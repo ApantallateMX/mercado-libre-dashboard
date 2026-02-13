@@ -310,6 +310,8 @@ async def update_price(item_id: str, data: PriceUpdate):
     try:
         result = await client.update_item_price(item_id, data.price)
         return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await client.close()
 
@@ -324,6 +326,8 @@ async def update_stock(item_id: str, data: StockUpdate):
     try:
         result = await client.update_item_stock(item_id, data.quantity)
         return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await client.close()
 
@@ -337,6 +341,8 @@ async def update_title(item_id: str, data: TitleUpdate):
     try:
         result = await client.update_item_title(item_id, data.title)
         return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await client.close()
 

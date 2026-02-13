@@ -34,6 +34,10 @@
                 class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
             Baja Venta
         </button>
+        <button data-tab="full" data-url="/partials/products-full"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            FULL
+        </button>
         <button data-tab="deals" data-url="/partials/products-deals"
                 class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
             Deals
@@ -143,13 +147,160 @@
                 msg.className = 'text-xs mt-1 block text-green-600';
                 if (stockDisplay) stockDisplay.textContent = quantity;
             } else {
-                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+                return r.text().then(function(t) {
+                    try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                    catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+                });
             }
         })
         .catch(function(e) {
             msg.textContent = 'Error: ' + e.message;
             msg.className = 'text-xs mt-1 block text-red-600';
         });
+    };
+
+    // ── Change FULL to merchant shipping ──
+    window.changeToMerchant = function(itemId) {
+        if (!confirm('Cambiar de FULL a envio propio?\n\nPerdera beneficios de Fulfillment (envio gratis, mayor exposicion). Solo haga esto si necesita gestionar el stock manualmente.')) {
+            return;
+        }
+        var msg = document.getElementById('msg-' + itemId);
+        if (msg) {
+            msg.textContent = 'Cambiando logistica...';
+            msg.className = 'text-xs mt-1 block text-gray-500';
+        }
+        fetch('/api/items/' + itemId + '/shipping', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({logistic_type: 'xd_drop_off'})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                if (msg) {
+                    msg.textContent = 'Cambiado a envio propio. Recargando...';
+                    msg.className = 'text-xs mt-1 block text-green-600';
+                }
+                setTimeout(function() {
+                    // Reload current tab
+                    var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
+                    if (activeBtn) activeBtn.click();
+                }, 1500);
+            } else {
+                return r.text().then(function(t) {
+                    try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                    catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+                });
+            }
+        })
+        .catch(function(e) {
+            if (msg) {
+                msg.textContent = 'Error: ' + e.message;
+                msg.className = 'text-xs mt-1 block text-red-600';
+            }
+        });
+    };
+
+    // ── Inline stock sync for all product tabs ──
+
+    // Call API to update stock, with inline feedback
+    window.inlineStockSync = function(itemId, qty, msgEl, onSuccess) {
+        msgEl.textContent = '...';
+        msgEl.className = 'text-[10px] text-gray-400 ml-1 inline';
+        fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: qty})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                msgEl.textContent = 'OK';
+                msgEl.className = 'text-[10px] text-green-600 ml-1 inline font-semibold';
+                setTimeout(function() { msgEl.textContent = ''; }, 2000);
+                if (onSuccess) onSuccess(qty);
+            } else {
+                return r.text().then(function(t) {
+                    try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                    catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+                });
+            }
+        })
+        .catch(function(e) {
+            msgEl.textContent = e.message;
+            msgEl.className = 'text-[10px] text-red-600 ml-1 inline';
+        });
+    };
+
+    // Quick sync: set MeLi stock = BM total in one click
+    window.quickSyncBM = function(btn, itemId, bmTotal) {
+        var cell = btn.closest('[data-stock-cell]');
+        var msgEl = cell.querySelector('[data-stock-msg]');
+        var displayEl = cell.querySelector('[data-stock-val]');
+        btn.disabled = true;
+        btn.textContent = '...';
+        window.inlineStockSync(itemId, bmTotal, msgEl, function(qty) {
+            displayEl.textContent = qty;
+            displayEl.className = 'cursor-pointer font-semibold hover:text-purple-600 hover:underline ' +
+                (qty > 5 ? 'text-green-600' : qty > 0 ? 'text-yellow-600' : 'text-red-600');
+            // Hide BM button if stock now matches
+            btn.classList.add('hidden');
+            btn.disabled = false;
+            btn.textContent = 'BM';
+        });
+    };
+
+    // Show inline editor replacing stock number
+    window.showStockEditor = function(el, itemId, currentStock, bmTotal) {
+        var cell = el.closest('[data-stock-cell]');
+        var msgEl = cell.querySelector('[data-stock-msg]');
+        var displayEl = cell.querySelector('[data-stock-val]');
+        var bmBtn = cell.querySelector('[data-bm-btn]');
+
+        // Hide display, show input
+        var prefill = (bmTotal > 0 && bmTotal !== currentStock) ? bmTotal : currentStock;
+        displayEl.style.display = 'none';
+        if (bmBtn) bmBtn.style.display = 'none';
+
+        var wrap = document.createElement('span');
+        wrap.className = 'inline-flex items-center gap-1';
+        wrap.setAttribute('data-editor', '');
+        wrap.innerHTML = '<input type="number" min="0" value="' + prefill + '" ' +
+            'class="w-14 px-1 py-0.5 border rounded text-xs text-right focus:ring-1 focus:ring-purple-400 focus:outline-none">' +
+            '<button class="text-green-600 hover:text-green-800 text-sm font-bold leading-none" title="Guardar">&#10003;</button>' +
+            '<button class="text-gray-400 hover:text-red-500 text-sm font-bold leading-none" title="Cancelar">&#10007;</button>';
+        cell.insertBefore(wrap, msgEl);
+
+        var inp = wrap.querySelector('input');
+        var okBtn = wrap.querySelectorAll('button')[0];
+        var cancelBtn = wrap.querySelectorAll('button')[1];
+        inp.focus();
+        inp.select();
+
+        function closeEditor() {
+            wrap.remove();
+            displayEl.style.display = '';
+            if (bmBtn) bmBtn.style.display = '';
+        }
+
+        cancelBtn.onclick = closeEditor;
+        okBtn.onclick = function() {
+            var val = parseInt(inp.value);
+            if (isNaN(val) || val < 0) { inp.classList.add('border-red-400'); return; }
+            closeEditor();
+            window.inlineStockSync(itemId, val, msgEl, function(qty) {
+                displayEl.textContent = qty;
+                displayEl.className = 'cursor-pointer font-semibold hover:text-purple-600 hover:underline ' +
+                    (qty > 5 ? 'text-green-600' : qty > 0 ? 'text-yellow-600' : 'text-red-600');
+                // Update BM button visibility
+                if (bmBtn) {
+                    if (bmTotal > 0 && bmTotal !== qty) { bmBtn.classList.remove('hidden'); }
+                    else { bmBtn.classList.add('hidden'); }
+                }
+            });
+        };
+        inp.onkeydown = function(e) {
+            if (e.key === 'Enter') okBtn.onclick();
+            if (e.key === 'Escape') closeEditor();
+        };
     };
 })();
 </script>

@@ -177,17 +177,25 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
         iid, data = r
         if isinstance(data, list):
             p_map[iid] = data
+    # Tipos que NO cuentan como deal del vendedor (MeLi los gestiona solo)
+    _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN"}
     for p in products:
         promos = p_map.get(p.get(id_key), [])
         p["_promotions"] = promos
-        p["_has_deal"] = any(
-            pr.get("status") in ("started", "active", "pending")
-            for pr in promos
-        )
-        p["_deal_types"] = list(set(
-            pr.get("type", "") for pr in promos
+        active_promos = [
+            pr for pr in promos
             if pr.get("status") in ("started", "active", "pending")
-        ))
+            and pr.get("type") not in _auto_types
+        ]
+        p["_has_deal"] = len(active_promos) > 0
+        p["_deal_types"] = list(set(pr.get("type", "") for pr in active_promos))
+        # Actualizar price/original_price desde la promo activa
+        if active_promos:
+            ap = active_promos[0]
+            if ap.get("price") and ap["price"] > 0:
+                p["price"] = ap["price"]
+            if ap.get("original_price") and ap["original_price"] > 0:
+                p["original_price"] = ap["original_price"]
 
 
 async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
@@ -986,12 +994,53 @@ async def items_grid_partial(
                     queried_sku, data = await coro
                     if data:
                         base = _extract_base_sku(queried_sku)
+                        _mty = data.get("TotalQtyMTY", 0) or 0
+                        _cdmx = data.get("TotalQtyCDMX", 0) or 0
+                        _tj = data.get("TotalQtyTJ", 0) or 0
                         inv = {
-                            "MTY": data.get("TotalQtyMTY", 0) or 0,
-                            "CDMX": data.get("TotalQtyCDMX", 0) or 0,
+                            "MTY": _mty,
+                            "CDMX": _cdmx,
+                            "TJ": _tj,
+                            "total": _mty + _cdmx + _tj,
                         }
                         for iid in sku_to_items[base]["item_ids"]:
                             inventory_map[iid] = inv
+
+        # Construir metadata por item (brand, model, variaciones)
+        item_meta = {}
+        for it in items:
+            body = it.get("body") or it
+            iid = body.get("id", "")
+            if not iid:
+                continue
+            sku = body.get("seller_custom_field") or ""
+            if not sku or sku == "None":
+                sku = ""
+                for attr in body.get("attributes", []):
+                    if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
+                        sku = attr["value_name"]
+                        break
+            brand = ""
+            model = ""
+            for attr in body.get("attributes", []):
+                aid = attr.get("id", "")
+                if aid == "BRAND" and attr.get("value_name"):
+                    brand = attr["value_name"]
+                elif aid == "MODEL" and attr.get("value_name"):
+                    model = attr["value_name"]
+            variations = body.get("variations") or []
+            shipping = body.get("shipping", {})
+            logistic_type = shipping.get("logistic_type", "")
+            item_meta[iid] = {
+                "sku": sku,
+                "brand": brand,
+                "model": model,
+                "has_variations": len(variations) > 1,
+                "variation_count": len(variations),
+                "is_full": logistic_type == "fulfillment",
+                "logistic_type": logistic_type,
+                "sold_qty": body.get("sold_quantity", 0),
+            }
 
         return templates.TemplateResponse("partials/items_grid.html", {
             "request": request,
@@ -1000,7 +1049,8 @@ async def items_grid_partial(
             "offset": offset,
             "limit": limit,
             "status": status,
-            "inventory_map": inventory_map
+            "inventory_map": inventory_map,
+            "item_meta": item_meta,
         })
     finally:
         await client.close()
@@ -1066,6 +1116,7 @@ async def items_no_stock_partial(request: Request):
                     # Ultimo recurso: inventory_id del item principal
                     if not sku:
                         sku = body.get("inventory_id") or ""
+                    shipping = body.get("shipping", {})
                     no_stock_items.append({
                         "id": body.get("id", ""),
                         "title": body.get("title", "-"),
@@ -1075,7 +1126,8 @@ async def items_no_stock_partial(request: Request):
                         "stock": stock,
                         "sold_quantity": sold,
                         "thumbnail": body.get("thumbnail", ""),
-                        "status": body.get("status", "-")
+                        "status": body.get("status", "-"),
+                        "is_full": shipping.get("logistic_type") == "fulfillment",
                     })
 
         # Enriquecer con sale_price para detectar deals
@@ -1118,13 +1170,14 @@ async def items_no_stock_partial(request: Request):
                     queried_sku, data = await coro
                     if data:
                         base = _extract_base_sku(queried_sku)
-                        inv = {
-                            "mty": data.get("TotalQtyMTY", 0) or 0,
-                            "cdmx": data.get("TotalQtyCDMX", 0) or 0,
-                        }
+                        _m = data.get("TotalQtyMTY", 0) or 0
+                        _c = data.get("TotalQtyCDMX", 0) or 0
+                        _t = data.get("TotalQtyTJ", 0) or 0
                         for i in sku_to_indices[base]["indices"]:
-                            no_stock_items[i]["mty"] = inv["mty"]
-                            no_stock_items[i]["cdmx"] = inv["cdmx"]
+                            no_stock_items[i]["mty"] = _m
+                            no_stock_items[i]["cdmx"] = _c
+                            no_stock_items[i]["tj"] = _t
+                            no_stock_items[i]["bm_total"] = _m + _c + _t
 
         return templates.TemplateResponse("partials/items_no_stock.html", {
             "request": request,
@@ -1259,6 +1312,7 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
         if not iid:
             continue
         sku = _get_item_sku(body)
+        shipping = body.get("shipping", {})
         p = {
             "id": iid,
             "title": body.get("title", ""),
@@ -1271,6 +1325,7 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
             "pictures_count": len(body.get("pictures", [])),
             "has_video": body.get("video_id") is not None,
             "category_id": body.get("category_id", ""),
+            "is_full": shipping.get("logistic_type", "") == "fulfillment",
         }
         if sales_map:
             s = sales_map.get(iid, {"units": 0, "revenue": 0, "fees": 0})
@@ -1643,6 +1698,61 @@ async def products_low_sellers_partial(request: Request):
         await client.close()
 
 
+@app.get("/partials/products-full", response_class=HTMLResponse)
+async def products_full_partial(request: Request, stock_filter: str = "all"):
+    """Productos en MeLi Fulfillment (FULL)."""
+    from datetime import datetime, timedelta
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        now = datetime.utcnow()
+        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
+
+        all_bodies, all_orders = await asyncio.gather(
+            _get_all_products_cached(client),
+            client.fetch_all_orders(date_from=date_from, date_to=date_to),
+        )
+        sales_map = _aggregate_sales_by_item(all_orders)
+
+        # Filtrar solo items FULL
+        full_bodies = [
+            b for b in all_bodies
+            if b.get("shipping", {}).get("logistic_type") == "fulfillment"
+        ]
+
+        products = _build_product_list(full_bodies, sales_map)
+
+        # Aplicar filtro de stock
+        if stock_filter == "with_stock":
+            products = [p for p in products if p.get("available_quantity", 0) > 0]
+        elif stock_filter == "no_stock":
+            products = [p for p in products if p.get("available_quantity", 0) == 0]
+
+        # Enriquecer con BM stock + product info + FX + variation SKUs
+        bm_map, _, usd_to_mxn, _ = await asyncio.gather(
+            _get_bm_stock_cached(products),
+            _enrich_with_bm_product_info(products),
+            _get_usd_to_mxn(client),
+            _enrich_variation_skus(client, products),
+        )
+        _apply_bm_stock(products, bm_map)
+        _calc_margins(products, usd_to_mxn)
+
+        # Ordenar por stock desc, luego por ventas desc
+        products.sort(key=lambda p: (p.get("available_quantity", 0), p.get("units", 0)), reverse=True)
+
+        return templates.TemplateResponse("partials/products_full.html", {
+            "request": request,
+            "products": products,
+            "stock_filter": stock_filter,
+            "usd_to_mxn": round(usd_to_mxn, 2),
+        })
+    finally:
+        await client.close()
+
+
 @app.get("/partials/products-deals", response_class=HTMLResponse)
 async def products_deals_partial(request: Request):
     """Deals: detecta deals por original_price + pricing con FX rate, margenes y ventas."""
@@ -1664,6 +1774,7 @@ async def products_deals_partial(request: Request):
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
+        # Fase 1: clasificar por original_price del body (rapido, sin API extra)
         active_deals = []
         candidates = []
         for p in products:
@@ -1673,6 +1784,14 @@ async def products_deals_partial(request: Request):
                 active_deals.append(p)
             elif p["available_quantity"] > 0:
                 candidates.append(p)
+
+        # Fase 2: verificar deals perdidos via promotions API en candidatos
+        # (el body batch a veces no incluye original_price aunque haya deal activo)
+        await _enrich_with_promotions(client, candidates, id_key="id")
+        newly_found = [p for p in candidates if p.get("_has_deal")]
+        if newly_found:
+            active_deals.extend(newly_found)
+            candidates = [p for p in candidates if not p.get("_has_deal")]
 
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
         candidates = candidates[:60]

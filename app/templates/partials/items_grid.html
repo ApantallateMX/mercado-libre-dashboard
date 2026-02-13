@@ -1,70 +1,153 @@
-<div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
     {% for item in items %}
-    <div class="bg-white rounded-lg shadow overflow-hidden">
-        {% if item.body and item.body.thumbnail %}
-        <img src="{{ item.body.thumbnail }}" alt="{{ item.body.title }}" class="w-full h-40 object-cover">
-        {% else %}
-        <div class="w-full h-40 bg-gray-200 flex items-center justify-center">
-            <span class="text-gray-400">Sin imagen</span>
+    {% set body = item.body if item.body else item %}
+    {% set iid = body.id if body.id else "" %}
+    {% set meta = item_meta.get(iid, {}) if item_meta is defined else {} %}
+    {% set inv = inventory_map.get(iid) if inventory_map is defined else None %}
+    {% set st = body.status|default("active") %}
+    <div class="bg-white rounded-lg shadow overflow-hidden border-l-4 {{ 'border-green-400' if st == 'active' else 'border-yellow-400' if st == 'paused' else 'border-gray-300' }}">
+        <!-- Header: status + badges + MLM ID -->
+        <div class="flex items-center justify-between px-3 py-2 bg-gray-50 border-b text-xs">
+            <div class="flex items-center gap-1.5">
+                <span class="px-1.5 py-0.5 rounded font-medium {{ 'bg-green-100 text-green-700' if st == 'active' else 'bg-yellow-100 text-yellow-700' if st == 'paused' else 'bg-gray-100 text-gray-500' }}">
+                    {{ 'Activo' if st == 'active' else 'Pausado' if st == 'paused' else st|capitalize }}
+                </span>
+                {% if meta.get('is_full') %}
+                <span class="px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-700 font-medium">FULL</span>
+                {% endif %}
+                {% if meta.get('has_variations') %}
+                <span class="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 font-medium">{{ meta.get('variation_count', 0) }} vars</span>
+                {% endif %}
+            </div>
+            <a href="https://www.mercadolibre.com.mx/publicaciones/{{ iid }}/modificar"
+               target="_blank"
+               class="text-blue-500 hover:text-blue-700 font-mono hover:underline"
+               title="Editar en MeLi">{{ iid }}</a>
         </div>
-        {% endif %}
-        <div class="p-4">
-            <h3 class="font-medium text-gray-800 text-sm mb-2 line-clamp-2">
-                {{ item.body.title if item.body else item.id }}
-            </h3>
-            {% if item.body %}
-            <div class="flex justify-between items-center mb-2">
-                <div>
-                    {% if item.body.original_price and item.body.original_price > item.body.price %}
-                    <span class="text-xs text-gray-400 line-through">${{ "{:,.0f}".format(item.body.original_price) }}</span>
-                    <span class="text-lg font-bold text-green-600">${{ "{:,.0f}".format(item.body.price) }}</span>
-                    <span class="text-xs text-green-600">(-{{ "%.0f"|format((1 - item.body.price / item.body.original_price) * 100) }}%)</span>
-                    {% else %}
-                    <span class="text-xl font-bold text-gray-800">${{ "{:,.0f}".format(item.body.price) }}</span>
+
+        <div class="p-3">
+            <!-- Thumbnail + titulo + meta -->
+            <div class="flex gap-3 mb-3">
+                {% if body.thumbnail %}
+                <img src="{{ body.thumbnail }}" alt="" class="w-12 h-12 rounded object-cover flex-shrink-0 bg-gray-100">
+                {% else %}
+                <div class="w-12 h-12 rounded bg-gray-200 flex items-center justify-center flex-shrink-0">
+                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                </div>
+                {% endif %}
+                <div class="min-w-0 flex-1">
+                    <h3 class="font-medium text-gray-800 text-sm leading-tight line-clamp-2">{{ body.title if body.title else iid }}</h3>
+                    <div class="text-xs text-gray-400 mt-0.5 truncate">
+                        {% if meta.get('brand') %}{{ meta.get('brand') }}{% endif %}
+                        {% if meta.get('brand') and meta.get('model') %} | {% endif %}
+                        {% if meta.get('model') %}{{ meta.get('model') }}{% endif %}
+                    </div>
+                    {% if meta.get('sku') %}
+                    <div class="text-xs text-gray-500 mt-0.5 font-mono truncate" title="{{ meta.get('sku') }}">SKU: {{ meta.get('sku') }}</div>
                     {% endif %}
                 </div>
-                <span class="text-sm text-gray-500">Stock: {{ item.body.available_quantity }}</span>
             </div>
-            {% set inv = inventory_map.get(item.body.id) if inventory_map is defined else None %}
+
+            <!-- Precio + Stock -->
+            <div class="flex justify-between items-center mb-2">
+                <div>
+                    {% if body.original_price and body.original_price > body.price %}
+                    <span class="text-xs text-gray-400 line-through">${{ "{:,.0f}".format(body.original_price) }}</span>
+                    <span class="text-base font-bold text-green-600">${{ "{:,.0f}".format(body.price) }}</span>
+                    <span class="text-xs text-green-600">(-{{ "%.0f"|format((1 - body.price / body.original_price) * 100) }}%)</span>
+                    {% else %}
+                    <span class="text-base font-bold text-gray-800">${{ "{:,.0f}".format(body.price) }}</span>
+                    {% endif %}
+                </div>
+                <div class="text-right">
+                    {% set sq = body.available_quantity|default(0) %}
+                    {% if meta.get('is_full') %}
+                    <span class="text-sm font-medium text-cyan-600">FULL: {{ sq }}</span>
+                    {% else %}
+                    <span class="text-sm font-medium {{ 'text-green-600' if sq > 5 else 'text-yellow-600' if sq > 0 else 'text-red-600' }}">
+                        Stock: {{ sq }}
+                    </span>
+                    {% endif %}
+                    {% if meta.get('sold_qty', 0) > 0 %}
+                    <div class="text-[10px] text-gray-400">{{ "{:,}".format(meta.get('sold_qty', 0)) }} vendidos</div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Badges almacen BinManager -->
             {% if inv %}
-            <div class="flex gap-2 mb-3 text-xs">
-                <span class="px-2 py-1 rounded {{ 'bg-green-100 text-green-700' if inv.MTY > 0 else 'bg-red-100 text-red-600' }}">
-                    MTY: <strong>{{ inv.MTY }}</strong>
+            <div class="flex gap-1.5 mb-3 text-xs">
+                <span class="px-2 py-0.5 rounded {{ 'bg-green-100 text-green-700' if inv.MTY > 0 else 'bg-red-50 text-red-500' }}">
+                    MTY:<strong>{{ inv.MTY }}</strong>
                 </span>
-                <span class="px-2 py-1 rounded {{ 'bg-green-100 text-green-700' if inv.CDMX > 0 else 'bg-red-100 text-red-600' }}">
-                    CDMX: <strong>{{ inv.CDMX }}</strong>
+                <span class="px-2 py-0.5 rounded {{ 'bg-green-100 text-green-700' if inv.CDMX > 0 else 'bg-red-50 text-red-500' }}">
+                    CDMX:<strong>{{ inv.CDMX }}</strong>
                 </span>
+                {% if inv.TJ %}
+                <span class="px-2 py-0.5 rounded {{ 'bg-green-100 text-green-700' if inv.TJ > 0 else 'bg-red-50 text-red-500' }}">
+                    TJ:<strong>{{ inv.TJ }}</strong>
+                </span>
+                {% endif %}
             </div>
             {% endif %}
 
             <!-- Edicion rapida -->
-            <div class="space-y-2">
-                <div class="flex gap-2">
-                    <input type="number" step="0.01" value="{{ item.body.price }}"
-                           id="price-{{ item.body.id }}"
-                           class="w-full border rounded px-2 py-1 text-sm">
-                    <button hx-put="/api/items/{{ item.body.id }}/price"
-                            hx-include="#price-{{ item.body.id }}"
-                            hx-vals='js:{"price": parseFloat(document.getElementById("price-{{ item.body.id }}").value)}'
+            <div class="space-y-2 border-t pt-2">
+                <!-- Precio -->
+                <div class="flex gap-1.5">
+                    <input type="number" step="0.01" value="{{ body.price }}"
+                           id="price-{{ iid }}"
+                           class="w-full border rounded px-2 py-1 text-sm focus:ring-1 focus:ring-yellow-400 focus:outline-none"
+                           onkeydown="if(event.key==='Enter'){document.getElementById('btn-price-{{ iid }}').click()}">
+                    <button id="btn-price-{{ iid }}"
+                            hx-put="/api/items/{{ iid }}/price"
+                            hx-include="#price-{{ iid }}"
+                            hx-vals='js:{"price": parseFloat(document.getElementById("price-{{ iid }}").value)}'
                             hx-swap="none"
-                            class="bg-yellow-400 px-3 py-1 rounded text-sm hover:bg-yellow-500">
+                            class="bg-yellow-400 px-3 py-1 rounded text-sm hover:bg-yellow-500 font-bold flex-shrink-0">
                         $
                     </button>
                 </div>
-                <div class="flex gap-2">
-                    <input type="number" value="{{ item.body.available_quantity }}"
-                           id="stock-{{ item.body.id }}"
-                           class="w-full border rounded px-2 py-1 text-sm">
-                    <button hx-put="/api/items/{{ item.body.id }}/stock"
-                            hx-include="#stock-{{ item.body.id }}"
-                            hx-vals='js:{"quantity": parseInt(document.getElementById("stock-{{ item.body.id }}").value)}'
-                            hx-swap="none"
-                            class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600">
+                <!-- Stock -->
+                {% if meta.get('is_full') %}
+                <div class="flex items-center gap-2 text-xs text-cyan-700 bg-cyan-50 rounded px-2 py-1.5">
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                    <span>Stock gestionado por MeLi FULL</span>
+                </div>
+                <button onclick="changeToMerchant('{{ iid }}')"
+                        class="w-full text-xs text-cyan-600 hover:text-cyan-800 hover:bg-cyan-50 rounded py-1 transition">
+                    Cambiar a envio propio
+                </button>
+                {% elif meta.get('has_variations') %}
+                <div class="flex items-center gap-2 text-xs text-purple-600 bg-purple-50 rounded px-2 py-1.5">
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>{{ meta.get('variation_count', 0) }} variaciones &mdash;
+                        <a href="https://www.mercadolibre.com.mx/publicaciones/{{ iid }}/modificar"
+                           target="_blank" class="underline hover:text-purple-800">editar en MeLi</a>
+                    </span>
+                </div>
+                {% else %}
+                <div class="flex gap-1.5">
+                    <input type="number" value="{{ body.available_quantity }}"
+                           id="new-stock-{{ iid }}"
+                           class="w-full border rounded px-2 py-1 text-sm focus:ring-1 focus:ring-blue-400 focus:outline-none"
+                           onkeydown="if(event.key==='Enter'){updateStock('{{ iid }}')}">
+                    <button onclick="updateStock('{{ iid }}')"
+                            class="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 font-bold flex-shrink-0">
                         #
                     </button>
+                    {% if inv and inv.total > 0 and inv.total != body.available_quantity %}
+                    <button onclick="var inp=document.getElementById('new-stock-{{ iid }}');inp.value={{ inv.total }};inp.focus();inp.select()"
+                            class="bg-purple-500 text-white px-2 py-1 rounded text-xs hover:bg-purple-600 font-bold whitespace-nowrap flex-shrink-0"
+                            title="Pre-llenar con BM total ({{ inv.total }}). Confirma con #">
+                        BM:{{ inv.total }}
+                    </button>
+                    {% endif %}
                 </div>
+                {% endif %}
+                <span id="msg-{{ iid }}" class="text-xs mt-1 block"></span>
+                <span id="stock-display-{{ iid }}" class="hidden">{{ body.available_quantity }}</span>
             </div>
-            {% endif %}
         </div>
     </div>
     {% else %}

@@ -58,10 +58,23 @@
                 <td class="px-3 py-3 text-right {{ 'text-green-600' if p._bm_mty > 0 else 'text-gray-300' }}">{{ p._bm_mty }}</td>
                 <td class="px-3 py-3 text-right {{ 'text-green-600' if p._bm_cdmx > 0 else 'text-gray-300' }}">{{ p._bm_cdmx }}</td>
                 <td class="px-3 py-3 text-right {{ 'text-green-600' if p._bm_tj > 0 else 'text-gray-300' }}">{{ p._bm_tj }}</td>
-                <td class="px-3 py-3 text-right">
-                    <span class="{{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }} font-semibold">
-                        {{ p.available_quantity }}
-                    </span>
+                <td class="px-3 py-3 text-right" data-stock-cell>
+                    {% if p.get('is_full') %}
+                    <span class="font-semibold text-cyan-600">{{ p.available_quantity }}</span>
+                    <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
+                    {% else %}
+                    {% set bm = p._bm_total|default(0) or 0 %}
+                    <span data-stock-val
+                          class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
+                          onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
+                    {% if bm > 0 and bm != p.available_quantity %}
+                    <button data-bm-btn
+                            onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
+                            class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition"
+                            title="Sync stock MeLi = BM ({{ bm }})">BM</button>
+                    {% endif %}
+                    {% endif %}
+                    <span data-stock-msg></span>
                 </td>
                 <td class="px-3 py-3 text-right">
                     {% if p.units_30d > 0 %}

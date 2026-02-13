@@ -1,9 +1,55 @@
-<div class="mb-4">
-    <h2 class="text-lg font-semibold text-gray-800">Top Ventas (30 dias)</h2>
-    <p class="text-sm text-gray-500">Productos ordenados por unidades vendidas</p>
+<div class="mb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+    <div>
+        <h2 class="text-lg font-semibold text-gray-800">
+            <span class="inline-flex items-center gap-2">
+                <svg class="w-5 h-5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                Productos en Fulfillment (FULL)
+            </span>
+        </h2>
+        <p class="text-sm text-gray-500">Stock gestionado por MeLi en sus bodegas</p>
+    </div>
+    <!-- Filtros -->
+    <div class="flex gap-2">
+        <button onclick="loadFullTab('all')"
+                class="px-3 py-1.5 rounded text-sm font-medium transition {{ 'bg-cyan-500 text-white' if stock_filter == 'all' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+            Todos ({{ products|length if stock_filter == 'all' else '-' }})
+        </button>
+        <button onclick="loadFullTab('with_stock')"
+                class="px-3 py-1.5 rounded text-sm font-medium transition {{ 'bg-green-500 text-white' if stock_filter == 'with_stock' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+            Con stock
+        </button>
+        <button onclick="loadFullTab('no_stock')"
+                class="px-3 py-1.5 rounded text-sm font-medium transition {{ 'bg-red-500 text-white' if stock_filter == 'no_stock' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+            Sin stock
+        </button>
+    </div>
 </div>
 
 {% if products %}
+<!-- Resumen rapido -->
+{% set total_stock = products|map(attribute='available_quantity')|sum %}
+{% set with_stock = products|selectattr('available_quantity', 'gt', 0)|list|length %}
+{% set no_stock = products|rejectattr('available_quantity', 'gt', 0)|list|length %}
+{% set total_units = products|map(attribute='units')|sum if products[0].get('units') is defined else 0 %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="bg-cyan-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-cyan-700">{{ products|length }}</div>
+        <div class="text-xs text-cyan-600">Productos FULL</div>
+    </div>
+    <div class="bg-green-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-green-700">{{ with_stock }}</div>
+        <div class="text-xs text-green-600">Con stock</div>
+    </div>
+    <div class="bg-red-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-red-700">{{ no_stock }}</div>
+        <div class="text-xs text-red-600">Sin stock</div>
+    </div>
+    <div class="bg-blue-50 rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-blue-700">{{ "{:,}".format(total_stock) }}</div>
+        <div class="text-xs text-blue-600">Unidades en FULL</div>
+    </div>
+</div>
+
 <div class="bg-white rounded-lg shadow overflow-x-auto">
     <table class="w-full text-sm">
         <thead class="bg-gray-50 border-b">
@@ -11,20 +57,19 @@
                 <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">#</th>
                 <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">Producto</th>
                 <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">ID / SKU</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Uds (30d)</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Revenue</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio MeLi</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock FULL</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Vendidos (30d)</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Revenue (30d)</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Costo BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Margen</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Deal</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Acciones</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-100">
             {% for p in products %}
-            <tr class="hover:bg-gray-50">
+            <tr class="hover:bg-gray-50 {{ 'bg-red-50/40' if p.available_quantity == 0 else '' }}">
                 <td class="px-3 py-3 text-gray-400 font-bold">{{ loop.index }}</td>
                 <td class="px-3 py-3">
                     <div class="flex items-center gap-2">
@@ -34,7 +79,7 @@
                         <div class="min-w-0">
                             <span class="text-gray-800 truncate block max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title }}</span>
                             {% if p.get('variations') %}
-                            <button onclick="toggleVariations('tv-{{ loop.index }}')"
+                            <button onclick="toggleVariationsFull('fv-{{ loop.index }}')"
                                     class="text-[10px] text-purple-600 hover:underline mt-0.5">
                                 {{ p.variations|length }} variaciones
                             </button>
@@ -49,8 +94,28 @@
                         <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
                     </div>
                 </td>
-                <td class="px-3 py-3 text-right font-bold text-gray-800">{{ p.units }}</td>
-                <td class="px-3 py-3 text-right text-gray-700">${{ "{:,.0f}".format(p.revenue) }}</td>
+                <td class="px-3 py-3 text-right">
+                    <div class="flex items-center justify-end gap-1.5">
+                        <span class="font-bold text-lg {{ 'text-cyan-600' if p.available_quantity > 5 else 'text-yellow-600' if p.available_quantity > 0 else 'text-red-600' }}">
+                            {{ p.available_quantity }}
+                        </span>
+                        <span class="px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
+                    </div>
+                </td>
+                <td class="px-3 py-3 text-right">
+                    {% if p.get('units', 0) > 0 %}
+                    <span class="font-semibold text-gray-800">{{ p.units }}</span>
+                    {% else %}
+                    <span class="text-red-500 font-semibold">0</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-right text-gray-700">
+                    {% if p.get('revenue', 0) > 0 %}
+                    ${{ "{:,.0f}".format(p.revenue) }}
+                    {% else %}
+                    <span class="text-gray-300">-</span>
+                    {% endif %}
+                </td>
                 <td class="px-3 py-3 text-right">
                     {% if p.original_price and p.original_price > p.price %}
                     <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
@@ -68,7 +133,6 @@
                     {% elif p.get('_bm_has_data') %}
                     <div class="flex flex-col items-end">
                         <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
-                        {% if p.get('_bm_brand') %}<span class="text-[10px] text-gray-300">{{ p._bm_brand }}</span>{% endif %}
                     </div>
                     {% else %}
                     <span class="text-gray-300 text-xs">-</span>
@@ -90,38 +154,6 @@
                     <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
-                <td class="px-3 py-3 text-right" data-stock-cell>
-                    {% if p.get('is_full') %}
-                    <span class="font-semibold text-cyan-600">{{ p.available_quantity }}</span>
-                    <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
-                    {% else %}
-                    {% set bm = p.get('_bm_total', 0) or 0 %}
-                    <span data-stock-val
-                          class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
-                          onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
-                    {% if bm > 0 and bm != p.available_quantity %}
-                    <button data-bm-btn
-                            onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
-                            class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition"
-                            title="Sync stock MeLi = BM ({{ bm }})">BM</button>
-                    {% endif %}
-                    {% endif %}
-                    <span data-stock-msg></span>
-                </td>
-                <td class="px-3 py-3 text-right">
-                    {% if p.get('_bm_total') is not none %}
-                    <div class="flex flex-col items-end text-xs">
-                        <span class="font-semibold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">
-                            {{ p._bm_total }}
-                        </span>
-                        <span class="text-[10px] text-gray-400">
-                            M:{{ p._bm_mty }} C:{{ p._bm_cdmx }}{% if p._bm_tj %} T:{{ p._bm_tj }}{% endif %}
-                        </span>
-                    </div>
-                    {% else %}
-                    <span class="text-gray-300">-</span>
-                    {% endif %}
-                </td>
                 <td class="px-3 py-3 text-center">
                     {% if p.original_price and p.original_price > p.price %}
                     <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
@@ -138,12 +170,16 @@
                         {% endif %}
                         <a href="https://www.mercadolibre.com.mx/publicaciones/{{ p.id }}/modificar" target="_blank"
                            class="text-[10px] text-gray-400 hover:text-gray-600">Editar</a>
+                        <button onclick="changeToMerchant('{{ p.id }}')"
+                                class="text-[10px] text-cyan-600 hover:text-cyan-800 hover:underline">
+                            Quitar FULL
+                        </button>
                     </div>
                 </td>
             </tr>
             {% if p.get('variations') %}
-            <tr id="tv-{{ loop.index }}" class="hidden bg-purple-50/30">
-                <td colspan="12" class="px-6 py-2">
+            <tr id="fv-{{ loop.index }}" class="hidden bg-purple-50/30">
+                <td colspan="11" class="px-6 py-2">
                     <div class="text-xs">
                         <table class="w-full">
                             <thead>
@@ -175,13 +211,41 @@
         </tbody>
     </table>
 </div>
+
+<div class="mt-3 text-sm text-gray-500">
+    Mostrando {{ products|length }} productos FULL
+    {% if stock_filter == 'with_stock' %}con stock{% elif stock_filter == 'no_stock' %}sin stock{% endif %}
+</div>
 {% else %}
-<p class="text-center py-8 text-gray-500">Sin datos de ventas en los ultimos 30 dias</p>
+<div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+    <svg class="w-12 h-12 mx-auto mb-3 text-cyan-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+    No hay productos en Fulfillment
+    {% if stock_filter != 'all' %}con este filtro{% endif %}
+</div>
 {% endif %}
 
 <script>
-function toggleVariations(id) {
+function toggleVariationsFull(id) {
     var row = document.getElementById(id);
     if (row) row.classList.toggle('hidden');
+}
+
+function loadFullTab(filter) {
+    var content = document.getElementById('tab-content');
+    content.innerHTML = '<div class="flex justify-center py-12"><svg class="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>';
+    fetch('/partials/products-full?stock_filter=' + filter, {headers: {'ngrok-skip-browser-warning': 'true'}})
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            content.innerHTML = html;
+            content.querySelectorAll('script').forEach(function(oldScript) {
+                var newScript = document.createElement('script');
+                newScript.textContent = oldScript.textContent;
+                oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+            if (window.htmx) htmx.process(content);
+        })
+        .catch(function(e) {
+            content.innerHTML = '<div class="text-center py-8 text-red-500">Error: ' + e.message + '</div>';
+        });
 }
 </script>

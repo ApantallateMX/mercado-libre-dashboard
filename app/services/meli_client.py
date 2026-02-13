@@ -688,8 +688,39 @@ class MeliClient:
         return await self.put(f"/items/{item_id}", json={"price": price})
 
     async def update_item_stock(self, item_id: str, quantity: int) -> dict:
-        """Actualiza el stock de un item."""
-        return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
+        """Actualiza el stock de un item. Si tiene variaciones, distribuye entre ellas."""
+        try:
+            return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
+        except MeliApiError as e:
+            if "not_modifiable" not in str(e):
+                raise
+        # Item tiene variaciones — obtener detalles y distribuir
+        item = await self.get(f"/items/{item_id}")
+        variations = item.get("variations", [])
+        if not variations:
+            raise MeliApiError(400, f"/items/{item_id}", "No se puede modificar stock y no tiene variaciones")
+        # Distribuir: proporcionalmente al stock actual, o igual si todos en 0
+        current_totals = [v.get("available_quantity", 0) for v in variations]
+        total_current = sum(current_totals)
+        var_updates = []
+        if total_current > 0 and len(variations) > 1:
+            # Proporcional
+            remaining = quantity
+            for i, v in enumerate(variations):
+                if i == len(variations) - 1:
+                    alloc = remaining  # ultimo se lleva el resto
+                else:
+                    alloc = round(quantity * current_totals[i] / total_current)
+                    remaining -= alloc
+                var_updates.append({"id": v["id"], "available_quantity": max(alloc, 0)})
+        else:
+            # Igual (o solo 1 variacion)
+            base = quantity // len(variations)
+            extra = quantity % len(variations)
+            for i, v in enumerate(variations):
+                alloc = base + (1 if i < extra else 0)
+                var_updates.append({"id": v["id"], "available_quantity": alloc})
+        return await self.put(f"/items/{item_id}", json={"variations": var_updates})
 
     # === Item Updates (Optimizar Listados) ===
 

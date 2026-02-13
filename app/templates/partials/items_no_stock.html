@@ -82,18 +82,38 @@
                     CDMX: —
                 </div>
                 {% endif %}
+                {% if item.tj is defined and item.tj > 0 %}
+                <div class="flex-1 text-center py-1.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                    TJ: <strong>{{ item.tj }}</strong>
+                </div>
+                {% endif %}
             </div>
 
             <!-- Actualizar Stock -->
+            {% if item.get('is_full') %}
+            <div class="flex items-center gap-2 text-xs text-cyan-700 bg-cyan-50 rounded px-2 py-1.5">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                <span>FULL &mdash; stock gestionado por MeLi</span>
+            </div>
+            {% else %}
             <div class="flex gap-2">
-                <input type="number" min="0" value="0" id="new-stock-{{ item.id }}"
+                <input type="number" min="0" value="{{ item.get('bm_total', 0) or 0 }}" id="new-stock-{{ item.id }}"
                        class="flex-1 border rounded px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none">
                 <button onclick="updateStock('{{ item.id }}')"
                         class="bg-blue-500 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-blue-600 transition">
                     Actualizar
                 </button>
             </div>
-            <span id="msg-{{ item.id }}" class="text-xs mt-1 block hidden"></span>
+            {% set bm_t = item.get('bm_total', 0) or 0 %}
+            {% if bm_t > 0 %}
+            <button onclick="var inp=document.getElementById('new-stock-{{ item.id }}');inp.value={{ bm_t }};inp.focus();inp.select()"
+                    class="w-full mt-2 bg-purple-500 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-purple-600 transition"
+                    title="Pre-llenar con BM total ({{ bm_t }}). Confirma con Actualizar">
+                Usar BM: {{ bm_t }}
+            </button>
+            {% endif %}
+            {% endif %}
+            <span id="msg-{{ item.id }}" class="text-xs mt-1 block"></span>
             <span id="stock-display-{{ item.id }}" class="hidden">{{ item.stock }}</span>
         </div>
     </div>

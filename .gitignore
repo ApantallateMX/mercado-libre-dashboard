@@ -2,3 +2,13 @@
 tokens.db
 __pycache__/
 *.pyc
+*.log
+nul
+*.json
+!package.json
+Agentes/
+Claude Codes/
+Proyecto Mercado LIbre/
+test*.html
+test*.py
+.claude/

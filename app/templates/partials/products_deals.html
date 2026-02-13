@@ -36,6 +36,19 @@
     </div>
 </div>
 
+<!-- Buscador global -->
+<div class="mb-6">
+    <div class="relative">
+        <input type="text" id="deals-search" placeholder="Buscar por SKU, MLM, titulo..."
+            class="w-full bg-white border rounded-lg pl-10 pr-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-400 focus:border-blue-400 shadow"
+            oninput="globalSearch()">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <span id="search-count" class="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 hidden"></span>
+    </div>
+</div>
+
 <!-- Recomendaciones inteligentes -->
 {% if recommendations %}
 <div id="recs-section" class="mb-6 space-y-3">
@@ -115,7 +128,8 @@
                     data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
                     data-stock="{{ p.available_quantity }}"
                     data-profit="{{ p.get('_ganancia_est', -99999) if p.get('_ganancia_est') is not none else -99999 }}"
-                    data-var-row="ad-{{ loop.index }}">
+                    data-var-row="ad-{{ loop.index }}"
+                    data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
                     <td class="px-3 py-2">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}
@@ -214,7 +228,19 @@
                         <span class="text-gray-300 text-xs">0</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right font-semibold text-xs">{{ p.available_quantity }}</td>
+                    <td class="px-3 py-2 text-right text-xs" data-stock-cell>
+                        {% set bm = p.get('_bm_total', 0) or 0 %}
+                        <span data-stock-val
+                              class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
+                              onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
+                        {% if bm > 0 and bm != p.available_quantity %}
+                        <button data-bm-btn
+                                onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
+                                class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition"
+                                title="Sync stock MeLi = BM ({{ bm }})">BM</button>
+                        {% endif %}
+                        <span data-stock-msg></span>
+                    </td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex flex-col items-center gap-1">
                             <button class="btn-ver-promos px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition w-full"
@@ -251,6 +277,17 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+    <!-- Paginacion deals activos -->
+    <div id="ad-pagination" class="flex items-center justify-between mt-3 px-1">
+        <span id="ad-page-info" class="text-xs text-gray-500"></span>
+        <div class="flex items-center gap-1">
+            <button onclick="adPage('first')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="ad-btn-first" disabled>&laquo;</button>
+            <button onclick="adPage('prev')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="ad-btn-prev" disabled>&lsaquo;</button>
+            <span id="ad-page-nums" class="flex gap-1"></span>
+            <button onclick="adPage('next')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="ad-btn-next">&rsaquo;</button>
+            <button onclick="adPage('last')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="ad-btn-last">&raquo;</button>
+        </div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">
@@ -314,7 +351,8 @@
                     data-price="{{ p.price }}"
                     data-bm-stock="{{ p.get('_bm_total', 0) if p.get('_bm_total') is not none else 0 }}"
                     data-category="{{ p.get('category_name', '') }}"
-                    data-var-row="cd-{{ loop.index }}">
+                    data-var-row="cd-{{ loop.index }}"
+                    data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
                     <td class="px-3 py-2">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}
@@ -374,13 +412,25 @@
                         <span class="text-gray-300 text-xs">0</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right">
+                    <td class="px-3 py-2 text-right" data-stock-cell>
+                        {% set bm = p.get('_bm_total', 0) or 0 %}
                         <div class="flex flex-col items-end text-xs">
-                            <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-yellow-600' if p.available_quantity > 0 else 'text-red-600' }}">{{ p.available_quantity }}</span>
-                            {% if p.get('_bm_total') is not none %}
-                            <span class="text-[10px] text-gray-400">BM: {{ p._bm_total }}</span>
+                            <span data-stock-val
+                                  class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-yellow-600' if p.available_quantity > 0 else 'text-red-600' }}"
+                                  onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
+                            {% if bm > 0 %}
+                            <span class="text-[10px] text-gray-400 inline-flex items-center gap-1">
+                                BM: {{ bm }}
+                                {% if bm != p.available_quantity %}
+                                <button data-bm-btn
+                                        onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
+                                        class="px-1 py-0 text-[9px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition"
+                                        title="Sync stock MeLi = BM ({{ bm }})">Sync</button>
+                                {% endif %}
+                            </span>
                             {% endif %}
                         </div>
+                        <span data-stock-msg></span>
                     </td>
                     <td class="px-3 py-2 text-right">
                         {% if p.get('_bm_total') is not none %}
@@ -436,6 +486,17 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+    <!-- Paginacion candidatos -->
+    <div id="cd-pagination" class="flex items-center justify-between mt-3 px-1">
+        <span id="cd-page-info" class="text-xs text-gray-500"></span>
+        <div class="flex items-center gap-1">
+            <button onclick="cdPage('first')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="cd-btn-first" disabled>&laquo;</button>
+            <button onclick="cdPage('prev')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="cd-btn-prev" disabled>&lsaquo;</button>
+            <span id="cd-page-nums" class="flex gap-1"></span>
+            <button onclick="cdPage('next')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="cd-btn-next">&rsaquo;</button>
+            <button onclick="cdPage('last')" class="px-2 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-40" id="cd-btn-last">&raquo;</button>
+        </div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">
@@ -610,13 +671,178 @@
 
 <script>
 const USD_TO_MXN = {{ usd_to_mxn or 20 }};
+const PAGE_SIZE = 25;
 let _modalState = {};
+let _adCurrentPage = 1;
+let _cdCurrentPage = 1;
+let _searchTerm = '';
 
 function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
 
 function toggleVariationsD(id) {
     var row = document.getElementById(id);
     if (row) row.classList.toggle('hidden');
+}
+
+// ===== Global Search =====
+
+var _searchDebounce = null;
+function globalSearch() {
+    clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(function() {
+        _searchTerm = (document.getElementById('deals-search').value || '').toLowerCase().trim();
+        _adCurrentPage = 1;
+        _cdCurrentPage = 1;
+        applySearchAndPaginate();
+    }, 200);
+}
+
+function applySearchAndPaginate() {
+    var adCount = paginateTable('active-deals-table', 'active-deal-row', _searchTerm, _adCurrentPage, 'ad');
+    var cdCount = paginateTable('candidates-table', 'candidate-row', _searchTerm, _cdCurrentPage, 'cd');
+
+    var countEl = document.getElementById('search-count');
+    if (_searchTerm) {
+        countEl.textContent = adCount + ' deals + ' + cdCount + ' candidatos';
+        countEl.classList.remove('hidden');
+    } else {
+        countEl.classList.add('hidden');
+    }
+    // Update candidates visible count
+    var ccEl = document.getElementById('candidates-count');
+    if (ccEl) ccEl.textContent = cdCount;
+}
+
+function paginateTable(tableId, rowClass, search, page, prefix) {
+    var table = document.getElementById(tableId);
+    if (!table) return 0;
+    var tbody = table.querySelector('tbody');
+    if (!tbody) return 0;
+
+    var mainRows = Array.from(tbody.querySelectorAll('tr.' + rowClass));
+
+    // Filter by search + category (for candidates)
+    var catFilter = '';
+    if (prefix === 'cd') {
+        var catEl = document.getElementById('cat-filter');
+        if (catEl) catFilter = catEl.value;
+    }
+
+    var visible = [];
+    mainRows.forEach(function(row) {
+        var match = true;
+        if (search) {
+            var haystack = row.getAttribute('data-search') || '';
+            match = haystack.indexOf(search) !== -1;
+        }
+        if (match && catFilter) {
+            var cat = row.getAttribute('data-category') || '';
+            if (cat !== catFilter) match = false;
+        }
+        row._visible = match;
+        if (match) visible.push(row);
+    });
+
+    var totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+    if (page > totalPages) page = totalPages;
+    if (prefix === 'ad') _adCurrentPage = page;
+    else _cdCurrentPage = page;
+
+    var startIdx = (page - 1) * PAGE_SIZE;
+    var endIdx = startIdx + PAGE_SIZE;
+
+    mainRows.forEach(function(row) {
+        var varId = row.getAttribute('data-var-row');
+        var varRow = varId ? document.getElementById(varId) : null;
+        row.classList.add('hidden');
+        if (varRow) varRow.classList.add('hidden');
+    });
+
+    for (var i = startIdx; i < Math.min(endIdx, visible.length); i++) {
+        visible[i].classList.remove('hidden');
+    }
+
+    renderPaginationControls(prefix, page, totalPages, visible.length);
+    return visible.length;
+}
+
+function renderPaginationControls(prefix, page, totalPages, totalItems) {
+    var info = document.getElementById(prefix + '-page-info');
+    var nums = document.getElementById(prefix + '-page-nums');
+    var btnFirst = document.getElementById(prefix + '-btn-first');
+    var btnPrev = document.getElementById(prefix + '-btn-prev');
+    var btnNext = document.getElementById(prefix + '-btn-next');
+    var btnLast = document.getElementById(prefix + '-btn-last');
+
+    if (!info) return;
+
+    var from = totalItems === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+    var to = Math.min(page * PAGE_SIZE, totalItems);
+    info.textContent = from + '-' + to + ' de ' + totalItems;
+
+    btnFirst.disabled = page <= 1;
+    btnPrev.disabled = page <= 1;
+    btnNext.disabled = page >= totalPages;
+    btnLast.disabled = page >= totalPages;
+
+    // Page number buttons (max 5 visible)
+    nums.innerHTML = '';
+    var startP = Math.max(1, page - 2);
+    var endP = Math.min(totalPages, startP + 4);
+    if (endP - startP < 4) startP = Math.max(1, endP - 4);
+
+    for (var p = startP; p <= endP; p++) {
+        var btn = document.createElement('button');
+        btn.textContent = p;
+        btn.className = p === page
+            ? 'px-2.5 py-1 text-xs rounded font-semibold bg-blue-500 text-white'
+            : 'px-2.5 py-1 text-xs rounded bg-gray-100 text-gray-600 hover:bg-gray-200';
+        btn.setAttribute('data-page', p);
+        btn.onclick = (function(pg) {
+            return function() {
+                if (prefix === 'ad') { _adCurrentPage = pg; }
+                else { _cdCurrentPage = pg; }
+                applySearchAndPaginate();
+            };
+        })(p);
+        nums.appendChild(btn);
+    }
+}
+
+function adPage(action) {
+    var table = document.getElementById('active-deals-table');
+    if (!table) return;
+    var total = table.querySelectorAll('tr.active-deal-row').length;
+    var totalFiltered = Array.from(table.querySelectorAll('tr.active-deal-row')).filter(function(r) {
+        if (!_searchTerm) return true;
+        return (r.getAttribute('data-search') || '').indexOf(_searchTerm) !== -1;
+    }).length;
+    var totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+    if (action === 'first') _adCurrentPage = 1;
+    else if (action === 'prev') _adCurrentPage = Math.max(1, _adCurrentPage - 1);
+    else if (action === 'next') _adCurrentPage = Math.min(totalPages, _adCurrentPage + 1);
+    else if (action === 'last') _adCurrentPage = totalPages;
+    applySearchAndPaginate();
+}
+
+function cdPage(action) {
+    var table = document.getElementById('candidates-table');
+    if (!table) return;
+    var catFilter = '';
+    var catEl = document.getElementById('cat-filter');
+    if (catEl) catFilter = catEl.value;
+    var totalFiltered = Array.from(table.querySelectorAll('tr.candidate-row')).filter(function(r) {
+        var match = true;
+        if (_searchTerm) match = (r.getAttribute('data-search') || '').indexOf(_searchTerm) !== -1;
+        if (match && catFilter) match = (r.getAttribute('data-category') || '') === catFilter;
+        return match;
+    }).length;
+    var totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+    if (action === 'first') _cdCurrentPage = 1;
+    else if (action === 'prev') _cdCurrentPage = Math.max(1, _cdCurrentPage - 1);
+    else if (action === 'next') _cdCurrentPage = Math.min(totalPages, _cdCurrentPage + 1);
+    else if (action === 'last') _cdCurrentPage = totalPages;
+    applySearchAndPaginate();
 }
 
 // ===== Event delegation for buttons (avoids onclick quoting issues) =====
@@ -1353,23 +1579,8 @@ function scrollToSection(id) {
 
 // ===== Category filter =====
 function filterByCategory() {
-    var val = document.getElementById('cat-filter').value;
-    var rows = document.querySelectorAll('#candidates-table tbody tr.candidate-row');
-    var visible = 0;
-    rows.forEach(function(row) {
-        var cat = row.getAttribute('data-category') || '';
-        var varId = row.getAttribute('data-var-row');
-        var varRow = varId ? document.getElementById(varId) : null;
-        if (!val || cat === val) {
-            row.classList.remove('hidden');
-            visible++;
-        } else {
-            row.classList.add('hidden');
-            if (varRow) varRow.classList.add('hidden');
-        }
-    });
-    var countEl = document.getElementById('candidates-count');
-    if (countEl) countEl.textContent = visible;
+    _cdCurrentPage = 1;
+    applySearchAndPaginate();
 }
 
 // ===== Sorting generico =====
@@ -1412,9 +1623,16 @@ function _sortTable(tableId, rowClass, btnClass, activeClass, field) {
 
 function sortCandidates(field) {
     _sortTable('candidates-table', 'candidate-row', 'sort-btn', 'bg-yellow-100 text-yellow-700 border border-yellow-300', field);
+    _cdCurrentPage = 1;
+    applySearchAndPaginate();
 }
 
 function sortActiveDeals(field) {
     _sortTable('active-deals-table', 'active-deal-row', 'asort-btn', 'bg-green-100 text-green-700 border border-green-300', field);
+    _adCurrentPage = 1;
+    applySearchAndPaginate();
 }
+
+// ===== Init: paginate on load =====
+applySearchAndPaginate();
 </script>
