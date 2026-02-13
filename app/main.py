@@ -1455,10 +1455,133 @@ async def _enrich_variation_skus(client, products: list):
 
 # ---------- Product Intelligence tabs ----------
 
+@app.get("/partials/products-inventory", response_class=HTMLResponse)
+async def products_inventory_partial(
+    request: Request,
+    preset: str = "all",
+    search: str = "",
+    sort_by: str = "",
+    enrich: str = "basic",
+    full_filter: str = "all",
+):
+    """Tab Inventario unificado: reemplaza all/top/stock/low/full."""
+    from datetime import datetime, timedelta
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        now = datetime.utcnow()
+        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
+
+        # Fase 1: fetch paralelo (products + orders + bm_stock)
+        all_bodies, all_orders = await asyncio.gather(
+            _get_all_products_cached(client),
+            client.fetch_all_orders(date_from=date_from, date_to=date_to),
+        )
+        sales_map = _aggregate_sales_by_item(all_orders)
+        products = _build_product_list(all_bodies, sales_map)
+
+        # Recomendaciones (para preset baja_venta)
+        for p in products:
+            recs = []
+            if p["pictures_count"] < 6:
+                recs.append("Agregar mas fotos (minimo 8)")
+            if not p["has_video"]:
+                recs.append("Agregar video al listado")
+            if p["available_quantity"] == 0:
+                recs.append("Reponer stock para no perder posicionamiento")
+            if p.get("units", 0) == 0 and p["available_quantity"] > 0:
+                recs.append("Candidato para deal/promocion")
+            p["recommendations"] = recs
+
+        # BM stock + variation SKUs (siempre)
+        bm_map, _ = await asyncio.gather(
+            _get_bm_stock_cached(products),
+            _enrich_variation_skus(client, products),
+        )
+        _apply_bm_stock(products, bm_map)
+
+        # Fase 2: enriquecimiento completo (costo/margen) si se pide
+        usd_to_mxn = 0.0
+        if enrich == "full":
+            _, usd_to_mxn = await asyncio.gather(
+                _enrich_with_bm_product_info(products),
+                _get_usd_to_mxn(client),
+            )
+            _calc_margins(products, usd_to_mxn)
+
+        # --- Filtrado por preset ---
+        if preset == "top":
+            products = [p for p in products if p.get("units", 0) > 0]
+        elif preset == "stock":
+            products = [p for p in products if p.get("_bm_total", 0) > 0]
+        elif preset == "low":
+            products = [p for p in products if p.get("units", 0) <= 2]
+        elif preset == "full":
+            products = [p for p in products if p.get("is_full")]
+        elif preset == "no_stock":
+            products = [p for p in products if p.get("available_quantity", 0) == 0]
+
+        # Filtro FULL adicional
+        if full_filter == "full":
+            products = [p for p in products if p.get("is_full")]
+        elif full_filter == "not_full":
+            products = [p for p in products if not p.get("is_full")]
+
+        # Busqueda por texto
+        if search:
+            q = search.lower()
+            products = [p for p in products
+                        if q in p.get("id", "").lower()
+                        or q in (p.get("sku") or "").lower()
+                        or q in p.get("title", "").lower()]
+
+        total_count = len(products)
+
+        # Ordenamiento
+        if not sort_by:
+            sort_by = {
+                "top": "units_desc",
+                "stock": "bm_desc",
+                "low": "stock_desc",
+                "full": "stock_desc",
+                "no_stock": "units_desc",
+            }.get(preset, "stock_desc")
+
+        field, direction = (sort_by.rsplit("_", 1) + ["desc"])[:2]
+        reverse = direction == "desc"
+        sort_keys = {
+            "stock": lambda p: p.get("available_quantity", 0),
+            "units": lambda p: p.get("units", 0),
+            "bm": lambda p: p.get("_bm_total", 0),
+            "price": lambda p: p.get("price", 0),
+            "revenue": lambda p: p.get("revenue", 0),
+            "margin": lambda p: p.get("_margen_pct") if p.get("_margen_pct") is not None else -999,
+            "photos": lambda p: p.get("pictures_count", 0),
+        }
+        products.sort(key=sort_keys.get(field, sort_keys["stock"]), reverse=reverse)
+
+        return templates.TemplateResponse("partials/products_inventory.html", {
+            "request": request,
+            "products": products,
+            "preset": preset,
+            "search": search,
+            "sort_by": sort_by,
+            "enrich": enrich,
+            "full_filter": full_filter,
+            "total_count": total_count,
+            "usd_to_mxn": round(usd_to_mxn, 2),
+        })
+    finally:
+        await client.close()
+
+
+# --- Legacy redirects (old tabs → new inventory endpoint) ---
+
 @app.get("/partials/products-all", response_class=HTMLResponse)
 async def products_all_partial(request: Request):
-    """Tab Todos: wrapper con filtros + grid existente."""
-    return templates.TemplateResponse("partials/products_all.html", {"request": request})
+    return await products_inventory_partial(request, preset="all")
 
 
 @app.get("/partials/products-summary", response_class=HTMLResponse)
@@ -1540,217 +1663,22 @@ async def products_summary_partial(request: Request):
 
 @app.get("/partials/products-top-sellers", response_class=HTMLResponse)
 async def products_top_sellers_partial(request: Request):
-    """Top 30 productos por unidades vendidas (30d). Usa cache compartido."""
-    from datetime import datetime, timedelta
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        # Ordenes (cached) + items (cached) en paralelo
-        all_orders, all_bodies = await asyncio.gather(
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
-            _get_all_products_cached(client),
-        )
-        sales_map = _aggregate_sales_by_item(all_orders)
-
-        if not sales_map:
-            return HTMLResponse('<p class="text-center py-8 text-gray-500">Sin ventas en los ultimos 30 dias</p>')
-
-        # Filtrar solo items con ventas y ordenar
-        sold_ids = sorted(sales_map.keys(), key=lambda x: sales_map[x]["units"], reverse=True)[:30]
-        body_map = {b["id"]: b for b in all_bodies if b.get("id")}
-        top_bodies = [body_map[iid] for iid in sold_ids if iid in body_map]
-
-        products = _build_product_list(top_bodies, sales_map)
-        # Mantener orden por ventas
-        products.sort(key=lambda p: p.get("units", 0), reverse=True)
-
-        # Enriquecer con BM stock + product info + FX + variation SKUs en paralelo
-        bm_map, _, usd_to_mxn, _ = await asyncio.gather(
-            _get_bm_stock_cached(products),
-            _enrich_with_bm_product_info(products),
-            _get_usd_to_mxn(client),
-            _enrich_variation_skus(client, products),
-        )
-        _apply_bm_stock(products, bm_map)
-        _calc_margins(products, usd_to_mxn)
-
-        return templates.TemplateResponse("partials/products_top_sellers.html", {
-            "request": request,
-            "products": products,
-            "usd_to_mxn": round(usd_to_mxn, 2),
-        })
-    finally:
-        await client.close()
+    return await products_inventory_partial(request, preset="top", enrich="full")
 
 
 @app.get("/partials/products-high-stock", response_class=HTMLResponse)
 async def products_high_stock_partial(request: Request):
-    """Productos con mayor stock en BinManager. Usa cache compartido."""
-    from datetime import datetime, timedelta
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        # Items (cached) + ordenes (cached) en paralelo
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
-        )
-        sales_map = _aggregate_sales_by_item(all_orders)
-
-        # Solo items con SKU
-        products = _build_product_list(
-            [b for b in all_bodies if _get_item_sku(b)], sales_map
-        )
-
-        # Fetch BM stock + product info + FX + variation SKUs en paralelo
-        bm_map, _, usd_to_mxn, _ = await asyncio.gather(
-            _get_bm_stock_cached(products),
-            _enrich_with_bm_product_info(products),
-            _get_usd_to_mxn(client),
-            _enrich_variation_skus(client, products),
-        )
-        _apply_bm_stock(products, bm_map)
-
-        # Filtrar solo con stock BM, ordenar desc, top 50
-        products = [p for p in products if p.get("_bm_total", 0) > 0]
-        products.sort(key=lambda p: p.get("_bm_total", 0), reverse=True)
-        products = products[:50]
-
-        # Agregar ventas 30d
-        for p in products:
-            s = sales_map.get(p["id"], {"units": 0, "revenue": 0})
-            p["units_30d"] = s["units"]
-            p["revenue_30d"] = s["revenue"]
-
-        _calc_margins(products, usd_to_mxn)
-
-        return templates.TemplateResponse("partials/products_high_stock.html", {
-            "request": request,
-            "products": products,
-            "usd_to_mxn": round(usd_to_mxn, 2),
-        })
-    finally:
-        await client.close()
+    return await products_inventory_partial(request, preset="stock", enrich="full")
 
 
 @app.get("/partials/products-low-sellers", response_class=HTMLResponse)
 async def products_low_sellers_partial(request: Request):
-    """Productos activos con 0-2 ventas (30d). Usa cache compartido."""
-    from datetime import datetime, timedelta
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        all_orders, all_bodies = await asyncio.gather(
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
-            _get_all_products_cached(client),
-        )
-        sales_map = _aggregate_sales_by_item(all_orders)
-
-        products = _build_product_list(all_bodies, sales_map)
-
-        # Filtrar: 0-2 ventas
-        products = [p for p in products if p.get("units", 0) <= 2]
-
-        # Recomendaciones automaticas
-        for p in products:
-            recs = []
-            if p["pictures_count"] < 6:
-                recs.append("Agregar mas fotos (minimo 8)")
-            if not p["has_video"]:
-                recs.append("Agregar video al listado")
-            if p["available_quantity"] == 0:
-                recs.append("Reponer stock para no perder posicionamiento")
-            if p.get("units", 0) == 0 and p["available_quantity"] > 0:
-                recs.append("Candidato para deal/promocion")
-            p["recommendations"] = recs
-
-        # Ordenar por stock desc, limitar a 50
-        products.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
-        products = products[:50]
-
-        # BM stock + variation SKUs
-        bm_map, _ = await asyncio.gather(
-            _get_bm_stock_cached(products),
-            _enrich_variation_skus(client, products),
-        )
-        _apply_bm_stock(products, bm_map)
-
-        return templates.TemplateResponse("partials/products_low_sellers.html", {
-            "request": request,
-            "products": products,
-        })
-    finally:
-        await client.close()
+    return await products_inventory_partial(request, preset="low")
 
 
 @app.get("/partials/products-full", response_class=HTMLResponse)
 async def products_full_partial(request: Request, stock_filter: str = "all"):
-    """Productos en MeLi Fulfillment (FULL)."""
-    from datetime import datetime, timedelta
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
-        )
-        sales_map = _aggregate_sales_by_item(all_orders)
-
-        # Filtrar solo items FULL
-        full_bodies = [
-            b for b in all_bodies
-            if b.get("shipping", {}).get("logistic_type") == "fulfillment"
-        ]
-
-        products = _build_product_list(full_bodies, sales_map)
-
-        # Aplicar filtro de stock
-        if stock_filter == "with_stock":
-            products = [p for p in products if p.get("available_quantity", 0) > 0]
-        elif stock_filter == "no_stock":
-            products = [p for p in products if p.get("available_quantity", 0) == 0]
-
-        # Enriquecer con BM stock + product info + FX + variation SKUs
-        bm_map, _, usd_to_mxn, _ = await asyncio.gather(
-            _get_bm_stock_cached(products),
-            _enrich_with_bm_product_info(products),
-            _get_usd_to_mxn(client),
-            _enrich_variation_skus(client, products),
-        )
-        _apply_bm_stock(products, bm_map)
-        _calc_margins(products, usd_to_mxn)
-
-        # Ordenar por stock desc, luego por ventas desc
-        products.sort(key=lambda p: (p.get("available_quantity", 0), p.get("units", 0)), reverse=True)
-
-        return templates.TemplateResponse("partials/products_full.html", {
-            "request": request,
-            "products": products,
-            "stock_filter": stock_filter,
-            "usd_to_mxn": round(usd_to_mxn, 2),
-        })
-    finally:
-        await client.close()
+    return await products_inventory_partial(request, preset="full", enrich="full", full_filter=stock_filter)
 
 
 @app.get("/partials/products-deals", response_class=HTMLResponse)

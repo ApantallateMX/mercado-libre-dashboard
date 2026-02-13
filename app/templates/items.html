@@ -11,32 +11,16 @@
     </div>
 </div>
 
-<!-- Tabs -->
+<!-- Tabs (4) -->
 <div class="bg-white rounded-lg shadow mb-6">
     <div class="flex border-b overflow-x-auto" id="product-tabs">
         <button data-tab="summary" data-url="/partials/products-summary"
                 class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-yellow-400 text-yellow-700 bg-yellow-50">
             Resumen
         </button>
-        <button data-tab="all" data-url="/partials/products-all"
+        <button data-tab="inventory" data-url="/partials/products-inventory"
                 class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
-            Todos
-        </button>
-        <button data-tab="top" data-url="/partials/products-top-sellers"
-                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
-            Top Ventas
-        </button>
-        <button data-tab="stock" data-url="/partials/products-high-stock"
-                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
-            Mayor Stock
-        </button>
-        <button data-tab="low" data-url="/partials/products-low-sellers"
-                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
-            Baja Venta
-        </button>
-        <button data-tab="full" data-url="/partials/products-full"
-                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
-            FULL
+            Inventario
         </button>
         <button data-tab="deals" data-url="/partials/products-deals"
                 class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
@@ -67,7 +51,6 @@
 {% block scripts %}
 <script>
 (function() {
-    var tabCache = {};
     var activeTab = 'summary';
 
     function switchTab(tabName, url) {
@@ -117,7 +100,7 @@
     // Load default tab
     switchTab('summary', '/partials/products-summary');
 
-    // Expose for external use (e.g. "Sin stock con ventas" button)
+    // Expose for external use
     window.switchProductTab = switchTab;
 
     // Stock update function (used by items-grid tab)
