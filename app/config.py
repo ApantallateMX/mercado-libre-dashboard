@@ -1,14 +1,15 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env.production first (Railway), then .env (local) as fallback
+_prod_env = Path(__file__).resolve().parent.parent / ".env.production"
+if _prod_env.exists():
+    load_dotenv(_prod_env)
+load_dotenv()  # .env local (no sobreescribe las ya cargadas)
 
-# Debug: log env vars at startup (Railway)
-print(f"[CONFIG] MELI_CLIENT_ID from env: '{os.environ.get('MELI_CLIENT_ID', '<NOT SET>')}'")
-print(f"[CONFIG] All MELI_ env vars: {[k for k in os.environ if k.startswith('MELI_')]}")
-print(f"[CONFIG] RAILWAY_ vars: {[k for k in os.environ if k.startswith('RAILWAY')]}")
-print(f"[CONFIG] PORT: {os.environ.get('PORT', '<NOT SET>')}")
-print(f"[CONFIG] Total env vars: {len(os.environ)}")
+print(f"[CONFIG] MELI_CLIENT_ID loaded: {'YES' if os.getenv('MELI_CLIENT_ID') else 'NO'}")
+print(f"[CONFIG] Source: {'.env.production' if _prod_env.exists() else '.env'}")
 
 # Mercado Libre API Configuration
 MELI_CLIENT_ID = os.getenv("MELI_CLIENT_ID", "")
