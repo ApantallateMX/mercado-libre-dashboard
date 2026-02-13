@@ -100,19 +100,24 @@
 
         {% if q.status == 'UNANSWERED' %}
         <div class="border-t pt-3">
-            <!-- AI Suggest Button -->
+            <!-- AI Suggest Button + Context Input -->
             <div class="mb-2">
-                <button onclick="suggestQuestionAnswer(this)"
-                        data-id="{{ q.id }}"
-                        data-text="{{ q.text }}"
-                        data-product-title="{{ q.product_title }}"
-                        data-price="{{ q.product_price }}"
-                        data-stock="{{ q.product_stock }}"
-                        data-elapsed="{{ q.elapsed }}"
-                        data-buyer-history='{{ q.buyer_history_json }}'
-                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
-                    <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
-                </button>
+                <div class="flex items-center gap-2 mb-1.5">
+                    <button onclick="suggestQuestionAnswer(this)"
+                            data-id="{{ q.id }}"
+                            data-text="{{ q.text }}"
+                            data-product-title="{{ q.product_title }}"
+                            data-price="{{ q.product_price }}"
+                            data-stock="{{ q.product_stock }}"
+                            data-elapsed="{{ q.elapsed }}"
+                            data-buyer-history='{{ q.buyer_history_json }}'
+                            class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors flex-shrink-0">
+                        <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
+                    </button>
+                    <input type="text" id="ai-context-q-{{ q.id }}"
+                           placeholder="Instrucciones para la IA (ej: menciona garantia, habla del envio gratis...)"
+                           class="flex-1 border border-purple-200 rounded-full px-3 py-1 text-xs text-gray-700 focus:ring-1 focus:ring-purple-400 focus:outline-none placeholder-gray-400">
+                </div>
             </div>
 
             <!-- AI Suggestion Panel (hidden until triggered) -->

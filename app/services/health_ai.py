@@ -4,7 +4,7 @@ import json
 import re
 
 
-def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed, buyer_history=None):
+def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed, buyer_history=None, user_context=None):
     system = (
         "Eres un vendedor profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
         "ESTRUCTURA OBLIGATORIA de cada respuesta:\n"
@@ -61,6 +61,9 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     if elapsed:
         # Add urgency context
         user += "(Responde con tono acorde a la espera del comprador)\n"
+    if user_context:
+        user += f"\n\nINSTRUCCIONES DEL VENDEDOR: {user_context}\n(Incorpora estas instrucciones de forma natural en tu respuesta)"
+
     user += "\nGenera una respuesta profesional siguiendo la estructura Saludo+Respuesta+Propuesta+Despedida:"
 
     return system, user, 800

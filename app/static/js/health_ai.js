@@ -140,13 +140,17 @@ window.suggestQuestionAnswer = function (btn) {
     var buyerHistory = [];
     try { buyerHistory = JSON.parse(btn.getAttribute('data-buyer-history') || '[]'); } catch (e) { }
 
+    var contextInput = document.getElementById('ai-context-q-' + id);
+    var userContext = contextInput ? contextInput.value.trim() : '';
+
     var payload = {
         question_text: btn.getAttribute('data-text'),
         product_title: btn.getAttribute('data-product-title') || '',
         product_price: parseFloat(btn.getAttribute('data-price')) || 0,
         product_stock: parseInt(btn.getAttribute('data-stock')) || 0,
         elapsed: btn.getAttribute('data-elapsed') || '',
-        buyer_history: buyerHistory
+        buyer_history: buyerHistory,
+        user_context: userContext
     };
 
     streamAiResponse('/api/health-ai/suggest-answer', payload, textId, function (fullText) {

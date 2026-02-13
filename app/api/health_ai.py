@@ -41,6 +41,7 @@ async def suggest_answer(request: Request):
         body.get("product_stock", 0),
         body.get("elapsed", ""),
         buyer_history=body.get("buyer_history", []),
+        user_context=body.get("user_context", ""),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),
