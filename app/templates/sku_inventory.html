@@ -1,0 +1,637 @@
+{% extends "base.html" %}
+
+{% block title %}Lanzar SKUs{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Lanzar SKUs</h1>
+    <p class="text-gray-600">Identifica productos con stock en BinManager, investiga automaticamente y lanza publicaciones optimizadas en MeLi</p>
+</div>
+
+<!-- Seccion de carga de SKUs -->
+<div class="bg-white p-6 rounded-lg shadow mb-6">
+    <h2 class="text-lg font-semibold text-gray-800 mb-4">1. Cargar lista de SKUs</h2>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- Opcion 1: Subir archivo -->
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-6 hover:border-yellow-400 transition-colors">
+            <div class="text-center">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="mt-2 text-sm font-medium text-gray-700">Subir archivo CSV o Excel</p>
+                <p class="mt-1 text-xs text-gray-500">La primera columna debe contener los SKUs</p>
+                <input type="file" id="file-input" accept=".csv,.xlsx,.xls" class="hidden">
+                <button type="button" onclick="document.getElementById('file-input').click()"
+                        class="mt-4 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm font-medium">
+                    Seleccionar archivo
+                </button>
+                <p id="file-name" class="mt-2 text-xs text-gray-500"></p>
+            </div>
+        </div>
+
+        <!-- Opcion 2: Pegar texto -->
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">O pegar lista de SKUs</label>
+            <textarea id="text-skus" rows="5"
+                      class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                      placeholder="Pega los SKUs separados por comas, punto y coma o saltos de linea...&#10;&#10;Ejemplo:&#10;SKU001&#10;SKU002, SKU003&#10;SKU004;SKU005"></textarea>
+        </div>
+    </div>
+
+    <div class="mt-6 flex items-center gap-4">
+        <button type="button" id="btn-comparar"
+                class="bg-yellow-400 text-gray-800 font-semibold px-6 py-2.5 rounded-lg hover:bg-yellow-500 transition text-sm">
+            Comparar con MeLi
+        </button>
+        <button type="button" id="btn-limpiar"
+                class="border border-gray-300 text-gray-600 px-4 py-2.5 rounded-lg hover:bg-gray-100 transition text-sm">
+            Limpiar
+        </button>
+        <span id="sku-count" class="text-sm text-gray-500"></span>
+    </div>
+</div>
+
+<!-- Loading -->
+<div id="loading" class="hidden">
+    <div class="bg-white rounded-lg shadow p-12 text-center">
+        <svg class="animate-spin h-10 w-10 mx-auto mb-4 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <p class="text-gray-500">Consultando BinManager y Mercado Libre...</p>
+        <p class="text-gray-400 text-sm mt-1">Esto puede tardar segun la cantidad de SKUs</p>
+    </div>
+</div>
+
+<!-- Resumen -->
+<div id="summary-section" class="hidden mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div class="bg-white p-5 rounded-lg shadow">
+            <p class="text-gray-500 text-xs mb-1">Total SKUs</p>
+            <p class="text-2xl font-bold text-gray-800" id="sum-total">0</p>
+        </div>
+        <div class="bg-white p-5 rounded-lg shadow border-l-4 border-green-500">
+            <p class="text-gray-500 text-xs mb-1">Candidatos a Lanzar</p>
+            <p class="text-2xl font-bold text-green-600" id="sum-not-published">0</p>
+            <p class="text-xs text-gray-500">Con stock, sin publicacion</p>
+        </div>
+        <div class="bg-white p-5 rounded-lg shadow border-l-4 border-purple-500">
+            <p class="text-gray-500 text-xs mb-1">Pausados</p>
+            <p class="text-2xl font-bold text-purple-600" id="sum-paused">0</p>
+            <p class="text-xs text-gray-500">Revisar y reactivar</p>
+        </div>
+        <div class="bg-white p-5 rounded-lg shadow border-l-4 border-blue-500">
+            <p class="text-gray-500 text-xs mb-1">Activos</p>
+            <p class="text-2xl font-bold text-blue-600" id="sum-active">0</p>
+            <p class="text-xs text-gray-500">Ya publicados</p>
+        </div>
+        <div class="bg-white p-5 rounded-lg shadow border-l-4 border-gray-400">
+            <p class="text-gray-500 text-xs mb-1">Sin Stock</p>
+            <p class="text-2xl font-bold text-gray-500" id="sum-no-stock">0</p>
+            <p class="text-xs text-gray-500">Ignorar por ahora</p>
+        </div>
+    </div>
+</div>
+
+<!-- Filtros y tabla de resultados -->
+<div id="results-section" class="hidden">
+    <div class="bg-white rounded-t-lg shadow px-4 py-3 border-b flex flex-wrap items-center gap-3">
+        <span class="text-sm font-medium text-gray-700">Filtrar:</span>
+        <button type="button" data-filter="all" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-yellow-400 text-gray-800">Todos</button>
+        <button type="button" data-filter="not_published" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-green-100">Candidatos a lanzar</button>
+        <button type="button" data-filter="paused" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-purple-100">Pausados</button>
+        <button type="button" data-filter="active" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-blue-100">Activos</button>
+        <button type="button" data-filter="no_stock" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-gray-100">Sin stock</button>
+        <input type="text" id="search-sku" placeholder="Buscar SKU..." class="ml-auto border rounded px-3 py-1 text-sm w-48">
+    </div>
+
+    <div class="bg-white rounded-b-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-left">
+                <tr>
+                    <th class="px-4 py-3 font-semibold text-gray-600">Estado</th>
+                    <th class="px-4 py-3 font-semibold text-gray-600">SKU</th>
+                    <th class="px-4 py-3 font-semibold text-gray-600 text-right" title="NEW / GRA / GRB / GRC">GR</th>
+                    <th class="px-4 py-3 font-semibold text-gray-600 text-right" title="ICB / ICC">IC</th>
+                    <th class="px-4 py-3 font-semibold text-gray-600 text-right" title="Inventario sin clasificar en sufijos">Otros</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600">ID MeLi</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600">Titulo en MeLi</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600 text-center">Score</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600 text-right">Stock MeLi</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600 text-right">Precio</th>
+                    <th class="px-3 py-3 font-semibold text-gray-600 text-center">Accion</th>
+                </tr>
+            </thead>
+            <tbody id="results-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Modal para crear item -->
+<div id="create-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <!-- Header -->
+        <div class="bg-yellow-400 px-6 py-4 flex items-center justify-between flex-shrink-0">
+            <div>
+                <h3 class="text-lg font-bold text-gray-800">Crear Publicacion en MeLi</h3>
+                <p class="text-sm text-gray-700" id="modal-sku">SKU: -</p>
+            </div>
+            <button type="button" onclick="closeModal()" class="text-gray-700 hover:text-gray-900">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Steps indicator -->
+        <div class="px-6 py-3 border-b bg-gray-50 flex-shrink-0">
+            <div class="flex items-center justify-between">
+                <div class="step-indicator flex items-center" data-step="1">
+                    <span class="w-8 h-8 rounded-full bg-yellow-400 text-gray-800 flex items-center justify-center font-bold text-sm">1</span>
+                    <span class="ml-2 text-sm font-medium text-gray-800">Categoria</span>
+                </div>
+                <div class="flex-1 h-1 bg-gray-300 mx-4"></div>
+                <div class="step-indicator flex items-center" data-step="2">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center font-bold text-sm">2</span>
+                    <span class="ml-2 text-sm font-medium text-gray-500">Atributos</span>
+                </div>
+                <div class="flex-1 h-1 bg-gray-300 mx-4"></div>
+                <div class="step-indicator flex items-center" data-step="3">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center font-bold text-sm">3</span>
+                    <span class="ml-2 text-sm font-medium text-gray-500">Detalles</span>
+                </div>
+                <div class="flex-1 h-1 bg-gray-300 mx-4"></div>
+                <div class="step-indicator flex items-center" data-step="4">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center font-bold text-sm">4</span>
+                    <span class="ml-2 text-sm font-medium text-gray-500">Publicar</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Content area -->
+        <div class="flex-1 overflow-y-auto p-6" id="modal-content">
+            <!-- Step 0: Research (auto-investigation) -->
+            <div id="step-0" class="step-content hidden">
+                <div class="text-center py-8">
+                    <svg class="animate-spin h-12 w-12 mx-auto text-yellow-400 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <h4 class="text-lg font-semibold text-gray-800 mb-2">Investigando producto...</h4>
+                    <p id="research-status-text" class="text-sm text-gray-500 mb-4">Buscando en MeLi y la web...</p>
+
+                    <!-- Progress bar -->
+                    <div class="max-w-md mx-auto mb-6">
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="research-progress-bar" class="bg-yellow-400 h-2 rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>MeLi</span>
+                            <span>Web</span>
+                            <span>Categoria</span>
+                            <span>Atributos</span>
+                        </div>
+                    </div>
+
+                    <button type="button" id="btn-skip-research" onclick="skipResearch()"
+                            class="hidden px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-100 transition text-sm">
+                        Omitir investigacion
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 1: Categoria -->
+            <div id="step-1" class="step-content hidden">
+                <div class="mb-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-sm font-medium text-gray-700">Titulo del producto <span id="title-char-count" class="text-xs text-gray-400 ml-2"></span></label>
+                        <button type="button" onclick="aiImproveTitle()" class="ai-btn hidden px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1" title="Mejorar titulo con IA">
+                            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.617 1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-2.786-1.115V7a1 1 0 01-2 0V5.967L5.587 7.082l1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 11.894-1.79l1.599.8L9 4.323V3a1 1 0 011-1z"/></svg>
+                            IA
+                        </button>
+                    </div>
+                    <input type="text" id="item-title" maxlength="60"
+                           class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                           placeholder="Escribe un titulo descriptivo para buscar categoria...">
+                    <div id="ai-title-suggestions" class="hidden mt-2"></div>
+                    <button type="button" onclick="searchCategory()"
+                            class="mt-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm">
+                        Buscar categoria por titulo
+                    </button>
+                </div>
+
+                <!-- Keyword category search -->
+                <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <label class="block text-xs font-medium text-blue-700 mb-2">Buscar categoria por palabra clave (ej: cubrebocas, funda, audifonos)</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="category-keyword"
+                               class="flex-1 border border-blue-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+                               placeholder="cubrebocas, funda iphone, audifonos..."
+                               onkeydown="if(event.key==='Enter') searchCategoryByKeyword()">
+                        <button type="button" onclick="searchCategoryByKeyword()"
+                                class="px-4 py-1.5 bg-blue-500 text-white text-sm font-medium rounded hover:bg-blue-600 transition">
+                            Buscar
+                        </button>
+                    </div>
+                </div>
+
+                <div id="categories-loading" class="hidden text-center py-8">
+                    <svg class="animate-spin h-8 w-8 mx-auto text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <p class="text-gray-500 mt-2 text-sm">Buscando categorias...</p>
+                </div>
+
+                <div id="categories-list" class="space-y-2 mt-4"></div>
+
+                <!-- Manual category ID input (always visible) -->
+                <div id="manual-category-section" class="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                    <p class="text-xs text-gray-600 mb-2">O ingresa el ID de categoria directamente (ej: MLM1234):</p>
+                    <div class="flex gap-2">
+                        <input type="text" id="manual-category-id"
+                               class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-yellow-400"
+                               placeholder="MLM1234">
+                        <input type="text" id="manual-category-name"
+                               class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-yellow-400"
+                               placeholder="Nombre (opcional)">
+                        <button type="button" onclick="useManualCategory()"
+                                class="px-3 py-1.5 bg-yellow-400 text-gray-800 text-sm font-medium rounded hover:bg-yellow-500 transition">
+                            Usar
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Research warnings -->
+                <div id="research-warnings" class="hidden mt-4"></div>
+
+                <!-- Competitors panel -->
+                <div id="competitors-panel" class="hidden mt-6 border-t pt-4">
+                    <h4 class="text-sm font-semibold text-gray-700 mb-3">Competencia en MeLi</h4>
+                    <div id="competitors-price-range" class="mb-3"></div>
+                    <div id="competitors-list" class="space-y-2 max-h-48 overflow-y-auto"></div>
+                </div>
+            </div>
+
+            <!-- Step 2: Atributos -->
+            <div id="step-2" class="step-content hidden">
+                <div id="attributes-loading" class="hidden text-center py-8">
+                    <svg class="animate-spin h-8 w-8 mx-auto text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <p class="text-gray-500 mt-2 text-sm">Cargando atributos de la categoria...</p>
+                </div>
+
+                <!-- Suggestions banner -->
+                <div id="suggestions-banner" class="hidden mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+                        <span class="text-sm text-blue-700"><strong id="suggestions-count">0</strong> sugerencias encontradas. Revisa y acepta las que apliquen.</span>
+                    </div>
+                    <button type="button" onclick="acceptAllSuggestions()"
+                            class="px-3 py-1 bg-blue-500 text-white text-xs font-semibold rounded hover:bg-blue-600 transition flex-shrink-0">
+                        Aceptar todas
+                    </button>
+                </div>
+
+                <div id="attributes-form" class="space-y-6">
+                    <!-- Atributos requeridos -->
+                    <div>
+                        <h4 class="text-sm font-semibold text-red-600 mb-3 flex items-center">
+                            <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                            </svg>
+                            Atributos Obligatorios
+                        </h4>
+                        <div id="required-attributes" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                    </div>
+
+                    <!-- Atributos recomendados -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="text-sm font-semibold text-yellow-600 flex items-center">
+                                <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                </svg>
+                                Recomendados (mejor posicionamiento)
+                            </h4>
+                            <button type="button" id="btn-ai-autofill" onclick="aiAutoFillAttributes()" class="ai-btn hidden px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1" title="Auto-llenar atributos con IA">
+                                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.617 1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-2.786-1.115V7a1 1 0 01-2 0V5.967L5.587 7.082l1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 11.894-1.79l1.599.8L9 4.323V3a1 1 0 011-1z"/></svg>
+                                IA Auto-fill
+                            </button>
+                        </div>
+                        <div id="recommended-attributes" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                    </div>
+
+                    <!-- Atributos opcionales (colapsable) -->
+                    <div>
+                        <details class="group">
+                            <summary class="cursor-pointer text-sm font-semibold text-gray-500 mb-3 flex items-center hover:text-gray-700">
+                                <svg class="w-4 h-4 mr-1 transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"/>
+                                </svg>
+                                Opcionales (<span id="optional-count">0</span> disponibles)
+                            </summary>
+                            <div id="optional-attributes" class="mt-2"></div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Detalles -->
+            <div id="step-3" class="step-content hidden">
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Precio (MXN) *</label>
+                            <input type="number" id="item-price" min="1" step="0.01"
+                                   class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                                   placeholder="0.00">
+                            <div id="price-hint" class="hidden text-xs mt-1 space-y-1"></div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Cantidad disponible *</label>
+                            <input type="number" id="item-quantity" min="1" step="1"
+                                   class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                                   placeholder="Stock disponible">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Tipo de publicacion *</label>
+                            <select id="item-listing-type"
+                                    class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400">
+                                <option value="gold_special">Premium (gold_special) - Mas exposicion</option>
+                                <option value="gold_pro">Clasica (gold_pro)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Condicion *</label>
+                            <select id="item-condition"
+                                    class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400">
+                                <option value="new">Nuevo</option>
+                                <option value="used">Usado</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-sm font-medium text-gray-700">Descripcion</label>
+                            <button type="button" onclick="aiImproveDescription('item-description')" class="ai-btn hidden px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1" title="Generar descripcion con IA">
+                                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.617 1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-2.786-1.115V7a1 1 0 01-2 0V5.967L5.587 7.082l1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 11.894-1.79l1.599.8L9 4.323V3a1 1 0 011-1z"/></svg>
+                                IA
+                            </button>
+                        </div>
+                        <textarea id="item-description" rows="4"
+                                  class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                                  placeholder="Descripcion detallada del producto..."></textarea>
+                    </div>
+
+                    <!-- Compliance: GTIN/UPC -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="text-sm font-semibold text-blue-700 mb-3 flex items-center">
+                            <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm2 10a1 1 0 10-2 0 1 1 0 002 0zm4-1a1 1 0 110 2 1 1 0 010-2z" clip-rule="evenodd"/></svg>
+                            Compliance MeLi
+                        </h4>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <!-- GTIN/UPC -->
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">GTIN / UPC</label>
+                                <input type="text" id="gtin-value"
+                                       class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-400"
+                                       placeholder="Codigo de barras (8-14 digitos)">
+                                <p class="text-xs text-gray-400 mt-0.5">Auto-detectado de BinManager</p>
+                            </div>
+                            <!-- Garantia -->
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Garantia</label>
+                                <div class="flex gap-2">
+                                    <select id="warranty-type" class="flex-1 border border-gray-300 rounded px-2 py-2 text-sm focus:outline-none focus:border-blue-400">
+                                        <option value="manufacturer">De fabrica</option>
+                                        <option value="seller">Del vendedor</option>
+                                        <option value="none">Sin garantia</option>
+                                    </select>
+                                    <select id="warranty-duration" class="w-24 border border-gray-300 rounded px-2 py-2 text-sm focus:outline-none focus:border-blue-400">
+                                        <option value="6">6 meses</option>
+                                        <option value="12" selected>1 anio</option>
+                                        <option value="24">2 anios</option>
+                                        <option value="36">3 anios</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <!-- Envio -->
+                            <div>
+                                <label class="block text-xs font-medium text-gray-700 mb-1">Envio</label>
+                                <div class="flex gap-2 items-center">
+                                    <select id="shipping-mode" class="flex-1 border border-gray-300 rounded px-2 py-2 text-sm focus:outline-none focus:border-blue-400">
+                                        <option value="me2">Mercado Envios 2</option>
+                                        <option value="me1">Mercado Envios 1</option>
+                                        <option value="custom">Personalizado</option>
+                                    </select>
+                                    <label class="flex items-center gap-1 text-xs whitespace-nowrap">
+                                        <input type="checkbox" id="free-shipping" checked class="rounded border-gray-300 text-yellow-500 focus:ring-yellow-400">
+                                        Gratis
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">URLs de imagenes (una por linea)</label>
+                        <textarea id="item-pictures" rows="3"
+                                  class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                                  placeholder="https://ejemplo.com/imagen1.jpg&#10;https://ejemplo.com/imagen2.jpg"></textarea>
+                        <p class="text-xs text-gray-500 mt-1">Minimo 1 imagen, recomendado 6+. Deben ser URLs publicas.</p>
+                    </div>
+
+                    <!-- Reference pictures from research -->
+                    <div id="reference-pictures" class="hidden">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Imagenes encontradas (NO VERIFICADAS)</label>
+                        <div class="bg-red-50 border border-red-200 rounded-lg p-2 mb-2">
+                            <p class="text-xs text-red-700 font-semibold">IMPORTANTE: Estas imagenes son de la competencia y pueden NO coincidir con tu producto (color, estilo, modelo diferente). Verifica cada imagen antes de usarla o sube tus propias fotos.</p>
+                        </div>
+                        <div id="reference-pictures-grid" class="grid grid-cols-3 md:grid-cols-6 gap-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Revisar y publicar -->
+            <div id="step-4" class="step-content hidden">
+                <!-- Quality score -->
+                <div id="quality-score-section" class="mb-6">
+                    <div class="flex items-center gap-4 mb-3">
+                        <h4 class="font-semibold text-gray-800">Calidad del listado</h4>
+                        <span id="quality-score-badge" class="px-3 py-1 rounded-full text-sm font-bold">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-3 mb-3">
+                        <div id="quality-score-bar" class="h-3 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                    <div id="quality-checklist" class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm"></div>
+                </div>
+
+                <div class="bg-gray-50 rounded-lg p-6 mb-6">
+                    <h4 class="font-semibold text-gray-800 mb-4">Resumen de la publicacion</h4>
+                    <div id="review-summary" class="space-y-2 text-sm"></div>
+                </div>
+
+                <div id="validation-result" class="mb-6"></div>
+
+                <div id="validation-loading" class="hidden text-center py-4 mb-4">
+                    <svg class="animate-spin h-6 w-6 mx-auto text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <p class="text-gray-500 text-sm mt-1">Validando con MeLi...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer con botones -->
+        <div class="px-6 py-4 border-t bg-gray-50 flex justify-between flex-shrink-0">
+            <button type="button" id="btn-prev-step" onclick="prevStep()"
+                    class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition text-sm hidden">
+                Anterior
+            </button>
+            <div class="ml-auto flex gap-3">
+                <button type="button" onclick="closeModal()"
+                        class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition text-sm">
+                    Cancelar
+                </button>
+                <button type="button" id="btn-next-step" onclick="nextStep()"
+                        class="px-6 py-2 bg-yellow-400 text-gray-800 font-semibold rounded-lg hover:bg-yellow-500 transition text-sm">
+                    Siguiente
+                </button>
+                <button type="button" id="btn-publish" onclick="publishItem()"
+                        class="px-6 py-2 bg-green-500 text-white font-semibold rounded-lg hover:bg-green-600 transition text-sm hidden">
+                    Publicar en MeLi
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal optimizar -->
+<div id="optimize-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div class="bg-yellow-400 px-6 py-4 flex items-center justify-between flex-shrink-0">
+            <div>
+                <h3 class="text-lg font-bold text-gray-800">Optimizar Publicacion</h3>
+                <p class="text-sm text-gray-700" id="opt-item-id">Item: -</p>
+            </div>
+            <button type="button" onclick="closeOptimizeModal()" class="text-gray-700 hover:text-gray-900">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <div id="opt-loading" class="flex-1 flex items-center justify-center py-12">
+            <div class="text-center">
+                <svg class="animate-spin h-10 w-10 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-gray-500 text-sm">Cargando detalles...</p>
+            </div>
+        </div>
+
+        <div id="opt-content" class="hidden flex-1 overflow-y-auto p-6 space-y-6">
+            <!-- Score actual + tips -->
+            <div class="flex items-center gap-4 bg-gray-50 rounded-lg p-4">
+                <div class="text-center">
+                    <div id="opt-score-badge" class="text-2xl font-bold">0%</div>
+                    <div class="text-xs text-gray-500">Score actual</div>
+                </div>
+                <div id="opt-tips" class="flex-1 space-y-1"></div>
+            </div>
+
+            <!-- Autocorrector IA -->
+            <div id="opt-autocorrect-section" class="ai-btn-opt hidden">
+                <button type="button" onclick="aiAutocorrect()"
+                        class="w-full px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-medium rounded-lg hover:bg-emerald-100 transition flex items-center justify-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    Autocorrector IA (ortografia + caracteres raros)
+                </button>
+                <div id="opt-autocorrect-result" class="hidden mt-2 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs"></div>
+            </div>
+
+            <!-- Titulo -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-sm font-medium text-gray-700">Titulo <span id="opt-title-len" class="text-xs text-gray-400"></span></label>
+                    <button type="button" onclick="aiImproveTitle('opt-title')" class="ai-btn-opt hidden px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1" title="Mejorar titulo con IA">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.617 1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-2.786-1.115V7a1 1 0 01-2 0V5.967L5.587 7.082l1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 11.894-1.79l1.599.8L9 4.323V3a1 1 0 011-1z"/></svg>
+                        IA
+                    </button>
+                </div>
+                <input type="text" id="opt-title" maxlength="60"
+                       class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                       oninput="document.getElementById('opt-title-len').textContent='('+this.value.length+'/60)'">
+            </div>
+
+            <!-- Descripcion -->
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-sm font-medium text-gray-700">Descripcion</label>
+                    <button type="button" onclick="aiImproveDescription('opt-description')" class="ai-btn-opt hidden px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1" title="Generar descripcion con IA">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.599-.8a1 1 0 01.894 1.79l-1.233.617 1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-2.786-1.115V7a1 1 0 01-2 0V5.967L5.587 7.082l1.738 5.42a1 1 0 01-.285 1.05 3.75 3.75 0 01-5.334 0 1 1 0 01-.285-1.05l1.738-5.42-1.233-.617a1 1 0 11.894-1.79l1.599.8L9 4.323V3a1 1 0 011-1z"/></svg>
+                        IA
+                    </button>
+                </div>
+                <textarea id="opt-description" rows="4"
+                          class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                          placeholder="Descripcion del producto..."></textarea>
+            </div>
+
+            <!-- Fotos actuales + agregar -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Fotos <span id="opt-pics-count" class="text-xs text-gray-400"></span></label>
+                <div id="opt-current-pics" class="flex flex-wrap gap-2 mb-2"></div>
+                <textarea id="opt-new-pics" rows="2"
+                          class="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400"
+                          placeholder="Agregar URLs de nuevas imagenes (una por linea)..."></textarea>
+            </div>
+
+            <!-- Atributos faltantes -->
+            <div id="opt-attrs-section" class="hidden">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Atributos por llenar</label>
+                <div id="opt-attrs-list" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+            </div>
+        </div>
+
+        <div id="opt-footer" class="hidden px-6 py-4 border-t bg-gray-50 flex justify-between flex-shrink-0">
+            <div id="opt-result" class="text-sm"></div>
+            <div class="flex gap-3">
+                <button type="button" onclick="closeOptimizeModal()"
+                        class="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition text-sm">
+                    Cerrar
+                </button>
+                <button type="button" id="btn-save-optimize" onclick="saveOptimization()"
+                        class="px-6 py-2 bg-yellow-400 text-gray-800 font-semibold rounded-lg hover:bg-yellow-500 transition text-sm">
+                    Guardar cambios
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Vacio -->
+<div id="empty-state" class="hidden">
+    <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+        <svg class="mx-auto h-16 w-16 text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+        </svg>
+        <p class="text-lg">Carga una lista de SKUs para comenzar</p>
+        <p class="text-sm mt-1">Sube un archivo CSV/Excel o pega los SKUs directamente</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/sku_inventory.js"></script>
+{% endblock %}

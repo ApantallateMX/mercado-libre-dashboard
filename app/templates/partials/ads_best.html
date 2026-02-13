@@ -1,0 +1,99 @@
+{% if unavailable %}
+<div class="px-6 py-8 text-center">
+    <svg class="mx-auto h-10 w-10 text-yellow-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+    </svg>
+    <p class="text-gray-600 font-medium">Datos no disponibles temporalmente</p>
+    <p class="text-sm text-gray-400 mt-1">Intenta de nuevo mas tarde.</p>
+</div>
+{% elif fallback_campaigns is defined and fallback_campaigns %}
+<div class="px-4 py-3 bg-green-50 border-b border-green-200 flex items-center gap-2">
+    <svg class="w-4 h-4 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    <span class="text-sm text-green-700">Detalle por producto no disponible — mostrando <strong>campanas con mejor ROAS</strong></span>
+</div>
+<table class="w-full">
+    <thead class="bg-green-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Campana</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Estado</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Gasto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Clics</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Uds Vendidas</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Ingresos</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">ROAS</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-green-100">
+        {% for c in fallback_campaigns %}
+        <tr class="hover:bg-green-50">
+            <td class="px-4 py-3 text-sm font-medium text-gray-800">{{ c.name }}</td>
+            <td class="px-4 py-3 text-center">
+                {% if c.status == 'active' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">Activa</span>
+                {% elif c.status == 'paused' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">Pausada</span>
+                {% else %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ c.status }}</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm text-right font-medium text-gray-800">${{ "%.2f"|format(c.cost) }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.clicks }}</td>
+            <td class="px-4 py-3 text-sm text-right font-medium text-gray-800">{{ c.units }}</td>
+            <td class="px-4 py-3 text-sm text-right font-medium text-green-600">${{ "%.2f"|format(c.revenue) }}</td>
+            <td class="px-4 py-3 text-sm text-right font-bold {{ 'text-green-600' if (c.roas or 0) >= 5 else 'text-yellow-600' if (c.roas or 0) >= 3 else 'text-gray-800' }}">
+                {{ "%.2f"|format(c.roas) }}x
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="px-6 py-4 bg-green-50 flex justify-between items-center border-t-2 border-green-200">
+    <span class="text-sm text-green-700">Top <strong>{{ fallback_campaigns|length }}</strong> campanas con ventas</span>
+    <div class="text-right">
+        <span class="text-sm text-green-700">Gasto: <strong>${{ "%.2f"|format(total_cost) }}</strong></span>
+        <span class="mx-2 text-green-400">|</span>
+        <span class="text-sm text-green-700">Uds vendidas: <strong>{{ total_units }}</strong></span>
+    </div>
+</div>
+{% elif best %}
+<table class="w-full">
+    <thead class="bg-green-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Producto</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Item ID</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Gasto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Clics</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">Uds Vendidas</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase border-b-2 border-green-200">ROAS</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-green-100">
+        {% for p in best %}
+        <tr class="hover:bg-green-50">
+            <td class="px-4 py-3 text-sm text-gray-800">
+                {{ p.title[:45] }}{% if p.title|length > 45 %}...{% endif %}
+            </td>
+            <td class="px-4 py-3 text-xs font-mono text-gray-500">{{ p.item_id }}</td>
+            <td class="px-4 py-3 text-sm text-right font-medium text-gray-800">${{ "%.2f"|format(p.cost or 0) }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ p.clicks or 0 }}</td>
+            <td class="px-4 py-3 text-sm text-right font-medium text-gray-800">{{ p.units or 0 }}</td>
+            <td class="px-4 py-3 text-sm text-right font-bold {{ 'text-green-600' if (p.roas or 0) >= 5 else 'text-yellow-600' if (p.roas or 0) >= 3 else 'text-gray-800' }}">
+                {{ "%.2f"|format(p.roas or 0) }}x
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="px-6 py-4 bg-green-50 flex justify-between items-center border-t-2 border-green-200">
+    <span class="text-sm text-green-700">Top <strong>{{ best|length }}</strong> productos con ventas</span>
+    <div class="text-right">
+        <span class="text-sm text-green-700">Gasto: <strong>${{ "%.2f"|format(total_cost) }}</strong></span>
+        <span class="mx-2 text-green-400">|</span>
+        <span class="text-sm text-green-700">Uds vendidas: <strong>{{ total_units }}</strong></span>
+    </div>
+</div>
+{% else %}
+<div class="px-6 py-8 text-center text-gray-500">
+    <p>No hay productos con ventas en el periodo seleccionado</p>
+</div>
+{% endif %}

@@ -1,0 +1,1420 @@
+<!-- Toast notification -->
+<div id="deals-toast" class="fixed top-4 right-4 z-[60] hidden transform transition-all duration-300 translate-x-full">
+    <div id="deals-toast-inner" class="rounded-lg shadow-lg px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-md">
+        <span id="deals-toast-icon" class="text-lg"></span>
+        <span id="deals-toast-msg" class="text-sm font-medium flex-1"></span>
+        <button onclick="hideToast()" class="text-gray-400 hover:text-gray-600">&times;</button>
+    </div>
+</div>
+
+<!-- KPIs resumen -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+    <div onclick="scrollToSection('active-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-green-50/30 transition group">
+        <p class="text-xs text-gray-500 group-hover:text-green-600">Deals Activos</p>
+        <p class="text-2xl font-bold text-green-600">{{ active_deals|length }}</p>
+        <p class="text-[10px] text-gray-400 group-hover:text-green-500 mt-0.5">Click para ver</p>
+    </div>
+    <div onclick="scrollToSection('candidates-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition group">
+        <p class="text-xs text-gray-500 group-hover:text-yellow-600">Candidatos</p>
+        <p class="text-2xl font-bold text-yellow-600">{{ candidates|length }}</p>
+        <p class="text-[10px] text-gray-400 group-hover:text-yellow-500 mt-0.5">{{ total_no_deal_no_sales }} sin ventas</p>
+    </div>
+    <div onclick="scrollToSection('candidates-section'); setTimeout(function(){sortCandidates('sales')},100)" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-blue-50/30 transition group">
+        <p class="text-xs text-gray-500 group-hover:text-blue-600">Ventas Deals (30d)</p>
+        <p class="text-2xl font-bold text-gray-800">{{ deals_units }} uds</p>
+        <p class="text-[10px] text-gray-400">${{ "{:,.0f}".format(deals_revenue) }}</p>
+    </div>
+    <div onclick="scrollToSection('recs-section')" class="bg-white rounded-lg shadow p-4 cursor-pointer hover:shadow-md hover:bg-indigo-50/30 transition group">
+        <p class="text-xs text-gray-500 group-hover:text-indigo-600">Recomendaciones</p>
+        <p class="text-2xl font-bold text-indigo-600">{{ recommendations|length }}</p>
+        <p class="text-[10px] text-gray-400 group-hover:text-indigo-500 mt-0.5">Oportunidades</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4">
+        <p class="text-xs text-gray-500">TC USD/MXN</p>
+        <p class="text-2xl font-bold text-blue-600">{{ usd_to_mxn }}</p>
+        <button onclick="reloadDealsTab()" class="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-0.5 block">Actualizar datos</button>
+    </div>
+</div>
+
+<!-- Recomendaciones inteligentes -->
+{% if recommendations %}
+<div id="recs-section" class="mb-6 space-y-3">
+    <h3 class="text-md font-semibold text-gray-700 flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full bg-indigo-500"></span>
+        Recomendaciones
+    </h3>
+    {% for rec in recommendations %}
+    <div class="bg-white rounded-lg shadow p-4 border-l-4
+        {% if rec.type == 'danger' %}border-red-500{% elif rec.type == 'warning' %}border-yellow-500{% elif rec.type == 'success' %}border-green-500{% else %}border-blue-500{% endif %}">
+        <div class="flex items-start gap-3">
+            <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold
+                {% if rec.type == 'danger' %}bg-red-500{% elif rec.type == 'warning' %}bg-yellow-500{% elif rec.type == 'success' %}bg-green-500{% else %}bg-blue-500{% endif %}">
+                {{ rec.icon }}
+            </div>
+            <div class="flex-1 min-w-0">
+                <p class="font-semibold text-sm text-gray-800">{{ rec.title }}</p>
+                <p class="text-xs text-gray-500 mt-0.5">{{ rec.desc }}</p>
+                {% if rec.products %}
+                <div class="mt-2 flex flex-wrap gap-2">
+                    {% for item in rec.products %}
+                    <span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px]
+                        {% if rec.type == 'danger' %}bg-red-50 text-red-700{% elif rec.type == 'warning' %}bg-yellow-50 text-yellow-700{% elif rec.type == 'success' %}bg-green-50 text-green-700{% else %}bg-blue-50 text-blue-700{% endif %}">
+                        <span class="font-mono font-semibold">{{ item.id }}</span>
+                        <span class="text-gray-400">{{ item.detail }}</span>
+                    </span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Deals activos -->
+<div id="active-section" class="mb-8">
+    <h3 class="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full bg-green-500"></span>
+        Deals Activos ({{ active_deals|length }})
+    </h3>
+
+    <div class="flex items-center gap-3 mb-2 flex-wrap">
+        <p class="text-xs text-gray-400">Ordenar:</p>
+        <div class="flex gap-1">
+            <button onclick="sortActiveDeals('sales')" id="asort-sales" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-green-100 text-green-700 border border-green-300">Ventas</button>
+            <button onclick="sortActiveDeals('margin')" id="asort-margin" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Margen</button>
+            <button onclick="sortActiveDeals('stock')" id="asort-stock" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock</button>
+            <button onclick="sortActiveDeals('profit')" id="asort-profit" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Ganancia</button>
+        </div>
+    </div>
+
+    {% if active_deals %}
+    <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm" id="active-deals-table">
+            <thead class="bg-green-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">P. Original</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">P. Deal</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Desc.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Costo BM</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail BM</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ganancia</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Margen</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in active_deals %}
+                <tr class="hover:bg-green-50/30 active-deal-row"
+                    data-sales="{{ p.get('units_30d', 0) }}"
+                    data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    data-stock="{{ p.available_quantity }}"
+                    data-profit="{{ p.get('_ganancia_est', -99999) if p.get('_ganancia_est') is not none else -99999 }}"
+                    data-var-row="ad-{{ loop.index }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-9 h-9 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <div class="min-w-0">
+                                <span class="text-gray-800 truncate block max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title }}</span>
+                                {% if p.permalink %}
+                                <a href="{{ p.permalink }}" target="_blank" class="text-[10px] text-blue-500 hover:underline">Ver en MeLi</a>
+                                {% endif %}
+                                {% if p.get('variations') %}
+                                <button onclick="toggleVariationsD('ad-{{ loop.index }}')"
+                                        class="text-[10px] text-purple-600 hover:underline block">
+                                    {{ p.variations|length }} variaciones
+                                </button>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.original_price and p.original_price > p.price %}
+                        <span class="text-gray-400 line-through text-xs">${{ "{:,.0f}".format(p.original_price) }}</span>
+                        {% else %}
+                        <span class="text-gray-400 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</td>
+                    <td class="px-3 py-2 text-center">
+                        {% if p.original_price and p.original_price > p.price %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
+                            -{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%
+                        </span>
+                        {% else %}
+                        <span class="text-gray-400 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
+                        <div class="flex flex-col items-end">
+                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
+                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_avg_cost', 0)) }} USD</span>
+                        </div>
+                        {% elif p.get('_bm_has_data') %}
+                        <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_retail_mxn') and p._retail_mxn > 0 %}
+                        <div class="flex flex-col items-end">
+                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._retail_mxn) }}</span>
+                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_retail_price', 0)) }} USD</span>
+                        </div>
+                        {% elif p.get('_bm_has_data') %}
+                        <span class="text-orange-500 text-[10px] font-medium">Sin retail</span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_ganancia_est') is not none %}
+                        <span class="{{ 'text-green-600' if p._ganancia_est > 0 else 'text-red-600' }} font-semibold text-xs">
+                            ${{ "{:,.0f}".format(p._ganancia_est) }}
+                        </span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                        {% if p.get('_margen_pct') is not none %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
+                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
+                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
+                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                            {% else %}bg-red-100 text-red-700{% endif %}">
+                            {{ "%.1f"|format(p._margen_pct) }}%
+                        </span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('units_30d', 0) > 0 %}
+                        <div class="flex flex-col items-end">
+                            <span class="font-semibold text-xs text-gray-800">{{ p.units_30d }} uds</span>
+                            <span class="text-[10px] text-gray-400">${{ "{:,.0f}".format(p.get('revenue_30d', 0)) }}</span>
+                        </div>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-semibold text-xs">{{ p.available_quantity }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <div class="flex flex-col items-center gap-1">
+                            <button class="btn-ver-promos px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition w-full"
+                                data-item-id="{{ p.id }}" data-title="{{ p.title }}"
+                                data-price="{{ p.price }}"
+                                data-original-price="{{ p.original_price or p.price }}"
+                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-thumb="{{ p.thumbnail or '' }}">
+                                Ver promos
+                            </button>
+                            <button class="btn-desactivar px-2 py-1 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100 transition w-full"
+                                data-item-id="{{ p.id }}">
+                                Desactivar
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% if p.get('variations') %}
+                <tr id="ad-{{ loop.index }}" class="hidden bg-purple-50/30">
+                    <td colspan="12" class="px-6 py-2">
+                        <div class="text-xs">
+                            <table class="w-full">
+                                <thead><tr class="text-gray-500"><th class="text-left py-1 font-medium">Variacion</th><th class="text-left py-1 font-medium">ID Variacion</th><th class="text-left py-1 font-medium">SKU</th><th class="text-right py-1 font-medium">Stock</th><th class="text-right py-1 font-medium">Precio</th></tr></thead>
+                                <tbody class="divide-y divide-purple-100">
+                                    {% for v in p.variations %}
+                                    <tr><td class="py-1 text-gray-700">{{ v.combo }}</td><td class="py-1 text-blue-600 font-mono text-[10px]">{{ v.id }}</td><td class="py-1 text-gray-500 font-mono">{{ v.sku or '-' }}</td><td class="py-1 text-right {{ 'text-green-600' if v.stock > 0 else 'text-red-500' }}">{{ v.stock }}</td><td class="py-1 text-right text-gray-600">${{ "{:,.0f}".format(v.price) }}</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+        No hay deals activos actualmente
+    </div>
+    {% endif %}
+</div>
+
+<!-- Candidatos para deals -->
+<div id="candidates-section">
+    <h3 class="text-md font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+        Candidatos para Deals (<span id="candidates-count">{{ candidates|length }}</span>)
+    </h3>
+
+    <!-- Controls: Sort + Filter -->
+    <div class="flex items-start gap-4 mb-3 flex-wrap bg-white rounded-lg shadow p-3">
+        <div class="flex items-center gap-2 flex-wrap">
+            <p class="text-xs text-gray-500 font-medium">Ordenar:</p>
+            <div class="flex gap-1">
+                <button onclick="sortCandidates('stock')" id="sort-stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-yellow-100 text-yellow-700 border border-yellow-300">Stock</button>
+                <button onclick="sortCandidates('sales')" id="sort-sales" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Ventas</button>
+                <button onclick="sortCandidates('margin')" id="sort-margin" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Margen</button>
+                <button onclick="sortCandidates('price')" id="sort-price" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Precio</button>
+                <button onclick="sortCandidates('bm_stock')" id="sort-bm_stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock BM</button>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+            <p class="text-xs text-gray-500 font-medium">Categoria:</p>
+            <select id="cat-filter" onchange="filterByCategory()" class="text-xs border rounded px-2 py-1 bg-white text-gray-700 min-w-[160px]">
+                <option value="">Todas ({{ candidates|length }})</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}">{{ cat }} ({{ cat_counts[cat] }})</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    {% if candidates %}
+    <div class="bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm" id="candidates-table">
+            <thead class="bg-yellow-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Categoria</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Costo BM</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Margen</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock BM</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in candidates %}
+                <tr class="hover:bg-yellow-50/30 candidate-row" id="crow-{{ p.id }}"
+                    data-stock="{{ p.available_quantity }}"
+                    data-sales="{{ p.get('units_30d', 0) }}"
+                    data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    data-price="{{ p.price }}"
+                    data-bm-stock="{{ p.get('_bm_total', 0) if p.get('_bm_total') is not none else 0 }}"
+                    data-category="{{ p.get('category_name', '') }}"
+                    data-var-row="cd-{{ loop.index }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-9 h-9 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <div class="min-w-0">
+                                <span class="text-gray-800 truncate block max-w-[180px] text-xs" title="{{ p.title }}">{{ p.title }}</span>
+                                <div class="flex items-center gap-1.5 mt-0.5">
+                                    <a href="{{ p.permalink }}" target="_blank" class="text-[10px] text-blue-600 font-mono font-semibold hover:underline">{{ p.id }}</a>
+                                    {% if p.sku %}<span class="text-[10px] text-gray-400 font-mono">{{ p.sku }}</span>{% endif %}
+                                </div>
+                                {% if p.get('variations') %}
+                                <button onclick="toggleVariationsD('cd-{{ loop.index }}')"
+                                        class="text-[10px] text-purple-600 hover:underline">
+                                    {{ p.variations|length }} var
+                                </button>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <span class="text-[10px] text-gray-500 leading-tight block max-w-[100px] truncate" title="{{ p.get('category_name', '') }}">{{ p.get('category_name', '-') }}</span>
+                    </td>
+                    <td class="px-3 py-2 text-right font-semibold text-gray-700 text-xs">${{ "{:,.0f}".format(p.price) }}</td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
+                        <div class="flex flex-col items-end">
+                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
+                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_avg_cost', 0)) }} USD</span>
+                        </div>
+                        {% elif p.get('_bm_has_data') %}
+                        <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                        {% if p.get('_margen_pct') is not none %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
+                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
+                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
+                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                            {% else %}bg-red-100 text-red-700{% endif %}">
+                            {{ "%.1f"|format(p._margen_pct) }}%
+                        </span>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('units_30d', 0) > 0 %}
+                        <div class="flex flex-col items-end">
+                            <span class="font-semibold text-xs text-gray-800">{{ p.units_30d }} uds</span>
+                            <span class="text-[10px] text-gray-400">${{ "{:,.0f}".format(p.get('revenue_30d', 0)) }}</span>
+                        </div>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        <div class="flex flex-col items-end text-xs">
+                            <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-yellow-600' if p.available_quantity > 0 else 'text-red-600' }}">{{ p.available_quantity }}</span>
+                            {% if p.get('_bm_total') is not none %}
+                            <span class="text-[10px] text-gray-400">BM: {{ p._bm_total }}</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_total') is not none %}
+                        <div class="flex flex-col items-end text-xs">
+                            <span class="font-semibold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">
+                                {{ p._bm_total }}
+                            </span>
+                            <span class="text-[10px] text-gray-400">M:{{ p._bm_mty }} C:{{ p._bm_cdmx }}</span>
+                        </div>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">-</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                        <div class="flex flex-col items-center gap-1">
+                            <button class="btn-ver-promos px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition w-full"
+                                data-item-id="{{ p.id }}" data-title="{{ p.title }}"
+                                data-price="{{ p.price }}"
+                                data-original-price="{{ p.original_price or p.price }}"
+                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-thumb="{{ p.thumbnail or '' }}">
+                                Ver promos
+                            </button>
+                            <button class="btn-activar-deal px-2 py-1 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600 transition font-medium w-full"
+                                data-item-id="{{ p.id }}"
+                                data-price="{{ p.price }}"
+                                data-sku="{{ p.sku or '' }}"
+                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
+                                data-thumb="{{ p.thumbnail or '' }}"
+                                data-title="{{ p.title }}">
+                                Activar Deal
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% if p.get('variations') %}
+                <tr id="cd-{{ loop.index }}" class="hidden bg-purple-50/30">
+                    <td colspan="9" class="px-6 py-2">
+                        <div class="text-xs">
+                            <table class="w-full">
+                                <thead><tr class="text-gray-500"><th class="text-left py-1 font-medium">Variacion</th><th class="text-left py-1 font-medium">ID Variacion</th><th class="text-left py-1 font-medium">SKU</th><th class="text-right py-1 font-medium">Stock</th><th class="text-right py-1 font-medium">Precio</th></tr></thead>
+                                <tbody class="divide-y divide-purple-100">
+                                    {% for v in p.variations %}
+                                    <tr><td class="py-1 text-gray-700">{{ v.combo }}</td><td class="py-1 text-blue-600 font-mono text-[10px]">{{ v.id }}</td><td class="py-1 text-gray-500 font-mono">{{ v.sku or '-' }}</td><td class="py-1 text-right {{ 'text-green-600' if v.stock > 0 else 'text-red-500' }}">{{ v.stock }}</td><td class="py-1 text-right text-gray-600">${{ "{:,.0f}".format(v.price) }}</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+        Todos los productos con stock ya estan en algun deal
+    </div>
+    {% endif %}
+</div>
+
+<!-- Modal de Activacion de Deal -->
+<div id="dealModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+        <!-- Header -->
+        <div class="flex items-center gap-3 p-5 border-b">
+            <img id="dm-thumb" src="" class="w-12 h-12 rounded object-cover" alt="">
+            <div class="min-w-0 flex-1">
+                <h3 id="dm-title" class="font-semibold text-gray-800 text-sm truncate"></h3>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <span id="dm-item-id" class="text-xs text-blue-600 font-mono font-semibold"></span>
+                    <span id="dm-sku" class="text-xs text-gray-400 font-mono"></span>
+                </div>
+            </div>
+            <button onclick="closeDealModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+
+        <!-- Pricing info -->
+        <div class="p-5 border-b bg-gray-50">
+            <div class="grid grid-cols-3 gap-4 text-center">
+                <div>
+                    <div class="text-xs text-gray-500">Precio MeLi</div>
+                    <div id="dm-price" class="text-lg font-bold text-gray-800"></div>
+                </div>
+                <div>
+                    <div class="text-xs text-gray-500">Costo BM (MXN)</div>
+                    <div id="dm-cost-mxn" class="text-lg font-bold text-blue-600"></div>
+                    <div id="dm-cost-usd" class="text-[10px] text-gray-400"></div>
+                </div>
+                <div>
+                    <div class="text-xs text-gray-500">Retail BM (MXN)</div>
+                    <div id="dm-retail-mxn" class="text-lg font-bold text-purple-600"></div>
+                    <div id="dm-retail-usd" class="text-[10px] text-gray-400"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Promotions list -->
+        <div class="p-5 border-b">
+            <h4 class="text-sm font-semibold text-gray-700 mb-3">Promociones Disponibles</h4>
+            <div id="dm-promos-loading" class="text-center py-4">
+                <div class="inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-sm text-gray-500 ml-2">Consultando promos...</span>
+            </div>
+            <div id="dm-promos-list" class="space-y-2 hidden"></div>
+            <div id="dm-promos-empty" class="text-center py-4 text-sm text-gray-400 hidden">
+                No hay promociones disponibles para este producto
+            </div>
+        </div>
+
+        <!-- Deal price calculator -->
+        <div class="p-5 border-b">
+            <h4 class="text-sm font-semibold text-gray-700 mb-3">Calculadora de Precio Deal</h4>
+            <div class="flex items-center gap-4 mb-4">
+                <div class="flex-1">
+                    <label class="text-xs text-gray-500 block mb-1">Precio Deal</label>
+                    <input type="number" id="dm-deal-price" step="1" min="0"
+                        class="w-full border rounded-lg px-3 py-2 text-lg font-bold focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400"
+                        oninput="updateDealCalc()">
+                </div>
+                <div class="text-center">
+                    <label class="text-xs text-gray-500 block mb-1">Descuento</label>
+                    <span id="dm-discount" class="text-lg font-bold text-gray-400">0%</span>
+                </div>
+            </div>
+
+            <!-- Desglose -->
+            <div class="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+                <div class="flex justify-between">
+                    <span class="text-gray-500">Precio Deal</span>
+                    <span id="calc-price" class="font-medium">$0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-500">- Costo BM</span>
+                    <span id="calc-cost" class="text-red-500">-$0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-500">- Comision MeLi (~17%)</span>
+                    <span id="calc-comision" class="text-red-500">-$0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-500">- IVA Comision (16%)</span>
+                    <span id="calc-iva" class="text-red-500">-$0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="text-gray-500">- Envio estimado</span>
+                    <span id="calc-envio" class="text-red-500">-$150</span>
+                </div>
+                <div class="flex justify-between border-t pt-2 mt-2">
+                    <span class="font-semibold text-gray-700">Ganancia Neta</span>
+                    <span id="calc-ganancia" class="font-bold text-lg">$0</span>
+                </div>
+                <div class="flex justify-between">
+                    <span class="font-semibold text-gray-700">Margen</span>
+                    <span id="calc-margen" class="font-bold text-lg">0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- PRICE_DISCOUNT dates (hidden by default) -->
+        <div id="dm-dates-section" class="p-5 border-b hidden">
+            <h4 class="text-sm font-semibold text-gray-700 mb-3">Fechas (PRICE_DISCOUNT)</h4>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="text-xs text-gray-500 block mb-1">Fecha inicio</label>
+                    <input type="datetime-local" id="dm-start-date"
+                        class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-500 block mb-1">Fecha fin</label>
+                    <input type="datetime-local" id="dm-end-date"
+                        class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400">
+                </div>
+            </div>
+            <p class="text-[10px] text-gray-400 mt-2">Min 5% descuento, max 80%, duracion max 14 dias</p>
+        </div>
+
+        <!-- Actions -->
+        <div class="p-5 flex items-center gap-3 justify-end">
+            <button onclick="closeDealModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cancelar</button>
+            <button id="dm-activate-btn" onclick="activateDeal()"
+                class="px-6 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled>
+                Activar Deal
+            </button>
+        </div>
+
+        <!-- Result message -->
+        <div id="dm-result" class="px-5 pb-5 hidden">
+            <div id="dm-result-msg" class="rounded-lg p-3 text-sm"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Gestionar Promos (interactivo) -->
+<div id="promoDetailModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+        <!-- Header -->
+        <div class="flex items-center gap-3 p-5 border-b">
+            <img id="pd-thumb" src="" class="w-10 h-10 rounded object-cover" alt="">
+            <div class="min-w-0 flex-1">
+                <h3 id="pd-title" class="font-semibold text-gray-800 text-sm truncate"></h3>
+                <div class="flex items-center gap-2 mt-0.5">
+                    <span id="pd-item-id" class="text-xs text-blue-600 font-mono font-semibold"></span>
+                    <span id="pd-current-price" class="text-xs text-gray-500"></span>
+                </div>
+            </div>
+            <button onclick="closePromoDetail()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none ml-3">&times;</button>
+        </div>
+        <!-- Content -->
+        <div class="p-5">
+            <div id="pd-loading" class="text-center py-4">
+                <div class="inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-sm text-gray-500 ml-2">Consultando promociones...</span>
+            </div>
+            <div id="pd-list" class="space-y-4 hidden"></div>
+            <div id="pd-empty" class="text-center py-4 text-sm text-gray-400 hidden">Sin promociones</div>
+        </div>
+        <!-- Result message -->
+        <div id="pd-result" class="px-5 pb-5 hidden">
+            <div id="pd-result-msg" class="rounded-lg p-3 text-sm"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const USD_TO_MXN = {{ usd_to_mxn or 20 }};
+let _modalState = {};
+
+function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
+
+function toggleVariationsD(id) {
+    var row = document.getElementById(id);
+    if (row) row.classList.toggle('hidden');
+}
+
+// ===== Event delegation for buttons (avoids onclick quoting issues) =====
+
+document.addEventListener('click', function(e) {
+    // "Activar Deal" button
+    const btnActivar = e.target.closest('.btn-activar-deal');
+    if (btnActivar) {
+        e.preventDefault();
+        openDealModal(
+            btnActivar.dataset.itemId,
+            parseFloat(btnActivar.dataset.price) || 0,
+            btnActivar.dataset.sku || '',
+            parseFloat(btnActivar.dataset.bmCost) || 0,
+            parseFloat(btnActivar.dataset.bmRetail) || 0,
+            btnActivar.dataset.thumb || '',
+            btnActivar.dataset.title || ''
+        );
+        return;
+    }
+
+    // "Ver promos" button
+    const btnVerPromos = e.target.closest('.btn-ver-promos');
+    if (btnVerPromos) {
+        e.preventDefault();
+        openPromoDetail(
+            btnVerPromos.dataset.itemId,
+            btnVerPromos.dataset.title || '',
+            parseFloat(btnVerPromos.dataset.price) || 0,
+            parseFloat(btnVerPromos.dataset.originalPrice) || 0,
+            parseFloat(btnVerPromos.dataset.bmCost) || 0,
+            btnVerPromos.dataset.thumb || ''
+        );
+        return;
+    }
+
+    // "Desactivar" button
+    const btnDesactivar = e.target.closest('.btn-desactivar');
+    if (btnDesactivar) {
+        e.preventDefault();
+        deactivateDeal(btnDesactivar.dataset.itemId);
+        return;
+    }
+});
+
+// ===== Deal Modal =====
+
+function openDealModal(itemId, price, sku, bmCostUsd, bmRetailUsd, thumb, title) {
+    _modalState = { itemId, price, sku, bmCostUsd, bmRetailUsd, selectedPromo: null, selectedPromoData: null };
+    const bmCostMxn = bmCostUsd * USD_TO_MXN;
+    const bmRetailMxn = bmRetailUsd * USD_TO_MXN;
+    _modalState.bmCostMxn = bmCostMxn;
+
+    document.getElementById('dm-thumb').src = thumb || '';
+    document.getElementById('dm-title').textContent = title;
+    document.getElementById('dm-item-id').textContent = itemId;
+    document.getElementById('dm-sku').textContent = sku ? ('SKU: ' + sku) : '';
+    document.getElementById('dm-price').textContent = fmt(price);
+    document.getElementById('dm-cost-mxn').textContent = bmCostMxn > 0 ? fmt(bmCostMxn) : '-';
+    document.getElementById('dm-cost-usd').textContent = bmCostUsd > 0 ? ('$' + bmCostUsd.toFixed(2) + ' USD') : '';
+    document.getElementById('dm-retail-mxn').textContent = bmRetailMxn > 0 ? fmt(bmRetailMxn) : '-';
+    document.getElementById('dm-retail-usd').textContent = bmRetailUsd > 0 ? ('$' + bmRetailUsd.toFixed(2) + ' USD') : '';
+
+    document.getElementById('dm-deal-price').value = '';
+    document.getElementById('dm-activate-btn').disabled = true;
+    document.getElementById('dm-activate-btn').textContent = 'Activar Deal';
+    document.getElementById('dm-result').classList.add('hidden');
+    document.getElementById('dm-dates-section').classList.add('hidden');
+    document.getElementById('dm-promos-loading').classList.remove('hidden');
+    document.getElementById('dm-promos-list').classList.add('hidden');
+    document.getElementById('dm-promos-empty').classList.add('hidden');
+
+    // Reset calculator display
+    ['calc-price','calc-cost','calc-comision','calc-iva'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '$0';
+    });
+    document.getElementById('calc-ganancia').textContent = '$0';
+    document.getElementById('calc-ganancia').className = 'font-bold text-lg';
+    document.getElementById('calc-margen').textContent = '0%';
+    document.getElementById('calc-margen').className = 'font-bold text-lg';
+    document.getElementById('dm-discount').textContent = '0%';
+    document.getElementById('dm-discount').className = 'text-lg font-bold text-gray-400';
+
+    const modal = document.getElementById('dealModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    // Fetch promotions
+    var dmCtrl = new AbortController();
+    setTimeout(function() { dmCtrl.abort(); }, 10000);
+    fetch('/api/items/' + itemId + '/promotions', {
+        signal: dmCtrl.signal,
+        headers: { 'ngrok-skip-browser-warning': '1' }
+    })
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(data) {
+            document.getElementById('dm-promos-loading').classList.add('hidden');
+            if (data.error) {
+                document.getElementById('dm-promos-empty').classList.remove('hidden');
+                document.getElementById('dm-promos-empty').textContent = 'Error: ' + data.error;
+                return;
+            }
+            var promos = data.promotions || [];
+            if (promos.length === 0) {
+                document.getElementById('dm-promos-empty').classList.remove('hidden');
+                return;
+            }
+            var list = document.getElementById('dm-promos-list');
+            list.innerHTML = '';
+            list.classList.remove('hidden');
+            promos.forEach(function(p, i) {
+                var typeColors = {
+                    'DEAL': 'bg-green-100 text-green-700',
+                    'DOD': 'bg-blue-100 text-blue-700',
+                    'LIGHTNING': 'bg-yellow-100 text-yellow-700',
+                    'MARKETPLACE_CAMPAIGN': 'bg-purple-100 text-purple-700',
+                    'PRICE_DISCOUNT': 'bg-gray-100 text-gray-700'
+                };
+                var color = typeColors[p.type] || 'bg-gray-100 text-gray-600';
+                var status = p.status || '';
+                var statusBadge = '';
+                if (status === 'started') statusBadge = '<span class="text-[10px] px-1.5 py-0.5 bg-green-500 text-white rounded">Activo</span>';
+                else if (status === 'candidate') statusBadge = '<span class="text-[10px] px-1.5 py-0.5 bg-yellow-200 text-yellow-800 rounded">Candidato</span>';
+                else if (status === 'pending') statusBadge = '<span class="text-[10px] px-1.5 py-0.5 bg-blue-200 text-blue-800 rounded">Pendiente</span>';
+                else statusBadge = '<span class="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">' + status + '</span>';
+
+                var suggested = p.suggested_discounted_price || '';
+                var minP = p.min_discounted_price || '';
+                var maxP = p.max_discounted_price || '';
+                var origP = p.original_price || '';
+                var dealP = p.price || '';
+
+                var div = document.createElement('div');
+                div.className = 'border rounded-lg p-3 cursor-pointer hover:border-yellow-400 transition border-gray-200';
+                div.setAttribute('data-promo-index', i);
+                div.onclick = function() { selectPromo(i, p); };
+                div.innerHTML =
+                    '<div class="flex items-center justify-between mb-1">' +
+                        '<div class="flex items-center gap-2">' +
+                            '<input type="radio" name="promo" class="accent-yellow-500">' +
+                            '<span class="inline-block px-2 py-0.5 rounded text-xs font-semibold ' + color + '">' + (p.type || 'PROMO') + '</span>' +
+                            statusBadge +
+                        '</div>' +
+                        (p.meli_percentage ? '<span class="text-[10px] text-gray-400">MeLi paga ' + p.meli_percentage + '%</span>' : '') +
+                    '</div>' +
+                    '<div class="text-xs text-gray-500 mt-1 flex flex-wrap gap-3">' +
+                        (origP ? '<span>Original: ' + fmt(origP) + '</span>' : '') +
+                        (dealP ? '<span>Deal: ' + fmt(dealP) + '</span>' : '') +
+                        (suggested ? '<span class="font-semibold text-yellow-700">Sugerido: ' + fmt(suggested) + '</span>' : '') +
+                        (minP ? '<span>Min: ' + fmt(minP) + '</span>' : '') +
+                        (maxP ? '<span>Max: ' + fmt(maxP) + '</span>' : '') +
+                        (p.seller_percentage ? '<span>Seller paga: ' + p.seller_percentage + '%</span>' : '') +
+                    '</div>';
+                list.appendChild(div);
+            });
+        })
+        .catch(function(err) {
+            document.getElementById('dm-promos-loading').classList.add('hidden');
+            document.getElementById('dm-promos-empty').classList.remove('hidden');
+            var msg = err.name === 'AbortError' ? 'Timeout: consulta tardo mas de 10s' : ('Error: ' + err.message);
+            document.getElementById('dm-promos-empty').textContent = msg;
+        });
+}
+
+function selectPromo(index, promo) {
+    _modalState.selectedPromo = index;
+    _modalState.selectedPromoData = promo;
+
+    // Re-render radio selection
+    var items = document.getElementById('dm-promos-list').children;
+    for (var i = 0; i < items.length; i++) {
+        var radio = items[i].querySelector('input[type=radio]');
+        if (radio) radio.checked = (i === index);
+        if (i === index) {
+            items[i].className = items[i].className.replace('border-gray-200', 'border-yellow-500 bg-yellow-50');
+        } else {
+            items[i].className = items[i].className.replace('border-yellow-500 bg-yellow-50', 'border-gray-200').replace('bg-yellow-50', '');
+        }
+    }
+
+    // Set suggested price
+    var suggested = promo.suggested_discounted_price || promo.price || '';
+    if (suggested) {
+        document.getElementById('dm-deal-price').value = Math.round(suggested);
+    }
+
+    // Show dates section for PRICE_DISCOUNT
+    var datesSection = document.getElementById('dm-dates-section');
+    if (promo.type === 'PRICE_DISCOUNT') {
+        datesSection.classList.remove('hidden');
+        var now = new Date();
+        var start = new Date(now.getTime() + 86400000);
+        var end = new Date(now.getTime() + 14 * 86400000);
+        document.getElementById('dm-start-date').value = start.toISOString().slice(0, 16);
+        document.getElementById('dm-end-date').value = end.toISOString().slice(0, 16);
+    } else {
+        datesSection.classList.add('hidden');
+    }
+
+    document.getElementById('dm-activate-btn').disabled = false;
+    updateDealCalc();
+}
+
+function updateDealCalc() {
+    var dealPrice = parseFloat(document.getElementById('dm-deal-price').value) || 0;
+    var origPrice = _modalState.price || 0;
+    var bmCostMxn = _modalState.bmCostMxn || 0;
+
+    // Discount
+    var discount = origPrice > 0 ? ((1 - dealPrice / origPrice) * 100) : 0;
+    document.getElementById('dm-discount').textContent = discount > 0 ? '-' + discount.toFixed(0) + '%' : '0%';
+    document.getElementById('dm-discount').className = 'text-lg font-bold ' + (discount > 0 ? 'text-green-600' : 'text-gray-400');
+
+    // Breakdown
+    var comision = dealPrice * 0.17;
+    var ivaComision = comision * 0.16;
+    var envio = 150;
+    var ganancia = dealPrice - bmCostMxn - comision - ivaComision - envio;
+    var margen = dealPrice > 0 ? (ganancia / dealPrice * 100) : 0;
+
+    document.getElementById('calc-price').textContent = fmt(dealPrice);
+    document.getElementById('calc-cost').textContent = bmCostMxn > 0 ? '-' + fmt(bmCostMxn) : '-$0';
+    document.getElementById('calc-comision').textContent = '-' + fmt(comision);
+    document.getElementById('calc-iva').textContent = '-' + fmt(ivaComision);
+    document.getElementById('calc-envio').textContent = '-$150';
+
+    var gEl = document.getElementById('calc-ganancia');
+    gEl.textContent = (ganancia < 0 ? '-' : '') + fmt(Math.abs(ganancia));
+    gEl.className = 'font-bold text-lg ' + (ganancia >= 0 ? 'text-green-600' : 'text-red-600');
+
+    var mEl = document.getElementById('calc-margen');
+    mEl.textContent = margen.toFixed(1) + '%';
+    if (margen >= 20) mEl.className = 'font-bold text-lg text-green-600';
+    else if (margen >= 10) mEl.className = 'font-bold text-lg text-yellow-600';
+    else if (margen >= 0) mEl.className = 'font-bold text-lg text-orange-600';
+    else mEl.className = 'font-bold text-lg text-red-600';
+
+    // Enable activate button
+    if (dealPrice > 0 && _modalState.selectedPromoData) {
+        document.getElementById('dm-activate-btn').disabled = false;
+    }
+}
+
+async function activateDeal() {
+    var btn = document.getElementById('dm-activate-btn');
+    btn.disabled = true;
+    btn.textContent = 'Activando...';
+
+    var dealPrice = parseFloat(document.getElementById('dm-deal-price').value);
+    var promoType = _modalState.selectedPromoData ? _modalState.selectedPromoData.type : null;
+    if (!dealPrice || !promoType) {
+        showResult(false, 'Selecciona una promocion y escribe un precio');
+        btn.disabled = false;
+        btn.textContent = 'Activar Deal';
+        return;
+    }
+
+    var body = { deal_price: dealPrice, promotion_type: promoType };
+    if (promoType === 'PRICE_DISCOUNT') {
+        body.original_price = _modalState.price;
+        var startDate = document.getElementById('dm-start-date').value;
+        var endDate = document.getElementById('dm-end-date').value;
+        if (startDate) body.start_date = startDate + ':00';
+        if (endDate) body.finish_date = endDate + ':00';
+    } else if (_modalState.selectedPromoData && _modalState.selectedPromoData.id) {
+        body.promotion_id = _modalState.selectedPromoData.id;
+    }
+
+    try {
+        var resp = await fetch('/api/items/' + _modalState.itemId + '/promotions/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            body: JSON.stringify(body)
+        });
+        var data = await resp.json();
+        if (resp.ok && data.ok) {
+            showResult(true, 'Deal activado exitosamente!');
+            btn.textContent = 'Hecho!';
+            btn.className = btn.className.replace('bg-yellow-500', 'bg-green-500').replace('hover:bg-yellow-600', '');
+            // Mark row as activated visually
+            markRowActivated(_modalState.itemId);
+            showToast('success', 'Deal activado para ' + (_modalState.itemId || ''));
+            setTimeout(function() { closeDealModal(); }, 800);
+        } else {
+            showResult(false, data.detail || data.error || 'Error al activar el deal');
+            btn.disabled = false;
+            btn.textContent = 'Activar Deal';
+        }
+    } catch (e) {
+        showResult(false, 'Error de red: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Activar Deal';
+    }
+}
+
+function showResult(success, msg) {
+    var el = document.getElementById('dm-result');
+    var msgEl = document.getElementById('dm-result-msg');
+    el.classList.remove('hidden');
+    msgEl.className = 'rounded-lg p-3 text-sm ' + (success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200');
+    msgEl.textContent = msg;
+}
+
+function closeDealModal() {
+    var modal = document.getElementById('dealModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    _modalState = {};
+}
+
+// ===== Deactivate =====
+
+async function deactivateDeal(itemId) {
+    if (!confirm('Desactivar el deal de este producto?\nItem: ' + itemId)) return;
+
+    try {
+        var resp = await fetch('/api/items/' + itemId + '/promotions', { headers: { 'ngrok-skip-browser-warning': '1' } });
+        var data = await resp.json();
+        var promos = data.promotions || [];
+        var active = promos.find(function(p) { return p.status === 'started' || p.status === 'active'; });
+
+        if (!active) {
+            var types = ['DEAL', 'DOD', 'LIGHTNING', 'PRICE_DISCOUNT', 'MARKETPLACE_CAMPAIGN'];
+            for (var t = 0; t < types.length; t++) {
+                try {
+                    var dr = await fetch('/api/items/' + itemId + '/promotions/' + types[t], { method: 'DELETE', headers: { 'ngrok-skip-browser-warning': '1' } });
+                    if (dr.ok) {
+                        showToast('success', 'Deal desactivado (' + types[t] + ')');
+                        markRowDeactivated(itemId);
+                        return;
+                    }
+                } catch(ex) {}
+            }
+            showToast('error', 'No se encontro promocion activa para desactivar');
+            return;
+        }
+
+        var delResp = await fetch('/api/items/' + itemId + '/promotions/' + active.type, { method: 'DELETE', headers: { 'ngrok-skip-browser-warning': '1' } });
+        var delData = await delResp.json();
+        if (delResp.ok && delData.ok) {
+            showToast('success', 'Deal desactivado (' + active.type + ')');
+            markRowDeactivated(itemId);
+        } else {
+            showToast('error', 'Error: ' + (delData.detail || 'No se pudo desactivar'));
+        }
+    } catch (e) {
+        showToast('error', 'Error: ' + e.message);
+    }
+}
+
+// ===== Promo Detail Modal (interactivo) =====
+
+var _pdState = {};
+
+function openPromoDetail(itemId, title, currentPrice, originalPrice, bmCostUsd, thumb) {
+    _pdState = { itemId: itemId, currentPrice: currentPrice, originalPrice: originalPrice, bmCostUsd: bmCostUsd, bmCostMxn: bmCostUsd * USD_TO_MXN };
+
+    document.getElementById('pd-title').textContent = title || itemId;
+    document.getElementById('pd-item-id').textContent = itemId;
+    document.getElementById('pd-current-price').textContent = 'Precio actual: ' + fmt(currentPrice);
+    var thumbEl = document.getElementById('pd-thumb');
+    if (thumbEl) thumbEl.src = thumb || '';
+    document.getElementById('pd-loading').classList.remove('hidden');
+    document.getElementById('pd-list').classList.add('hidden');
+    document.getElementById('pd-empty').classList.add('hidden');
+    document.getElementById('pd-result').classList.add('hidden');
+
+    var modal = document.getElementById('promoDetailModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+
+    var ctrl = new AbortController();
+    setTimeout(function() { ctrl.abort(); }, 10000);
+    fetch('/api/items/' + itemId + '/promotions', {
+        signal: ctrl.signal,
+        headers: { 'ngrok-skip-browser-warning': '1' }
+    })
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(data) {
+            document.getElementById('pd-loading').classList.add('hidden');
+            if (data.error) {
+                document.getElementById('pd-empty').classList.remove('hidden');
+                document.getElementById('pd-empty').textContent = 'Error de API: ' + data.error;
+                return;
+            }
+            var promos = data.promotions || [];
+            if (promos.length === 0) {
+                document.getElementById('pd-empty').classList.remove('hidden');
+                document.getElementById('pd-empty').textContent = 'Sin promociones disponibles para este item';
+                return;
+            }
+            renderPromoCards(promos);
+        })
+        .catch(function(err) {
+            document.getElementById('pd-loading').classList.add('hidden');
+            document.getElementById('pd-empty').classList.remove('hidden');
+            var msg = err.name === 'AbortError' ? 'Timeout: la consulta tardo mas de 10s' : ('Error: ' + err.message);
+            document.getElementById('pd-empty').textContent = msg;
+        });
+}
+
+function renderPromoCards(promos) {
+    var list = document.getElementById('pd-list');
+    list.innerHTML = '';
+    list.classList.remove('hidden');
+    var typeColors = {
+        'DEAL': 'bg-green-100 text-green-700',
+        'SMART': 'bg-blue-100 text-blue-700',
+        'PRE_NEGOTIATED': 'bg-blue-100 text-blue-700',
+        'DOD': 'bg-indigo-100 text-indigo-700',
+        'LIGHTNING': 'bg-yellow-100 text-yellow-700',
+        'MARKETPLACE_CAMPAIGN': 'bg-purple-100 text-purple-700',
+        'PRICE_DISCOUNT': 'bg-gray-100 text-gray-700',
+        'SELLER_COUPON_CAMPAIGN': 'bg-pink-100 text-pink-700'
+    };
+    var statusLabels = {
+        'started': '<span class="text-[10px] px-1.5 py-0.5 bg-green-500 text-white rounded font-medium">ACTIVA</span>',
+        'candidate': '<span class="text-[10px] px-1.5 py-0.5 bg-yellow-200 text-yellow-800 rounded font-medium">CANDIDATA</span>',
+        'pending': '<span class="text-[10px] px-1.5 py-0.5 bg-blue-200 text-blue-800 rounded font-medium">PENDIENTE</span>'
+    };
+
+    promos.forEach(function(p, idx) {
+        var color = typeColors[p.type] || 'bg-gray-100 text-gray-600';
+        var statusHtml = statusLabels[p.status] || '<span class="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">' + (p.status || '') + '</span>';
+
+        // Determine if this promo is actionable
+        var isActive = (p.status === 'started' || p.status === 'active');
+        var isCandidate = (p.status === 'candidate' || p.status === 'pending');
+        var isSmartType = (p.type === 'SMART' || p.type === 'PRE_NEGOTIATED');
+        var isActionable = (p.type !== 'SELLER_COUPON_CAMPAIGN') && !isSmartType && (isActive || isCandidate);
+        var actionLabel = isActive ? 'Modificar Precio' : 'Participar';
+        var actionColor = isActive ? 'bg-blue-500 hover:bg-blue-600' : 'bg-green-500 hover:bg-green-600';
+
+        var div = document.createElement('div');
+        div.className = 'border rounded-lg overflow-hidden';
+
+        // Header + info
+        var html = '<div class="p-3">' +
+            '<div class="flex items-center gap-2 mb-2">' +
+                '<span class="px-2 py-0.5 rounded text-xs font-semibold ' + color + '">' + (p.type || '?') + '</span>' +
+                statusHtml +
+                (p.name ? '<span class="text-[10px] text-gray-400 ml-1">' + p.name + '</span>' : '') +
+                (p.id ? '<span class="text-[10px] text-gray-300 ml-auto">ID: ' + p.id + '</span>' : '') +
+            '</div>' +
+            '<div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">';
+        if (p.original_price) html += '<div>Original: <b>' + fmt(p.original_price) + '</b></div>';
+        if (p.price && p.price > 0) html += '<div>Precio Deal: <b class="text-green-600">' + fmt(p.price) + '</b></div>';
+        if (p.suggested_discounted_price && p.suggested_discounted_price > 0) html += '<div>Sugerido: <b class="text-yellow-700">' + fmt(p.suggested_discounted_price) + '</b></div>';
+        if (p.min_discounted_price) html += '<div>Min: ' + fmt(p.min_discounted_price) + '</div>';
+        if (p.max_discounted_price) html += '<div>Max: ' + fmt(p.max_discounted_price) + '</div>';
+        if (p.meli_percentage) html += '<div>MeLi paga: ' + p.meli_percentage + '%</div>';
+        if (p.seller_percentage) html += '<div>Seller paga: ' + p.seller_percentage + '%</div>';
+        if (p.start_date) html += '<div>Inicio: ' + new Date(p.start_date).toLocaleDateString('es-MX') + '</div>';
+        if (p.finish_date) html += '<div>Fin: ' + new Date(p.finish_date).toLocaleDateString('es-MX') + '</div>';
+        html += '</div>';
+
+        // Action button
+        if (isActionable) {
+            html += '<button class="mt-3 px-3 py-1.5 text-xs text-white rounded font-medium ' + actionColor + ' transition" ' +
+                'onclick="togglePromoAction(' + idx + ')">' + actionLabel + '</button>';
+        } else if (p.type === 'SELLER_COUPON_CAMPAIGN') {
+            html += '<div class="mt-2 text-[10px] text-gray-400">Cupon de cuenta — se gestiona a nivel tienda</div>';
+        } else if (isSmartType) {
+            html += '<div class="mt-2 text-[10px] text-gray-400">Promocion automatica de MeLi — se aplica automaticamente sin accion del vendedor</div>';
+        }
+        html += '</div>';
+
+        // Expandable action panel (hidden by default)
+        if (isActionable) {
+            var suggestedPrice = p.suggested_discounted_price || p.price || '';
+            html += '<div id="pd-action-' + idx + '" class="hidden border-t bg-gray-50 p-4">' +
+                '<div class="flex items-center gap-3 mb-3">' +
+                    '<div class="flex-1">' +
+                        '<label class="text-xs text-gray-500 block mb-1">Nuevo Precio</label>' +
+                        '<input type="number" id="pd-price-' + idx + '" step="1" min="0" ' +
+                            'value="' + (suggestedPrice ? Math.round(suggestedPrice) : '') + '" ' +
+                            'class="w-full border rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-400 focus:border-blue-400" ' +
+                            'oninput="calcPromoMargin(' + idx + ')">' +
+                    '</div>' +
+                    '<div class="text-center">' +
+                        '<label class="text-xs text-gray-500 block mb-1">Descuento</label>' +
+                        '<span id="pd-disc-' + idx + '" class="text-sm font-bold text-gray-400">0%</span>' +
+                    '</div>' +
+                '</div>';
+
+            // Mini calculator
+            html += '<div class="bg-white rounded-lg p-3 space-y-1 text-xs border mb-3">' +
+                '<div class="flex justify-between"><span class="text-gray-500">Precio</span><span id="pd-cp-' + idx + '" class="font-medium">$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">- Costo BM</span><span id="pd-cc-' + idx + '" class="text-red-500">-$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">- Comision MeLi (~17%)</span><span id="pd-cm-' + idx + '" class="text-red-500">-$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">- IVA Comision</span><span id="pd-ci-' + idx + '" class="text-red-500">-$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">- Envio est.</span><span class="text-red-500">-$150</span></div>' +
+                '<div class="flex justify-between border-t pt-1 mt-1"><span class="font-semibold">Ganancia</span><span id="pd-cg-' + idx + '" class="font-bold">$0</span></div>' +
+                '<div class="flex justify-between"><span class="font-semibold">Margen</span><span id="pd-cmg-' + idx + '" class="font-bold">0%</span></div>' +
+            '</div>';
+
+            // PRICE_DISCOUNT dates
+            if (p.type === 'PRICE_DISCOUNT') {
+                var now = new Date();
+                var s = new Date(now.getTime() + 86400000);
+                var e = new Date(now.getTime() + 14 * 86400000);
+                html += '<div class="grid grid-cols-2 gap-3 mb-3">' +
+                    '<div><label class="text-[10px] text-gray-500 block mb-1">Fecha inicio</label>' +
+                    '<input type="datetime-local" id="pd-sd-' + idx + '" value="' + s.toISOString().slice(0,16) + '" class="w-full border rounded px-2 py-1 text-xs"></div>' +
+                    '<div><label class="text-[10px] text-gray-500 block mb-1">Fecha fin</label>' +
+                    '<input type="datetime-local" id="pd-ed-' + idx + '" value="' + e.toISOString().slice(0,16) + '" class="w-full border rounded px-2 py-1 text-xs"></div>' +
+                '</div>';
+            }
+
+            // Submit button
+            html += '<button id="pd-submit-' + idx + '" class="w-full px-4 py-2 text-sm text-white rounded-lg font-semibold ' + actionColor + ' transition disabled:opacity-50" ' +
+                'onclick="submitPromoAction(' + idx + ', \'' + p.type + '\', ' + (p.original_price || _pdState.originalPrice || 0) + ', \'' + (p.id || '') + '\')">' +
+                (isActive ? 'Guardar Cambios' : 'Participar en Promocion') +
+            '</button>' +
+            '<div id="pd-submsg-' + idx + '" class="mt-2 text-xs hidden"></div>' +
+            '</div>';
+        }
+
+        div.innerHTML = html;
+        list.appendChild(div);
+
+        // Trigger initial calc if there's a suggested price
+        if (isActionable && suggestedPrice) {
+            setTimeout(function() { calcPromoMargin(idx); }, 50);
+        }
+    });
+}
+
+function togglePromoAction(idx) {
+    var panel = document.getElementById('pd-action-' + idx);
+    if (panel) {
+        panel.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) {
+            calcPromoMargin(idx);
+        }
+    }
+}
+
+function calcPromoMargin(idx) {
+    var priceEl = document.getElementById('pd-price-' + idx);
+    if (!priceEl) return;
+    var dealPrice = parseFloat(priceEl.value) || 0;
+    var origPrice = _pdState.originalPrice || _pdState.currentPrice || 0;
+    var bmCostMxn = _pdState.bmCostMxn || 0;
+
+    var discount = origPrice > 0 ? ((1 - dealPrice / origPrice) * 100) : 0;
+    var discEl = document.getElementById('pd-disc-' + idx);
+    if (discEl) {
+        discEl.textContent = discount > 0 ? '-' + discount.toFixed(0) + '%' : '0%';
+        discEl.className = 'text-sm font-bold ' + (discount > 0 ? 'text-green-600' : 'text-gray-400');
+    }
+
+    var comision = dealPrice * 0.17;
+    var iva = comision * 0.16;
+    var envio = 150;
+    var ganancia = dealPrice - bmCostMxn - comision - iva - envio;
+    var margen = dealPrice > 0 ? (ganancia / dealPrice * 100) : 0;
+
+    var cpEl = document.getElementById('pd-cp-' + idx); if (cpEl) cpEl.textContent = fmt(dealPrice);
+    var ccEl = document.getElementById('pd-cc-' + idx); if (ccEl) ccEl.textContent = bmCostMxn > 0 ? '-' + fmt(bmCostMxn) : '-$0';
+    var cmEl = document.getElementById('pd-cm-' + idx); if (cmEl) cmEl.textContent = '-' + fmt(comision);
+    var ciEl = document.getElementById('pd-ci-' + idx); if (ciEl) ciEl.textContent = '-' + fmt(iva);
+
+    var gEl = document.getElementById('pd-cg-' + idx);
+    if (gEl) {
+        gEl.textContent = (ganancia < 0 ? '-' : '') + fmt(Math.abs(ganancia));
+        gEl.className = 'font-bold ' + (ganancia >= 0 ? 'text-green-600' : 'text-red-600');
+    }
+    var mEl = document.getElementById('pd-cmg-' + idx);
+    if (mEl) {
+        mEl.textContent = margen.toFixed(1) + '%';
+        if (margen >= 20) mEl.className = 'font-bold text-green-600';
+        else if (margen >= 10) mEl.className = 'font-bold text-yellow-600';
+        else if (margen >= 0) mEl.className = 'font-bold text-orange-600';
+        else mEl.className = 'font-bold text-red-600';
+    }
+}
+
+async function submitPromoAction(idx, promoType, originalPrice, promotionId) {
+    var priceEl = document.getElementById('pd-price-' + idx);
+    var submitBtn = document.getElementById('pd-submit-' + idx);
+    var msgEl = document.getElementById('pd-submsg-' + idx);
+    var dealPrice = parseFloat(priceEl.value);
+
+    if (!dealPrice || dealPrice <= 0) {
+        msgEl.textContent = 'Ingresa un precio valido';
+        msgEl.className = 'mt-2 text-xs text-red-600';
+        msgEl.classList.remove('hidden');
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Procesando...';
+    msgEl.classList.add('hidden');
+
+    var body = { deal_price: dealPrice, promotion_type: promoType };
+    if (promoType === 'PRICE_DISCOUNT') {
+        body.original_price = originalPrice;
+        var sd = document.getElementById('pd-sd-' + idx);
+        var ed = document.getElementById('pd-ed-' + idx);
+        if (sd && sd.value) body.start_date = sd.value + ':00';
+        if (ed && ed.value) body.finish_date = ed.value + ':00';
+    } else if (promotionId) {
+        body.promotion_id = promotionId;
+    }
+
+    try {
+        var resp = await fetch('/api/items/' + _pdState.itemId + '/promotions/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            body: JSON.stringify(body)
+        });
+        var data = await resp.json();
+        if (resp.ok && data.ok) {
+            msgEl.textContent = 'Promocion actualizada!';
+            msgEl.className = 'mt-2 text-xs text-green-600 font-semibold bg-green-50 p-2 rounded';
+            msgEl.classList.remove('hidden');
+            submitBtn.textContent = 'Hecho!';
+            submitBtn.className = submitBtn.className.replace(/bg-\w+-500/, 'bg-green-500');
+            markRowActivated(_pdState.itemId);
+            showToast('success', 'Promocion aplicada a ' + (_pdState.itemId || ''));
+            setTimeout(function() { closePromoDetail(); }, 800);
+        } else {
+            var errMsg = data.detail || data.error || 'Error al procesar la promocion';
+            msgEl.textContent = 'Error: ' + errMsg;
+            msgEl.className = 'mt-2 text-xs text-red-600 bg-red-50 p-2 rounded';
+            msgEl.classList.remove('hidden');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Reintentar';
+        }
+    } catch (e) {
+        msgEl.textContent = 'Error de red: ' + e.message;
+        msgEl.className = 'mt-2 text-xs text-red-600 bg-red-50 p-2 rounded';
+        msgEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Reintentar';
+    }
+}
+
+function closePromoDetail() {
+    var modal = document.getElementById('promoDetailModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+// ===== Reload tab =====
+
+function reloadDealsTab() {
+    if (window.switchProductTab) {
+        window.switchProductTab('deals', '/partials/products-deals');
+    } else {
+        location.reload();
+    }
+}
+
+// Close modals on escape or clicking backdrop
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeDealModal();
+        closePromoDetail();
+    }
+});
+document.getElementById('dealModal').addEventListener('click', function(e) {
+    if (e.target === this) closeDealModal();
+});
+document.getElementById('promoDetailModal').addEventListener('click', function(e) {
+    if (e.target === this) closePromoDetail();
+});
+
+// ===== Toast notifications =====
+var _toastTimer = null;
+function showToast(type, msg) {
+    var toast = document.getElementById('deals-toast');
+    var inner = document.getElementById('deals-toast-inner');
+    var icon = document.getElementById('deals-toast-icon');
+    var msgEl = document.getElementById('deals-toast-msg');
+
+    if (type === 'success') {
+        inner.className = 'rounded-lg shadow-lg px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-md bg-green-50 border border-green-200 text-green-800';
+        icon.textContent = '\u2713';
+    } else {
+        inner.className = 'rounded-lg shadow-lg px-4 py-3 flex items-center gap-3 min-w-[280px] max-w-md bg-red-50 border border-red-200 text-red-800';
+        icon.textContent = '\u2717';
+    }
+    msgEl.textContent = msg;
+    toast.classList.remove('hidden', 'translate-x-full');
+    toast.classList.add('translate-x-0');
+
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(hideToast, 4000);
+}
+function hideToast() {
+    var toast = document.getElementById('deals-toast');
+    toast.classList.add('translate-x-full');
+    setTimeout(function() { toast.classList.add('hidden'); }, 300);
+}
+
+// ===== Row visual updates (no reload) =====
+function markRowActivated(itemId) {
+    // Mark candidate row as activated
+    var row = document.getElementById('crow-' + itemId);
+    if (row) {
+        row.classList.add('bg-green-50/50');
+        row.style.opacity = '0.6';
+        // Change action buttons
+        var actions = row.querySelector('td:last-child');
+        if (actions) {
+            actions.innerHTML = '<span class="text-xs text-green-600 font-semibold px-2 py-1 bg-green-50 rounded inline-block">Deal activado</span>';
+        }
+    }
+}
+function markRowDeactivated(itemId) {
+    // Find active deal row and fade it
+    var tables = document.querySelectorAll('#active-deals-table tbody tr.active-deal-row');
+    tables.forEach(function(row) {
+        var link = row.querySelector('a.text-blue-600, span.text-blue-600');
+        if (link && link.textContent.trim() === itemId) {
+            row.classList.add('bg-red-50/50');
+            row.style.opacity = '0.5';
+            var actions = row.querySelector('td:last-child');
+            if (actions) {
+                actions.innerHTML = '<span class="text-xs text-red-600 font-semibold px-2 py-1 bg-red-50 rounded inline-block">Desactivado</span>';
+            }
+        }
+    });
+}
+
+// ===== Scroll to section =====
+function scrollToSection(id) {
+    var el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ===== Category filter =====
+function filterByCategory() {
+    var val = document.getElementById('cat-filter').value;
+    var rows = document.querySelectorAll('#candidates-table tbody tr.candidate-row');
+    var visible = 0;
+    rows.forEach(function(row) {
+        var cat = row.getAttribute('data-category') || '';
+        var varId = row.getAttribute('data-var-row');
+        var varRow = varId ? document.getElementById(varId) : null;
+        if (!val || cat === val) {
+            row.classList.remove('hidden');
+            visible++;
+        } else {
+            row.classList.add('hidden');
+            if (varRow) varRow.classList.add('hidden');
+        }
+    });
+    var countEl = document.getElementById('candidates-count');
+    if (countEl) countEl.textContent = visible;
+}
+
+// ===== Sorting generico =====
+function _sortTable(tableId, rowClass, btnClass, activeClass, field) {
+    // Update button styles
+    document.querySelectorAll('.' + btnClass).forEach(function(btn) {
+        var isActive = btn.id.endsWith('-' + field);
+        if (isActive) {
+            btn.className = btnClass + ' px-2.5 py-1 text-[11px] rounded font-medium ' + activeClass;
+        } else {
+            btn.className = btnClass + ' px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200';
+        }
+    });
+
+    var table = document.getElementById(tableId);
+    if (!table) return;
+    var tbody = table.querySelector('tbody');
+    if (!tbody) return;
+
+    var mainRows = tbody.querySelectorAll('tr.' + rowClass);
+    var groups = [];
+    mainRows.forEach(function(row) {
+        var varId = row.getAttribute('data-var-row');
+        var varRow = varId ? document.getElementById(varId) : null;
+        groups.push({ main: row, variation: varRow, val: parseFloat(row.getAttribute('data-' + field)) || 0 });
+    });
+
+    groups.sort(function(a, b) {
+        // Push sentinel values (-999, -99999) to bottom
+        if (a.val <= -999 && b.val > -999) return 1;
+        if (b.val <= -999 && a.val > -999) return -1;
+        return b.val - a.val;
+    });
+
+    groups.forEach(function(g) {
+        tbody.appendChild(g.main);
+        if (g.variation) tbody.appendChild(g.variation);
+    });
+}
+
+function sortCandidates(field) {
+    _sortTable('candidates-table', 'candidate-row', 'sort-btn', 'bg-yellow-100 text-yellow-700 border border-yellow-300', field);
+}
+
+function sortActiveDeals(field) {
+    _sortTable('active-deals-table', 'active-deal-row', 'asort-btn', 'bg-green-100 text-green-700 border border-green-300', field);
+}
+</script>

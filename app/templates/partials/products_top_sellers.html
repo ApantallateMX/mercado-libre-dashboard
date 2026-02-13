@@ -1,0 +1,174 @@
+<div class="mb-4">
+    <h2 class="text-lg font-semibold text-gray-800">Top Ventas (30 dias)</h2>
+    <p class="text-sm text-gray-500">Productos ordenados por unidades vendidas</p>
+</div>
+
+{% if products %}
+<div class="bg-white rounded-lg shadow overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+            <tr>
+                <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">#</th>
+                <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">Producto</th>
+                <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">ID / SKU</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Uds (30d)</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Revenue</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio MeLi</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Costo BM</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Margen</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock BM</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Deal</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Acciones</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for p in products %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-3 py-3 text-gray-400 font-bold">{{ loop.index }}</td>
+                <td class="px-3 py-3">
+                    <div class="flex items-center gap-2">
+                        {% if p.thumbnail %}
+                        <img src="{{ p.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
+                        {% endif %}
+                        <div class="min-w-0">
+                            <span class="text-gray-800 truncate block max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title }}</span>
+                            {% if p.get('variations') %}
+                            <button onclick="toggleVariations('tv-{{ loop.index }}')"
+                                    class="text-[10px] text-purple-600 hover:underline mt-0.5">
+                                {{ p.variations|length }} variaciones
+                            </button>
+                            {% endif %}
+                        </div>
+                    </div>
+                </td>
+                <td class="px-3 py-3">
+                    <div class="flex flex-col">
+                        <a href="{{ p.permalink }}" target="_blank"
+                           class="text-xs text-blue-600 font-mono font-semibold hover:underline">{{ p.id }}</a>
+                        <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                    </div>
+                </td>
+                <td class="px-3 py-3 text-right font-bold text-gray-800">{{ p.units }}</td>
+                <td class="px-3 py-3 text-right text-gray-700">${{ "{:,.0f}".format(p.revenue) }}</td>
+                <td class="px-3 py-3 text-right">
+                    {% if p.original_price and p.original_price > p.price %}
+                    <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                    <span class="text-green-600 font-semibold text-xs">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% else %}
+                    <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-right">
+                    {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
+                    <div class="flex flex-col items-end">
+                        <span class="text-gray-700 text-xs font-semibold">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
+                        <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_avg_cost', 0)) }} USD</span>
+                    </div>
+                    {% elif p.get('_bm_has_data') %}
+                    <div class="flex flex-col items-end">
+                        <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
+                        {% if p.get('_bm_brand') %}<span class="text-[10px] text-gray-300">{{ p._bm_brand }}</span>{% endif %}
+                    </div>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-center">
+                    {% if p.get('_margen_pct') is not none %}
+                    <div class="flex flex-col items-center">
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
+                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
+                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
+                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                            {% else %}bg-red-100 text-red-700{% endif %}">
+                            {{ "%.1f"|format(p._margen_pct) }}%
+                        </span>
+                        <span class="text-[10px] text-gray-400 mt-0.5">${{ "{:,.0f}".format(p._ganancia_est) }}</span>
+                    </div>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-right">
+                    <span class="{{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }} font-semibold">
+                        {{ p.available_quantity }}
+                    </span>
+                </td>
+                <td class="px-3 py-3 text-right">
+                    {% if p.get('_bm_total') is not none %}
+                    <div class="flex flex-col items-end text-xs">
+                        <span class="font-semibold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">
+                            {{ p._bm_total }}
+                        </span>
+                        <span class="text-[10px] text-gray-400">
+                            M:{{ p._bm_mty }} C:{{ p._bm_cdmx }}{% if p._bm_tj %} T:{{ p._bm_tj }}{% endif %}
+                        </span>
+                    </div>
+                    {% else %}
+                    <span class="text-gray-300">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-center">
+                    {% if p.original_price and p.original_price > p.price %}
+                    <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                        -{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%
+                    </span>
+                    {% else %}
+                    <span class="text-xs text-gray-400">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-center">
+                    <div class="flex flex-col items-center gap-1">
+                        {% if p.permalink %}
+                        <a href="{{ p.permalink }}" target="_blank" class="text-blue-500 hover:text-blue-700 text-xs">Ver</a>
+                        {% endif %}
+                        <a href="https://www.mercadolibre.com.mx/publicaciones/{{ p.id }}/modificar" target="_blank"
+                           class="text-[10px] text-gray-400 hover:text-gray-600">Editar</a>
+                    </div>
+                </td>
+            </tr>
+            {% if p.get('variations') %}
+            <tr id="tv-{{ loop.index }}" class="hidden bg-purple-50/30">
+                <td colspan="12" class="px-6 py-2">
+                    <div class="text-xs">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="text-gray-500">
+                                    <th class="text-left py-1 font-medium">Variacion</th>
+                                    <th class="text-left py-1 font-medium">ID Variacion</th>
+                                    <th class="text-left py-1 font-medium">SKU</th>
+                                    <th class="text-right py-1 font-medium">Stock</th>
+                                    <th class="text-right py-1 font-medium">Precio</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-purple-100">
+                                {% for v in p.variations %}
+                                <tr>
+                                    <td class="py-1 text-gray-700">{{ v.combo }}</td>
+                                    <td class="py-1 text-blue-600 font-mono text-[10px]">{{ v.id }}</td>
+                                    <td class="py-1 text-gray-500 font-mono">{{ v.sku or '-' }}</td>
+                                    <td class="py-1 text-right {{ 'text-green-600' if v.stock > 0 else 'text-red-500' }}">{{ v.stock }}</td>
+                                    <td class="py-1 text-right text-gray-600">${{ "{:,.0f}".format(v.price) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="text-center py-8 text-gray-500">Sin datos de ventas en los ultimos 30 dias</p>
+{% endif %}
+
+<script>
+function toggleVariations(id) {
+    var row = document.getElementById(id);
+    if (row) row.classList.toggle('hidden');
+}
+</script>

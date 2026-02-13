@@ -1,0 +1,106 @@
+{% if items %}
+<div class="mb-4 px-1">
+    <span class="text-sm font-medium text-gray-700">
+        {{ items|length }} productos sin stock con ventas
+    </span>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+    {% for item in items %}
+    <div class="bg-white rounded-lg shadow overflow-hidden border-l-4 {{ 'border-red-500' if item.status == 'paused' else 'border-orange-400' }}" id="row-{{ item.id }}">
+        <!-- Imagen + Estado -->
+        <div class="relative">
+            {% if item.thumbnail %}
+            <img src="{{ item.thumbnail }}" alt="" class="w-full h-36 object-cover">
+            {% else %}
+            <div class="w-full h-36 bg-gray-100 flex items-center justify-center">
+                <span class="text-gray-400 text-sm">Sin imagen</span>
+            </div>
+            {% endif %}
+            <div class="absolute top-2 right-2">
+                {% if item.status == 'active' %}
+                <span class="px-2 py-1 text-xs rounded-full bg-green-500 text-white font-medium shadow">Activo</span>
+                {% elif item.status == 'paused' %}
+                <span class="px-2 py-1 text-xs rounded-full bg-yellow-500 text-white font-medium shadow">Pausado</span>
+                {% else %}
+                <span class="px-2 py-1 text-xs rounded-full bg-gray-500 text-white font-medium shadow">{{ item.status }}</span>
+                {% endif %}
+            </div>
+            <div class="absolute top-2 left-2">
+                <span class="px-2 py-1 text-xs rounded-full bg-red-600 text-white font-bold shadow">Stock: 0</span>
+            </div>
+        </div>
+
+        <div class="p-4">
+            <!-- Titulo -->
+            <h3 class="font-medium text-gray-800 text-sm mb-2 line-clamp-2 leading-tight">
+                {{ item.title[:60] }}{% if item.title|length > 60 %}...{% endif %}
+            </h3>
+
+            <!-- MLM + SKU -->
+            <div class="flex items-center gap-2 mb-3 text-xs">
+                <a href="https://www.mercadolibre.com.mx/publicaciones/{{ item.id }}/modificar" target="_blank"
+                   class="font-mono text-blue-600 hover:underline">{{ item.id }}</a>
+                {% if item.sku and item.sku != '-' %}
+                <span class="font-mono text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{{ item.sku }}</span>
+                {% endif %}
+            </div>
+
+            <!-- Precio + Ventas -->
+            <div class="flex justify-between items-center mb-3">
+                <div>
+                    {% if item.original_price and item.original_price > (item.price or 0) %}
+                    <span class="text-xs text-gray-400 line-through">${{ "{:,.0f}".format(item.original_price) }}</span>
+                    <span class="text-lg font-bold text-green-600">${{ "{:,.0f}".format(item.price) }}</span>
+                    <span class="text-xs text-green-600">(-{{ "%.0f"|format((1 - item.price / item.original_price) * 100) }}%)</span>
+                    {% else %}
+                    <span class="text-lg font-bold text-gray-800">${{ "{:,.0f}".format(item.price) }}</span>
+                    {% endif %}
+                </div>
+                <span class="text-sm text-gray-600">
+                    <span class="font-semibold text-gray-800">{{ item.sold_quantity }}</span> vendidos
+                </span>
+            </div>
+
+            <!-- Inventario BinManager -->
+            <div class="flex gap-2 mb-3">
+                {% if item.mty is defined %}
+                <div class="flex-1 text-center py-1.5 rounded text-xs font-medium {{ 'bg-green-100 text-green-700' if item.mty > 0 else 'bg-red-100 text-red-600' }}">
+                    MTY: <strong>{{ item.mty }}</strong>
+                </div>
+                {% else %}
+                <div class="flex-1 text-center py-1.5 rounded text-xs font-medium bg-gray-100 text-gray-400">
+                    MTY: —
+                </div>
+                {% endif %}
+                {% if item.cdmx is defined %}
+                <div class="flex-1 text-center py-1.5 rounded text-xs font-medium {{ 'bg-green-100 text-green-700' if item.cdmx > 0 else 'bg-red-100 text-red-600' }}">
+                    CDMX: <strong>{{ item.cdmx }}</strong>
+                </div>
+                {% else %}
+                <div class="flex-1 text-center py-1.5 rounded text-xs font-medium bg-gray-100 text-gray-400">
+                    CDMX: —
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Actualizar Stock -->
+            <div class="flex gap-2">
+                <input type="number" min="0" value="0" id="new-stock-{{ item.id }}"
+                       class="flex-1 border rounded px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none">
+                <button onclick="updateStock('{{ item.id }}')"
+                        class="bg-blue-500 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-blue-600 transition">
+                    Actualizar
+                </button>
+            </div>
+            <span id="msg-{{ item.id }}" class="text-xs mt-1 block hidden"></span>
+            <span id="stock-display-{{ item.id }}" class="hidden">{{ item.stock }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+    No hay productos sin stock con ventas
+</div>
+{% endif %}

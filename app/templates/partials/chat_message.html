@@ -1,0 +1,9 @@
+{% if role == 'user' %}
+<div class="flex justify-end mb-3">
+    <div class="bg-gray-200 text-gray-800 rounded-2xl rounded-br-md px-4 py-2 max-w-[85%] text-sm whitespace-pre-wrap">{{ content }}</div>
+</div>
+{% else %}
+<div class="flex justify-start mb-3">
+    <div class="bg-yellow-100 text-gray-800 rounded-2xl rounded-bl-md px-4 py-2 max-w-[85%] text-sm whitespace-pre-wrap">{{ content }}</div>
+</div>
+{% endif %}

@@ -1,0 +1,98 @@
+{% if conversations %}
+<div class="space-y-4">
+    {% for conv in conversations %}
+    <div class="border border-gray-200 rounded-lg p-4">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-gray-800">Conversacion #{{ conv.pack_id }}</span>
+                {% if conv.last_from_buyer %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700">Pendiente</span>
+                {% endif %}
+            </div>
+            <span class="text-xs text-gray-500">{{ conv.date }} &middot; {{ conv.last_elapsed }}</span>
+        </div>
+
+        {% if conv.messages %}
+        <div id="conv-messages-{{ conv.pack_id }}" class="space-y-2 mb-3 max-h-40 overflow-y-auto">
+            {% for m in conv.messages[-5:] %}
+            <div class="text-sm {{ 'text-blue-700 bg-blue-50' if m.is_seller else 'text-gray-700 bg-gray-50' }} rounded p-2"
+                 data-msg-role="{{ 'seller' if m.is_seller else 'buyer' }}"
+                 data-msg-text="{{ m.text }}">
+                <span class="text-xs font-medium">{{ 'Tu' if m.is_seller else 'Comprador' }}{{ ' (' + m.time + ')' if m.time else '' }}:</span>
+                {{ m.text }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="border-t pt-3">
+            <!-- AI Suggest Button -->
+            <div class="mb-2">
+                <button onclick="suggestMessageReply(this)"
+                        data-pack-id="{{ conv.pack_id }}"
+                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
+                    <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
+                </button>
+            </div>
+
+            <!-- AI Suggestion Panel (hidden until triggered) -->
+            <div id="ai-panel-msg-{{ conv.pack_id }}" class="hidden mb-3">
+                <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-purple-600 text-xs font-semibold">Sugerencia IA</span>
+                        <div id="ai-spin-msg-{{ conv.pack_id }}" class="hidden">
+                            <svg class="animate-spin h-4 w-4 text-purple-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                        </div>
+                    </div>
+                    <div id="ai-text-msg-{{ conv.pack_id }}" class="text-sm text-gray-700 whitespace-pre-wrap"></div>
+                    <div id="ai-act-msg-{{ conv.pack_id }}" class="hidden flex gap-2 mt-2">
+                        <button onclick="useAiSuggestion('message', '{{ conv.pack_id }}')"
+                                class="text-xs bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700">
+                            Usar respuesta
+                        </button>
+                        <button onclick="suggestMessageReply(document.querySelector('[data-pack-id=\'{{ conv.pack_id }}\']'))"
+                                class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">
+                            Regenerar
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Message textarea -->
+            <textarea id="msg-input-{{ conv.pack_id }}" rows="2"
+                      class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu mensaje..."></textarea>
+            <div class="flex items-center gap-2 mt-2">
+                <button id="btn-msg-{{ conv.pack_id }}" onclick="sendChatMessage('{{ conv.pack_id }}')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+                    Enviar
+                </button>
+                <span id="msg-status-{{ conv.pack_id }}" class="text-xs"></span>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% set total = paging.total if paging and paging.total is defined else 0 %}
+{% if total > limit %}
+<div class="flex items-center justify-between mt-4 pt-4 border-t">
+    <span class="text-sm text-gray-500">
+        Mostrando {{ offset + 1 }}-{{ [offset + limit, total]|min }} de {{ total }}
+    </span>
+    <div class="flex gap-2">
+        <button onclick="healthPrevPage('messages')" {% if offset <= 0 %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset > 0 %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Anterior
+        </button>
+        <button onclick="healthNextPage('messages')" {% if offset + limit >= total %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset + limit < total %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Siguiente
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<p class="text-center py-8 text-gray-500">No hay mensajes</p>
+{% endif %}

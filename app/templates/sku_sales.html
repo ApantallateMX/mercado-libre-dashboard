@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Ventas por SKU{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Ventas por SKU</h1>
+    <p class="text-gray-600">Total de productos vendidos agrupados por SKU</p>
+</div>
+
+<!-- Filtro de fechas -->
+<div class="bg-white p-4 rounded-lg shadow mb-6">
+    <div class="flex flex-wrap gap-4 items-end">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Desde</label>
+            <input type="date" name="date_from" id="date_from"
+                   class="border rounded px-3 py-2 text-sm">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
+            <input type="date" name="date_to" id="date_to"
+                   class="border rounded px-3 py-2 text-sm">
+        </div>
+        <button type="button" id="btn-filtrar"
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded hover:bg-yellow-500 transition text-sm">
+            Filtrar
+        </button>
+        <button type="button" id="btn-limpiar"
+                class="border border-gray-300 text-gray-600 px-4 py-2 rounded hover:bg-gray-100 transition text-sm">
+            Limpiar
+        </button>
+    </div>
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-hidden">
+    <div id="sku-sales-table">
+        <div class="animate-pulse p-4 space-y-3">
+            {% for i in range(10) %}
+            <div class="h-12 bg-gray-200 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const today = new Date();
+    const monthAgo = new Date();
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
+
+    document.getElementById('date_to').value = today.toISOString().split('T')[0];
+    document.getElementById('date_from').value = monthAgo.toISOString().split('T')[0];
+
+    function loadInventoryForSkus() {
+        var rows = document.querySelectorAll('#sku-sales-table tr[data-sku]');
+        if (!rows.length) return;
+        var skus = [];
+        rows.forEach(function(row) { skus.push(row.getAttribute('data-sku')); });
+        fetch('/api/items/inventory-sku-sales?skus=' + encodeURIComponent(skus.join(',')))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                rows.forEach(function(row) {
+                    var sku = row.getAttribute('data-sku');
+                    var inv = data[sku];
+                    var mtyCell = row.querySelector('.inv-mty');
+                    var cdmxCell = row.querySelector('.inv-cdmx');
+                    if (inv) {
+                        var mty = inv.MTY || 0;
+                        var cdmx = inv.CDMX || 0;
+                        mtyCell.innerHTML = '<span class="font-medium ' + (mty > 0 ? 'text-green-700' : 'text-red-600') + '">' + mty + '</span>';
+                        cdmxCell.innerHTML = '<span class="font-medium ' + (cdmx > 0 ? 'text-green-700' : 'text-red-600') + '">' + cdmx + '</span>';
+                    } else {
+                        mtyCell.innerHTML = '<span class="text-gray-400 text-xs">N/A</span>';
+                        cdmxCell.innerHTML = '<span class="text-gray-400 text-xs">N/A</span>';
+                    }
+                });
+            })
+            .catch(function() {
+                rows.forEach(function(row) {
+                    row.querySelector('.inv-mty').innerHTML = '<span class="text-red-400 text-xs">Error</span>';
+                    row.querySelector('.inv-cdmx').innerHTML = '<span class="text-red-400 text-xs">Error</span>';
+                });
+            });
+    }
+
+    function loadSkuTable(url) {
+        var target = document.getElementById('sku-sales-table');
+        target.innerHTML = '<div class="p-8 text-center text-gray-500"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando ordenes, esto puede tardar unos segundos...</div>';
+        document.getElementById('btn-filtrar').disabled = true;
+        document.getElementById('btn-filtrar').classList.add('opacity-50');
+        fetch(url)
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                target.innerHTML = html;
+                document.getElementById('btn-filtrar').disabled = false;
+                document.getElementById('btn-filtrar').classList.remove('opacity-50');
+                loadInventoryForSkus();
+            });
+    }
+
+    document.getElementById('btn-filtrar').addEventListener('click', function() {
+        var dateFrom = document.getElementById('date_from').value;
+        var dateTo = document.getElementById('date_to').value;
+        var params = [];
+        if (dateFrom) params.push('date_from=' + dateFrom);
+        if (dateTo) params.push('date_to=' + dateTo);
+        loadSkuTable('/partials/sku-sales-table?' + params.join('&'));
+    });
+
+    document.getElementById('btn-limpiar').addEventListener('click', function() {
+        document.getElementById('date_from').value = '';
+        document.getElementById('date_to').value = '';
+        loadSkuTable('/partials/sku-sales-table');
+    });
+
+    // Carga inicial con fechas por defecto
+    loadSkuTable('/partials/sku-sales-table?date_from=' + document.getElementById('date_from').value + '&date_to=' + document.getElementById('date_to').value);
+</script>
+{% endblock %}

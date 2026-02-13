@@ -1,0 +1,182 @@
+<!-- Status Filters -->
+<div class="flex gap-2 mb-4">
+    <button onclick="setHealthStatus('claims', '')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if not status else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Todos
+    </button>
+    <button onclick="setHealthStatus('claims', 'opened')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if status == 'opened' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Abiertos
+    </button>
+    <button onclick="setHealthStatus('claims', 'closed')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if status == 'closed' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Cerrados
+    </button>
+</div>
+
+{% if claims %}
+<div class="space-y-4">
+    {% for claim in claims %}
+    <div class="border border-gray-200 rounded-lg p-4" id="claim-row-{{ claim.id }}">
+        <div class="flex justify-between items-start mb-3">
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-semibold text-gray-800">Reclamo #{{ claim.id }}</span>
+                {% if claim.order_id %}
+                <span class="text-xs text-gray-400">Orden {{ claim.order_id }}</span>
+                {% endif %}
+                {% set status_class = {
+                    'opened': 'bg-red-100 text-red-800',
+                    'closed': 'bg-gray-100 text-gray-800',
+                }.get(claim.status, 'bg-yellow-100 text-yellow-800') %}
+                <span class="px-2 py-0.5 text-xs rounded-full {{ status_class }}">{{ claim.status }}</span>
+                {% if claim.urgency == 'red' %}
+                <span class="w-2 h-2 rounded-full bg-red-500" title="Urgente"></span>
+                {% elif claim.urgency == 'yellow' %}
+                <span class="w-2 h-2 rounded-full bg-yellow-500" title="Atencion"></span>
+                {% endif %}
+            </div>
+            <span class="text-xs text-gray-500">{{ claim.date_created }} &middot; {{ claim.elapsed }}</span>
+        </div>
+
+        <!-- Reason + Stage -->
+        <p class="text-sm text-gray-600 mb-1">{{ claim.reason_desc }}
+            <span class="text-xs text-gray-400">({{ claim.reason_id }})</span>
+        </p>
+        {% if claim.stage == 'dispute' %}
+        <span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">En Disputa</span>
+        {% elif claim.stage == 'claim' %}
+        <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Reclamo</span>
+        {% endif %}
+        {% if claim.due_date %}
+        <span class="text-xs text-red-600 ml-2">Responder antes de: {{ claim.due_date }}</span>
+        {% endif %}
+
+        <!-- Product -->
+        {% if claim.product_title %}
+        <p class="text-xs text-gray-500 mt-1 mb-2">Producto: {{ claim.product_title }}
+            {% if claim.product_price %} &middot; ${{ "{:,.2f}".format(claim.product_price) }}{% endif %}
+        </p>
+        {% endif %}
+
+        <!-- Issues & Suggestions (pre-existing analysis) -->
+        {% if claim.issues %}
+        <div class="mb-3 space-y-1">
+            {% for issue in claim.issues %}
+            <p class="text-xs text-red-600 flex items-start gap-1">
+                <span class="mt-0.5">&#9888;</span> {{ issue }}
+            </p>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if claim.suggestions %}
+        <div class="mb-3 space-y-1">
+            {% for sug in claim.suggestions %}
+            <p class="text-xs text-blue-600 flex items-start gap-1">
+                <span class="mt-0.5">&#10148;</span> {{ sug }}
+            </p>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if claim.status == 'opened' %}
+        <!-- AI Action Buttons -->
+        <div class="flex gap-2 mb-3">
+            <button onclick="analyzeClaimAi(this)"
+                    data-id="{{ claim.id }}"
+                    data-reason-desc="{{ claim.reason_desc }}"
+                    data-reason-id="{{ claim.reason_id }}"
+                    data-product-title="{{ claim.product_title }}"
+                    data-price="0"
+                    data-days-open="{{ claim.days_open }}"
+                    data-claims-rate="0"
+                    data-claims-status=""
+                    data-sale-fee="0"
+                    data-shipping-cost="0"
+                    class="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full hover:bg-blue-200 font-semibold transition-colors">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>Analisis IA
+            </button>
+            <button onclick="suggestClaimResponse(this)"
+                    data-id="{{ claim.id }}"
+                    data-reason-id="{{ claim.reason_id }}"
+                    data-reason-desc="{{ claim.reason_desc }}"
+                    data-product-title="{{ claim.product_title }}"
+                    data-days-open="{{ claim.days_open }}"
+                    data-issues='{{ claim.issues | tojson }}'
+                    data-suggestions='{{ claim.suggestions | tojson }}'
+                    class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
+                <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir Respuesta
+            </button>
+        </div>
+
+        <!-- AI Analysis Panel (hidden until triggered) -->
+        <div id="ai-analysis-{{ claim.id }}" class="hidden mb-3"></div>
+
+        <!-- AI Response Suggestion Panel (hidden until triggered) -->
+        <div id="ai-panel-claim-{{ claim.id }}" class="hidden mb-3">
+            <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-purple-600 text-xs font-semibold">Respuesta Sugerida</span>
+                    <div id="ai-spin-claim-{{ claim.id }}" class="hidden">
+                        <svg class="animate-spin h-4 w-4 text-purple-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                    </div>
+                </div>
+                <div id="ai-text-claim-{{ claim.id }}" class="text-sm text-gray-700 whitespace-pre-wrap"></div>
+                <div id="ai-act-claim-{{ claim.id }}" class="hidden flex gap-2 mt-2">
+                    <button onclick="useAiSuggestion('claim', '{{ claim.id }}')"
+                            class="text-xs bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700">
+                        Usar respuesta
+                    </button>
+                    <button onclick="suggestClaimResponse(document.querySelector('[data-id=\'{{ claim.id }}\'][data-reason-id]'))"
+                            class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">
+                        Regenerar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Existing response form -->
+        <div class="border-t pt-3 mt-2">
+            <div class="flex gap-2 mb-2">
+                <select id="claim-action-{{ claim.id }}" class="border rounded px-2 py-1 text-sm">
+                    <option value="refund">Devolver dinero</option>
+                    <option value="message">Enviar mensaje</option>
+                </select>
+            </div>
+            <textarea id="claim-text-{{ claim.id }}" rows="2"
+                      class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu respuesta..."></textarea>
+            <div class="flex items-center gap-2 mt-2">
+                <button id="btn-claim-{{ claim.id }}" onclick="respondClaim('{{ claim.id }}')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+                    Responder
+                </button>
+                <span id="msg-claim-{{ claim.id }}" class="text-xs"></span>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% set total = paging.total if paging and paging.total is defined else 0 %}
+{% if total > limit %}
+<div class="flex items-center justify-between mt-4 pt-4 border-t">
+    <span class="text-sm text-gray-500">
+        Mostrando {{ offset + 1 }}-{{ [offset + limit, total]|min }} de {{ total }}
+    </span>
+    <div class="flex gap-2">
+        <button onclick="healthPrevPage('claims')" {% if offset <= 0 %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset > 0 %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Anterior
+        </button>
+        <button onclick="healthNextPage('claims')" {% if offset + limit >= total %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset + limit < total %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Siguiente
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<p class="text-center py-8 text-gray-500">No hay reclamos</p>
+{% endif %}

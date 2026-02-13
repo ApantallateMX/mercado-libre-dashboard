@@ -1,0 +1,91 @@
+<div class="mb-4">
+    <h2 class="text-lg font-semibold text-gray-800">Sin Publicar en MeLi</h2>
+    <p class="text-sm text-gray-500">SKUs con stock en BinManager que no tienen listing activo — oportunidades de venta</p>
+</div>
+
+{% if products %}
+<div class="mb-3 text-sm text-gray-600">
+    {{ products|length }} SKUs con stock sin publicar | TC: ${{ "%.2f"|format(usd_to_mxn) }} MXN/USD
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead class="bg-purple-50 border-b">
+            <tr>
+                <th class="text-left px-4 py-3 text-gray-600 font-medium">SKU</th>
+                <th class="text-left px-4 py-3 text-gray-600 font-medium">Producto</th>
+                <th class="text-left px-4 py-3 text-gray-600 font-medium">Marca</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">RetailPrice USD</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">AvgCost USD</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">Precio Est. MXN</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">Stock Total</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">MTY</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">CDMX</th>
+                <th class="text-right px-4 py-3 text-gray-600 font-medium">TJ</th>
+                <th class="text-center px-4 py-3 text-gray-600 font-medium">Accion</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for p in products %}
+            <tr class="hover:bg-purple-50/30">
+                <td class="px-4 py-3 font-mono text-xs font-semibold text-gray-700">{{ p.sku }}</td>
+                <td class="px-4 py-3">
+                    <span class="text-gray-800 truncate block max-w-[200px]" title="{{ p.title }}">
+                        {{ p.title or '-' }}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-gray-600">{{ p.brand or '-' }}</td>
+                <td class="px-4 py-3 text-right">
+                    {% if p.retail_price_usd > 0 and p.retail_price_usd < 9999 %}
+                    <span class="text-gray-700">${{ "%.2f"|format(p.retail_price_usd) }}</span>
+                    {% else %}
+                    <span class="text-gray-300">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3 text-right">
+                    {% if p.avg_cost_usd > 0 and p.avg_cost_usd < 9999 %}
+                    <span class="text-gray-700">${{ "%.2f"|format(p.avg_cost_usd) }}</span>
+                    {% else %}
+                    <span class="text-gray-300">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3 text-right">
+                    {% if p.estimated_price_mxn > 0 %}
+                    <span class="font-semibold text-green-700">${{ "{:,.0f}".format(p.estimated_price_mxn) }}</span>
+                    {% else %}
+                    <span class="text-gray-300">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-3 text-right">
+                    <span class="font-bold {{ 'text-green-600' if p.total_stock > 20 else 'text-yellow-600' if p.total_stock > 4 else 'text-red-600' }}">
+                        {{ p.total_stock }}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-right {{ 'text-green-600' if p.mty > 0 else 'text-gray-300' }}">{{ p.mty }}</td>
+                <td class="px-4 py-3 text-right {{ 'text-green-600' if p.cdmx > 0 else 'text-gray-300' }}">{{ p.cdmx }}</td>
+                <td class="px-4 py-3 text-right {{ 'text-green-600' if p.tj > 0 else 'text-gray-300' }}">{{ p.tj }}</td>
+                <td class="px-4 py-3 text-center">
+                    <a href="/sku-inventory?sku={{ p.base_sku }}"
+                       class="inline-block px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600 transition">
+                        Lanzar
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="mt-4 text-xs text-gray-400">
+    Nota: Esta tab consulta multiples APIs y puede tardar mas en cargar. Los precios estimados usan: RetailPrice * TC * 1.16 (IVA).
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center">
+    <div class="text-gray-400 mb-2">
+        <svg class="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+    </div>
+    <p class="text-gray-500">Todos los SKUs con stock en BinManager ya estan publicados en MeLi</p>
+</div>
+{% endif %}

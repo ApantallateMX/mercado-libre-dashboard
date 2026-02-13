@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Centro de Productos{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="mb-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-2">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Centro de Productos</h1>
+        <p class="text-gray-600">Inteligencia y optimizacion para alcanzar la meta de $500k/dia</p>
+    </div>
+</div>
+
+<!-- Tabs -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="flex border-b overflow-x-auto" id="product-tabs">
+        <button data-tab="summary" data-url="/partials/products-summary"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-yellow-400 text-yellow-700 bg-yellow-50">
+            Resumen
+        </button>
+        <button data-tab="all" data-url="/partials/products-all"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Todos
+        </button>
+        <button data-tab="top" data-url="/partials/products-top-sellers"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Top Ventas
+        </button>
+        <button data-tab="stock" data-url="/partials/products-high-stock"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Mayor Stock
+        </button>
+        <button data-tab="low" data-url="/partials/products-low-sellers"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Baja Venta
+        </button>
+        <button data-tab="deals" data-url="/partials/products-deals"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Deals
+        </button>
+        <button data-tab="unpublished" data-url="/partials/products-not-published"
+                class="tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            Sin Publicar
+        </button>
+    </div>
+</div>
+
+<!-- Tab content -->
+<div id="tab-content">
+    <!-- Default: skeleton loading -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {% for i in range(4) %}
+        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-1/2 mb-3"></div>
+            <div class="h-8 bg-gray-200 rounded w-3/4 mb-2"></div>
+            <div class="h-3 bg-gray-200 rounded w-1/3"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var tabCache = {};
+    var activeTab = 'summary';
+
+    function switchTab(tabName, url) {
+        // Update tab styles
+        document.querySelectorAll('.tab-btn').forEach(function(btn) {
+            if (btn.dataset.tab === tabName) {
+                btn.className = 'tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-yellow-400 text-yellow-700 bg-yellow-50';
+            } else {
+                btn.className = 'tab-btn px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300';
+            }
+        });
+        activeTab = tabName;
+
+        var content = document.getElementById('tab-content');
+
+        // Show loading
+        content.innerHTML = '<div class="flex justify-center py-12"><svg class="animate-spin h-8 w-8 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg></div>';
+
+        // Fetch content
+        fetch(url, {headers: {'ngrok-skip-browser-warning': 'true'}})
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                if (activeTab === tabName) {
+                    content.innerHTML = html;
+                    // Execute inline scripts (innerHTML doesn't run them)
+                    content.querySelectorAll('script').forEach(function(oldScript) {
+                        var newScript = document.createElement('script');
+                        newScript.textContent = oldScript.textContent;
+                        oldScript.parentNode.replaceChild(newScript, oldScript);
+                    });
+                    // Re-process htmx in loaded content
+                    if (window.htmx) htmx.process(content);
+                }
+            })
+            .catch(function(e) {
+                content.innerHTML = '<div class="text-center py-8 text-red-500">Error cargando contenido: ' + e.message + '</div>';
+            });
+    }
+
+    // Bind tab clicks
+    document.querySelectorAll('.tab-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            switchTab(btn.dataset.tab, btn.dataset.url);
+        });
+    });
+
+    // Load default tab
+    switchTab('summary', '/partials/products-summary');
+
+    // Expose for external use (e.g. "Sin stock con ventas" button)
+    window.switchProductTab = switchTab;
+
+    // Stock update function (used by items-grid tab)
+    window.updateStock = function(itemId) {
+        var input = document.getElementById('new-stock-' + itemId);
+        var quantity = parseInt(input.value);
+        var msg = document.getElementById('msg-' + itemId);
+        var stockDisplay = document.getElementById('stock-display-' + itemId);
+
+        if (isNaN(quantity) || quantity < 0) {
+            msg.textContent = 'Cantidad invalida';
+            msg.className = 'text-xs mt-1 block text-red-600';
+            return;
+        }
+
+        msg.textContent = 'Actualizando...';
+        msg.className = 'text-xs mt-1 block text-gray-500';
+
+        fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: quantity})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                msg.textContent = 'Actualizado';
+                msg.className = 'text-xs mt-1 block text-green-600';
+                if (stockDisplay) stockDisplay.textContent = quantity;
+            } else {
+                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+            }
+        })
+        .catch(function(e) {
+            msg.textContent = 'Error: ' + e.message;
+            msg.className = 'text-xs mt-1 block text-red-600';
+        });
+    };
+})();
+</script>
+{% endblock %}

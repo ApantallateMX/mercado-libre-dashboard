@@ -1,0 +1,62 @@
+<table class="w-full">
+    <thead class="bg-gray-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad Vendida</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingreso Total</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">MTY</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">CDMX</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-200">
+        {% for sku_data in sku_sales %}
+        {% set show_inv = sku_data.sku != 'SIN SKU' %}
+        <tr class="hover:bg-gray-50 border-b border-gray-200" {% if show_inv %}data-sku="{{ sku_data.sku }}"{% endif %}>
+            <td class="px-4 py-3 whitespace-nowrap text-sm font-mono font-medium text-gray-800">
+                {{ sku_data.sku }}
+            </td>
+            <td class="px-4 py-3 text-sm text-gray-800">
+                {{ sku_data.title[:50] }}{% if sku_data.title|length > 50 %}...{% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 text-right">
+                {{ sku_data.quantity }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 text-right">
+                ${{ "%.2f"|format(sku_data.revenue) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-mty">
+                {% if show_inv %}
+                <span class="text-gray-400 text-xs">...</span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-cdmx">
+                {% if show_inv %}
+                <span class="text-gray-400 text-xs">...</span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="6" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if sku_sales %}
+<div class="px-6 py-4 bg-gray-50 flex justify-between items-center border-t-2 border-gray-300">
+    <span class="text-sm font-medium text-gray-700">
+        Total: {{ sku_sales|length }} SKUs
+    </span>
+    <div class="text-right">
+        <span class="text-sm text-gray-600">Unidades: <strong>{{ total_quantity }}</strong></span>
+        <span class="mx-2 text-gray-400">|</span>
+        <span class="text-sm text-gray-600">Ingreso: <strong>${{ "%.2f"|format(total_revenue) }}</strong></span>
+    </div>
+</div>
+{% endif %}

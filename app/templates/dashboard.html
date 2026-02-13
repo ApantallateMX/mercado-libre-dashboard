@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
+    <p class="text-gray-600">Resumen de tu cuenta de Mercado Libre</p>
+</div>
+
+<!-- Filtro de fechas -->
+<div class="bg-white p-4 rounded-lg shadow mb-6">
+    <!-- Botones rapidos de rango -->
+    <div class="flex flex-wrap gap-2 mb-3" id="range-buttons">
+        <button type="button" data-days="7" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">7 dias</button>
+        <button type="button" data-days="15" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">15 dias</button>
+        <button type="button" data-days="30" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">1 mes</button>
+        <button type="button" data-days="90" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">3 meses</button>
+        <button type="button" data-days="180" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">6 meses</button>
+    </div>
+    <!-- Selector manual -->
+    <div class="flex flex-wrap gap-4 items-end">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Desde</label>
+            <input type="date" id="dash_date_from" class="border rounded px-3 py-2 text-sm">
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
+            <input type="date" id="dash_date_to" class="border rounded px-3 py-2 text-sm">
+        </div>
+        <button type="button" id="btn-dash-filtrar"
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded hover:bg-yellow-500 transition text-sm">
+            Filtrar
+        </button>
+        <button type="button" id="btn-dash-limpiar"
+                class="border border-gray-300 text-gray-600 px-4 py-2 rounded hover:bg-gray-100 transition text-sm">
+            Limpiar
+        </button>
+    </div>
+</div>
+
+<!-- Metricas -->
+<div id="metrics-cards">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        {% for i in range(4) %}
+        <div class="bg-white p-6 rounded-lg shadow animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+            <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Meta Diaria -->
+<div class="bg-white rounded-lg shadow mb-6 p-6" id="daily-goal-section">
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <div>
+            <h2 class="text-lg font-semibold text-gray-800">Meta Diaria de Ventas</h2>
+            <p class="text-sm text-gray-500">Seguimiento dia a dia vs tu meta configurada</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <label class="text-sm font-medium text-gray-600">Meta diaria: $</label>
+            <input type="number" id="daily-goal-input" min="0" step="1000"
+                   class="border rounded px-3 py-1.5 text-sm w-36 text-right font-semibold"
+                   value="500000">
+            <button type="button" id="btn-update-goal"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1.5 rounded hover:bg-yellow-500 transition text-sm">
+                Aplicar
+            </button>
+        </div>
+    </div>
+
+    <!-- Barra de progreso del dia de hoy -->
+    <div id="today-goal-bar" class="mb-4">
+        <div class="flex justify-between items-end mb-1">
+            <span class="text-sm font-medium text-gray-700">Hoy</span>
+            <span id="today-goal-text" class="text-sm font-semibold text-gray-600">Cargando...</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-4">
+            <div id="today-goal-fill" class="h-4 rounded-full bg-gray-300 transition-all duration-500" style="width: 0%"></div>
+        </div>
+        <div class="flex justify-between mt-1">
+            <span id="today-sold-label" class="text-xs text-gray-500">$0</span>
+            <span id="today-remaining-label" class="text-xs text-gray-500"></span>
+        </div>
+    </div>
+
+    <!-- Tabla de ventas diarias -->
+    <div id="daily-sales-table">
+        <div class="animate-pulse space-y-2">
+            {% for i in range(5) %}
+            <div class="h-8 bg-gray-200 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- Grafico de ventas -->
+<div class="bg-white rounded-lg shadow mb-8">
+    <div class="px-6 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
+        <div>
+            <h2 id="chart-title" class="text-lg font-semibold text-gray-800">Ventas del Periodo</h2>
+            <p id="chart-subtitle" class="text-sm text-gray-500"></p>
+        </div>
+        <div id="chart-legend" class="flex gap-4 text-xs">
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#FBBF24"></span> Unidades vendidas</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#3B82F6"></span> Ingresos ($)</span>
+        </div>
+    </div>
+    <div class="p-6">
+        <div id="chart-loading" class="animate-pulse h-64 bg-gray-100 rounded flex items-center justify-center text-gray-400">
+            Cargando grafica...
+        </div>
+        <canvas id="salesChart" class="hidden" height="120"></canvas>
+    </div>
+</div>
+
+<!-- Ultimas ventas -->
+<div class="bg-white p-6 rounded-lg shadow">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-800">Ultimas Ventas</h2>
+        <a href="/orders" class="text-blue-600 hover:underline">Ver todas</a>
+    </div>
+    <div id="recent-orders">
+        <div class="animate-pulse space-y-3">
+            {% for i in range(5) %}
+            <div class="h-12 bg-gray-200 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    var salesChartInstance = null;
+    var activeRangeBtn = null;
+
+    var today = new Date();
+
+    function toDateStr(d) {
+        return d.toISOString().split('T')[0];
+    }
+
+    function setRange(days) {
+        var end = new Date();
+        var start = new Date();
+        start.setDate(start.getDate() - (days - 1));
+        document.getElementById('dash_date_from').value = toDateStr(start);
+        document.getElementById('dash_date_to').value = toDateStr(end);
+    }
+
+    function highlightRangeBtn(btn) {
+        // Quitar highlight de todos
+        document.querySelectorAll('.range-btn').forEach(function(b) {
+            b.classList.remove('bg-yellow-400', 'text-gray-800', 'border-yellow-400');
+            b.classList.add('border-gray-300', 'text-gray-600');
+        });
+        if (btn) {
+            btn.classList.add('bg-yellow-400', 'text-gray-800', 'border-yellow-400');
+            btn.classList.remove('border-gray-300', 'text-gray-600');
+        }
+        activeRangeBtn = btn;
+    }
+
+    // Default: 30 dias (1 mes)
+    setRange(30);
+
+    function getDateParams() {
+        var df = document.getElementById('dash_date_from').value;
+        var dt = document.getElementById('dash_date_to').value;
+        var params = [];
+        if (df) params.push('date_from=' + df);
+        if (dt) params.push('date_to=' + dt);
+        return params.join('&');
+    }
+
+    function fmtMoney(n) {
+        return n.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    }
+
+    function renderMetrics(m) {
+        var cards = [
+            {label: 'Ordenes del Periodo', value: m.total_orders, color: 'text-gray-800', link: '/orders', hint: 'Ver todas las ordenes'},
+            {label: 'Ventas del Periodo', value: m.period_sales, color: 'text-green-600', link: '/orders', hint: 'Ordenes pagadas/entregadas'},
+            {label: 'Ingresos del Periodo', value: '$' + fmtMoney(m.period_revenue), color: 'text-gray-800', link: '/sku-sales', hint: 'Ver desglose por SKU'},
+            {label: 'Productos Activos', value: m.active_items, color: 'text-blue-600', link: '/items', hint: 'Ver catalogo de productos'}
+        ];
+        var html = '<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">';
+        cards.forEach(function(c) {
+            html += '<a href="' + c.link + '" class="bg-white p-6 rounded-lg shadow hover:shadow-md hover:ring-2 hover:ring-yellow-300 transition block group">' +
+                '<p class="text-gray-500 text-sm">' + c.label + '</p>' +
+                '<p class="text-3xl font-bold ' + c.color + '">' + c.value + '</p>' +
+                '<p class="text-xs text-gray-400 mt-1 group-hover:text-yellow-600 transition">' + c.hint + ' &rarr;</p></a>';
+        });
+        html += '</div>';
+        document.getElementById('metrics-cards').innerHTML = html;
+    }
+
+    function renderChart(chartObj) {
+        var chartLoading = document.getElementById('chart-loading');
+        var chartCanvas = document.getElementById('salesChart');
+        chartLoading.classList.add('hidden');
+        chartCanvas.classList.remove('hidden');
+
+        if (salesChartInstance) {
+            salesChartInstance.destroy();
+            salesChartInstance = null;
+        }
+
+        var data = chartObj.data;
+        var group_by = chartObj.group_by;
+        var monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+        var labels = data.map(function(d) {
+            if (group_by === 'month') {
+                var parts = d.date.split('-');
+                return monthNames[parseInt(parts[1]) - 1] + ' ' + parts[0];
+            }
+            var parts = d.date.split('-');
+            return parseInt(parts[2]) + '/' + monthNames[parseInt(parts[1]) - 1];
+        });
+
+        var totalUnits = data.reduce(function(s, d) { return s + d.count; }, 0);
+        var totalRevenue = data.reduce(function(s, d) { return s + d.amount; }, 0);
+        var groupLabel = group_by === 'month' ? 'mensual' : 'diario';
+
+        var df = document.getElementById('dash_date_from').value;
+        var dt = document.getElementById('dash_date_to').value;
+        document.getElementById('chart-title').textContent = 'Ventas del Periodo (' + groupLabel + ') — ' + df + ' a ' + dt;
+        document.getElementById('chart-subtitle').textContent =
+            totalUnits + ' unidades vendidas | $' + fmtMoney(totalRevenue) + ' en ingresos';
+
+        var ctx = chartCanvas.getContext('2d');
+        salesChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Unidades vendidas',
+                        data: data.map(function(d) { return d.count; }),
+                        backgroundColor: 'rgba(251, 191, 36, 0.7)',
+                        borderColor: '#FBBF24',
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        yAxisID: 'y',
+                        order: 2
+                    },
+                    {
+                        label: 'Ingresos ($)',
+                        data: data.map(function(d) { return d.amount; }),
+                        type: 'line',
+                        borderColor: '#3B82F6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.08)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 3,
+                        pointBackgroundColor: '#3B82F6',
+                        borderWidth: 2,
+                        yAxisID: 'y1',
+                        order: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                if (ctx.dataset.yAxisID === 'y1') {
+                                    return 'Ingresos: $' + ctx.parsed.y.toLocaleString('es-MX', {minimumFractionDigits: 2});
+                                }
+                                return 'Unidades: ' + ctx.parsed.y;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        position: 'left',
+                        title: { display: true, text: 'Unidades', color: '#B45309', font: { weight: 'bold' } },
+                        ticks: { stepSize: 1, color: '#B45309' },
+                        grid: { color: 'rgba(0,0,0,0.05)' }
+                    },
+                    y1: {
+                        beginAtZero: true,
+                        position: 'right',
+                        title: { display: true, text: 'Ingresos ($)', color: '#2563EB', font: { weight: 'bold' } },
+                        ticks: {
+                            color: '#2563EB',
+                            callback: function(v) { return '$' + v.toLocaleString('es-MX'); }
+                        },
+                        grid: { drawOnChartArea: false }
+                    },
+                    x: {
+                        ticks: { maxRotation: 45, minRotation: 0, font: { size: 11 } },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+
+    function loadDashboard() {
+        var p = getDateParams();
+        var btn = document.getElementById('btn-dash-filtrar');
+        btn.disabled = true;
+        btn.classList.add('opacity-50');
+
+        // Skeletons
+        document.getElementById('metrics-cards').innerHTML =
+            '<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">' +
+            Array(4).fill('<div class="bg-white p-6 rounded-lg shadow animate-pulse"><div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div><div class="h-8 bg-gray-200 rounded w-3/4"></div></div>').join('') +
+            '</div>';
+        var chartLoading = document.getElementById('chart-loading');
+        var chartCanvas = document.getElementById('salesChart');
+        chartLoading.classList.remove('hidden');
+        chartCanvas.classList.add('hidden');
+
+        // 1. Endpoint unificado: metricas + chart en 1 sola llamada
+        fetch('/api/metrics/dashboard-data?' + p)
+            .then(function(r) { return r.json(); })
+            .then(function(resp) {
+                renderMetrics(resp.metrics);
+                renderChart(resp.chart);
+            })
+            .catch(function() {
+                document.getElementById('metrics-cards').innerHTML = '<p class="text-center py-4 text-red-500">Error cargando metricas</p>';
+                chartLoading.innerHTML = '<span class="text-red-500">Error cargando grafica</span>';
+            });
+
+        // 2. Recent orders (liviana, 1 sola pagina de 5)
+        document.getElementById('recent-orders').innerHTML =
+            '<div class="animate-pulse space-y-3">' +
+            Array(5).fill('<div class="h-12 bg-gray-200 rounded"></div>').join('') +
+            '</div>';
+        fetch('/partials/recent-orders?' + p)
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                document.getElementById('recent-orders').innerHTML = html;
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            })
+            .catch(function() {
+                document.getElementById('recent-orders').innerHTML = '<p class="text-center py-4 text-red-500">Error cargando ordenes</p>';
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            });
+    }
+
+    // Range buttons
+    document.querySelectorAll('.range-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var days = parseInt(this.getAttribute('data-days'));
+            setRange(days);
+            highlightRangeBtn(this);
+            loadDashboard();
+        });
+    });
+
+    document.getElementById('btn-dash-filtrar').addEventListener('click', function() {
+        highlightRangeBtn(null); // Quitar highlight de presets al usar filtro manual
+        loadDashboard();
+    });
+    document.getElementById('btn-dash-limpiar').addEventListener('click', function() {
+        setRange(30);
+        // Highlight "1 mes" por defecto
+        highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
+        loadDashboard();
+    });
+
+    // === Meta Diaria ===
+    var dailyGoal = parseInt(localStorage.getItem('meli_daily_goal') || '500000');
+    document.getElementById('daily-goal-input').value = dailyGoal;
+
+    document.getElementById('btn-update-goal').addEventListener('click', function() {
+        dailyGoal = parseInt(document.getElementById('daily-goal-input').value) || 500000;
+        localStorage.setItem('meli_daily_goal', dailyGoal);
+        loadDailySales();
+    });
+
+    function updateTodayBar(todayRevenue) {
+        var pct = dailyGoal > 0 ? (todayRevenue / dailyGoal * 100) : 0;
+        var cappedPct = Math.min(pct, 100);
+        var fill = document.getElementById('today-goal-fill');
+        var barColor = pct >= 100 ? 'bg-green-500' : (pct >= 80 ? 'bg-yellow-400' : 'bg-red-400');
+        fill.className = 'h-4 rounded-full transition-all duration-500 ' + barColor;
+        fill.style.width = cappedPct + '%';
+
+        document.getElementById('today-goal-text').textContent =
+            '$' + fmtMoney(todayRevenue) + ' / $' + fmtMoney(dailyGoal) + ' (' + pct.toFixed(1) + '%)';
+
+        document.getElementById('today-sold-label').textContent = '$' + fmtMoney(todayRevenue) + ' vendido';
+        var remaining = Math.max(dailyGoal - todayRevenue, 0);
+        document.getElementById('today-remaining-label').textContent =
+            remaining > 0 ? ('Faltan $' + fmtMoney(remaining)) : 'Meta alcanzada!';
+    }
+
+    function renderDailyTable(data) {
+        var daily = data.daily_data || [];
+        var totals = data.totals || {};
+        if (daily.length === 0) {
+            document.getElementById('daily-sales-table').innerHTML = '<p class="text-center py-4 text-gray-500">No hay datos para el periodo</p>';
+            return;
+        }
+        var html = '<div class="overflow-x-auto"><table class="w-full text-sm">';
+        html += '<thead><tr class="border-b border-gray-200 text-left text-gray-500">';
+        html += '<th class="py-2 px-3 font-medium">Fecha</th>';
+        html += '<th class="py-2 px-3 font-medium text-right">Unidades</th>';
+        html += '<th class="py-2 px-3 font-medium text-right">Bruto</th>';
+        html += '<th class="py-2 px-3 font-medium text-right">Neto</th>';
+        html += '<th class="py-2 px-3 font-medium text-right">% de Meta</th>';
+        html += '<th class="py-2 px-3 font-medium w-40">Progreso</th>';
+        html += '<th class="py-2 px-3 font-medium text-center">Estado</th>';
+        html += '</tr></thead><tbody>';
+
+        // Calcular venta de hoy para la barra superior
+        var todayStr = toDateStr(new Date());
+        var todayRevenue = 0;
+
+        daily.forEach(function(day) {
+            var pct = day.pct_of_goal;
+            var rowBg = pct >= 100 ? 'bg-green-50' : (pct >= 80 ? 'bg-yellow-50' : 'bg-white');
+            var pctColor = pct >= 100 ? 'text-green-600' : (pct >= 80 ? 'text-yellow-600' : 'text-red-600');
+            var barColor = pct >= 100 ? 'bg-green-500' : (pct >= 80 ? 'bg-yellow-400' : 'bg-red-400');
+            var barW = Math.min(pct, 100);
+            var badge, badgeClass;
+            if (pct >= 100) { badge = 'Meta'; badgeClass = 'bg-green-100 text-green-800'; }
+            else if (pct >= 80) { badge = 'Cerca'; badgeClass = 'bg-yellow-100 text-yellow-800'; }
+            else { badge = 'Bajo'; badgeClass = 'bg-red-100 text-red-800'; }
+
+            if (day.date === todayStr) todayRevenue = day.revenue_gross;
+
+            html += '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50">';
+            html += '<td class="py-2 px-3 font-medium text-gray-700">' + day.date + '</td>';
+            html += '<td class="py-2 px-3 text-right text-gray-700">' + day.units + '</td>';
+            html += '<td class="py-2 px-3 text-right font-semibold text-gray-800">$' + fmtMoney(day.revenue_gross) + '</td>';
+            html += '<td class="py-2 px-3 text-right text-green-700">$' + fmtMoney(day.revenue_net) + '</td>';
+            html += '<td class="py-2 px-3 text-right font-semibold ' + pctColor + '">' + pct.toFixed(1) + '%</td>';
+            html += '<td class="py-2 px-3"><div class="w-full bg-gray-200 rounded-full h-2.5"><div class="' + barColor + ' h-2.5 rounded-full" style="width:' + barW + '%"></div></div></td>';
+            html += '<td class="py-2 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-medium ' + badgeClass + '">' + badge + '</span></td>';
+            html += '</tr>';
+        });
+
+        html += '</tbody><tfoot class="bg-gray-50 font-semibold"><tr class="border-t-2 border-gray-300">';
+        html += '<td class="py-3 px-3 text-gray-700">Total (' + totals.total_days + ' dias)</td>';
+        html += '<td class="py-3 px-3 text-right text-gray-800">' + totals.units + '</td>';
+        html += '<td class="py-3 px-3 text-right text-gray-800">$' + fmtMoney(totals.revenue_gross) + '</td>';
+        html += '<td class="py-3 px-3 text-right text-green-700">$' + fmtMoney(totals.revenue_net) + '</td>';
+        html += '<td class="py-3 px-3 text-right text-gray-600">Prom: ' + totals.avg_pct.toFixed(1) + '%</td>';
+        html += '<td class="py-3 px-3"></td>';
+        html += '<td class="py-3 px-3 text-center text-xs text-gray-600">' + totals.days_met + '/' + totals.total_days + ' dias</td>';
+        html += '</tr></tfoot></table></div>';
+
+        document.getElementById('daily-sales-table').innerHTML = html;
+        updateTodayBar(todayRevenue);
+    }
+
+    function loadDailySales() {
+        var p = getDateParams();
+        document.getElementById('daily-sales-table').innerHTML =
+            '<div class="animate-pulse space-y-2">' +
+            Array(5).fill('<div class="h-8 bg-gray-200 rounded"></div>').join('') +
+            '</div>';
+        fetch('/api/metrics/daily-sales?' + p + '&goal=' + dailyGoal)
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function(data) {
+                renderDailyTable(data);
+            })
+            .catch(function(e) {
+                document.getElementById('daily-sales-table').innerHTML = '<p class="text-center text-red-500 py-4">Error cargando tabla diaria: ' + e.message + '</p>';
+                updateTodayBar(0);
+            });
+    }
+
+    // Modificar loadDashboard para tambien cargar daily sales
+    var _originalLoadDashboard = loadDashboard;
+    loadDashboard = function() {
+        _originalLoadDashboard();
+        loadDailySales();
+    };
+
+    // Carga inicial: highlight "1 mes"
+    highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
+    loadDashboard();
+</script>
+{% endblock %}

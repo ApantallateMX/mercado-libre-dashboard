@@ -1,0 +1,188 @@
+<!-- Status Filters -->
+<div class="flex gap-2 mb-4">
+    <button onclick="setHealthStatus('questions', 'UNANSWERED')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if status == 'UNANSWERED' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Sin Responder
+    </button>
+    <button onclick="setHealthStatus('questions', 'ANSWERED')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if status == 'ANSWERED' else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Respondidas
+    </button>
+    <button onclick="setHealthStatus('questions', '')"
+            class="px-3 py-1 text-xs rounded-full {{ 'bg-yellow-400 text-gray-800 font-semibold' if not status else 'bg-gray-100 text-gray-600 hover:bg-gray-200' }}">
+        Todas
+    </button>
+</div>
+
+{% if questions %}
+<div class="space-y-4">
+    {% for q in questions %}
+    <div class="border border-gray-200 rounded-lg p-4" id="question-row-{{ q.id }}">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500">{{ q.date_created }}</span>
+                {% if q.elapsed %}
+                <span class="text-xs text-gray-400">({{ q.elapsed }})</span>
+                {% endif %}
+                {% if q.item_id %}
+                <span class="text-xs text-gray-400">Item: {{ q.item_id }}</span>
+                {% endif %}
+                {% if q.urgency == 'red' %}
+                <span class="w-2 h-2 rounded-full bg-red-500" title="Urgente"></span>
+                {% elif q.urgency == 'yellow' %}
+                <span class="w-2 h-2 rounded-full bg-yellow-500" title="Pendiente"></span>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-2">
+                {% set qs_class = 'bg-yellow-100 text-yellow-800' if q.status == 'UNANSWERED' else 'bg-green-100 text-green-800' %}
+                <span class="px-2 py-0.5 text-xs rounded-full {{ qs_class }}">{{ q.status }}</span>
+                <button onclick="deleteQuestion({{ q.id }}, this)"
+                        title="Eliminar pregunta"
+                        class="text-gray-400 hover:text-red-500 transition p-1 rounded hover:bg-red-50">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Question text -->
+        <p class="text-sm font-medium text-gray-800 mb-2">{{ q.text }}</p>
+
+        <!-- Product info -->
+        {% if q.product_title %}
+        <div class="flex items-center gap-3 mb-3 text-xs text-gray-500 bg-gray-50 rounded px-3 py-1.5">
+            {% if q.product_thumbnail %}
+            <img src="{{ q.product_thumbnail }}" class="w-8 h-8 object-cover rounded" alt="">
+            {% endif %}
+            <span>{{ q.product_title[:60] }}</span>
+            {% if q.product_price %}
+            <span class="font-semibold text-gray-700">${{ "%.2f"|format(q.product_price) }}</span>
+            {% endif %}
+            {% if q.product_stock is defined %}
+            <span>{{ q.product_stock }} en stock</span>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if q.buyer_question_count is defined and q.buyer_question_count > 0 and q.status == 'UNANSWERED' %}
+        <!-- Buyer History Accordion -->
+        <div class="mb-2">
+            <button onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('svg.chevron').classList.toggle('rotate-90')"
+                    class="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 font-medium py-1">
+                <svg class="chevron w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                Historial del comprador ({{ q.buyer_question_count }} pregunta{{ 's' if q.buyer_question_count != 1 else '' }} anterior{{ 'es' if q.buyer_question_count != 1 else '' }})
+            </button>
+            <div class="hidden ml-4 border-l-2 border-blue-100 pl-3 space-y-2 mb-2">
+                {% for hq in q.buyer_history[:5] %}
+                <div class="text-xs">
+                    <div class="flex items-center gap-2 text-gray-400">
+                        <span>{{ hq.date_created }}</span>
+                        {% if hq.item_id != q.item_id %}
+                        <span class="px-1.5 py-0.5 bg-gray-100 rounded text-gray-500">Otro producto</span>
+                        {% endif %}
+                        {% if hq.status == 'ANSWERED' %}
+                        <span class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                        {% else %}
+                        <span class="w-1.5 h-1.5 rounded-full bg-yellow-400"></span>
+                        {% endif %}
+                    </div>
+                    <p class="text-gray-700 mt-0.5">"{{ hq.text[:120] }}{{ '...' if hq.text|length > 120 else '' }}"</p>
+                    {% if hq.answer_text %}
+                    <p class="text-gray-400 mt-0.5 italic">R: {{ hq.answer_text[:100] }}{{ '...' if hq.answer_text|length > 100 else '' }}</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if q.status == 'UNANSWERED' %}
+        <div class="border-t pt-3">
+            <!-- AI Suggest Button -->
+            <div class="mb-2">
+                <button onclick="suggestQuestionAnswer(this)"
+                        data-id="{{ q.id }}"
+                        data-text="{{ q.text }}"
+                        data-product-title="{{ q.product_title }}"
+                        data-price="{{ q.product_price }}"
+                        data-stock="{{ q.product_stock }}"
+                        data-elapsed="{{ q.elapsed }}"
+                        data-buyer-history='{{ q.buyer_history_json }}'
+                        class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors">
+                    <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
+                </button>
+            </div>
+
+            <!-- AI Suggestion Panel (hidden until triggered) -->
+            <div id="ai-panel-q-{{ q.id }}" class="hidden mb-3">
+                <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-purple-600 text-xs font-semibold">Sugerencia IA</span>
+                        <div id="ai-spin-q-{{ q.id }}" class="hidden">
+                            <svg class="animate-spin h-4 w-4 text-purple-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                        </div>
+                    </div>
+                    <div id="ai-text-q-{{ q.id }}" class="text-sm text-gray-700 whitespace-pre-wrap"></div>
+                    <div id="ai-act-q-{{ q.id }}" class="hidden flex gap-2 mt-2">
+                        <button onclick="useAiSuggestion('question', '{{ q.id }}')"
+                                class="text-xs bg-purple-600 text-white px-3 py-1 rounded hover:bg-purple-700">
+                            Usar respuesta
+                        </button>
+                        <button onclick="suggestQuestionAnswer(document.querySelector('[data-id=\'{{ q.id }}\'][data-text]'))"
+                                class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">
+                            Regenerar
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Answer textarea -->
+            <textarea id="answer-{{ q.id }}" rows="2" maxlength="2000"
+                      oninput="var c=document.getElementById('charcount-{{ q.id }}'); if(c) c.textContent=this.value.length+'/2000';"
+                      class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu respuesta..."></textarea>
+            <div class="flex items-center gap-2 mt-2">
+                <span id="charcount-{{ q.id }}" class="text-xs text-gray-400 ml-auto">0/2000</span>
+            </div>
+            <div class="flex items-center gap-2 mt-1">
+                <button id="btn-answer-{{ q.id }}" onclick="answerQuestion({{ q.id }})"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+                    Responder
+                </button>
+                <span id="msg-question-{{ q.id }}" class="text-xs"></span>
+            </div>
+        </div>
+        {% elif q.answer %}
+        <div class="bg-green-50 rounded p-3 mt-2">
+            <p class="text-xs text-gray-500 mb-1">Tu respuesta:</p>
+            <p class="text-sm text-gray-700">{{ q.answer.text }}</p>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+{% set total = paging.total if paging and paging.total is defined else 0 %}
+{% if total > limit %}
+<div class="flex items-center justify-between mt-4 pt-4 border-t">
+    <span class="text-sm text-gray-500">
+        Mostrando {{ offset + 1 }}-{{ [offset + limit, total]|min }} de {{ total }}
+    </span>
+    <div class="flex gap-2">
+        <button onclick="healthPrevPage('questions')" {% if offset <= 0 %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset > 0 %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Anterior
+        </button>
+        <button onclick="healthNextPage('questions')" {% if offset + limit >= total %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm rounded {% if offset + limit < total %}bg-gray-200 hover:bg-gray-300 text-gray-700{% else %}bg-gray-100 text-gray-400 cursor-not-allowed{% endif %}">
+            Siguiente
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<p class="text-center py-8 text-gray-500">No hay preguntas</p>
+{% endif %}

@@ -1,0 +1,495 @@
+{% extends "base.html" %}
+
+{% block title %}Salud de Cuenta{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Salud de Cuenta</h1>
+    <p class="text-gray-600">Reputacion, reclamos, preguntas y mensajes</p>
+</div>
+
+<!-- Date Filters -->
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+    <div class="flex flex-wrap items-end gap-4">
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">Desde</label>
+            <input type="date" id="health-date-from" class="border rounded px-3 py-1.5 text-sm">
+        </div>
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+            <input type="date" id="health-date-to" class="border rounded px-3 py-1.5 text-sm">
+        </div>
+        <button onclick="applyHealthFilters()"
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+            Aplicar
+        </button>
+        <button onclick="clearHealthFilters()"
+                class="bg-gray-200 text-gray-700 px-4 py-1.5 rounded hover:bg-gray-300 text-sm">
+            Limpiar
+        </button>
+        <span id="health-filter-indicator" class="text-xs text-gray-400 ml-2"></span>
+        <div class="flex items-center gap-2 text-xs text-gray-400 ml-auto">
+            <span id="health-last-update"></span>
+            <span id="health-refresh-indicator" class="hidden">
+                <svg class="inline animate-spin h-3 w-3 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Actualizando...
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- KPI Cards -->
+<div id="health-summary">
+    <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+        {% for i in range(5) %}
+        <div class="bg-white p-5 rounded-lg shadow animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+            <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 2-column layout: main content + sidebar -->
+<div class="flex gap-6">
+    <!-- Main content -->
+    <div class="flex-1 min-w-0">
+        <div class="bg-white rounded-lg shadow">
+            <div class="border-b border-gray-200">
+                <nav class="flex -mb-px" id="health-tabs">
+                    <button type="button" data-tab="claims"
+                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600">
+                        Reclamos
+                    </button>
+                    <button type="button" data-tab="questions"
+                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                        Preguntas
+                    </button>
+                    <button type="button" data-tab="messages"
+                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                        Mensajes
+                    </button>
+                    <button type="button" data-tab="reputation"
+                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                        Reputacion
+                    </button>
+                </nav>
+            </div>
+
+            <!-- Tab Content -->
+            <div id="health-tab-content" class="p-6">
+                <div class="animate-pulse space-y-3">
+                    {% for i in range(5) %}
+                    <div class="h-10 bg-gray-200 rounded"></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar: Best Practices (hidden on mobile) -->
+    <div class="hidden lg:block lg:w-72 flex-shrink-0">
+        {% include "partials/health_best_practices.html" %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/health_ai.js"></script>
+<script>
+    // Ultimos 7 dias incluyendo hoy
+    function _fmtDate(d) { return d.toISOString().slice(0, 10); }
+    var _today = new Date();
+    var _weekAgo = new Date(_today);
+    _weekAgo.setDate(_today.getDate() - 6);
+
+    var healthFilters = {
+        currentTab: 'claims',
+        date_from: _fmtDate(_weekAgo),
+        date_to: _fmtDate(_today),
+        offsets: { claims: 0, questions: 0, messages: 0 },
+        statuses: { claims: '', questions: 'UNANSWERED' },
+        limit: 20
+    };
+
+    function buildParams() {
+        var params = [];
+        if (healthFilters.date_from) params.push('date_from=' + healthFilters.date_from);
+        if (healthFilters.date_to) params.push('date_to=' + healthFilters.date_to);
+        return params;
+    }
+
+    function buildTabParams(tab) {
+        var params = buildParams();
+        var offset = healthFilters.offsets[tab] || 0;
+        params.push('offset=' + offset);
+        params.push('limit=' + healthFilters.limit);
+        if (tab === 'claims' && healthFilters.statuses.claims) {
+            params.push('status=' + healthFilters.statuses.claims);
+        }
+        if (tab === 'questions' && healthFilters.statuses.questions) {
+            params.push('status=' + healthFilters.statuses.questions);
+        }
+        return params.join('&');
+    }
+
+    function loadSummary() {
+        var params = buildParams();
+        var url = '/partials/health-summary' + (params.length ? '?' + params.join('&') : '');
+        var container = document.getElementById('health-summary');
+        fetch(url)
+            .then(function(r) { return r.text(); })
+            .then(function(html) { container.innerHTML = html; })
+            .catch(function() { container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando resumen</p>'; });
+    }
+
+    function loadTab(tab) {
+        healthFilters.currentTab = tab;
+        // Update tab styles
+        document.querySelectorAll('.health-tab').forEach(function(btn) {
+            if (btn.getAttribute('data-tab') === tab) {
+                btn.className = 'health-tab px-6 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600';
+            } else {
+                btn.className = 'health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300';
+            }
+        });
+
+        var content = document.getElementById('health-tab-content');
+        content.innerHTML = '<div class="animate-pulse space-y-3">' +
+            Array(5).fill('<div class="h-10 bg-gray-200 rounded"></div>').join('') + '</div>';
+
+        var qs = buildTabParams(tab);
+        fetch('/partials/health-' + tab + '?' + qs)
+            .then(function(r) { return r.text(); })
+            .then(function(html) { content.innerHTML = html; })
+            .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando datos</p>'; });
+    }
+
+    function applyHealthFilters() {
+        healthFilters.date_from = document.getElementById('health-date-from').value;
+        healthFilters.date_to = document.getElementById('health-date-to').value;
+        healthFilters.offsets = { claims: 0, questions: 0, messages: 0 };
+        updateFilterIndicator();
+        loadSummary();
+        loadTab(healthFilters.currentTab);
+        _updateTimestamp();
+        _startAutoRefresh();
+    }
+
+    function clearHealthFilters() {
+        healthFilters.date_from = '';
+        healthFilters.date_to = '';
+        healthFilters.offsets = { claims: 0, questions: 0, messages: 0 };
+        healthFilters.statuses = { claims: '', questions: 'UNANSWERED' };
+        document.getElementById('health-date-from').value = '';
+        document.getElementById('health-date-to').value = '';
+        updateFilterIndicator();
+        loadSummary();
+        loadTab(healthFilters.currentTab);
+        _updateTimestamp();
+        _startAutoRefresh();
+    }
+
+    function updateFilterIndicator() {
+        var indicator = document.getElementById('health-filter-indicator');
+        if (healthFilters.date_from || healthFilters.date_to) {
+            var text = 'Filtrando: ';
+            if (healthFilters.date_from) text += 'desde ' + healthFilters.date_from;
+            if (healthFilters.date_from && healthFilters.date_to) text += ' ';
+            if (healthFilters.date_to) text += 'hasta ' + healthFilters.date_to;
+            indicator.textContent = text;
+        } else {
+            indicator.textContent = '';
+        }
+    }
+
+    // Pagination functions called from partials
+    window.healthNextPage = function(tab) {
+        var offset = healthFilters.offsets[tab] || 0;
+        healthFilters.offsets[tab] = offset + healthFilters.limit;
+        loadTab(tab);
+    };
+
+    window.healthPrevPage = function(tab) {
+        var offset = healthFilters.offsets[tab] || 0;
+        healthFilters.offsets[tab] = Math.max(0, offset - healthFilters.limit);
+        loadTab(tab);
+    };
+
+    // Status filter functions called from partials
+    window.setHealthStatus = function(tab, status) {
+        healthFilters.statuses[tab] = status;
+        healthFilters.offsets[tab] = 0;
+        loadTab(tab);
+    };
+
+    document.querySelectorAll('.health-tab').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            loadTab(this.getAttribute('data-tab'));
+        });
+    });
+
+    // Exponer loadTab globalmente para que los cards KPI puedan usarlo
+    window.loadTab = loadTab;
+
+    // --- Auto-refresh system ---
+    var _autoRefreshInterval = null;
+    var _AUTO_REFRESH_MS = 30000;
+
+    function _updateTimestamp() {
+        var now = new Date();
+        var hh = String(now.getHours()).padStart(2, '0');
+        var mm = String(now.getMinutes()).padStart(2, '0');
+        var ss = String(now.getSeconds()).padStart(2, '0');
+        var el = document.getElementById('health-last-update');
+        if (el) el.textContent = 'Actualizado: ' + hh + ':' + mm + ':' + ss;
+    }
+
+    function _isUserInteracting() {
+        var content = document.getElementById('health-tab-content');
+        if (!content) return false;
+        var activeEl = document.activeElement;
+        // Check if user has focus on any input/textarea inside tab content
+        if (content.contains(activeEl) &&
+            (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT')) {
+            return true;
+        }
+        // Check if any textarea has text (user may have typed something and clicked elsewhere)
+        var textareas = content.querySelectorAll('textarea');
+        for (var i = 0; i < textareas.length; i++) {
+            if (textareas[i].value.trim().length > 0) {
+                return true;
+            }
+        }
+        // Check if any AI suggestion panel is visible (user reviewing suggestion)
+        var aiPanels = content.querySelectorAll('[id^="ai-panel-"]');
+        for (var j = 0; j < aiPanels.length; j++) {
+            if (!aiPanels[j].classList.contains('hidden')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _autoRefresh() {
+        var indicator = document.getElementById('health-refresh-indicator');
+        if (indicator) indicator.classList.remove('hidden');
+
+        // Siempre refrescar summary (KPI cards)
+        loadSummary();
+
+        // Solo refrescar tab si el usuario NO esta interactuando
+        if (!_isUserInteracting()) {
+            loadTab(healthFilters.currentTab);
+        }
+
+        _updateTimestamp();
+        setTimeout(function() {
+            if (indicator) indicator.classList.add('hidden');
+        }, 1500);
+    }
+
+    function _startAutoRefresh() {
+        if (_autoRefreshInterval) clearInterval(_autoRefreshInterval);
+        _autoRefreshInterval = setInterval(_autoRefresh, _AUTO_REFRESH_MS);
+    }
+
+    function _stopAutoRefresh() {
+        if (_autoRefreshInterval) {
+            clearInterval(_autoRefreshInterval);
+            _autoRefreshInterval = null;
+        }
+    }
+
+    // Pausar/reanudar al cambiar de pestana del navegador
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            _stopAutoRefresh();
+        } else {
+            _autoRefresh();
+            _startAutoRefresh();
+        }
+    });
+
+    // Carga inicial — precargar fechas en los inputs
+    document.getElementById('health-date-from').value = healthFilters.date_from;
+    document.getElementById('health-date-to').value = healthFilters.date_to;
+    updateFilterIndicator();
+    loadSummary();
+    loadTab('claims');
+    _updateTimestamp();
+    _startAutoRefresh();
+
+    // Eliminar pregunta
+    window.deleteQuestion = function(questionId, btnEl) {
+        if (!confirm('¿Eliminar esta pregunta? Esta accion no se puede deshacer.')) return;
+        var row = document.getElementById('question-row-' + questionId);
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = '<svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+        }
+        fetch('/api/health/questions/' + questionId, {
+            method: 'DELETE',
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        })
+        .then(function(r) {
+            if (r.ok) {
+                if (row) {
+                    row.style.transition = 'opacity 0.3s, max-height 0.3s';
+                    row.style.opacity = '0';
+                    row.style.maxHeight = row.scrollHeight + 'px';
+                    setTimeout(function() {
+                        row.style.maxHeight = '0';
+                        row.style.overflow = 'hidden';
+                        row.style.padding = '0';
+                        row.style.margin = '0';
+                        row.style.border = 'none';
+                    }, 300);
+                    setTimeout(function() { row.remove(); }, 600);
+                }
+            } else {
+                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+            }
+        })
+        .catch(function(e) {
+            alert('Error eliminando pregunta: ' + e.message);
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
+            }
+        });
+    };
+
+    // Funciones de respuesta
+    window.answerQuestion = function(questionId) {
+        var textarea = document.getElementById('answer-' + questionId);
+        var text = textarea.value.trim();
+        if (!text) return;
+        var btn = document.getElementById('btn-answer-' + questionId);
+        var msg = document.getElementById('msg-question-' + questionId);
+        btn.disabled = true;
+        btn.textContent = 'Enviando...';
+        msg.textContent = '';
+
+        var controller = new AbortController();
+        var timeoutId = setTimeout(function() { controller.abort(); }, 15000);
+
+        fetch('/api/health/questions/' + questionId + '/answer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: text}),
+            signal: controller.signal
+        })
+        .then(function(r) {
+            clearTimeout(timeoutId);
+            if (r.ok) {
+                var row = document.getElementById('question-row-' + questionId);
+                if (row) {
+                    // Replace answer section with success confirmation
+                    var answerSection = row.querySelector('.border-t.pt-3');
+                    if (answerSection) {
+                        answerSection.innerHTML = '<div class="bg-green-50 border border-green-200 rounded-lg p-3">' +
+                            '<div class="flex items-center gap-2 mb-1">' +
+                            '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>' +
+                            '<span class="text-sm font-semibold text-green-700">Respuesta enviada</span></div>' +
+                            '<p class="text-xs text-gray-600 ml-7">' + text.substring(0, 120) + (text.length > 120 ? '...' : '') + '</p></div>';
+                    }
+                    // Animate out after 1.5s
+                    setTimeout(function() {
+                        row.style.transition = 'opacity 0.5s, max-height 0.5s';
+                        row.style.opacity = '0';
+                        row.style.maxHeight = row.scrollHeight + 'px';
+                        setTimeout(function() {
+                            row.style.maxHeight = '0';
+                            row.style.overflow = 'hidden';
+                            row.style.padding = '0';
+                            row.style.margin = '0';
+                            row.style.border = 'none';
+                        }, 500);
+                        setTimeout(function() { row.remove(); }, 1000);
+                    }, 1500);
+                }
+            } else {
+                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+            }
+        })
+        .catch(function(e) {
+            clearTimeout(timeoutId);
+            var errorMsg = e.name === 'AbortError' ? 'Timeout: sin respuesta en 15s' : 'Error: ' + e.message;
+            msg.textContent = errorMsg;
+            msg.className = 'text-xs text-red-600 mt-1';
+            btn.disabled = false;
+            btn.textContent = 'Responder';
+        });
+    };
+
+    window.sendChatMessage = function(packId) {
+        var textarea = document.getElementById('msg-input-' + packId);
+        var text = textarea.value.trim();
+        if (!text) return;
+        var btn = document.getElementById('btn-msg-' + packId);
+        var msgEl = document.getElementById('msg-status-' + packId);
+        btn.disabled = true;
+        btn.textContent = 'Enviando...';
+        msgEl.textContent = '';
+
+        fetch('/api/health/messages/' + packId + '/send', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: text})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                msgEl.textContent = 'Mensaje enviado';
+                msgEl.className = 'text-xs text-green-600 mt-1';
+                textarea.value = '';
+                btn.disabled = false;
+                btn.textContent = 'Enviar';
+            } else {
+                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+            }
+        })
+        .catch(function(e) {
+            msgEl.textContent = 'Error: ' + e.message;
+            msgEl.className = 'text-xs text-red-600 mt-1';
+            btn.disabled = false;
+            btn.textContent = 'Enviar';
+        });
+    };
+
+    window.respondClaim = function(claimId) {
+        var textarea = document.getElementById('claim-text-' + claimId);
+        var action = document.getElementById('claim-action-' + claimId).value;
+        var text = textarea.value.trim();
+        if (!text) return;
+        var btn = document.getElementById('btn-claim-' + claimId);
+        var msgEl = document.getElementById('msg-claim-' + claimId);
+        btn.disabled = true;
+        btn.textContent = 'Enviando...';
+
+        fetch('/api/health/claims/' + claimId + '/respond', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: action, text: text})
+        })
+        .then(function(r) {
+            if (r.ok) {
+                msgEl.textContent = 'Respuesta enviada';
+                msgEl.className = 'text-xs text-green-600 mt-1';
+                btn.textContent = 'Enviado';
+            } else {
+                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+            }
+        })
+        .catch(function(e) {
+            msgEl.textContent = 'Error: ' + e.message;
+            msgEl.className = 'text-xs text-red-600 mt-1';
+            btn.disabled = false;
+            btn.textContent = 'Responder';
+        });
+    };
+</script>
+{% endblock %}

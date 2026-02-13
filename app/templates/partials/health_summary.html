@@ -1,0 +1,85 @@
+{% if errors %}
+<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+    <p class="text-sm font-medium text-red-700">Algunos datos no se pudieron cargar:</p>
+    <ul class="text-xs text-red-600 mt-1">
+        {% for err in errors %}
+        <li>{{ err }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if date_from or date_to %}
+<div class="mb-2">
+    <span class="text-xs text-gray-400">
+        Filtro activo:
+        {% if date_from %}desde {{ date_from }}{% endif %}
+        {% if date_to %}hasta {{ date_to }}{% endif %}
+    </span>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+    <!-- Reputacion -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-gray-500 text-sm">Reputacion</p>
+        {% set level_colors = {
+            '5_green': 'text-green-600',
+            '4_light_green': 'text-green-500',
+            '3_yellow': 'text-yellow-600',
+            '2_orange': 'text-orange-500',
+            '1_red': 'text-red-600',
+        } %}
+        {% set level_names = {
+            '5_green': 'MercadoLider',
+            '4_light_green': 'Buena',
+            '3_yellow': 'Regular',
+            '2_orange': 'Mala',
+            '1_red': 'Critica',
+        } %}
+        <p class="text-2xl font-bold {{ level_colors.get(summary.reputation_level, 'text-gray-800') }}">
+            {{ level_names.get(summary.reputation_level, summary.reputation_level) }}
+        </p>
+        {% if summary.power_seller_status %}
+        <p class="text-xs text-green-600 font-medium mt-1">{{ summary.power_seller_status }}</p>
+        {% endif %}
+    </div>
+
+    <!-- Reclamos -->
+    <div class="bg-white p-5 rounded-lg shadow cursor-pointer hover:shadow-lg transition {% if summary.open_claims > 0 %}ring-2 ring-red-300{% endif %}"
+         onclick="if(window.loadTab) window.loadTab('claims')">
+        <p class="text-gray-500 text-sm">Reclamos Abiertos</p>
+        <p class="text-2xl font-bold {% if summary.open_claims > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+            {{ summary.open_claims }}
+        </p>
+        <p class="text-xs text-gray-400 mt-1">Tasa: {{ "%.2f"|format(summary.claims_rate * 100) }}%</p>
+        <p class="text-xs text-gray-300 mt-2">Clic para ver detalle &rarr;</p>
+    </div>
+
+    <!-- Preguntas -->
+    <div class="bg-white p-5 rounded-lg shadow cursor-pointer hover:shadow-lg transition {% if summary.unanswered_questions > 0 %}ring-2 ring-yellow-300{% endif %}"
+         onclick="if(window.loadTab) window.loadTab('questions')">
+        <p class="text-gray-500 text-sm">Preguntas Sin Responder</p>
+        <p class="text-2xl font-bold {% if summary.unanswered_questions > 0 %}text-yellow-600{% else %}text-green-600{% endif %}">
+            {{ summary.unanswered_questions }}
+        </p>
+        <p class="text-xs text-gray-300 mt-2">Clic para ver detalle &rarr;</p>
+    </div>
+
+    <!-- Mensajes -->
+    <div class="bg-white p-5 rounded-lg shadow cursor-pointer hover:shadow-lg transition"
+         onclick="if(window.loadTab) window.loadTab('messages')">
+        <p class="text-gray-500 text-sm">Mensajes</p>
+        <p class="text-2xl font-bold text-blue-600">{{ summary.unread_messages }}</p>
+        <p class="text-xs text-gray-300 mt-2">Clic para ver detalle &rarr;</p>
+    </div>
+
+    <!-- Demoras -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-gray-500 text-sm">Tasa Demoras</p>
+        <p class="text-2xl font-bold {% if summary.delayed_rate > 0.05 %}text-red-600{% else %}text-green-600{% endif %}">
+            {{ "%.2f"|format(summary.delayed_rate * 100) }}%
+        </p>
+        <p class="text-xs text-gray-400 mt-1">Cancelaciones: {{ "%.2f"|format(summary.cancellation_rate * 100) }}%</p>
+    </div>
+</div>

@@ -1,0 +1,58 @@
+<!-- Filtros -->
+<div class="bg-white p-4 rounded-lg shadow mb-6">
+    <div class="flex flex-wrap gap-4 items-center">
+        <select id="status-select" name="status" class="border rounded px-3 py-2"
+                hx-get="/partials/items-grid"
+                hx-target="#items-grid"
+                hx-include="#status-select, #sku-search">
+            <option value="active">Activos</option>
+            <option value="paused">Pausados</option>
+            <option value="closed">Finalizados</option>
+            <option value="">Todos</option>
+        </select>
+        <div class="flex gap-2">
+            <input type="text" id="sku-search" name="sku" placeholder="Buscar por SKU..."
+                   class="border rounded px-3 py-2 w-48"
+                   hx-get="/partials/items-grid"
+                   hx-target="#items-grid"
+                   hx-trigger="keyup changed delay:500ms, search"
+                   hx-include="#status-select, #sku-search">
+            <button type="button" onclick="document.getElementById('sku-search').value=''; htmx.trigger('#sku-search', 'search');"
+                    class="bg-gray-200 text-gray-600 px-3 py-2 rounded hover:bg-gray-300 text-sm">
+                Limpiar
+            </button>
+        </div>
+        <button type="button" id="btn-sin-stock"
+                class="bg-red-500 text-white font-semibold px-4 py-2 rounded hover:bg-red-600 transition text-sm">
+            Sin stock con ventas
+        </button>
+    </div>
+</div>
+
+<!-- Grid de productos -->
+<div id="items-grid" hx-get="/partials/items-grid" hx-trigger="load">
+    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {% for i in range(8) %}
+        <div class="bg-white rounded-lg shadow p-4 animate-pulse">
+            <div class="h-40 bg-gray-200 rounded mb-3"></div>
+            <div class="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
+            <div class="h-6 bg-gray-200 rounded w-1/2"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+(function() {
+    var btn = document.getElementById('btn-sin-stock');
+    if (btn) {
+        btn.addEventListener('click', function() {
+            var target = document.getElementById('items-grid');
+            target.innerHTML = '<div class="p-8 text-center text-gray-500"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Buscando productos sin stock con ventas...</div>';
+            fetch('/partials/items-no-stock')
+                .then(function(r) { return r.text(); })
+                .then(function(html) { target.innerHTML = html; });
+        });
+    }
+})();
+</script>

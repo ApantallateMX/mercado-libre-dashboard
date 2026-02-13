@@ -1,0 +1,529 @@
+<!-- Modal de edicion completa de item -->
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-start">
+        <div>
+            <h2 class="text-lg font-bold text-gray-800">Editar Listado</h2>
+            <p class="text-sm text-gray-500">{{ item.id }}</p>
+        </div>
+        <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Thumbnail + Info -->
+    <div class="flex items-start gap-4">
+        {% if item.thumbnail %}
+        <img src="{{ item.thumbnail }}" class="w-20 h-20 rounded-lg object-cover" alt="">
+        {% endif %}
+        <div>
+            <p class="font-medium text-gray-800">{{ item.title[:80] }}</p>
+            <p class="text-sm text-gray-500">
+                {% if item.original_price and item.original_price > (item.price or 0) %}
+                <span class="line-through text-gray-400">${{ "{:,.0f}".format(item.original_price) }}</span>
+                <span class="text-green-600 font-medium">${{ "{:,.0f}".format(item.price or 0) }}</span>
+                <span class="text-green-600 text-xs">(-{{ "%.0f"|format((1 - (item.price or 0) / item.original_price) * 100) }}%)</span>
+                {% else %}
+                ${{ "{:,.0f}".format(item.price or 0) }}
+                {% endif %}
+                | Stock: {{ item.available_quantity }} | Vendidos: {{ item.sold_quantity }}
+            </p>
+            <div class="flex gap-2 mt-1">
+                <span class="px-2 py-0.5 text-xs rounded-full {% if item.status == 'active' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                    {{ item.status }}
+                </span>
+                {% set score_class = "bg-green-100 text-green-800" if score >= 70 else ("bg-yellow-100 text-yellow-800" if score >= 40 else "bg-red-100 text-red-800") %}
+                <span class="px-2 py-0.5 text-xs rounded-full font-bold {{ score_class }}">Score: {{ score }}</span>
+            </div>
+            {% if item.permalink %}
+            <a href="{{ item.permalink }}" target="_blank" class="text-xs text-blue-500 hover:underline mt-1 inline-block">Ver en MeLi</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Pending changes counter -->
+    <div id="changes-banner" class="hidden bg-yellow-50 border border-yellow-300 rounded-lg p-3 flex items-center justify-between">
+        <span class="text-sm text-yellow-800">
+            <strong id="changes-count">0</strong> campo(s) modificado(s)
+        </span>
+        <button onclick="saveBatch('{{ item.id }}')"
+                class="bg-yellow-500 text-white font-semibold px-4 py-1.5 rounded-lg hover:bg-yellow-600 text-sm">
+            Guardar Todos los Cambios
+        </button>
+    </div>
+
+    <hr class="border-gray-200">
+
+    <!-- Titulo -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Titulo</label>
+        <div class="flex gap-2">
+            <input type="text" id="edit-title" value="{{ item.title }}" maxlength="60"
+                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field" data-field="title" data-original="{{ item.title }}"
+                   oninput="checkModified(this)">
+            <button id="btn-save-title" onclick="saveField('{{ item.id }}', 'title', {title: document.getElementById('edit-title').value}, 'btn-save-title', 'msg-title')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+        </div>
+        <span id="msg-title" class="text-xs"></span>
+    </div>
+
+    <!-- Precio -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Precio</label>
+        <div class="flex gap-2">
+            <div class="relative flex-1">
+                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                <input type="number" id="edit-price" value="{{ item.price or 0 }}" min="0" step="0.01"
+                       class="w-full pl-7 pr-3 py-2 border rounded text-sm tracked-field" data-field="price" data-original="{{ item.price or 0 }}"
+                       oninput="checkModified(this)">
+            </div>
+            <button id="btn-save-price" onclick="saveField('{{ item.id }}', 'price', {price: parseFloat(document.getElementById('edit-price').value)}, 'btn-save-price', 'msg-price')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+        </div>
+        <span id="msg-price" class="text-xs"></span>
+    </div>
+
+    <!-- Stock -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Stock disponible</label>
+        <div class="flex gap-2">
+            <input type="number" id="edit-stock" value="{{ item.available_quantity }}" min="0" step="1"
+                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field" data-field="quantity" data-original="{{ item.available_quantity }}"
+                   oninput="checkModified(this)">
+            <button id="btn-save-stock" onclick="saveField('{{ item.id }}', 'stock', {quantity: parseInt(document.getElementById('edit-stock').value)}, 'btn-save-stock', 'msg-stock')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+        </div>
+        <span id="msg-stock" class="text-xs"></span>
+    </div>
+
+    <!-- Inventario Real (BinManager) -->
+    {% if seller_sku %}
+    <div id="inventory-section" class="bg-gray-50 rounded-lg p-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Inventario Real (BinManager)</label>
+        <p class="text-xs text-gray-500 mb-2">SKU: <span class="font-mono font-medium">{{ seller_sku }}</span></p>
+        <div id="inventory-loading" class="text-xs text-gray-400">Consultando inventario...</div>
+        <div id="inventory-table" class="hidden">
+            <table class="w-full text-sm mb-2">
+                <thead>
+                    <tr class="text-xs text-gray-500 border-b">
+                        <th class="text-left py-1">Locacion</th>
+                        <th class="text-right py-1">Cantidad</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="border-b border-gray-100">
+                        <td class="py-1">CDMX</td>
+                        <td id="inv-cdmx" class="text-right py-1 font-medium">-</td>
+                    </tr>
+                    <tr class="border-b border-gray-100">
+                        <td class="py-1">Tijuana</td>
+                        <td id="inv-tj" class="text-right py-1 font-medium">-</td>
+                    </tr>
+                    <tr class="border-b border-gray-100">
+                        <td class="py-1">Monterrey</td>
+                        <td id="inv-mty" class="text-right py-1 font-medium">-</td>
+                    </tr>
+                    <tr class="font-bold">
+                        <td class="py-1">Total</td>
+                        <td id="inv-total" class="text-right py-1">-</td>
+                    </tr>
+                </tbody>
+            </table>
+            <button id="btn-use-inventory" onclick="useInventoryAsStock()"
+                    class="w-full bg-purple-500 text-white font-semibold px-3 py-2 rounded hover:bg-purple-600 text-sm">
+                Usar total como stock
+            </button>
+        </div>
+        <div id="inventory-error" class="hidden text-xs text-red-500"></div>
+    </div>
+    {% endif %}
+
+    <!-- Descripcion -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Descripcion</label>
+        <textarea id="edit-description" rows="4"
+                  class="w-full border rounded px-3 py-2 text-sm tracked-field" data-field="plain_text" data-original="{{ description }}"
+                  oninput="checkModified(this)">{{ description }}</textarea>
+        <div class="flex items-center gap-2 mt-1">
+            <button id="btn-save-desc" onclick="saveField('{{ item.id }}', 'description', {plain_text: document.getElementById('edit-description').value}, 'btn-save-desc', 'msg-desc')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            <span id="msg-desc" class="text-xs"></span>
+        </div>
+    </div>
+
+    <!-- Estado -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+        <div class="flex gap-2">
+            <select id="edit-status" class="border rounded px-3 py-2 text-sm tracked-field" data-field="status" data-original="{{ item.status }}"
+                    onchange="checkModified(this)">
+                <option value="active" {% if item.status == 'active' %}selected{% endif %}>Activo</option>
+                <option value="paused" {% if item.status == 'paused' %}selected{% endif %}>Pausado</option>
+            </select>
+            <button id="btn-save-status" onclick="saveField('{{ item.id }}', 'status', {status: document.getElementById('edit-status').value}, 'btn-save-status', 'msg-status')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            <span id="msg-status" class="text-xs"></span>
+        </div>
+    </div>
+
+    <!-- Envio -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Envio</label>
+        <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" id="edit-free-shipping" {% if item.shipping.free_shipping %}checked{% endif %}
+                       class="tracked-field" data-field="free_shipping" data-original="{{ 'true' if item.shipping.free_shipping else 'false' }}"
+                       onchange="checkModified(this)">
+                Envio gratis
+            </label>
+            <button id="btn-save-shipping" onclick="saveField('{{ item.id }}', 'shipping', {free_shipping: document.getElementById('edit-free-shipping').checked}, 'btn-save-shipping', 'msg-shipping')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            <span id="msg-shipping" class="text-xs"></span>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Logistica: {{ item.shipping.get('logistic_type', '-') }}</p>
+    </div>
+
+    <!-- Fotos -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Fotos (<span id="photos-count">{{ item.pictures|length }}</span>)</label>
+        <div id="photos-grid" class="flex flex-wrap gap-2 mb-2">
+            {% for pic in item.pictures %}
+            <div class="relative group" data-photo-index="{{ loop.index0 }}">
+                <img src="{{ pic.get('secure_url', pic.get('url', '')) }}" class="w-16 h-16 rounded object-cover border" alt="Foto {{ loop.index }}">
+                <button onclick="removePhoto({{ loop.index0 }})" title="Eliminar foto"
+                        class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">
+                    X
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+        <p class="text-xs text-gray-400">Para agregar fotos, usa la URL de la imagen:</p>
+        <div class="flex gap-2 mt-1">
+            <input type="text" id="edit-new-photo" placeholder="https://..." class="flex-1 border rounded px-3 py-2 text-sm">
+            <button id="btn-add-photo" onclick="addPhotoToList()"
+                    class="bg-gray-200 text-gray-700 font-semibold px-3 py-2 rounded hover:bg-gray-300 text-sm">Agregar</button>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+            <button id="btn-save-photos" onclick="savePhotos('{{ item.id }}')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar Fotos</button>
+            <span id="msg-photos" class="text-xs"></span>
+        </div>
+    </div>
+
+    <!-- Atributos -->
+    <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Atributos principales</label>
+        <div class="space-y-2" id="attributes-list">
+            {% for attr in item.get('attributes', [])[:10] %}
+            <div class="flex gap-2 items-center text-sm">
+                <span class="text-gray-500 w-40 truncate" title="{{ attr.get('name', attr.get('id', '')) }}">{{ attr.get('name', attr.get('id', '')) }}:</span>
+                <input type="text" data-attr-id="{{ attr.get('id', '') }}"
+                       value="{{ attr.get('value_name', '') }}" class="attr-input flex-1 border rounded px-2 py-1 text-sm">
+            </div>
+            {% endfor %}
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+            <button id="btn-save-attrs" onclick="saveAttributes('{{ item.id }}')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar Atributos</button>
+            <span id="msg-attrs" class="text-xs"></span>
+        </div>
+    </div>
+
+    <hr class="border-gray-200">
+
+    <!-- Guardar Todo -->
+    <div class="flex items-center justify-between">
+        <p id="batch-summary" class="text-sm text-gray-500">Sin cambios pendientes</p>
+        <button id="btn-save-all" onclick="saveBatch('{{ item.id }}')"
+                class="bg-yellow-500 text-white font-bold px-6 py-2.5 rounded-lg hover:bg-yellow-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled>
+            Guardar Todos los Cambios
+        </button>
+    </div>
+    <span id="msg-batch" class="text-xs"></span>
+</div>
+
+<script>
+// --- Photo management ---
+var _currentPhotos = [];
+{% for pic in item.pictures %}
+_currentPhotos.push({source: "{{ pic.get('secure_url', pic.get('url', '')) }}"});
+{% endfor %}
+var _originalPhotoCount = _currentPhotos.length;
+var _photosModified = false;
+
+window.removePhoto = function(index) {
+    _currentPhotos.splice(index, 1);
+    _photosModified = true;
+    refreshPhotosGrid();
+    updateChangeCounter();
+};
+
+window.addPhotoToList = function() {
+    var url = document.getElementById('edit-new-photo').value.trim();
+    if (!url) return;
+    _currentPhotos.push({source: url});
+    _photosModified = true;
+    document.getElementById('edit-new-photo').value = '';
+    refreshPhotosGrid();
+    updateChangeCounter();
+};
+
+function refreshPhotosGrid() {
+    var grid = document.getElementById('photos-grid');
+    var html = '';
+    _currentPhotos.forEach(function(pic, idx) {
+        html += '<div class="relative group" data-photo-index="' + idx + '">';
+        html += '<img src="' + pic.source + '" class="w-16 h-16 rounded object-cover border" alt="Foto ' + (idx + 1) + '">';
+        html += '<button onclick="removePhoto(' + idx + ')" title="Eliminar foto"';
+        html += ' class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600">X</button>';
+        html += '</div>';
+    });
+    grid.innerHTML = html;
+    document.getElementById('photos-count').textContent = _currentPhotos.length;
+}
+
+window.savePhotos = function(itemId) {
+    saveField(itemId, 'pictures', {pictures: _currentPhotos}, 'btn-save-photos', 'msg-photos');
+};
+
+// --- Change tracking ---
+window.checkModified = function(el) {
+    var original = el.getAttribute('data-original');
+    var current;
+    if (el.type === 'checkbox') {
+        current = el.checked ? 'true' : 'false';
+    } else {
+        current = el.value;
+    }
+    if (current !== original) {
+        el.classList.add('border-yellow-400', 'ring-1', 'ring-yellow-300');
+        el.classList.remove('border-gray-300');
+    } else {
+        el.classList.remove('border-yellow-400', 'ring-1', 'ring-yellow-300');
+    }
+    updateChangeCounter();
+};
+
+function getModifiedFields() {
+    var changes = {};
+    var fields = document.querySelectorAll('.tracked-field');
+    fields.forEach(function(el) {
+        var field = el.getAttribute('data-field');
+        var original = el.getAttribute('data-original');
+        var current;
+        if (el.type === 'checkbox') {
+            current = el.checked ? 'true' : 'false';
+        } else {
+            current = el.value;
+        }
+        if (current !== original) {
+            if (field === 'price') {
+                changes[field] = parseFloat(current);
+            } else if (field === 'quantity') {
+                changes[field] = parseInt(current);
+            } else if (field === 'free_shipping') {
+                changes[field] = current === 'true';
+            } else {
+                changes[field] = current;
+            }
+        }
+    });
+    if (_photosModified) {
+        changes['pictures'] = _currentPhotos;
+    }
+    return changes;
+}
+
+function updateChangeCounter() {
+    var changes = getModifiedFields();
+    var count = Object.keys(changes).length;
+    var banner = document.getElementById('changes-banner');
+    var summary = document.getElementById('batch-summary');
+    var btnAll = document.getElementById('btn-save-all');
+    var countEl = document.getElementById('changes-count');
+
+    if (count > 0) {
+        banner.classList.remove('hidden');
+        countEl.textContent = count;
+        summary.textContent = count + ' campo(s) modificado(s)';
+        btnAll.disabled = false;
+    } else {
+        banner.classList.add('hidden');
+        summary.textContent = 'Sin cambios pendientes';
+        btnAll.disabled = true;
+    }
+}
+
+// --- Batch save ---
+window.saveBatch = function(itemId) {
+    var changes = getModifiedFields();
+    var count = Object.keys(changes).length;
+    if (count === 0) return;
+
+    // Build details list for confirmation
+    var labels = {
+        title: 'Titulo', plain_text: 'Descripcion', price: 'Precio',
+        quantity: 'Stock', status: 'Estado', free_shipping: 'Envio gratis',
+        pictures: 'Fotos', attributes: 'Atributos'
+    };
+    var detailsHtml = '<ul class="space-y-1">';
+    for (var key in changes) {
+        var label = labels[key] || key;
+        var val = changes[key];
+        if (key === 'pictures') {
+            val = val.length + ' imagenes';
+        } else if (key === 'free_shipping') {
+            val = val ? 'Si' : 'No';
+        } else if (key === 'price') {
+            val = '$' + val;
+        } else if (typeof val === 'string' && val.length > 60) {
+            val = val.substring(0, 60) + '...';
+        }
+        detailsHtml += '<li class="flex gap-2"><span class="font-medium text-gray-700">' + label + ':</span> <span class="text-gray-500">' + val + '</span></li>';
+    }
+    detailsHtml += '</ul>';
+
+    confirmAction(
+        'Guardar ' + count + ' cambio(s)',
+        '<p class="mb-3">Se enviaran los siguientes cambios a MeLi:</p>' + detailsHtml +
+        '<p class="text-gray-400 text-xs mt-3">Item: ' + itemId + '</p>',
+        function() {
+            var btnAll = document.getElementById('btn-save-all');
+            var msgBatch = document.getElementById('msg-batch');
+            btnAll.disabled = true;
+            btnAll.textContent = 'Guardando...';
+            msgBatch.textContent = '';
+
+            fetch('/api/items/' + itemId + '/batch', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(changes)
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    msgBatch.textContent = 'Todos los cambios guardados correctamente';
+                    msgBatch.className = 'text-xs text-green-600';
+                    // Reset tracked fields
+                    document.querySelectorAll('.tracked-field').forEach(function(el) {
+                        var current;
+                        if (el.type === 'checkbox') {
+                            current = el.checked ? 'true' : 'false';
+                        } else {
+                            current = el.value;
+                        }
+                        el.setAttribute('data-original', current);
+                        el.classList.remove('border-yellow-400', 'ring-1', 'ring-yellow-300');
+                    });
+                    _photosModified = false;
+                    updateChangeCounter();
+                    if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
+                } else {
+                    // Partial success
+                    var errors = [];
+                    var successes = [];
+                    for (var key in data.results) {
+                        var r = data.results[key];
+                        if (r.ok) {
+                            successes.push(key);
+                        } else {
+                            errors.push(key + ': ' + (r.error || 'Error'));
+                        }
+                    }
+                    var msg = '';
+                    if (successes.length) msg += 'OK: ' + successes.join(', ') + '. ';
+                    if (errors.length) msg += 'Errores: ' + errors.join('; ');
+                    msgBatch.textContent = msg;
+                    msgBatch.className = 'text-xs ' + (errors.length ? 'text-red-600' : 'text-green-600');
+                    if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
+                }
+                btnAll.textContent = 'Guardar Todos los Cambios';
+                btnAll.disabled = Object.keys(getModifiedFields()).length === 0;
+            })
+            .catch(function(e) {
+                msgBatch.textContent = 'Error: ' + e.message;
+                msgBatch.className = 'text-xs text-red-600';
+                btnAll.textContent = 'Guardar Todos los Cambios';
+                btnAll.disabled = false;
+            });
+        }
+    );
+};
+
+// --- Legacy functions kept for individual saves ---
+window.addPhoto = function(itemId) {
+    var url = document.getElementById('edit-new-photo').value.trim();
+    if (!url) return;
+    _currentPhotos.push({source: url});
+    _photosModified = true;
+    document.getElementById('edit-new-photo').value = '';
+    refreshPhotosGrid();
+    updateChangeCounter();
+    saveField(itemId, 'pictures', {pictures: _currentPhotos}, 'btn-add-photo', 'msg-photos');
+};
+
+window.saveAttributes = function(itemId) {
+    var inputs = document.querySelectorAll('.attr-input');
+    var attrs = [];
+    inputs.forEach(function(input) {
+        var attrId = input.getAttribute('data-attr-id');
+        var val = input.value.trim();
+        if (attrId && val) {
+            attrs.push({id: attrId, value_name: val});
+        }
+    });
+    saveField(itemId, 'attributes', {attributes: attrs}, 'btn-save-attrs', 'msg-attrs');
+};
+
+// Initialize counter
+updateChangeCounter();
+
+// --- Inventory (BinManager) ---
+{% if seller_sku %}
+(function() {
+    fetch('/api/items/inventory/{{ seller_sku }}')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var loading = document.getElementById('inventory-loading');
+            var table = document.getElementById('inventory-table');
+            var errorEl = document.getElementById('inventory-error');
+            if (data.error) {
+                loading.classList.add('hidden');
+                errorEl.textContent = data.error;
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            var tj = data.TotalQtyTJ || 0;
+            var cdmx = data.TotalQtyCDMX || 0;
+            var mty = data.TotalQtyMTY || 0;
+            var total = tj + cdmx + mty;
+            document.getElementById('inv-cdmx').textContent = cdmx;
+            document.getElementById('inv-tj').textContent = tj;
+            document.getElementById('inv-mty').textContent = mty;
+            document.getElementById('inv-total').textContent = total;
+            loading.classList.add('hidden');
+            table.classList.remove('hidden');
+            window._inventoryTotal = total;
+        })
+        .catch(function() {
+            var loading = document.getElementById('inventory-loading');
+            var errorEl = document.getElementById('inventory-error');
+            if (loading) loading.classList.add('hidden');
+            if (errorEl) {
+                errorEl.textContent = 'Error consultando inventario';
+                errorEl.classList.remove('hidden');
+            }
+        });
+})();
+
+window.useInventoryAsStock = function() {
+    if (typeof window._inventoryTotal === 'undefined') return;
+    var stockInput = document.getElementById('edit-stock');
+    stockInput.value = window._inventoryTotal;
+    checkModified(stockInput);
+};
+{% endif %}
+</script>

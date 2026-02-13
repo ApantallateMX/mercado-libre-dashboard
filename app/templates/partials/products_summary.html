@@ -1,0 +1,111 @@
+<!-- KPIs principales -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <!-- Revenue 30d -->
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+         onclick="window.switchProductTab('top', '/partials/products-top-sellers')">
+        <p class="text-sm text-gray-500 mb-1">Revenue 30 dias</p>
+        <p class="text-2xl font-bold text-gray-800">${{ "{:,.0f}".format(revenue_30d) }}</p>
+        {% set daily_avg = revenue_30d / 30 if revenue_30d > 0 else 0 %}
+        <div class="flex items-center gap-2 mt-1">
+            <span class="text-sm {{ 'text-green-600' if daily_avg >= 500000 else 'text-yellow-600' if daily_avg >= 300000 else 'text-red-600' }}">
+                ${{ "{:,.0f}".format(daily_avg) }}/dia
+            </span>
+            <span class="text-xs text-gray-400">meta: $500k</span>
+        </div>
+        <!-- Progress bar -->
+        {% set pct = (daily_avg / 500000 * 100) if daily_avg > 0 else 0 %}
+        <div class="mt-2 w-full bg-gray-200 rounded-full h-2">
+            <div class="h-2 rounded-full {{ 'bg-green-500' if pct >= 100 else 'bg-yellow-400' if pct >= 60 else 'bg-red-400' }}"
+                 style="width: {{ [pct, 100]|min }}%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">{{ "%.0f"|format(pct) }}% de la meta diaria</p>
+    </div>
+
+    <!-- Unidades vendidas -->
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+         onclick="window.switchProductTab('top', '/partials/products-top-sellers')">
+        <p class="text-sm text-gray-500 mb-1">Unidades vendidas (30d)</p>
+        <p class="text-2xl font-bold text-gray-800">{{ "{:,}".format(total_units) }}</p>
+        <p class="text-sm text-gray-400 mt-1">{{ "{:,}".format(total_orders) }} ordenes</p>
+    </div>
+
+    <!-- Productos activos -->
+    <div class="bg-white rounded-lg shadow p-5">
+        <p class="text-sm text-gray-500 mb-1">Productos activos</p>
+        <p class="text-2xl font-bold text-gray-800">{{ total_active }}</p>
+        <div class="flex items-center gap-3 mt-1">
+            {% if products_with_sales > 0 %}
+            <span class="text-sm text-green-600 cursor-pointer hover:underline"
+                  onclick="window.switchProductTab('top', '/partials/products-top-sellers')">{{ products_with_sales }} vendiendo</span>
+            {% endif %}
+            {% if products_no_sales > 0 %}
+            <span class="text-sm text-red-500 cursor-pointer hover:underline"
+                  onclick="window.switchProductTab('low', '/partials/products-low-sellers')">{{ products_no_sales }} sin ventas</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- SKUs activos -->
+    <div class="bg-white rounded-lg shadow p-5 cursor-pointer hover:shadow-md transition"
+         onclick="window.switchProductTab('all', '/partials/products-all')">
+        <p class="text-sm text-gray-500 mb-1">SKUs unicos vendidos</p>
+        <p class="text-2xl font-bold text-gray-800">{{ unique_skus }}</p>
+        <p class="text-sm text-gray-400 mt-1">Ticket prom: ${{ "{:,.0f}".format(avg_ticket) }}</p>
+    </div>
+</div>
+
+<!-- Segunda fila: metricas de accion -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <!-- Top 5 productos -->
+    <div class="bg-white rounded-lg shadow p-5 md:col-span-2">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">Top 5 Productos (30 dias)</h3>
+        {% if top_products %}
+        <div class="space-y-2">
+            {% for p in top_products[:5] %}
+            <div class="flex items-center justify-between py-2 {{ 'border-t border-gray-100' if not loop.first else '' }}">
+                <div class="flex items-center gap-3 flex-1 min-w-0">
+                    <span class="text-xs font-bold text-gray-400 w-5">{{ loop.index }}</span>
+                    {% if p.thumbnail %}
+                    <img src="{{ p.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
+                    {% endif %}
+                    <div class="min-w-0">
+                        <p class="text-sm text-gray-800 truncate">{{ p.title }}</p>
+                        <p class="text-xs text-gray-400">{{ p.units }} uds | ${{ "{:,.0f}".format(p.revenue) }}</p>
+                    </div>
+                </div>
+                <div class="text-right flex-shrink-0 ml-2">
+                    <span class="text-sm font-semibold text-gray-700">{{ p.units }} uds</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-sm text-gray-400 text-center py-4">Sin datos de ventas</p>
+        {% endif %}
+    </div>
+
+    <!-- Quick actions -->
+    <div class="bg-white rounded-lg shadow p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">Acciones rapidas</h3>
+        <div class="space-y-2">
+            {% if products_no_sales > 0 %}
+            <button onclick="window.switchProductTab('low', '/partials/products-low-sellers')"
+                    class="w-full text-left px-3 py-2 rounded bg-red-50 hover:bg-red-100 text-sm text-red-700 transition">
+                {{ products_no_sales }} productos sin ventas &rarr;
+            </button>
+            {% endif %}
+            <button onclick="window.switchProductTab('deals', '/partials/products-deals')"
+                    class="w-full text-left px-3 py-2 rounded bg-blue-50 hover:bg-blue-100 text-sm text-blue-700 transition">
+                Ver oportunidades de Deals &rarr;
+            </button>
+            <button onclick="window.switchProductTab('unpublished', '/partials/products-not-published')"
+                    class="w-full text-left px-3 py-2 rounded bg-purple-50 hover:bg-purple-100 text-sm text-purple-700 transition">
+                SKUs sin publicar en MeLi &rarr;
+            </button>
+            <button onclick="window.switchProductTab('stock', '/partials/products-high-stock')"
+                    class="w-full text-left px-3 py-2 rounded bg-green-50 hover:bg-green-100 text-sm text-green-700 transition">
+                Mayor stock en almacen &rarr;
+            </button>
+        </div>
+    </div>
+</div>

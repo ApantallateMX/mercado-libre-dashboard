@@ -1,0 +1,58 @@
+<!-- Tabla de ventas diarias con meta -->
+<div class="overflow-x-auto">
+    <table class="w-full text-sm">
+        <thead>
+            <tr class="border-b border-gray-200 text-left text-gray-500">
+                <th class="py-2 px-3 font-medium">Fecha</th>
+                <th class="py-2 px-3 font-medium text-right">Unidades</th>
+                <th class="py-2 px-3 font-medium text-right">Bruto</th>
+                <th class="py-2 px-3 font-medium text-right">Neto</th>
+                <th class="py-2 px-3 font-medium text-right">% de Meta</th>
+                <th class="py-2 px-3 font-medium w-40">Progreso</th>
+                <th class="py-2 px-3 font-medium text-center">Estado</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for day in daily_data %}
+            {% set pct = day.pct_of_goal %}
+            {% set row_color = "bg-green-50" if pct >= 100 else ("bg-yellow-50" if pct >= 80 else "bg-white") %}
+            <tr class="{{ row_color }} border-b border-gray-100 hover:bg-gray-50">
+                <td class="py-2 px-3 font-medium text-gray-700">{{ day.date }}</td>
+                <td class="py-2 px-3 text-right text-gray-700">{{ day.units }}</td>
+                <td class="py-2 px-3 text-right font-semibold text-gray-800">${{ "{:,.2f}".format(day.revenue_gross) }}</td>
+                <td class="py-2 px-3 text-right text-green-700">${{ "{:,.2f}".format(day.revenue_net) }}</td>
+                <td class="py-2 px-3 text-right font-semibold {% if pct >= 100 %}text-green-600{% elif pct >= 80 %}text-yellow-600{% else %}text-red-600{% endif %}">
+                    {{ "%.1f"|format(pct) }}%
+                </td>
+                <td class="py-2 px-3">
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        {% set bar_pct = [pct, 100] | min %}
+                        {% set bar_color = "bg-green-500" if pct >= 100 else ("bg-yellow-400" if pct >= 80 else "bg-red-400") %}
+                        <div class="{{ bar_color }} h-2.5 rounded-full" style="width: {{ bar_pct }}%"></div>
+                    </div>
+                </td>
+                <td class="py-2 px-3 text-center">
+                    {% if pct >= 100 %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-medium">Meta</span>
+                    {% elif pct >= 80 %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 font-medium">Cerca</span>
+                    {% else %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800 font-medium">Bajo</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot class="bg-gray-50 font-semibold">
+            <tr class="border-t-2 border-gray-300">
+                <td class="py-3 px-3 text-gray-700">Total ({{ daily_data|length }} dias)</td>
+                <td class="py-3 px-3 text-right text-gray-800">{{ totals.units }}</td>
+                <td class="py-3 px-3 text-right text-gray-800">${{ "{:,.2f}".format(totals.revenue_gross) }}</td>
+                <td class="py-3 px-3 text-right text-green-700">${{ "{:,.2f}".format(totals.revenue_net) }}</td>
+                <td class="py-3 px-3 text-right text-gray-600">Prom: {{ "%.1f"|format(totals.avg_pct) }}%</td>
+                <td class="py-3 px-3"></td>
+                <td class="py-3 px-3 text-center text-xs text-gray-600">{{ totals.days_met }}/{{ daily_data|length }} dias</td>
+            </tr>
+        </tfoot>
+    </table>
+</div>

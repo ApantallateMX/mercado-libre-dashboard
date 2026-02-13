@@ -1,0 +1,170 @@
+{% if unavailable %}
+<div class="px-6 py-8 text-center">
+    <svg class="mx-auto h-10 w-10 text-yellow-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+    </svg>
+    <p class="text-gray-600 font-medium">Datos no disponibles temporalmente</p>
+    <p class="text-sm text-gray-400 mt-1">Intenta de nuevo mas tarde.</p>
+</div>
+{% elif fallback_campaigns is defined and fallback_campaigns %}
+<div class="px-4 py-3 bg-red-50 border-b border-red-200 flex items-center gap-2">
+    <svg class="w-4 h-4 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
+    <span class="text-sm text-red-700">Detalle por producto no disponible — mostrando <strong>campanas con gasto sin ventas</strong></span>
+</div>
+<table class="w-full">
+    <thead class="bg-red-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Campana</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Estado</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Gasto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Clics</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Impresiones</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">CTR</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-red-100">
+        {% for c in fallback_campaigns %}
+        <tr class="hover:bg-red-50">
+            <td class="px-4 py-3 text-sm font-medium text-gray-800">{{ c.name }}</td>
+            <td class="px-4 py-3 text-center">
+                {% if c.status == 'active' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">Activa</span>
+                {% elif c.status == 'paused' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">Pausada</span>
+                {% else %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ c.status }}</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm text-right font-bold text-red-600">${{ "%.2f"|format(c.cost) }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.clicks }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.impressions }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ "%.2f"|format(c.ctr) }}%</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="px-6 py-4 bg-red-50 border-t-2 border-red-200">
+    <span class="text-sm font-medium text-red-700">
+        Total quemado: <strong>${{ "%.2f"|format(total_burned) }}</strong> en {{ fallback_campaigns|length }} campanas sin ventas
+    </span>
+</div>
+{% elif fallback_campaigns is defined and not fallback_campaigns %}
+<div class="px-6 py-8 text-center text-gray-500">
+    <p class="text-green-600 font-medium">No hay campanas quemando dinero sin ventas</p>
+    <p class="text-sm mt-1">Todas tus campanas activas tienen al menos una venta</p>
+    <p class="text-xs text-gray-400 mt-2">Nota: detalle por producto no disponible — mostrando datos a nivel de campana</p>
+</div>
+{% elif burning %}
+<table class="w-full">
+    <thead class="bg-red-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Producto</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Item ID</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Precio</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Gasto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Clics</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Estado</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-red-500 uppercase border-b-2 border-red-200">Diagnostico</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-red-100">
+        {% for p in burning %}
+        <tr class="hover:bg-red-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
+            <td class="px-4 py-3 text-sm text-gray-800">
+                {{ p.title[:45] }}{% if p.title|length > 45 %}...{% endif %}
+            </td>
+            <td class="px-4 py-3 text-xs font-mono text-gray-500">
+                {% if p.permalink %}<a href="{{ p.permalink }}" target="_blank" class="text-blue-600 hover:underline">{{ p.item_id }}</a>{% else %}{{ p.item_id }}{% endif %}
+            </td>
+            <td class="px-4 py-3 text-right">
+                {% if p.original_price and p.original_price > (p.price or 0) %}
+                <span class="text-xs text-gray-400 line-through block">${{ "{:,.0f}".format(p.original_price) }}</span>
+                <span class="text-sm font-medium text-green-600">${{ "{:,.0f}".format(p.price or 0) }}</span>
+                <span class="text-xs text-green-600">(-{{ "%.0f"|format((1 - (p.price or 0) / p.original_price) * 100) }}%)</span>
+                {% else %}
+                <span class="text-sm text-gray-800">${{ "{:,.0f}".format(p.price or 0) }}</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-sm text-right font-bold text-red-600">${{ "%.2f"|format(p.cost or 0) }}</td>
+            <td class="px-4 py-3 text-sm text-right text-gray-800">{{ p.clicks or 0 }}</td>
+            <td class="px-4 py-3 text-center">
+                {% if p.status == 'paused' %}
+                <span class="text-xs bg-red-200 text-red-900 px-2 py-0.5 rounded-full font-semibold">Pausado</span>
+                {% elif p.stock == 0 %}
+                <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">Sin stock</span>
+                {% else %}
+                <span class="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">Activo ({{ p.stock }} uds)</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-center">
+                <span class="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 select-none">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    Ver
+                </span>
+            </td>
+        </tr>
+        <!-- Fila expandible con diagnostico -->
+        <tr class="hidden">
+            <td colspan="7" class="px-0 py-0">
+                <div class="bg-gray-50 border-l-4 {% if p.status == 'paused' or p.stock == 0 %}border-red-400{% else %}border-yellow-400{% endif %} px-6 py-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Info del listado -->
+                        <div>
+                            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Datos del listado</p>
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                                <span class="text-gray-500">Fotos:</span>
+                                <span class="{% if p.photos < 5 %}text-red-600 font-semibold{% elif p.photos < 8 %}text-yellow-600{% else %}text-green-600{% endif %}">{{ p.photos }}{% if p.photos < 5 %} (insuficientes){% endif %}</span>
+                                <span class="text-gray-500">Video:</span>
+                                <span class="{% if p.has_video %}text-green-600{% else %}text-red-600{% endif %}">{{ "Si" if p.has_video else "No" }}</span>
+                                <span class="text-gray-500">Envio gratis:</span>
+                                <span class="{% if p.free_shipping %}text-green-600{% else %}text-red-600{% endif %}">{{ "Si" if p.free_shipping else "No" }}</span>
+                                <span class="text-gray-500">Logistica:</span>
+                                <span class="text-gray-800">{{ p.logistic or "-" }}</span>
+                                <span class="text-gray-500">Catalogo:</span>
+                                <span class="text-gray-800">{{ "Si" if p.catalog else "No" }}</span>
+                                <span class="text-gray-500">Vendidos total:</span>
+                                <span class="text-gray-800">{{ p.sold or 0 }}</span>
+                                <span class="text-gray-500">CTR:</span>
+                                <span class="{% if p.ctr < 0.1 %}text-red-600{% elif p.ctr > 0.3 %}text-green-600{% else %}text-gray-800{% endif %}">{{ p.ctr }}%</span>
+                            </div>
+                        </div>
+                        <!-- Problemas y sugerencias -->
+                        <div>
+                            <p class="text-xs font-semibold text-red-500 uppercase mb-2">Problemas detectados</p>
+                            <ul class="text-sm space-y-1 mb-3">
+                                {% for issue in p.issues %}
+                                <li class="flex items-start gap-1.5">
+                                    <svg class="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>
+                                    <span class="text-gray-700">{{ issue }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            <p class="text-xs font-semibold text-green-600 uppercase mb-2">Sugerencias</p>
+                            <ul class="text-sm space-y-1">
+                                {% for sug in p.suggestions %}
+                                <li class="flex items-start gap-1.5">
+                                    <svg class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                                    <span class="text-gray-700">{{ sug }}</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+<div class="px-6 py-4 bg-red-50 border-t-2 border-red-200 flex flex-wrap items-center justify-between gap-2">
+    <span class="text-sm font-medium text-red-700">
+        Total quemado: <strong>${{ "%.2f"|format(total_burned) }}</strong> en {{ burning|length }} productos sin ventas
+    </span>
+    <span class="text-xs text-gray-500">Haz clic en una fila para ver el diagnostico</span>
+</div>
+{% else %}
+<div class="px-6 py-8 text-center text-gray-500">
+    <p class="text-green-600 font-medium">No hay productos quemando dinero sin ventas</p>
+    <p class="text-sm mt-1">Todos tus anuncios activos tienen al menos una venta</p>
+</div>
+{% endif %}

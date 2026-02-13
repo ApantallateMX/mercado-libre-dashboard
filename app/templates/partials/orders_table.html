@@ -1,0 +1,223 @@
+<table class="w-full">
+    <thead class="bg-gray-50">
+        <tr>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Fecha</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>
+            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Precio</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cargos</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Envío</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Impuestos</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300 text-green-700">Total</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Estado</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-200">
+        {% for order in orders %}
+        <tr class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
+                {{ order.date_created[:10] }}
+            </td>
+            <td class="px-4 py-3 text-sm text-gray-800">
+                {% if order.order_items %}
+                    {{ order.order_items[0].title[:40] }}{% if order.order_items[0].title|length > 40 %}...{% endif %}
+                    {% if order.order_items|length > 1 %}
+                    <span class="text-xs text-gray-400">(+{{ order.order_items|length - 1 }})</span>
+                    {% endif %}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-500">
+                {% if order.order_items %}{{ order.order_items[0].sku }}{% else %}-{% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-800">
+                ${{ "{:,.2f}".format(order.total_amount) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-red-600">
+                -${{ "{:,.2f}".format(order.total_fees) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-orange-600">
+                {% if order.shipping_cost > 0 %}-${{ "{:,.2f}".format(order.shipping_cost) }}{% else %}-{% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-purple-600">
+                -${{ "{:,.2f}".format(order.taxes) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-green-700">
+                ${{ "{:,.2f}".format(order.net_amount) }}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-center">
+                {% if order.status == 'paid' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">Pagado</span>
+                {% elif order.status == 'delivered' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800">Entregado</span>
+                {% elif order.status == 'cancelled' %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">Cancelado</span>
+                {% else %}
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ order.status }}</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-center">
+                <span class="inline-flex items-center text-xs text-gray-400 hover:text-gray-700 select-none">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </span>
+            </td>
+        </tr>
+        <!-- Fila expandible con detalle de cobros -->
+        <tr class="hidden">
+            <td colspan="10" class="px-0 py-0">
+                <div class="bg-gray-50 border-l-4 border-yellow-400 px-6 py-4">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Col 1: Items de la orden -->
+                        <div>
+                            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Productos</p>
+                            {% for item in order.order_items %}
+                            <div class="mb-3 {% if not loop.last %}pb-3 border-b border-gray-200{% endif %}">
+                                <p class="text-sm font-medium text-gray-800">{{ item.title[:55] }}{% if item.title|length > 55 %}...{% endif %}</p>
+                                <div class="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs mt-1">
+                                    <span class="text-gray-400">SKU:</span>
+                                    <span class="text-gray-700 font-mono">{{ item.sku }}</span>
+                                    <span class="text-gray-400">Item ID:</span>
+                                    <span class="text-gray-700 font-mono">{{ item.item_id }}</span>
+                                    <span class="text-gray-400">Cantidad:</span>
+                                    <span class="text-gray-700">{{ item.quantity }}</span>
+                                    <span class="text-gray-400">Precio unitario:</span>
+                                    <span class="text-gray-700">${{ "{:,.2f}".format(item.unit_price) }}</span>
+                                    {% if item.discount > 0 %}
+                                    <span class="text-gray-400">Precio original:</span>
+                                    <span class="text-gray-500 line-through">${{ "{:,.2f}".format(item.full_unit_price) }}</span>
+                                    <span class="text-gray-400">Descuento:</span>
+                                    <span class="text-green-600">-${{ "{:,.2f}".format(item.discount) }}</span>
+                                    {% endif %}
+                                    <span class="text-gray-400">Subtotal:</span>
+                                    <span class="text-gray-800 font-semibold">${{ "{:,.2f}".format(item.subtotal) }}</span>
+                                    <span class="text-gray-400">Tipo publicacion:</span>
+                                    <span class="text-gray-700">{{ item.listing_type }}</span>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                        <!-- Col 2: Desglose de cobros (formato MeLi) -->
+                        <div>
+                            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Desglose de Cobros</p>
+                            <div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                                <div class="px-4 py-2.5 flex justify-between text-sm border-b border-gray-100">
+                                    <span class="text-gray-700">Precio del producto</span>
+                                    <span class="text-gray-800 font-medium">${{ "{:,.2f}".format(order.total_amount) }}</span>
+                                </div>
+                                <div class="px-4 py-2 flex justify-between text-sm border-b border-gray-100 bg-red-50">
+                                    <span class="text-red-700">Cargos por venta</span>
+                                    <span class="text-red-700">-${{ "{:,.2f}".format(order.total_fees) }}</span>
+                                </div>
+                                {% if order.shipping_cost > 0 %}
+                                <div class="px-4 py-2 flex justify-between text-sm border-b border-gray-100 bg-orange-50">
+                                    <span class="text-orange-700">Envíos</span>
+                                    <span class="text-orange-700">-${{ "{:,.2f}".format(order.shipping_cost) }}</span>
+                                </div>
+                                {% endif %}
+                                <div class="px-4 py-2 flex justify-between text-sm border-b border-gray-100 bg-purple-50">
+                                    <span class="text-purple-700">Impuestos</span>
+                                    <span class="text-purple-700">-${{ "{:,.2f}".format(order.taxes) }}</span>
+                                </div>
+                                <div class="px-4 py-3 flex justify-between text-sm bg-green-50 border-t-2 border-green-300">
+                                    <span class="text-green-800 font-bold">Total</span>
+                                    <span class="text-green-800 font-bold">${{ "{:,.2f}".format(order.net_amount) }}</span>
+                                </div>
+                            </div>
+
+                            <!-- Porcentaje de comision -->
+                            {% if order.total_amount > 0 %}
+                            <div class="mt-2 text-xs text-gray-400">
+                                Descuentos totales: {{ "%.1f"|format((order.total_amount - order.net_amount) / order.total_amount * 100) }}% del precio
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Col 3: Info de pago y envio -->
+                        <div>
+                            <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Pago y Envio</p>
+                            <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                                <span class="text-gray-400">No. Orden:</span>
+                                <span class="text-gray-700 font-mono text-xs">{{ order.id }}</span>
+                                {% if order.pack_id %}
+                                <span class="text-gray-400">Pack:</span>
+                                <span class="text-gray-700 font-mono text-xs">{{ order.pack_id }}</span>
+                                {% endif %}
+                                <span class="text-gray-400">Metodo pago:</span>
+                                <span class="text-gray-700">{{ order.payment_method }}</span>
+                                <span class="text-gray-400">Tipo:</span>
+                                <span class="text-gray-700">{{ order.payment_type }}</span>
+                                {% if order.installments > 1 %}
+                                <span class="text-gray-400">Cuotas:</span>
+                                <span class="text-gray-700">{{ order.installments }} meses</span>
+                                {% endif %}
+                                <span class="text-gray-400">Comprador:</span>
+                                <span class="text-gray-700">{{ order.buyer.nickname if order.buyer else '-' }}</span>
+                                {% if order.shipping_id %}
+                                <span class="text-gray-400">Envio ID:</span>
+                                <span class="text-gray-700 font-mono text-xs">{{ order.shipping_id }}</span>
+                                {% endif %}
+                            </div>
+
+                            <!-- Tags -->
+                            {% if order.tags %}
+                            <div class="mt-3">
+                                <p class="text-xs text-gray-400 mb-1">Tags:</p>
+                                <div class="flex flex-wrap gap-1">
+                                    {% for tag in order.tags %}
+                                    <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ tag }}</span>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="10" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if orders %}
+<div class="px-6 py-3 bg-gray-50 border-t-2 border-gray-300 flex flex-wrap items-center justify-between gap-2">
+    <div class="flex flex-wrap gap-4 text-sm text-gray-600">
+        <span>Precio: <strong>${{ "{:,.2f}".format(orders|sum(attribute='total_amount')) }}</strong></span>
+        <span class="text-red-600">Cargos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='total_fees')) }}</strong></span>
+        <span class="text-orange-600">Envíos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='shipping_cost')) }}</strong></span>
+        <span class="text-purple-600">Impuestos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='taxes')) }}</strong></span>
+        <span class="text-green-700">Total: <strong>${{ "{:,.2f}".format(orders|sum(attribute='net_amount')) }}</strong></span>
+    </div>
+    <span class="text-xs text-gray-400">Clic en una fila para ver detalle</span>
+</div>
+{% endif %}
+
+{% if paging %}
+<div class="px-6 py-4 bg-gray-50 flex justify-between items-center border-t border-gray-200">
+    <span class="text-sm text-gray-600">
+        Mostrando {{ offset + 1 }} - {{ offset + orders|length }} de {{ paging.total }}
+    </span>
+    <div class="flex gap-2">
+        {% if offset > 0 %}
+        <button hx-get="/partials/orders-table?offset={{ offset - limit }}&limit={{ limit }}"
+                hx-target="#orders-table"
+                class="px-3 py-1 border rounded text-sm hover:bg-gray-100">
+            Anterior
+        </button>
+        {% endif %}
+        {% if offset + limit < paging.total %}
+        <button hx-get="/partials/orders-table?offset={{ offset + limit }}&limit={{ limit }}"
+                hx-target="#orders-table"
+                class="px-3 py-1 border rounded text-sm hover:bg-gray-100">
+            Siguiente
+        </button>
+        {% endif %}
+    </div>
+</div>
+{% endif %}

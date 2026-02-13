@@ -1,0 +1,612 @@
+{% extends "base.html" %}
+
+{% block title %}Optimizar Listados{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Optimizar Listados</h1>
+    <p class="text-gray-600">Analisis de salud de tus publicaciones con acciones rapidas</p>
+</div>
+
+<!-- Busqueda -->
+<div class="bg-white p-4 rounded-lg shadow mb-4">
+    <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" id="search-input" placeholder="Buscar por titulo o ID..."
+               class="w-full pl-10 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+               oninput="filterBySearch(this.value)">
+    </div>
+</div>
+
+<!-- Filtros -->
+<div class="bg-white p-4 rounded-lg shadow mb-6 space-y-3">
+    <!-- Fila 1: Categoria -->
+    <div class="flex flex-wrap gap-3 items-center">
+        <span class="text-sm font-medium text-gray-700">Categoria:</span>
+        <button type="button" data-filter="all" class="health-filter px-3 py-1.5 text-sm rounded-full font-medium bg-yellow-400 text-gray-800 border border-yellow-400">
+            Todos
+        </button>
+        <button type="button" data-filter="critico" class="health-filter px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-red-100">
+            Critico (&lt;40)
+        </button>
+        <button type="button" data-filter="necesita_trabajo" class="health-filter px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-100">
+            Necesita Trabajo (40-70)
+        </button>
+        <button type="button" data-filter="bueno" class="health-filter px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-green-100">
+            Bueno (70+)
+        </button>
+    </div>
+    <!-- Fila 2: Filtros avanzados -->
+    <div class="flex flex-wrap gap-4 items-center border-t border-gray-100 pt-3">
+        <div class="flex items-center gap-2">
+            <label class="text-xs font-medium text-gray-500">Stock:</label>
+            <select id="filter-stock" onchange="renderTable()" class="border rounded px-2 py-1 text-xs text-gray-700">
+                <option value="all">Todos</option>
+                <option value="0">Sin stock (0)</option>
+                <option value="1-5">Bajo (1-5)</option>
+                <option value="6-20">Medio (6-20)</option>
+                <option value="21+">Alto (21+)</option>
+            </select>
+        </div>
+        <div class="flex items-center gap-2">
+            <label class="text-xs font-medium text-gray-500">Ventas:</label>
+            <select id="filter-ventas" onchange="renderTable()" class="border rounded px-2 py-1 text-xs text-gray-700">
+                <option value="all">Todas</option>
+                <option value="0">Sin ventas (0)</option>
+                <option value="1-10">Pocas (1-10)</option>
+                <option value="11-50">Moderadas (11-50)</option>
+                <option value="51+">Muchas (51+)</option>
+            </select>
+        </div>
+        <div class="flex items-center gap-2">
+            <label class="text-xs font-medium text-gray-500">Score:</label>
+            <select id="filter-score" onchange="renderTable()" class="border rounded px-2 py-1 text-xs text-gray-700">
+                <option value="all">Todos</option>
+                <option value="0-20">Muy bajo (0-20)</option>
+                <option value="21-40">Bajo (21-40)</option>
+                <option value="41-70">Medio (41-70)</option>
+                <option value="71-100">Alto (71-100)</option>
+            </select>
+        </div>
+        <div class="flex items-center gap-2 ml-auto">
+            <label class="text-xs font-medium text-gray-500">Ordenar:</label>
+            <select id="sort-by" onchange="renderTable()" class="border rounded px-2 py-1 text-xs text-gray-700">
+                <option value="score-asc">Score (menor primero)</option>
+                <option value="score-desc">Score (mayor primero)</option>
+                <option value="stock-asc">Stock (menor primero)</option>
+                <option value="stock-desc">Stock (mayor primero)</option>
+                <option value="ventas-desc">Ventas (mayor primero)</option>
+                <option value="ventas-asc">Ventas (menor primero)</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- Stats resumen -->
+<div id="health-stats" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="bg-red-50 p-4 rounded-lg shadow">
+        <p class="text-sm text-red-600">Criticos</p>
+        <p id="stat-critico" class="text-2xl font-bold text-red-700">-</p>
+    </div>
+    <div class="bg-yellow-50 p-4 rounded-lg shadow">
+        <p class="text-sm text-yellow-600">Necesitan Trabajo</p>
+        <p id="stat-necesita" class="text-2xl font-bold text-yellow-700">-</p>
+    </div>
+    <div class="bg-green-50 p-4 rounded-lg shadow">
+        <p class="text-sm text-green-600">Buenos</p>
+        <p id="stat-bueno" class="text-2xl font-bold text-green-700">-</p>
+    </div>
+</div>
+
+<!-- Tabla de items -->
+<div id="items-health-table">
+    <div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
+        <svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        Analizando listados...
+    </div>
+</div>
+
+<!-- Modal de edicion -->
+<div id="edit-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
+        <div id="edit-modal-content" class="p-6">
+            Cargando...
+        </div>
+    </div>
+</div>
+
+<!-- Modal de confirmacion -->
+<div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-60 hidden z-[60] flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-md m-4 p-6">
+        <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-3"></h3>
+        <div id="confirm-details" class="text-sm text-gray-600 mb-5 max-h-60 overflow-y-auto"></div>
+        <div class="flex gap-3 justify-end">
+            <button id="confirm-cancel" class="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                Cancelar
+            </button>
+            <button id="confirm-accept" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600">
+                Si, modificar
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    var allItems = [];
+    var currentFilter = 'all';
+    var searchQuery = '';
+    var _confirmCallback = null;
+    var _modalHadChanges = false;
+    var inventoryData = {};
+
+    function loadItemsHealth() {
+        fetch('/api/items/needs-work')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                allItems = data.items || [];
+                updateStats();
+                renderTable();
+                loadBulkInventory();
+            })
+            .catch(function() {
+                document.getElementById('items-health-table').innerHTML =
+                    '<p class="text-center py-8 text-red-500">Error cargando datos</p>';
+            });
+    }
+
+    function loadBulkInventory() {
+        var skus = allItems
+            .filter(function(i) { return i.seller_sku; })
+            .map(function(i) { return i.seller_sku; });
+        if (skus.length === 0) return;
+        // Deduplicate
+        var unique = [];
+        var seen = {};
+        skus.forEach(function(s) { if (!seen[s]) { seen[s] = true; unique.push(s); } });
+        // Fetch in batches of 20
+        var batches = [];
+        for (var i = 0; i < unique.length; i += 20) {
+            batches.push(unique.slice(i, i + 20));
+        }
+        batches.forEach(function(batch) {
+            fetch('/api/items/inventory-bulk?skus=' + encodeURIComponent(batch.join(',')))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    for (var sku in data) {
+                        inventoryData[sku] = data[sku];
+                    }
+                    updateInventoryCells();
+                })
+                .catch(function() {});
+        });
+    }
+
+    function updateInventoryCells() {
+        allItems.forEach(function(item) {
+            var cell = document.getElementById('inv-' + item.id);
+            if (!cell) return;
+            if (!item.seller_sku) {
+                cell.innerHTML = '<span class="text-xs text-gray-400">Sin SKU</span>';
+                return;
+            }
+            var inv = inventoryData[item.seller_sku];
+            if (!inv) return; // still loading
+            var tj = inv.TotalQtyTJ || 0;
+            var cdmx = inv.TotalQtyCDMX || 0;
+            var mty = inv.TotalQtyMTY || 0;
+            var total = tj + cdmx + mty;
+            cell.innerHTML =
+                '<div class="text-xs leading-tight">' +
+                '<span class="text-gray-500">TJ:</span><span class="font-medium">' + tj + '</span> ' +
+                '<span class="text-gray-500">CDMX:</span><span class="font-medium">' + cdmx + '</span> ' +
+                '<span class="text-gray-500">MTY:</span><span class="font-medium">' + mty + '</span>' +
+                '<div class="font-bold text-gray-800">Total: ' + total + '</div>' +
+                '</div>';
+            // Highlight row if MeLi stock is 0 but inventory available
+            if (item.available_quantity === 0 && total > 0) {
+                var row = cell.closest('tr');
+                if (row) row.classList.add('bg-yellow-50');
+            }
+            // Show/hide sync button
+            var syncBtn = document.getElementById('sync-' + item.id);
+            if (syncBtn) {
+                if (total !== item.available_quantity && total > 0) {
+                    syncBtn.classList.remove('hidden');
+                } else {
+                    syncBtn.classList.add('hidden');
+                }
+            }
+        });
+    }
+
+    function updateStats() {
+        var critico = allItems.filter(function(i) { return i.category === 'critico'; }).length;
+        var necesita = allItems.filter(function(i) { return i.category === 'necesita_trabajo'; }).length;
+        var bueno = allItems.filter(function(i) { return i.category === 'bueno'; }).length;
+        document.getElementById('stat-critico').textContent = critico;
+        document.getElementById('stat-necesita').textContent = necesita;
+        document.getElementById('stat-bueno').textContent = bueno;
+    }
+
+    function filterBySearch(query) {
+        searchQuery = query.toLowerCase().trim();
+        renderTable();
+    }
+
+    function matchRange(value, range) {
+        if (range === 'all') return true;
+        if (range === '0') return value === 0;
+        var parts = range.replace('+', '').split('-');
+        var min = parseInt(parts[0]);
+        if (range.indexOf('+') !== -1) return value >= min;
+        var max = parseInt(parts[1]);
+        return value >= min && value <= max;
+    }
+
+    function renderTable() {
+        var filtered = allItems;
+
+        // Category filter
+        if (currentFilter !== 'all') {
+            filtered = filtered.filter(function(i) { return i.category === currentFilter; });
+        }
+
+        // Search filter
+        if (searchQuery) {
+            filtered = filtered.filter(function(i) {
+                return i.title.toLowerCase().indexOf(searchQuery) !== -1 ||
+                       i.id.toLowerCase().indexOf(searchQuery) !== -1;
+            });
+        }
+
+        // Stock filter
+        var stockFilter = document.getElementById('filter-stock').value;
+        if (stockFilter !== 'all') {
+            filtered = filtered.filter(function(i) { return matchRange(i.available_quantity, stockFilter); });
+        }
+
+        // Ventas filter
+        var ventasFilter = document.getElementById('filter-ventas').value;
+        if (ventasFilter !== 'all') {
+            filtered = filtered.filter(function(i) { return matchRange(i.sold_quantity || 0, ventasFilter); });
+        }
+
+        // Score filter
+        var scoreFilter = document.getElementById('filter-score').value;
+        if (scoreFilter !== 'all') {
+            filtered = filtered.filter(function(i) { return matchRange(i.score, scoreFilter); });
+        }
+
+        // Sort
+        var sortBy = document.getElementById('sort-by').value;
+        var sortParts = sortBy.split('-');
+        var sortField = sortParts[0];
+        var sortDir = sortParts[1];
+        filtered.sort(function(a, b) {
+            var va, vb;
+            if (sortField === 'score') { va = a.score; vb = b.score; }
+            else if (sortField === 'stock') { va = a.available_quantity; vb = b.available_quantity; }
+            else if (sortField === 'ventas') { va = a.sold_quantity || 0; vb = b.sold_quantity || 0; }
+            else { va = a.score; vb = b.score; }
+            return sortDir === 'asc' ? va - vb : vb - va;
+        });
+
+        if (filtered.length === 0) {
+            document.getElementById('items-health-table').innerHTML =
+                '<div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">' +
+                (searchQuery ? 'No se encontraron items con "' + searchQuery + '"' : 'No hay items con estos filtros') +
+                '</div>';
+            return;
+        }
+
+        var html = '<div class="bg-white rounded-lg shadow overflow-x-auto"><table class="w-full text-sm">';
+        html += '<thead><tr class="border-b border-gray-200 text-left text-gray-500 bg-gray-50">';
+        html += '<th class="py-3 px-3 font-medium">Producto</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Stock</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Inventario</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Ventas</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Score</th>';
+        html += '<th class="py-3 px-3 font-medium">Problemas</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Estado</th>';
+        html += '<th class="py-3 px-3 font-medium text-center">Acciones</th>';
+        html += '</tr></thead><tbody>';
+
+        filtered.forEach(function(item) {
+            var scoreColor = item.score >= 70 ? 'bg-green-100 text-green-800' :
+                             (item.score >= 40 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800');
+            var statusColor = item.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
+            var toggleStatus = item.status === 'active' ? 'paused' : 'active';
+            var toggleLabel = item.status === 'active' ? 'Pausar' : 'Activar';
+            var toggleColor = item.status === 'active' ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800';
+
+            html += '<tr class="border-b border-gray-100 hover:bg-gray-50">';
+            // Producto
+            html += '<td class="py-3 px-3"><div class="flex items-center gap-3">';
+            if (item.thumbnail) {
+                html += '<img src="' + item.thumbnail + '" class="w-10 h-10 rounded object-cover" alt="">';
+            }
+            html += '<div><p class="font-medium text-gray-800 text-xs">' + item.title.substring(0, 60) + '</p>';
+            html += '<p class="text-xs text-gray-400">' + item.id + ' | $' + (item.price || 0).toLocaleString('es-MX') + '</p></div></div></td>';
+            // Stock
+            var stockClass = item.available_quantity === 0 ? 'text-red-600 font-bold' : (item.available_quantity <= 5 ? 'text-yellow-600 font-semibold' : 'text-gray-800');
+            html += '<td class="py-3 px-3 text-center"><span class="text-sm ' + stockClass + '">' + item.available_quantity + '</span></td>';
+            // Inventario BinManager
+            var invContent = '';
+            if (!item.seller_sku) {
+                invContent = '<span class="text-xs text-gray-400">Sin SKU</span>';
+            } else {
+                var inv = inventoryData[item.seller_sku];
+                if (inv) {
+                    var tj = inv.TotalQtyTJ || 0, cdmx = inv.TotalQtyCDMX || 0, mty = inv.TotalQtyMTY || 0;
+                    var total = tj + cdmx + mty;
+                    invContent = '<div class="text-xs leading-tight">' +
+                        '<span class="text-gray-500">TJ:</span><span class="font-medium">' + tj + '</span> ' +
+                        '<span class="text-gray-500">CDMX:</span><span class="font-medium">' + cdmx + '</span> ' +
+                        '<span class="text-gray-500">MTY:</span><span class="font-medium">' + mty + '</span>' +
+                        '<div class="font-bold text-gray-800">Total: ' + total + '</div></div>';
+                } else {
+                    invContent = '<span class="text-xs text-gray-400">Cargando...</span>';
+                }
+            }
+            html += '<td id="inv-' + item.id + '" class="py-3 px-3 text-center">' + invContent + '</td>';
+            // Ventas
+            html += '<td class="py-3 px-3 text-center"><span class="text-sm text-gray-800">' + (item.sold_quantity || 0) + '</span></td>';
+            // Score
+            html += '<td class="py-3 px-3 text-center"><span class="px-2 py-1 rounded-full text-xs font-bold ' + scoreColor + '">' + item.score + '</span></td>';
+            // Problemas
+            html += '<td class="py-3 px-3"><div class="flex flex-wrap gap-1">';
+            item.problems.forEach(function(p) {
+                html += '<span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-600">' + p + '</span>';
+            });
+            html += '</div></td>';
+            // Estado
+            html += '<td class="py-3 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full ' + statusColor + '">' + item.status + '</span></td>';
+            // Acciones
+            html += '<td class="py-3 px-3 text-center"><div class="flex gap-2 justify-center flex-wrap">';
+            html += '<button onclick="openEditModal(\'' + item.id + '\')" class="text-blue-600 hover:text-blue-800 text-xs font-medium">Editar</button>';
+            html += '<button onclick="toggleItemStatus(\'' + item.id + '\', \'' + toggleStatus + '\', this)" class="' + toggleColor + ' text-xs font-medium">' + toggleLabel + '</button>';
+            // Sync button (hidden by default, shown when inventory differs)
+            var syncHidden = 'hidden';
+            if (item.seller_sku && inventoryData[item.seller_sku]) {
+                var si = inventoryData[item.seller_sku];
+                var sTotal = (si.TotalQtyTJ || 0) + (si.TotalQtyCDMX || 0) + (si.TotalQtyMTY || 0);
+                if (sTotal !== item.available_quantity && sTotal > 0) syncHidden = '';
+            }
+            html += '<button id="sync-' + item.id + '" onclick="syncStock(\'' + item.id + '\', \'' + (item.seller_sku || '') + '\')" class="text-purple-600 hover:text-purple-800 text-xs font-medium ' + syncHidden + '">Sync</button>';
+            html += '</div></td>';
+            html += '</tr>';
+        });
+
+        html += '</tbody></table></div>';
+        document.getElementById('items-health-table').innerHTML = html;
+    }
+
+    // Filtros
+    document.querySelectorAll('.health-filter').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.querySelectorAll('.health-filter').forEach(function(b) {
+                b.className = 'health-filter px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600';
+            });
+            this.className = 'health-filter px-3 py-1.5 text-sm rounded-full font-medium bg-yellow-400 text-gray-800 border border-yellow-400';
+            currentFilter = this.getAttribute('data-filter');
+            renderTable();
+        });
+    });
+
+    // Confirmation modal
+    window.confirmAction = function(title, detailsHtml, onConfirm) {
+        var modal = document.getElementById('confirm-modal');
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-details').innerHTML = detailsHtml;
+        modal.classList.remove('hidden');
+        _confirmCallback = onConfirm;
+    };
+
+    document.getElementById('confirm-cancel').addEventListener('click', function() {
+        document.getElementById('confirm-modal').classList.add('hidden');
+        _confirmCallback = null;
+    });
+
+    document.getElementById('confirm-accept').addEventListener('click', function() {
+        document.getElementById('confirm-modal').classList.add('hidden');
+        if (_confirmCallback) {
+            _confirmCallback();
+            _confirmCallback = null;
+        }
+    });
+
+    document.getElementById('confirm-modal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.classList.add('hidden');
+            _confirmCallback = null;
+        }
+    });
+
+    // Toggle status with confirmation
+    window.toggleItemStatus = function(itemId, newStatus, btn) {
+        var item = allItems.find(function(i) { return i.id === itemId; });
+        var itemTitle = item ? item.title.substring(0, 50) : itemId;
+        var action = newStatus === 'paused' ? 'PAUSAR' : 'ACTIVAR';
+
+        confirmAction(
+            'Confirmar cambio de estado',
+            '<p class="mb-2">Estas seguro de <strong>' + action + '</strong> este item?</p>' +
+            '<p class="text-gray-500 text-xs">' + itemTitle + '</p>' +
+            '<p class="text-gray-400 text-xs">' + itemId + '</p>',
+            function() {
+                btn.textContent = '...';
+                btn.disabled = true;
+                fetch('/api/items/' + itemId + '/status', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({status: newStatus})
+                })
+                .then(function(r) {
+                    if (r.ok) {
+                        allItems.forEach(function(item) {
+                            if (item.id === itemId) {
+                                item.status = newStatus;
+                                if (newStatus === 'paused') {
+                                    item.score = Math.max(item.score - 40, 0);
+                                    if (item.problems.indexOf('Pausado') === -1) item.problems.push('Pausado');
+                                } else {
+                                    item.score = Math.min(item.score + 40, 100);
+                                    item.problems = item.problems.filter(function(p) { return p !== 'Pausado'; });
+                                }
+                                item.category = item.score < 40 ? 'critico' : (item.score <= 70 ? 'necesita_trabajo' : 'bueno');
+                            }
+                        });
+                        updateStats();
+                        renderTable();
+                    } else {
+                        btn.textContent = 'Error';
+                        btn.disabled = false;
+                    }
+                })
+                .catch(function() {
+                    btn.textContent = 'Error';
+                    btn.disabled = false;
+                });
+            }
+        );
+    };
+
+    // Edit modal
+    window.openEditModal = function(itemId) {
+        _modalHadChanges = false;
+        var modal = document.getElementById('edit-modal');
+        var content = document.getElementById('edit-modal-content');
+        modal.classList.remove('hidden');
+        content.innerHTML = '<div class="text-center py-8"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando...</div>';
+
+        fetch('/partials/item-edit/' + itemId)
+            .then(function(r) { return r.text(); })
+            .then(function(html) { content.innerHTML = html; })
+            .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando item</p>'; });
+    };
+
+    window.closeEditModal = function() {
+        document.getElementById('edit-modal').classList.add('hidden');
+        // Refresh table data after closing modal to reflect any changes
+        loadItemsHealth();
+    };
+
+    // Close modal on backdrop click
+    document.getElementById('edit-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeEditModal();
+    });
+
+    // Save field with confirmation
+    window.saveField = function(itemId, endpoint, bodyData, btnId, msgId) {
+        var fieldName = endpoint.charAt(0).toUpperCase() + endpoint.slice(1);
+        var detailText = '';
+        if (bodyData.title) detailText = 'Titulo: ' + bodyData.title;
+        else if (bodyData.plain_text) detailText = 'Descripcion: ' + bodyData.plain_text.substring(0, 80) + '...';
+        else if (bodyData.status) detailText = 'Estado: ' + bodyData.status;
+        else if (bodyData.free_shipping !== undefined) detailText = 'Envio gratis: ' + (bodyData.free_shipping ? 'Si' : 'No');
+        else if (bodyData.pictures) detailText = 'Fotos: ' + bodyData.pictures.length + ' imagenes';
+        else if (bodyData.attributes) detailText = 'Atributos: ' + bodyData.attributes.length + ' campos';
+        else if (bodyData.price !== undefined) detailText = 'Precio: $' + bodyData.price;
+        else if (bodyData.quantity !== undefined) detailText = 'Stock: ' + bodyData.quantity;
+        else detailText = JSON.stringify(bodyData).substring(0, 100);
+
+        confirmAction(
+            'Confirmar cambio',
+            '<p class="mb-2">Estas seguro de modificar <strong>' + fieldName + '</strong>?</p>' +
+            '<p class="bg-gray-50 p-2 rounded text-xs text-gray-600">' + detailText + '</p>' +
+            '<p class="text-gray-400 text-xs mt-1">Item: ' + itemId + '</p>',
+            function() {
+                var btn = document.getElementById(btnId);
+                var msg = document.getElementById(msgId);
+                btn.disabled = true;
+                btn.textContent = '...';
+                msg.textContent = '';
+
+                fetch('/api/items/' + itemId + '/' + endpoint, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(bodyData)
+                })
+                .then(function(r) {
+                    if (r.ok) {
+                        msg.textContent = 'Guardado';
+                        msg.className = 'text-xs text-green-600';
+                        btn.textContent = 'Guardar';
+                        btn.disabled = false;
+                        _modalHadChanges = true;
+                    } else {
+                        return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+                    }
+                })
+                .catch(function(e) {
+                    msg.textContent = 'Error: ' + e.message;
+                    msg.className = 'text-xs text-red-600';
+                    btn.textContent = 'Guardar';
+                    btn.disabled = false;
+                });
+            }
+        );
+    };
+
+    // Sync stock from BinManager to MeLi
+    window.syncStock = function(itemId, sku) {
+        if (!sku || !inventoryData[sku]) return;
+        var inv = inventoryData[sku];
+        var tj = inv.TotalQtyTJ || 0, cdmx = inv.TotalQtyCDMX || 0, mty = inv.TotalQtyMTY || 0;
+        var total = tj + cdmx + mty;
+        var item = allItems.find(function(i) { return i.id === itemId; });
+        var currentStock = item ? item.available_quantity : '?';
+
+        confirmAction(
+            'Sincronizar Stock',
+            '<p class="mb-2">Actualizar stock de MeLi con inventario real:</p>' +
+            '<div class="bg-gray-50 p-3 rounded text-sm space-y-1 mb-2">' +
+            '<p><span class="text-gray-500">SKU:</span> <strong>' + sku + '</strong></p>' +
+            '<p><span class="text-gray-500">Stock actual MeLi:</span> <strong class="text-red-600">' + currentStock + '</strong></p>' +
+            '<p><span class="text-gray-500">Inventario real:</span> TJ: ' + tj + ' | CDMX: ' + cdmx + ' | MTY: ' + mty + '</p>' +
+            '<p><span class="text-gray-500">Nuevo stock:</span> <strong class="text-green-600">' + total + '</strong></p>' +
+            '</div>',
+            function() {
+                var btn = document.getElementById('sync-' + itemId);
+                if (btn) { btn.textContent = '...'; btn.disabled = true; }
+                fetch('/api/items/' + itemId + '/stock', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({quantity: total})
+                })
+                .then(function(r) {
+                    if (r.ok) {
+                        if (item) {
+                            item.available_quantity = total;
+                            // Remove "Sin stock" problem if it existed
+                            item.problems = item.problems.filter(function(p) { return p !== 'Sin stock'; });
+                            if (total > 0 && item.score < 100) {
+                                item.score = Math.min(item.score + 30, 100);
+                                item.category = item.score < 40 ? 'critico' : (item.score <= 70 ? 'necesita_trabajo' : 'bueno');
+                            }
+                        }
+                        updateStats();
+                        renderTable();
+                        updateInventoryCells();
+                    } else {
+                        if (btn) { btn.textContent = 'Error'; btn.disabled = false; }
+                    }
+                })
+                .catch(function() {
+                    if (btn) { btn.textContent = 'Error'; btn.disabled = false; }
+                });
+            }
+        );
+    };
+
+    // Cargar datos iniciales
+    loadItemsHealth();
+</script>
+{% endblock %}
