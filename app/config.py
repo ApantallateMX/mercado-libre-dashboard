@@ -3,6 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Debug: log env vars at startup (Railway)
+print(f"[CONFIG] MELI_CLIENT_ID from env: '{os.environ.get('MELI_CLIENT_ID', '<NOT SET>')}'")
+print(f"[CONFIG] All MELI_ env vars: {[k for k in os.environ if k.startswith('MELI_')]}")
+
 # Mercado Libre API Configuration
 MELI_CLIENT_ID = os.getenv("MELI_CLIENT_ID", "")
 MELI_CLIENT_SECRET = os.getenv("MELI_CLIENT_SECRET", "")
