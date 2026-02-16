@@ -1,3 +1,75 @@
+<!-- Banner: Alertas de Stock Perdido -->
+{% if stock_alerts %}
+<div class="mb-4 bg-red-50 border border-red-200 rounded-lg p-4">
+    <div class="flex items-start gap-3 mb-3">
+        <svg class="w-6 h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+        <div class="flex-1">
+            <h3 class="text-red-800 font-bold text-sm">
+                Ventas Perdidas: {{ stock_alerts|length }} producto{{ 's' if stock_alerts|length > 1 else '' }} sin stock en MeLi con inventario disponible
+            </h3>
+            <p class="text-red-600 text-xs mt-1">
+                Estos productos se vendieron en los ultimos 30 dias, tienen 0 stock en MeLi, pero hay inventario en BinManager. Cada dia sin stock es ranking y ventas perdidas.
+            </p>
+        </div>
+        <button onclick="bulkSyncAlerts()" id="bulk-sync-btn"
+                class="flex-shrink-0 px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition">
+            Sincronizar todos ({{ stock_alerts|length }})
+        </button>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead>
+                <tr class="text-red-700 border-b border-red-200">
+                    <th class="text-left py-1.5 px-2 font-medium">Producto</th>
+                    <th class="text-left py-1.5 px-2 font-medium">ID</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Ventas 30d</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Stock MeLi</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Stock BM</th>
+                    <th class="text-center py-1.5 px-2 font-medium">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-red-100">
+                {% for a in stock_alerts[:10] %}
+                <tr class="hover:bg-red-100/50" id="alert-row-{{ a.id }}">
+                    <td class="py-1.5 px-2">
+                        <div class="flex items-center gap-2">
+                            {% if a.thumbnail %}
+                            <img src="{{ a.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <span class="text-gray-800 truncate max-w-[180px]" title="{{ a.title }}">{{ a.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="py-1.5 px-2 font-mono text-red-700">{{ a.id }}</td>
+                    <td class="py-1.5 px-2 text-right font-bold text-gray-800">{{ a.get('units', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right font-bold text-red-600">0</td>
+                    <td class="py-1.5 px-2 text-right font-bold text-green-600">{{ a.get('_bm_total', 0) }}</td>
+                    <td class="py-1.5 px-2 text-center">
+                        <div class="flex items-center justify-center gap-1">
+                            <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                                    class="px-2 py-0.5 bg-purple-600 text-white rounded hover:bg-purple-700 font-medium transition">
+                                Sincronizar
+                            </button>
+                            <button onclick="openEditModal('{{ a.id }}')"
+                                    class="px-2 py-0.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium transition">
+                                Editar
+                            </button>
+                            <span id="alert-msg-{{ a.id }}" class="text-[10px] ml-1"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if stock_alerts|length > 10 %}
+    <p class="text-xs text-red-500 mt-2 text-center">... y {{ stock_alerts|length - 10 }} producto(s) mas</p>
+    {% endif %}
+    <span id="bulk-sync-msg" class="text-xs mt-2 block text-center"></span>
+</div>
+{% endif %}
+
 <!-- Toolbar: presets + busqueda + columnas + sort -->
 <div class="mb-4 space-y-3">
     <!-- Preset pills -->
@@ -304,8 +376,8 @@
                         {% if p.permalink %}
                         <a href="{{ p.permalink }}" target="_blank" class="text-blue-500 hover:text-blue-700 text-xs">Ver</a>
                         {% endif %}
-                        <a href="https://www.mercadolibre.com.mx/publicaciones/{{ p.id }}/modificar" target="_blank"
-                           class="text-[10px] text-gray-400 hover:text-gray-600">Editar</a>
+                        <button onclick="openEditModal('{{ p.id }}')"
+                                class="text-[10px] text-gray-400 hover:text-gray-600">Editar</button>
                         {% if p.is_full %}
                         <button onclick="changeToMerchant('{{ p.id }}')"
                                 class="text-[10px] text-cyan-600 hover:text-cyan-800 hover:underline">
@@ -516,5 +588,84 @@ window.showPriceEditor = function(el, itemId, currentPrice) {
         if (e.key === 'Enter') okBtn.onclick();
         if (e.key === 'Escape') closeEditor();
     };
+};
+
+/* --- Alert stock sync --- */
+window.syncAlertItem = function(itemId, bmQty, btn) {
+    var msgEl = document.getElementById('alert-msg-' + itemId);
+    btn.disabled = true;
+    btn.textContent = '...';
+    fetch('/api/items/' + itemId + '/stock', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({quantity: bmQty})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            btn.textContent = 'OK';
+            btn.className = 'px-2 py-0.5 bg-green-600 text-white rounded font-medium';
+            if (msgEl) { msgEl.textContent = 'Stock: ' + bmQty; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+            var row = document.getElementById('alert-row-' + itemId);
+            if (row) row.classList.add('opacity-50');
+        } else {
+            return r.text().then(function(t) {
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+            });
+        }
+    })
+    .catch(function(e) {
+        btn.textContent = 'Error';
+        btn.className = 'px-2 py-0.5 bg-red-600 text-white rounded font-medium';
+        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+};
+
+window.bulkSyncAlerts = function() {
+    var alertData = [
+        {% for a in stock_alerts[:10] %}
+        {id: '{{ a.id }}', qty: {{ a.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    var btn = document.getElementById('bulk-sync-btn');
+    var msg = document.getElementById('bulk-sync-msg');
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando...';
+    var done = 0, errors = 0, total = alertData.length;
+
+    function updateProgress() {
+        msg.textContent = 'Progreso: ' + done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+
+    alertData.forEach(function(item) {
+        fetch('/api/items/' + item.id + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: item.qty})
+        })
+        .then(function(r) {
+            done++;
+            if (!r.ok) errors++;
+            else {
+                var row = document.getElementById('alert-row-' + item.id);
+                if (row) row.classList.add('opacity-50');
+            }
+            updateProgress();
+            if (done === total) {
+                btn.textContent = 'Completado';
+                btn.className = 'flex-shrink-0 px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded-lg';
+                setTimeout(function() {
+                    var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
+                    if (activeBtn) activeBtn.click();
+                }, 2000);
+            }
+        })
+        .catch(function() {
+            done++;
+            errors++;
+            updateProgress();
+        });
+    });
 };
 </script>

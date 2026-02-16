@@ -39,8 +39,8 @@
 
             <!-- MLM + SKU -->
             <div class="flex items-center gap-2 mb-3 text-xs">
-                <a href="https://www.mercadolibre.com.mx/publicaciones/{{ item.id }}/modificar" target="_blank"
-                   class="font-mono text-blue-600 hover:underline">{{ item.id }}</a>
+                <button onclick="openEditModal('{{ item.id }}')"
+                        class="font-mono text-blue-600 hover:underline">{{ item.id }}</button>
                 {% if item.sku and item.sku != '-' %}
                 <span class="font-mono text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{{ item.sku }}</span>
                 {% endif %}

@@ -46,6 +46,31 @@
         {% endfor %}
     </div>
 </div>
+
+<!-- Modal de edicion -->
+<div id="edit-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
+        <div id="edit-modal-content" class="p-6">
+            Cargando...
+        </div>
+    </div>
+</div>
+
+<!-- Modal de confirmacion -->
+<div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-60 hidden z-[60] flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-md m-4 p-6">
+        <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-3"></h3>
+        <div id="confirm-details" class="text-sm text-gray-600 mb-5 max-h-60 overflow-y-auto"></div>
+        <div class="flex gap-3 justify-end">
+            <button id="confirm-cancel" class="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                Cancelar
+            </button>
+            <button id="confirm-accept" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600">
+                Si, modificar
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -229,6 +254,124 @@
             btn.disabled = false;
             btn.textContent = 'BM';
         });
+    };
+
+    // ── Confirmation modal ──
+    var _confirmCallback = null;
+    var _modalHadChanges = false;
+
+    window.confirmAction = function(title, detailsHtml, onConfirm) {
+        var modal = document.getElementById('confirm-modal');
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-details').innerHTML = detailsHtml;
+        modal.classList.remove('hidden');
+        _confirmCallback = onConfirm;
+    };
+
+    document.getElementById('confirm-cancel').addEventListener('click', function() {
+        document.getElementById('confirm-modal').classList.add('hidden');
+        _confirmCallback = null;
+    });
+
+    document.getElementById('confirm-accept').addEventListener('click', function() {
+        document.getElementById('confirm-modal').classList.add('hidden');
+        if (_confirmCallback) {
+            _confirmCallback();
+            _confirmCallback = null;
+        }
+    });
+
+    document.getElementById('confirm-modal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            this.classList.add('hidden');
+            _confirmCallback = null;
+        }
+    });
+
+    // ── Edit modal ──
+    window.openEditModal = function(itemId) {
+        _modalHadChanges = false;
+        var modal = document.getElementById('edit-modal');
+        var content = document.getElementById('edit-modal-content');
+        modal.classList.remove('hidden');
+        content.innerHTML = '<div class="text-center py-8"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando...</div>';
+
+        fetch('/partials/item-edit/' + itemId, {headers: {'ngrok-skip-browser-warning': 'true'}})
+            .then(function(r) { return r.text(); })
+            .then(function(html) {
+                content.innerHTML = html;
+                // Execute inline scripts from the partial
+                content.querySelectorAll('script').forEach(function(oldScript) {
+                    var newScript = document.createElement('script');
+                    newScript.textContent = oldScript.textContent;
+                    oldScript.parentNode.replaceChild(newScript, oldScript);
+                });
+            })
+            .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando item</p>'; });
+    };
+
+    window.closeEditModal = function() {
+        document.getElementById('edit-modal').classList.add('hidden');
+        // Reload active tab to reflect changes
+        var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
+        if (activeBtn) activeBtn.click();
+    };
+
+    // Close modal on backdrop click
+    document.getElementById('edit-modal').addEventListener('click', function(e) {
+        if (e.target === this) closeEditModal();
+    });
+
+    // Save individual field with confirmation
+    window.saveField = function(itemId, endpoint, bodyData, btnId, msgId) {
+        var fieldName = endpoint.charAt(0).toUpperCase() + endpoint.slice(1);
+        var detailText = '';
+        if (bodyData.title) detailText = 'Titulo: ' + bodyData.title;
+        else if (bodyData.plain_text) detailText = 'Descripcion: ' + bodyData.plain_text.substring(0, 80) + '...';
+        else if (bodyData.status) detailText = 'Estado: ' + bodyData.status;
+        else if (bodyData.free_shipping !== undefined) detailText = 'Envio gratis: ' + (bodyData.free_shipping ? 'Si' : 'No');
+        else if (bodyData.pictures) detailText = 'Fotos: ' + bodyData.pictures.length + ' imagenes';
+        else if (bodyData.attributes) detailText = 'Atributos: ' + bodyData.attributes.length + ' campos';
+        else if (bodyData.price !== undefined) detailText = 'Precio: $' + bodyData.price;
+        else if (bodyData.quantity !== undefined) detailText = 'Stock: ' + bodyData.quantity;
+        else detailText = JSON.stringify(bodyData).substring(0, 100);
+
+        confirmAction(
+            'Confirmar cambio',
+            '<p class="mb-2">Estas seguro de modificar <strong>' + fieldName + '</strong>?</p>' +
+            '<p class="bg-gray-50 p-2 rounded text-xs text-gray-600">' + detailText + '</p>' +
+            '<p class="text-gray-400 text-xs mt-1">Item: ' + itemId + '</p>',
+            function() {
+                var btn = document.getElementById(btnId);
+                var msg = document.getElementById(msgId);
+                btn.disabled = true;
+                btn.textContent = '...';
+                msg.textContent = '';
+
+                fetch('/api/items/' + itemId + '/' + endpoint, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                    body: JSON.stringify(bodyData)
+                })
+                .then(function(r) {
+                    if (r.ok) {
+                        msg.textContent = 'Guardado';
+                        msg.className = 'text-xs text-green-600';
+                        btn.textContent = 'Guardar';
+                        btn.disabled = false;
+                        _modalHadChanges = true;
+                    } else {
+                        return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+                    }
+                })
+                .catch(function(e) {
+                    msg.textContent = 'Error: ' + e.message;
+                    msg.className = 'text-xs text-red-600';
+                    btn.textContent = 'Guardar';
+                    btn.disabled = false;
+                });
+            }
+        );
     };
 
     // Show inline editor replacing stock number

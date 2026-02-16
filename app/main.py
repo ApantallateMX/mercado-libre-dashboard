@@ -1511,6 +1511,15 @@ async def products_inventory_partial(
             )
             _calc_margins(products, usd_to_mxn)
 
+        # --- Stock alerts: ventas>0, stock MeLi=0, stock BM>0 ---
+        stock_alerts = [
+            p for p in products
+            if p.get("units", 0) > 0
+            and p.get("available_quantity", 0) == 0
+            and (p.get("_bm_total") or 0) > 0
+        ]
+        stock_alerts.sort(key=lambda x: x.get("units", 0), reverse=True)
+
         # --- Filtrado por preset ---
         if preset == "top":
             products = [p for p in products if p.get("units", 0) > 0]
@@ -1572,6 +1581,7 @@ async def products_inventory_partial(
             "full_filter": full_filter,
             "total_count": total_count,
             "usd_to_mxn": round(usd_to_mxn, 2),
+            "stock_alerts": stock_alerts,
         })
     finally:
         await client.close()
