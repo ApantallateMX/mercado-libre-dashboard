@@ -103,7 +103,77 @@
     </div>
 
     {% if active_deals %}
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <!-- Mobile cards active deals -->
+    <div class="md:hidden space-y-2">
+        {% for p in active_deals %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-green-500 active-deal-row"
+             data-sales="{{ p.get('units_30d', 0) }}"
+             data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+             data-stock="{{ p.available_quantity }}"
+             data-profit="{{ p.get('_ganancia_est', -99999) if p.get('_ganancia_est') is not none else -99999 }}"
+             data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
+            <div class="flex gap-2">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                        {% if p.sku %}<span class="text-xs text-gray-400 font-mono">{{ p.sku }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs">
+                {% if p.original_price and p.original_price > p.price %}
+                <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                {% endif %}
+                <span class="font-bold text-green-600 text-sm">${{ "{:,.0f}".format(p.price) }}</span>
+                {% if p.original_price and p.original_price > p.price %}
+                <span class="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold">-{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%</span>
+                {% endif %}
+                {% if p.get('_margen_pct') is not none %}
+                <span class="px-1.5 py-0.5 rounded font-semibold
+                    {% if p._margen_pct >= 20 %}bg-green-100 text-green-700{% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700{% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                    M: {{ "%.1f"|format(p._margen_pct) }}%
+                </span>
+                {% endif %}
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-2 text-xs">
+                <div>
+                    <span class="text-gray-400 block">Ventas 30d</span>
+                    <span class="font-semibold">{{ p.get('units_30d', 0) }} uds</span>
+                    {% if p.get('revenue_30d', 0) > 0 %}<span class="text-gray-400 block">${{ "{:,.0f}".format(p.revenue_30d) }}</span>{% endif %}
+                </div>
+                <div>
+                    <span class="text-gray-400 block">Stock</span>
+                    <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}">{{ p.available_quantity }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400 block">Ganancia</span>
+                    {% if p.get('_ganancia_est') is not none %}
+                    <span class="font-semibold {{ 'text-green-600' if p._ganancia_est > 0 else 'text-red-600' }}">${{ "{:,.0f}".format(p._ganancia_est) }}</span>
+                    {% else %}<span class="text-gray-300">-</span>{% endif %}
+                </div>
+            </div>
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button class="btn-ver-promos flex-1 px-2 py-2 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition min-h-[40px]"
+                    data-item-id="{{ p.id }}" data-title="{{ p.title }}"
+                    data-price="{{ p.price }}"
+                    data-original-price="{{ p.original_price or p.price }}"
+                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-thumb="{{ p.thumbnail or '' }}">
+                    Ver promos
+                </button>
+                <button class="btn-desactivar flex-1 px-2 py-2 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100 transition min-h-[40px]"
+                    data-item-id="{{ p.id }}">
+                    Desactivar
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="bg-white rounded-lg shadow hidden md:block overflow-x-auto">
         <table class="w-full text-sm" id="active-deals-table">
             <thead class="bg-green-50 border-b">
                 <tr>
@@ -327,7 +397,82 @@
     </div>
 
     {% if candidates %}
-    <div class="bg-white rounded-lg shadow overflow-x-auto">
+    <!-- Mobile cards candidates -->
+    <div class="md:hidden space-y-2">
+        {% for p in candidates %}
+        <div class="bg-white rounded-lg shadow p-3 candidate-row" id="mcrow-{{ p.id }}"
+             data-stock="{{ p.available_quantity }}"
+             data-sales="{{ p.get('units_30d', 0) }}"
+             data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+             data-price="{{ p.price }}"
+             data-bm-stock="{{ p.get('_bm_total', 0) if p.get('_bm_total') is not none else 0 }}"
+             data-category="{{ p.get('category_name', '') }}"
+             data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
+            <div class="flex gap-2">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <a href="{{ p.permalink }}" target="_blank" class="text-xs text-blue-600 font-mono font-semibold hover:underline">{{ p.id }}</a>
+                        {% if p.sku %}<span class="text-xs text-gray-400 font-mono">{{ p.sku }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs">
+                <span class="font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                {% if p.get('_margen_pct') is not none %}
+                <span class="px-1.5 py-0.5 rounded font-semibold
+                    {% if p._margen_pct >= 20 %}bg-green-100 text-green-700{% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700{% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                    M: {{ "%.1f"|format(p._margen_pct) }}%
+                </span>
+                {% endif %}
+                <span class="text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded truncate max-w-[120px]">{{ p.get('category_name', '-') }}</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-2 text-xs">
+                <div>
+                    <span class="text-gray-400 block">Ventas 30d</span>
+                    {% if p.get('units_30d', 0) > 0 %}
+                    <span class="font-semibold">{{ p.units_30d }} uds</span>
+                    {% else %}<span class="text-gray-300">0</span>{% endif %}
+                </div>
+                <div>
+                    <span class="text-gray-400 block">Stock MeLi</span>
+                    <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-yellow-600' if p.available_quantity > 0 else 'text-red-600' }}">{{ p.available_quantity }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-400 block">Stock BM</span>
+                    {% if p.get('_bm_total') is not none %}
+                    <span class="font-semibold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">{{ p._bm_total }}</span>
+                    {% else %}<span class="text-gray-300">-</span>{% endif %}
+                </div>
+            </div>
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button class="btn-ver-promos flex-1 px-2 py-2 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition min-h-[40px]"
+                    data-item-id="{{ p.id }}" data-title="{{ p.title }}"
+                    data-price="{{ p.price }}"
+                    data-original-price="{{ p.original_price or p.price }}"
+                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-thumb="{{ p.thumbnail or '' }}">
+                    Ver promos
+                </button>
+                <button class="btn-activar-deal flex-1 px-2 py-2 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600 transition font-medium min-h-[40px]"
+                    data-item-id="{{ p.id }}"
+                    data-price="{{ p.price }}"
+                    data-sku="{{ p.sku or '' }}"
+                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
+                    data-thumb="{{ p.thumbnail or '' }}"
+                    data-title="{{ p.title }}">
+                    Activar Deal
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <!-- Desktop table candidates -->
+    <div class="bg-white rounded-lg shadow hidden md:block overflow-x-auto">
         <table class="w-full text-sm" id="candidates-table">
             <thead class="bg-yellow-50 border-b">
                 <tr>

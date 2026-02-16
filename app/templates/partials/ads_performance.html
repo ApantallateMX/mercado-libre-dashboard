@@ -12,6 +12,35 @@
     <svg class="w-4 h-4 text-yellow-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>
     <span class="text-sm text-yellow-700">Detalle por producto no disponible — mostrando datos <strong>por campana</strong></span>
 </div>
+<!-- Mobile cards -->
+<div class="md:hidden space-y-2 p-3">
+    {% for c in fallback_campaigns %}
+    <div class="bg-white rounded-lg shadow p-3">
+        <div class="flex items-center justify-between gap-2">
+            <p class="text-sm font-medium text-gray-800 truncate flex-1">{{ c.name }}</p>
+            {% if c.status == 'active' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 flex-shrink-0">Activa</span>
+            {% elif c.status == 'paused' %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 flex-shrink-0">Pausada</span>
+            {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800 flex-shrink-0">{{ c.status }}</span>
+            {% endif %}
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-2 text-xs">
+            <div><span class="text-gray-400 block">Gasto</span><span class="font-medium text-red-600">${{ "%.2f"|format(c.cost) }}</span></div>
+            <div><span class="text-gray-400 block">Ingresos</span><span class="font-medium text-green-600">${{ "%.2f"|format(c.revenue) }}</span></div>
+            <div><span class="text-gray-400 block">ROAS</span><span class="font-bold {{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' if (c.roas or 0) < 1 else 'text-yellow-600' }}">{{ "%.2f"|format(c.roas) }}x</span></div>
+        </div>
+        <div class="flex gap-3 mt-1 text-xs text-gray-500">
+            <span>Clics: {{ c.clicks }}</span>
+            <span>Ventas: {{ c.units }}</span>
+            <span>ACOS: {{ "%.1f"|format(c.acos) }}%</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+<!-- Desktop table -->
+<div class="hidden md:block">
 <div class="overflow-x-auto">
     <table class="w-full">
         <thead class="bg-gray-50">
@@ -53,7 +82,8 @@
         </tbody>
     </table>
 </div>
-<div class="px-6 py-4 bg-gray-50 flex justify-between items-center border-t-2 border-gray-300">
+</div>
+<div class="px-4 md:px-6 py-3 md:py-4 bg-gray-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-t-2 border-gray-300">
     <span class="text-sm text-gray-600"><strong>{{ fallback_campaigns|length }}</strong> campanas con gasto</span>
     <div class="text-right">
         <span class="text-sm text-gray-600">Gasto: <strong class="text-red-600">${{ "%.2f"|format(total_cost) }}</strong></span>
@@ -63,6 +93,27 @@
 </div>
 
 {% elif products %}
+<!-- Mobile cards -->
+<div class="md:hidden space-y-2 p-3">
+    {% for p in products %}
+    <div class="bg-white rounded-lg shadow p-3">
+        <p class="text-sm font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+        <p class="text-xs font-mono text-gray-400">{{ p.item_id }}</p>
+        <div class="grid grid-cols-3 gap-2 mt-2 text-xs">
+            <div><span class="text-gray-400 block">Gasto</span><span class="font-medium text-red-600">${{ "%.2f"|format(p.cost or 0) }}</span></div>
+            <div><span class="text-gray-400 block">Ingresos</span><span class="font-medium text-green-600">${{ "%.2f"|format(p.revenue or 0) }}</span></div>
+            <div><span class="text-gray-400 block">ROAS</span><span class="font-bold {{ 'text-green-600' if (p.roas or 0) >= 3 else 'text-red-600' if (p.roas or 0) < 1 else 'text-yellow-600' }}">{{ "%.2f"|format(p.roas or 0) }}x</span></div>
+        </div>
+        <div class="flex gap-3 mt-1 text-xs text-gray-500">
+            <span>Clics: {{ p.clicks or 0 }}</span>
+            <span>Ventas: {{ p.units or 0 }}</span>
+            <span>ACOS: {{ "%.1f"|format(p.acos or 0) }}%</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+<!-- Desktop table -->
+<div class="hidden md:block">
 <div class="overflow-x-auto">
     <table class="w-full">
         <thead class="bg-gray-50">
@@ -97,11 +148,12 @@
         </tbody>
     </table>
 </div>
+</div>
 <!-- Footer: totales + paginacion -->
-<div class="px-6 py-4 bg-gray-50 border-t-2 border-gray-300">
-    <div class="flex flex-wrap justify-between items-center gap-3">
+<div class="px-4 md:px-6 py-3 md:py-4 bg-gray-50 border-t-2 border-gray-300">
+    <div class="flex flex-col sm:flex-row flex-wrap justify-between items-start sm:items-center gap-2 sm:gap-3">
         <!-- Totales -->
-        <div class="flex items-center gap-4">
+        <div class="flex flex-wrap items-center gap-2 sm:gap-4">
             <span class="text-sm text-gray-600">
                 {% if show_all %}
                     <strong>{{ total_count }}</strong> productos

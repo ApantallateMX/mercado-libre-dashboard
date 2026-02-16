@@ -1,3 +1,138 @@
+<!-- Mobile card view -->
+<div class="md:hidden space-y-2">
+    {% for c in campaigns %}
+    <div class="bg-white rounded-lg shadow p-3">
+        <!-- Header: name + status badge (tap to expand) -->
+        <div class="flex items-center justify-between gap-2 cursor-pointer" onclick="this.parentElement.querySelector('.camp-detail').classList.toggle('hidden')">
+            <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-gray-800 truncate">{{ c.name or c.id }}</p>
+            </div>
+            <div id="m-camp-status-badge-{{ c.id }}">
+                {% if c.status == 'active' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 whitespace-nowrap">Activa</span>
+                {% elif c.status == 'paused' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 whitespace-nowrap">Pausada</span>
+                {% else %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800 whitespace-nowrap">{{ c.status }}</span>
+                {% endif %}
+            </div>
+            <svg class="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </div>
+
+        <!-- Key metrics grid -->
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-xs">
+            <span>Gasto: <strong class="text-red-600">${{ "%.2f"|format(c.cost or 0) }}</strong></span>
+            <span>Ingresos: <strong class="text-green-600">${{ "%.2f"|format(c.revenue or 0) }}</strong></span>
+            <span>Clics: <strong>{{ c.clicks or 0 }}</strong></span>
+            <span>ROAS: <strong class="{{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' }}">{{ "%.2f"|format(c.roas or 0) }}x</strong></span>
+        </div>
+
+        <!-- Budget + units summary -->
+        <div class="text-xs text-gray-500 mt-1">Presup.: ${{ "%.2f"|format(c.daily_budget or 0) }}/dia | Uds: {{ c.units or 0 }}</div>
+
+        <!-- Expandable detail section -->
+        <div class="camp-detail hidden mt-3 pt-3 border-t border-gray-200">
+            <!-- Extra metrics -->
+            <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                <div>
+                    <p class="text-gray-400 uppercase">Impresiones</p>
+                    <p class="text-sm font-semibold text-gray-800">{{ "{:,}".format(c.impressions or 0) }}</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">CTR</p>
+                    <p class="text-sm font-semibold {{ 'text-green-600' if (c.ctr or 0) > 0.5 else 'text-gray-800' }}">{{ "%.2f"|format(c.ctr or 0) }}%</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">CPC Promedio</p>
+                    <p class="text-sm font-semibold text-gray-800">${{ "%.2f"|format(c.cpc or 0) }}</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">ACOS</p>
+                    <p class="text-sm font-semibold {{ 'text-green-600' if (c.acos or 0) <= 15 else 'text-red-600' if (c.acos or 0) > 30 else 'text-yellow-600' }}">{{ "%.1f"|format(c.acos or 0) }}%</p>
+                </div>
+            </div>
+
+            {% if c.cost > 0 %}
+            <div class="mt-2 pt-2 border-t border-gray-100 text-xs">
+                <span class="text-gray-500">Eficiencia:
+                    {% if (c.roas or 0) >= 5 %}
+                    <span class="font-semibold text-green-600">Excelente</span>
+                    {% elif (c.roas or 0) >= 3 %}
+                    <span class="font-semibold text-green-600">Buena</span>
+                    {% elif (c.roas or 0) >= 1 %}
+                    <span class="font-semibold text-yellow-600">Regular</span>
+                    {% else %}
+                    <span class="font-semibold text-red-600">Perdiendo dinero</span>
+                    {% endif %}
+                </span>
+                {% if c.units > 0 %}
+                <span class="text-gray-500 ml-2">Costo/venta: <span class="font-semibold text-gray-800">${{ "%.2f"|format(c.cost / c.units) }}</span></span>
+                {% endif %}
+                {% if c.daily_budget > 0 %}
+                <span class="text-gray-500 ml-2">Uso presup.: <span class="font-semibold text-gray-800">{{ "%.0f"|format(c.cost / c.daily_budget * 100) }}%</span></span>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Actions -->
+            <div class="mt-3 pt-3 border-t border-gray-300">
+                <p class="text-xs text-gray-400 uppercase mb-2">Acciones rapidas</p>
+                <div class="space-y-3">
+                    <!-- Pause / Resume -->
+                    <div>
+                        {% if c.status == 'active' %}
+                        <button type="button" onclick="event.stopPropagation(); toggleCampaign('{{ c.id }}', 'paused', this)"
+                                class="px-3 py-1.5 text-sm font-medium rounded bg-red-100 text-red-700 hover:bg-red-200 transition">
+                            Pausar
+                        </button>
+                        {% elif c.status == 'paused' %}
+                        <button type="button" onclick="event.stopPropagation(); toggleCampaign('{{ c.id }}', 'active', this)"
+                                class="px-3 py-1.5 text-sm font-medium rounded bg-green-100 text-green-700 hover:bg-green-200 transition">
+                            Reanudar
+                        </button>
+                        {% endif %}
+                    </div>
+
+                    <!-- Edit Budget -->
+                    <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                            <label class="block text-xs text-gray-500 mb-1">Presupuesto diario</label>
+                            <input type="number" step="0.01" min="1" value="{{ '%.2f'|format(c.daily_budget or 0) }}"
+                                   id="m-budget-input-{{ c.id }}"
+                                   onclick="event.stopPropagation()"
+                                   class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:border-yellow-400 focus:outline-none">
+                        </div>
+                        <button type="button" onclick="event.stopPropagation(); var inp=document.getElementById('m-budget-input-{{ c.id }}'); var v=parseFloat(inp.value); if(isNaN(v)||v<1){alert('Presupuesto debe ser mayor a 0');return;} _campAction('{{ c.id }}',{budget:v},this,'Guardado');"
+                                class="px-3 py-1.5 text-sm font-medium rounded bg-yellow-400 text-gray-800 hover:bg-yellow-500 transition whitespace-nowrap">
+                            Guardar
+                        </button>
+                    </div>
+
+                    <!-- Edit ACOS Target -->
+                    <div class="flex items-end gap-2">
+                        <div class="flex-1">
+                            <label class="block text-xs text-gray-500 mb-1">ACOS Target (3-500)</label>
+                            <input type="number" step="1" min="3" max="500" value="{{ '%.0f'|format(c.acos or 15) }}"
+                                   id="m-acos-input-{{ c.id }}"
+                                   onclick="event.stopPropagation()"
+                                   class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:border-yellow-400 focus:outline-none">
+                        </div>
+                        <button type="button" onclick="event.stopPropagation(); var inp=document.getElementById('m-acos-input-{{ c.id }}'); var v=parseFloat(inp.value); if(isNaN(v)||v<3||v>500){alert('ACOS target debe estar entre 3 y 500');return;} _campAction('{{ c.id }}',{acos_target:v},this,'Guardado');"
+                                class="px-3 py-1.5 text-sm font-medium rounded bg-yellow-400 text-gray-800 hover:bg-yellow-500 transition whitespace-nowrap">
+                            Guardar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">No se encontraron campanas</div>
+    {% endfor %}
+</div>
+
+<!-- Desktop table view -->
+<div class="hidden md:block">
 <table class="w-full">
     <thead class="bg-gray-50">
         <tr>
@@ -147,9 +282,23 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 
 {% if campaigns %}
-<div class="px-6 py-4 bg-gray-50 border-t-2 border-gray-300 flex flex-wrap items-center justify-between gap-2">
+<!-- Mobile footer -->
+<div class="md:hidden px-4 py-3 bg-gray-50 border-t border-gray-200">
+    <div class="flex items-center justify-between text-xs text-gray-600">
+        <span>Total: <strong>{{ campaigns|length }}</strong> campanas</span>
+        <span>Gasto: <strong class="text-red-600">${{ "%.2f"|format(campaigns|sum(attribute='cost')) }}</strong></span>
+    </div>
+    <div class="flex items-center justify-between text-xs text-gray-600 mt-1">
+        <span>Ingresos: <strong class="text-green-600">${{ "%.2f"|format(campaigns|sum(attribute='revenue')) }}</strong></span>
+        <span>Uds: <strong>{{ campaigns|sum(attribute='units') }}</strong></span>
+    </div>
+    <p class="text-xs text-gray-400 mt-1">Toca una campana para ver detalle y acciones</p>
+</div>
+<!-- Desktop footer -->
+<div class="hidden md:flex px-6 py-4 bg-gray-50 border-t-2 border-gray-300 flex-wrap items-center justify-between gap-2">
     <span class="text-sm text-gray-600">Total: <strong>{{ campaigns|length }}</strong> campanas</span>
     <div class="flex gap-4 text-sm text-gray-600">
         <span>Gasto total: <strong class="text-red-600">${{ "%.2f"|format(campaigns|sum(attribute='cost')) }}</strong></span>

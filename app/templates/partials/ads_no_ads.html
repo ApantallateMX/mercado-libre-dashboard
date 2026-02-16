@@ -1,31 +1,81 @@
 {% if products %}
-<div class="px-6 py-3 bg-blue-50 border-b border-blue-200">
-    <div class="flex flex-wrap items-center justify-between gap-2">
+<div class="px-4 md:px-6 py-3 bg-blue-50 border-b border-blue-200">
+    <div class="flex flex-col md:flex-row md:flex-wrap md:items-center justify-between gap-2">
         <p class="text-sm text-blue-800">
             <strong>{{ products|length }}</strong> productos activos sin publicidad
             (de {{ total_active }} activos, {{ total_with_ads }} ya tienen Ads).
         </p>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-col md:flex-row items-stretch md:items-center gap-2">
             {% if campaigns %}
-            <select id="noads-campaign-select" class="border rounded px-2 py-1 text-sm">
+            <select id="noads-campaign-select" class="border rounded px-2 py-2.5 md:py-1 text-sm w-full md:w-auto">
                 <option value="">Seleccionar campana...</option>
                 {% for c in campaigns %}
                 <option value="{{ c.id }}">{{ c.name }}</option>
                 {% endfor %}
             </select>
             <button onclick="assignSelectedToAds()" id="btn-assign-ads"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1 rounded hover:bg-yellow-500 text-sm disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2.5 md:py-1 rounded hover:bg-yellow-500 text-sm disabled:opacity-50 disabled:cursor-not-allowed" disabled>
                 Asignar seleccionados
             </button>
             <span id="assign-status" class="text-xs"></span>
             {% endif %}
-            <button onclick="downloadNoAdsExcel()" class="bg-green-500 text-white font-semibold px-3 py-1 rounded hover:bg-green-600 text-sm" title="Descargar listado en Excel">
+            <button onclick="downloadNoAdsExcel()" class="bg-green-500 text-white font-semibold px-3 py-2.5 md:py-1 rounded hover:bg-green-600 text-sm" title="Descargar listado en Excel">
                 Descargar Excel
             </button>
         </div>
     </div>
 </div>
-<div class="overflow-x-auto">
+
+<!-- Mobile cards -->
+<div class="md:hidden space-y-2 p-3">
+    {% for p in products %}
+    <div class="bg-white rounded-lg shadow p-3" id="noads-mcard-{{ p.id }}">
+        <div class="flex gap-3">
+            <div class="flex flex-col items-center gap-1 flex-shrink-0">
+                <input type="checkbox" class="noads-check rounded" value="{{ p.id }}" onchange="updateAssignBtn()">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" alt="" class="w-12 h-12 rounded object-cover" loading="lazy">
+                {% else %}
+                <div class="w-12 h-12 rounded bg-gray-200"></div>
+                {% endif %}
+            </div>
+            <div class="flex-1 min-w-0">
+                {% if p.permalink %}
+                <a href="{{ p.permalink }}" target="_blank" class="text-sm font-medium text-gray-800 hover:text-blue-600 line-clamp-2">{{ p.title }}</a>
+                {% else %}
+                <p class="text-sm font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                {% endif %}
+                <p class="text-xs text-gray-400 font-mono">{{ p.id }}</p>
+            </div>
+            {% if p.stock == 0 %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 flex-shrink-0 h-fit">Sin stock</span>
+            {% elif p.sold_quantity > 10 %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 flex-shrink-0 h-fit">Oportunidad</span>
+            {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 flex-shrink-0 h-fit">Nuevo</span>
+            {% endif %}
+        </div>
+        <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+            <span class="text-gray-800">
+                {% if p.original_price and p.original_price > (p.price or 0) %}
+                <span class="line-through text-gray-400">${{ "{:,.0f}".format(p.original_price) }}</span>
+                <strong class="text-green-600 ml-1">${{ "{:,.0f}".format(p.price or 0) }}</strong>
+                {% else %}
+                <strong>${{ "{:,.0f}".format(p.price or 0) }}</strong>
+                {% endif %}
+            </span>
+            <span>Stock: <strong class="{{ 'text-red-600' if p.stock == 0 else 'text-gray-800' }}">{{ p.stock }}</strong></span>
+            <span>Vendidos: <strong>{{ p.sold_quantity }}</strong></span>
+        </div>
+        <div class="mt-1">
+            <span class="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{{ p.category_name }}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Desktop table -->
+<div class="hidden md:block overflow-x-auto">
     <table class="w-full" id="ads-no-ads-inner-table">
         <thead class="bg-gray-50">
             <tr>

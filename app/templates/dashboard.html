@@ -29,11 +29,11 @@
             <input type="date" id="dash_date_to" class="w-full border rounded px-2 md:px-3 py-2 text-sm">
         </div>
         <button type="button" id="btn-dash-filtrar"
-                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded hover:bg-yellow-500 active:bg-yellow-600 transition text-sm">
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2.5 min-h-[44px] rounded hover:bg-yellow-500 active:bg-yellow-600 transition text-sm">
             Filtrar
         </button>
         <button type="button" id="btn-dash-limpiar"
-                class="border border-gray-300 text-gray-600 px-3 py-2 rounded hover:bg-gray-100 active:bg-gray-200 transition text-sm">
+                class="border border-gray-300 text-gray-600 px-3 py-2.5 min-h-[44px] rounded hover:bg-gray-100 active:bg-gray-200 transition text-sm">
             Limpiar
         </button>
     </div>
@@ -53,18 +53,18 @@
 
 <!-- Meta Diaria -->
 <div class="bg-white rounded-lg shadow mb-6 p-6" id="daily-goal-section">
-    <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 mb-4">
         <div>
             <h2 class="text-lg font-semibold text-gray-800">Meta Diaria de Ventas</h2>
             <p class="text-sm text-gray-500">Seguimiento dia a dia vs tu meta configurada</p>
         </div>
         <div class="flex items-center gap-3">
-            <label class="text-sm font-medium text-gray-600">Meta diaria: $</label>
+            <label class="text-sm font-medium text-gray-600">Meta: $</label>
             <input type="number" id="daily-goal-input" min="0" step="1000"
-                   class="border rounded px-3 py-1.5 text-sm w-36 text-right font-semibold"
+                   class="border rounded px-3 py-2 text-sm w-36 text-right font-semibold"
                    value="500000">
             <button type="button" id="btn-update-goal"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1.5 rounded hover:bg-yellow-500 transition text-sm">
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2.5 min-h-[44px] rounded hover:bg-yellow-500 transition text-sm">
                 Aplicar
             </button>
         </div>

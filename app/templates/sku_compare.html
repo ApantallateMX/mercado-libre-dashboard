@@ -96,9 +96,12 @@
         <span class="border-l border-gray-300 h-4 mx-1"></span>
         <button type="button" data-filter="sin_stock" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-red-100">Sin Stock</button>
         <button type="button" data-filter="pausado" class="filter-btn px-3 py-1 text-xs rounded-full font-medium bg-gray-200 text-gray-600 hover:bg-purple-100">Pausados</button>
-        <input type="text" id="search-sku" placeholder="Buscar SKU..." class="ml-auto border rounded px-3 py-1 text-sm w-48">
+        <input type="text" id="search-sku" placeholder="Buscar SKU..." class="ml-auto border rounded px-3 py-1 text-sm w-full md:w-48 mt-2 md:mt-0">
     </div>
-    <div class="bg-white rounded-b-lg shadow overflow-x-auto">
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2 p-2" id="compare-cards"></div>
+    <!-- Desktop table -->
+    <div class="bg-white rounded-b-lg shadow hidden md:block overflow-x-auto">
         <table class="w-full text-sm">
             <thead class="bg-gray-50 text-left">
                 <tr>
@@ -222,16 +225,20 @@
         return map[reason] || '<span class="text-xs text-gray-400">—</span>';
     }
 
+    function borderColor(status) {
+        var map = {lost:'border-red-500', down:'border-orange-500', equal:'border-gray-300', up:'border-green-500', 'new':'border-blue-500'};
+        return map[status] || 'border-gray-300';
+    }
+
     function renderTable(rows) {
         var tbody = document.getElementById('compare-tbody');
+        var cards = document.getElementById('compare-cards');
         var search = (document.getElementById('search-sku').value || '').toLowerCase();
 
         var filtered = rows.filter(function(r) {
-            // Status-based filters
             if (currentFilter === 'lost' || currentFilter === 'down' || currentFilter === 'up' || currentFilter === 'new') {
                 if (r.status !== currentFilter) return false;
             }
-            // Reason-based filters
             if (currentFilter === 'sin_stock') {
                 if (r.reason !== 'sin_stock' && r.reason !== 'sin_stock_pausado') return false;
             }
@@ -244,10 +251,12 @@
 
         if (filtered.length === 0) {
             tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400">No hay SKUs con este filtro</td></tr>';
+            cards.innerHTML = '<div class="text-center py-8 text-gray-400">No hay SKUs con este filtro</div>';
             return;
         }
 
-        var html = '';
+        var tableHtml = '';
+        var cardHtml = '';
         filtered.forEach(function(r) {
             var rowBg = '';
             if (r.status === 'lost') rowBg = 'bg-red-50';
@@ -261,22 +270,39 @@
                     : '<span class="text-green-600">' + r.stock + '</span>';
             }
 
-            html += '<tr class="border-t ' + rowBg + ' hover:bg-gray-50">';
-            html += '<td class="px-4 py-2.5">' + statusBadge(r.status) + '</td>';
-            html += '<td class="px-4 py-2.5">' + reasonBadge(r.reason) + '</td>';
-            html += '<td class="px-4 py-2.5 font-mono text-xs font-semibold">' + r.sku + '</td>';
-            html += '<td class="px-4 py-2.5 text-gray-700 max-w-xs truncate" title="' + r.title + '">' + (r.title.length > 40 ? r.title.substring(0,40) + '...' : r.title) + '</td>';
-            html += '<td class="px-4 py-2.5 text-right">' + stockDisplay + '</td>';
-            html += '<td class="px-4 py-2.5 text-right font-semibold">' + r.units_a + '</td>';
-            html += '<td class="px-4 py-2.5 text-right text-gray-500">' + r.units_b + '</td>';
-            html += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.unit_diff) + '">' + diffSign(r.unit_diff) + '</td>';
-            html += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.pct) + '">' + (r.pct > 0 ? '+' : '') + r.pct + '%</td>';
-            html += '<td class="px-4 py-2.5 text-right">$' + fmt(r.rev_a) + '</td>';
-            html += '<td class="px-4 py-2.5 text-right text-gray-500">$' + fmt(r.rev_b) + '</td>';
-            html += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.rev_diff) + '">$' + fmt(Math.abs(r.rev_diff)) + (r.rev_diff < 0 ? ' ↓' : (r.rev_diff > 0 ? ' ↑' : '')) + '</td>';
-            html += '</tr>';
+            // Desktop table row
+            tableHtml += '<tr class="border-t ' + rowBg + ' hover:bg-gray-50">';
+            tableHtml += '<td class="px-4 py-2.5">' + statusBadge(r.status) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5">' + reasonBadge(r.reason) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 font-mono text-xs font-semibold">' + r.sku + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-gray-700 max-w-xs truncate" title="' + r.title + '">' + (r.title.length > 40 ? r.title.substring(0,40) + '...' : r.title) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right">' + stockDisplay + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right font-semibold">' + r.units_a + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right text-gray-500">' + r.units_b + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.unit_diff) + '">' + diffSign(r.unit_diff) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.pct) + '">' + (r.pct > 0 ? '+' : '') + r.pct + '%</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right">$' + fmt(r.rev_a) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right text-gray-500">$' + fmt(r.rev_b) + '</td>';
+            tableHtml += '<td class="px-4 py-2.5 text-right font-semibold ' + diffColor(r.rev_diff) + '">$' + fmt(Math.abs(r.rev_diff)) + (r.rev_diff < 0 ? ' ↓' : (r.rev_diff > 0 ? ' ↑' : '')) + '</td>';
+            tableHtml += '</tr>';
+
+            // Mobile card
+            cardHtml += '<div class="bg-white rounded-lg shadow p-3 border-l-4 ' + borderColor(r.status) + '">';
+            cardHtml += '<div class="flex items-center justify-between gap-2">';
+            cardHtml += '<span class="font-mono text-xs font-semibold text-gray-700">' + r.sku + '</span>';
+            cardHtml += '<div class="flex gap-1">' + statusBadge(r.status) + reasonBadge(r.reason) + '</div>';
+            cardHtml += '</div>';
+            cardHtml += '<p class="text-sm text-gray-600 line-clamp-1 mt-1">' + r.title + '</p>';
+            cardHtml += '<div class="grid grid-cols-2 gap-x-4 gap-y-1 mt-2 text-xs">';
+            cardHtml += '<div>Stock: ' + stockDisplay + '</div>';
+            cardHtml += '<div>Cambio: <span class="font-semibold ' + diffColor(r.unit_diff) + '">' + diffSign(r.unit_diff) + ' (' + (r.pct > 0 ? '+' : '') + r.pct + '%)</span></div>';
+            cardHtml += '<div>Uds: <strong>' + r.units_a + '</strong> <span class="text-gray-400">vs ' + r.units_b + '</span></div>';
+            cardHtml += '<div>$: <strong>$' + fmt(r.rev_a) + '</strong> <span class="text-gray-400">vs $' + fmt(r.rev_b) + '</span></div>';
+            cardHtml += '</div>';
+            cardHtml += '</div>';
         });
-        tbody.innerHTML = html;
+        tbody.innerHTML = tableHtml;
+        cards.innerHTML = cardHtml;
     }
 
     function renderSummary(s) {
