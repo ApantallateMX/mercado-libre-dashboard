@@ -14,12 +14,10 @@ from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
 from app.api.metrics import router as metrics_router
-from app.api.chat import router as chat_router
 from app.api.health import router as health_router
 from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
 from app.services import token_store
-from app.services import chat_store
 from app.services.meli_client import get_meli_client
 from app import order_net_revenue
 
@@ -106,7 +104,6 @@ async def _seed_tokens():
 async def lifespan(app: FastAPI):
     """Inicializa la base de datos al iniciar."""
     await token_store.init_db()
-    await chat_store.init_chat_db()
     await _seed_tokens()
     yield
 
@@ -165,7 +162,6 @@ app.include_router(auth_router)
 app.include_router(orders_router)
 app.include_router(items_router)
 app.include_router(metrics_router)
-app.include_router(chat_router)
 app.include_router(health_router)
 app.include_router(sku_inventory_router)
 app.include_router(health_ai_router)
