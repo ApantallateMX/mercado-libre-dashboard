@@ -111,25 +111,25 @@
     </div>
 </div>
 
-<!-- Modal de edicion -->
-<div id="edit-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
-    <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto m-4">
-        <div id="edit-modal-content" class="p-6">
+<!-- Modal de edicion (full-screen mobile) -->
+<div id="edit-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-end md:items-center justify-center">
+    <div class="bg-white md:rounded-xl shadow-2xl w-full md:max-w-2xl h-[95vh] md:h-auto md:max-h-[90vh] overflow-y-auto rounded-t-2xl md:m-4">
+        <div id="edit-modal-content" class="p-4 md:p-6">
             Cargando...
         </div>
     </div>
 </div>
 
 <!-- Modal de confirmacion -->
-<div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-60 hidden z-[60] flex items-center justify-center">
-    <div class="bg-white rounded-xl shadow-2xl w-full max-w-md m-4 p-6">
+<div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-60 hidden z-[60] flex items-end md:items-center justify-center">
+    <div class="bg-white md:rounded-xl shadow-2xl w-full md:max-w-md rounded-t-2xl md:m-4 p-5 md:p-6">
         <h3 id="confirm-title" class="text-lg font-bold text-gray-800 mb-3"></h3>
         <div id="confirm-details" class="text-sm text-gray-600 mb-5 max-h-60 overflow-y-auto"></div>
-        <div class="flex gap-3 justify-end">
-            <button id="confirm-cancel" class="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+        <div class="flex gap-3">
+            <button id="confirm-cancel" class="flex-1 md:flex-none px-4 py-3 md:py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 active:bg-gray-100">
                 Cancelar
             </button>
-            <button id="confirm-accept" class="px-4 py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600">
+            <button id="confirm-accept" class="flex-1 md:flex-none px-4 py-3 md:py-2 text-sm font-medium text-white bg-yellow-500 rounded-lg hover:bg-yellow-600 active:bg-yellow-700">
                 Si, modificar
             </button>
         </div>

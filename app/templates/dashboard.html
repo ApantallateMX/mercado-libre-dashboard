@@ -3,37 +3,37 @@
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
-    <p class="text-gray-600">Resumen de tu cuenta de Mercado Libre</p>
+<div class="mb-4 md:mb-6">
+    <h1 class="text-xl md:text-2xl font-bold text-gray-800">Dashboard</h1>
+    <p class="text-sm text-gray-600">Resumen de tu cuenta de Mercado Libre</p>
 </div>
 
 <!-- Filtro de fechas -->
-<div class="bg-white p-4 rounded-lg shadow mb-6">
+<div class="bg-white p-3 md:p-4 rounded-lg shadow mb-4 md:mb-6">
     <!-- Botones rapidos de rango -->
-    <div class="flex flex-wrap gap-2 mb-3" id="range-buttons">
-        <button type="button" data-days="7" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">7 dias</button>
-        <button type="button" data-days="15" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">15 dias</button>
-        <button type="button" data-days="30" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">1 mes</button>
-        <button type="button" data-days="90" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">3 meses</button>
-        <button type="button" data-days="180" class="range-btn px-3 py-1.5 text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 transition">6 meses</button>
+    <div class="flex flex-wrap gap-1.5 md:gap-2 mb-3" id="range-buttons">
+        <button type="button" data-days="7" class="range-btn px-2.5 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 active:bg-yellow-500 transition">7d</button>
+        <button type="button" data-days="15" class="range-btn px-2.5 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 active:bg-yellow-500 transition">15d</button>
+        <button type="button" data-days="30" class="range-btn px-2.5 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 active:bg-yellow-500 transition">1 mes</button>
+        <button type="button" data-days="90" class="range-btn px-2.5 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 active:bg-yellow-500 transition">3 mes</button>
+        <button type="button" data-days="180" class="range-btn px-2.5 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-yellow-400 hover:text-gray-800 hover:border-yellow-400 active:bg-yellow-500 transition">6 mes</button>
     </div>
     <!-- Selector manual -->
-    <div class="flex flex-wrap gap-4 items-end">
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Desde</label>
-            <input type="date" id="dash_date_from" class="border rounded px-3 py-2 text-sm">
+    <div class="flex flex-wrap gap-2 md:gap-4 items-end">
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs md:text-sm font-medium text-gray-700 mb-1">Desde</label>
+            <input type="date" id="dash_date_from" class="w-full border rounded px-2 md:px-3 py-2 text-sm">
         </div>
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
-            <input type="date" id="dash_date_to" class="border rounded px-3 py-2 text-sm">
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs md:text-sm font-medium text-gray-700 mb-1">Hasta</label>
+            <input type="date" id="dash_date_to" class="w-full border rounded px-2 md:px-3 py-2 text-sm">
         </div>
         <button type="button" id="btn-dash-filtrar"
-                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded hover:bg-yellow-500 transition text-sm">
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded hover:bg-yellow-500 active:bg-yellow-600 transition text-sm">
             Filtrar
         </button>
         <button type="button" id="btn-dash-limpiar"
-                class="border border-gray-300 text-gray-600 px-4 py-2 rounded hover:bg-gray-100 transition text-sm">
+                class="border border-gray-300 text-gray-600 px-3 py-2 rounded hover:bg-gray-100 active:bg-gray-200 transition text-sm">
             Limpiar
         </button>
     </div>
@@ -41,11 +41,11 @@
 
 <!-- Metricas -->
 <div id="metrics-cards">
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-6 md:mb-8">
         {% for i in range(4) %}
-        <div class="bg-white p-6 rounded-lg shadow animate-pulse">
-            <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-            <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+        <div class="bg-white p-4 md:p-6 rounded-lg shadow animate-pulse">
+            <div class="h-3 md:h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+            <div class="h-6 md:h-8 bg-gray-200 rounded w-3/4"></div>
         </div>
         {% endfor %}
     </div>

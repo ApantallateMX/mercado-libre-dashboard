@@ -50,7 +50,60 @@
     </div>
 </div>
 
-<div class="bg-white rounded-lg shadow overflow-x-auto">
+<!-- Mobile Card View -->
+<div class="md:hidden space-y-2">
+    {% for p in products %}
+    <div class="bg-white rounded-lg shadow p-3 {{ 'border-l-4 border-red-400' if p.available_quantity == 0 else '' }}">
+        <div class="flex gap-3">
+            {% if p.thumbnail %}
+            <img src="{{ p.thumbnail }}" class="w-14 h-14 rounded object-cover flex-shrink-0" alt="">
+            {% endif %}
+            <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-gray-800 leading-tight line-clamp-2">{{ p.title }}</p>
+                <p class="text-xs text-gray-400 font-mono mt-0.5">{{ p.id }}</p>
+            </div>
+            <div class="text-right flex-shrink-0">
+                <div class="text-lg font-bold {{ 'text-cyan-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}">{{ p.available_quantity }}</div>
+                <span class="px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
+            </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
+            <div>
+                {% if p.original_price and p.original_price > p.price %}
+                <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                <span class="font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                {% else %}
+                <span class="font-bold text-gray-800">${{ "{:,.0f}".format(p.price) }}</span>
+                {% endif %}
+            </div>
+            {% if p.get('units', 0) > 0 %}
+            <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.units }}</span></div>
+            {% endif %}
+            {% if p.get('revenue', 0) > 0 %}
+            <div><span class="text-gray-500">Rev:</span> <span class="font-bold">${{ "{:,.0f}".format(p.revenue) }}</span></div>
+            {% endif %}
+            {% if p.get('_margen_pct') is not none %}
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold
+                {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
+                {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
+                {% else %}bg-red-100 text-red-700{% endif %}">
+                {{ "%.0f"|format(p._margen_pct) }}%
+            </span>
+            {% endif %}
+        </div>
+        <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+            {% if p.permalink %}
+            <a href="{{ p.permalink }}" target="_blank" class="flex-1 text-center py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg active:bg-blue-100">Ver</a>
+            {% endif %}
+            <button onclick="openEditModal('{{ p.id }}')" class="flex-1 text-center py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg active:bg-gray-200">Editar</button>
+            <button onclick="changeToMerchant('{{ p.id }}')" class="flex-1 text-center py-1.5 text-xs font-medium text-cyan-700 bg-cyan-50 rounded-lg active:bg-cyan-100">Quitar FULL</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Desktop Table View -->
+<div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
     <table class="w-full text-sm">
         <thead class="bg-gray-50 border-b">
             <tr>
@@ -210,7 +263,7 @@
             {% endfor %}
         </tbody>
     </table>
-</div>
+</div><!-- end desktop -->
 
 <div class="mt-3 text-sm text-gray-500">
     Mostrando {{ products|length }} productos FULL
