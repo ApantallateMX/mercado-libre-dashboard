@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import APP_PIN
+from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -69,11 +69,45 @@ def _calc_margins(products: list, usd_to_mxn: float):
             p["_margen_pct"] = None
 
 
+async def _seed_tokens():
+    """Auto-recover MeLi tokens from env vars after Railway deploy."""
+    if not MELI_REFRESH_TOKEN or not MELI_USER_ID:
+        return
+    existing = await token_store.get_any_tokens()
+    if existing:
+        return
+    # DB empty but env vars present → refresh to get new access_token
+    import httpx
+    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(MELI_TOKEN_URL, data={
+                "grant_type": "refresh_token",
+                "client_id": MELI_CLIENT_ID,
+                "client_secret": MELI_CLIENT_SECRET,
+                "refresh_token": MELI_REFRESH_TOKEN,
+            })
+            if resp.status_code == 200:
+                data = resp.json()
+                await token_store.save_tokens(
+                    MELI_USER_ID,
+                    data["access_token"],
+                    data["refresh_token"],
+                    data.get("expires_in", 21600),
+                )
+                print(f"[SEED] Tokens recovered for user {MELI_USER_ID}")
+            else:
+                print(f"[SEED] Token refresh failed: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[SEED] Error recovering tokens: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Inicializa la base de datos al iniciar."""
     await token_store.init_db()
     await chat_store.init_chat_db()
+    await _seed_tokens()
     yield
 
 

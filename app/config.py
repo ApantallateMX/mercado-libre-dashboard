@@ -24,6 +24,10 @@ SECRET_KEY = os.getenv("SECRET_KEY", "cambiar-esta-clave-secreta-en-produccion")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "tokens.db")
 APP_PIN = os.getenv("APP_PIN", "8741")
 
+# Seed tokens for auto-recovery on deploy (Railway ephemeral storage)
+MELI_USER_ID = os.getenv("MELI_USER_ID", "")
+MELI_REFRESH_TOKEN = os.getenv("MELI_REFRESH_TOKEN", "")
+
 # Ollama Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
