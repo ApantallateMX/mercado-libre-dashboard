@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from app.config import APP_PIN
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -81,6 +83,48 @@ app = FastAPI(title="Mercado Libre Dashboard", lifespan=lifespan)
 BASE_PATH = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_PATH / "templates")
+
+# ---------- PIN access middleware ----------
+_PIN_EXEMPT = ("/pin", "/pin/verify", "/static", "/favicon.ico")
+
+
+class PinMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if any(path.startswith(ex) for ex in _PIN_EXEMPT):
+            return await call_next(request)
+        if request.cookies.get("pin_ok") != "1":
+            from urllib.parse import quote
+            next_url = quote(str(request.url.path), safe="")
+            return RedirectResponse(f"/pin?next={next_url}", status_code=302)
+        return await call_next(request)
+
+
+app.add_middleware(PinMiddleware)
+
+
+# ---------- PIN routes ----------
+@app.get("/pin", response_class=HTMLResponse)
+async def pin_page(request: Request, error: str = "", next: str = "/dashboard"):
+    return templates.TemplateResponse("pin.html", {
+        "request": request,
+        "error": error,
+        "next": next,
+    })
+
+
+@app.post("/pin/verify")
+async def pin_verify(request: Request):
+    form = await request.form()
+    pin = form.get("pin", "")
+    next_url = form.get("next", "/dashboard")
+    if pin == APP_PIN:
+        response = RedirectResponse(next_url, status_code=302)
+        response.set_cookie("pin_ok", "1", max_age=2592000, httponly=True, samesite="lax")
+        return response
+    from urllib.parse import quote
+    return RedirectResponse(f"/pin?error=1&next={quote(next_url, safe='')}", status_code=302)
+
 
 # Routers
 app.include_router(auth_router)

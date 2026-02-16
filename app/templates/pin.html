@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acceso</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;
+    min-height:100dvh;padding:1rem}
+  .card{background:#1e293b;border-radius:1rem;padding:2.5rem 2rem;width:100%;max-width:340px;
+    text-align:center;box-shadow:0 25px 50px -12px rgba(0,0,0,.5)}
+  .lock{font-size:2.5rem;margin-bottom:.75rem}
+  h1{font-size:1.25rem;font-weight:600;margin-bottom:.25rem}
+  .sub{font-size:.85rem;color:#94a3b8;margin-bottom:1.75rem}
+  .digits{display:flex;gap:.75rem;justify-content:center;margin-bottom:1.5rem}
+  .digits input{width:3.25rem;height:3.75rem;border:2px solid #334155;border-radius:.75rem;
+    background:#0f172a;color:#f1f5f9;font-size:1.75rem;text-align:center;outline:none;
+    transition:border-color .15s}
+  .digits input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.25)}
+  .error{color:#f87171;font-size:.85rem;margin-bottom:1rem;min-height:1.25rem}
+  .spinner{display:none;margin:1rem auto 0}
+  .spinner.show{display:block}
+  .spinner svg{width:2rem;height:2rem;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="lock">&#128274;</div>
+  <h1>Ingresa tu PIN</h1>
+  <p class="sub">4 digitos para continuar</p>
+  {% if error %}
+  <p class="error">PIN incorrecto. Intenta de nuevo.</p>
+  {% else %}
+  <p class="error"></p>
+  {% endif %}
+  <form id="pinForm" method="post" action="/pin/verify">
+    <input type="hidden" name="next" value="{{ next }}">
+    <input type="hidden" name="pin" id="pinValue">
+    <div class="digits">
+      <input type="tel" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="off" data-idx="0" autofocus>
+      <input type="tel" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="off" data-idx="1">
+      <input type="tel" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="off" data-idx="2">
+      <input type="tel" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="off" data-idx="3">
+    </div>
+    <div class="spinner" id="spinner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5">
+        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke-linecap="round"/>
+      </svg>
+    </div>
+  </form>
+</div>
+<script>
+(function(){
+  const inputs=document.querySelectorAll('.digits input');
+  const form=document.getElementById('pinForm');
+  const pinField=document.getElementById('pinValue');
+  const spinner=document.getElementById('spinner');
+
+  inputs.forEach((inp,i)=>{
+    inp.addEventListener('input',()=>{
+      inp.value=inp.value.replace(/\D/g,'').slice(0,1);
+      if(inp.value&&i<3)inputs[i+1].focus();
+      trySubmit();
+    });
+    inp.addEventListener('keydown',(e)=>{
+      if(e.key==='Backspace'&&!inp.value&&i>0){
+        inputs[i-1].focus();
+        inputs[i-1].value='';
+      }
+    });
+    inp.addEventListener('paste',(e)=>{
+      e.preventDefault();
+      const data=(e.clipboardData||window.clipboardData).getData('text').replace(/\D/g,'').slice(0,4);
+      for(let j=0;j<data.length&&j<4;j++){inputs[j].value=data[j]}
+      if(data.length>=4)trySubmit(); else if(data.length>0)inputs[Math.min(data.length,3)].focus();
+    });
+  });
+
+  function trySubmit(){
+    const pin=[...inputs].map(i=>i.value).join('');
+    if(pin.length===4){
+      pinField.value=pin;
+      spinner.classList.add('show');
+      inputs.forEach(i=>{i.disabled=true});
+      form.submit();
+    }
+  }
+})();
+</script>
+</body>
+</html>

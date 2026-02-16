@@ -22,6 +22,7 @@ MELI_API_URL = "https://api.mercadolibre.com"
 # App Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "cambiar-esta-clave-secreta-en-produccion")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "tokens.db")
+APP_PIN = os.getenv("APP_PIN", "8741")
 
 # Ollama Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
