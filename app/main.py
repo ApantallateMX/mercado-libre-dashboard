@@ -36,6 +36,22 @@ def _extract_base_sku(sku: str) -> str:
     return sku
 
 
+import re as _re
+
+def _clean_sku_for_bm(sku: str) -> str:
+    """Limpia SKU de MeLi para consultar BinManager.
+    Quita: (N), / segunda_parte, espacios extra, etc."""
+    if not sku:
+        return ""
+    # Tomar primera parte antes de " / " (MeLi a veces concatena SKUs)
+    s = sku.split("/")[0].strip()
+    # Quitar sufijos entre parentesis: (18), (2), etc.
+    s = _re.sub(r'\(\d+\)$', '', s).strip()
+    # Quitar parentesis sobrantes
+    s = _re.sub(r'[()]', '', s).strip()
+    return s
+
+
 async def _get_usd_to_mxn(client) -> float:
     """Obtiene tipo de cambio USD->MXN de la API de MeLi."""
     try:
@@ -279,13 +295,16 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
     BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
     sem = asyncio.Semaphore(15)
 
-    # Deduplicate by base SKU
+    # Deduplicate by base SKU (clean for BM)
     base_to_skus = {}
     for p in products:
         sku = p.get(sku_key, "")
         if not sku:
             continue
-        base = _extract_base_sku(sku).upper()
+        clean = _clean_sku_for_bm(sku)
+        if not clean:
+            continue
+        base = _extract_base_sku(clean).upper()
         base_to_skus.setdefault(base, []).append(sku)
 
     async def _fetch(base, http):
@@ -330,7 +349,10 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         sku = p.get(sku_key, "")
         if not sku:
             continue
-        base = _extract_base_sku(sku).upper()
+        clean = _clean_sku_for_bm(sku)
+        if not clean:
+            continue
+        base = _extract_base_sku(clean).upper()
         bm = base_map.get(base)
         if bm:
             p["_bm_retail_price"] = bm.get("RetailPrice", 0) or 0
@@ -1357,9 +1379,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 return base_sku, None
 
         async def _fetch_stock(sku, http):
-            """Busca stock: FullFillment exacto -> sufijos -> InventoryReport."""
-            # 1) FullFillment con SKU exacto
-            _, data = await _ff_fetch(sku, http)
+            """Busca stock: FullFillment exacto -> sufijos -> InventoryReport.
+            Limpia SKU de MeLi antes de consultar BM."""
+            clean = _clean_sku_for_bm(sku)
+            if not clean:
+                return sku, None
+
+            # 1) FullFillment con SKU limpio
+            _, data = await _ff_fetch(clean, http)
             if data:
                 mty = data.get("TotalQtyMTY", 0) or 0
                 cdmx = data.get("TotalQtyCDMX", 0) or 0
@@ -1368,7 +1395,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                     return sku, {"TotalQtyMTY": mty, "TotalQtyCDMX": cdmx, "TotalQtyTJ": tj}
 
             # 2) FullFillment con sufijos sellable
-            base = _extract_base_sku(sku)
+            base = _extract_base_sku(clean)
             suffix_results = await asyncio.gather(
                 *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
                 return_exceptions=True
