@@ -1556,6 +1556,23 @@ async def products_inventory_partial(
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
+        # Fallback: enriquecer SKU desde ordenes para items sin SKU en datos
+        _sku_from_orders = {}
+        for order in all_orders:
+            for oi in order.get("order_items", []):
+                it = oi.get("item", {})
+                raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
+                if raw_sku and it.get("id"):
+                    # Tomar el SKU mas corto (base) para el item_id
+                    # seller_sku puede ser "SKU1+SKU2" para packs
+                    base = raw_sku.split("+")[0].strip()
+                    existing = _sku_from_orders.get(it["id"], "")
+                    if not existing or len(base) < len(existing):
+                        _sku_from_orders[it["id"]] = base
+        for p in products:
+            if not p.get("sku") and p["id"] in _sku_from_orders:
+                p["sku"] = _sku_from_orders[p["id"]]
+
         # Recomendaciones (para preset baja_venta)
         for p in products:
             recs = []
