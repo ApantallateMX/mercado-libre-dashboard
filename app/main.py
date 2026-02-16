@@ -1298,7 +1298,8 @@ async def _get_all_products_cached(client) -> list[dict]:
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
-    """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache."""
+    """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
+    Busca primero con SKU exacto; si no encuentra, busca con sufijos sellable."""
     import httpx
     BM_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
 
@@ -1318,24 +1319,65 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     if to_fetch:
         sem = asyncio.Semaphore(15)
 
-        async def _fetch(sku, http):
+        async def _fetch_one(query_sku, http):
             async with sem:
                 try:
                     resp = await http.post(
-                        f"{BM_URL}?WEBSKU={sku}",
+                        f"{BM_URL}?WEBSKU={query_sku}",
                         content="", timeout=10.0
                     )
                     if resp.status_code == 200:
                         data = resp.json()
                         if data and isinstance(data, list) and data:
-                            return sku, data[0]
+                            return query_sku, data[0]
                 except Exception:
                     pass
-                return sku, None
+                return query_sku, None
+
+        async def _fetch_with_suffixes(sku, http):
+            """Busca SKU exacto primero. Si no encuentra, intenta sufijos sellable
+            y agrega stock de todas las variantes encontradas."""
+            _, data = await _fetch_one(sku, http)
+            if data:
+                total = (data.get("TotalQtyMTY", 0) or 0) + (data.get("TotalQtyCDMX", 0) or 0) + (data.get("TotalQtyTJ", 0) or 0)
+                if total > 0:
+                    return sku, data
+
+            # SKU exacto no retorno stock -> buscar con sufijos sellable
+            base = _extract_base_sku(sku)
+            suffix_results = await asyncio.gather(
+                *[_fetch_one(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
+                return_exceptions=True
+            )
+            # Agregar stock de todas las variantes sellable
+            agg = {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}
+            seen_product_skus = set()
+            found_any = False
+            for r in suffix_results:
+                if isinstance(r, Exception) or r is None:
+                    continue
+                _, sdata = r
+                if sdata:
+                    # Deduplicate by ProductSKU
+                    psku = sdata.get("ProductSKU", "")
+                    if psku and psku in seen_product_skus:
+                        continue
+                    if psku:
+                        seen_product_skus.add(psku)
+                    agg["TotalQtyMTY"] += (sdata.get("TotalQtyMTY", 0) or 0)
+                    agg["TotalQtyCDMX"] += (sdata.get("TotalQtyCDMX", 0) or 0)
+                    agg["TotalQtyTJ"] += (sdata.get("TotalQtyTJ", 0) or 0)
+                    found_any = True
+            if found_any:
+                return sku, agg
+            # Return original data even if total=0 (so we know BM was checked)
+            if data:
+                return sku, data
+            return sku, None
 
         async with httpx.AsyncClient() as http:
             results = await asyncio.gather(
-                *[_fetch(s, http) for s in to_fetch],
+                *[_fetch_with_suffixes(s, http) for s in to_fetch],
                 return_exceptions=True
             )
 
