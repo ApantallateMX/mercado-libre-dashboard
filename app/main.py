@@ -429,7 +429,7 @@ async def login_page(request: Request):
 async def dashboard_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "user": user,
@@ -441,7 +441,7 @@ async def dashboard_page(request: Request):
 async def orders_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("orders.html", {
         "request": request,
         "user": user,
@@ -453,7 +453,7 @@ async def orders_page(request: Request):
 async def items_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("items.html", {
         "request": request,
         "user": user,
@@ -465,7 +465,7 @@ async def items_page(request: Request):
 async def sku_sales_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("sku_sales.html", {
         "request": request,
         "user": user,
@@ -477,7 +477,7 @@ async def sku_sales_page(request: Request):
 async def sku_compare_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("sku_compare.html", {
         "request": request,
         "user": user,
@@ -489,7 +489,7 @@ async def sku_compare_page(request: Request):
 async def sku_inventory_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("sku_inventory.html", {
         "request": request,
         "user": user,
@@ -682,7 +682,7 @@ async def sku_compare_api(
 async def ads_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("ads.html", {
         "request": request,
         "user": user,
@@ -694,7 +694,7 @@ async def ads_page(request: Request):
 async def health_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("health.html", {
         "request": request,
         "user": user,
@@ -706,7 +706,7 @@ async def health_page(request: Request):
 async def items_health_page(request: Request):
     user = await get_current_user()
     if not user:
-        return RedirectResponse(url="/login")
+        return templates.TemplateResponse("no_session.html", {"request": request})
     return templates.TemplateResponse("items_health.html", {
         "request": request,
         "user": user,
