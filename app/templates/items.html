@@ -236,14 +236,15 @@
         });
     };
 
-    // Quick sync: set MeLi stock = BM total in one click
+    // Quick sync: set MeLi stock = 60% of BM total (safety stock for other channels)
     window.quickSyncBM = function(btn, itemId, bmTotal) {
         var cell = btn.closest('[data-stock-cell]');
         var msgEl = cell.querySelector('[data-stock-msg]');
         var displayEl = cell.querySelector('[data-stock-val]');
         btn.disabled = true;
         btn.textContent = '...';
-        window.inlineStockSync(itemId, bmTotal, msgEl, function(qty) {
+        var safeQty = Math.floor(bmTotal * 0.6);
+        window.inlineStockSync(itemId, safeQty, msgEl, function(qty) {
             displayEl.textContent = qty;
             displayEl.className = 'cursor-pointer font-semibold hover:text-purple-600 hover:underline ' +
                 (qty > 5 ? 'text-green-600' : qty > 0 ? 'text-yellow-600' : 'text-red-600');

@@ -106,10 +106,11 @@
             </div>
             {% set bm_t = item.get('bm_total', 0) or 0 %}
             {% if bm_t > 0 %}
-            <button onclick="var inp=document.getElementById('new-stock-{{ item.id }}');inp.value={{ bm_t }};inp.focus();inp.select()"
+            {% set bm_safe = (bm_t * 0.6)|int %}
+            <button onclick="var inp=document.getElementById('new-stock-{{ item.id }}');inp.value={{ bm_safe }};inp.focus();inp.select()"
                     class="w-full mt-2 bg-purple-500 text-white px-3 py-1.5 rounded text-sm font-bold hover:bg-purple-600 transition"
-                    title="Pre-llenar con BM total ({{ bm_t }}). Confirma con Actualizar">
-                Usar BM: {{ bm_t }}
+                    title="Pre-llenar con 60% de BM ({{ bm_safe }} de {{ bm_t }}). Confirma con Actualizar">
+                Usar BM 60%: {{ bm_safe }}
             </button>
             {% endif %}
             {% endif %}

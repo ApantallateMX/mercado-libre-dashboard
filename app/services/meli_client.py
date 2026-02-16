@@ -692,7 +692,8 @@ class MeliClient:
         try:
             return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
         except MeliApiError as e:
-            if "not_modifiable" not in str(e):
+            err_msg = str(e).lower()
+            if "not modifiable" not in err_msg and "not_modifiable" not in err_msg:
                 raise
         # Item tiene variaciones — obtener detalles y distribuir
         item = await self.get(f"/items/{item_id}")

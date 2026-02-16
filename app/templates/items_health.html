@@ -593,17 +593,18 @@
         var inv = inventoryData[sku];
         var tj = inv.TotalQtyTJ || 0, cdmx = inv.TotalQtyCDMX || 0, mty = inv.TotalQtyMTY || 0;
         var total = tj + cdmx + mty;
+        var safeQty = Math.floor(total * 0.6);
         var item = allItems.find(function(i) { return i.id === itemId; });
         var currentStock = item ? item.available_quantity : '?';
 
         confirmAction(
-            'Sincronizar Stock',
-            '<p class="mb-2">Actualizar stock de MeLi con inventario real:</p>' +
+            'Sincronizar Stock (60%)',
+            '<p class="mb-2">Actualizar stock de MeLi (60% del inventario real):</p>' +
             '<div class="bg-gray-50 p-3 rounded text-sm space-y-1 mb-2">' +
             '<p><span class="text-gray-500">SKU:</span> <strong>' + sku + '</strong></p>' +
             '<p><span class="text-gray-500">Stock actual MeLi:</span> <strong class="text-red-600">' + currentStock + '</strong></p>' +
-            '<p><span class="text-gray-500">Inventario real:</span> TJ: ' + tj + ' | CDMX: ' + cdmx + ' | MTY: ' + mty + '</p>' +
-            '<p><span class="text-gray-500">Nuevo stock:</span> <strong class="text-green-600">' + total + '</strong></p>' +
+            '<p><span class="text-gray-500">Inventario real:</span> TJ: ' + tj + ' | CDMX: ' + cdmx + ' | MTY: ' + mty + ' = ' + total + '</p>' +
+            '<p><span class="text-gray-500">Nuevo stock (60%):</span> <strong class="text-green-600">' + safeQty + '</strong></p>' +
             '</div>',
             function() {
                 var btn = document.getElementById('sync-' + itemId);
@@ -611,15 +612,15 @@
                 fetch('/api/items/' + itemId + '/stock', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({quantity: total})
+                    body: JSON.stringify({quantity: safeQty})
                 })
                 .then(function(r) {
                     if (r.ok) {
                         if (item) {
-                            item.available_quantity = total;
+                            item.available_quantity = safeQty;
                             // Remove "Sin stock" problem if it existed
                             item.problems = item.problems.filter(function(p) { return p !== 'Sin stock'; });
-                            if (total > 0 && item.score < 100) {
+                            if (safeQty > 0 && item.score < 100) {
                                 item.score = Math.min(item.score + 30, 100);
                                 item.category = item.score < 40 ? 'critico' : (item.score <= 70 ? 'necesita_trabajo' : 'bueno');
                             }
