@@ -1299,9 +1299,10 @@ async def _get_all_products_cached(client) -> list[dict]:
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
-    Busca primero con SKU exacto; si no encuentra, busca con sufijos sellable."""
+    Estrategia: FullFillment exacto -> sufijos sellable -> InventoryReport fallback."""
     import httpx
-    BM_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+    BM_FF_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 
     # Check cache and find which SKUs need fetching
     result_map = {}
@@ -1319,11 +1320,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     if to_fetch:
         sem = asyncio.Semaphore(15)
 
-        async def _fetch_one(query_sku, http):
+        async def _ff_fetch(query_sku, http):
+            """Fetch stock from FullFillment API."""
             async with sem:
                 try:
                     resp = await http.post(
-                        f"{BM_URL}?WEBSKU={query_sku}",
+                        f"{BM_FF_URL}?WEBSKU={query_sku}",
                         content="", timeout=10.0
                     )
                     if resp.status_code == 200:
@@ -1334,50 +1336,77 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                     pass
                 return query_sku, None
 
-        async def _fetch_with_suffixes(sku, http):
-            """Busca SKU exacto primero. Si no encuentra, intenta sufijos sellable
-            y agrega stock de todas las variantes encontradas."""
-            _, data = await _fetch_one(sku, http)
-            if data:
-                total = (data.get("TotalQtyMTY", 0) or 0) + (data.get("TotalQtyCDMX", 0) or 0) + (data.get("TotalQtyTJ", 0) or 0)
-                if total > 0:
-                    return sku, data
+        async def _inv_fetch(base_sku, http):
+            """Fetch stock from InventoryReport API (fallback)."""
+            async with sem:
+                try:
+                    resp = await http.post(BM_INV_URL, json={
+                        "COMPANYID": 1, "SEARCH": base_sku,
+                        "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+                    }, headers={"Content-Type": "application/json"}, timeout=8.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data and isinstance(data, list):
+                            for item in data:
+                                if item.get("SKU", "").upper() == base_sku.upper():
+                                    return base_sku, item
+                            if data:
+                                return base_sku, data[0]
+                except Exception:
+                    pass
+                return base_sku, None
 
-            # SKU exacto no retorno stock -> buscar con sufijos sellable
+        async def _fetch_stock(sku, http):
+            """Busca stock: FullFillment exacto -> sufijos -> InventoryReport."""
+            # 1) FullFillment con SKU exacto
+            _, data = await _ff_fetch(sku, http)
+            if data:
+                mty = data.get("TotalQtyMTY", 0) or 0
+                cdmx = data.get("TotalQtyCDMX", 0) or 0
+                tj = data.get("TotalQtyTJ", 0) or 0
+                if (mty + cdmx + tj) > 0:
+                    return sku, {"TotalQtyMTY": mty, "TotalQtyCDMX": cdmx, "TotalQtyTJ": tj}
+
+            # 2) FullFillment con sufijos sellable
             base = _extract_base_sku(sku)
             suffix_results = await asyncio.gather(
-                *[_fetch_one(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
+                *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
                 return_exceptions=True
             )
-            # Agregar stock de todas las variantes sellable
             agg = {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}
-            seen_product_skus = set()
+            seen_psku = set()
             found_any = False
             for r in suffix_results:
                 if isinstance(r, Exception) or r is None:
                     continue
                 _, sdata = r
                 if sdata:
-                    # Deduplicate by ProductSKU
                     psku = sdata.get("ProductSKU", "")
-                    if psku and psku in seen_product_skus:
+                    if psku and psku in seen_psku:
                         continue
                     if psku:
-                        seen_product_skus.add(psku)
+                        seen_psku.add(psku)
                     agg["TotalQtyMTY"] += (sdata.get("TotalQtyMTY", 0) or 0)
                     agg["TotalQtyCDMX"] += (sdata.get("TotalQtyCDMX", 0) or 0)
                     agg["TotalQtyTJ"] += (sdata.get("TotalQtyTJ", 0) or 0)
                     found_any = True
-            if found_any:
+            if found_any and (agg["TotalQtyMTY"] + agg["TotalQtyCDMX"] + agg["TotalQtyTJ"]) > 0:
                 return sku, agg
-            # Return original data even if total=0 (so we know BM was checked)
-            if data:
-                return sku, data
+
+            # 3) Fallback: InventoryReport (no tiene desglose MTY/CDMX/TJ,
+            #    pero tiene TotalQty que es mejor que nada)
+            _, inv_data = await _inv_fetch(base, http)
+            if inv_data:
+                total_qty = inv_data.get("TotalQty", 0) or 0
+                if total_qty > 0:
+                    # Sin desglose por almacen, poner todo en "total" via cdmx placeholder
+                    return sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": total_qty, "TotalQtyTJ": 0}
+
             return sku, None
 
         async with httpx.AsyncClient() as http:
             results = await asyncio.gather(
-                *[_fetch_with_suffixes(s, http) for s in to_fetch],
+                *[_fetch_stock(s, http) for s in to_fetch],
                 return_exceptions=True
             )
 
