@@ -904,6 +904,25 @@ class MeliClient:
         except Exception:
             pass
 
+        # Strategy 1b: fallback to base SKU (without BM suffix like -NEW, -GRA, etc.)
+        _BM_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
+        sku_upper = sku.upper()
+        base_sku = sku
+        for sfx in _BM_SUFFIXES:
+            if sku_upper.endswith(sfx):
+                base_sku = sku[:-len(sfx)]
+                break
+        if base_sku != sku and not trusted_ids:
+            try:
+                r1b = await self.get(
+                    f"/users/{self.user_id}/items/search",
+                    params={"seller_sku": base_sku, "limit": 50}
+                )
+                for item_id in r1b.get("results", []):
+                    trusted_ids.add(item_id)
+            except Exception:
+                pass
+
         # Strategy 2: keyword search on own listings (may include false positives)
         try:
             r2 = await self.get(

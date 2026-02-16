@@ -2012,6 +2012,7 @@ async def products_not_published_partial(request: Request):
                 skus_with_stock[query_sku.upper()] = stock_data
 
         # Fase 3: Verificar cuales NO estan en MeLi
+        # Buscar por SKU completo (con sufijo) y tambien por base SKU
         async def _check_meli(sku):
             async with sem:
                 try:
@@ -2019,7 +2020,18 @@ async def products_not_published_partial(request: Request):
                         f"/users/{client.user_id}/items/search",
                         params={"seller_sku": sku, "limit": 1}
                     )
-                    return sku, len(result.get("results", [])) > 0
+                    if result.get("results"):
+                        return sku, True
+                    # Fallback: buscar por base SKU (sin sufijo)
+                    base = _extract_base_sku(sku)
+                    if base != sku:
+                        result2 = await client.get(
+                            f"/users/{client.user_id}/items/search",
+                            params={"seller_sku": base, "limit": 1}
+                        )
+                        if result2.get("results"):
+                            return sku, True
+                    return sku, False
                 except Exception:
                     return sku, False
 
