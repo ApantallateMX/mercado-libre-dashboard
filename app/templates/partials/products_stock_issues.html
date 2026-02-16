@@ -1,0 +1,421 @@
+<!-- KPIs -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400">
+        <p class="text-xs text-gray-500">Sin Stock (con BM)</p>
+        <p class="text-2xl font-bold text-orange-600">{{ restock_count }}</p>
+        <p class="text-[10px] text-gray-400">Productos para reabastecer</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400">
+        <p class="text-xs text-gray-500">Revenue Perdido (30d)</p>
+        <p class="text-2xl font-bold text-orange-600">${{ "{:,.0f}".format(lost_revenue) }}</p>
+        <p class="text-[10px] text-gray-400">De items sin stock</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400">
+        <p class="text-xs text-gray-500">Riesgo Sobreventa</p>
+        <p class="text-2xl font-bold text-yellow-600">{{ risk_count }}</p>
+        <p class="text-[10px] text-gray-400">Sin stock en BinManager</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400">
+        <p class="text-xs text-gray-500">Stock MeLi en Riesgo</p>
+        <p class="text-2xl font-bold text-yellow-600">{{ risk_stock }}</p>
+        <p class="text-[10px] text-gray-400">Unidades sin respaldo BM</p>
+    </div>
+</div>
+
+<!-- ===== Seccion A: Reabastecer ===== -->
+<div class="mb-8">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-orange-400 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Reabastecer</h3>
+            <span class="text-xs text-gray-400">(MeLi=0, BM disponible)</span>
+        </div>
+        {% if restock %}
+        <button onclick="bulkSyncRestock()" id="bulk-restock-btn"
+                class="px-3 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg hover:bg-purple-700 active:bg-purple-800 transition">
+            Sincronizar Todos ({{ restock|length }})
+        </button>
+        {% endif %}
+    </div>
+
+    {% if restock %}
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2">
+        {% for p in restock %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-orange-300" id="restock-m-{{ p.id }}">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <p class="text-[10px] text-gray-400 font-mono mt-0.5">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
+                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-green-600">{{ p.get('_bm_total', 0) }}</span></div>
+                {% if p.get('_bm_mty') is not none %}
+                <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
+                {% endif %}
+            </div>
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
+                    Sync 60%
+                </button>
+                <button onclick="openEditModal('{{ p.id }}')"
+                        class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300 min-h-[36px]">
+                    Editar
+                </button>
+                <span id="restock-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Desktop table -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-orange-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">TJ</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in restock %}
+                <tr class="hover:bg-orange-50/30" id="restock-d-{{ p.id }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
+                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_total', 0) }}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <div class="flex items-center justify-center gap-1">
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
+                                Sync 60%
+                            </button>
+                            <button onclick="openEditModal('{{ p.id }}')"
+                                    class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
+                                Editar
+                            </button>
+                            <span id="restock-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
+        Todos los productos con ventas tienen stock en MeLi
+    </div>
+    {% endif %}
+    <span id="bulk-restock-msg" class="text-xs mt-2 block text-center"></span>
+</div>
+
+<!-- ===== Seccion B: Riesgo Sobreventa ===== -->
+<div class="mb-6">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-yellow-400 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Riesgo Sobreventa</h3>
+            <span class="text-xs text-gray-400">(MeLi>0, BM=0, no FULL)</span>
+        </div>
+        {% if oversell_risk %}
+        <button onclick="bulkPauseRisk()" id="bulk-pause-btn"
+                class="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-lg hover:bg-yellow-600 active:bg-yellow-700 transition">
+            Pausar Todos ({{ oversell_risk|length }})
+        </button>
+        {% endif %}
+    </div>
+
+    {% if oversell_risk %}
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2">
+        {% for p in oversell_risk %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-yellow-300" id="risk-m-{{ p.id }}">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <p class="text-[10px] text-gray-400 font-mono mt-0.5">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">Stock MeLi:</span> <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span></div>
+                <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
+                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-red-600">0</span></div>
+            </div>
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                <button onclick="setStockZero('{{ p.id }}', this)"
+                        class="flex-1 py-1.5 text-xs bg-red-500 text-white rounded-lg font-medium active:bg-red-600 min-h-[36px]">
+                    Stock -> 0
+                </button>
+                <button onclick="pauseItem('{{ p.id }}', this)"
+                        class="flex-1 py-1.5 text-xs bg-yellow-500 text-white rounded-lg font-medium active:bg-yellow-600 min-h-[36px]">
+                    Pausar
+                </button>
+                <span id="risk-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Desktop table -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-yellow-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in oversell_risk %}
+                <tr class="hover:bg-yellow-50/30" id="risk-d-{{ p.id }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-yellow-600">{{ p.available_quantity }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <div class="flex items-center justify-center gap-1">
+                            <button onclick="setStockZero('{{ p.id }}', this)"
+                                    class="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs font-medium transition">
+                                Stock -> 0
+                            </button>
+                            <button onclick="pauseItem('{{ p.id }}', this)"
+                                    class="px-2 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-xs font-medium transition">
+                                Pausar
+                            </button>
+                            <span id="risk-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
+        No hay productos con riesgo de sobreventa
+    </div>
+    {% endif %}
+    <span id="bulk-pause-msg" class="text-xs mt-2 block text-center"></span>
+</div>
+
+<script>
+// --- Restock: sync 60% of BM total ---
+function syncRestockItem(itemId, bmTotal, btn) {
+    var safeQty = Math.floor(bmTotal * 0.6);
+    btn.disabled = true;
+    btn.textContent = '...';
+    var msgEl = document.getElementById('restock-msg-' + itemId) || document.getElementById('restock-msg-d-' + itemId);
+    fetch('/api/items/' + itemId + '/stock', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({quantity: safeQty})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            btn.textContent = 'OK (' + safeQty + ')';
+            btn.className = btn.className.replace('bg-purple-600', 'bg-green-600').replace('hover:bg-purple-700', '');
+            if (msgEl) { msgEl.textContent = 'Stock: ' + safeQty; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+            var row = document.getElementById('restock-m-' + itemId) || document.getElementById('restock-d-' + itemId);
+            if (row) row.classList.add('opacity-50');
+        } else {
+            return r.text().then(function(t) {
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+            });
+        }
+    })
+    .catch(function(e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+}
+
+function bulkSyncRestock() {
+    var items = [
+        {% for p in restock %}
+        {id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    var btn = document.getElementById('bulk-restock-btn');
+    var msg = document.getElementById('bulk-restock-msg');
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando...';
+    var done = 0, errors = 0, total = items.length;
+    function updateProgress() {
+        msg.textContent = done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+    items.forEach(function(item) {
+        var qty = Math.floor(item.bm * 0.6);
+        fetch('/api/items/' + item.id + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: qty})
+        })
+        .then(function(r) {
+            done++;
+            if (!r.ok) errors++;
+            else {
+                var row = document.getElementById('restock-m-' + item.id) || document.getElementById('restock-d-' + item.id);
+                if (row) row.classList.add('opacity-50');
+            }
+            updateProgress();
+            if (done === total) {
+                btn.textContent = 'Completado';
+                btn.className = btn.className.replace('bg-purple-600', 'bg-green-600');
+            }
+        })
+        .catch(function() { done++; errors++; updateProgress(); });
+    });
+}
+
+// --- Risk: set stock to 0 ---
+function setStockZero(itemId, btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    var msgEl = document.getElementById('risk-msg-' + itemId) || document.getElementById('risk-msg-d-' + itemId);
+    fetch('/api/items/' + itemId + '/stock', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({quantity: 0})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            btn.textContent = 'OK';
+            btn.className = btn.className.replace('bg-red-500', 'bg-green-600').replace('hover:bg-red-600', '');
+            var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
+            if (row) row.classList.add('opacity-50');
+        } else {
+            return r.text().then(function(t) {
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+            });
+        }
+    })
+    .catch(function(e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+}
+
+// --- Risk: pause item ---
+function pauseItem(itemId, btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    var msgEl = document.getElementById('risk-msg-' + itemId) || document.getElementById('risk-msg-d-' + itemId);
+    fetch('/api/items/' + itemId + '/status', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({status: 'paused'})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            btn.textContent = 'Pausado';
+            btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600').replace('hover:bg-yellow-600', '');
+            var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
+            if (row) row.classList.add('opacity-50');
+        } else {
+            return r.text().then(function(t) {
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+            });
+        }
+    })
+    .catch(function(e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+}
+
+// --- Bulk pause all risk items ---
+function bulkPauseRisk() {
+    if (!confirm('Pausar todos los productos en riesgo de sobreventa?\n\nEstos productos tienen stock en MeLi pero 0 en BinManager.')) return;
+    var items = [
+        {% for p in oversell_risk %}
+        '{{ p.id }}'{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    var btn = document.getElementById('bulk-pause-btn');
+    var msg = document.getElementById('bulk-pause-msg');
+    btn.disabled = true;
+    btn.textContent = 'Pausando...';
+    var done = 0, errors = 0, total = items.length;
+    function updateProgress() {
+        msg.textContent = done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+    items.forEach(function(itemId) {
+        fetch('/api/items/' + itemId + '/status', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({status: 'paused'})
+        })
+        .then(function(r) {
+            done++;
+            if (!r.ok) errors++;
+            else {
+                var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
+                if (row) row.classList.add('opacity-50');
+            }
+            updateProgress();
+            if (done === total) {
+                btn.textContent = 'Completado';
+                btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600');
+            }
+        })
+        .catch(function() { done++; errors++; updateProgress(); });
+    });
+}
+</script>

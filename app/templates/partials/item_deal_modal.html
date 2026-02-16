@@ -1,0 +1,359 @@
+{% set bm_cost_mxn = bm_cost_usd * usd_to_mxn if bm_cost_usd and bm_cost_usd < 9999 else 0 %}
+{% set bm_retail_mxn = bm_retail_usd * usd_to_mxn if bm_retail_usd and bm_retail_usd < 9999 else 0 %}
+
+<!-- Header -->
+<div class="flex items-center gap-3 mb-4 pb-4 border-b">
+    {% if thumbnail %}
+    <img src="{{ thumbnail }}" class="w-12 h-12 rounded object-cover" alt="">
+    {% endif %}
+    <div class="min-w-0 flex-1">
+        <h3 class="font-semibold text-gray-800 text-sm truncate">{{ title }}</h3>
+        <div class="flex items-center gap-2 mt-0.5">
+            <span class="text-xs text-blue-600 font-mono font-semibold">{{ item_id }}</span>
+            {% if sku %}<span class="text-xs text-gray-400 font-mono">SKU: {{ sku }}</span>{% endif %}
+        </div>
+    </div>
+    <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+</div>
+
+<!-- Deal Status -->
+{% if has_deal %}
+<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+    <div class="flex items-center gap-2">
+        <span class="text-green-600 font-bold text-sm">Deal Activo</span>
+        <span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-xs font-medium">
+            -{{ "%.0f"|format((1 - price / original_price) * 100) }}%
+        </span>
+    </div>
+    <div class="flex gap-4 mt-2 text-sm">
+        <div><span class="text-gray-500">Original:</span> <span class="line-through text-gray-400">${{ "{:,.0f}".format(original_price) }}</span></div>
+        <div><span class="text-gray-500">Deal:</span> <span class="font-bold text-green-600">${{ "{:,.0f}".format(price) }}</span></div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Pricing Info -->
+<div class="bg-gray-50 rounded-lg p-4 mb-4">
+    <div class="grid grid-cols-3 gap-4 text-center">
+        <div>
+            <div class="text-xs text-gray-500">Precio MeLi</div>
+            <div class="text-lg font-bold text-gray-800">${{ "{:,.0f}".format(price) }}</div>
+        </div>
+        <div>
+            <div class="text-xs text-gray-500">Costo BM</div>
+            <div class="text-lg font-bold text-blue-600">{{ '${:,.0f}'.format(bm_cost_mxn) if bm_cost_mxn > 0 else '-' }}</div>
+            {% if bm_cost_usd and bm_cost_usd > 0 and bm_cost_usd < 9999 %}
+            <div class="text-[10px] text-gray-400">${{ '%.2f'|format(bm_cost_usd) }} USD</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-xs text-gray-500">Retail BM</div>
+            <div class="text-lg font-bold text-purple-600">{{ '${:,.0f}'.format(bm_retail_mxn) if bm_retail_mxn > 0 else '-' }}</div>
+            {% if bm_retail_usd and bm_retail_usd > 0 and bm_retail_usd < 9999 %}
+            <div class="text-[10px] text-gray-400">${{ '%.2f'|format(bm_retail_usd) }} USD</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Promotions from API -->
+<div class="mb-4">
+    <h4 class="text-sm font-semibold text-gray-700 mb-3">Promociones Disponibles</h4>
+    <div id="idm-promos-loading" class="text-center py-4">
+        <div class="inline-block w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-sm text-gray-500 ml-2">Consultando promos...</span>
+    </div>
+    <div id="idm-promos-list" class="space-y-2 hidden"></div>
+    <div id="idm-promos-empty" class="text-center py-4 text-sm text-gray-400 hidden">
+        No hay promociones disponibles
+    </div>
+</div>
+
+<!-- Deal Price Calculator -->
+<div class="border-t pt-4 mb-4">
+    <h4 class="text-sm font-semibold text-gray-700 mb-3">Calculadora de Precio Deal</h4>
+    <div class="flex items-center gap-4 mb-4">
+        <div class="flex-1">
+            <label class="text-xs text-gray-500 block mb-1">Precio Deal</label>
+            <input type="number" id="idm-deal-price" step="1" min="0"
+                {% if has_deal %}value="{{ price|int }}"{% endif %}
+                class="w-full border rounded-lg px-3 py-2 text-lg font-bold focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400"
+                oninput="_idmCalc()">
+        </div>
+        <div class="text-center">
+            <label class="text-xs text-gray-500 block mb-1">Descuento</label>
+            <span id="idm-discount" class="text-lg font-bold text-gray-400">0%</span>
+        </div>
+    </div>
+    <div class="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">Precio Deal</span><span id="idm-c-price" class="font-medium">$0</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">- Costo BM</span><span id="idm-c-cost" class="text-red-500">$0</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">- Comision MeLi (~17%)</span><span id="idm-c-com" class="text-red-500">$0</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">- IVA Comision (16%)</span><span id="idm-c-iva" class="text-red-500">$0</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">- Envio estimado</span><span class="text-red-500">-$150</span></div>
+        <div class="flex justify-between border-t pt-2 mt-2">
+            <span class="font-semibold text-gray-700">Ganancia Neta</span>
+            <span id="idm-c-gan" class="font-bold text-lg">$0</span>
+        </div>
+        <div class="flex justify-between">
+            <span class="font-semibold text-gray-700">Margen</span>
+            <span id="idm-c-mar" class="font-bold text-lg">0%</span>
+        </div>
+    </div>
+</div>
+
+<!-- PRICE_DISCOUNT dates -->
+<div id="idm-dates" class="border-t pt-4 mb-4 hidden">
+    <h4 class="text-sm font-semibold text-gray-700 mb-3">Fechas (PRICE_DISCOUNT)</h4>
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <label class="text-xs text-gray-500 block mb-1">Fecha inicio</label>
+            <input type="datetime-local" id="idm-start-date" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400">
+        </div>
+        <div>
+            <label class="text-xs text-gray-500 block mb-1">Fecha fin</label>
+            <input type="datetime-local" id="idm-end-date" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400">
+        </div>
+    </div>
+</div>
+
+<!-- Actions -->
+<div class="flex items-center gap-3 justify-end border-t pt-4">
+    <button onclick="closeEditModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cerrar</button>
+    {% if has_deal %}
+    <button id="idm-deactivate-btn" onclick="_idmDeactivate()"
+        class="px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition font-semibold">
+        Desactivar Deal
+    </button>
+    {% endif %}
+    <button id="idm-activate-btn" onclick="_idmActivate()"
+        class="px-6 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+        disabled>
+        {{ 'Modificar Deal' if has_deal else 'Activar Deal' }}
+    </button>
+</div>
+<div id="idm-result" class="mt-3 hidden">
+    <div id="idm-result-msg" class="rounded-lg p-3 text-sm"></div>
+</div>
+
+<script>
+(function() {
+    var ITEM_ID = '{{ item_id }}';
+    var PRICE = {{ price }};
+    var ORIG_PRICE = {{ original_price or price }};
+    var BM_COST_MXN = {{ bm_cost_mxn|round(2) }};
+    var USD_MXN = {{ usd_to_mxn }};
+    var _selectedPromo = null;
+    var _selectedPromoData = null;
+
+    function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
+
+    // Calculator
+    window._idmCalc = function() {
+        var dp = parseFloat(document.getElementById('idm-deal-price').value) || 0;
+        var basePrice = ORIG_PRICE > PRICE ? ORIG_PRICE : PRICE;
+        var disc = basePrice > 0 ? ((1 - dp / basePrice) * 100) : 0;
+        var discEl = document.getElementById('idm-discount');
+        discEl.textContent = disc > 0 ? Math.round(disc) + '%' : '0%';
+        discEl.className = 'text-lg font-bold ' + (disc >= 20 ? 'text-green-600' : disc >= 10 ? 'text-yellow-600' : 'text-gray-400');
+
+        var com = dp * 0.17;
+        var iva = com * 0.16;
+        var gan = dp - BM_COST_MXN - com - iva - 150;
+        var mar = dp > 0 ? (gan / dp * 100) : 0;
+
+        document.getElementById('idm-c-price').textContent = fmt(dp);
+        document.getElementById('idm-c-cost').textContent = BM_COST_MXN > 0 ? ('-' + fmt(BM_COST_MXN)) : '-';
+        document.getElementById('idm-c-com').textContent = '-' + fmt(com);
+        document.getElementById('idm-c-iva').textContent = '-' + fmt(iva);
+        document.getElementById('idm-c-gan').textContent = fmt(gan);
+        document.getElementById('idm-c-gan').className = 'font-bold text-lg ' + (gan >= 0 ? 'text-green-600' : 'text-red-600');
+        document.getElementById('idm-c-mar').textContent = Math.round(mar) + '%';
+        document.getElementById('idm-c-mar').className = 'font-bold text-lg ' + (mar >= 15 ? 'text-green-600' : mar >= 0 ? 'text-yellow-600' : 'text-red-600');
+
+        document.getElementById('idm-activate-btn').disabled = !(dp > 0 && _selectedPromo);
+    };
+
+    // Fetch promotions
+    var ctrl = new AbortController();
+    setTimeout(function() { ctrl.abort(); }, 10000);
+    fetch('/api/items/' + ITEM_ID + '/promotions', {
+        signal: ctrl.signal,
+        headers: { 'ngrok-skip-browser-warning': '1' }
+    })
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(data) {
+        document.getElementById('idm-promos-loading').classList.add('hidden');
+        if (data.error) {
+            var emptyEl = document.getElementById('idm-promos-empty');
+            emptyEl.textContent = 'Error: ' + data.error;
+            emptyEl.classList.remove('hidden');
+            return;
+        }
+        var promos = data.promotions || [];
+        if (promos.length === 0) {
+            document.getElementById('idm-promos-empty').classList.remove('hidden');
+            return;
+        }
+        renderPromos(promos);
+    })
+    .catch(function(err) {
+        document.getElementById('idm-promos-loading').classList.add('hidden');
+        var emptyEl = document.getElementById('idm-promos-empty');
+        emptyEl.textContent = err.name === 'AbortError' ? 'Timeout (10s)' : ('Error: ' + err.message);
+        emptyEl.classList.remove('hidden');
+    });
+
+    function renderPromos(promos) {
+        var list = document.getElementById('idm-promos-list');
+        list.innerHTML = '';
+        list.classList.remove('hidden');
+        var typeColors = {
+            'DEAL': 'bg-green-100 text-green-700',
+            'DOD': 'bg-blue-100 text-blue-700',
+            'LIGHTNING': 'bg-yellow-100 text-yellow-700',
+            'MARKETPLACE_CAMPAIGN': 'bg-purple-100 text-purple-700',
+            'PRICE_DISCOUNT': 'bg-gray-100 text-gray-700',
+            'SMART': 'bg-blue-100 text-blue-700',
+            'PRE_NEGOTIATED': 'bg-blue-100 text-blue-700'
+        };
+        var statusLabels = {
+            'started': '<span class="text-[10px] px-1.5 py-0.5 bg-green-500 text-white rounded font-medium">ACTIVA</span>',
+            'candidate': '<span class="text-[10px] px-1.5 py-0.5 bg-yellow-200 text-yellow-800 rounded font-medium">CANDIDATA</span>',
+            'pending': '<span class="text-[10px] px-1.5 py-0.5 bg-blue-200 text-blue-800 rounded font-medium">PENDIENTE</span>'
+        };
+        promos.forEach(function(p) {
+            var color = typeColors[p.type] || 'bg-gray-100 text-gray-600';
+            var statusHtml = statusLabels[p.status] || '<span class="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">' + (p.status || '') + '</span>';
+            var isSmart = p.type === 'SMART' || p.type === 'PRE_NEGOTIATED';
+            var card = document.createElement('div');
+            card.className = 'border rounded-lg p-3 cursor-pointer hover:border-blue-400 transition ' +
+                (isSmart ? 'opacity-60 cursor-not-allowed' : '');
+            card.innerHTML =
+                '<div class="flex items-center justify-between mb-1">' +
+                    '<div class="flex items-center gap-2">' +
+                        '<span class="px-2 py-0.5 rounded text-[10px] font-semibold ' + color + '">' + p.type + '</span>' +
+                        statusHtml +
+                    '</div>' +
+                    (p.deal_price ? '<span class="text-sm font-bold text-green-600">' + fmt(p.deal_price) + '</span>' : '') +
+                '</div>' +
+                (p.name ? '<p class="text-xs text-gray-600 truncate">' + p.name + '</p>' : '') +
+                (isSmart ? '<p class="text-[10px] text-gray-400 mt-1">Gestionado por MeLi (no editable)</p>' : '') +
+                (p.id ? '<p class="text-[10px] text-gray-400">ID: ' + p.id + '</p>' : '');
+
+            if (!isSmart) {
+                card.onclick = function() {
+                    list.querySelectorAll('div').forEach(function(d) { d.classList.remove('border-blue-500', 'bg-blue-50'); });
+                    card.classList.add('border-blue-500', 'bg-blue-50');
+                    _selectedPromo = p.type;
+                    _selectedPromoData = p;
+                    if (p.type === 'PRICE_DISCOUNT') {
+                        document.getElementById('idm-dates').classList.remove('hidden');
+                    } else {
+                        document.getElementById('idm-dates').classList.add('hidden');
+                    }
+                    if (p.deal_price) {
+                        document.getElementById('idm-deal-price').value = Math.round(p.deal_price);
+                    }
+                    _idmCalc();
+                };
+            }
+            list.appendChild(card);
+        });
+    }
+
+    // Activate deal
+    window._idmActivate = function() {
+        var dealPrice = parseFloat(document.getElementById('idm-deal-price').value);
+        if (!dealPrice || !_selectedPromo) return;
+
+        var btn = document.getElementById('idm-activate-btn');
+        btn.disabled = true;
+        btn.textContent = 'Procesando...';
+
+        var body = { deal_price: dealPrice, promotion_type: _selectedPromo };
+        var method = 'PUT';
+
+        if (_selectedPromo === 'PRICE_DISCOUNT') {
+            method = 'POST';
+            var sd = document.getElementById('idm-start-date').value;
+            var ed = document.getElementById('idm-end-date').value;
+            if (sd) body.start_date = new Date(sd).toISOString();
+            if (ed) body.finish_date = new Date(ed).toISOString();
+        } else if (_selectedPromoData && _selectedPromoData.id) {
+            body.promotion_id = _selectedPromoData.id;
+        }
+
+        fetch('/api/items/' + ITEM_ID + '/promotions/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            body: JSON.stringify(body)
+        })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+        .then(function(res) {
+            var resultEl = document.getElementById('idm-result');
+            var msgEl = document.getElementById('idm-result-msg');
+            resultEl.classList.remove('hidden');
+            if (res.ok) {
+                msgEl.className = 'rounded-lg p-3 text-sm bg-green-50 text-green-700 border border-green-200';
+                msgEl.textContent = 'Deal activado exitosamente a ' + fmt(dealPrice);
+                btn.textContent = 'Listo';
+            } else {
+                msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
+                msgEl.textContent = 'Error: ' + (res.data.detail || res.data.error || JSON.stringify(res.data));
+                btn.textContent = 'Activar Deal';
+                btn.disabled = false;
+            }
+        })
+        .catch(function(e) {
+            var resultEl = document.getElementById('idm-result');
+            var msgEl = document.getElementById('idm-result-msg');
+            resultEl.classList.remove('hidden');
+            msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700';
+            msgEl.textContent = 'Error: ' + e.message;
+            btn.textContent = 'Activar Deal';
+            btn.disabled = false;
+        });
+    };
+
+    // Deactivate deal
+    window._idmDeactivate = function() {
+        if (!confirm('Desactivar el deal activo para este producto?')) return;
+        var btn = document.getElementById('idm-deactivate-btn');
+        btn.disabled = true;
+        btn.textContent = 'Desactivando...';
+
+        // Try to delete current promo type, fallback to DEAL
+        var promoType = (_selectedPromo || 'DEAL');
+        fetch('/api/items/' + ITEM_ID + '/promotions/' + promoType, {
+            method: 'DELETE',
+            headers: { 'ngrok-skip-browser-warning': '1' }
+        })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+        .then(function(res) {
+            var resultEl = document.getElementById('idm-result');
+            var msgEl = document.getElementById('idm-result-msg');
+            resultEl.classList.remove('hidden');
+            if (res.ok) {
+                msgEl.className = 'rounded-lg p-3 text-sm bg-green-50 text-green-700 border border-green-200';
+                msgEl.textContent = 'Deal desactivado';
+                btn.textContent = 'Desactivado';
+            } else {
+                msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
+                msgEl.textContent = 'Error: ' + (res.data.detail || JSON.stringify(res.data));
+                btn.textContent = 'Desactivar Deal';
+                btn.disabled = false;
+            }
+        })
+        .catch(function(e) {
+            btn.textContent = 'Error';
+            btn.disabled = false;
+        });
+    };
+
+    // Auto-calculate if has deal
+    {% if has_deal %}
+    _idmCalc();
+    {% endif %}
+})();
+</script>

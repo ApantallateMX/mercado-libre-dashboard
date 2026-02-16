@@ -1130,132 +1130,121 @@ async def items_grid_partial(
         await client.close()
 
 
+@app.get("/api/items/{item_id}/bm-cost")
+async def get_item_bm_cost(item_id: str):
+    """Devuelve costo BM de un item on-demand (para modal de deals desde inventario)."""
+    import httpx
+    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0, "error": "No autenticado"})
+    try:
+        data = await client.get(f"/items/{item_id}")
+        sku = _get_item_sku(data) if data else ""
+        if not sku:
+            return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0})
+        base = _extract_base_sku(sku).upper()
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(BM_INV_URL, json={
+                "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
+                "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+            }, headers={"Content-Type": "application/json"}, timeout=8.0)
+            if resp.status_code == 200:
+                items = resp.json()
+                if items and isinstance(items, list):
+                    for it in items:
+                        if it.get("SKU", "").upper() == base:
+                            return JSONResponse({
+                                "avg_cost_usd": it.get("AvgCostQTY", 0) or 0,
+                                "retail_price_usd": it.get("RetailPrice", 0) or 0,
+                            })
+                    if items:
+                        return JSONResponse({
+                            "avg_cost_usd": items[0].get("AvgCostQTY", 0) or 0,
+                            "retail_price_usd": items[0].get("RetailPrice", 0) or 0,
+                        })
+        return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0})
+    finally:
+        await client.close()
+
+
 @app.get("/partials/items-no-stock", response_class=HTMLResponse)
-async def items_no_stock_partial(request: Request):
+async def items_no_stock_redirect(request: Request):
+    """Legacy redirect -> stock issues."""
+    return RedirectResponse("/partials/products-stock-issues", status_code=302)
+
+
+@app.get("/partials/products-stock-issues", response_class=HTMLResponse)
+async def products_stock_issues_partial(request: Request):
+    """Stock tab: Reabastecer (MeLi=0 + BM>0) y Riesgo Sobreventa (MeLi>0 + BM=0)."""
+    from datetime import datetime, timedelta
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
-        # Obtener todos los items (activos y pausados)
-        all_item_ids = []
-        for status in ["active", "paused"]:
-            offset = 0
-            while True:
-                try:
-                    items_data = await client.get_items(offset=offset, limit=50, status=status)
-                except Exception:
-                    break
-                ids = items_data.get("results", [])
-                if not ids:
-                    break
-                all_item_ids.extend(ids)
-                total = items_data.get("paging", {}).get("total", 0)
-                offset += 50
-                if offset >= total:
-                    break
+        now = datetime.utcnow()
+        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
 
-        # Obtener detalles en batches de 20
-        no_stock_items = []
-        for i in range(0, len(all_item_ids), 20):
-            batch = all_item_ids[i:i+20]
-            try:
-                details = await client.get_items_details(batch)
-            except Exception:
-                continue
-            for item in details:
-                body = item.get("body", {})
-                if not body:
-                    continue
-                stock = body.get("available_quantity", 0)
-                sold = body.get("sold_quantity", 0)
-                if stock == 0 and sold > 0:
-                    sku = body.get("seller_custom_field") or ""
-                    if sku == "None":
-                        sku = ""
-                    # Buscar SKU en atributos (SELLER_SKU)
-                    if not sku and body.get("attributes"):
-                        for attr in body["attributes"]:
-                            if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                                sku = attr["value_name"]
-                                break
-                    # Buscar SKU en variaciones (seller_custom_field o inventory_id)
-                    if not sku and body.get("variations"):
-                        for var in body["variations"]:
-                            if var.get("seller_custom_field"):
-                                sku = var["seller_custom_field"]
-                                break
-                            if var.get("inventory_id"):
-                                sku = var["inventory_id"]
-                                break
-                    # Ultimo recurso: inventory_id del item principal
-                    if not sku:
-                        sku = body.get("inventory_id") or ""
-                    shipping = body.get("shipping", {})
-                    no_stock_items.append({
-                        "id": body.get("id", ""),
-                        "title": body.get("title", "-"),
-                        "sku": sku or "-",
-                        "price": body.get("price", 0),
-                        "original_price": body.get("original_price") or None,
-                        "stock": stock,
-                        "sold_quantity": sold,
-                        "thumbnail": body.get("thumbnail", ""),
-                        "status": body.get("status", "-"),
-                        "is_full": shipping.get("logistic_type") == "fulfillment",
-                    })
+        all_bodies, all_orders = await asyncio.gather(
+            _get_all_products_cached(client),
+            client.fetch_all_orders(date_from=date_from, date_to=date_to),
+        )
+        sales_map = _aggregate_sales_by_item(all_orders)
+        products = _build_product_list(all_bodies, sales_map)
 
-        # Enriquecer con sale_price para detectar deals
-        await _enrich_with_sale_prices(client, no_stock_items, id_key="id", price_key="price")
+        # Enriquecer SKU desde ordenes (fallback)
+        _sku_from_orders = {}
+        for order in all_orders:
+            for oi in order.get("order_items", []):
+                it = oi.get("item", {})
+                raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
+                if raw_sku and it.get("id"):
+                    base = raw_sku.split("+")[0].strip()
+                    existing = _sku_from_orders.get(it["id"], "")
+                    if not existing or len(base) < len(existing):
+                        _sku_from_orders[it["id"]] = base
+        for p in products:
+            if not p.get("sku") and p["id"] in _sku_from_orders:
+                p["sku"] = _sku_from_orders[p["id"]]
 
-        # Ordenar por ventas descendente
-        no_stock_items.sort(key=lambda x: x["sold_quantity"], reverse=True)
+        # BM stock
+        bm_map = await _get_bm_stock_cached(products)
+        _apply_bm_stock(products, bm_map)
 
-        # Consultar inventario BinManager para items con SKU
-        import httpx as _httpx2
-        BINMANAGER_URL2 = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
-        sku_to_indices = {}  # base -> {sku, indices}
-        for idx, it in enumerate(no_stock_items):
-            sku = it.get("sku", "")
-            if sku and sku != "-":
-                base = _extract_base_sku(sku)
-                sku_to_indices.setdefault(base, {"sku": sku, "indices": []})
-                sku_to_indices[base]["indices"].append(idx)
+        # Seccion A: Reabastecer (MeLi=0, BM>0, tiene ventas)
+        restock = [
+            p for p in products
+            if p.get("available_quantity", 0) == 0
+            and (p.get("_bm_total") or 0) > 0
+            and p.get("units", 0) > 0
+        ]
+        restock.sort(key=lambda x: x.get("units", 0), reverse=True)
 
-        if sku_to_indices:
-            sem = asyncio.Semaphore(10)
-            async def _fetch_bm(query_sku: str, http: _httpx2.AsyncClient):
-                async with sem:
-                    try:
-                        resp = await http.post(
-                            f"{BINMANAGER_URL2}?WEBSKU={query_sku}",
-                            content="", timeout=15.0
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            if data and isinstance(data, list) and len(data) > 0:
-                                return query_sku, data[0]
-                    except Exception:
-                        pass
-                    return query_sku, None
+        # Seccion B: Riesgo Sobreventa (MeLi>0, BM=0, no FULL)
+        oversell_risk = [
+            p for p in products
+            if p.get("available_quantity", 0) > 0
+            and (p.get("_bm_total") or 0) == 0
+            and not p.get("is_full")
+            and p.get("sku")  # solo items con SKU (BM deberia tenerlos)
+        ]
+        oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
 
-            async with _httpx2.AsyncClient() as http:
-                bm_tasks = [_fetch_bm(info["sku"], http) for info in sku_to_indices.values()]
-                for coro in asyncio.as_completed(bm_tasks):
-                    queried_sku, data = await coro
-                    if data:
-                        base = _extract_base_sku(queried_sku)
-                        _m = data.get("TotalQtyMTY", 0) or 0
-                        _c = data.get("TotalQtyCDMX", 0) or 0
-                        _t = data.get("TotalQtyTJ", 0) or 0
-                        for i in sku_to_indices[base]["indices"]:
-                            no_stock_items[i]["mty"] = _m
-                            no_stock_items[i]["cdmx"] = _c
-                            no_stock_items[i]["tj"] = _t
-                            no_stock_items[i]["bm_total"] = _m + _c + _t
+        # KPIs
+        restock_count = len(restock)
+        lost_revenue = sum(p.get("revenue", 0) for p in restock)
+        risk_count = len(oversell_risk)
+        risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
 
-        return templates.TemplateResponse("partials/items_no_stock.html", {
+        return templates.TemplateResponse("partials/products_stock_issues.html", {
             "request": request,
-            "items": no_stock_items
+            "restock": restock,
+            "oversell_risk": oversell_risk,
+            "restock_count": restock_count,
+            "lost_revenue": lost_revenue,
+            "risk_count": risk_count,
+            "risk_stock": risk_stock,
         })
     finally:
         await client.close()
@@ -2770,6 +2759,76 @@ async def item_edit_partial(request: Request, item_id: str):
             "score": score,
             "problems": problems,
             "seller_sku": seller_sku,
+        })
+    finally:
+        await client.close()
+
+
+@app.get("/partials/item-deal/{item_id}", response_class=HTMLResponse)
+async def item_deal_partial(request: Request, item_id: str):
+    """Deal management partial: loads inside edit-modal for a single item."""
+    import httpx
+    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        item = await client.get_item(item_id)
+        sku = _get_item_sku(item) if item else ""
+        price = item.get("price", 0)
+        original_price = item.get("original_price") or 0
+
+        # Sale price enrichment
+        sp = await client.get_item_sale_price(item_id)
+        if sp and isinstance(sp, dict):
+            amt = sp.get("amount")
+            reg = sp.get("regular_amount")
+            if amt and reg and reg > amt:
+                price = amt
+                original_price = reg
+
+        has_deal = original_price and original_price > price
+
+        # BM cost + FX rate in parallel
+        usd_to_mxn = 20.0
+        bm_cost_usd = 0
+        bm_retail_usd = 0
+        async def _get_bm():
+            if not sku:
+                return 0, 0
+            base = _extract_base_sku(sku).upper()
+            async with httpx.AsyncClient() as http:
+                resp = await http.post(BM_INV_URL, json={
+                    "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
+                    "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+                }, headers={"Content-Type": "application/json"}, timeout=8.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and isinstance(data, list):
+                        for it in data:
+                            if it.get("SKU", "").upper() == base:
+                                return it.get("AvgCostQTY", 0) or 0, it.get("RetailPrice", 0) or 0
+                        if data:
+                            return data[0].get("AvgCostQTY", 0) or 0, data[0].get("RetailPrice", 0) or 0
+            return 0, 0
+
+        (bm_cost_usd, bm_retail_usd), usd_to_mxn = await asyncio.gather(
+            _get_bm(),
+            _get_usd_to_mxn(client),
+        )
+
+        return templates.TemplateResponse("partials/item_deal_modal.html", {
+            "request": request,
+            "item_id": item_id,
+            "title": item.get("title", ""),
+            "thumbnail": item.get("thumbnail", ""),
+            "sku": sku,
+            "price": price,
+            "original_price": original_price,
+            "has_deal": has_deal,
+            "bm_cost_usd": bm_cost_usd,
+            "bm_retail_usd": bm_retail_usd,
+            "usd_to_mxn": round(usd_to_mxn, 2),
         })
     finally:
         await client.close()
