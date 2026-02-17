@@ -1210,109 +1210,88 @@ async def items_no_stock_redirect(request: Request):
 
 @app.get("/partials/products-stock-issues", response_class=HTMLResponse)
 async def products_stock_issues_partial(request: Request):
-    """Stock tab: shell ligero con carga progresiva HTMX."""
-    return templates.TemplateResponse("partials/products_stock_issues.html", {"request": request})
-
-
-async def _get_stock_base_data(client):
-    """Shared helper: fetch products + orders (cached) + build product list."""
-    from datetime import datetime, timedelta
-    now = datetime.utcnow()
-    date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    date_to = now.strftime("%Y-%m-%d")
-    all_bodies, all_orders = await asyncio.gather(
-        _get_all_products_cached(client),
-        _get_orders_cached(client, date_from, date_to),
-    )
-    sales_map = _aggregate_sales_by_item(all_orders)
-    products = _build_product_list(all_bodies, sales_map)
-    _enrich_sku_from_orders(products, all_orders)
-    return products
-
-
-@app.get("/partials/stock-section/restock", response_class=HTMLResponse)
-async def stock_section_restock(request: Request):
-    """Restock + Activate sections — BM only for MeLi=0 products (fast)."""
+    """Stock tab: Reabastecer + Riesgo + Activar. Resultado cacheado 5 min."""
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
-        products = await _get_stock_base_data(client)
+        # Cache de resultado completo (evita re-computar cada vez)
+        key = f"stock_issues:{client.user_id}"
+        entry = _stock_issues_cache.get(key)
+        if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
+            ctx = entry[1].copy()
+            ctx["request"] = request
+            return templates.TemplateResponse("partials/products_stock_issues.html", ctx)
 
-        # Solo necesitamos BM para productos con MeLi=0
-        meli_zero = [p for p in products if p.get("available_quantity", 0) == 0]
-        bm_map = await _get_bm_stock_cached(meli_zero)
-        _apply_bm_stock(meli_zero, bm_map)
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
+
+        all_bodies, all_orders = await asyncio.gather(
+            _get_all_products_cached(client),
+            _get_orders_cached(client, date_from, date_to),
+        )
+        sales_map = _aggregate_sales_by_item(all_orders)
+        products = _build_product_list(all_bodies, sales_map)
+        _enrich_sku_from_orders(products, all_orders)
+
+        # BM stock para todos
+        bm_map = await _get_bm_stock_cached(products)
+        _apply_bm_stock(products, bm_map)
 
         # Seccion A: Reabastecer (MeLi=0, BM>0, tiene ventas)
         restock = [
-            p for p in meli_zero
-            if (p.get("_bm_total") or 0) > 0
+            p for p in products
+            if p.get("available_quantity", 0) == 0
+            and (p.get("_bm_total") or 0) > 0
             and p.get("units", 0) > 0
         ]
         restock.sort(key=lambda x: x.get("units", 0), reverse=True)
 
+        # Seccion B: Riesgo Sobreventa (MeLi>0, BM=0, no FULL)
+        oversell_risk = [
+            p for p in products
+            if p.get("available_quantity", 0) > 0
+            and (p.get("_bm_total") or 0) == 0
+            and not p.get("is_full")
+            and p.get("sku")
+        ]
+        oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
+
         # Seccion C: Activar (MeLi=0, BM>0, sin ventas)
         restock_ids = {p["id"] for p in restock}
         activate = [
-            p for p in meli_zero
-            if (p.get("_bm_total") or 0) > 0
+            p for p in products
+            if p.get("available_quantity", 0) == 0
+            and (p.get("_bm_total") or 0) > 0
             and p["id"] not in restock_ids
         ]
         activate.sort(key=lambda x: x.get("_bm_total", 0), reverse=True)
 
+        # KPIs
         restock_count = len(restock)
         lost_revenue = sum(p.get("revenue", 0) for p in restock)
+        risk_count = len(oversell_risk)
+        risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
         activate_count = len(activate)
         activate_stock = sum(p.get("_bm_total", 0) for p in activate)
 
-        return templates.TemplateResponse("partials/stock_section_restock.html", {
-            "request": request,
+        ctx = {
             "restock": restock,
+            "oversell_risk": oversell_risk,
             "activate": activate,
             "restock_count": restock_count,
             "lost_revenue": lost_revenue,
-            "activate_count": activate_count,
-            "activate_stock": activate_stock,
-        })
-    finally:
-        await client.close()
-
-
-@app.get("/partials/stock-section/risk", response_class=HTMLResponse)
-async def stock_section_risk(request: Request):
-    """Risk section — BM only for MeLi>0 products."""
-    client = await get_meli_client()
-    if not client:
-        return HTMLResponse("<p>Error: No autenticado</p>")
-    try:
-        products = await _get_stock_base_data(client)
-
-        # Solo necesitamos BM para productos con MeLi>0, SKU, no FULL
-        meli_positive = [
-            p for p in products
-            if p.get("available_quantity", 0) > 0
-            and p.get("sku")
-            and not p.get("is_full")
-        ]
-        bm_map = await _get_bm_stock_cached(meli_positive)
-        _apply_bm_stock(meli_positive, bm_map)
-
-        oversell_risk = [
-            p for p in meli_positive
-            if (p.get("_bm_total") or 0) == 0
-        ]
-        oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
-
-        risk_count = len(oversell_risk)
-        risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
-
-        return templates.TemplateResponse("partials/stock_section_risk.html", {
-            "request": request,
-            "oversell_risk": oversell_risk,
             "risk_count": risk_count,
             "risk_stock": risk_stock,
-        })
+            "activate_count": activate_count,
+            "activate_stock": activate_stock,
+        }
+        _stock_issues_cache[key] = (_time.time(), ctx)
+        ctx_with_req = ctx.copy()
+        ctx_with_req["request"] = request
+        return templates.TemplateResponse("partials/products_stock_issues.html", ctx_with_req)
     finally:
         await client.close()
 
@@ -1331,41 +1310,49 @@ _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
 _sale_price_cache: dict[str, tuple[float, dict | None]] = {}
 _SALE_PRICE_CACHE_TTL = 300  # 5 min
+_stock_issues_cache: dict[str, tuple[float, dict]] = {}
+_STOCK_ISSUES_TTL = 300      # 5 min
+_products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 
 
 async def _get_all_products_cached(client) -> list[dict]:
-    """Devuelve todos los items activos con detalles, cacheado 5 min.
-    Primera llamada lenta, las siguientes instantaneas."""
+    """Devuelve todos los items activos con detalles, cacheado 15 min.
+    Lock previene doble fetch cuando multiples requests concurrentes."""
     key = f"products:{client.user_id}"
     entry = _products_cache.get(key)
     if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
         return entry[1]
 
-    all_ids = await client.get_all_active_item_ids()
-    all_details = []
-    # Fetch batches in parallel (5 concurrent batches of 20)
-    sem = asyncio.Semaphore(5)
+    async with _products_fetch_lock:
+        # Double-check despues de adquirir lock
+        entry = _products_cache.get(key)
+        if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
+            return entry[1]
 
-    async def _batch(ids):
-        async with sem:
-            try:
-                return await client.get_items_details(ids)
-            except Exception:
-                return []
+        all_ids = await client.get_all_active_item_ids()
+        all_details = []
+        sem = asyncio.Semaphore(5)
 
-    batches = [all_ids[i:i+20] for i in range(0, len(all_ids), 20)]
-    results = await asyncio.gather(*[_batch(b) for b in batches])
-    for batch_result in results:
-        all_details.extend(batch_result)
+        async def _batch(ids):
+            async with sem:
+                try:
+                    return await client.get_items_details(ids)
+                except Exception:
+                    return []
 
-    products = []
-    for d in all_details:
-        body = d.get("body", d)
-        if body and body.get("id"):
-            products.append(body)
+        batches = [all_ids[i:i+20] for i in range(0, len(all_ids), 20)]
+        results = await asyncio.gather(*[_batch(b) for b in batches])
+        for batch_result in results:
+            all_details.extend(batch_result)
 
-    _products_cache[key] = (_time.time(), products)
-    return products
+        products = []
+        for d in all_details:
+            body = d.get("body", d)
+            if body and body.get("id"):
+                products.append(body)
+
+        _products_cache[key] = (_time.time(), products)
+        return products
 
 
 async def _get_orders_cached(client, date_from: str, date_to: str) -> list:
@@ -1423,7 +1410,7 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
 _prewarm_task = None
 
 async def _prewarm_caches():
-    """Pre-carga products + orders + BM stock en background."""
+    """Pre-carga products + orders + BM stock + stock issues en background."""
     try:
         client = await get_meli_client()
         if not client:
@@ -1441,7 +1428,23 @@ async def _prewarm_caches():
             sales_map = _aggregate_sales_by_item(all_orders)
             products = _build_product_list(all_bodies, sales_map)
             _enrich_sku_from_orders(products, all_orders)
-            await _get_bm_stock_cached(products)
+            bm_map = await _get_bm_stock_cached(products)
+            _apply_bm_stock(products, bm_map)
+
+            # Pre-computar stock issues result
+            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_total") or 0) > 0 and p.get("units", 0) > 0]
+            restock.sort(key=lambda x: x.get("units", 0), reverse=True)
+            oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
+            oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
+            restock_ids = {p["id"] for p in restock}
+            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_total") or 0) > 0 and p["id"] not in restock_ids]
+            activate.sort(key=lambda x: x.get("_bm_total", 0), reverse=True)
+            _stock_issues_cache[f"stock_issues:{client.user_id}"] = (_time.time(), {
+                "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
+                "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
+                "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
+                "activate_count": len(activate), "activate_stock": sum(p.get("_bm_total", 0) for p in activate),
+            })
         finally:
             await client.close()
     except Exception:
