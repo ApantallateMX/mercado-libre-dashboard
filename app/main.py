@@ -316,7 +316,7 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
                     "CONCEPTID": 8,
                     "NUMBERPAGE": 1,
                     "RECORDSPAGE": 10,
-                }, headers={"Content-Type": "application/json"}, timeout=8.0)
+                }, headers={"Content-Type": "application/json"}, timeout=30.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     if data and isinstance(data, list) and data:
@@ -1170,7 +1170,7 @@ async def get_item_bm_cost(item_id: str):
             resp = await http.post(BM_INV_URL, json={
                 "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
                 "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-            }, headers={"Content-Type": "application/json"}, timeout=8.0)
+            }, headers={"Content-Type": "application/json"}, timeout=30.0)
             if resp.status_code == 200:
                 items = resp.json()
                 if items and isinstance(items, list):
@@ -1321,12 +1321,14 @@ async def _get_all_products_cached(client) -> list[dict]:
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
-    Estrategia: FullFillment exacto -> sufijos sellable -> InventoryReport fallback."""
+    Estrategia en 2 fases:
+      Fase 1: FullFillment exacto + sufijos (rapido, <1s por SKU)
+      Fase 2: InventoryReport batch para los que fallaron (lento, 7-10s por SKU)
+    """
     import httpx
     BM_FF_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
     BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 
-    # Check cache and find which SKUs need fetching
     result_map = {}
     to_fetch = []
     for p in products:
@@ -1339,117 +1341,134 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         else:
             to_fetch.append(sku)
 
-    if to_fetch:
-        sem = asyncio.Semaphore(15)
+    if not to_fetch:
+        return result_map
 
-        async def _ff_fetch(query_sku, http):
-            """Fetch stock from FullFillment API."""
-            async with sem:
-                try:
-                    resp = await http.post(
-                        f"{BM_FF_URL}?WEBSKU={query_sku}",
-                        content="", timeout=10.0
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data and isinstance(data, list) and data:
-                            return query_sku, data[0]
-                except Exception:
-                    pass
-                return query_sku, None
+    def _store(sku, data):
+        inv = {
+            "mty": max(0, data.get("TotalQtyMTY", 0) or 0),
+            "cdmx": max(0, data.get("TotalQtyCDMX", 0) or 0),
+            "tj": max(0, data.get("TotalQtyTJ", 0) or 0),
+        }
+        inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
+        if inv["total"] > 0:
+            _bm_stock_cache[sku.upper()] = (_time.time(), inv)
+            result_map[sku] = inv
+            return True
+        return False
 
-        async def _inv_fetch(base_sku, http):
-            """Fetch stock from InventoryReport API (fallback)."""
-            async with sem:
+    ff_sem = asyncio.Semaphore(20)
+
+    async def _ff_fetch(query_sku, http):
+        async with ff_sem:
+            try:
+                resp = await http.post(
+                    f"{BM_FF_URL}?WEBSKU={query_sku}",
+                    content="", timeout=15.0
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and isinstance(data, list) and data:
+                        return query_sku, data[0]
+            except Exception:
+                pass
+            return query_sku, None
+
+    # --- FASE 1: FullFillment (rapido) ---
+    async def _ff_phase(sku, http):
+        """Intenta FF exacto, luego FF con sufijos. Retorna (sku, found_bool)."""
+        clean = _clean_sku_for_bm(sku)
+        if not clean:
+            return sku, False
+
+        # 1a) FF exacto
+        _, data = await _ff_fetch(clean, http)
+        if data:
+            if _store(sku, data):
+                return sku, True
+
+        # 1b) FF con sufijos
+        base = _extract_base_sku(clean)
+        suffix_results = await asyncio.gather(
+            *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
+            return_exceptions=True
+        )
+        agg = {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}
+        seen_psku = set()
+        found_any = False
+        for r in suffix_results:
+            if isinstance(r, Exception) or r is None:
+                continue
+            _, sdata = r
+            if sdata:
+                psku = sdata.get("ProductSKU", "")
+                if psku and psku in seen_psku:
+                    continue
+                if psku:
+                    seen_psku.add(psku)
+                agg["TotalQtyMTY"] += max(0, sdata.get("TotalQtyMTY", 0) or 0)
+                agg["TotalQtyCDMX"] += max(0, sdata.get("TotalQtyCDMX", 0) or 0)
+                agg["TotalQtyTJ"] += max(0, sdata.get("TotalQtyTJ", 0) or 0)
+                found_any = True
+        if found_any and _store(sku, agg):
+            return sku, True
+
+        return sku, False
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        ff_results = await asyncio.gather(
+            *[_ff_phase(s, http) for s in to_fetch],
+            return_exceptions=True
+        )
+
+    # Recopilar SKUs que fallaron en Fase 1
+    ff_failed = []
+    for r in ff_results:
+        if isinstance(r, Exception):
+            continue
+        sku, found = r
+        if not found:
+            ff_failed.append(sku)
+
+    # --- FASE 2: InventoryReport para los que fallaron (lento, batch) ---
+    if ff_failed:
+        inv_sem = asyncio.Semaphore(10)
+
+        async def _inv_fetch(sku, http):
+            clean = _clean_sku_for_bm(sku)
+            base = _extract_base_sku(clean) if clean else ""
+            if not base:
+                return sku, False
+            async with inv_sem:
                 try:
                     resp = await http.post(BM_INV_URL, json={
-                        "COMPANYID": 1, "SEARCH": base_sku,
+                        "COMPANYID": 1, "SEARCH": base,
                         "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-                    }, headers={"Content-Type": "application/json"}, timeout=8.0)
+                    }, headers={"Content-Type": "application/json"}, timeout=30.0)
                     if resp.status_code == 200:
                         data = resp.json()
                         if data and isinstance(data, list):
+                            inv_item = None
                             for item in data:
-                                if item.get("SKU", "").upper() == base_sku.upper():
-                                    return base_sku, item
-                            if data:
-                                return base_sku, data[0]
+                                if item.get("SKU", "").upper() == base.upper():
+                                    inv_item = item
+                                    break
+                            if not inv_item and data:
+                                inv_item = data[0]
+                            if inv_item:
+                                total_qty = inv_item.get("TotalQty", 0) or 0
+                                if total_qty > 0:
+                                    _store(sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": total_qty, "TotalQtyTJ": 0})
+                                    return sku, True
                 except Exception:
                     pass
-                return base_sku, None
+                return sku, False
 
-        async def _fetch_stock(sku, http):
-            """Busca stock: FullFillment exacto -> sufijos -> InventoryReport.
-            Limpia SKU de MeLi antes de consultar BM."""
-            clean = _clean_sku_for_bm(sku)
-            if not clean:
-                return sku, None
-
-            # 1) FullFillment con SKU limpio
-            _, data = await _ff_fetch(clean, http)
-            if data:
-                mty = max(0, data.get("TotalQtyMTY", 0) or 0)
-                cdmx = max(0, data.get("TotalQtyCDMX", 0) or 0)
-                tj = max(0, data.get("TotalQtyTJ", 0) or 0)
-                if (mty + cdmx + tj) > 0:
-                    return sku, {"TotalQtyMTY": mty, "TotalQtyCDMX": cdmx, "TotalQtyTJ": tj}
-
-            # 2) FullFillment con sufijos sellable
-            base = _extract_base_sku(clean)
-            suffix_results = await asyncio.gather(
-                *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            await asyncio.gather(
+                *[_inv_fetch(s, http) for s in ff_failed],
                 return_exceptions=True
             )
-            agg = {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}
-            seen_psku = set()
-            found_any = False
-            for r in suffix_results:
-                if isinstance(r, Exception) or r is None:
-                    continue
-                _, sdata = r
-                if sdata:
-                    psku = sdata.get("ProductSKU", "")
-                    if psku and psku in seen_psku:
-                        continue
-                    if psku:
-                        seen_psku.add(psku)
-                    agg["TotalQtyMTY"] += max(0, sdata.get("TotalQtyMTY", 0) or 0)
-                    agg["TotalQtyCDMX"] += max(0, sdata.get("TotalQtyCDMX", 0) or 0)
-                    agg["TotalQtyTJ"] += max(0, sdata.get("TotalQtyTJ", 0) or 0)
-                    found_any = True
-            if found_any and (agg["TotalQtyMTY"] + agg["TotalQtyCDMX"] + agg["TotalQtyTJ"]) > 0:
-                return sku, agg
-
-            # 3) Fallback: InventoryReport (no tiene desglose MTY/CDMX/TJ,
-            #    pero tiene TotalQty que es mejor que nada)
-            _, inv_data = await _inv_fetch(base, http)
-            if inv_data:
-                total_qty = inv_data.get("TotalQty", 0) or 0
-                if total_qty > 0:
-                    # Sin desglose por almacen, poner todo en "total" via cdmx placeholder
-                    return sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": total_qty, "TotalQtyTJ": 0}
-
-            return sku, None
-
-        async with httpx.AsyncClient() as http:
-            results = await asyncio.gather(
-                *[_fetch_stock(s, http) for s in to_fetch],
-                return_exceptions=True
-            )
-
-        for r in results:
-            if isinstance(r, Exception) or r is None:
-                continue
-            sku, data = r
-            if data:
-                inv = {
-                    "mty": data.get("TotalQtyMTY", 0) or 0,
-                    "cdmx": data.get("TotalQtyCDMX", 0) or 0,
-                    "tj": data.get("TotalQtyTJ", 0) or 0,
-                }
-                inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
-                _bm_stock_cache[sku.upper()] = (_time.time(), inv)
-                result_map[sku] = inv
 
     return result_map
 
@@ -2899,7 +2918,7 @@ async def item_deal_partial(request: Request, item_id: str):
                 resp = await http.post(BM_INV_URL, json={
                     "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
                     "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-                }, headers={"Content-Type": "application/json"}, timeout=8.0)
+                }, headers={"Content-Type": "application/json"}, timeout=30.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     if data and isinstance(data, list):
