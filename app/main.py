@@ -4686,7 +4686,15 @@ async def activate_item_promotion_api(item_id: str, request: Request):
         )
         return {"ok": True, "result": result}
     except Exception as e:
-        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+        detail = str(e)
+        error_body = getattr(e, "body", None)
+        if isinstance(error_body, dict):
+            detail = error_body.get("error", "") or detail
+            cause = error_body.get("cause", [])
+            if isinstance(cause, list) and cause:
+                cause_msgs = [c.get("message", c.get("code", str(c))) for c in cause[:5]]
+                detail += " | " + "; ".join(cause_msgs)
+        return JSONResponse({"ok": False, "detail": detail, "meli_body": error_body}, status_code=400)
     finally:
         await client.close()
 

@@ -278,8 +278,8 @@
             method = 'POST';
             var sd = document.getElementById('idm-start-date').value;
             var ed = document.getElementById('idm-end-date').value;
-            if (sd) body.start_date = new Date(sd).toISOString();
-            if (ed) body.finish_date = new Date(ed).toISOString();
+            if (sd) body.start_date = sd + ':00';
+            if (ed) body.finish_date = ed + ':00';
         } else if (_selectedPromoData && _selectedPromoData.id) {
             body.promotion_id = _selectedPromoData.id;
         }
