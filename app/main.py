@@ -1841,8 +1841,8 @@ async def products_inventory_partial(
             products = [p for p in products if not p.get("is_full")]
 
         # Busqueda por texto (incluye SKUs de variaciones)
-        if search:
-            q = search.lower()
+        if search and search.strip():
+            q = search.strip().lower()
             def _matches(p):
                 if q in p.get("id", "").lower():
                     return True

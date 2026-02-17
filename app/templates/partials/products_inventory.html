@@ -704,7 +704,7 @@ var _searchTimer = null;
 function searchTable(query) {
     clearTimeout(_searchTimer);
     _searchTimer = setTimeout(function() {
-        _navTo(buildInvUrl({search: query, page: 1}));
+        _navTo(buildInvUrl({search: (query || '').trim(), page: 1}));
     }, 400);
 }
 
