@@ -2565,10 +2565,10 @@ async def health_claims_partial(
         dt = date_to or None
 
         if filter_order_id:
-            # Fetch all claims (paginated) and filter by resource_id server-side
+            # Fetch all claims WITHOUT date filter — the claim may predate the active range
             try:
                 all_claims = await client.fetch_all_claims(status=params_status,
-                                                            date_from=df, date_to=dt)
+                                                            date_from=None, date_to=None)
                 raw_claims = [c for c in all_claims
                               if str(c.get("resource_id", "")) == filter_order_id]
             except Exception:
@@ -3044,11 +3044,11 @@ async def health_search_partial(
                 except Exception:
                     return None
 
-            # Search claims that match this order (resource_id) — fetch recent claims
+            # Search claims that match this order (resource_id) — fetch ALL claims, no date filter
             async def _find_claims_for_order(order_id):
                 try:
-                    cd = await client.get_claims(limit=50, status=None)
-                    return [cl for cl in cd.get("results", [])
+                    all_cl = await client.fetch_all_claims(status=None, date_from=None, date_to=None)
+                    return [cl for cl in all_cl
                             if str(cl.get("resource_id", "")) == str(order_id)]
                 except Exception:
                     return []
