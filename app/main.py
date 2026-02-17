@@ -402,9 +402,10 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
     for p in products:
         bm = bm_map.get(p.get(sku_key))
         if bm:
-            p["_bm_mty"] = bm.get("TotalQtyMTY", 0) or 0
-            p["_bm_cdmx"] = bm.get("TotalQtyCDMX", 0) or 0
-            p["_bm_tj"] = bm.get("TotalQtyTJ", 0) or 0
+            # CRITICO: usar MainQty (stock propio), NO TotalQty (incluye alternativos)
+            p["_bm_mty"] = max(0, bm.get("MainQtyMTY", 0) or 0)
+            p["_bm_cdmx"] = max(0, bm.get("MainQtyCDMX", 0) or 0)
+            p["_bm_tj"] = max(0, bm.get("MainQtyTJ", 0) or 0)
             p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"] + p["_bm_tj"]
 
 
@@ -1102,9 +1103,10 @@ async def items_grid_partial(
                     queried_sku, data = await coro
                     if data:
                         base = _extract_base_sku(queried_sku)
-                        _mty = data.get("TotalQtyMTY", 0) or 0
-                        _cdmx = data.get("TotalQtyCDMX", 0) or 0
-                        _tj = data.get("TotalQtyTJ", 0) or 0
+                        # CRITICO: usar MainQty (stock propio), NO TotalQty
+                        _mty = max(0, data.get("MainQtyMTY", 0) or 0)
+                        _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
+                        _tj = max(0, data.get("MainQtyTJ", 0) or 0)
                         inv = {
                             "MTY": _mty,
                             "CDMX": _cdmx,
@@ -1479,10 +1481,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
 
     def _store(sku, data, force_cache=False):
+        # CRITICO: usar MainQty (stock propio), NO TotalQty (incluye alternativos)
         inv = {
-            "mty": max(0, data.get("TotalQtyMTY", 0) or 0),
-            "cdmx": max(0, data.get("TotalQtyCDMX", 0) or 0),
-            "tj": max(0, data.get("TotalQtyTJ", 0) or 0),
+            "mty": max(0, data.get("MainQtyMTY", 0) or 0),
+            "cdmx": max(0, data.get("MainQtyCDMX", 0) or 0),
+            "tj": max(0, data.get("MainQtyTJ", 0) or 0),
         }
         inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
         if inv["total"] > 0 or force_cache:
@@ -1532,7 +1535,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
             return_exceptions=True
         )
-        agg = {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}
+        agg = {"MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
         seen_psku = set()
         found_any = False
         for r in suffix_results:
@@ -1545,9 +1548,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                     continue
                 if psku:
                     seen_psku.add(psku)
-                agg["TotalQtyMTY"] += max(0, sdata.get("TotalQtyMTY", 0) or 0)
-                agg["TotalQtyCDMX"] += max(0, sdata.get("TotalQtyCDMX", 0) or 0)
-                agg["TotalQtyTJ"] += max(0, sdata.get("TotalQtyTJ", 0) or 0)
+                # CRITICO: usar MainQty (stock propio), NO TotalQty
+                agg["MainQtyMTY"] += max(0, sdata.get("MainQtyMTY", 0) or 0)
+                agg["MainQtyCDMX"] += max(0, sdata.get("MainQtyCDMX", 0) or 0)
+                agg["MainQtyTJ"] += max(0, sdata.get("MainQtyTJ", 0) or 0)
                 found_any = True
         if found_any and _store(sku, agg):
             return sku, True
@@ -1598,7 +1602,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                             if inv_item:
                                 avail_qty = inv_item.get("AvailableQTY") or inv_item.get("TotalQty") or 0
                                 if avail_qty > 0:
-                                    _store(sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}, force_cache=True)
+                                    _store(sku, {"MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}, force_cache=True)
                                     # Override with total since InvReport has no warehouse breakdown
                                     inv = {"mty": 0, "cdmx": 0, "tj": 0, "total": int(avail_qty)}
                                     _bm_stock_cache[sku.upper()] = (_time.time(), inv)
@@ -2343,12 +2347,13 @@ async def products_not_published_partial(request: Request):
                         data = resp.json()
                         if data and isinstance(data, list) and data:
                             row = data[0]
-                            total = (row.get("TotalQtyMTY", 0) or 0) + (row.get("TotalQtyCDMX", 0) or 0) + (row.get("TotalQtyTJ", 0) or 0)
+                            # CRITICO: usar MainQty (stock propio), NO TotalQty
+                            total = max(0, row.get("MainQtyMTY", 0) or 0) + max(0, row.get("MainQtyCDMX", 0) or 0) + max(0, row.get("MainQtyTJ", 0) or 0)
                             if total > 0:
                                 return query_sku, {
-                                    "mty": row.get("TotalQtyMTY", 0) or 0,
-                                    "cdmx": row.get("TotalQtyCDMX", 0) or 0,
-                                    "tj": row.get("TotalQtyTJ", 0) or 0,
+                                    "mty": max(0, row.get("MainQtyMTY", 0) or 0),
+                                    "cdmx": max(0, row.get("MainQtyCDMX", 0) or 0),
+                                    "tj": max(0, row.get("MainQtyTJ", 0) or 0),
                                     "total": total,
                                 }
                 except Exception:
