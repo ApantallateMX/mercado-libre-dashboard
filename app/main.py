@@ -168,6 +168,10 @@ async def pin_verify(request: Request):
     if pin == APP_PIN:
         response = RedirectResponse(next_url, status_code=302)
         response.set_cookie("pin_ok", "1", max_age=2592000, httponly=True, samesite="lax")
+        # Pre-warm caches en background para que tabs carguen rapido
+        global _prewarm_task
+        if _prewarm_task is None or _prewarm_task.done():
+            _prewarm_task = asyncio.create_task(_prewarm_caches())
         return response
     from urllib.parse import quote
     return RedirectResponse(f"/pin?error=1&next={quote(next_url, safe='')}", status_code=302)
@@ -482,6 +486,10 @@ async def dashboard_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    # Pre-warm caches al entrar al dashboard
+    global _prewarm_task
+    if _prewarm_task is None or _prewarm_task.done():
+        _prewarm_task = asyncio.create_task(_prewarm_caches())
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "user": user,
@@ -506,6 +514,10 @@ async def items_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    # Pre-warm caches al entrar a Centro de Productos
+    global _prewarm_task
+    if _prewarm_task is None or _prewarm_task.done():
+        _prewarm_task = asyncio.create_task(_prewarm_caches())
     return templates.TemplateResponse("items.html", {
         "request": request,
         "user": user,
@@ -1210,25 +1222,13 @@ async def products_stock_issues_partial(request: Request):
 
         all_bodies, all_orders = await asyncio.gather(
             _get_all_products_cached(client),
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
+            _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
         # Enriquecer SKU desde ordenes (fallback)
-        _sku_from_orders = {}
-        for order in all_orders:
-            for oi in order.get("order_items", []):
-                it = oi.get("item", {})
-                raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
-                if raw_sku and it.get("id"):
-                    base = raw_sku.split("+")[0].strip()
-                    existing = _sku_from_orders.get(it["id"], "")
-                    if not existing or len(base) < len(existing):
-                        _sku_from_orders[it["id"]] = base
-        for p in products:
-            if not p.get("sku") and p["id"] in _sku_from_orders:
-                p["sku"] = _sku_from_orders[p["id"]]
+        _enrich_sku_from_orders(products, all_orders)
 
         # BM stock
         bm_map = await _get_bm_stock_cached(products)
@@ -1280,8 +1280,10 @@ import time as _time
 _products_cache: dict[str, tuple[float, list]] = {}
 _bm_stock_cache: dict[str, tuple[float, dict]] = {}
 _category_cache: dict[str, str] = {}  # category_id -> name
-_PRODUCTS_CACHE_TTL = 300   # 5 min
-_BM_CACHE_TTL = 300         # 5 min
+_PRODUCTS_CACHE_TTL = 900   # 15 min
+_BM_CACHE_TTL = 900         # 15 min
+_orders_cache: dict[str, tuple[float, list]] = {}
+_ORDERS_CACHE_TTL = 900     # 15 min
 
 
 async def _get_all_products_cached(client) -> list[dict]:
@@ -1319,6 +1321,46 @@ async def _get_all_products_cached(client) -> list[dict]:
     return products
 
 
+async def _get_orders_cached(client, date_from: str, date_to: str) -> list:
+    """Ordenes de 30 dias con cache."""
+    key = f"orders:{client.user_id}:{date_from}"
+    entry = _orders_cache.get(key)
+    if entry and (_time.time() - entry[0]) < _ORDERS_CACHE_TTL:
+        return entry[1]
+    orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+    _orders_cache[key] = (_time.time(), orders)
+    return orders
+
+
+# --- Background pre-warm ---
+_prewarm_task = None
+
+async def _prewarm_caches():
+    """Pre-carga products + orders + BM stock en background."""
+    try:
+        client = await get_meli_client()
+        if not client:
+            return
+        try:
+            from datetime import datetime, timedelta
+            now = datetime.utcnow()
+            date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+            date_to = now.strftime("%Y-%m-%d")
+
+            all_bodies, all_orders = await asyncio.gather(
+                _get_all_products_cached(client),
+                _get_orders_cached(client, date_from, date_to),
+            )
+            sales_map = _aggregate_sales_by_item(all_orders)
+            products = _build_product_list(all_bodies, sales_map)
+            _enrich_sku_from_orders(products, all_orders)
+            await _get_bm_stock_cached(products)
+        finally:
+            await client.close()
+    except Exception:
+        pass  # Background task — no debe romper nada
+
+
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
     Estrategia en 2 fases:
@@ -1344,6 +1386,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     if not to_fetch:
         return result_map
 
+    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
+
     def _store(sku, data):
         inv = {
             "mty": max(0, data.get("TotalQtyMTY", 0) or 0),
@@ -1351,11 +1395,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "tj": max(0, data.get("TotalQtyTJ", 0) or 0),
         }
         inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
+        _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:
-            _bm_stock_cache[sku.upper()] = (_time.time(), inv)
             result_map[sku] = inv
             return True
         return False
+
+    def _store_empty(sku):
+        """Cachea resultado vacio para no re-consultar."""
+        _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
 
     ff_sem = asyncio.Semaphore(20)
 
@@ -1438,6 +1486,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             clean = _clean_sku_for_bm(sku)
             base = _extract_base_sku(clean) if clean else ""
             if not base:
+                _store_empty(sku)
                 return sku, False
             async with inv_sem:
                 try:
@@ -1462,6 +1511,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                                     return sku, True
                 except Exception:
                     pass
+                _store_empty(sku)
                 return sku, False
 
         async with httpx.AsyncClient(timeout=30.0) as http:
@@ -1482,6 +1532,23 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
             p["_bm_cdmx"] = inv["cdmx"]
             p["_bm_tj"] = inv["tj"]
             p["_bm_total"] = inv["total"]
+
+
+def _enrich_sku_from_orders(products: list, orders: list):
+    """Enriquece SKU de productos desde ordenes (fallback para items sin SKU en datos)."""
+    sku_map = {}
+    for order in orders:
+        for oi in order.get("order_items", []):
+            it = oi.get("item", {})
+            raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
+            if raw_sku and it.get("id"):
+                base = raw_sku.split("+")[0].strip()
+                existing = sku_map.get(it["id"], "")
+                if not existing or len(base) < len(existing):
+                    sku_map[it["id"]] = base
+    for p in products:
+        if not p.get("sku") and p["id"] in sku_map:
+            p["sku"] = sku_map[p["id"]]
 
 
 def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
@@ -1654,30 +1721,14 @@ async def products_inventory_partial(
         date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
-        # Fase 1: fetch paralelo (products + orders + bm_stock)
+        # Fase 1: fetch paralelo (products + orders)
         all_bodies, all_orders = await asyncio.gather(
             _get_all_products_cached(client),
-            client.fetch_all_orders(date_from=date_from, date_to=date_to),
+            _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
-
-        # Fallback: enriquecer SKU desde ordenes para items sin SKU en datos
-        _sku_from_orders = {}
-        for order in all_orders:
-            for oi in order.get("order_items", []):
-                it = oi.get("item", {})
-                raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
-                if raw_sku and it.get("id"):
-                    # Tomar el SKU mas corto (base) para el item_id
-                    # seller_sku puede ser "SKU1+SKU2" para packs
-                    base = raw_sku.split("+")[0].strip()
-                    existing = _sku_from_orders.get(it["id"], "")
-                    if not existing or len(base) < len(existing):
-                        _sku_from_orders[it["id"]] = base
-        for p in products:
-            if not p.get("sku") and p["id"] in _sku_from_orders:
-                p["sku"] = _sku_from_orders[p["id"]]
+        _enrich_sku_from_orders(products, all_orders)
 
         # Recomendaciones (para preset baja_venta)
         for p in products:
