@@ -2585,6 +2585,29 @@ async def health_claims_partial(
             raw_claims = data.get("results", [])
             paging = data.get("paging", {"total": len(raw_claims), "offset": offset, "limit": limit})
 
+        # --- Refresh status of "opened" claims via individual endpoint ---
+        # The search API can return stale status; the detail endpoint is authoritative
+        opened_ids = [c for c in raw_claims if c.get("status") == "opened"]
+        if opened_ids:
+            sem_refresh = asyncio.Semaphore(5)
+
+            async def _refresh_status(claim):
+                async with sem_refresh:
+                    try:
+                        detail = await client.get_claim_detail(str(claim.get("id", "")))
+                        if isinstance(detail, dict) and detail.get("status"):
+                            claim["status"] = detail["status"]
+                            if detail.get("stage"):
+                                claim["stage"] = detail["stage"]
+                            # Also refresh players (for due_date / actions)
+                            if detail.get("players"):
+                                claim["players"] = detail["players"]
+                    except Exception:
+                        pass  # Keep original status if detail fetch fails
+
+            await asyncio.gather(*[_refresh_status(c) for c in opened_ids[:30]],
+                                 return_exceptions=True)
+
         # Reason code mapping (PDD = producto defectuoso, PNR = no recibido)
         REASON_MAP = {
             "PNR": ("No recibido", "not_received"),
@@ -3065,6 +3088,21 @@ async def health_search_partial(
                 item_info = oi[0].get("item", {}) if oi else {}
                 ship = order.get("shipping", {})
                 claims_for_order = await _find_claims_for_order(order["id"])
+                # Refresh status of claims from search API (may be stale)
+                if claims_for_order:
+                    sem_r = asyncio.Semaphore(5)
+                    async def _refresh_cl(cl):
+                        async with sem_r:
+                            try:
+                                d = await client.get_claim_detail(str(cl.get("id", "")))
+                                if isinstance(d, dict) and d.get("status"):
+                                    cl["status"] = d["status"]
+                                    if d.get("stage"):
+                                        cl["stage"] = d["stage"]
+                            except Exception:
+                                pass
+                    await asyncio.gather(*[_refresh_cl(cl) for cl in claims_for_order[:10]],
+                                         return_exceptions=True)
                 results.append({
                     "type": "order",
                     "id": order.get("id", ""),
