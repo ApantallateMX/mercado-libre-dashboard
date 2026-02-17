@@ -1134,7 +1134,14 @@ class MeliClient:
         params = {"app_version": "v2"}
 
         if promotion_type == "PRICE_DISCOUNT":
-            # PRICE_DISCOUNT: POST con deal_price + start/finish dates
+            # PRICE_DISCOUNT: Si ya existe uno activo, DELETE primero, luego POST nuevo
+            if kwargs.get("is_modification"):
+                try:
+                    await self.delete(endpoint, params={"app_version": "v2", "promotion_type": "PRICE_DISCOUNT"})
+                    await asyncio.sleep(0.5)  # brief wait for MeLi to process
+                except Exception:
+                    pass  # Si no habia uno activo, ignorar error de delete
+
             body = {"deal_price": deal_price, "promotion_type": "PRICE_DISCOUNT"}
             if kwargs.get("original_price"):
                 body["original_price"] = kwargs["original_price"]
@@ -1143,8 +1150,22 @@ class MeliClient:
             if kwargs.get("finish_date"):
                 body["finish_date"] = kwargs["finish_date"]
             return await self.post(endpoint, params=params, json=body)
+        elif promotion_type in ("DEAL", "MARKETPLACE_CAMPAIGN"):
+            # Campaign deals (Descuentos Primavera, etc): POST to /marketplace/ endpoint
+            mp_endpoint = f"/marketplace/seller-promotions/items/{item_id}"
+            mp_params = {"user_id": self.user_id}
+            body = {
+                "deal_price": deal_price,
+                "promotion_type": promotion_type,
+            }
+            if kwargs.get("promotion_id"):
+                body["promotion_id"] = kwargs["promotion_id"]
+            return await self._request_raw(
+                "POST", mp_endpoint, extra_headers={"version": "v2"},
+                params=mp_params, json=body
+            )
         else:
-            # DEAL/DOD/LIGHTNING/MARKETPLACE_CAMPAIGN: PUT con deal_price + promotion_type + promotion_id
+            # DOD/LIGHTNING/other: PUT con deal_price + promotion_type + promotion_id
             body = {"deal_price": deal_price, "promotion_type": promotion_type}
             if kwargs.get("promotion_id"):
                 body["promotion_id"] = kwargs["promotion_id"]

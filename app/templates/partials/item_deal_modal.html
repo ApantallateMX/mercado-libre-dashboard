@@ -413,6 +413,11 @@
     function _doActivate(dealPrice, btn) {
         var body = { deal_price: dealPrice, promotion_type: _selectedPromo };
 
+        // Si la promo ya esta activa, es una modificacion (DELETE + POST para PRICE_DISCOUNT)
+        if (_selectedPromoData && _selectedPromoData.status === 'started') {
+            body.is_modification = true;
+        }
+
         if (_selectedPromo === 'PRICE_DISCOUNT') {
             var sd = document.getElementById('idm-start-date').value;
             var ed = document.getElementById('idm-end-date').value;
@@ -422,7 +427,7 @@
                 resultEl.classList.remove('hidden');
                 msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
                 msgEl.textContent = 'Fechas de inicio y fin son requeridas para PRICE_DISCOUNT';
-                btn.textContent = 'Activar Deal';
+                btn.textContent = 'Modificar Deal';
                 btn.disabled = false;
                 return;
             }
