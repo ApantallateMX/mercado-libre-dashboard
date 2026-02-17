@@ -1744,6 +1744,16 @@ async def _enrich_variation_skus(client, products: list):
 
 # ---------- Product Intelligence tabs ----------
 
+@app.post("/api/cache/invalidate-products")
+async def invalidate_products_cache():
+    """Invalida cache de productos para forzar re-fetch desde MeLi."""
+    cleared = 0
+    for cache in (_products_cache, _orders_cache, _sale_price_cache):
+        cleared += len(cache)
+        cache.clear()
+    return {"ok": True, "cleared": cleared}
+
+
 @app.get("/partials/products-inventory", response_class=HTMLResponse)
 async def products_inventory_partial(
     request: Request,
