@@ -282,9 +282,62 @@
         container.innerHTML = '';
     };
 
-    // --- Auto-refresh system ---
+    // Navigate to a specific claim from search results
+    window.goToClaim = function(claimId) {
+        // Switch to claims tab and highlight the specific claim
+        clearHealthSearch();
+        healthFilters.statuses.claims = ''; // Show all to find it
+        healthFilters.offsets.claims = 0;
+        loadTab('claims');
+        // After tab loads, scroll to and highlight the claim
+        setTimeout(function() {
+            var el = document.getElementById('claim-row-' + claimId);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                el.classList.add('ring-2', 'ring-yellow-400');
+                setTimeout(function() { el.classList.remove('ring-2', 'ring-yellow-400'); }, 3000);
+            }
+        }, 1500);
+    };
+
+    // Navigate to claims tab showing claims for a specific order
+    window.goToClaimsForOrder = function(orderId) {
+        clearHealthSearch();
+        healthFilters.statuses.claims = '';
+        healthFilters.offsets.claims = 0;
+        loadTab('claims');
+        // Highlight matching claims after load
+        setTimeout(function() {
+            var content = document.getElementById('health-tab-content');
+            if (!content) return;
+            var cards = content.querySelectorAll('[id^="claim-row-"]');
+            cards.forEach(function(card) {
+                var orderText = card.textContent;
+                if (orderText.indexOf(orderId) !== -1) {
+                    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    card.classList.add('ring-2', 'ring-yellow-400');
+                    setTimeout(function() { card.classList.remove('ring-2', 'ring-yellow-400'); }, 3000);
+                }
+            });
+        }, 1500);
+    };
+
+    // Navigate to messages for a specific order
+    window.goToMessagesForOrder = function(orderId) {
+        clearHealthSearch();
+        loadTab('messages');
+    };
+
+    // --- Auto-refresh system (non-intrusive) ---
     var _autoRefreshInterval = null;
-    var _AUTO_REFRESH_MS = 30000;
+    var _AUTO_REFRESH_MS = 60000; // 60s instead of 30s to reduce disruption
+    var _lastUserActivity = Date.now();
+
+    // Track ANY user activity on the page
+    document.addEventListener('mousedown', function() { _lastUserActivity = Date.now(); }, true);
+    document.addEventListener('keydown', function() { _lastUserActivity = Date.now(); }, true);
+    document.addEventListener('scroll', function() { _lastUserActivity = Date.now(); }, true);
+    document.addEventListener('focus', function() { _lastUserActivity = Date.now(); }, true);
 
     function _updateTimestamp() {
         var now = new Date();
@@ -296,42 +349,62 @@
     }
 
     function _isUserInteracting() {
-        var content = document.getElementById('health-tab-content');
-        if (!content) return false;
+        // If user was active in the last 10 seconds, they're interacting
+        if (Date.now() - _lastUserActivity < 10000) return true;
+
         var activeEl = document.activeElement;
-        // Check if user has focus on any input/textarea inside tab content
-        if (content.contains(activeEl) &&
-            (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT')) {
+        // Any focused input/textarea/select anywhere on the page
+        if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT')) {
             return true;
         }
-        // Check if any textarea has text (user may have typed something and clicked elsewhere)
+
+        // Check if search results are visible
+        var searchResults = document.getElementById('health-search-results');
+        if (searchResults && !searchResults.classList.contains('hidden') && searchResults.innerHTML.trim()) {
+            return true;
+        }
+
+        // Check search input has text
+        var searchInput = document.getElementById('health-search-input');
+        if (searchInput && searchInput.value.trim().length > 0) {
+            return true;
+        }
+
+        var content = document.getElementById('health-tab-content');
+        if (!content) return false;
+
+        // Check if any textarea has text
         var textareas = content.querySelectorAll('textarea');
         for (var i = 0; i < textareas.length; i++) {
-            if (textareas[i].value.trim().length > 0) {
-                return true;
-            }
+            if (textareas[i].value.trim().length > 0) return true;
         }
-        // Check if any AI suggestion panel is visible (user reviewing suggestion)
+        // Check if any AI suggestion panel is visible
         var aiPanels = content.querySelectorAll('[id^="ai-panel-"]');
         for (var j = 0; j < aiPanels.length; j++) {
-            if (!aiPanels[j].classList.contains('hidden')) {
-                return true;
+            if (!aiPanels[j].classList.contains('hidden')) return true;
+        }
+        // Check if any accordion/conversation is expanded
+        var accordions = content.querySelectorAll('.border-l-2:not(.hidden)');
+        for (var k = 0; k < accordions.length; k++) {
+            if (!accordions[k].classList.contains('hidden')) {
+                var parent = accordions[k].parentElement;
+                if (parent && !parent.querySelector('.hidden') === accordions[k]) return true;
             }
         }
         return false;
     }
 
     function _autoRefresh() {
+        // Skip entirely if user is interacting
+        if (_isUserInteracting()) return;
+
         var indicator = document.getElementById('health-refresh-indicator');
         if (indicator) indicator.classList.remove('hidden');
 
-        // Siempre refrescar summary (KPI cards)
+        // Refresh summary (KPI cards)
         loadSummary();
-
-        // Solo refrescar tab si el usuario NO esta interactuando
-        if (!_isUserInteracting()) {
-            loadTab(healthFilters.currentTab);
-        }
+        // Refresh current tab
+        loadTab(healthFilters.currentTab);
 
         _updateTimestamp();
         setTimeout(function() {
@@ -356,7 +429,7 @@
         if (document.hidden) {
             _stopAutoRefresh();
         } else {
-            _autoRefresh();
+            // Don't immediately refresh when coming back — give user a moment
             _startAutoRefresh();
         }
     });
