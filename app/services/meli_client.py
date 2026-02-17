@@ -260,7 +260,7 @@ class MeliClient:
         if not item_ids:
             return []
         ids = ",".join(item_ids[:20])  # Max 20 items por request
-        return await self.get("/items", params={"ids": ids})
+        return await self.get("/items", params={"ids": ids, "attributes": "id,title,price,original_price,available_quantity,thumbnail,permalink,pictures,video_id,category_id,shipping,seller_custom_field,attributes,variations,status"})
 
     async def get_item_sale_price(self, item_id: str) -> dict | None:
         """Obtiene precio de venta real (con promocion si existe).

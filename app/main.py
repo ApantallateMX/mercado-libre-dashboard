@@ -1840,13 +1840,22 @@ async def products_inventory_partial(
         elif full_filter == "not_full":
             products = [p for p in products if not p.get("is_full")]
 
-        # Busqueda por texto
+        # Busqueda por texto (incluye SKUs de variaciones)
         if search:
             q = search.lower()
-            products = [p for p in products
-                        if q in p.get("id", "").lower()
-                        or q in (p.get("sku") or "").lower()
-                        or q in p.get("title", "").lower()]
+            def _matches(p):
+                if q in p.get("id", "").lower():
+                    return True
+                if q in (p.get("sku") or "").lower():
+                    return True
+                if q in p.get("title", "").lower():
+                    return True
+                # Buscar en SKUs de variaciones
+                for v in p.get("variations", []):
+                    if q in (v.get("sku") or "").lower():
+                        return True
+                return False
+            products = [p for p in products if _matches(p)]
 
         total_count = len(products)
 
