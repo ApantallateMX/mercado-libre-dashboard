@@ -298,6 +298,7 @@
                 msgEl.className = 'rounded-lg p-3 text-sm bg-green-50 text-green-700 border border-green-200';
                 msgEl.textContent = 'Deal activado exitosamente a ' + fmt(dealPrice);
                 btn.textContent = 'Listo';
+                if (window._onDealChange) window._onDealChange(true, dealPrice, ORIG_PRICE > PRICE ? ORIG_PRICE : PRICE);
             } else {
                 msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
                 msgEl.textContent = 'Error: ' + (res.data.detail || res.data.error || JSON.stringify(res.data));
@@ -338,6 +339,7 @@
                 msgEl.className = 'rounded-lg p-3 text-sm bg-green-50 text-green-700 border border-green-200';
                 msgEl.textContent = 'Deal desactivado';
                 btn.textContent = 'Desactivado';
+                if (window._onDealChange) window._onDealChange(false, 0, 0);
             } else {
                 msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
                 msgEl.textContent = 'Error: ' + (res.data.detail || JSON.stringify(res.data));

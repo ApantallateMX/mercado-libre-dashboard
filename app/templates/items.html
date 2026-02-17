@@ -116,7 +116,12 @@
     // Bind tab clicks
     document.querySelectorAll('.tab-btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
-            switchTab(btn.dataset.tab, btn.dataset.url);
+            var url = btn.dataset.url;
+            // Persist inventory tab state
+            if (btn.dataset.tab === 'inventory' && window._lastInventoryUrl) {
+                url = window._lastInventoryUrl;
+            }
+            switchTab(btn.dataset.tab, url);
         });
     });
 
@@ -309,11 +314,13 @@
             .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando item</p>'; });
     };
 
-    window.closeEditModal = function() {
+    window.closeEditModal = function(forceReload) {
         document.getElementById('edit-modal').classList.add('hidden');
-        // Reload active tab to reflect changes
-        var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
-        if (activeBtn) activeBtn.click();
+        window._onDealChange = null;
+        if (forceReload || _modalHadChanges) {
+            var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
+            if (activeBtn) activeBtn.click();
+        }
     };
 
     // Close modal on backdrop click

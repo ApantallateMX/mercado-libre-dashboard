@@ -1284,6 +1284,8 @@ _PRODUCTS_CACHE_TTL = 900   # 15 min
 _BM_CACHE_TTL = 900         # 15 min
 _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
+_sale_price_cache: dict[str, tuple[float, dict | None]] = {}
+_SALE_PRICE_CACHE_TTL = 300  # 5 min
 
 
 async def _get_all_products_cached(client) -> list[dict]:
@@ -1330,6 +1332,46 @@ async def _get_orders_cached(client, date_from: str, date_to: str) -> list:
     orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
     _orders_cache[key] = (_time.time(), orders)
     return orders
+
+
+async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict]:
+    """Fetch /items/{id}/sale_price para detectar deals activos. Cache 5min.
+    Retorna {item_id: {amount, regular_amount, ...}} solo para items CON descuento."""
+    now = _time.time()
+    result = {}
+    to_fetch = []
+    for iid in item_ids:
+        entry = _sale_price_cache.get(iid)
+        if entry and (now - entry[0]) < _SALE_PRICE_CACHE_TTL:
+            if entry[1]:
+                result[iid] = entry[1]
+        else:
+            to_fetch.append(iid)
+
+    if not to_fetch:
+        return result
+
+    sem = asyncio.Semaphore(10)
+
+    async def _fetch_one(iid):
+        async with sem:
+            try:
+                data = await client._get(f"/items/{iid}/sale_price")
+                if data and data.get("regular_amount") and data.get("amount"):
+                    if data["regular_amount"] > data["amount"]:
+                        _sale_price_cache[iid] = (now, data)
+                        return iid, data
+                _sale_price_cache[iid] = (now, None)
+                return iid, None
+            except Exception:
+                _sale_price_cache[iid] = (now, None)
+                return iid, None
+
+    results = await asyncio.gather(*[_fetch_one(iid) for iid in to_fetch])
+    for iid, data in results:
+        if data:
+            result[iid] = data
+    return result
 
 
 # --- Background pre-warm ---
@@ -1710,6 +1752,9 @@ async def products_inventory_partial(
     sort_by: str = "",
     enrich: str = "basic",
     full_filter: str = "all",
+    page: int = 1,
+    per_page: int = 20,
+    alert_days: int = 30,
 ):
     """Tab Inventario unificado: reemplaza all/top/stock/low/full."""
     from datetime import datetime, timedelta
@@ -1718,7 +1763,8 @@ async def products_inventory_partial(
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
         now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        days = max(7, min(alert_days, 90))
+        date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
         # Fase 1: fetch paralelo (products + orders)
@@ -1819,9 +1865,47 @@ async def products_inventory_partial(
         }
         products.sort(key=sort_keys.get(field, sort_keys["stock"]), reverse=reverse)
 
+        # --- Pagination ---
+        from math import ceil
+        if per_page <= 0:
+            per_page = 20
+        if per_page >= total_count:
+            # "Todos" — no paginar
+            total_pages = 1
+            page = 1
+            page_products = products
+        else:
+            total_pages = max(1, ceil(total_count / per_page))
+            page = max(1, min(page, total_pages))
+            start = (page - 1) * per_page
+            page_products = products[start:start + per_page]
+
+        # --- Enrich page with sale_price (deals) ---
+        page_ids = [p["id"] for p in page_products]
+        sale_prices = await _get_sale_prices_cached(client, page_ids)
+        for p in page_products:
+            sp = sale_prices.get(p["id"])
+            if sp:
+                p["original_price"] = sp["regular_amount"]
+                p["price"] = sp["amount"]
+                p["_has_deal"] = True
+            else:
+                p["_has_deal"] = False
+
+        # --- Enrich alerts with estimated lost revenue ---
+        for a in stock_alerts:
+            units = a.get("units", 0)
+            price = a.get("price", 0)
+            days = alert_days or 30
+            daily_avg = units / days if days > 0 else 0
+            a["_alert_units"] = units
+            a["_alert_revenue"] = round(units * price, 0)
+            a["_est_lost_revenue"] = round(daily_avg * price * days * 0.5, 0)  # conservative 50%
+        stock_alerts.sort(key=lambda x: x.get("_est_lost_revenue", 0), reverse=True)
+
         return templates.TemplateResponse("partials/products_inventory.html", {
             "request": request,
-            "products": products,
+            "products": page_products,
             "preset": preset,
             "search": search,
             "sort_by": sort_by,
@@ -1830,6 +1914,10 @@ async def products_inventory_partial(
             "total_count": total_count,
             "usd_to_mxn": round(usd_to_mxn, 2),
             "stock_alerts": stock_alerts,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+            "alert_days": alert_days,
         })
     finally:
         await client.close()

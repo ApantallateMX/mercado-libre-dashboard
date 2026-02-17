@@ -11,14 +11,25 @@
                     Ventas Perdidas: {{ stock_alerts|length }} producto{{ 's' if stock_alerts|length > 1 else '' }} sin stock
                 </h3>
                 <p class="text-red-600 text-[10px] md:text-xs mt-0.5 hidden md:block">
-                    Estos productos se vendieron en 30 dias, tienen 0 stock en MeLi, pero hay inventario en BinManager.
+                    Productos con ventas en {{ alert_days }}d, 0 stock MeLi, pero inventario en BinManager.
                 </p>
             </div>
         </div>
-        <button onclick="bulkSyncAlerts()" id="bulk-sync-btn"
-                class="w-full md:w-auto px-3 py-2 md:py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
-            Sincronizar todos ({{ stock_alerts|length }})
-        </button>
+        <div class="flex items-center gap-2">
+            <div class="flex items-center gap-1 text-xs">
+                <span class="text-red-600 hidden md:inline">Periodo:</span>
+                {% for d in [7, 15, 30] %}
+                <button onclick="setAlertDays({{ d }})"
+                        class="px-2 py-1 rounded text-[10px] font-medium transition {{ 'bg-red-600 text-white' if alert_days == d else 'bg-red-100 text-red-700 hover:bg-red-200' }}">
+                    {{ d }}d
+                </button>
+                {% endfor %}
+            </div>
+            <button onclick="bulkSyncAlerts()" id="bulk-sync-btn"
+                    class="w-full md:w-auto px-3 py-2 md:py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
+                Sincronizar todos ({{ stock_alerts|length }})
+            </button>
+        </div>
     </div>
     <!-- Mobile alert cards -->
     <div class="md:hidden space-y-2">
@@ -58,9 +69,10 @@
                 <tr class="text-red-700 border-b border-red-200">
                     <th class="text-left py-1.5 px-2 font-medium">Producto</th>
                     <th class="text-left py-1.5 px-2 font-medium">ID</th>
-                    <th class="text-right py-1.5 px-2 font-medium">Ventas 30d</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Ventas {{ alert_days }}d</th>
                     <th class="text-right py-1.5 px-2 font-medium">Stock MeLi</th>
                     <th class="text-right py-1.5 px-2 font-medium">Stock BM</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Rev. Perdido Est.</th>
                     <th class="text-center py-1.5 px-2 font-medium">Acciones</th>
                 </tr>
             </thead>
@@ -79,6 +91,11 @@
                     <td class="py-1.5 px-2 text-right font-bold text-gray-800">{{ a.get('units', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-600">0</td>
                     <td class="py-1.5 px-2 text-right font-bold text-green-600">{{ a.get('_bm_total', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right font-bold text-red-700">
+                        {% if a.get('_est_lost_revenue', 0) > 0 %}
+                        ${{ "{:,.0f}".format(a._est_lost_revenue) }}
+                        {% else %}-{% endif %}
+                    </td>
                     <td class="py-1.5 px-2 text-center">
                         <div class="flex items-center justify-center gap-1">
                             <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
@@ -126,7 +143,7 @@
         {% endfor %}
     </div>
 
-    <!-- Search + FULL filter + Sort + Count -->
+    <!-- Search + FULL filter + Sort + Per Page + Count -->
     <div class="flex flex-wrap gap-2 md:gap-3 items-center">
         <div class="relative flex-1 min-w-[150px] md:min-w-[200px] max-w-xs">
             <input type="text" id="inv-search" value="{{ search }}" placeholder="Buscar SKU / Titulo..."
@@ -161,7 +178,19 @@
                 <option value="photos_asc" {{ 'selected' if sort_by == 'photos_asc' }}>Fotos (asc)</option>
             </select>
         </div>
-        <span class="text-xs text-gray-400 ml-auto">Mostrando: <strong id="inv-visible-count">{{ products|length }}</strong> de {{ total_count }} productos</span>
+        <div class="flex items-center gap-1 text-xs">
+            <span class="text-gray-500 hidden md:inline">Por pag:</span>
+            <select id="inv-per-page" onchange="changePerPage(parseInt(this.value))"
+                    class="text-xs border rounded px-2 py-1.5 focus:ring-1 focus:ring-yellow-400 focus:outline-none">
+                {% for pp in [10, 20, 50, 9999] %}
+                <option value="{{ pp }}" {{ 'selected' if per_page == pp }}>{{ 'Todos' if pp >= 9999 else pp }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <span class="text-xs text-gray-400 ml-auto">
+            Mostrando: <strong id="inv-visible-count">{{ products|length }}</strong> de {{ total_count }} productos
+            {% if total_pages > 1 %} (pag {{ page }}/{{ total_pages }}){% endif %}
+        </span>
     </div>
 
     <!-- Column toggles (desktop only) -->
@@ -205,8 +234,11 @@
 {% if products %}
 <!-- ===== Mobile Card View ===== -->
 <div class="md:hidden space-y-2" id="inv-mobile-cards">
+    {% set row_offset = (page - 1) * per_page %}
     {% for p in products %}
+    {% set has_deal = (p.get('_has_deal')) or (p.original_price and p.original_price > p.price) %}
     <div class="bg-white rounded-lg shadow p-3 inv-card {{ 'border-l-4 border-red-400' if p.available_quantity == 0 else '' }}"
+         data-id="{{ p.id }}"
          data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
         <div class="flex gap-3">
             {% if p.thumbnail %}
@@ -220,7 +252,7 @@
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
             <!-- Precio -->
             <div>
-                {% if p.original_price and p.original_price > p.price %}
+                {% if has_deal %}
                 <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
                 <span class="font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                 {% else %}
@@ -267,8 +299,8 @@
                 </span>
             </div>
             {% endif %}
-            {% if p.original_price and p.original_price > p.price %}
-            <div>
+            {% if has_deal %}
+            <div data-deal-cell>
                 <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">
                     Deal -{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%
                 </span>
@@ -281,7 +313,7 @@
             <a href="{{ p.permalink }}" target="_blank" class="flex-1 text-center py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-lg active:bg-blue-100 min-h-[40px]">Ver</a>
             {% endif %}
             <button onclick="openEditModal('{{ p.id }}')" class="flex-1 text-center py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg active:bg-gray-200 min-h-[40px]">Editar</button>
-            {% if p.original_price and p.original_price > p.price %}
+            {% if has_deal %}
             <button onclick="openDealAction('{{ p.id }}', {{ p.price }}, '{{ p.sku or '' }}', '{{ p.title|replace("'", "\\'") }}', {{ p.original_price }}, '{{ p.thumbnail or '' }}')"
                     class="flex-1 text-center py-2 text-sm font-medium text-green-700 bg-green-50 rounded-lg active:bg-green-100 min-h-[40px]">Ver Deal</button>
             {% else %}
@@ -313,7 +345,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">MTY</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">TJ</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas {{ alert_days }}d</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="cost">Costo BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="margin">Margen</th>
@@ -325,8 +357,11 @@
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-100" id="inv-tbody">
+            {% set row_offset = (page - 1) * per_page %}
             {% for p in products %}
+            {% set has_deal = (p.get('_has_deal')) or (p.original_price and p.original_price > p.price) %}
             <tr class="hover:bg-gray-50 inv-row {{ 'bg-red-50/40' if p.available_quantity == 0 else '' }}"
+                data-id="{{ p.id }}"
                 data-units="{{ p.get('units', 0) }}"
                 data-stock="{{ p.available_quantity }}"
                 data-bm="{{ p.get('_bm_total', 0) or 0 }}"
@@ -337,7 +372,7 @@
                 data-revenue="{{ p.get('revenue', 0) }}"
                 data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
                 <!-- # -->
-                <td class="px-3 py-2 text-gray-400 font-bold text-xs">{{ loop.index }}</td>
+                <td class="px-3 py-2 text-gray-400 font-bold text-xs">{{ row_offset + loop.index }}</td>
                 <!-- Producto -->
                 <td class="px-3 py-2">
                     <div class="flex items-center gap-2">
@@ -365,7 +400,7 @@
                 </td>
                 <!-- Precio (editable) -->
                 <td class="px-3 py-2 text-right" data-price-cell>
-                    {% if p.original_price and p.original_price > p.price %}
+                    {% if has_deal %}
                     <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
                     <span data-price-val class="text-green-600 font-semibold text-xs cursor-pointer hover:underline"
                           onclick="showPriceEditor(this, '{{ p.id }}', {{ p.price }})">${{ "{:,.0f}".format(p.price) }}</span>
@@ -415,7 +450,7 @@
                 <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">
                     <span class="{{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</span>
                 </td>
-                <!-- Ventas 30d -->
+                <!-- Ventas -->
                 <td class="px-3 py-2 text-right">
                     <span class="font-bold {{ 'text-gray-800' if p.get('units', 0) > 0 else 'text-red-500' }}">
                         {{ p.get('units', 0) }}
@@ -460,8 +495,8 @@
                     {% endif %}
                 </td>
                 <!-- Deal -->
-                <td class="px-3 py-2 text-center">
-                    {% if p.original_price and p.original_price > p.price %}
+                <td class="px-3 py-2 text-center" data-deal-cell>
+                    {% if has_deal %}
                     <div class="flex flex-col items-center">
                         <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
@@ -512,7 +547,7 @@
                         {% endif %}
                         <button onclick="openEditModal('{{ p.id }}')"
                                 class="text-[10px] text-gray-400 hover:text-gray-600">Editar</button>
-                        {% if p.original_price and p.original_price > p.price %}
+                        {% if has_deal %}
                         <button onclick="openDealAction('{{ p.id }}', {{ p.price }}, '{{ p.sku or '' }}', '{{ p.title|replace("'", "\\'") }}', {{ p.original_price }}, '{{ p.thumbnail or '' }}')"
                                 class="text-[10px] text-green-600 hover:text-green-800 hover:underline">Ver Deal</button>
                         {% else %}
@@ -563,10 +598,37 @@
     </table>
 </div><!-- end desktop table -->
 
+<!-- Pagination controls -->
+{% if total_pages > 1 %}
+<div class="mt-4 flex flex-col md:flex-row items-center justify-between gap-3">
+    <div class="text-xs text-gray-500">
+        Pagina {{ page }} de {{ total_pages }} ({{ total_count }} productos)
+    </div>
+    <div class="flex items-center gap-1">
+        {% if page > 1 %}
+        <button onclick="goToPage(1)" class="px-2 py-1.5 text-xs rounded border hover:bg-gray-50" title="Primera">&laquo;</button>
+        <button onclick="goToPage({{ page - 1 }})" class="px-3 py-1.5 text-xs rounded border hover:bg-gray-50">Anterior</button>
+        {% endif %}
+        {% set start_pg = [1, page - 2]|max %}
+        {% set end_pg = [total_pages, page + 2]|min %}
+        {% for pg in range(start_pg, end_pg + 1) %}
+        <button onclick="goToPage({{ pg }})"
+                class="px-3 py-1.5 text-xs rounded border font-medium {{ 'bg-yellow-400 text-white border-yellow-400' if pg == page else 'hover:bg-gray-50' }}">
+            {{ pg }}
+        </button>
+        {% endfor %}
+        {% if page < total_pages %}
+        <button onclick="goToPage({{ page + 1 }})" class="px-3 py-1.5 text-xs rounded border hover:bg-gray-50">Siguiente</button>
+        <button onclick="goToPage({{ total_pages }})" class="px-2 py-1.5 text-xs rounded border hover:bg-gray-50" title="Ultima">&raquo;</button>
+        {% endif %}
+    </div>
+</div>
+{% else %}
 <div class="mt-3 text-sm text-gray-500">
     Mostrando {{ products|length }} productos
     {% if preset == 'top' %}con ventas{% elif preset == 'stock' %}con stock BM{% elif preset == 'low' %}con 0-2 ventas{% elif preset == 'full' %}en Fulfillment{% elif preset == 'no_stock' %}sin stock{% endif %}
 </div>
+{% endif %}
 {% else %}
 <div class="bg-white rounded-lg shadow p-8 text-center text-gray-500">
     <p>No se encontraron productos{% if search %} para "{{ search }}"{% endif %}</p>
@@ -576,50 +638,68 @@
 <script>
 var _invPreset = '{{ preset }}';
 var _invEnrich = '{{ enrich }}';
+var _invPage = {{ page }};
+var _invPerPage = {{ per_page }};
+var _invTotalPages = {{ total_pages }};
+var _invAlertDays = {{ alert_days }};
+
+/* --- Centralized URL builder --- */
+function buildInvUrl(overrides) {
+    overrides = overrides || {};
+    var preset = overrides.preset || _invPreset;
+    var enrich = overrides.enrich || ((['top','stock','full'].indexOf(preset) >= 0) ? 'full' : _invEnrich);
+    var params = {
+        preset: preset,
+        enrich: enrich,
+        page: overrides.page || 1,
+        per_page: overrides.per_page || _invPerPage,
+        alert_days: overrides.alert_days || _invAlertDays
+    };
+    var search = overrides.search !== undefined ? overrides.search : (document.getElementById('inv-search') ? document.getElementById('inv-search').value : '');
+    if (search) params.search = search;
+    var sort = overrides.sort_by || (document.getElementById('inv-sort') ? document.getElementById('inv-sort').value : '');
+    if (sort) params.sort_by = sort;
+    var ff = overrides.full_filter || (document.getElementById('inv-full-filter') ? document.getElementById('inv-full-filter').value : 'all');
+    if (ff && ff !== 'all') params.full_filter = ff;
+    var url = '/partials/products-inventory?';
+    var parts = [];
+    for (var k in params) { parts.push(k + '=' + encodeURIComponent(params[k])); }
+    return url + parts.join('&');
+}
+
+function _navTo(url) {
+    window._lastInventoryUrl = url;
+    window.switchProductTab('inventory', url);
+}
 
 function toggleVariationsInv(id) {
     var row = document.getElementById(id);
     if (row) row.classList.toggle('hidden');
 }
 
-/* --- Preset switching (server-side re-fetch) --- */
-function switchPreset(preset) {
-    // Determine enrich level
-    var enrich = (['top','stock','full'].indexOf(preset) >= 0) ? 'full' : 'basic';
-    var url = '/partials/products-inventory?preset=' + preset + '&enrich=' + enrich;
-    var search = document.getElementById('inv-search');
-    if (search && search.value) url += '&search=' + encodeURIComponent(search.value);
-    var ff = document.getElementById('inv-full-filter');
-    if (ff && ff.value !== 'all') url += '&full_filter=' + ff.value;
-    // Load via parent switchTab
-    window.switchProductTab('inventory', url);
+/* --- Pagination --- */
+function goToPage(n) {
+    _navTo(buildInvUrl({page: n}));
+}
+function changePerPage(n) {
+    _navTo(buildInvUrl({per_page: n, page: 1}));
+}
+function setAlertDays(d) {
+    _navTo(buildInvUrl({alert_days: d}));
 }
 
-/* --- Client-side text search (filters visible rows + mobile cards) --- */
+/* --- Preset switching --- */
+function switchPreset(preset) {
+    _navTo(buildInvUrl({preset: preset, page: 1}));
+}
+
+/* --- Server-side search (debounce 400ms) --- */
 var _searchTimer = null;
 function searchTable(query) {
     clearTimeout(_searchTimer);
     _searchTimer = setTimeout(function() {
-        var q = query.toLowerCase().trim();
-        var count = 0;
-        // Desktop rows
-        document.querySelectorAll('.inv-row').forEach(function(row) {
-            var match = !q || row.dataset.search.indexOf(q) >= 0;
-            row.style.display = match ? '' : 'none';
-            var nextRow = row.nextElementSibling;
-            if (nextRow && nextRow.classList.contains('inv-var-row')) {
-                nextRow.style.display = match ? '' : 'none';
-            }
-            if (match) count++;
-        });
-        // Mobile cards
-        document.querySelectorAll('.inv-card').forEach(function(card) {
-            var match = !q || card.dataset.search.indexOf(q) >= 0;
-            card.style.display = match ? '' : 'none';
-        });
-        var vc = document.getElementById('inv-visible-count');
-        if (vc) vc.textContent = count;
-    }, 200);
+        _navTo(buildInvUrl({search: query, page: 1}));
+    }, 400);
 }
 
 /* --- Column toggle --- */
@@ -628,7 +708,6 @@ function toggleColumn(colName, show) {
         if (show) el.classList.remove('hidden');
         else el.classList.add('hidden');
     });
-    // Save preference
     try {
         var prefs = JSON.parse(localStorage.getItem('inv_cols') || '{}');
         prefs[colName] = show;
@@ -651,24 +730,14 @@ function toggleColumn(colName, show) {
     } catch(e) {}
 })();
 
-/* --- Sort (server-side for correct order) --- */
+/* --- Sort (server-side) --- */
 function applySort(sortBy) {
-    var url = '/partials/products-inventory?preset=' + _invPreset + '&enrich=' + _invEnrich + '&sort_by=' + sortBy;
-    var search = document.getElementById('inv-search');
-    if (search && search.value) url += '&search=' + encodeURIComponent(search.value);
-    var ff = document.getElementById('inv-full-filter');
-    if (ff && ff.value !== 'all') url += '&full_filter=' + ff.value;
-    window.switchProductTab('inventory', url);
+    _navTo(buildInvUrl({sort_by: sortBy, page: 1}));
 }
 
 /* --- FULL filter (server-side) --- */
 function applyFullFilter(val) {
-    var url = '/partials/products-inventory?preset=' + _invPreset + '&enrich=' + _invEnrich + '&full_filter=' + val;
-    var search = document.getElementById('inv-search');
-    if (search && search.value) url += '&search=' + encodeURIComponent(search.value);
-    var sort = document.getElementById('inv-sort');
-    if (sort) url += '&sort_by=' + sort.value;
-    window.switchProductTab('inventory', url);
+    _navTo(buildInvUrl({full_filter: val, page: 1}));
 }
 
 /* --- Inline price editor --- */
@@ -815,12 +884,35 @@ window.bulkSyncAlerts = function() {
     });
 };
 
+/* --- Deal cell update (called from modal) --- */
+window.updateDealCell = function(itemId, hasDeal, newPrice, originalPrice) {
+    var row = document.querySelector('tr[data-id="' + itemId + '"]');
+    if (!row) return;
+    var cell = row.querySelector('[data-deal-cell]');
+    if (!cell) return;
+    if (hasDeal && originalPrice > 0) {
+        var disc = Math.round((1 - newPrice / originalPrice) * 100);
+        cell.innerHTML = '<div class="flex flex-col items-center">' +
+            '<span class="text-[10px] text-gray-400 line-through">$' + Math.round(originalPrice).toLocaleString('es-MX') + '</span>' +
+            '<span class="text-xs font-bold text-green-600">$' + Math.round(newPrice).toLocaleString('es-MX') + '</span>' +
+            '<span class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700 mt-0.5">-' + disc + '%</span>' +
+            '</div>';
+    } else {
+        cell.innerHTML = '<span class="text-xs text-gray-400">Sin deal</span>';
+    }
+};
+
 /* --- Open Deal action (loads deal partial in edit modal) --- */
 window.openDealAction = function(itemId, price, sku, title, originalPrice, thumb) {
     var modal = document.getElementById('edit-modal');
     var content = document.getElementById('edit-modal-content');
     modal.classList.remove('hidden');
     content.innerHTML = '<div class="text-center py-8"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando deals...</div>';
+
+    // Set up callback for deal changes (called from modal)
+    window._onDealChange = function(hasDeal, dealPrice, origPrice) {
+        window.updateDealCell(itemId, hasDeal, dealPrice, origPrice);
+    };
 
     fetch('/partials/item-deal/' + itemId, {headers: {'ngrok-skip-browser-warning': 'true'}})
         .then(function(r) { return r.text(); })
@@ -834,4 +926,7 @@ window.openDealAction = function(itemId, price, sku, title, originalPrice, thumb
         })
         .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando deal info</p>'; });
 };
+
+/* --- Save last URL for tab persistence --- */
+window._lastInventoryUrl = buildInvUrl({page: _invPage});
 </script>
