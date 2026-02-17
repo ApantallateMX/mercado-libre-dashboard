@@ -3010,58 +3010,75 @@ async def health_search_partial(
         is_long_number = is_numeric and len(query.replace("-", "")) >= 8
 
         if is_long_number:
-            # Try as Order ID first
-            try:
-                order = await client.get(f"/orders/{query}")
-                if order and order.get("id"):
-                    oi = order.get("order_items", [])
-                    item_info = oi[0].get("item", {}) if oi else {}
-                    ship = order.get("shipping", {})
-                    # Check for associated claims
-                    claims_for_order = []
-                    try:
-                        cd = await client.get_claims(limit=5, status=None)
-                        for cl in cd.get("results", []):
-                            if str(cl.get("resource_id", "")) == str(order["id"]):
-                                claims_for_order.append(cl)
-                    except Exception:
-                        pass
-                    results.append({
-                        "type": "order",
-                        "id": order.get("id", ""),
-                        "status": order.get("status", ""),
-                        "date": (order.get("date_created", "") or "")[:10],
-                        "buyer": order.get("buyer", {}).get("nickname", ""),
-                        "buyer_id": order.get("buyer", {}).get("id", ""),
-                        "product_title": item_info.get("title", ""),
-                        "product_id": item_info.get("id", ""),
-                        "total_amount": order.get("total_amount", 0),
-                        "currency": order.get("currency_id", ""),
-                        "shipping_status": ship.get("status", ""),
-                        "shipping_id": ship.get("id", ""),
-                        "claims": claims_for_order,
-                    })
-                    result_type = "order"
-            except Exception:
-                pass
+            # Try as Order ID and Claim ID in parallel
+            async def _try_order():
+                try:
+                    order = await client.get(f"/orders/{query}")
+                    if order and order.get("id"):
+                        return order
+                except Exception:
+                    return None
 
-            # Try as Claim ID
-            if not results:
+            async def _try_claim():
                 try:
                     claim = await client.get(f"/post-purchase/v1/claims/{query}")
                     if claim and claim.get("id"):
-                        results.append({
-                            "type": "claim",
-                            "id": claim.get("id", ""),
-                            "status": claim.get("status", ""),
-                            "reason_id": claim.get("reason_id", ""),
-                            "date": (claim.get("date_created", "") or "")[:10],
-                            "order_id": claim.get("resource_id", ""),
-                            "stage": claim.get("stage", ""),
-                        })
-                        result_type = "claim"
+                        return claim
                 except Exception:
-                    pass
+                    return None
+
+            # Search claims that match this order (resource_id) — fetch recent claims
+            async def _find_claims_for_order(order_id):
+                try:
+                    cd = await client.get_claims(limit=50, status=None)
+                    return [cl for cl in cd.get("results", [])
+                            if str(cl.get("resource_id", "")) == str(order_id)]
+                except Exception:
+                    return []
+
+            order_result, claim_result = await asyncio.gather(
+                _try_order(), _try_claim(), return_exceptions=True
+            )
+            order_result = order_result if not isinstance(order_result, Exception) else None
+            claim_result = claim_result if not isinstance(claim_result, Exception) else None
+
+            if order_result and order_result.get("id"):
+                order = order_result
+                oi = order.get("order_items", [])
+                item_info = oi[0].get("item", {}) if oi else {}
+                ship = order.get("shipping", {})
+                claims_for_order = await _find_claims_for_order(order["id"])
+                results.append({
+                    "type": "order",
+                    "id": order.get("id", ""),
+                    "status": order.get("status", ""),
+                    "date": (order.get("date_created", "") or "")[:10],
+                    "buyer": order.get("buyer", {}).get("nickname", ""),
+                    "buyer_id": order.get("buyer", {}).get("id", ""),
+                    "product_title": item_info.get("title", ""),
+                    "product_id": item_info.get("id", ""),
+                    "total_amount": order.get("total_amount", 0),
+                    "currency": order.get("currency_id", ""),
+                    "shipping_status": ship.get("status", ""),
+                    "shipping_id": ship.get("id", ""),
+                    "claims": claims_for_order,
+                })
+                result_type = "order"
+
+            if claim_result and claim_result.get("id"):
+                # Add claim as a separate result (even if order was also found)
+                claim = claim_result
+                results.append({
+                    "type": "claim",
+                    "id": claim.get("id", ""),
+                    "status": claim.get("status", ""),
+                    "reason_id": claim.get("reason_id", ""),
+                    "date": (claim.get("date_created", "") or "")[:10],
+                    "order_id": claim.get("resource_id", ""),
+                    "stage": claim.get("stage", ""),
+                })
+                if not result_type:
+                    result_type = "claim"
 
         # Keyword search via orders
         if not results:

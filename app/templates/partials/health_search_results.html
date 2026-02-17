@@ -44,37 +44,42 @@
         </div>
 
         {% if r.claims %}
-        <div class="mt-2 border-t pt-2">
-            <p class="text-xs text-red-600 font-semibold mb-1">Reclamos asociados:</p>
+        <div class="mt-2 border-t pt-2 mb-2">
+            <p class="text-xs text-red-600 font-semibold mb-1.5">Reclamos asociados:</p>
             {% for cl in r.claims %}
-            <div class="text-xs text-gray-600 flex items-center gap-2 cursor-pointer hover:text-blue-600"
+            <div class="flex items-center justify-between p-2 bg-red-50 rounded mb-1 cursor-pointer hover:bg-red-100 transition"
                  onclick="if(window.goToClaim) window.goToClaim('{{ cl.id }}')">
-                <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                Reclamo #{{ cl.id }} - {{ cl.status }} ({{ cl.reason_id }})
-                <span class="text-blue-500 text-[10px]">ir &rarr;</span>
+                <div class="flex items-center gap-2 text-xs text-gray-700">
+                    <span class="w-2 h-2 rounded-full {% if cl.status == 'opened' %}bg-red-500{% else %}bg-gray-400{% endif %}"></span>
+                    <span class="font-semibold">Reclamo #{{ cl.id }}</span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] {% if cl.status == 'opened' %}bg-red-200 text-red-800{% else %}bg-gray-200 text-gray-600{% endif %}">{{ cl.status }}</span>
+                    <span class="text-gray-400">{{ cl.reason_id }}</span>
+                </div>
+                <div class="flex items-center gap-1 text-xs text-blue-600 font-medium">
+                    <span>Ir al reclamo</span>
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </div>
             </div>
             {% endfor %}
         </div>
         {% endif %}
 
-        <!-- Quick actions -->
-        <div class="flex gap-2 mt-3">
-            {% if r.claims %}
+        <!-- Always show action buttons -->
+        <div class="flex gap-2 mt-2">
             <button onclick="if(window.goToClaimsForOrder) window.goToClaimsForOrder('{{ r.id }}')"
-                    class="text-xs bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1.5 rounded-full font-medium transition">
-                Ver reclamos
+                    class="text-xs bg-gray-100 text-gray-700 hover:bg-yellow-100 hover:text-yellow-800 px-3 py-1.5 rounded-full font-medium transition">
+                Buscar en reclamos
             </button>
-            {% endif %}
             <button onclick="if(window.goToMessagesForOrder) window.goToMessagesForOrder('{{ r.id }}')"
-                    class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded-full font-medium transition">
+                    class="text-xs bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-800 px-3 py-1.5 rounded-full font-medium transition">
                 Ver mensajes
             </button>
         </div>
     </div>
 
     {% elif r.type == 'claim' %}
-    <!-- Claim Card — clickeable to navigate -->
-    <div class="border border-gray-200 rounded-lg p-4 border-l-4 border-l-red-400 hover:shadow transition cursor-pointer"
+    <!-- Claim Card — fully clickeable -->
+    <div class="border border-gray-200 rounded-lg p-4 border-l-4 border-l-red-400 hover:shadow-md transition cursor-pointer group"
          onclick="if(window.goToClaim) window.goToClaim('{{ r.id }}')">
         <div class="flex justify-between items-start mb-2">
             <div class="flex items-center gap-2">
@@ -91,15 +96,15 @@
             </div>
             <span class="text-xs text-gray-500">{{ r.date }}</span>
         </div>
-        <div class="text-xs text-gray-600">
+        <div class="text-xs text-gray-600 mb-2">
             <span class="text-gray-400">Razon:</span> {{ r.reason_id }}
             {% if r.order_id %}
             &middot; <span class="text-gray-400">Orden:</span> {{ r.order_id }}
             {% endif %}
         </div>
-        <div class="mt-2 flex items-center gap-1 text-xs text-blue-600 font-medium">
+        <div class="flex items-center gap-1 text-xs text-blue-600 font-medium group-hover:text-blue-800">
             <span>Ir al reclamo</span>
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <svg class="w-3 h-3 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </div>
     </div>
     {% endif %}
