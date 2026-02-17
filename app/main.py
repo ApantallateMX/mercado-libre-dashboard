@@ -1249,24 +1249,39 @@ async def products_stock_issues_partial(request: Request):
             if p.get("available_quantity", 0) > 0
             and (p.get("_bm_total") or 0) == 0
             and not p.get("is_full")
-            and p.get("sku")  # solo items con SKU (BM deberia tenerlos)
+            and p.get("sku")
         ]
         oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
+
+        # Seccion C: Activar (MeLi=0, BM>0, sin ventas — oportunidades)
+        restock_ids = {p["id"] for p in restock}
+        activate = [
+            p for p in products
+            if p.get("available_quantity", 0) == 0
+            and (p.get("_bm_total") or 0) > 0
+            and p["id"] not in restock_ids  # excluir los que ya estan en Reabastecer
+        ]
+        activate.sort(key=lambda x: x.get("_bm_total", 0), reverse=True)
 
         # KPIs
         restock_count = len(restock)
         lost_revenue = sum(p.get("revenue", 0) for p in restock)
         risk_count = len(oversell_risk)
         risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
+        activate_count = len(activate)
+        activate_stock = sum(p.get("_bm_total", 0) for p in activate)
 
         return templates.TemplateResponse("partials/products_stock_issues.html", {
             "request": request,
             "restock": restock,
             "oversell_risk": oversell_risk,
+            "activate": activate,
             "restock_count": restock_count,
             "lost_revenue": lost_revenue,
             "risk_count": risk_count,
             "risk_stock": risk_stock,
+            "activate_count": activate_count,
+            "activate_stock": activate_stock,
         })
     finally:
         await client.close()
@@ -1430,14 +1445,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
 
-    def _store(sku, data):
+    def _store(sku, data, force_cache=False):
         inv = {
             "mty": max(0, data.get("TotalQtyMTY", 0) or 0),
             "cdmx": max(0, data.get("TotalQtyCDMX", 0) or 0),
             "tj": max(0, data.get("TotalQtyTJ", 0) or 0),
         }
         inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
-        _bm_stock_cache[sku.upper()] = (_time.time(), inv)
+        if inv["total"] > 0 or force_cache:
+            _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:
             result_map[sku] = inv
             return True
@@ -1547,9 +1563,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                             if not inv_item and data:
                                 inv_item = data[0]
                             if inv_item:
-                                total_qty = inv_item.get("TotalQty", 0) or 0
-                                if total_qty > 0:
-                                    _store(sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": total_qty, "TotalQtyTJ": 0})
+                                avail_qty = inv_item.get("AvailableQTY") or inv_item.get("TotalQty") or 0
+                                if avail_qty > 0:
+                                    _store(sku, {"TotalQtyMTY": 0, "TotalQtyCDMX": 0, "TotalQtyTJ": 0}, force_cache=True)
+                                    # Override with total since InvReport has no warehouse breakdown
+                                    inv = {"mty": 0, "cdmx": 0, "tj": 0, "total": int(avail_qty)}
+                                    _bm_stock_cache[sku.upper()] = (_time.time(), inv)
+                                    result_map[sku] = inv
                                     return sku, True
                 except Exception:
                     pass
@@ -4734,6 +4754,42 @@ async def delete_item_promotion_api(item_id: str, promotion_type: str):
     try:
         await client.delete_item_promotion(item_id, promotion_type)
         return {"ok": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
+@app.put("/api/items/{item_id}/stock")
+async def update_item_stock_api(item_id: str, request: Request):
+    """Actualiza el stock de un item."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = await request.json()
+        quantity = int(body.get("quantity", 0))
+        result = await client.update_item_stock(item_id, quantity)
+        return {"ok": True, "quantity": quantity}
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
+@app.put("/api/items/{item_id}/status")
+async def update_item_status_api(item_id: str, request: Request):
+    """Cambia el estado de un item (active/paused)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = await request.json()
+        status = body.get("status", "active")
+        if status not in ("active", "paused"):
+            return JSONResponse({"detail": "Status invalido"}, status_code=400)
+        result = await client.update_item_status(item_id, status)
+        return {"ok": True, "status": status}
     except Exception as e:
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
     finally:
