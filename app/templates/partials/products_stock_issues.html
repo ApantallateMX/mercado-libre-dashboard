@@ -170,10 +170,16 @@
             <span class="text-xs text-gray-400">(MeLi>0, BM=0, no FULL)</span>
         </div>
         {% if oversell_risk %}
-        <button onclick="bulkPauseRisk()" id="bulk-pause-btn"
-                class="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-lg hover:bg-yellow-600 active:bg-yellow-700 transition">
-            Pausar Todos ({{ oversell_risk|length }})
-        </button>
+        <div class="flex gap-2">
+            <button onclick="bulkStockZeroRisk()" id="bulk-zero-btn"
+                    class="px-3 py-1.5 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 active:bg-red-700 transition">
+                Stock -> 0 Todos ({{ oversell_risk|length }})
+            </button>
+            <button onclick="bulkPauseRisk()" id="bulk-pause-btn"
+                    class="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-lg hover:bg-yellow-600 active:bg-yellow-700 transition">
+                Pausar Todos ({{ oversell_risk|length }})
+            </button>
+        </div>
         {% endif %}
     </div>
 
@@ -416,6 +422,46 @@ function pauseItem(itemId, btn) {
         btn.textContent = 'Error';
         btn.disabled = false;
         if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+}
+
+// --- Bulk set stock to 0 for all risk items ---
+function bulkStockZeroRisk() {
+    if (!confirm('Poner stock en 0 para TODOS los productos en riesgo de sobreventa?\n\n' + {{ oversell_risk|length }} + ' productos seran afectados.')) return;
+    var items = [
+        {% for p in oversell_risk %}
+        '{{ p.id }}'{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    var btn = document.getElementById('bulk-zero-btn');
+    var msg = document.getElementById('bulk-pause-msg');
+    btn.disabled = true;
+    btn.textContent = 'Procesando...';
+    var done = 0, errors = 0, total = items.length;
+    function updateProgress() {
+        msg.textContent = 'Stock->0: ' + done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+    items.forEach(function(itemId) {
+        fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: 0})
+        })
+        .then(function(r) {
+            done++;
+            if (!r.ok) errors++;
+            else {
+                var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
+                if (row) row.classList.add('opacity-50');
+            }
+            updateProgress();
+            if (done === total) {
+                btn.textContent = 'Completado';
+                btn.className = btn.className.replace('bg-red-500', 'bg-green-600');
+            }
+        })
+        .catch(function() { done++; errors++; updateProgress(); });
     });
 }
 
