@@ -2553,21 +2553,37 @@ async def health_claims_partial(
     status: str = Query(""),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    order_id: str = Query("", description="Filter by order/resource ID"),
 ):
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
+        filter_order_id = order_id.strip() if order_id else ""
         params_status = status if status else None
         df = date_from or None
         dt = date_to or None
-        try:
-            data = await client.get_claims(offset=offset, limit=limit, status=params_status,
-                                           date_from=df, date_to=dt)
-        except Exception:
-            data = {"results": [], "paging": {"total": 0, "offset": 0, "limit": limit}}
-        raw_claims = data.get("results", [])
-        paging = data.get("paging", {"total": len(raw_claims), "offset": offset, "limit": limit})
+
+        if filter_order_id:
+            # Fetch all claims (paginated) and filter by resource_id server-side
+            try:
+                all_claims = await client.fetch_all_claims(status=params_status,
+                                                            date_from=df, date_to=dt)
+                raw_claims = [c for c in all_claims
+                              if str(c.get("resource_id", "")) == filter_order_id]
+            except Exception:
+                raw_claims = []
+            paging = {"total": len(raw_claims), "offset": 0, "limit": len(raw_claims) or limit}
+            # Apply offset/limit manually
+            raw_claims = raw_claims[offset:offset + limit]
+        else:
+            try:
+                data = await client.get_claims(offset=offset, limit=limit, status=params_status,
+                                               date_from=df, date_to=dt)
+            except Exception:
+                data = {"results": [], "paging": {"total": 0, "offset": 0, "limit": limit}}
+            raw_claims = data.get("results", [])
+            paging = data.get("paging", {"total": len(raw_claims), "offset": offset, "limit": limit})
 
         # Reason code mapping (PDD = producto defectuoso, PNR = no recibido)
         REASON_MAP = {
@@ -2794,6 +2810,7 @@ async def health_claims_partial(
             "offset": offset,
             "limit": limit,
             "status": status,
+            "filter_order_id": filter_order_id,
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando reclamos: {e}</p>')
