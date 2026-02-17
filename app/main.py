@@ -40,13 +40,13 @@ import re as _re
 
 def _clean_sku_for_bm(sku: str) -> str:
     """Limpia SKU de MeLi para consultar BinManager.
-    Quita: (N), / segunda_parte, espacios extra, etc."""
+    Quita: (N), / segunda_parte, + segunda_parte, espacios extra, etc."""
     if not sku:
         return ""
-    # Tomar primera parte antes de " / " (MeLi a veces concatena SKUs)
-    s = sku.split("/")[0].strip()
+    # Tomar primera parte antes de " / " o " + " (MeLi concatena SKUs en packs)
+    s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
     # Quitar sufijos entre parentesis: (18), (2), etc.
-    s = _re.sub(r'\(\d+\)$', '', s).strip()
+    s = _re.sub(r'\(\d+\)', '', s).strip()
     # Quitar parentesis sobrantes
     s = _re.sub(r'[()]', '', s).strip()
     return s
@@ -1388,9 +1388,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             # 1) FullFillment con SKU limpio
             _, data = await _ff_fetch(clean, http)
             if data:
-                mty = data.get("TotalQtyMTY", 0) or 0
-                cdmx = data.get("TotalQtyCDMX", 0) or 0
-                tj = data.get("TotalQtyTJ", 0) or 0
+                mty = max(0, data.get("TotalQtyMTY", 0) or 0)
+                cdmx = max(0, data.get("TotalQtyCDMX", 0) or 0)
+                tj = max(0, data.get("TotalQtyTJ", 0) or 0)
                 if (mty + cdmx + tj) > 0:
                     return sku, {"TotalQtyMTY": mty, "TotalQtyCDMX": cdmx, "TotalQtyTJ": tj}
 
@@ -1413,9 +1413,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                         continue
                     if psku:
                         seen_psku.add(psku)
-                    agg["TotalQtyMTY"] += (sdata.get("TotalQtyMTY", 0) or 0)
-                    agg["TotalQtyCDMX"] += (sdata.get("TotalQtyCDMX", 0) or 0)
-                    agg["TotalQtyTJ"] += (sdata.get("TotalQtyTJ", 0) or 0)
+                    agg["TotalQtyMTY"] += max(0, sdata.get("TotalQtyMTY", 0) or 0)
+                    agg["TotalQtyCDMX"] += max(0, sdata.get("TotalQtyCDMX", 0) or 0)
+                    agg["TotalQtyTJ"] += max(0, sdata.get("TotalQtyTJ", 0) or 0)
                     found_any = True
             if found_any and (agg["TotalQtyMTY"] + agg["TotalQtyCDMX"] + agg["TotalQtyTJ"]) > 0:
                 return sku, agg
