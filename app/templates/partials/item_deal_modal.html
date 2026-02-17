@@ -148,6 +148,7 @@
     var BM_COST_MXN = {{ bm_cost_mxn|round(2) }};
     var _selectedPromo = null;
     var _selectedPromoData = null;
+    var _activePromos = []; // track all active (started) promos
 
     function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
 
@@ -260,6 +261,7 @@
         }
 
         var _autoSelected = false;
+        _activePromos = promos.filter(function(p) { return p.status === 'started'; });
 
         promos.forEach(function(p) {
             var color = typeColors[p.type] || 'bg-gray-100 text-gray-600';
@@ -369,6 +371,14 @@
         });
     }
 
+    // Helper: delete a promo, returns promise
+    function _deletePromo(promoType) {
+        return fetch('/api/items/' + ITEM_ID + '/promotions/' + promoType, {
+            method: 'DELETE',
+            headers: { 'ngrok-skip-browser-warning': '1' }
+        }).then(function(r) { return r.json(); });
+    }
+
     // Activate deal
     window._idmActivate = function() {
         var dealPrice = parseFloat(document.getElementById('idm-deal-price').value);
@@ -378,6 +388,29 @@
         btn.disabled = true;
         btn.textContent = 'Procesando...';
 
+        // If switching promo type, deactivate conflicting active promos first
+        var conflicting = _activePromos.filter(function(ap) {
+            return ap.type !== _selectedPromo && ap.type !== 'SMART' && ap.type !== 'PRE_NEGOTIATED';
+        });
+
+        var deactivateFirst;
+        if (conflicting.length > 0 && _selectedPromo !== 'PRICE_DISCOUNT') {
+            // Deactivate PRICE_DISCOUNT (or other active) before activating new type
+            var deletePromises = conflicting.map(function(ap) { return _deletePromo(ap.type); });
+            deactivateFirst = Promise.all(deletePromises);
+        } else {
+            deactivateFirst = Promise.resolve();
+        }
+
+        deactivateFirst.then(function() {
+            _doActivate(dealPrice, btn);
+        }).catch(function(e) {
+            btn.textContent = 'Activar Deal';
+            btn.disabled = false;
+        });
+    };
+
+    function _doActivate(dealPrice, btn) {
         var body = { deal_price: dealPrice, promotion_type: _selectedPromo };
 
         if (_selectedPromo === 'PRICE_DISCOUNT') {
@@ -417,7 +450,11 @@
                 if (window._onDealChange) window._onDealChange(true, dealPrice, origP);
             } else {
                 msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
-                msgEl.textContent = 'Error: ' + (res.data.detail || res.data.error || JSON.stringify(res.data));
+                var errMsg = res.data.detail || res.data.error || '';
+                if (res.data.meli_body && typeof res.data.meli_body === 'object') {
+                    errMsg += ' [' + JSON.stringify(res.data.meli_body) + ']';
+                }
+                msgEl.textContent = 'Error: ' + (errMsg || JSON.stringify(res.data));
                 btn.textContent = 'Activar Deal';
                 btn.disabled = false;
             }

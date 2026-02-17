@@ -4697,14 +4697,27 @@ async def activate_item_promotion_api(item_id: str, request: Request):
         )
         return {"ok": True, "result": result}
     except Exception as e:
-        detail = str(e)
+        import logging, json as _json
         error_body = getattr(e, "body", None)
+        logging.getLogger("api").warning(f"activate_promotion({item_id}) error: {e} body={error_body}")
+        # Build detailed error message from MeLi response
+        detail = str(e)
         if isinstance(error_body, dict):
-            detail = error_body.get("error", "") or detail
+            parts = []
+            if error_body.get("error"):
+                parts.append(error_body["error"])
+            if error_body.get("message"):
+                parts.append(error_body["message"])
             cause = error_body.get("cause", [])
-            if isinstance(cause, list) and cause:
-                cause_msgs = [c.get("message", c.get("code", str(c))) for c in cause[:5]]
-                detail += " | " + "; ".join(cause_msgs)
+            if isinstance(cause, list):
+                for c in cause[:5]:
+                    if isinstance(c, dict):
+                        parts.append(c.get("message") or c.get("code") or str(c))
+                    else:
+                        parts.append(str(c))
+            detail = " | ".join(parts) if parts else detail
+        elif isinstance(error_body, str) and error_body:
+            detail = error_body
         return JSONResponse({"ok": False, "detail": detail, "meli_body": error_body}, status_code=400)
     finally:
         await client.close()
