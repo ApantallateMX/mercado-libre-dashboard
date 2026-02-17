@@ -1129,42 +1129,44 @@ class MeliClient:
 
     async def activate_item_promotion(self, item_id: str, deal_price: float,
                                        promotion_type: str, **kwargs) -> dict:
-        """Activa promocion: PUT para deals de campana, POST para PRICE_DISCOUNT."""
+        """Activa promocion via POST. Borra oferta existente si hay conflicto."""
         endpoint = f"/seller-promotions/items/{item_id}"
         params = {"app_version": "v2"}
 
-        if promotion_type == "PRICE_DISCOUNT":
-            # PRICE_DISCOUNT: Si ya existe uno activo, DELETE primero, luego POST nuevo
-            if kwargs.get("is_modification"):
-                try:
-                    await self.delete(endpoint, params={"app_version": "v2", "promotion_type": "PRICE_DISCOUNT"})
-                    await asyncio.sleep(0.5)  # brief wait for MeLi to process
-                except Exception:
-                    pass  # Si no habia uno activo, ignorar error de delete
+        # Build body
+        body = {"deal_price": deal_price, "promotion_type": promotion_type}
+        if kwargs.get("promotion_id"):
+            body["promotion_id"] = kwargs["promotion_id"]
+        if kwargs.get("original_price"):
+            body["original_price"] = kwargs["original_price"]
+        if kwargs.get("start_date"):
+            body["start_date"] = kwargs["start_date"]
+        if kwargs.get("finish_date"):
+            body["finish_date"] = kwargs["finish_date"]
 
-            body = {"deal_price": deal_price, "promotion_type": "PRICE_DISCOUNT"}
-            if kwargs.get("original_price"):
-                body["original_price"] = kwargs["original_price"]
-            if kwargs.get("start_date"):
-                body["start_date"] = kwargs["start_date"]
-            if kwargs.get("finish_date"):
-                body["finish_date"] = kwargs["finish_date"]
+        # Try POST; if OFFER_ALREADY_EXISTS, delete existing and retry
+        try:
             return await self.post(endpoint, params=params, json=body)
-        elif promotion_type in ("DEAL", "MARKETPLACE_CAMPAIGN"):
-            # Campaign deals (Descuentos Primavera, etc): POST to /seller-promotions/ v2
-            body = {
-                "deal_price": deal_price,
-                "promotion_type": promotion_type,
-            }
-            if kwargs.get("promotion_id"):
-                body["promotion_id"] = kwargs["promotion_id"]
+        except MeliApiError as e:
+            is_exists = False
+            if isinstance(e.body, dict):
+                for c in e.body.get("cause", []):
+                    if isinstance(c, dict) and "OFFER_ALREADY_EXISTS" in (c.get("error_code") or ""):
+                        is_exists = True
+                        break
+                if not is_exists and "OFFER_ALREADY_EXISTS" in (e.body.get("message") or ""):
+                    is_exists = True
+            if not is_exists:
+                raise  # Not a conflict error, re-raise
+
+            # Delete existing offer(s) and retry
+            for ptype in ("PRICE_DISCOUNT", "DEAL"):
+                try:
+                    await self.delete(endpoint, params={"app_version": "v2", "promotion_type": ptype})
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
             return await self.post(endpoint, params=params, json=body)
-        else:
-            # DOD/LIGHTNING/other: PUT con deal_price + promotion_type + promotion_id
-            body = {"deal_price": deal_price, "promotion_type": promotion_type}
-            if kwargs.get("promotion_id"):
-                body["promotion_id"] = kwargs["promotion_id"]
-            return await self.put(endpoint, params=params, json=body)
 
     async def delete_item_promotion(self, item_id: str, promotion_type: str) -> dict:
         """DELETE /seller-promotions/items/{item_id}?app_version=v2&promotion_type=TYPE"""
