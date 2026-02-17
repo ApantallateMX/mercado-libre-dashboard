@@ -1776,7 +1776,21 @@ async def products_inventory_partial(
         products = _build_product_list(all_bodies, sales_map)
         _enrich_sku_from_orders(products, all_orders)
 
-        # Recomendaciones (para preset baja_venta)
+        # --- Apply CACHED BM stock (instant, no API calls) ---
+        # Only use whatever is already in the BM cache from prewarm/previous loads
+        for p in products:
+            sku = p.get("sku", "")
+            if sku:
+                cached = _bm_stock_cache.get(sku.upper())
+                if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+                    data = cached[1]
+                    p["_bm_total"] = data.get("total", 0)
+                    p["_bm_mty"] = data.get("mty", 0)
+                    p["_bm_cdmx"] = data.get("cdmx", 0)
+                    p["_bm_tj"] = data.get("tj", 0)
+                    p["_bm_has_data"] = True
+
+        # Recomendaciones
         for p in products:
             recs = []
             if p["pictures_count"] < 6:
@@ -1789,23 +1803,7 @@ async def products_inventory_partial(
                 recs.append("Candidato para deal/promocion")
             p["recommendations"] = recs
 
-        # BM stock + variation SKUs (siempre)
-        bm_map, _ = await asyncio.gather(
-            _get_bm_stock_cached(products),
-            _enrich_variation_skus(client, products),
-        )
-        _apply_bm_stock(products, bm_map)
-
-        # Fase 2: enriquecimiento completo (costo/margen) si se pide
-        usd_to_mxn = 0.0
-        if enrich == "full":
-            _, usd_to_mxn = await asyncio.gather(
-                _enrich_with_bm_product_info(products),
-                _get_usd_to_mxn(client),
-            )
-            _calc_margins(products, usd_to_mxn)
-
-        # --- Stock alerts: ventas>0, stock MeLi=0, stock BM>0 ---
+        # --- Stock alerts from cached BM data (no waiting) ---
         stock_alerts = [
             p for p in products
             if p.get("units", 0) > 0
@@ -1870,7 +1868,6 @@ async def products_inventory_partial(
         if per_page <= 0:
             per_page = 20
         if per_page >= total_count:
-            # "Todos" — no paginar
             total_pages = 1
             page = 1
             page_products = products
@@ -1880,9 +1877,36 @@ async def products_inventory_partial(
             start = (page - 1) * per_page
             page_products = products[start:start + per_page]
 
-        # --- Enrich page with sale_price (deals) ---
+        # --- Trigger background BM prewarm for ALL products (non-blocking) ---
+        # This fills the cache gradually so subsequent pages load with BM data
+        _bg_key = f"bm_bg:{client.user_id}"
+        if _bg_key not in _bm_stock_cache:
+            _bm_stock_cache[_bg_key] = (_time.time(), {})
+            asyncio.ensure_future(_get_bm_stock_cached(products))
+
+        # --- Enrich ONLY page products (BM fresh + sale_price + variations) ---
+        usd_to_mxn = 0.0
         page_ids = [p["id"] for p in page_products]
-        sale_prices = await _get_sale_prices_cached(client, page_ids)
+        enrichment_tasks = [
+            _get_bm_stock_cached(page_products),
+            _get_sale_prices_cached(client, page_ids),
+            _enrich_variation_skus(client, page_products),
+        ]
+        if enrich == "full":
+            enrichment_tasks.append(_enrich_with_bm_product_info(page_products))
+            enrichment_tasks.append(_get_usd_to_mxn(client))
+
+        enrich_results = await asyncio.gather(*enrichment_tasks)
+        bm_map = enrich_results[0]
+        sale_prices = enrich_results[1]
+        # enrich_results[2] = variation SKUs (side-effect, no return needed)
+
+        _apply_bm_stock(page_products, bm_map)
+
+        if enrich == "full":
+            usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
+            _calc_margins(page_products, usd_to_mxn)
+
         for p in page_products:
             sp = sale_prices.get(p["id"])
             if sp:
@@ -1896,11 +1920,11 @@ async def products_inventory_partial(
         for a in stock_alerts:
             units = a.get("units", 0)
             price = a.get("price", 0)
-            days = alert_days or 30
-            daily_avg = units / days if days > 0 else 0
+            d = alert_days or 30
+            daily_avg = units / d if d > 0 else 0
             a["_alert_units"] = units
             a["_alert_revenue"] = round(units * price, 0)
-            a["_est_lost_revenue"] = round(daily_avg * price * days * 0.5, 0)  # conservative 50%
+            a["_est_lost_revenue"] = round(daily_avg * price * d * 0.5, 0)
         stock_alerts.sort(key=lambda x: x.get("_est_lost_revenue", 0), reverse=True)
 
         return templates.TemplateResponse("partials/products_inventory.html", {
