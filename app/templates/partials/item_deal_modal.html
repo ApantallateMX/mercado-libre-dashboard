@@ -247,6 +247,20 @@
             'pending': '<span class="text-[10px] px-1.5 py-0.5 bg-blue-200 text-blue-800 rounded font-medium">PENDIENTE</span>'
         };
 
+        // Helper: get deal price from promo (MeLi uses deal_price or price)
+        function getPromoPrice(p) {
+            return p.deal_price || p.price || 0;
+        }
+
+        // Helper: convert ISO date to datetime-local value (YYYY-MM-DDTHH:MM)
+        function toLocalInput(isoStr) {
+            if (!isoStr) return '';
+            // "2026-02-17T00:00:00.000-06:00" -> "2026-02-17T00:00"
+            return isoStr.substring(0, 16);
+        }
+
+        var _autoSelected = false;
+
         promos.forEach(function(p) {
             var color = typeColors[p.type] || 'bg-gray-100 text-gray-600';
             var statusHtml = statusLabels[p.status] || '<span class="text-[10px] px-1.5 py-0.5 bg-gray-200 text-gray-600 rounded">' + (p.status || '') + '</span>';
@@ -255,104 +269,103 @@
             card.className = 'border rounded-lg p-3 transition ' +
                 (isSmart ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-blue-400');
 
+            var dealP = getPromoPrice(p);
+
             // Build card content
             var html = '<div class="flex items-center justify-between mb-1">' +
                 '<div class="flex items-center gap-2">' +
                     '<span class="px-2 py-0.5 rounded text-[10px] font-semibold ' + color + '">' + p.type + '</span>' +
                     statusHtml +
                 '</div>';
-            // Show current deal price if active
-            if (p.status === 'started' && p.price > 0) {
-                html += '<span class="text-sm font-bold text-green-600">' + fmt(p.price) + '</span>';
+            if (p.status === 'started' && dealP > 0) {
+                html += '<span class="text-sm font-bold text-green-600">' + fmt(dealP) + '</span>';
             }
             html += '</div>';
 
-            // Name
             if (p.name) {
                 html += '<p class="text-xs text-gray-600 truncate">' + p.name + '</p>';
             }
 
-            // Limits info for actionable promos
             if (!isSmart) {
                 var limitsHtml = '';
-                if (p.max_discounted_price > 0) {
-                    limitsHtml += '<span>Max: ' + fmt(p.max_discounted_price) + '</span>';
-                }
-                if (p.min_discounted_price > 0) {
-                    limitsHtml += '<span>Min: ' + fmt(p.min_discounted_price) + '</span>';
-                }
-                if (p.suggested_discounted_price > 0) {
-                    limitsHtml += '<span class="font-semibold text-blue-700">Sugerido: ' + fmt(p.suggested_discounted_price) + '</span>';
-                }
-                if (limitsHtml) {
-                    html += '<div class="flex gap-3 mt-1 text-[10px] text-gray-500">' + limitsHtml + '</div>';
-                }
-                // Dates for campaign deals
-                if (p.start_date && p.type !== 'PRICE_DISCOUNT') {
+                if (p.max_discounted_price > 0) limitsHtml += '<span>Max: ' + fmt(p.max_discounted_price) + '</span>';
+                if (p.min_discounted_price > 0) limitsHtml += '<span>Min: ' + fmt(p.min_discounted_price) + '</span>';
+                if (p.suggested_discounted_price > 0) limitsHtml += '<span class="font-semibold text-blue-700">Sugerido: ' + fmt(p.suggested_discounted_price) + '</span>';
+                if (limitsHtml) html += '<div class="flex gap-3 mt-1 text-[10px] text-gray-500">' + limitsHtml + '</div>';
+                // Show dates for all promos that have them
+                if (p.start_date) {
                     var sd = p.start_date.substring(0, 10);
                     var ed = p.finish_date ? p.finish_date.substring(0, 10) : '';
-                    html += '<p class="text-[10px] text-gray-400 mt-0.5">Periodo: ' + sd + ' a ' + ed + '</p>';
+                    html += '<p class="text-[10px] text-gray-400 mt-0.5">Periodo: ' + sd + (ed ? ' a ' + ed : '') + '</p>';
                 }
             } else {
                 html += '<p class="text-[10px] text-gray-400 mt-1">Gestionado por MeLi (no editable)</p>';
             }
 
-            if (p.id) {
-                html += '<p class="text-[10px] text-gray-400">ID: ' + p.id + '</p>';
-            }
+            if (p.id) html += '<p class="text-[10px] text-gray-400">ID: ' + p.id + '</p>';
 
             card.innerHTML = html;
 
+            // Selection handler for actionable promos
+            function selectCard() {
+                list.querySelectorAll('.promo-card').forEach(function(d) {
+                    d.classList.remove('border-blue-500', 'bg-blue-50');
+                });
+                card.classList.add('border-blue-500', 'bg-blue-50');
+                _selectedPromo = p.type;
+                _selectedPromoData = p;
+
+                // Show/hide dates + pre-fill from promo data
+                if (p.type === 'PRICE_DISCOUNT') {
+                    document.getElementById('idm-dates').classList.remove('hidden');
+                    document.getElementById('idm-start-date').value = toLocalInput(p.start_date);
+                    document.getElementById('idm-end-date').value = toLocalInput(p.finish_date);
+                } else {
+                    document.getElementById('idm-dates').classList.add('hidden');
+                }
+
+                // Show limits panel
+                var limitsEl = document.getElementById('idm-promo-limits');
+                if (p.max_discounted_price > 0 || p.suggested_discounted_price > 0) {
+                    var lhtml = '<div class="flex items-center gap-2 mb-1"><span class="font-semibold text-blue-800">' + p.type + '</span>';
+                    if (p.name) lhtml += '<span class="text-blue-600">' + p.name + '</span>';
+                    lhtml += '</div><div class="flex gap-4">';
+                    if (p.min_discounted_price > 0) lhtml += '<span>Min: <strong>' + fmt(p.min_discounted_price) + '</strong></span>';
+                    if (p.max_discounted_price > 0) lhtml += '<span>Max: <strong>' + fmt(p.max_discounted_price) + '</strong></span>';
+                    if (p.suggested_discounted_price > 0) lhtml += '<span>Sugerido: <strong class="text-blue-700">' + fmt(p.suggested_discounted_price) + '</strong></span>';
+                    lhtml += '</div>';
+                    limitsEl.innerHTML = lhtml;
+                    limitsEl.classList.remove('hidden');
+                } else {
+                    limitsEl.classList.add('hidden');
+                }
+
+                // Set price: active deal price > suggested > max > empty
+                var priceInput = document.getElementById('idm-deal-price');
+                if (dealP > 0 && p.status === 'started') {
+                    priceInput.value = Math.round(dealP);
+                } else if (p.suggested_discounted_price > 0) {
+                    priceInput.value = Math.round(p.suggested_discounted_price);
+                } else if (p.max_discounted_price > 0) {
+                    priceInput.value = Math.round(p.max_discounted_price);
+                } else {
+                    priceInput.value = '';
+                }
+
+                _idmCalc();
+            }
+
             if (!isSmart) {
-                card.onclick = function() {
-                    // Deselect all
-                    list.querySelectorAll('.promo-card').forEach(function(d) {
-                        d.classList.remove('border-blue-500', 'bg-blue-50');
-                    });
-                    card.classList.add('border-blue-500', 'bg-blue-50');
-                    _selectedPromo = p.type;
-                    _selectedPromoData = p;
-
-                    // Show/hide dates section
-                    if (p.type === 'PRICE_DISCOUNT') {
-                        document.getElementById('idm-dates').classList.remove('hidden');
-                    } else {
-                        document.getElementById('idm-dates').classList.add('hidden');
-                    }
-
-                    // Show limits panel
-                    var limitsEl = document.getElementById('idm-promo-limits');
-                    if (p.max_discounted_price > 0 || p.suggested_discounted_price > 0) {
-                        var lhtml = '<div class="flex items-center gap-2 mb-1"><span class="font-semibold text-blue-800">' + p.type + '</span>';
-                        if (p.name) lhtml += '<span class="text-blue-600">' + p.name + '</span>';
-                        lhtml += '</div><div class="flex gap-4">';
-                        if (p.min_discounted_price > 0) lhtml += '<span>Min: <strong>' + fmt(p.min_discounted_price) + '</strong></span>';
-                        if (p.max_discounted_price > 0) lhtml += '<span>Max: <strong>' + fmt(p.max_discounted_price) + '</strong></span>';
-                        if (p.suggested_discounted_price > 0) lhtml += '<span>Sugerido: <strong class="text-blue-700">' + fmt(p.suggested_discounted_price) + '</strong></span>';
-                        lhtml += '</div>';
-                        limitsEl.innerHTML = lhtml;
-                        limitsEl.classList.remove('hidden');
-                    } else {
-                        limitsEl.classList.add('hidden');
-                    }
-
-                    // Set price: use suggested if available, else current deal price, else empty
-                    var priceInput = document.getElementById('idm-deal-price');
-                    if (p.suggested_discounted_price > 0) {
-                        priceInput.value = Math.round(p.suggested_discounted_price);
-                    } else if (p.price > 0 && p.status === 'started') {
-                        priceInput.value = Math.round(p.price);
-                    } else if (p.max_discounted_price > 0) {
-                        priceInput.value = Math.round(p.max_discounted_price);
-                    } else {
-                        priceInput.value = '';
-                    }
-
-                    _idmCalc();
-                };
+                card.onclick = selectCard;
             }
             card.classList.add('promo-card');
             list.appendChild(card);
+
+            // Auto-select the active promo (started) on first load
+            if (!_autoSelected && !isSmart && p.status === 'started') {
+                _autoSelected = true;
+                selectCard();
+            }
         });
     }
 
@@ -370,8 +383,18 @@
         if (_selectedPromo === 'PRICE_DISCOUNT') {
             var sd = document.getElementById('idm-start-date').value;
             var ed = document.getElementById('idm-end-date').value;
-            if (sd) body.start_date = sd + ':00';
-            if (ed) body.finish_date = ed + ':00';
+            if (!sd || !ed) {
+                var resultEl = document.getElementById('idm-result');
+                var msgEl = document.getElementById('idm-result-msg');
+                resultEl.classList.remove('hidden');
+                msgEl.className = 'rounded-lg p-3 text-sm bg-red-50 text-red-700 border border-red-200';
+                msgEl.textContent = 'Fechas de inicio y fin son requeridas para PRICE_DISCOUNT';
+                btn.textContent = 'Activar Deal';
+                btn.disabled = false;
+                return;
+            }
+            body.start_date = sd.length === 16 ? sd + ':00' : sd;
+            body.finish_date = ed.length === 16 ? ed + ':00' : ed;
         } else if (_selectedPromoData && _selectedPromoData.id) {
             body.promotion_id = _selectedPromoData.id;
         }

@@ -4660,6 +4660,8 @@ async def get_item_promotions_api(item_id: str):
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
         promos = await client.get_item_promotions(item_id)
+        import logging
+        logging.getLogger("api").info(f"promotions({item_id}): {promos}")
         return {"promotions": promos, "error": None}
     except Exception as e:
         import logging
