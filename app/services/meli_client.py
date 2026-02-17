@@ -1151,19 +1151,14 @@ class MeliClient:
                 body["finish_date"] = kwargs["finish_date"]
             return await self.post(endpoint, params=params, json=body)
         elif promotion_type in ("DEAL", "MARKETPLACE_CAMPAIGN"):
-            # Campaign deals (Descuentos Primavera, etc): POST to /marketplace/ endpoint
-            mp_endpoint = f"/marketplace/seller-promotions/items/{item_id}"
-            mp_params = {"user_id": self.user_id}
+            # Campaign deals (Descuentos Primavera, etc): POST to /seller-promotions/ v2
             body = {
                 "deal_price": deal_price,
                 "promotion_type": promotion_type,
             }
             if kwargs.get("promotion_id"):
                 body["promotion_id"] = kwargs["promotion_id"]
-            return await self._request_raw(
-                "POST", mp_endpoint, extra_headers={"version": "v2"},
-                params=mp_params, json=body
-            )
+            return await self.post(endpoint, params=params, json=body)
         else:
             # DOD/LIGHTNING/other: PUT con deal_price + promotion_type + promotion_id
             body = {"deal_price": deal_price, "promotion_type": promotion_type}
