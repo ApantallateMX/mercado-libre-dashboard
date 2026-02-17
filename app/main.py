@@ -1356,7 +1356,7 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
     async def _fetch_one(iid):
         async with sem:
             try:
-                data = await client._get(f"/items/{iid}/sale_price")
+                data = await client.get_item_sale_price(iid)
                 if data and data.get("regular_amount") and data.get("amount"):
                     if data["regular_amount"] > data["amount"]:
                         _sale_price_cache[iid] = (now, data)
