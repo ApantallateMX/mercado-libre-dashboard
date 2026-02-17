@@ -1,6 +1,6 @@
 <div class="space-y-6">
     <!-- Nivel General -->
-    <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 flex-wrap">
         <div>
             <p class="text-sm text-gray-500">Nivel de Reputacion</p>
             {% set level_map = {
@@ -18,11 +18,126 @@
             <span class="ml-2 px-3 py-1 rounded-full bg-green-100 text-green-700 text-sm font-medium">{{ reputation.power_seller }}</span>
             {% endif %}
         </div>
+        {% if reputation.period %}
+        <span class="text-xs text-gray-400">Periodo: {{ reputation.period }}</span>
+        {% endif %}
     </div>
 
-    <!-- Metricas en Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <!-- Transacciones -->
+    <!-- 3 Metric Gauges -->
+    <div class="space-y-4">
+        <!-- Claims Gauge -->
+        {% set m = reputation.claims_margin %}
+        <div class="bg-gray-50 rounded-lg p-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-sm font-semibold text-gray-700">Tasa de Reclamos</h3>
+                <div class="flex items-center gap-2">
+                    <span class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
+                        {{ reputation.claims_pct }}%
+                    </span>
+                    <span class="px-2 py-0.5 text-xs rounded-full {% if m.status == 'green' %}bg-green-100 text-green-700{% elif m.status == 'yellow' %}bg-yellow-100 text-yellow-700{% elif m.status == 'orange' %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                        {{ m.label }}
+                    </span>
+                </div>
+            </div>
+            <!-- Visual gauge with zone markers -->
+            <div class="relative h-4 rounded-full overflow-hidden bg-gray-200 mb-1">
+                <div class="absolute inset-y-0 left-0 bg-green-400 rounded-l-full" style="width:{{ m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-yellow-400" style="left:{{ m.green_end }}%;width:{{ m.yellow_end - m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-orange-400" style="left:{{ m.yellow_end }}%;width:{{ m.red_start - m.yellow_end }}%"></div>
+                <div class="absolute inset-y-0 bg-red-400 rounded-r-full" style="left:{{ m.red_start }}%;width:{{ 100 - m.red_start }}%"></div>
+                <!-- Position marker -->
+                <div class="absolute top-0 bottom-0 w-1 bg-gray-800 rounded" style="left:{{ m.gauge_position }}%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] text-gray-400">
+                <span>0%</span>
+                <span>{{ "%.0f"|format(thresholds.claims.green * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.claims.yellow * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.claims.red * 100) }}%</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+                {% if reputation.claims_remaining > 0 %}
+                {{ reputation.claims_remaining }} reclamo{{ 's' if reputation.claims_remaining != 1 else '' }} mas antes de pasar a {{ reputation.claims_next_zone }}
+                {% else %}
+                En zona critica — priorizar resolucion de reclamos
+                {% endif %}
+            </p>
+        </div>
+
+        <!-- Cancellations Gauge -->
+        {% set m = reputation.cancel_margin %}
+        <div class="bg-gray-50 rounded-lg p-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-sm font-semibold text-gray-700">Tasa de Cancelaciones</h3>
+                <div class="flex items-center gap-2">
+                    <span class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
+                        {{ reputation.cancellation_pct }}%
+                    </span>
+                    <span class="px-2 py-0.5 text-xs rounded-full {% if m.status == 'green' %}bg-green-100 text-green-700{% elif m.status == 'yellow' %}bg-yellow-100 text-yellow-700{% elif m.status == 'orange' %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                        {{ m.label }}
+                    </span>
+                </div>
+            </div>
+            <div class="relative h-4 rounded-full overflow-hidden bg-gray-200 mb-1">
+                <div class="absolute inset-y-0 left-0 bg-green-400 rounded-l-full" style="width:{{ m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-yellow-400" style="left:{{ m.green_end }}%;width:{{ m.yellow_end - m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-orange-400" style="left:{{ m.yellow_end }}%;width:{{ m.red_start - m.yellow_end }}%"></div>
+                <div class="absolute inset-y-0 bg-red-400 rounded-r-full" style="left:{{ m.red_start }}%;width:{{ 100 - m.red_start }}%"></div>
+                <div class="absolute top-0 bottom-0 w-1 bg-gray-800 rounded" style="left:{{ m.gauge_position }}%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] text-gray-400">
+                <span>0%</span>
+                <span>{{ "%.0f"|format(thresholds.cancellations.green * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.cancellations.yellow * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.cancellations.red * 100) }}%</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+                {% if reputation.cancel_remaining > 0 %}
+                {{ reputation.cancel_remaining }} cancelacion{{ 'es' if reputation.cancel_remaining != 1 else '' }} mas antes de pasar a {{ reputation.cancel_next_zone }}
+                {% else %}
+                En zona critica — verificar stock antes de aceptar ventas
+                {% endif %}
+            </p>
+        </div>
+
+        <!-- Delays Gauge -->
+        {% set m = reputation.delay_margin %}
+        <div class="bg-gray-50 rounded-lg p-4">
+            <div class="flex justify-between items-center mb-2">
+                <h3 class="text-sm font-semibold text-gray-700">Tasa de Demoras</h3>
+                <div class="flex items-center gap-2">
+                    <span class="text-lg font-bold {% if m.status == 'green' %}text-green-600{% elif m.status == 'yellow' %}text-yellow-600{% elif m.status == 'orange' %}text-orange-500{% else %}text-red-600{% endif %}">
+                        {{ reputation.delayed_pct }}%
+                    </span>
+                    <span class="px-2 py-0.5 text-xs rounded-full {% if m.status == 'green' %}bg-green-100 text-green-700{% elif m.status == 'yellow' %}bg-yellow-100 text-yellow-700{% elif m.status == 'orange' %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                        {{ m.label }}
+                    </span>
+                </div>
+            </div>
+            <div class="relative h-4 rounded-full overflow-hidden bg-gray-200 mb-1">
+                <div class="absolute inset-y-0 left-0 bg-green-400 rounded-l-full" style="width:{{ m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-yellow-400" style="left:{{ m.green_end }}%;width:{{ m.yellow_end - m.green_end }}%"></div>
+                <div class="absolute inset-y-0 bg-orange-400" style="left:{{ m.yellow_end }}%;width:{{ m.red_start - m.yellow_end }}%"></div>
+                <div class="absolute inset-y-0 bg-red-400 rounded-r-full" style="left:{{ m.red_start }}%;width:{{ 100 - m.red_start }}%"></div>
+                <div class="absolute top-0 bottom-0 w-1 bg-gray-800 rounded" style="left:{{ m.gauge_position }}%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] text-gray-400">
+                <span>0%</span>
+                <span>{{ "%.0f"|format(thresholds.delays.green * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.delays.yellow * 100) }}%</span>
+                <span>{{ "%.0f"|format(thresholds.delays.red * 100) }}%</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+                {% if reputation.delay_remaining > 0 %}
+                {{ reputation.delay_remaining }} demora{{ 's' if reputation.delay_remaining != 1 else '' }} mas antes de pasar a {{ reputation.delay_next_zone }}
+                {% else %}
+                En zona critica — priorizar despacho rapido
+                {% endif %}
+            </p>
+        </div>
+    </div>
+
+    <!-- Transactions & Ratings -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div class="bg-gray-50 rounded-lg p-4">
             <h3 class="text-sm font-semibold text-gray-700 mb-3">Transacciones</h3>
             <div class="space-y-2">
@@ -37,7 +152,6 @@
             </div>
         </div>
 
-        <!-- Calificaciones -->
         <div class="bg-gray-50 rounded-lg p-4">
             <h3 class="text-sm font-semibold text-gray-700 mb-3">Calificaciones</h3>
             <div class="space-y-2">
@@ -70,30 +184,34 @@
                 </div>
             </div>
         </div>
+    </div>
 
-        <!-- Metricas de Servicio -->
-        <div class="bg-gray-50 rounded-lg p-4">
-            <h3 class="text-sm font-semibold text-gray-700 mb-3">Metricas de Servicio</h3>
-            <div class="space-y-2">
-                <div class="flex justify-between">
-                    <span class="text-sm text-gray-600">Tasa de Reclamos</span>
-                    <span class="text-sm font-semibold {% if reputation.claims_rate > 0.03 %}text-red-600{% else %}text-green-600{% endif %}">
-                        {{ "%.2f"|format(reputation.claims_rate * 100) }}%
-                    </span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-sm text-gray-600">Tasa de Cancelacion</span>
-                    <span class="text-sm font-semibold {% if reputation.cancellation_rate > 0.03 %}text-red-600{% else %}text-green-600{% endif %}">
-                        {{ "%.2f"|format(reputation.cancellation_rate * 100) }}%
-                    </span>
-                </div>
-                <div class="flex justify-between">
-                    <span class="text-sm text-gray-600">Tasa de Demoras</span>
-                    <span class="text-sm font-semibold {% if reputation.delayed_rate > 0.05 %}text-red-600{% else %}text-green-600{% endif %}">
-                        {{ "%.2f"|format(reputation.delayed_rate * 100) }}%
-                    </span>
-                </div>
+    <!-- Actionable Tips -->
+    {% if reputation.improvement_tips %}
+    <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">Recomendaciones</h3>
+        <div class="space-y-2">
+            {% for tip in reputation.improvement_tips %}
+            <div class="flex items-start gap-3 p-2 rounded-lg {% if tip.severity == 'red' %}bg-red-50{% elif tip.severity == 'yellow' %}bg-yellow-50{% elif tip.severity == 'green' %}bg-green-50{% else %}bg-blue-50{% endif %}">
+                {% if tip.severity == 'red' %}
+                <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                {% elif tip.severity == 'yellow' %}
+                <svg class="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                {% elif tip.severity == 'green' %}
+                <svg class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                {% else %}
+                <svg class="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                {% endif %}
+                <span class="text-xs text-gray-700 flex-1">{{ tip.text }}</span>
+                {% if tip.tab %}
+                <button onclick="if(window.loadTab) window.loadTab('{{ tip.tab }}')"
+                        class="text-xs text-blue-600 hover:text-blue-800 font-medium flex-shrink-0">
+                    Ver detalle &rarr;
+                </button>
+                {% endif %}
             </div>
+            {% endfor %}
         </div>
     </div>
+    {% endif %}
 </div>

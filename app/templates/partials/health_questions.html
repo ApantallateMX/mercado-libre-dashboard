@@ -17,20 +17,26 @@
 {% if questions %}
 <div class="space-y-4">
     {% for q in questions %}
-    <div class="border border-gray-200 rounded-lg p-4" id="question-row-{{ q.id }}">
+    {% set border_color = 'border-l-red-500' if q.urgency == 'red' else ('border-l-yellow-400' if q.urgency == 'yellow' else ('border-l-green-400' if q.urgency == 'green' else 'border-l-gray-200')) %}
+    <div class="border border-gray-200 rounded-lg p-4 border-l-4 {{ border_color }}" id="question-row-{{ q.id }}">
         <div class="flex justify-between items-start mb-2">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
                 <span class="text-xs text-gray-500">{{ q.date_created }}</span>
                 {% if q.elapsed %}
                 <span class="text-xs text-gray-400">({{ q.elapsed }})</span>
                 {% endif %}
+                <!-- Type badge -->
+                <span class="px-2 py-0.5 text-[10px] font-semibold rounded-full {{ q.q_type_color }}">{{ q.q_type_label }}</span>
                 {% if q.item_id %}
-                <span class="text-xs text-gray-400">Item: {{ q.item_id }}</span>
+                <span class="text-xs text-gray-400">{{ q.item_id }}</span>
                 {% endif %}
                 {% if q.urgency == 'red' %}
-                <span class="w-2 h-2 rounded-full bg-red-500" title="Urgente"></span>
+                <span class="flex h-2 w-2 relative">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                </span>
                 {% elif q.urgency == 'yellow' %}
-                <span class="w-2 h-2 rounded-full bg-yellow-500" title="Pendiente"></span>
+                <span class="w-2 h-2 rounded-full bg-yellow-500"></span>
                 {% endif %}
             </div>
             <div class="flex items-center gap-2">
@@ -100,6 +106,22 @@
 
         {% if q.status == 'UNANSWERED' %}
         <div class="border-t pt-3">
+            <!-- Quick Template Buttons -->
+            {% if q.quick_templates %}
+            <div class="mb-2">
+                <p class="text-[10px] text-gray-400 mb-1">Respuestas rapidas:</p>
+                <div class="flex flex-wrap gap-1.5">
+                    {% for tmpl in q.quick_templates %}
+                    <button onclick="document.getElementById('answer-{{ q.id }}').value='{{ tmpl|e }}'; var c=document.getElementById('charcount-{{ q.id }}'); if(c) c.textContent='{{ tmpl|length }}/2000';"
+                            class="text-[11px] bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full hover:bg-yellow-100 hover:text-yellow-800 transition truncate max-w-xs"
+                            title="{{ tmpl }}">
+                        {{ tmpl[:50] }}{{ '...' if tmpl|length > 50 else '' }}
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
             <!-- AI Suggest Button + Context Input -->
             <div class="mb-2">
                 <div class="flex items-center gap-2 mb-1.5">
@@ -120,7 +142,7 @@
                 </div>
             </div>
 
-            <!-- AI Suggestion Panel (hidden until triggered) -->
+            <!-- AI Suggestion Panel -->
             <div id="ai-panel-q-{{ q.id }}" class="hidden mb-3">
                 <div class="bg-purple-50 border border-purple-200 rounded-lg p-3">
                     <div class="flex items-center gap-2 mb-2">

@@ -1,0 +1,102 @@
+{% if results %}
+<div class="space-y-3">
+    <p class="text-xs text-gray-500 mb-2">{{ results|length }} resultado{{ 's' if results|length != 1 else '' }} para "{{ query }}"</p>
+
+    {% for r in results %}
+    {% if r.type == 'order' %}
+    <!-- Order Card -->
+    <div class="border border-gray-200 rounded-lg p-4 hover:shadow transition">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                <span class="text-sm font-semibold text-gray-800">Orden #{{ r.id }}</span>
+                {% set order_status_class = {
+                    'paid': 'bg-green-100 text-green-800',
+                    'confirmed': 'bg-green-100 text-green-800',
+                    'cancelled': 'bg-red-100 text-red-800',
+                }.get(r.status, 'bg-gray-100 text-gray-800') %}
+                <span class="px-2 py-0.5 text-xs rounded-full {{ order_status_class }}">{{ r.status }}</span>
+            </div>
+            <span class="text-xs text-gray-500">{{ r.date }}</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-2">
+            <div>
+                <span class="text-gray-400">Comprador:</span>
+                <span class="font-medium">{{ r.buyer }}</span>
+            </div>
+            <div>
+                <span class="text-gray-400">Monto:</span>
+                <span class="font-semibold text-gray-800">${{ "{:,.2f}".format(r.total_amount) }} {{ r.currency }}</span>
+            </div>
+            {% if r.product_title %}
+            <div class="col-span-2">
+                <span class="text-gray-400">Producto:</span>
+                <span>{{ r.product_title[:80] }}</span>
+            </div>
+            {% endif %}
+            {% if r.shipping_status %}
+            <div>
+                <span class="text-gray-400">Envio:</span>
+                <span class="font-medium">{{ r.shipping_status }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if r.claims %}
+        <div class="mt-2 border-t pt-2">
+            <p class="text-xs text-red-600 font-semibold mb-1">Reclamos asociados:</p>
+            {% for cl in r.claims %}
+            <div class="text-xs text-gray-600 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                Reclamo #{{ cl.id }} - {{ cl.status }} ({{ cl.reason_id }})
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Quick actions -->
+        <div class="flex gap-2 mt-2">
+            <button onclick="if(window.loadTab) window.loadTab('claims')"
+                    class="text-xs text-blue-600 hover:text-blue-800">Ver reclamos</button>
+            <button onclick="if(window.loadTab) window.loadTab('messages')"
+                    class="text-xs text-blue-600 hover:text-blue-800">Ver mensajes</button>
+        </div>
+    </div>
+
+    {% elif r.type == 'claim' %}
+    <!-- Claim Card -->
+    <div class="border border-gray-200 rounded-lg p-4 border-l-4 border-l-red-400 hover:shadow transition">
+        <div class="flex justify-between items-start mb-2">
+            <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                <span class="text-sm font-semibold text-gray-800">Reclamo #{{ r.id }}</span>
+                {% set claim_status_class = {
+                    'opened': 'bg-red-100 text-red-800',
+                    'closed': 'bg-gray-100 text-gray-800',
+                }.get(r.status, 'bg-yellow-100 text-yellow-800') %}
+                <span class="px-2 py-0.5 text-xs rounded-full {{ claim_status_class }}">{{ r.status }}</span>
+                {% if r.stage %}
+                <span class="text-xs text-gray-400">({{ r.stage }})</span>
+                {% endif %}
+            </div>
+            <span class="text-xs text-gray-500">{{ r.date }}</span>
+        </div>
+        <div class="text-xs text-gray-600">
+            <span class="text-gray-400">Razon:</span> {{ r.reason_id }}
+            {% if r.order_id %}
+            &middot; <span class="text-gray-400">Orden:</span> {{ r.order_id }}
+            {% endif %}
+        </div>
+        <div class="mt-2">
+            <button onclick="if(window.loadTab) window.loadTab('claims')"
+                    class="text-xs text-blue-600 hover:text-blue-800">Ir a reclamos &rarr;</button>
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+
+{% else %}
+<p class="text-center py-6 text-gray-400 text-sm">No se encontraron resultados para "{{ query }}"</p>
+{% endif %}

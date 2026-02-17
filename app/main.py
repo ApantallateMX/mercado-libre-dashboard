@@ -2284,6 +2284,126 @@ def _metric_status(rate: float, key: str) -> str:
 _STATUS_LABELS = {"green": "Excelente", "yellow": "Atencion", "orange": "Riesgo", "red": "Critico"}
 
 
+def _compute_health_score(claims_rate: float, cancel_rate: float, delay_rate: float,
+                           open_claims: int, unanswered_q: int) -> int:
+    """Compute a composite health score 0-100.
+    Weights: claims 30%, cancellations 20%, delays 20%, open_claims 15%, questions 15%.
+    Each sub-score is 100 when perfect and 0 when at/above red threshold."""
+    t = _MELI_THRESHOLDS
+    def _rate_score(rate, key):
+        red = t[key]["red"]
+        if rate <= 0:
+            return 100
+        if rate >= red:
+            return 0
+        return max(0, round((1 - rate / red) * 100))
+
+    s_claims = _rate_score(claims_rate, "claims")
+    s_cancel = _rate_score(cancel_rate, "cancellations")
+    s_delays = _rate_score(delay_rate, "delays")
+    # Open claims: 0 = 100, 5+ = 0
+    s_open = max(0, round((1 - min(open_claims, 5) / 5) * 100))
+    # Unanswered questions: 0 = 100, 10+ = 0
+    s_unans = max(0, round((1 - min(unanswered_q, 10) / 10) * 100))
+
+    score = round(s_claims * 0.30 + s_cancel * 0.20 + s_delays * 0.20 + s_open * 0.15 + s_unans * 0.15)
+    return max(0, min(100, score))
+
+
+def _classify_question(text: str) -> str:
+    """Classify a question by type based on keywords."""
+    t = (text or "").lower()
+    if any(w in t for w in ["envio", "envío", "llega", "demora", "entrega", "shipping", "despacho", "tarda"]):
+        return "envio"
+    if any(w in t for w in ["stock", "disponible", "queda", "hay", "tienen", "unidades"]):
+        return "stock"
+    if any(w in t for w in ["compatible", "sirve para", "funciona con", "modelo", "medida", "tamaño", "talla"]):
+        return "compatibilidad"
+    if any(w in t for w in ["precio", "descuento", "oferta", "costo", "vale", "barato", "rebaja", "promocion"]):
+        return "precio"
+    if any(w in t for w in ["garantia", "garantía", "devolucion", "devolución", "cambio"]):
+        return "garantia"
+    if any(w in t for w in ["factura", "fiscal", "iva", "cfdi", "boleta"]):
+        return "factura"
+    return "general"
+
+
+_QUESTION_TYPE_LABELS = {
+    "envio": {"label": "Envio", "color": "bg-blue-100 text-blue-700"},
+    "stock": {"label": "Stock", "color": "bg-green-100 text-green-700"},
+    "compatibilidad": {"label": "Compat.", "color": "bg-purple-100 text-purple-700"},
+    "precio": {"label": "Precio", "color": "bg-yellow-100 text-yellow-700"},
+    "garantia": {"label": "Garantia", "color": "bg-orange-100 text-orange-700"},
+    "factura": {"label": "Factura", "color": "bg-gray-100 text-gray-700"},
+    "general": {"label": "General", "color": "bg-gray-100 text-gray-600"},
+}
+
+_QUESTION_TEMPLATES = {
+    "envio": [
+        "El envio se realiza por Mercado Envios. Una vez despachado, recibiras el numero de seguimiento para rastrear tu paquete.",
+        "Los tiempos de entrega dependen de tu ubicacion. Puedes ver la fecha estimada antes de comprar.",
+    ],
+    "stock": [
+        "Si, tenemos stock disponible. Puedes comprarlo directamente.",
+        "Por el momento no tenemos stock. Te recomiendo agregar a favoritos para que te notifique cuando este disponible.",
+    ],
+    "compatibilidad": [
+        "Este producto es compatible con los modelos indicados en la descripcion. Revisa la ficha tecnica para confirmar.",
+        "Verificamos que es compatible. Puedes comprarlo con confianza.",
+    ],
+    "precio": [
+        "El precio publicado es el precio final. Incluye envio gratis si tu compra supera el monto minimo.",
+        "Por el momento no manejamos descuentos adicionales, pero el precio ya es competitivo.",
+    ],
+    "garantia": [
+        "El producto cuenta con garantia del vendedor. Si tienes algun problema, puedes iniciar un reclamo desde tu compra.",
+        "Ofrecemos devolucion gratis dentro de los 30 dias de recibido el producto.",
+    ],
+    "factura": [
+        "Emitimos factura. Una vez realizada la compra, solicita la factura por mensaje y te la enviamos.",
+        "La factura se genera automaticamente y la puedes descargar desde tu compra en MercadoLibre.",
+    ],
+    "general": [
+        "Gracias por tu pregunta. Quedamos a tu disposicion para cualquier duda adicional.",
+    ],
+}
+
+
+def _compute_metric_margin(rate: float, key: str) -> dict:
+    """Compute how far the current rate is from each threshold and remaining margin."""
+    t = _MELI_THRESHOLDS[key]
+    status = _metric_status(rate, key)
+    # How many percentage points until next worse threshold
+    if rate < t["green"]:
+        next_threshold = t["green"]
+        margin_pct = round((next_threshold - rate) * 100, 2)
+        margin_label = f"{margin_pct}pp antes de amarillo"
+    elif rate < t["yellow"]:
+        next_threshold = t["yellow"]
+        margin_pct = round((next_threshold - rate) * 100, 2)
+        margin_label = f"{margin_pct}pp antes de naranja"
+    elif rate < t["red"]:
+        next_threshold = t["red"]
+        margin_pct = round((next_threshold - rate) * 100, 2)
+        margin_label = f"{margin_pct}pp antes de rojo"
+    else:
+        margin_pct = 0
+        margin_label = "En zona critica"
+    # Position as percentage of the gauge (0-100 scale where red threshold = ~90%)
+    max_val = t["red"] * 1.2  # give some space beyond red
+    gauge_position = min(100, round((rate / max_val) * 100)) if max_val > 0 else 0
+    return {
+        "status": status,
+        "label": _STATUS_LABELS[status],
+        "margin_pct": margin_pct,
+        "margin_label": margin_label,
+        "gauge_position": gauge_position,
+        "green_end": round((t["green"] / max_val) * 100),
+        "yellow_end": round((t["yellow"] / max_val) * 100),
+        "red_start": round((t["red"] / max_val) * 100),
+    }
+
+
 def _elapsed_str(iso_date: str) -> tuple:
     """Return (human string, total seconds) from an ISO date to now(UTC)."""
     from datetime import datetime, timezone
@@ -2376,6 +2496,14 @@ async def health_summary_partial(
 
         urgent_count = open_claims + unanswered_questions
 
+        health_score = _compute_health_score(claims_rate, cancel_rate, delay_rate,
+                                              open_claims, unanswered_questions)
+
+        sales_period = metrics.get("claims", {}).get("period", "60 days")
+        claims_margin = _compute_metric_margin(claims_rate, "claims")
+        cancel_margin = _compute_metric_margin(cancel_rate, "cancellations")
+        delay_margin = _compute_metric_margin(delay_rate, "delays")
+
         summary = SimpleNamespace(
             reputation_level=reputation.get("level_id", "unknown"),
             power_seller_status=reputation.get("power_seller_status", None),
@@ -2383,21 +2511,26 @@ async def health_summary_partial(
             unanswered_questions=unanswered_questions,
             unread_messages=unread_messages,
             urgent_count=urgent_count,
+            health_score=health_score,
+            sales_period=sales_period,
             claims_rate=claims_rate,
             claims_pct=round(claims_rate * 100, 2),
             claims_status=claims_status,
             claims_label=_STATUS_LABELS[claims_status],
             claims_value=claims_value,
+            claims_margin=claims_margin,
             cancellation_rate=cancel_rate,
             cancellation_pct=round(cancel_rate * 100, 2),
             cancellation_status=cancel_status,
             cancellation_label=_STATUS_LABELS[cancel_status],
             cancellation_value=cancel_value,
+            cancel_margin=cancel_margin,
             delayed_rate=delay_rate,
             delayed_pct=round(delay_rate * 100, 2),
             delayed_status=delay_status,
             delayed_label=_STATUS_LABELS[delay_status],
             delayed_value=delay_value,
+            delay_margin=delay_margin,
         )
 
         return templates.TemplateResponse("partials/health_summary.html", {
@@ -2464,6 +2597,57 @@ async def health_claims_partial(
             except Exception:
                 pass
 
+        # Parallel fetch: claim messages + shipment tracking for opened claims
+        opened_claims = [c for c in raw_claims if c.get("status") == "opened"]
+        claim_messages_map = {}  # claim_id -> list of messages
+        shipment_tracking_map = {}  # order_id -> tracking info
+
+        if opened_claims:
+            sem = asyncio.Semaphore(5)
+
+            async def _fetch_claim_msgs(claim_id):
+                async with sem:
+                    try:
+                        msgs = await client.get_claim_messages(str(claim_id))
+                        if isinstance(msgs, list):
+                            return str(claim_id), msgs
+                        return str(claim_id), msgs.get("results", msgs.get("messages", []))
+                    except Exception:
+                        return str(claim_id), []
+
+            async def _fetch_shipment_tracking(order_id):
+                async with sem:
+                    try:
+                        order = await client.get(f"/orders/{order_id}")
+                        ship_id = order.get("shipping", {}).get("id")
+                        if ship_id:
+                            ship = await client.get_shipment(str(ship_id))
+                            return str(order_id), {
+                                "status": ship.get("status", ""),
+                                "substatus": ship.get("substatus", ""),
+                                "tracking_number": ship.get("tracking_number", ""),
+                                "tracking_url": ship.get("tracking_url", ""),
+                                "carrier": ship.get("logistic_type", ""),
+                            }
+                    except Exception:
+                        pass
+                    return str(order_id), {}
+
+            # Fetch messages for up to 20 opened claims
+            msg_tasks = [_fetch_claim_msgs(c.get("id", "")) for c in opened_claims[:20]]
+            # Fetch tracking for PNR (not received) claims
+            pnr_claims = [c for c in opened_claims
+                          if (c.get("reason_id", "")[:3] == "PNR") and c.get("resource_id")]
+            track_tasks = [_fetch_shipment_tracking(str(c.get("resource_id", ""))) for c in pnr_claims[:20]]
+
+            all_results = await asyncio.gather(*msg_tasks, *track_tasks, return_exceptions=True)
+            for r in all_results[:len(msg_tasks)]:
+                if isinstance(r, tuple):
+                    claim_messages_map[r[0]] = r[1]
+            for r in all_results[len(msg_tasks):]:
+                if isinstance(r, tuple):
+                    shipment_tracking_map[r[0]] = r[1]
+
         enriched = []
         for c in raw_claims:
             date_created = c.get("date_created", "")
@@ -2472,13 +2656,46 @@ async def health_claims_partial(
 
             c_status = c.get("status", "")
             stage = c.get("stage", "")
+
+            # Due date for mandatory action (compute first for urgency)
+            due_date_raw = ""
+            due_date = ""
+            for player in c.get("players", []):
+                if player.get("role") == "respondent":
+                    for a in player.get("available_actions", []):
+                        if a.get("mandatory") and a.get("due_date"):
+                            due_date_raw = a["due_date"]
+                            due_date = due_date_raw[:10]
+                            break
+                    break
+
+            # Compute countdown hours until due_date
+            countdown_hours = None
+            if due_date_raw and c_status == "opened":
+                from datetime import datetime, timezone
+                try:
+                    due_dt = datetime.fromisoformat(due_date_raw.replace("Z", "+00:00"))
+                    remaining = due_dt - datetime.now(timezone.utc)
+                    countdown_hours = max(0, round(remaining.total_seconds() / 3600, 1))
+                except Exception:
+                    pass
+
+            # Urgency based on countdown (more precise than days_open)
             if c_status == "opened":
-                if days_open > 7:
-                    urgency = "red"
-                elif days_open > 3:
-                    urgency = "yellow"
+                if countdown_hours is not None:
+                    if countdown_hours < 8:
+                        urgency = "red"
+                    elif countdown_hours < 24:
+                        urgency = "yellow"
+                    else:
+                        urgency = "green"
                 else:
-                    urgency = "green"
+                    if days_open > 7:
+                        urgency = "red"
+                    elif days_open > 3:
+                        urgency = "yellow"
+                    else:
+                        urgency = "green"
             else:
                 urgency = "gray"
 
@@ -2493,16 +2710,6 @@ async def health_claims_partial(
             for player in c.get("players", []):
                 if player.get("role") == "respondent":
                     seller_actions = [a.get("action", "") for a in player.get("available_actions", [])]
-                    break
-
-            # Due date for mandatory action
-            due_date = ""
-            for player in c.get("players", []):
-                if player.get("role") == "respondent":
-                    for a in player.get("available_actions", []):
-                        if a.get("mandatory") and a.get("due_date"):
-                            due_date = a["due_date"][:10]
-                            break
                     break
 
             issues = []
@@ -2534,6 +2741,23 @@ async def health_claims_partial(
             resource_id = str(c.get("resource_id", ""))
             order_info = orders_map.get(resource_id, {})
 
+            # Conversation messages
+            claim_id_str = str(c.get("id", ""))
+            raw_msgs = claim_messages_map.get(claim_id_str, [])
+            conversation = []
+            for msg in raw_msgs[-10:]:
+                sender = msg.get("sender_role", msg.get("role", ""))
+                text = msg.get("text", msg.get("message", ""))
+                msg_date = msg.get("date_created", "")
+                conversation.append({
+                    "sender": sender,
+                    "text": text,
+                    "date": msg_date[:16].replace("T", " ") if msg_date else "",
+                })
+
+            # Tracking info for PNR claims
+            tracking = shipment_tracking_map.get(resource_id, {})
+
             enriched.append(SimpleNamespace(
                 id=c.get("id", ""),
                 order_id=resource_id,
@@ -2544,18 +2768,24 @@ async def health_claims_partial(
                 elapsed=elapsed_str,
                 days_open=days_open,
                 urgency=urgency,
+                countdown_hours=countdown_hours,
                 reason_desc=reason_desc,
                 reason_id=reason_id,
+                reason_type=reason_type,
                 product_title=order_info.get("title", ""),
                 product_price=order_info.get("price", 0),
                 seller_actions=seller_actions,
                 due_date=due_date,
                 issues=issues,
                 suggestions=suggestions,
+                conversation=conversation,
+                tracking=tracking,
             ))
 
-        # Ordenar del mas nuevo al mas viejo
-        enriched.sort(key=lambda c: c._sort_date, reverse=True)
+        # Sort: urgency first (red > yellow > green > gray), then by date
+        _urgency_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
+        enriched.sort(key=lambda c: (_urgency_order.get(c.urgency, 3), not c._sort_date, c._sort_date), reverse=False)
+        # Reverse date within same urgency (newest first) — already handled by tuple sort
 
         return templates.TemplateResponse("partials/health_claims.html", {
             "request": request,
@@ -2698,9 +2928,17 @@ async def health_questions_partial(
                     "answer": entry["answer_text"][:150] if entry["answer_text"] else "",
                 })
 
+            # Classify question type
+            q_text = q.get("text", "")
+            q_type = _classify_question(q_text)
+            q_type_info = _QUESTION_TYPE_LABELS.get(q_type, _QUESTION_TYPE_LABELS["general"])
+
+            # Get quick templates for this type
+            quick_templates = _QUESTION_TEMPLATES.get(q_type, _QUESTION_TEMPLATES["general"])
+
             enriched.append(SimpleNamespace(
                 id=q.get("id", ""),
-                text=q.get("text", "-"),
+                text=q_text or "-",
                 status=q_status,
                 date_created=date_created[:10] if date_created else "-",
                 _sort_date=date_created or "",
@@ -2716,10 +2954,25 @@ async def health_questions_partial(
                 buyer_history=buyer_history,
                 buyer_question_count=len(buyer_history),
                 buyer_history_json=json.dumps(bh_for_json, ensure_ascii=False) if bh_for_json else "[]",
+                q_type=q_type,
+                q_type_label=q_type_info["label"],
+                q_type_color=q_type_info["color"],
+                quick_templates=quick_templates,
             ))
 
-        # Ordenar del mas nuevo al mas viejo
-        enriched.sort(key=lambda q: q._sort_date, reverse=True)
+        # Sort: urgency-first for UNANSWERED (red > yellow > green > gray), then newest
+        _urgency_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
+        enriched.sort(key=lambda q: (_urgency_order.get(q.urgency, 3), q._sort_date), reverse=False)
+        # Within same urgency, newest first — fix by making date descending
+        enriched.sort(key=lambda q: (_urgency_order.get(q.urgency, 3), ""), reverse=False)
+        # Stable sort by urgency, then reverse date within group
+        from itertools import groupby
+        sorted_enriched = []
+        enriched_by_urg = sorted(enriched, key=lambda q: _urgency_order.get(q.urgency, 3))
+        for _, group in groupby(enriched_by_urg, key=lambda q: q.urgency):
+            grp = sorted(list(group), key=lambda q: q._sort_date, reverse=True)
+            sorted_enriched.extend(grp)
+        enriched = sorted_enriched
 
         return templates.TemplateResponse("partials/health_questions.html", {
             "request": request,
@@ -2731,6 +2984,121 @@ async def health_questions_partial(
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando preguntas: {e}</p>')
+    finally:
+        await client.close()
+
+
+@app.get("/partials/health-search", response_class=HTMLResponse)
+async def health_search_partial(
+    request: Request,
+    q: str = Query("", description="Search query"),
+):
+    """Global search: order ID, claim ID, or keyword search."""
+    query = (q or "").strip()
+    if not query:
+        return HTMLResponse('<p class="text-center py-4 text-gray-400 text-sm">Ingresa un termino de busqueda</p>')
+
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        results = []
+        result_type = "unknown"
+
+        # Detect query type
+        is_numeric = query.replace("-", "").isdigit()
+        is_long_number = is_numeric and len(query.replace("-", "")) >= 8
+
+        if is_long_number:
+            # Try as Order ID first
+            try:
+                order = await client.get(f"/orders/{query}")
+                if order and order.get("id"):
+                    oi = order.get("order_items", [])
+                    item_info = oi[0].get("item", {}) if oi else {}
+                    ship = order.get("shipping", {})
+                    # Check for associated claims
+                    claims_for_order = []
+                    try:
+                        cd = await client.get_claims(limit=5, status=None)
+                        for cl in cd.get("results", []):
+                            if str(cl.get("resource_id", "")) == str(order["id"]):
+                                claims_for_order.append(cl)
+                    except Exception:
+                        pass
+                    results.append({
+                        "type": "order",
+                        "id": order.get("id", ""),
+                        "status": order.get("status", ""),
+                        "date": (order.get("date_created", "") or "")[:10],
+                        "buyer": order.get("buyer", {}).get("nickname", ""),
+                        "buyer_id": order.get("buyer", {}).get("id", ""),
+                        "product_title": item_info.get("title", ""),
+                        "product_id": item_info.get("id", ""),
+                        "total_amount": order.get("total_amount", 0),
+                        "currency": order.get("currency_id", ""),
+                        "shipping_status": ship.get("status", ""),
+                        "shipping_id": ship.get("id", ""),
+                        "claims": claims_for_order,
+                    })
+                    result_type = "order"
+            except Exception:
+                pass
+
+            # Try as Claim ID
+            if not results:
+                try:
+                    claim = await client.get(f"/post-purchase/v1/claims/{query}")
+                    if claim and claim.get("id"):
+                        results.append({
+                            "type": "claim",
+                            "id": claim.get("id", ""),
+                            "status": claim.get("status", ""),
+                            "reason_id": claim.get("reason_id", ""),
+                            "date": (claim.get("date_created", "") or "")[:10],
+                            "order_id": claim.get("resource_id", ""),
+                            "stage": claim.get("stage", ""),
+                        })
+                        result_type = "claim"
+                except Exception:
+                    pass
+
+        # Keyword search via orders
+        if not results:
+            try:
+                seller_id = client.user_id
+                data = await client.get(f"/orders/search?seller={seller_id}&q={query}&sort=date_desc&limit=10")
+                for order in data.get("results", []):
+                    oi = order.get("order_items", [])
+                    item_info = oi[0].get("item", {}) if oi else {}
+                    ship = order.get("shipping", {})
+                    results.append({
+                        "type": "order",
+                        "id": order.get("id", ""),
+                        "status": order.get("status", ""),
+                        "date": (order.get("date_created", "") or "")[:10],
+                        "buyer": order.get("buyer", {}).get("nickname", ""),
+                        "buyer_id": order.get("buyer", {}).get("id", ""),
+                        "product_title": item_info.get("title", ""),
+                        "product_id": item_info.get("id", ""),
+                        "total_amount": order.get("total_amount", 0),
+                        "currency": order.get("currency_id", ""),
+                        "shipping_status": ship.get("status", ""),
+                        "shipping_id": ship.get("id", ""),
+                        "claims": [],
+                    })
+                result_type = "search"
+            except Exception:
+                pass
+
+        return templates.TemplateResponse("partials/health_search_results.html", {
+            "request": request,
+            "results": results,
+            "query": query,
+            "result_type": result_type,
+        })
+    except Exception as e:
+        return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error en busqueda: {e}</p>')
     finally:
         await client.close()
 
@@ -2758,6 +3126,37 @@ async def health_messages_partial(
         paging = data.get("paging", {"total": len(raw_messages), "offset": offset, "limit": limit})
         seller_id = str(client.user_id)
 
+        # Collect order_ids for context enrichment
+        order_context_map = {}  # order_id -> {product, amount, buyer}
+        order_ids_for_context = []
+        for msg in raw_messages:
+            oid = msg.get("order_id", msg.get("resource_id", ""))
+            if oid:
+                order_ids_for_context.append(str(oid))
+
+        if order_ids_for_context:
+            sem_oc = asyncio.Semaphore(5)
+            async def _fetch_order_ctx(oid):
+                async with sem_oc:
+                    try:
+                        order = await client.get(f"/orders/{oid}")
+                        oi = order.get("order_items", [])
+                        item_info = oi[0].get("item", {}) if oi else {}
+                        return oid, {
+                            "product_title": item_info.get("title", ""),
+                            "total_amount": order.get("total_amount", 0),
+                            "currency": order.get("currency_id", ""),
+                            "buyer": order.get("buyer", {}).get("nickname", ""),
+                            "status": order.get("status", ""),
+                        }
+                    except Exception:
+                        return oid, {}
+            oc_tasks = [_fetch_order_ctx(oid) for oid in list(set(order_ids_for_context))[:20]]
+            oc_results = await asyncio.gather(*oc_tasks, return_exceptions=True)
+            for r in oc_results:
+                if isinstance(r, tuple):
+                    order_context_map[r[0]] = r[1]
+
         enriched = []
         for msg in raw_messages:
             messages_list = msg.get("messages", [])
@@ -2767,9 +3166,11 @@ async def health_messages_partial(
             last_msg = messages_list[-1] if messages_list else None
             last_from_buyer = False
             last_elapsed = "-"
+            needs_response = False
             if last_msg:
                 from_id = str(last_msg.get("from", {}).get("user_id", ""))
                 last_from_buyer = from_id != seller_id
+                needs_response = last_from_buyer
                 ts = last_msg.get("date_created", last_msg.get("date", ""))
                 if ts:
                     last_elapsed, _ = _elapsed_str(ts)
@@ -2795,17 +3196,35 @@ async def health_messages_partial(
                 ))
 
             pack_id = msg.get("id", msg.get("pack_id", ""))
+            oid = str(msg.get("order_id", msg.get("resource_id", "")))
+            order_ctx = order_context_map.get(oid, {})
+
             enriched.append(SimpleNamespace(
                 pack_id=pack_id,
+                order_id=oid,
                 date=conv_date[:10] if conv_date else "-",
                 _sort_date=conv_date or "",
                 last_from_buyer=last_from_buyer,
                 last_elapsed=last_elapsed,
+                needs_response=needs_response,
                 messages=enriched_msgs,
+                order_product=order_ctx.get("product_title", ""),
+                order_amount=order_ctx.get("total_amount", 0),
+                order_currency=order_ctx.get("currency", ""),
+                order_buyer=order_ctx.get("buyer", ""),
+                order_status=order_ctx.get("status", ""),
             ))
 
-        # Ordenar del mas nuevo al mas viejo
-        enriched.sort(key=lambda m: m._sort_date, reverse=True)
+        # Sort: needs_response first, then newest first
+        enriched.sort(key=lambda m: (0 if m.needs_response else 1, m._sort_date), reverse=False)
+        # Within each group, sort by date descending
+        from itertools import groupby as _grp
+        sorted_msgs = []
+        enriched_by_nr = sorted(enriched, key=lambda m: 0 if m.needs_response else 1)
+        for _, group in _grp(enriched_by_nr, key=lambda m: m.needs_response):
+            grp = sorted(list(group), key=lambda m: m._sort_date, reverse=True)
+            sorted_msgs.extend(grp)
+        enriched = sorted_msgs
 
         return templates.TemplateResponse("partials/health_messages.html", {
             "request": request,
@@ -2839,17 +3258,64 @@ async def health_reputation_partial(request: Request):
 
         level = rep.get("level_id", "unknown")
 
+        # Compute margin data
+        claims_margin = _compute_metric_margin(claims_rate, "claims")
+        cancel_margin = _compute_metric_margin(cancel_rate, "cancellations")
+        delay_margin = _compute_metric_margin(delay_rate, "delays")
+
+        # Sales count for context
+        total_sales = metrics.get("claims", {}).get("value", 0) or 0
+        period = metrics.get("claims", {}).get("period", "60 days")
+
+        # Compute how many more incidents before next threshold
+        def _margin_count(rate, key, total):
+            t = _MELI_THRESHOLDS[key]
+            if rate < t["green"]:
+                remaining = (t["green"] - rate) * max(total, 100)
+                return int(remaining), "verde"
+            elif rate < t["yellow"]:
+                remaining = (t["yellow"] - rate) * max(total, 100)
+                return int(remaining), "naranja"
+            elif rate < t["red"]:
+                remaining = (t["red"] - rate) * max(total, 100)
+                return int(remaining), "rojo"
+            return 0, "critico"
+
+        claims_remaining, claims_next_zone = _margin_count(claims_rate, "claims", total_sales)
+        cancel_remaining, cancel_next_zone = _margin_count(cancel_rate, "cancellations", total_sales)
+        delay_remaining, delay_next_zone = _margin_count(delay_rate, "delays", total_sales)
+
         tips = []
         if claims_rate >= 0.02:
-            tips.append("Reducir reclamos: responder preguntas proactivamente y mejorar descripciones de producto")
+            tips.append({
+                "text": "Reducir reclamos: responder preguntas proactivamente y mejorar descripciones",
+                "severity": "red" if claims_rate >= 0.04 else "yellow",
+                "tab": "claims",
+            })
         if cancel_rate >= 0.025:
-            tips.append("Reducir cancelaciones: mantener stock actualizado y verificar antes de publicar")
+            tips.append({
+                "text": "Reducir cancelaciones: mantener stock actualizado y verificar antes de publicar",
+                "severity": "red" if cancel_rate >= 0.05 else "yellow",
+                "tab": "claims",
+            })
         if delay_rate >= 0.15:
-            tips.append("Reducir demoras: usar Fulfillment o enviar el mismo dia del pago")
+            tips.append({
+                "text": "Reducir demoras: usar Fulfillment o enviar el mismo dia del pago",
+                "severity": "red" if delay_rate >= 0.20 else "yellow",
+                "tab": "reputation",
+            })
         if level != "5_green":
-            tips.append("Para subir a MercadoLider: mantener las 3 metricas en verde y aumentar volumen de ventas")
+            tips.append({
+                "text": "Para subir a MercadoLider: mantener las 3 metricas en verde y aumentar volumen",
+                "severity": "blue",
+                "tab": "reputation",
+            })
         if not tips:
-            tips.append("Mantener el excelente nivel actual — todas las metricas estan en rango optimo")
+            tips.append({
+                "text": "Excelente! Todas las metricas estan en rango optimo",
+                "severity": "green",
+                "tab": "",
+            })
 
         reputation = SimpleNamespace(
             level=level,
@@ -2862,13 +3328,23 @@ async def health_reputation_partial(request: Request):
             claims_rate=claims_rate,
             claims_pct=round(claims_rate * 100, 2),
             claims_status=_metric_status(claims_rate, "claims"),
+            claims_margin=claims_margin,
+            claims_remaining=claims_remaining,
+            claims_next_zone=claims_next_zone,
             cancellation_rate=cancel_rate,
             cancellation_pct=round(cancel_rate * 100, 2),
             cancellation_status=_metric_status(cancel_rate, "cancellations"),
+            cancel_margin=cancel_margin,
+            cancel_remaining=cancel_remaining,
+            cancel_next_zone=cancel_next_zone,
             delayed_rate=delay_rate,
             delayed_pct=round(delay_rate * 100, 2),
             delayed_status=_metric_status(delay_rate, "delays"),
+            delay_margin=delay_margin,
+            delay_remaining=delay_remaining,
+            delay_next_zone=delay_next_zone,
             improvement_tips=tips,
+            period=period,
         )
 
         return templates.TemplateResponse("partials/health_reputation.html", {
