@@ -1575,51 +1575,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         if not found:
             ff_failed.append(sku)
 
-    # --- FASE 2: InventoryReport para los que fallaron (lento, batch) ---
+    # NOTA: Se eliminó la Fase 2 con InventoryReport.
+    # InventoryReport.AvailableQTY NO representa el stock real disponible para venta.
+    # Ejemplo: SNTV001763 devuelve 4971, SNTV001863 devuelve 9124 — valores históricos, no físicos.
+    # El único dato confiable es MainQty del FullFillment (Fase 1 arriba).
+    # Si FullFillment no tiene datos, el stock vendible real es 0.
     if ff_failed:
-        inv_sem = asyncio.Semaphore(10)
-
-        async def _inv_fetch(sku, http):
-            clean = _clean_sku_for_bm(sku)
-            base = _extract_base_sku(clean) if clean else ""
-            if not base:
-                _store_empty(sku)
-                return sku, False
-            async with inv_sem:
-                try:
-                    resp = await http.post(BM_INV_URL, json={
-                        "COMPANYID": 1, "SEARCH": base,
-                        "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-                    }, headers={"Content-Type": "application/json"}, timeout=30.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data and isinstance(data, list):
-                            inv_item = None
-                            for item in data:
-                                if item.get("SKU", "").upper() == base.upper():
-                                    inv_item = item
-                                    break
-                            if not inv_item and data:
-                                inv_item = data[0]
-                            if inv_item:
-                                avail_qty = inv_item.get("AvailableQTY") or inv_item.get("TotalQty") or 0
-                                if avail_qty > 0:
-                                    _store(sku, {"MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}, force_cache=True)
-                                    # Override with total since InvReport has no warehouse breakdown
-                                    inv = {"mty": 0, "cdmx": 0, "tj": 0, "total": int(avail_qty)}
-                                    _bm_stock_cache[sku.upper()] = (_time.time(), inv)
-                                    result_map[sku] = inv
-                                    return sku, True
-                except Exception:
-                    pass
-                _store_empty(sku)
-                return sku, False
-
-        async with httpx.AsyncClient(timeout=30.0) as http:
-            await asyncio.gather(
-                *[_inv_fetch(s, http) for s in ff_failed],
-                return_exceptions=True
-            )
+        for sku in ff_failed:
+            _store_empty(sku)
 
     return result_map
 

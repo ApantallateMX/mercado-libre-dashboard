@@ -131,41 +131,16 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
 
     sellable_total = gr["total"] + ic["total"]
 
-    # If no sellable suffix has stock, check InventoryReport as reference
-    stock_other = 0
-    if sellable_total == 0:
-        try:
-            payload = {
-                "COMPANYID": BINMANAGER_COMPANY_ID,
-                "SEARCH": base,
-                "CONCEPTID": BINMANAGER_CONCEPT_ID,
-                "NUMBERPAGE": 1,
-                "RECORDSPAGE": 10,
-            }
-            resp = await http.post(
-                BINMANAGER_INVENTORY_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=15.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list):
-                    for item in data:
-                        if item.get("SKU", "").upper() == base.upper():
-                            stock_other = item.get("AvailableQTY", 0) or 0
-                            break
-                    else:
-                        if data:
-                            stock_other = data[0].get("AvailableQTY", 0) or 0
-        except Exception:
-            pass
+    # NOTA: InventoryReport.AvailableQTY NO es el stock real disponible.
+    # Para SNTV001763 devuelve 4971, para SNTV001863 devuelve 9124 — valores absurdos.
+    # El único dato confiable es MainQty del FullFillment (ya consultado arriba).
+    # Si ningún sufijo vendible tiene stock, el inventario real es 0.
 
     return {
         "stock_gr": gr,
         "stock_ic": ic,
-        "stock_other": stock_other,
-        "total_stock": sellable_total if sellable_total > 0 else stock_other,
+        "stock_other": 0,
+        "total_stock": sellable_total,
     }
 
 

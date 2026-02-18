@@ -167,21 +167,27 @@ async def get_items_needs_work():
 
 @router.get("/inventory-bulk")
 async def get_inventory_bulk(skus: str = Query(..., description="Comma-separated SKUs")):
-    """Consulta inventario BinManager para multiples SKUs en paralelo."""
+    """Consulta inventario BinManager para multiples SKUs en paralelo.
+    Usa MainQty (dato real). Si la consulta directa falla, intenta con sufijos vendibles.
+    """
     sku_list = [s.strip() for s in skus.split(",") if s.strip()]
     if not sku_list:
         return {}
 
     async def fetch_one(sku: str, client: httpx.AsyncClient):
-        try:
-            resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={sku}", content="", timeout=10.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    return sku, data[0]
-            return sku, None
-        except Exception:
-            return sku, None
+        """Consulta BM con el SKU dado. Si no hay datos, intenta con sufijos."""
+        base, _ = _get_base_and_type(sku)
+        # Intentar consulta directa primero
+        for query in [sku] + [f"{base}{s}" for s in ALL_SUFFIXES]:
+            try:
+                resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={query}", content="", timeout=10.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and isinstance(data, list) and len(data) > 0:
+                        return sku, data[0]
+            except Exception:
+                pass
+        return sku, None
 
     results = {}
     async with httpx.AsyncClient() as client:
@@ -272,16 +278,24 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
 
 @router.get("/inventory/{web_sku}")
 async def get_inventory(web_sku: str):
-    """Consulta inventario BinManager para un SKU."""
+    """Consulta inventario BinManager para un SKU.
+    Si la consulta directa no tiene datos, intenta con sufijos vendibles.
+    Siempre retorna MainQty (dato real, nunca TotalQty ni AvailableQTY).
+    """
+    base, _ = _get_base_and_type(web_sku)
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={web_sku}", content="", timeout=10.0)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list) and len(data) > 0:
-                    return data[0]
-                return {"error": "SKU no encontrado", "WebSKU": web_sku}
-            return {"error": f"BinManager respondio {resp.status_code}", "WebSKU": web_sku}
+            # Intentar consulta directa primero, luego con sufijos
+            for query in [web_sku] + [f"{base}{s}" for s in ALL_SUFFIXES]:
+                try:
+                    resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={query}", content="", timeout=10.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data and isinstance(data, list) and len(data) > 0:
+                            return data[0]
+                except Exception:
+                    pass
+            return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 
