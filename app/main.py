@@ -367,22 +367,35 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
-    """Consulta BinManager FullFillment para stock por almacen (MTY/CDMX/TJ)."""
+    """Consulta BinManager Warehouse endpoint para stock real por almacen (MTY/CDMX/TJ)."""
     import httpx
-    BM_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
     sem = asyncio.Semaphore(10)
 
     async def _fetch(sku, http):
         async with sem:
+            base = _extract_base_sku(_clean_sku_for_bm(sku))
+            if not base:
+                return sku, None
             try:
-                resp = await http.post(
-                    f"{BM_URL}?WEBSKU={sku}",
-                    content="", timeout=15.0
-                )
+                resp = await http.post(BM_WH_URL, json={
+                    "COMPANYID": 1, "SKU": base, "WarehouseID": None,
+                    "LocationID": "47,62,68", "BINID": None,
+                    "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                }, timeout=15.0)
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and data:
-                        return sku, data[0]
+                    rows = resp.json() or []
+                    mty = cdmx = tj = 0
+                    for row in rows:
+                        qty = row.get("QtyTotal", 0) or 0
+                        wname = (row.get("WarehouseName") or "").lower()
+                        if "monterrey" in wname or "maxx" in wname:
+                            mty += qty
+                        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                            cdmx += qty
+                        else:
+                            tj += qty
+                    return sku, {"mty": mty, "cdmx": cdmx, "tj": tj}
             except Exception:
                 pass
             return sku, None
@@ -402,9 +415,9 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
     for p in products:
         bm = bm_map.get(p.get(sku_key))
         if bm:
-            p["_bm_mty"] = max(0, bm.get("MainQtyMTY", 0) or 0)
-            p["_bm_cdmx"] = max(0, bm.get("MainQtyCDMX", 0) or 0)
-            p["_bm_tj"] = max(0, bm.get("MainQtyTJ", 0) or 0)
+            p["_bm_mty"] = max(0, bm.get("mty", 0) or 0)
+            p["_bm_cdmx"] = max(0, bm.get("cdmx", 0) or 0)
+            p["_bm_tj"] = max(0, bm.get("tj", 0) or 0)
             p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"]
 
 
@@ -1059,14 +1072,13 @@ async def items_grid_partial(
                 bodies_for_sp.append(body)
         await _enrich_with_sale_prices(client, bodies_for_sp, id_key="id", price_key="price")
 
-        # Consultar inventario BinManager para cada item
-        BINMANAGER_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+        # Consultar inventario BinManager para cada item (Warehouse endpoint = stock real)
+        BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
         inventory_map = {}  # item_id -> {MTY, CDMX}
         sku_to_items = {}   # base -> {sku, item_ids}
         for it in items:
             body = it.get("body") or it
             sku = body.get("seller_custom_field") or ""
-            # Si no tiene seller_custom_field o es "None", buscar en atributos SELLER_SKU
             if not sku or sku == "None":
                 sku = ""
                 for attr in body.get("attributes", []):
@@ -1081,38 +1093,38 @@ async def items_grid_partial(
 
         if sku_to_items:
             sem = asyncio.Semaphore(10)
-            async def _fetch_inv(query_sku: str, http: _httpx.AsyncClient):
+            async def _fetch_inv(base_sku: str, http: _httpx.AsyncClient):
                 async with sem:
                     try:
-                        resp = await http.post(
-                            f"{BINMANAGER_URL}?WEBSKU={query_sku}",
-                            content="", timeout=15.0
-                        )
+                        resp = await http.post(BM_WH_URL, json={
+                            "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
+                            "LocationID": "47,62,68", "BINID": None,
+                            "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                        }, timeout=15.0)
                         if resp.status_code == 200:
-                            data = resp.json()
-                            if data and isinstance(data, list) and len(data) > 0:
-                                return query_sku, data[0]
+                            rows = resp.json() or []
+                            mty = cdmx = tj = 0
+                            for row in rows:
+                                qty = row.get("QtyTotal", 0) or 0
+                                wname = (row.get("WarehouseName") or "").lower()
+                                if "monterrey" in wname or "maxx" in wname:
+                                    mty += qty
+                                elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                                    cdmx += qty
+                                else:
+                                    tj += qty
+                            return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": mty + cdmx}
                     except Exception:
                         pass
-                    return query_sku, None
+                    return base_sku, None
 
             async with _httpx.AsyncClient() as http:
-                tasks = [_fetch_inv(info["sku"], http) for info in sku_to_items.values()]
+                tasks = [_fetch_inv(base, http) for base in sku_to_items.keys()]
                 for coro in asyncio.as_completed(tasks):
-                    queried_sku, data = await coro
-                    if data:
-                        _mty = max(0, data.get("MainQtyMTY", 0) or 0)
-                        _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
-                        _tj = max(0, data.get("MainQtyTJ", 0) or 0)
-                        inv = {
-                            "MTY": _mty,
-                            "CDMX": _cdmx,
-                            "TJ": _tj,
-                            "total": _mty + _cdmx,
-                        }
-                        q_base_up = _extract_base_sku(queried_sku).upper()
+                    queried_base, inv = await coro
+                    if inv:
                         for b, info in sku_to_items.items():
-                            if _extract_base_sku(info["sku"]).upper() == q_base_up:
+                            if b.upper() == queried_base.upper():
                                 for iid in info["item_ids"]:
                                     inventory_map[iid] = inv
 
@@ -1471,13 +1483,10 @@ async def _prewarm_caches():
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
-    Estrategia en 2 fases:
-      Fase 1: FullFillment exacto + sufijos (rapido, <1s por SKU)
-      Fase 2: InventoryReport batch para los que fallaron (lento, 7-10s por SKU)
+    Usa Warehouse endpoint (Get_GlobalStock_InventoryBySKU_Warehouse) para stock real.
     """
     import httpx
-    BM_FF_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
-    BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 
     result_map = {}
     to_fetch = []
@@ -1496,93 +1505,55 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
 
-    def _store(sku, data, force_cache=False):
-        # CRITICO: usar MainQty (stock propio), NO TotalQty (incluye alternativos)
-        inv = {
-            "mty": max(0, data.get("MainQtyMTY", 0) or 0),
-            "cdmx": max(0, data.get("MainQtyCDMX", 0) or 0),
-            "tj": max(0, data.get("MainQtyTJ", 0) or 0),
-        }
-        # TJ es solo informativo, no se cuenta para venta
-        inv["total"] = inv["mty"] + inv["cdmx"]
-        if inv["total"] > 0 or force_cache:
-            _bm_stock_cache[sku.upper()] = (_time.time(), inv)
+    def _store_wh(sku, rows):
+        """Parsea filas del Warehouse endpoint y cachea."""
+        mty = cdmx = tj = 0
+        for row in (rows or []):
+            qty = row.get("QtyTotal", 0) or 0
+            wname = (row.get("WarehouseName") or "").lower()
+            if "monterrey" in wname or "maxx" in wname:
+                mty += qty
+            elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                cdmx += qty
+            else:
+                tj += qty
+        inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx}
+        _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:
             result_map[sku] = inv
-            return True
-        return False
+        return inv["total"] > 0
 
     def _store_empty(sku):
-        """Cachea resultado vacio para no re-consultar."""
         _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
 
-    ff_sem = asyncio.Semaphore(40)
+    wh_sem = asyncio.Semaphore(20)
 
-    async def _ff_fetch(query_sku, http):
-        async with ff_sem:
-            try:
-                resp = await http.post(
-                    f"{BM_FF_URL}?WEBSKU={query_sku}",
-                    content="", timeout=15.0
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and data:
-                        return query_sku, data[0]
-            except Exception:
-                pass
-            return query_sku, None
-
-    # --- FASE 1: FullFillment (rapido) ---
-    async def _ff_phase(sku, http):
-        """Intenta FF exacto, luego con sufijos. SOLO usa MainQty (dato real de BM)."""
+    async def _wh_phase(sku, http):
+        """Consulta Warehouse endpoint para obtener stock real por almacen."""
         clean = _clean_sku_for_bm(sku)
         if not clean:
-            return sku, False
-
+            _store_empty(sku)
+            return
         base = _extract_base_sku(clean)
-
-        # 1a) FF exacto
-        _, data = await _ff_fetch(clean, http)
-        if not data:
-            # Intentar con sufijos si el base no retorna nada
-            for sfx in _ALL_SUFFIXES:
-                _, data = await _ff_fetch(f"{base}{sfx}", http)
-                if data:
-                    break
-
-        if data:
-            if _store(sku, data):
-                return sku, True
-            # Cachear aunque total=0 para no re-consultar
-            _store(sku, data, force_cache=True)
-            return sku, True
-
-        return sku, False
+        async with wh_sem:
+            try:
+                resp = await http.post(BM_WH_URL, json={
+                    "COMPANYID": 1, "SKU": base, "WarehouseID": None,
+                    "LocationID": "47,62,68", "BINID": None,
+                    "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                }, timeout=15.0)
+                if resp.status_code == 200:
+                    _store_wh(sku, resp.json())
+                    return
+            except Exception:
+                pass
+        _store_empty(sku)
 
     async with httpx.AsyncClient(timeout=30.0) as http:
-        ff_results = await asyncio.gather(
-            *[_ff_phase(s, http) for s in to_fetch],
+        await asyncio.gather(
+            *[_wh_phase(s, http) for s in to_fetch],
             return_exceptions=True
         )
-
-    # Recopilar SKUs que fallaron en Fase 1
-    ff_failed = []
-    for r in ff_results:
-        if isinstance(r, Exception):
-            continue
-        sku, found = r
-        if not found:
-            ff_failed.append(sku)
-
-    # NOTA: Se eliminó la Fase 2 con InventoryReport.
-    # InventoryReport.AvailableQTY NO representa el stock real disponible para venta.
-    # Ejemplo: SNTV001763 devuelve 4971, SNTV001863 devuelve 9124 — valores históricos, no físicos.
-    # El único dato confiable es MainQty del FullFillment (Fase 1 arriba).
-    # Si FullFillment no tiene datos, el stock vendible real es 0.
-    if ff_failed:
-        for sku in ff_failed:
-            _store_empty(sku)
 
     return result_map
 
@@ -2315,7 +2286,6 @@ async def products_not_published_partial(request: Request):
             return HTMLResponse('<p class="text-center py-8 text-gray-500">No se encontraron SKUs para comparar</p>')
 
         BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-        BM_FF_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
         sem = asyncio.Semaphore(15)
 
         # Fase 1: BM InventoryReport + exchange rate en paralelo
@@ -2354,34 +2324,39 @@ async def products_not_published_partial(request: Request):
 
         usd_to_mxn = await _get_usd_to_mxn(client)
 
-        # Fase 2: BM FullFillment con estimacion inteligente
-        async def _check_base_ff(base_sku, http):
-            """Consulta FF del base SKU y estima stock con ratio same-base."""
+        # Fase 2: BM Warehouse endpoint (stock real por almacen)
+        BM_WH_URL2 = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+
+        async def _check_base_wh(base_sku, http):
+            """Consulta Warehouse endpoint para obtener stock real."""
             async with sem:
                 try:
-                    resp = await http.post(
-                        f"{BM_FF_URL}?WEBSKU={base_sku}",
-                        content="", timeout=10.0
-                    )
+                    resp = await http.post(BM_WH_URL2, json={
+                        "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
+                        "LocationID": "47,62,68", "BINID": None,
+                        "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                    }, timeout=10.0)
                     if resp.status_code == 200:
-                        data = resp.json()
-                        if data and isinstance(data, list) and data:
-                            row = data[0]
-                            _mty = max(0, row.get("MainQtyMTY", 0) or 0)
-                            _cdmx = max(0, row.get("MainQtyCDMX", 0) or 0)
-                            _tj = max(0, row.get("MainQtyTJ", 0) or 0)
-                            total = _mty + _cdmx
-                            if total > 0:
-                                return base_sku, {
-                                    "mty": _mty, "cdmx": _cdmx,
-                                    "tj": _tj, "total": total,
-                                }
+                        rows = resp.json() or []
+                        mty = cdmx = tj = 0
+                        for row in rows:
+                            qty = row.get("QtyTotal", 0) or 0
+                            wname = (row.get("WarehouseName") or "").lower()
+                            if "monterrey" in wname or "maxx" in wname:
+                                mty += qty
+                            elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                                cdmx += qty
+                            else:
+                                tj += qty
+                        total = mty + cdmx
+                        if total > 0:
+                            return base_sku, {"mty": mty, "cdmx": cdmx, "tj": tj, "total": total}
                 except Exception:
                     pass
                 return base_sku, None
 
         async with httpx.AsyncClient() as http:
-            ff_tasks = [_check_base_ff(sku, http) for sku in bm_products.keys()]
+            ff_tasks = [_check_base_wh(sku, http) for sku in bm_products.keys()]
             ff_results = await asyncio.gather(*ff_tasks, return_exceptions=True)
 
         skus_with_stock = {}

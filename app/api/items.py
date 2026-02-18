@@ -5,9 +5,48 @@ import httpx
 import asyncio
 from app.services.meli_client import get_meli_client
 
-BINMANAGER_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+BM_COMPANY_ID = 1
+BM_LOCATION_IDS = "47,62,68"
+BM_CONDITIONS = "GRA,GRB,GRC,ICB,ICC,NEW"
 
 router = APIRouter(prefix="/api/items", tags=["items"])
+
+
+async def _bm_warehouse_qty(base_sku: str, client: httpx.AsyncClient) -> dict | None:
+    """Consulta stock real de BinManager via Warehouse endpoint.
+    Retorna dict con MainQtyMTY, MainQtyCDMX, MainQtyTJ (para compatibilidad con templates).
+    """
+    payload = {
+        "COMPANYID": BM_COMPANY_ID,
+        "SKU": base_sku,
+        "WarehouseID": None,
+        "LocationID": BM_LOCATION_IDS,
+        "BINID": None,
+        "Condition": BM_CONDITIONS,
+        "ForInventory": 0,
+        "SUPPLIERS": None,
+    }
+    try:
+        resp = await client.post(BM_WAREHOUSE_URL, json=payload, timeout=15.0)
+        if resp.status_code == 200:
+            rows = resp.json() or []
+            mty = cdmx = tj = 0
+            for row in rows:
+                qty = row.get("QtyTotal", 0) or 0
+                wname = (row.get("WarehouseName") or "").lower()
+                if "monterrey" in wname or "maxx" in wname:
+                    mty += qty
+                elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                    cdmx += qty
+                else:
+                    tj += qty
+            if mty + cdmx + tj > 0:
+                return {"MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
+                        "WebSKU": base_sku, "ProductSKU": base_sku}
+    except Exception:
+        pass
+    return None
 
 
 class PriceUpdate(BaseModel):
@@ -175,19 +214,10 @@ async def get_inventory_bulk(skus: str = Query(..., description="Comma-separated
         return {}
 
     async def fetch_one(sku: str, client: httpx.AsyncClient):
-        """Consulta BM con el SKU dado. Si no hay datos, intenta con sufijos."""
+        """Consulta BM Warehouse endpoint para obtener stock real."""
         base, _ = _get_base_and_type(sku)
-        # Intentar consulta directa primero
-        for query in [sku] + [f"{base}{s}" for s in ALL_SUFFIXES]:
-            try:
-                resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={query}", content="", timeout=10.0)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        return sku, data[0]
-            except Exception:
-                pass
-        return sku, None
+        data = await _bm_warehouse_qty(base, client)
+        return sku, data
 
     results = {}
     async with httpx.AsyncClient() as client:
@@ -239,17 +269,9 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
 
     async def fetch_one(query_sku: str, client: httpx.AsyncClient):
         async with sem:
-            try:
-                resp = await client.post(
-                    f"{BINMANAGER_URL}?WEBSKU={query_sku}", content="", timeout=15.0
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and len(data) > 0:
-                        return query_sku, data[0]
-                return query_sku, None
-            except Exception:
-                return query_sku, None
+            base, _ = _get_base_and_type(query_sku)
+            data = await _bm_warehouse_qty(base, client)
+            return query_sku, data
 
     base_data = {}
     async with httpx.AsyncClient() as client:
@@ -278,24 +300,15 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
 
 @router.get("/inventory/{web_sku}")
 async def get_inventory(web_sku: str):
-    """Consulta inventario BinManager para un SKU.
-    Si la consulta directa no tiene datos, intenta con sufijos vendibles.
-    Siempre retorna MainQty (dato real, nunca TotalQty ni AvailableQTY).
-    """
+    """Consulta inventario BinManager para un SKU via Warehouse endpoint (stock real)."""
     base, _ = _get_base_and_type(web_sku)
     try:
         async with httpx.AsyncClient() as client:
-            # Intentar consulta directa primero, luego con sufijos
-            for query in [web_sku] + [f"{base}{s}" for s in ALL_SUFFIXES]:
-                try:
-                    resp = await client.post(f"{BINMANAGER_URL}?WEBSKU={query}", content="", timeout=10.0)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data and isinstance(data, list) and len(data) > 0:
-                            return data[0]
-                except Exception:
-                    pass
-            return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku}
+            data = await _bm_warehouse_qty(base, client)
+            if data:
+                return data
+            return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku,
+                    "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 

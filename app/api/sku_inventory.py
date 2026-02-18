@@ -13,10 +13,13 @@ from app.services.product_researcher import research_product
 router = APIRouter(prefix="/api/sku-inventory", tags=["sku-inventory"])
 
 # BinManager API endpoints
-BINMANAGER_FULLFILLMENT_URL = "https://binmanager.mitechnologiesinc.com/FullFillment/FullFillment/GetQtysFromWebSKU"
+BINMANAGER_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+BINMANAGER_CONDITION_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 BINMANAGER_INVENTORY_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 BINMANAGER_COMPANY_ID = 1
 BINMANAGER_CONCEPT_ID = 8
+BM_LOCATION_IDS = "47,62,68"
+BM_CONDITIONS = "GRA,GRB,GRC,ICB,ICC,NEW"
 
 # SKU suffix handling
 _GR_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC")
@@ -55,92 +58,108 @@ def _extract_base_sku(sku: str) -> str:
     return sku
 
 
-async def _fetch_suffix_stock(base_sku: str, suffix: str, http: httpx.AsyncClient) -> dict | None:
-    """Query FullFillment for a single SKU+suffix. Returns raw row or None."""
-    try:
-        resp = await http.post(
-            f"{BINMANAGER_FULLFILLMENT_URL}?WEBSKU={base_sku}{suffix}",
-            content="",
-            timeout=15.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            if data and isinstance(data, list) and len(data) > 0:
-                return data[0]
-    except Exception:
-        pass
-    return None
+def _wh_name_to_zone(wname: str) -> str:
+    """Clasifica nombre de almacen en mty/cdmx/tj."""
+    w = wname.lower()
+    if "monterrey" in w or "maxx" in w:
+        return "mty"
+    if "autobot" in w or "cdmx" in w or "ebanistas" in w:
+        return "cdmx"
+    return "tj"
 
 
 async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
-    """Consulta stock vendible en BinManager por sufijos.
+    """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
 
-    Queries FullFillment for each sellable suffix (-NEW,-GRA,-GRB,-GRC,-ICB,-ICC),
-    deduplicates by ProductSKU, and returns two groups:
-      stock_gr: NEW/GRA/GRB/GRC (condicion buena)
-      stock_ic: ICB/ICC (incompleto)
-    Each group has: mty, cdmx, tj, total
+    - Warehouse: da totales reales por almacen (MTY/CDMX/TJ)
+    - Condition: da desglose GR vs IC por condicion
+    Retorna {stock_gr, stock_ic, stock_other, total_stock}
     """
+    import json as _json
     base = _extract_base_sku(sku)
 
-    # Query all 6 suffixes in parallel
-    tasks = []
-    suffix_labels = []
-    for sfx in _GR_SUFFIXES:
-        tasks.append(_fetch_suffix_stock(base, sfx, http))
-        suffix_labels.append(("gr", sfx))
-    for sfx in _IC_SUFFIXES:
-        tasks.append(_fetch_suffix_stock(base, sfx, http))
-        suffix_labels.append(("ic", sfx))
+    wh_payload = {
+        "COMPANYID": BINMANAGER_COMPANY_ID,
+        "SKU": base,
+        "WarehouseID": None,
+        "LocationID": BM_LOCATION_IDS,
+        "BINID": None,
+        "Condition": BM_CONDITIONS,
+        "ForInventory": 0,
+        "SUPPLIERS": None,
+    }
+    cond_payload = {
+        "COMPANYID": BINMANAGER_COMPANY_ID,
+        "SKU": base,
+        "WAREHOUSEID": None,
+        "LOCATIONID": BM_LOCATION_IDS,
+        "BINID": None,
+        "CONDITION": BM_CONDITIONS,
+        "FORINVENTORY": 0,
+        "SUPPLIERS": None,
+    }
 
-    rows = await asyncio.gather(*tasks)
+    wh_resp, cond_resp = await asyncio.gather(
+        http.post(BINMANAGER_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
+        http.post(BINMANAGER_CONDITION_URL, json=cond_payload, timeout=15.0),
+        return_exceptions=True,
+    )
 
-    # Deduplicate by ProductSKU globally, classify by actual ProductSKU suffix
-    seen = set()
-    gr = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
-    ic = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0}
+    # --- Totales por almacen ---
+    total_mty = total_cdmx = total_tj = 0
+    if not isinstance(wh_resp, Exception) and wh_resp.status_code == 200:
+        for row in (wh_resp.json() or []):
+            qty = row.get("QtyTotal", 0) or 0
+            zone = _wh_name_to_zone(row.get("WarehouseName") or "")
+            if zone == "mty":
+                total_mty += qty
+            elif zone == "cdmx":
+                total_cdmx += qty
+            else:
+                total_tj += qty
 
-    for (group, sfx), row in zip(suffix_labels, rows):
-        if row is None:
-            continue
-        product_sku = (row.get("ProductSKU") or "").upper()
-        if not product_sku:
-            product_sku = f"{base}{sfx}".upper()
+    grand_total = total_mty + total_cdmx  # TJ excluido
 
-        if product_sku in seen:
-            continue
-        seen.add(product_sku)
+    # --- Desglose GR vs IC por condicion ---
+    gr_qty = ic_qty = 0
+    if not isinstance(cond_resp, Exception) and cond_resp.status_code == 200:
+        cond_data = cond_resp.json() or {}
+        conditions_raw = cond_data.get("Conditions_JSON") or "[]"
+        try:
+            conditions = _json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
+            for c in conditions:
+                cond = (c.get("Condition") or "").upper()
+                qty = c.get("TotalQty", 0) or 0
+                if cond in ("GRA", "GRB", "GRC", "NEW"):
+                    gr_qty += qty
+                elif cond in ("ICB", "ICC"):
+                    ic_qty += qty
+        except Exception:
+            gr_qty = grand_total
+    else:
+        gr_qty = grand_total
 
-        # Classify by actual ProductSKU suffix, not by which query found it
-        psku_upper = product_sku.upper()
-        actual_group = "gr"  # default
-        for ic_sfx in _IC_SUFFIXES:
-            if psku_upper.endswith(ic_sfx):
-                actual_group = "ic"
-                break
-
-        mty = row.get("MainQtyMTY", 0) or 0
-        cdmx = row.get("MainQtyCDMX", 0) or 0
-        tj = row.get("MainQtyTJ", 0) or 0
-        target = gr if actual_group == "gr" else ic
-        target["mty"] += mty
-        target["cdmx"] += cdmx
-        target["tj"] += tj
-        # TJ es solo informativo, no cuenta para total vendible
-        target["total"] += mty + cdmx
-
-    sellable_total = gr["total"] + ic["total"]
-
-    # NOTA: InventoryReport.AvailableQTY NO es el stock real disponible.
-    # Para SNTV001763 devuelve 4971, para SNTV001863 devuelve 9124 — valores absurdos.
-    # El único dato confiable es MainQty del FullFillment (ya consultado arriba).
-    # Si ningún sufijo vendible tiene stock, el inventario real es 0.
+    # Distribuir MTY/CDMX proporcionalmente entre GR/IC (aproximacion)
+    total_cond = gr_qty + ic_qty or 1
+    gr_ratio = gr_qty / total_cond
+    gr = {
+        "mty": round(total_mty * gr_ratio),
+        "cdmx": round(total_cdmx * gr_ratio),
+        "tj": 0,
+        "total": gr_qty,
+    }
+    ic = {
+        "mty": total_mty - gr["mty"],
+        "cdmx": total_cdmx - gr["cdmx"],
+        "tj": 0,
+        "total": ic_qty,
+    }
 
     return {
         "stock_gr": gr,
         "stock_ic": ic,
         "stock_other": 0,
-        "total_stock": sellable_total,
+        "total_stock": grand_total,
     }
 
 
