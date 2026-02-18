@@ -743,14 +743,25 @@ function pauseItem(itemId, btn) {
     });
 }
 
-// --- Bulk set stock to 0 for all risk items (solo los visibles en DOM) ---
+// --- Bulk set stock to 0 for all risk items (solo los visibles en DOM, no variaciones) ---
 function bulkStockZeroRisk() {
-    var allIds = [{% for p in oversell_risk %}'{{ p.id }}'{{ ',' if not loop.last else '' }}{% endfor %}];
-    var items = allIds.filter(function(id) {
-        return document.getElementById('risk-d-' + id) || document.getElementById('risk-m-' + id);
+    var allInfo = [
+        {% for p in oversell_risk %}
+        {id: '{{ p.id }}', hv: {{ 'true' if p.get('has_variations') else 'false' }} }{{ ',' if not loop.last else '' }}
+        {% endfor %}
+    ];
+    var pending = allInfo.filter(function(x) {
+        return document.getElementById('risk-d-' + x.id) || document.getElementById('risk-m-' + x.id);
     });
-    if (!items.length) { alert('No hay items pendientes en Riesgo Sobreventa.'); return; }
-    if (!confirm('Poner stock en 0 para ' + items.length + ' productos en riesgo?\n\n(Solo los aún no procesados)')) return;
+    var items = pending.filter(function(x) { return !x.hv; }).map(function(x) { return x.id; });
+    var varCount = pending.filter(function(x) { return x.hv; }).length;
+    if (!pending.length) { alert('No hay items pendientes en Riesgo Sobreventa.'); return; }
+    if (!items.length) {
+        alert('Todos los items en Riesgo tienen variaciones.\nUsa el botón "Sync Var." en cada uno para ajustar el stock por variación (las que tienen BM=0 quedarán en 0 en MeLi).');
+        return;
+    }
+    var note = varCount > 0 ? '\n\n⚠️ ' + varCount + ' item(s) con variaciones se omitirán\n   → Usa "Sync Var." individualmente para ellos' : '';
+    if (!confirm('Poner stock en 0 para ' + items.length + ' productos sin variaciones?' + note)) return;
     var btn = document.getElementById('bulk-zero-btn');
     var msg = document.getElementById('bulk-pause-msg');
     btn.disabled = true;
@@ -1032,9 +1043,9 @@ function confirmSyncVariations(itemId, confirmBtn) {
                 .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
                 .replace('hover:bg-indigo-700', '').replace('active:bg-indigo-700', '');
         }
-        if (errors === 0) {
-            setTimeout(function() { _removeStockRows(itemId); }, 1200);
-        }
+        // Quitar fila siempre que el usuario confirmó (aunque algunas var. tengan error)
+        // Si hay errores parciales el botón ya muestra el resumen "X/3 OK, 1 err"
+        setTimeout(function() { _removeStockRows(itemId); }, 1200);
     })
     .catch(function(e) {
         confirmBtn.disabled = false;
