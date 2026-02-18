@@ -83,8 +83,24 @@
                 <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
                 {% endif %}
             </div>
-            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                {% if p.get('has_variations') %}
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
+                {% if p.get('is_full') %}
+                <div class="flex-1 flex flex-col gap-1">
+                    <span class="flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-[10px] font-semibold">
+                        ⚠️ FULL — cambia logística en Seller Center primero
+                    </span>
+                    <div class="flex gap-1">
+                        <a href="https://articulo.mercadolibre.com.mx/{{ p.id | replace('MLM', 'MLM-') }}" target="_blank"
+                           class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
+                            Ver en MeLi ↗
+                        </a>
+                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                                class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600">
+                            Ya cambié → Sync
+                        </button>
+                    </div>
+                </div>
+                {% elif p.get('has_variations') %}
                 <button onclick="syncVariationStocks('{{ p.id }}', this)"
                         data-variations='{{ p.variations | tojson }}'
                         class="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg font-medium active:bg-indigo-700 min-h-[36px]"
@@ -173,6 +189,18 @@
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-center">
+                        {% if p.get('is_full') %}
+                        <div class="flex flex-col items-center gap-1">
+                            <span class="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">⚠️ FULL</span>
+                            <a href="https://articulo.mercadolibre.com.mx/{{ p.id | replace('MLM', 'MLM-') }}" target="_blank"
+                               class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium whitespace-nowrap">Ver en MeLi ↗</a>
+                            <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                                    class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium whitespace-nowrap">
+                                Ya cambié → Sync
+                            </button>
+                            <span id="restock-msg-d-{{ p.id }}" class="text-[10px]"></span>
+                        </div>
+                        {% else %}
                         <div class="flex items-center justify-center gap-1">
                             {% if p.get('has_variations') %}
                             <button onclick="syncVariationStocks('{{ p.id }}', this)"
@@ -193,6 +221,7 @@
                             </button>
                             <span id="restock-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
                         </div>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -520,6 +549,54 @@
 </div>
 
 <script>
+// --- Helpers ---
+function _removeStockRows(itemId) {
+    ['restock-m', 'restock-d', 'risk-m', 'risk-d', 'act-m', 'act-d'].forEach(function(pfx) {
+        var r = document.getElementById(pfx + '-' + itemId);
+        if (r) {
+            r.style.transition = 'opacity 0.4s';
+            r.style.opacity = '0';
+            setTimeout(function() { if (r.parentNode) r.parentNode.removeChild(r); }, 450);
+        }
+    });
+}
+
+// Helper FULL: sync stock directo (para cuando ya se cambió logística en Seller Center)
+function _setFullMsg(itemId, msg, cls) {
+    document.querySelectorAll('[id="restock-msg-' + itemId + '"],[id="restock-msg-d-' + itemId + '"]').forEach(function(el) {
+        el.textContent = msg; el.className = cls;
+    });
+}
+window.syncFullItem = function(itemId, bmQty, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando...';
+    var safeQty = Math.floor(bmQty * 0.6);
+    fetch('/api/items/' + itemId + '/stock', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({quantity: safeQty})
+    })
+    .then(function(r) {
+        return r.text().then(function(t) {
+            if (!r.ok) {
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error ' + r.status); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error('Error ' + r.status); }
+            }
+        });
+    })
+    .then(function() { setTimeout(function() { _removeStockRows(itemId); }, 800); })
+    .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Ya cambié → Sync';
+        var errMsg = e.message || 'Error';
+        _setFullMsg(itemId, errMsg, 'text-[10px] text-red-600 block mt-1');
+        var isFull = errMsg.toLowerCase().indexOf('cannot update') >= 0 || errMsg.toLowerCase().indexOf('not modifiable') >= 0;
+        alert(isFull
+            ? 'El item sigue siendo FULL en MeLi.\n\nPasos:\n1. Clic en "Ver en MeLi ↗"\n2. Editar → cambiar logística a "Envío por cuenta propia"\n3. Guardar en MeLi\n4. Volver aquí y clic en "Ya cambié → Sync"'
+            : 'Error al sincronizar ' + itemId + ':\n' + errMsg);
+    });
+};
+
 // --- Restock: sync 60% of BM total ---
 function syncRestockItem(itemId, bmTotal, btn) {
     var safeQty = Math.floor(bmTotal * 0.6);
@@ -534,10 +611,8 @@ function syncRestockItem(itemId, bmTotal, btn) {
     .then(function(r) {
         if (r.ok) {
             btn.textContent = 'OK (' + safeQty + ')';
-            btn.className = btn.className.replace('bg-purple-600', 'bg-green-600').replace('hover:bg-purple-700', '');
             if (msgEl) { msgEl.textContent = 'Stock: ' + safeQty; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
-            var row = document.getElementById('restock-m-' + itemId) || document.getElementById('restock-d-' + itemId);
-            if (row) row.classList.add('opacity-50');
+            setTimeout(function() { _removeStockRows(itemId); }, 1000);
         } else {
             return r.text().then(function(t) {
                 try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
@@ -555,9 +630,10 @@ function syncRestockItem(itemId, bmTotal, btn) {
 function bulkSyncRestock() {
     var items = [
         {% for p in restock %}
-        {id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}
+        {% if not p.get('is_full') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}{% endif %}
         {% endfor %}
-    ];
+    ].filter(Boolean);
+    if (!items.length) { alert('No hay items syncronizables (todos son FULL o variaciones).'); return; }
     var btn = document.getElementById('bulk-restock-btn');
     var msg = document.getElementById('bulk-restock-msg');
     btn.disabled = true;
@@ -577,14 +653,11 @@ function bulkSyncRestock() {
         .then(function(r) {
             done++;
             if (!r.ok) errors++;
-            else {
-                var row = document.getElementById('restock-m-' + item.id) || document.getElementById('restock-d-' + item.id);
-                if (row) row.classList.add('opacity-50');
-            }
+            else { setTimeout(function() { _removeStockRows(item.id); }, 800); }
             updateProgress();
             if (done === total) {
-                btn.textContent = 'Completado';
-                btn.className = btn.className.replace('bg-purple-600', 'bg-green-600');
+                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                btn.className = btn.className.replace('bg-purple-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600');
             }
         })
         .catch(function() { done++; errors++; updateProgress(); });
@@ -604,9 +677,8 @@ function setStockZero(itemId, btn) {
     .then(function(r) {
         if (r.ok) {
             btn.textContent = 'OK';
-            btn.className = btn.className.replace('bg-red-500', 'bg-green-600').replace('hover:bg-red-600', '');
-            var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-            if (row) row.classList.add('opacity-50');
+            if (msgEl) { msgEl.textContent = 'Stock→0'; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+            setTimeout(function() { _removeStockRows(itemId); }, 1000);
         } else {
             return r.text().then(function(t) {
                 try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
@@ -634,9 +706,8 @@ function pauseItem(itemId, btn) {
     .then(function(r) {
         if (r.ok) {
             btn.textContent = 'Pausado';
-            btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600').replace('hover:bg-yellow-600', '');
-            var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-            if (row) row.classList.add('opacity-50');
+            if (msgEl) { msgEl.textContent = 'Pausado'; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+            setTimeout(function() { _removeStockRows(itemId); }, 1000);
         } else {
             return r.text().then(function(t) {
                 try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
@@ -677,14 +748,11 @@ function bulkStockZeroRisk() {
         .then(function(r) {
             done++;
             if (!r.ok) errors++;
-            else {
-                var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-                if (row) row.classList.add('opacity-50');
-            }
+            else { setTimeout(function() { _removeStockRows(itemId); }, 800); }
             updateProgress();
             if (done === total) {
-                btn.textContent = 'Completado';
-                btn.className = btn.className.replace('bg-red-500', 'bg-green-600');
+                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                btn.className = btn.className.replace('bg-red-500', errors > 0 ? 'bg-yellow-500' : 'bg-green-600');
             }
         })
         .catch(function() { done++; errors++; updateProgress(); });
@@ -717,14 +785,11 @@ function bulkPauseRisk() {
         .then(function(r) {
             done++;
             if (!r.ok) errors++;
-            else {
-                var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-                if (row) row.classList.add('opacity-50');
-            }
+            else { setTimeout(function() { _removeStockRows(itemId); }, 800); }
             updateProgress();
             if (done === total) {
-                btn.textContent = 'Completado';
-                btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600');
+                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                btn.className = btn.className.replace('bg-yellow-500', errors > 0 ? 'bg-yellow-600' : 'bg-green-600');
             }
         })
         .catch(function() { done++; errors++; updateProgress(); });
@@ -761,10 +826,8 @@ function activateItem(itemId, bmTotal, status, btn) {
     })
     .then(function() {
         btn.textContent = 'OK (' + safeQty + ')';
-        btn.className = btn.className.replace('bg-green-600', 'bg-gray-400').replace('hover:bg-green-700', '');
         if (msgEl) { msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : ''); msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
-        var row = document.getElementById('act-m-' + itemId) || document.getElementById('act-d-' + itemId);
-        if (row) row.classList.add('opacity-50');
+        setTimeout(function() { _removeStockRows(itemId); }, 1000);
     })
     .catch(function(e) {
         btn.textContent = 'Error';
@@ -944,11 +1007,9 @@ function confirmSyncVariations(itemId, confirmBtn) {
                 .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
                 .replace('hover:bg-indigo-700', '').replace('active:bg-indigo-700', '');
         }
-        var row = document.getElementById('restock-m-' + itemId)
-               || document.getElementById('restock-d-' + itemId)
-               || document.getElementById('risk-m-' + itemId)
-               || document.getElementById('risk-d-' + itemId);
-        if (row) row.classList.add('opacity-60');
+        if (errors === 0) {
+            setTimeout(function() { _removeStockRows(itemId); }, 1200);
+        }
     })
     .catch(function(e) {
         confirmBtn.disabled = false;
@@ -992,12 +1053,11 @@ function bulkActivateAll() {
         })
         .then(function() {
             done++;
-            var row = document.getElementById('act-m-' + item.id) || document.getElementById('act-d-' + item.id);
-            if (row) row.classList.add('opacity-50');
+            setTimeout(function() { _removeStockRows(item.id); }, 800);
             updateProgress();
             if (done === total) {
-                btn.textContent = 'Completado';
-                btn.className = btn.className.replace('bg-green-600', 'bg-gray-400');
+                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                btn.className = btn.className.replace('bg-green-600', errors > 0 ? 'bg-yellow-500' : 'bg-gray-400');
             }
         })
         .catch(function() { done++; errors++; updateProgress(); });
