@@ -1,6 +1,8 @@
 <!-- Banner: Alertas de Stock Perdido -->
 {% if stock_alerts %}
-<div class="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 md:p-4">
+{% set alert_per_page = 10 %}
+{% set alert_total_pages = ((stock_alerts|length - 1) // alert_per_page) + 1 if stock_alerts|length > 0 else 1 %}
+<div class="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 md:p-4" id="alert-section">
     <div class="flex flex-col md:flex-row md:items-start gap-2 md:gap-3 mb-3">
         <div class="flex items-start gap-2 flex-1">
             <svg class="w-5 h-5 md:w-6 md:h-6 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -31,10 +33,11 @@
             </button>
         </div>
     </div>
-    <!-- Mobile alert cards -->
-    <div class="md:hidden space-y-2">
+    <!-- Mobile alert cards (paginated) -->
+    <div class="md:hidden space-y-2" id="alert-mobile-list">
         {% for a in stock_alerts %}
-        <div class="bg-white rounded-lg p-2.5 border border-red-100" id="alert-row-{{ a.id }}">
+        <div class="bg-white rounded-lg p-2.5 border border-red-100 alert-card" data-alert-page="{{ ((loop.index0 // alert_per_page) + 1) }}" id="alert-row-{{ a.id }}"
+             style="{{ 'display:none' if loop.index0 >= alert_per_page else '' }}">
             <div class="flex items-center gap-2 mb-2">
                 {% if a.thumbnail %}
                 <img src="{{ a.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
@@ -64,7 +67,7 @@
         </div>
         {% endfor %}
     </div>
-    <!-- Desktop alert table -->
+    <!-- Desktop alert table (paginated) -->
     <div class="hidden md:block overflow-x-auto">
         <table class="w-full text-xs">
             <thead>
@@ -81,9 +84,10 @@
                     <th class="text-center py-1.5 px-2 font-medium">Acciones</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-red-100">
+            <tbody class="divide-y divide-red-100" id="alert-desktop-tbody">
                 {% for a in stock_alerts %}
-                <tr class="hover:bg-red-100/50" id="alert-row-d-{{ a.id }}">
+                <tr class="hover:bg-red-100/50 alert-row" data-alert-page="{{ ((loop.index0 // alert_per_page) + 1) }}" id="alert-row-d-{{ a.id }}"
+                    style="{{ 'display:none' if loop.index0 >= alert_per_page else '' }}">
                     <td class="py-1.5 px-2">
                         <div class="flex items-center gap-2">
                             {% if a.thumbnail %}
@@ -124,6 +128,22 @@
             </tbody>
         </table>
     </div>
+    <!-- Alert pagination controls -->
+    {% if alert_total_pages > 1 %}
+    <div class="flex items-center justify-between mt-3 pt-2 border-t border-red-200">
+        <span class="text-[10px] text-red-600" id="alert-page-info">Pag 1 de {{ alert_total_pages }} ({{ stock_alerts|length }} alertas)</span>
+        <div class="flex items-center gap-1" id="alert-pagination">
+            <button onclick="alertGoToPage(_alertPage - 1)" id="alert-prev-btn" class="px-2 py-1 text-[10px] rounded border border-red-200 text-red-700 hover:bg-red-100 disabled:opacity-30" disabled>Anterior</button>
+            {% for pg in range(1, alert_total_pages + 1) %}
+            <button onclick="alertGoToPage({{ pg }})" data-alert-pg="{{ pg }}"
+                    class="alert-pg-btn px-2 py-1 text-[10px] rounded border font-medium {{ 'bg-red-600 text-white border-red-600' if pg == 1 else 'border-red-200 text-red-700 hover:bg-red-100' }}">
+                {{ pg }}
+            </button>
+            {% endfor %}
+            <button onclick="alertGoToPage(_alertPage + 1)" id="alert-next-btn" class="px-2 py-1 text-[10px] rounded border border-red-200 text-red-700 hover:bg-red-100 {{ 'disabled:opacity-30' if alert_total_pages <= 1 else '' }}">Siguiente</button>
+        </div>
+    </div>
+    {% endif %}
     <span id="bulk-sync-msg" class="text-xs mt-2 block text-center"></span>
 </div>
 {% endif %}
@@ -656,6 +676,35 @@ var _invPage = {{ page }};
 var _invPerPage = {{ per_page }};
 var _invTotalPages = {{ total_pages }};
 var _invAlertDays = {{ alert_days }};
+var _alertPage = 1;
+var _alertTotalPages = {{ alert_total_pages if stock_alerts else 1 }};
+
+/* --- Alert pagination (client-side) --- */
+function alertGoToPage(pg) {
+    if (pg < 1 || pg > _alertTotalPages) return;
+    _alertPage = pg;
+    // Show/hide rows by data-alert-page
+    document.querySelectorAll('.alert-row, .alert-card').forEach(function(el) {
+        el.style.display = (el.dataset.alertPage == String(pg)) ? '' : 'none';
+    });
+    // Update page buttons
+    document.querySelectorAll('.alert-pg-btn').forEach(function(btn) {
+        var bpg = parseInt(btn.dataset.alertPg);
+        if (bpg === pg) {
+            btn.className = 'alert-pg-btn px-2 py-1 text-[10px] rounded border font-medium bg-red-600 text-white border-red-600';
+        } else {
+            btn.className = 'alert-pg-btn px-2 py-1 text-[10px] rounded border font-medium border-red-200 text-red-700 hover:bg-red-100';
+        }
+    });
+    // Update prev/next
+    var prevBtn = document.getElementById('alert-prev-btn');
+    var nextBtn = document.getElementById('alert-next-btn');
+    if (prevBtn) prevBtn.disabled = (pg <= 1);
+    if (nextBtn) nextBtn.disabled = (pg >= _alertTotalPages);
+    // Update info
+    var info = document.getElementById('alert-page-info');
+    if (info) info.textContent = 'Pag ' + pg + ' de ' + _alertTotalPages + ' ({{ stock_alerts|length }} alertas)';
+}
 
 /* --- Centralized URL builder --- */
 function buildInvUrl(overrides) {

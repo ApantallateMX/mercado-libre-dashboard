@@ -402,12 +402,28 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
     for p in products:
         bm = bm_map.get(p.get(sku_key))
         if bm:
-            # CRITICO: usar MainQty (stock propio), NO TotalQty (incluye alternativos)
-            p["_bm_mty"] = max(0, bm.get("MainQtyMTY", 0) or 0)
-            p["_bm_cdmx"] = max(0, bm.get("MainQtyCDMX", 0) or 0)
-            p["_bm_tj"] = max(0, bm.get("MainQtyTJ", 0) or 0)
-            # TJ es solo informativo, no se cuenta para total vendible
-            p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"]
+            _mty = max(0, bm.get("MainQtyMTY", 0) or 0)
+            _cdmx = max(0, bm.get("MainQtyCDMX", 0) or 0)
+            _tj = max(0, bm.get("MainQtyTJ", 0) or 0)
+            # Estimacion inteligente: ratio same-base de AlternativeSKUs
+            alt_str = bm.get("AlternativeSKUs") or ""
+            sku_val = p.get(sku_key, "")
+            q_base = _extract_base_sku(sku_val) if sku_val else ""
+            ratio = 0.0
+            if alt_str and alt_str != "No Alternatives" and q_base:
+                alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                base_up = q_base.upper()
+                same_base = sum(1 for a in alts if a.upper().startswith(base_up + "-"))
+                if len(alts) > 0:
+                    ratio = same_base / len(alts)
+            if ratio > 0 and (_mty > 0 or _cdmx > 0):
+                _mty += int(max(0, bm.get("AltQtyMTY", 0) or 0) * ratio)
+                _cdmx += int(max(0, bm.get("AltQtyCDMX", 0) or 0) * ratio)
+                _tj += int(max(0, bm.get("AltQtyTJ", 0) or 0) * ratio)
+            p["_bm_mty"] = _mty
+            p["_bm_cdmx"] = _cdmx
+            p["_bm_tj"] = _tj
+            p["_bm_total"] = _mty + _cdmx
 
 
 def _aggregate_sales_by_item(orders: list) -> dict:
@@ -1103,18 +1119,37 @@ async def items_grid_partial(
                 for coro in asyncio.as_completed(tasks):
                     queried_sku, data = await coro
                     if data:
-                        # SOLO MainQty — AltQty mezcla stock de otros productos
                         _mty = max(0, data.get("MainQtyMTY", 0) or 0)
                         _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
                         _tj = max(0, data.get("MainQtyTJ", 0) or 0)
+                        # Estimacion inteligente: ratio same-base de AlternativeSKUs
+                        alt_str = data.get("AlternativeSKUs") or ""
+                        q_base = _extract_base_sku(queried_sku)
+                        ratio = 0.0
+                        if alt_str and alt_str != "No Alternatives" and q_base:
+                            alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                            base_up = q_base.upper()
+                            same_base = sum(1 for a in alts if a.upper().startswith(base_up + "-"))
+                            if len(alts) > 0:
+                                ratio = same_base / len(alts)
+                        if ratio > 0 and (_mty > 0 or _cdmx > 0):
+                            _alt_mty = max(0, data.get("AltQtyMTY", 0) or 0)
+                            _alt_cdmx = max(0, data.get("AltQtyCDMX", 0) or 0)
+                            _alt_tj = max(0, data.get("AltQtyTJ", 0) or 0)
+                            _mty += int(_alt_mty * ratio)
+                            _cdmx += int(_alt_cdmx * ratio)
+                            _tj += int(_alt_tj * ratio)
                         inv = {
                             "MTY": _mty,
                             "CDMX": _cdmx,
                             "TJ": _tj,
-                            "total": _mty + _cdmx,  # TJ informativo
+                            "total": _mty + _cdmx,
                         }
-                        for iid in sku_to_items[base]["item_ids"]:
-                            inventory_map[iid] = inv
+                        # Map to all items with same base SKU
+                        for b, info in sku_to_items.items():
+                            if _extract_base_sku(info["sku"]).upper() == _extract_base_sku(queried_sku).upper():
+                                for iid in info["item_ids"]:
+                                    inventory_map[iid] = inv
 
         # Construir metadata por item (brand, model, variaciones)
         item_meta = {}
@@ -1535,43 +1570,58 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     # --- FASE 1: FullFillment (rapido) ---
     async def _ff_phase(sku, http):
-        """Intenta FF exacto, luego FF con sufijos. Retorna (sku, found_bool)."""
+        """Intenta FF exacto con estimacion inteligente de stock por sufijos.
+        Usa ratio same-base/total de AlternativeSKUs para estimar stock real.
+        Gate: solo aplica ratio si MainQty > 0 en al menos un almacen vendible."""
         clean = _clean_sku_for_bm(sku)
         if not clean:
             return sku, False
 
-        # 1a) FF exacto — SOLO usar MainQty (stock del ProductSKU asignado)
-        # NO usar AltQty: incluye stock de OTROS productos, no del mismo SKU
         base = _extract_base_sku(clean)
-        _, data = await _ff_fetch(clean, http)
-        if data:
-            if _store(sku, data):
-                return sku, True
 
-        # 1b) FF con sufijos
-        suffix_results = await asyncio.gather(
-            *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
-            return_exceptions=True
-        )
-        agg = {"MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
-        seen_psku = set()
-        found_any = False
-        for r in suffix_results:
-            if isinstance(r, Exception) or r is None:
-                continue
-            _, sdata = r
-            if sdata:
-                psku = sdata.get("ProductSKU", "")
-                if psku and psku in seen_psku:
-                    continue
-                if psku:
-                    seen_psku.add(psku)
-                # CRITICO: usar MainQty (stock propio), NO TotalQty
-                agg["MainQtyMTY"] += max(0, sdata.get("MainQtyMTY", 0) or 0)
-                agg["MainQtyCDMX"] += max(0, sdata.get("MainQtyCDMX", 0) or 0)
-                agg["MainQtyTJ"] += max(0, sdata.get("MainQtyTJ", 0) or 0)
-                found_any = True
-        if found_any and _store(sku, agg):
+        # 1a) FF exacto
+        _, data = await _ff_fetch(clean, http)
+        if not data:
+            # Intentar con sufijos si el base no retorna nada
+            for sfx in _ALL_SUFFIXES:
+                _, data = await _ff_fetch(f"{base}{sfx}", http)
+                if data:
+                    break
+
+        if data:
+            main_mty = max(0, data.get("MainQtyMTY", 0) or 0)
+            main_cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
+            main_tj = max(0, data.get("MainQtyTJ", 0) or 0)
+            alt_mty = max(0, data.get("AltQtyMTY", 0) or 0)
+            alt_cdmx = max(0, data.get("AltQtyCDMX", 0) or 0)
+            alt_tj = max(0, data.get("AltQtyTJ", 0) or 0)
+
+            # Calcular ratio same-base desde AlternativeSKUs
+            ratio = 0.0
+            alt_str = data.get("AlternativeSKUs") or ""
+            if alt_str and alt_str != "No Alternatives":
+                alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                base_upper = base.upper()
+                same_base = sum(1 for a in alts if a.upper().startswith(base_upper + "-"))
+                total_alts = len(alts)
+                if total_alts > 0:
+                    ratio = same_base / total_alts
+
+            # Gate: solo aplicar ratio si el producto tiene stock confirmado
+            # (MainQty > 0 en almacen vendible MTY o CDMX)
+            if ratio > 0 and (main_mty > 0 or main_cdmx > 0):
+                est_data = {
+                    "MainQtyMTY": main_mty + int(alt_mty * ratio),
+                    "MainQtyCDMX": main_cdmx + int(alt_cdmx * ratio),
+                    "MainQtyTJ": main_tj + int(alt_tj * ratio),
+                }
+            else:
+                est_data = data
+
+            if _store(sku, est_data):
+                return sku, True
+            # Cachear aunque total=0 para no re-consultar
+            _store(sku, est_data, force_cache=True)
             return sku, True
 
         return sku, False
@@ -2407,49 +2457,56 @@ async def products_not_published_partial(request: Request):
 
         usd_to_mxn = await _get_usd_to_mxn(client)
 
-        # Fase 2: BM FullFillment para variantes sellable
-        async def _check_suffix(base_sku, suffix, http):
-            query_sku = f"{base_sku}{suffix}"
+        # Fase 2: BM FullFillment con estimacion inteligente
+        async def _check_base_ff(base_sku, http):
+            """Consulta FF del base SKU y estima stock con ratio same-base."""
             async with sem:
                 try:
                     resp = await http.post(
-                        f"{BM_FF_URL}?WEBSKU={query_sku}",
+                        f"{BM_FF_URL}?WEBSKU={base_sku}",
                         content="", timeout=10.0
                     )
                     if resp.status_code == 200:
                         data = resp.json()
                         if data and isinstance(data, list) and data:
                             row = data[0]
-                            # SOLO MainQty — AltQty mezcla stock de otros productos
                             _mty = max(0, row.get("MainQtyMTY", 0) or 0)
                             _cdmx = max(0, row.get("MainQtyCDMX", 0) or 0)
                             _tj = max(0, row.get("MainQtyTJ", 0) or 0)
-                            total = _mty + _cdmx  # TJ informativo
+                            # Estimacion con ratio same-base
+                            alt_str = row.get("AlternativeSKUs") or ""
+                            ratio = 0.0
+                            if alt_str and alt_str != "No Alternatives":
+                                alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                                base_up = base_sku.upper()
+                                same_base = sum(1 for a in alts if a.upper().startswith(base_up + "-"))
+                                if len(alts) > 0:
+                                    ratio = same_base / len(alts)
+                            if ratio > 0 and (_mty > 0 or _cdmx > 0):
+                                _mty += int(max(0, row.get("AltQtyMTY", 0) or 0) * ratio)
+                                _cdmx += int(max(0, row.get("AltQtyCDMX", 0) or 0) * ratio)
+                                _tj += int(max(0, row.get("AltQtyTJ", 0) or 0) * ratio)
+                            total = _mty + _cdmx
                             if total > 0:
-                                return query_sku, {
-                                    "mty": _mty,
-                                    "cdmx": _cdmx,
-                                    "tj": _tj,
-                                    "total": total,
+                                return base_sku, {
+                                    "mty": _mty, "cdmx": _cdmx,
+                                    "tj": _tj, "total": total,
                                 }
                 except Exception:
                     pass
-                return query_sku, None
+                return base_sku, None
 
         async with httpx.AsyncClient() as http:
-            suffix_tasks = []
-            for base_sku in bm_products.keys():
-                for suffix in _ALL_SUFFIXES:
-                    suffix_tasks.append(_check_suffix(base_sku, suffix, http))
-            suffix_results = await asyncio.gather(*suffix_tasks, return_exceptions=True)
+            ff_tasks = [_check_base_ff(sku, http) for sku in bm_products.keys()]
+            ff_results = await asyncio.gather(*ff_tasks, return_exceptions=True)
 
         skus_with_stock = {}
-        for r in suffix_results:
+        for r in ff_results:
             if isinstance(r, Exception) or r is None:
                 continue
-            query_sku, stock_data = r
+            base_sku, stock_data = r
             if stock_data:
-                skus_with_stock[query_sku.upper()] = stock_data
+                skus_with_stock[base_sku.upper()] = stock_data
 
         # Fase 3: Verificar cuales NO estan en MeLi
         # Buscar por SKU completo (con sufijo) y tambien por base SKU
