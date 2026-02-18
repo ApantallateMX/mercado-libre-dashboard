@@ -406,7 +406,8 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
             p["_bm_mty"] = max(0, bm.get("MainQtyMTY", 0) or 0)
             p["_bm_cdmx"] = max(0, bm.get("MainQtyCDMX", 0) or 0)
             p["_bm_tj"] = max(0, bm.get("MainQtyTJ", 0) or 0)
-            p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"] + p["_bm_tj"]
+            # TJ es solo informativo, no se cuenta para total vendible
+            p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"]
 
 
 def _aggregate_sales_by_item(orders: list) -> dict:
@@ -1222,6 +1223,7 @@ async def products_stock_issues_partial(request: Request):
         entry = _stock_issues_cache.get(key)
         if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
             ctx = entry[1].copy()
+            # include_paused: traer items pausados para seccion Activar
             ctx["request"] = request
             return templates.TemplateResponse("partials/products_stock_issues.html", ctx)
 
@@ -1231,7 +1233,7 @@ async def products_stock_issues_partial(request: Request):
         date_to = now.strftime("%Y-%m-%d")
 
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
+            _get_all_products_cached(client, include_paused=True),
             _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
@@ -1317,21 +1319,24 @@ _STOCK_ISSUES_TTL = 300      # 5 min
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 
 
-async def _get_all_products_cached(client) -> list[dict]:
-    """Devuelve todos los items activos con detalles, cacheado 15 min.
+async def _get_all_products_cached(client, include_paused=False) -> list[dict]:
+    """Devuelve todos los items (active + opcionalmente paused), cacheado 15 min.
     Lock previene doble fetch cuando multiples requests concurrentes."""
-    key = f"products:{client.user_id}"
+    suffix = ":with_paused" if include_paused else ""
+    key = f"products:{client.user_id}{suffix}"
     entry = _products_cache.get(key)
     if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
         return entry[1]
 
     async with _products_fetch_lock:
-        # Double-check despues de adquirir lock
         entry = _products_cache.get(key)
         if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
             return entry[1]
 
-        all_ids = await client.get_all_active_item_ids()
+        if include_paused:
+            all_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
+        else:
+            all_ids = await client.get_all_active_item_ids()
         all_details = []
         sem = asyncio.Semaphore(5)
 
@@ -1417,6 +1422,7 @@ async def _prewarm_caches():
         client = await get_meli_client()
         if not client:
             return
+        # prewarm include_paused marker
         try:
             from datetime import datetime, timedelta
             now = datetime.utcnow()
@@ -1424,7 +1430,7 @@ async def _prewarm_caches():
             date_to = now.strftime("%Y-%m-%d")
 
             all_bodies, all_orders = await asyncio.gather(
-                _get_all_products_cached(client),
+                _get_all_products_cached(client, include_paused=True),
                 _get_orders_cached(client, date_from, date_to),
             )
             sales_map = _aggregate_sales_by_item(all_orders)
@@ -1487,7 +1493,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "cdmx": max(0, data.get("MainQtyCDMX", 0) or 0),
             "tj": max(0, data.get("MainQtyTJ", 0) or 0),
         }
-        inv["total"] = inv["mty"] + inv["cdmx"] + inv["tj"]
+        # TJ es solo informativo, no se cuenta para venta
+        inv["total"] = inv["mty"] + inv["cdmx"]
         if inv["total"] > 0 or force_cache:
             _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:

@@ -198,10 +198,11 @@
             }
             var inv = inventoryData[item.seller_sku];
             if (!inv) return; // still loading
-            var tj = inv.TotalQtyTJ || 0;
-            var cdmx = inv.TotalQtyCDMX || 0;
-            var mty = inv.TotalQtyMTY || 0;
-            var total = tj + cdmx + mty;
+            var tj = inv.MainQtyTJ || 0;
+            var cdmx = inv.MainQtyCDMX || 0;
+            var mty = inv.MainQtyMTY || 0;
+            // TJ es solo informativo, no cuenta para total vendible
+            var total = cdmx + mty;
             cell.innerHTML =
                 '<div class="text-xs leading-tight">' +
                 '<span class="text-gray-500">TJ:</span><span class="font-medium">' + tj + '</span> ' +
@@ -333,7 +334,7 @@
             var syncHidden = 'hidden';
             if (item.seller_sku && inventoryData[item.seller_sku]) {
                 var si = inventoryData[item.seller_sku];
-                var sTotal = (si.TotalQtyTJ || 0) + (si.TotalQtyCDMX || 0) + (si.TotalQtyMTY || 0);
+                var sTotal = (si.MainQtyCDMX || 0) + (si.MainQtyMTY || 0);
                 if (sTotal !== item.available_quantity && sTotal > 0) syncHidden = '';
             }
 
@@ -387,8 +388,9 @@
             } else {
                 var inv = inventoryData[item.seller_sku];
                 if (inv) {
-                    var tj = inv.TotalQtyTJ || 0, cdmx = inv.TotalQtyCDMX || 0, mty = inv.TotalQtyMTY || 0;
-                    var total = tj + cdmx + mty;
+                    var tj = inv.MainQtyTJ || 0, cdmx = inv.MainQtyCDMX || 0, mty = inv.MainQtyMTY || 0;
+                    // TJ informativo, total = solo MTY + CDMX
+                    var total = cdmx + mty;
                     invContent = '<div class="text-xs leading-tight">' +
                         '<span class="text-gray-500">TJ:</span><span class="font-medium">' + tj + '</span> ' +
                         '<span class="text-gray-500">CDMX:</span><span class="font-medium">' + cdmx + '</span> ' +
@@ -591,8 +593,9 @@
     window.syncStock = function(itemId, sku) {
         if (!sku || !inventoryData[sku]) return;
         var inv = inventoryData[sku];
-        var tj = inv.TotalQtyTJ || 0, cdmx = inv.TotalQtyCDMX || 0, mty = inv.TotalQtyMTY || 0;
-        var total = tj + cdmx + mty;
+        var tj = inv.MainQtyTJ || 0, cdmx = inv.MainQtyCDMX || 0, mty = inv.MainQtyMTY || 0;
+        // TJ informativo, total = solo MTY + CDMX
+        var total = cdmx + mty;
         var safeQty = Math.floor(total * 0.6);
         var item = allItems.find(function(i) { return i.id === itemId; });
         var currentStock = item ? item.available_quantity : '?';

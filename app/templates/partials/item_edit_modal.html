@@ -496,10 +496,11 @@ updateChangeCounter();
                 errorEl.classList.remove('hidden');
                 return;
             }
-            var tj = data.TotalQtyTJ || 0;
-            var cdmx = data.TotalQtyCDMX || 0;
-            var mty = data.TotalQtyMTY || 0;
-            var total = tj + cdmx + mty;
+            var tj = data.MainQtyTJ || 0;
+            var cdmx = data.MainQtyCDMX || 0;
+            var mty = data.MainQtyMTY || 0;
+            // TJ informativo, total vendible = solo MTY + CDMX
+            var total = cdmx + mty;
             document.getElementById('inv-cdmx').textContent = cdmx;
             document.getElementById('inv-tj').textContent = tj;
             document.getElementById('inv-mty').textContent = mty;

@@ -260,9 +260,9 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
     for base, original_skus in base_to_skus.items():
         d = base_data.get(base)
         inv = {
-            "MTY": (d.get("TotalQtyMTY", 0) or 0) if d else 0,
-            "CDMX": (d.get("TotalQtyCDMX", 0) or 0) if d else 0,
-            "TJ": (d.get("TotalQtyTJ", 0) or 0) if d else 0,
+            "MTY": (d.get("MainQtyMTY", 0) or 0) if d else 0,
+            "CDMX": (d.get("MainQtyCDMX", 0) or 0) if d else 0,
+            "TJ": (d.get("MainQtyTJ", 0) or 0) if d else 0,
         }
         for sku in original_skus:
             results[sku] = inv

@@ -540,12 +540,33 @@ class MeliClient:
         return await self.get(f"/advertising/product_ads/campaigns/{campaign_id}", params=params)
 
     async def get_all_active_item_ids(self) -> list[str]:
-        """Obtiene todos los item_ids activos del seller usando scroll (sin limite de offset)."""
+        """Obtiene todos los item_ids activos del seller usando scroll."""
+        return await self._get_item_ids_by_status("active")
+
+    async def get_all_item_ids_by_statuses(self, statuses: list[str]) -> list[str]:
+        """Obtiene item_ids para multiples statuses (active, paused, etc.)."""
+        import asyncio
+        results = await asyncio.gather(
+            *[self._get_item_ids_by_status(s) for s in statuses],
+            return_exceptions=True,
+        )
+        all_ids = []
+        seen = set()
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            for iid in r:
+                if iid not in seen:
+                    seen.add(iid)
+                    all_ids.append(iid)
+        return all_ids
+
+    async def _get_item_ids_by_status(self, status: str) -> list[str]:
+        """Scroll para obtener todos los item_ids de un status dado."""
         all_ids: list[str] = []
-        # Primera pagina con search_type=scan para obtener scroll_id
         data = await self.get(
             f"/users/{self.user_id}/items/search",
-            params={"status": "active", "limit": 100, "search_type": "scan"},
+            params={"status": status, "limit": 100, "search_type": "scan"},
         )
         all_ids.extend(data.get("results", []))
         total = data.get("paging", {}).get("total", 0)
@@ -554,7 +575,7 @@ class MeliClient:
         while scroll_id and len(all_ids) < total:
             data = await self.get(
                 f"/users/{self.user_id}/items/search",
-                params={"status": "active", "limit": 100, "search_type": "scan",
+                params={"status": status, "limit": 100, "search_type": "scan",
                          "scroll_id": scroll_id},
             )
             results = data.get("results", [])

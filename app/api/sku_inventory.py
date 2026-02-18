@@ -119,14 +119,15 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
                 actual_group = "ic"
                 break
 
-        mty = row.get("TotalQtyMTY", 0) or 0
-        cdmx = row.get("TotalQtyCDMX", 0) or 0
-        tj = row.get("TotalQtyTJ", 0) or 0
+        mty = row.get("MainQtyMTY", 0) or 0
+        cdmx = row.get("MainQtyCDMX", 0) or 0
+        tj = row.get("MainQtyTJ", 0) or 0
         target = gr if actual_group == "gr" else ic
         target["mty"] += mty
         target["cdmx"] += cdmx
         target["tj"] += tj
-        target["total"] += mty + cdmx + tj
+        # TJ es solo informativo, no cuenta para total vendible
+        target["total"] += mty + cdmx
 
     sellable_total = gr["total"] + ic["total"]
 
