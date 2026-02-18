@@ -5160,33 +5160,57 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
         pct = max(0.0, min(1.0, pct))
 
         # 1. Obtener variaciones con SKUs
-        # Primero intentar con las variaciones que el cliente envía (ya tienen SKUs correctos).
-        # Si no hay, hacer fetch del item en MeLi.
-        client_vars = body.get("variations", [])  # [{id, sku, stock, combo}, ...]
+        # El batch fetch (GET /items?ids=) no devuelve attributes por variacion.
+        # GET /items/{id}/variations/{var_id} SI devuelve seller_custom_field real.
+        client_vars = body.get("variations", [])  # [{id, sku, stock, combo}, ...] para combos
+        client_var_map = {str(cv.get("id")): cv for cv in client_vars}
 
-        if client_vars:
-            # Convertir formato del cliente al formato interno
-            raw_vars = []
-            for cv in client_vars:
-                raw_vars.append({
-                    "id": cv.get("id"),
-                    "seller_custom_field": cv.get("sku", ""),
-                    "available_quantity": cv.get("stock", 0),
-                    "_combo_override": cv.get("combo", ""),
-                    "attribute_combinations": [],
-                    "attributes": [],
-                })
-        else:
-            item = await client.get(f"/items/{item_id}")
-            raw_vars = item.get("variations", [])
-
-        if not raw_vars:
+        # Fetch item individual para obtener variation IDs y attribute_combinations
+        item = await client.get(f"/items/{item_id}")
+        raw_vars_base = item.get("variations", [])
+        if not raw_vars_base:
             return JSONResponse({"ok": False, "detail": "El item no tiene variaciones"}, status_code=400)
+
+        # Fetch detalle de cada variacion via /items/{id}/variations/{var_id}
+        # Este endpoint devuelve seller_custom_field por variacion (el batch no lo hace)
+        access_token = client.access_token
+
+        async def _fetch_variation_detail(var_id, http_client):
+            try:
+                resp = await http_client.get(
+                    f"https://api.mercadolibre.com/items/{item_id}/variations/{var_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception:
+                pass
+            return None
+
+        async with httpx.AsyncClient() as http_pre:
+            var_details = await asyncio.gather(
+                *[_fetch_variation_detail(v.get("id"), http_pre) for v in raw_vars_base]
+            )
+
+        # Construir raw_vars enriquecidas: SKU real del detail + combo/stock del cliente
+        raw_vars = []
+        for base_v, detail in zip(raw_vars_base, var_details):
+            merged = dict(base_v)
+            if detail:
+                scf = detail.get("seller_custom_field")
+                if scf and scf != "None":
+                    merged["seller_custom_field"] = scf
+                if detail.get("attributes"):
+                    merged["attributes"] = detail["attributes"]
+            cv = client_var_map.get(str(base_v.get("id")), {})
+            if cv.get("combo"):
+                merged["_combo_override"] = cv["combo"]
+            raw_vars.append(merged)
 
         # 2. Para cada variacion: obtener SKU y consultar BM
         async def _fetch_var_bm(v: dict, http: httpx.AsyncClient):
             v_sku = _get_var_sku(v)
-            # Si hay combo override (desde cliente), usarlo directamente
             if v.get("_combo_override"):
                 combo_str = v["_combo_override"]
             else:
@@ -5274,6 +5298,53 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             "results": list(var_results),
             "updated_count": sum(1 for r in var_results if r["updated"]),
         })
+    finally:
+        await client.close()
+
+
+@app.get("/api/items/{item_id}/debug-variations")
+async def debug_item_variations(item_id: str, request: Request):
+    """Debug: retorna estructura cruda de variaciones (batch vs individual) para diagnosticar SKU lookup."""
+    import httpx as _httpx
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        item = await client.get(f"/items/{item_id}")
+        variations = item.get("variations", [])
+        debug = []
+        async with _httpx.AsyncClient() as http:
+            for v in variations:
+                var_id = v.get("id")
+                # Fetch individual
+                individual = None
+                try:
+                    r = await http.get(
+                        f"https://api.mercadolibre.com/items/{item_id}/variations/{var_id}",
+                        headers={"Authorization": f"Bearer {client.access_token}"},
+                        timeout=10.0,
+                    )
+                    if r.status_code == 200:
+                        individual = r.json()
+                except Exception as ex:
+                    individual = {"error": str(ex)}
+
+                debug.append({
+                    "id": var_id,
+                    "from_batch": {
+                        "available_quantity": v.get("available_quantity"),
+                        "seller_custom_field": v.get("seller_custom_field"),
+                        "attribute_combinations": v.get("attribute_combinations", []),
+                        "attributes": v.get("attributes", []),
+                        "_get_var_sku_result": _get_var_sku(v),
+                    },
+                    "from_individual": {
+                        "seller_custom_field": individual.get("seller_custom_field") if individual else None,
+                        "attributes": individual.get("attributes", []) if individual else [],
+                        "_get_var_sku_result": _get_var_sku(individual) if individual and "id" in individual else "N/A",
+                    } if individual else "fetch failed",
+                })
+        return JSONResponse({"item_id": item_id, "variation_count": len(variations), "variations": debug})
     finally:
         await client.close()
 
