@@ -86,6 +86,7 @@
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
                 {% if p.get('has_variations') %}
                 <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                        data-variations='{{ p.variations | tojson }}'
                         class="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg font-medium active:bg-indigo-700 min-h-[36px]"
                         title="Sincroniza cada variacion con su propio SKU en BM (seguro)">
                     Sync Var. ({{ p.variations|length }})
@@ -169,6 +170,7 @@
                         <div class="flex items-center justify-center gap-1">
                             {% if p.get('has_variations') %}
                             <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                                    data-variations='{{ p.variations | tojson }}'
                                     class="px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs font-medium transition"
                                     title="Sync seguro por variacion">
                                 Sync Var.
@@ -252,6 +254,7 @@
                 {% if p.get('has_variations') %}
                 <!-- Multi-variacion: NO poner todo en 0; usar sync por variacion -->
                 <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                        data-variations='{{ p.variations | tojson }}'
                         class="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg font-medium active:bg-indigo-700 min-h-[36px]"
                         title="Sincroniza cada variacion con su propio stock BM">
                     Sync Var. ({{ p.variations|length }})
@@ -331,6 +334,7 @@
                         <div class="flex items-center justify-center gap-1 flex-wrap">
                             {% if p.get('has_variations') %}
                             <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                                    data-variations='{{ p.variations | tojson }}'
                                     class="px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs font-medium transition"
                                     title="Sync por variacion — seguro">
                                 Sync Var.
@@ -762,17 +766,30 @@ function activateItem(itemId, bmTotal, status, btn) {
 // --- Sync per-variation stocks (multi-variation items) ---
 function syncVariationStocks(itemId, btn) {
     btn.disabled = true;
-    var origText = btn.textContent;
+    var origText = btn.textContent.trim();
     btn.textContent = '...';
-    var msgEl = document.getElementById('restock-msg-' + itemId)
-             || document.getElementById('restock-msg-d-' + itemId)
-             || document.getElementById('risk-msg-' + itemId)
-             || document.getElementById('risk-msg-d-' + itemId);
+
+    // Leer variaciones desde data-attribute (ya tienen SKUs correctos desde el server)
+    var knownVariations = [];
+    try { knownVariations = JSON.parse(btn.getAttribute('data-variations') || '[]'); } catch(e) {}
+
+    // Panel de resultados (se inserta junto al boton)
+    var panelId = 'var-panel-' + itemId;
+    var panel = document.getElementById(panelId);
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.id = panelId;
+        panel.style.cssText = 'position:absolute;z-index:50;background:#fff;border:1px solid #c7d2fe;border-radius:8px;padding:8px 10px;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.15);min-width:240px;max-width:340px;right:0;top:calc(100% + 4px)';
+        btn.parentElement.style.position = 'relative';
+        btn.parentElement.appendChild(panel);
+    }
+    panel.innerHTML = '<span style="color:#6366f1;font-weight:600">Consultando BM...</span>';
+    panel.style.display = 'block';
 
     fetch('/api/items/' + itemId + '/sync-variation-stocks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-        body: JSON.stringify({pct: 0.6})
+        body: JSON.stringify({pct: 0.6, variations: knownVariations})
     })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
@@ -781,41 +798,52 @@ function syncVariationStocks(itemId, btn) {
         var results = d.results || [];
         var updated = results.filter(function(v) { return v.updated; }).length;
         var errors  = results.filter(function(v) { return v.error; }).length;
-
-        // Build tooltip with per-variation summary
-        var lines = results.map(function(v) {
-            var status = v.error ? '✗' : '✓';
-            var combo = v.combo ? v.combo.substring(0, 20) : v.sku;
-            return status + ' ' + combo + ': BM=' + v.bm_total + ' → MeLi=' + v.meli_qty;
-        });
-        var summary = updated + '/' + results.length + ' var. OK'
-                    + (errors > 0 ? ' (' + errors + ' err)' : '');
+        var summary = updated + '/' + results.length + ' var. OK' + (errors > 0 ? ' (' + errors + ' err)' : '');
 
         btn.textContent = summary;
-        btn.title = lines.join('\n');
         btn.className = btn.className
             .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
             .replace('hover:bg-indigo-700', errors > 0 ? 'hover:bg-yellow-600' : 'hover:bg-green-700')
             .replace('active:bg-indigo-700', '');
 
-        if (msgEl) {
-            msgEl.textContent = summary;
-            msgEl.className = 'text-[10px] ml-1 font-semibold ' + (errors > 0 ? 'text-yellow-600' : 'text-green-600');
-            // Show detail tooltip on hover via title attribute
-            msgEl.title = lines.join('\n');
-        }
+        // Construir panel con tabla de resultados por variacion
+        var rows = results.map(function(v) {
+            var icon = v.error ? '❌' : (v.bm_total === 0 ? '⚠️' : '✅');
+            var skuLabel = v.sku ? ('<span style="color:#64748b;font-size:10px">' + v.sku + '</span>') : '';
+            var comboShort = (v.combo || ('Var ' + v.variation_id)).substring(0, 25);
+            var detail = v.error
+                ? '<span style="color:#dc2626">' + v.error + '</span>'
+                : 'BM <b>' + v.bm_total + '</b> → MeLi <b>' + v.meli_qty + '</b>';
+            return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f1f5f9">'
+                + icon + ' <div style="flex:1"><div>' + comboShort + '</div>' + skuLabel + '</div>'
+                + '<div style="text-align:right">' + detail + '</div></div>';
+        }).join('');
+
+        panel.innerHTML = '<div style="font-weight:600;color:#4338ca;margin-bottom:6px">'
+            + summary + ' <span style="float:right;cursor:pointer;color:#94a3b8" onclick="document.getElementById(\'' + panelId + '\').style.display=\'none\'">✕</span></div>'
+            + rows
+            + '<div style="color:#94a3b8;font-size:10px;margin-top:5px">Sincronizado al 60% del stock BM</div>';
 
         var row = document.getElementById('restock-m-' + itemId)
                || document.getElementById('restock-d-' + itemId)
                || document.getElementById('risk-m-' + itemId)
                || document.getElementById('risk-d-' + itemId);
         if (row) row.classList.add('opacity-60');
+
+        // Auto-cerrar panel al click fuera
+        setTimeout(function() {
+            document.addEventListener('click', function closePnl(e) {
+                if (!panel.contains(e.target) && e.target !== btn) {
+                    panel.style.display = 'none';
+                    document.removeEventListener('click', closePnl);
+                }
+            });
+        }, 100);
     })
     .catch(function(e) {
         btn.textContent = origText;
         btn.disabled = false;
-        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
-        else { alert('Error sync variaciones: ' + e.message); }
+        panel.innerHTML = '<span style="color:#dc2626">Error: ' + e.message + '</span>';
     });
 }
 

@@ -5159,19 +5159,41 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
         pct = float(body.get("pct", 0.6))
         pct = max(0.0, min(1.0, pct))
 
-        # 1. Fetch item de MeLi para obtener variaciones + SKUs
-        item = await client.get(f"/items/{item_id}")
-        raw_vars = item.get("variations", [])
+        # 1. Obtener variaciones con SKUs
+        # Primero intentar con las variaciones que el cliente envía (ya tienen SKUs correctos).
+        # Si no hay, hacer fetch del item en MeLi.
+        client_vars = body.get("variations", [])  # [{id, sku, stock, combo}, ...]
+
+        if client_vars:
+            # Convertir formato del cliente al formato interno
+            raw_vars = []
+            for cv in client_vars:
+                raw_vars.append({
+                    "id": cv.get("id"),
+                    "seller_custom_field": cv.get("sku", ""),
+                    "available_quantity": cv.get("stock", 0),
+                    "_combo_override": cv.get("combo", ""),
+                    "attribute_combinations": [],
+                    "attributes": [],
+                })
+        else:
+            item = await client.get(f"/items/{item_id}")
+            raw_vars = item.get("variations", [])
+
         if not raw_vars:
             return JSONResponse({"ok": False, "detail": "El item no tiene variaciones"}, status_code=400)
 
         # 2. Para cada variacion: obtener SKU y consultar BM
         async def _fetch_var_bm(v: dict, http: httpx.AsyncClient):
             v_sku = _get_var_sku(v)
-            combos = []
-            for ac in v.get("attribute_combinations", []):
-                combos.append(f"{ac.get('name','')}: {ac.get('value_name','')}")
-            combo_str = ", ".join(combos) if combos else f"Var {v.get('id','')}"
+            # Si hay combo override (desde cliente), usarlo directamente
+            if v.get("_combo_override"):
+                combo_str = v["_combo_override"]
+            else:
+                combos = []
+                for ac in v.get("attribute_combinations", []):
+                    combos.append(f"{ac.get('name','')}: {ac.get('value_name','')}")
+                combo_str = ", ".join(combos) if combos else f"Var {v.get('id','')}"
             result = {
                 "variation_id": v.get("id"),
                 "sku": v_sku,
