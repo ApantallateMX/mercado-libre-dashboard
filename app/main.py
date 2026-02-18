@@ -3,7 +3,7 @@ import json
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
@@ -1340,6 +1340,7 @@ _SALE_PRICE_CACHE_TTL = 300  # 5 min
 _stock_issues_cache: dict[str, tuple[float, dict]] = {}
 _STOCK_ISSUES_TTL = 300      # 5 min
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
+_synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
 
 
 _ALL_MELI_STATUSES = ["active", "paused", "closed", "inactive", "under_review"]
@@ -1842,6 +1843,7 @@ async def products_inventory_partial(
             if p.get("units", 0) > 0
             and p.get("available_quantity", 0) == 0
             and (p.get("_bm_total") or 0) > 0
+            and p.get("id") not in _synced_alert_items
         ]
         stock_alerts.sort(key=lambda x: x.get("units", 0), reverse=True)
 
@@ -2042,6 +2044,15 @@ async def products_inventory_partial(
         })
     finally:
         await client.close()
+
+
+# --- Mark alert item as synced (evita duplicar trabajo entre usuarios) ---
+
+@app.post("/partials/mark-synced/{item_id}")
+async def mark_alert_synced(item_id: str):
+    """Registra un item como sincronizado; se excluye de alertas hasta que la cache expire."""
+    _synced_alert_items.add(item_id)
+    return Response(status_code=204)
 
 
 # --- Legacy redirects (old tabs → new inventory endpoint) ---

@@ -868,6 +868,22 @@ window.showPriceEditor = function(el, itemId, currentPrice) {
 };
 
 /* --- Alert stock sync --- */
+function _removeAlertRows(itemId) {
+    var rowMobile = document.getElementById('alert-row-' + itemId);
+    var rowDesktop = document.getElementById('alert-row-d-' + itemId);
+    if (rowMobile) rowMobile.remove();
+    if (rowDesktop) rowDesktop.remove();
+    // Actualizar contador en encabezado
+    var section = document.getElementById('alert-section');
+    if (!section) return;
+    var remaining = section.querySelectorAll('.alert-row, .alert-card').length;
+    if (remaining === 0) { section.remove(); return; }
+    var h3 = section.querySelector('h3');
+    if (h3) h3.textContent = 'Ventas Perdidas: ' + remaining + ' producto' + (remaining !== 1 ? 's' : '') + ' sin stock';
+    var bulkBtn = document.getElementById('bulk-sync-btn');
+    if (bulkBtn && !bulkBtn.disabled) bulkBtn.textContent = 'Sincronizar todos (' + remaining + ')';
+}
+
 window.syncAlertItem = function(itemId, bmQty, btn) {
     var msgEl = document.getElementById('alert-msg-' + itemId);
     var safeQty = Math.floor(bmQty * 0.6);
@@ -880,11 +896,10 @@ window.syncAlertItem = function(itemId, bmQty, btn) {
     })
     .then(function(r) {
         if (r.ok) {
-            btn.textContent = 'OK';
-            btn.className = 'px-2 py-0.5 bg-green-600 text-white rounded font-medium';
-            if (msgEl) { msgEl.textContent = 'Stock: ' + safeQty; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
-            var row = document.getElementById('alert-row-' + itemId);
-            if (row) row.classList.add('opacity-50');
+            // Marcar en servidor (excluye para otros usuarios al recargar)
+            fetch('/partials/mark-synced/' + itemId, {method: 'POST', headers: {'ngrok-skip-browser-warning': 'true'}});
+            // Quitar fila del DOM inmediatamente
+            _removeAlertRows(itemId);
         } else {
             return r.text().then(function(t) {
                 try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
@@ -893,6 +908,7 @@ window.syncAlertItem = function(itemId, bmQty, btn) {
         }
     })
     .catch(function(e) {
+        btn.disabled = false;
         btn.textContent = 'Error';
         btn.className = 'px-2 py-0.5 bg-red-600 text-white rounded font-medium';
         if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
@@ -926,8 +942,9 @@ window.bulkSyncAlerts = function() {
             done++;
             if (!r.ok) errors++;
             else {
-                var row = document.getElementById('alert-row-' + item.id);
-                if (row) row.classList.add('opacity-50');
+                // Marcar en servidor y quitar del DOM
+                fetch('/partials/mark-synced/' + item.id, {method: 'POST', headers: {'ngrok-skip-browser-warning': 'true'}});
+                _removeAlertRows(item.id);
             }
             updateProgress();
             if (done === total) {
