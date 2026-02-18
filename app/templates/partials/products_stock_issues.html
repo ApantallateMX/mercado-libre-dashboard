@@ -705,10 +705,14 @@ function bulkSyncRestock() {
 }
 
 // --- Risk: set stock to 0 ---
+function _setRiskMsg(itemId, msg, cls) {
+    document.querySelectorAll('[id="risk-msg-' + itemId + '"], [id="risk-msg-d-' + itemId + '"]').forEach(function(el) {
+        el.textContent = msg; el.className = cls;
+    });
+}
 function setStockZero(itemId, btn) {
     btn.disabled = true;
     btn.textContent = '...';
-    var msgEl = document.getElementById('risk-msg-' + itemId) || document.getElementById('risk-msg-d-' + itemId);
     fetch('/api/items/' + itemId + '/stock', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
@@ -717,7 +721,7 @@ function setStockZero(itemId, btn) {
     .then(function(r) {
         if (r.ok) {
             btn.textContent = 'OK';
-            if (msgEl) { msgEl.textContent = 'Stock→0'; msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+            _setRiskMsg(itemId, 'Stock→0', 'text-[10px] ml-1 text-green-600 font-semibold');
             setTimeout(function() { _removeStockRows(itemId); }, 1000);
         } else {
             return r.text().then(function(t) {
@@ -729,7 +733,8 @@ function setStockZero(itemId, btn) {
     .catch(function(e) {
         btn.textContent = 'Error';
         btn.disabled = false;
-        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+        _setRiskMsg(itemId, e.message, 'text-[10px] ml-1 text-red-600');
+        alert('Error Stock→0 ' + itemId + ':\n' + e.message);
     });
 }
 

@@ -710,14 +710,22 @@ class MeliClient:
 
     async def update_item_stock(self, item_id: str, quantity: int) -> dict:
         """Actualiza el stock de un item.
-        Si el item tiene variaciones, MeLi devuelve 'not modifiable' al actualizar
-        available_quantity del item raiz. En ese caso, actualizamos todas las variaciones.
+        Si el item tiene variaciones, MeLi devuelve un error de 'not modifiable' o
+        'available_quantity' al actualizar el item raiz. En ese caso, actualizamos
+        todas las variaciones individualmente con la misma cantidad.
         """
+        _VAR_ERROR_KEYWORDS = (
+            "not modifiable", "not_modifiable",
+            "available_quantity", "variation",
+            "cannot_update", "cannot update",
+        )
         try:
             return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
         except MeliApiError as e:
             err_msg = str(e).lower()
-            if "not modifiable" not in err_msg and "not_modifiable" not in err_msg:
+            body_str = str(e.body).lower() if e.body else ""
+            combined = err_msg + " " + body_str
+            if not any(kw in combined for kw in _VAR_ERROR_KEYWORDS):
                 raise
         # Item tiene variaciones → obtener y actualizar cada variacion con la misma cantidad
         item_data = await self.get(f"/items/{item_id}")
