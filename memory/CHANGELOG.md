@@ -1,5 +1,48 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-02-18 — Fix: BM variaciones corregido → items multi-variacion ya no son falsos positivos en Riesgo
+
+### Problema resuelto
+MLM3018881010 aparecia en "Riesgo Sobreventa" con Stock MeLi=53 (suma total) y BM=0.
+Pero Negro (SHIL000287) tenia BM=21 → no era riesgo real. El parent SKU (SHIL000286=Dorado)
+solo tenia BM=0, ignorando las otras variaciones.
+
+### Cambios
+- **`app/main.py` `_get_bm_stock_cached`**: ahora fetcha BM de SKUs de CADA variacion para items con `has_variations=True`
+- **`app/main.py` `_apply_bm_stock`**: para items con variaciones, suma BM de todas las variaciones individuales como `_bm_total`; cada `v["_bm_total"]` es el BM de esa variacion especifica
+- **`app/templates/partials/products_stock_issues.html`**:
+  - Risk desktop: columna Stock MeLi → "por var. 👁" para items con variaciones
+  - Risk mobile: igual, muestra link en lugar del total confuso
+  - `showVarStockPanel`: si variaciones tienen `_bm_total`, muestra columna BM+MeLi juntos
+
+### Resultado
+- Falso positivo eliminado: BM suma = 21 > 0 → item excluido de oversell_risk
+- Items con TODAS variaciones BM=0 siguen apareciendo correctamente en Riesgo
+
+---
+
+## 2026-02-18 — Feat: Sync stock por variacion individual (items multi-variacion)
+
+### Problema resuelto
+MLM3018881010 (Dorado/Negro/Plateado): el boton "Sync 60%" consultaba el SKU del item
+y distribuia proporcionalmente, resultando en 0 para todas las variaciones porque el SKU
+del item no estaba en BM. Ahora cada variacion consulta su propio SKU.
+
+### Cambios
+- **`app/main.py`**: Nuevo endpoint `POST /api/items/{id}/sync-variation-stocks`
+  → Consulta BM Warehouse por SKU de CADA variacion independientemente
+  → Actualiza SOLO esa variacion (no toca las demas)
+  → `PUT /api/items/{id}/stock` devuelve 409 si item tiene variaciones
+- **`app/services/meli_client.py`**:
+  → `update_item_stock()` lanza `ValueError` para items con variaciones
+  → Nuevo `update_variation_stocks_directly(item_id, var_updates)`: PUT variaciones especificas
+- **`app/templates/partials/products_stock_issues.html`**:
+  → Boton "Sync Var. (N)" (indigo) en Restock y Risk para items con `has_variations=True`
+  → Funcion `syncVariationStocks(itemId, btn)` muestra resultado por variacion en tooltip
+
+---
+
+
 ## 2026-02-18 — Feat: Reestructuracion completa seccion Ads (6 tabs + tiers)
 
 ### Archivos modificados
