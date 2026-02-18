@@ -709,9 +709,9 @@ class MeliClient:
         return await self.put(f"/items/{item_id}", json={"price": price})
 
     async def update_item_stock(self, item_id: str, quantity: int) -> dict:
-        """Actualiza el stock de un item SIN variaciones.
-        Para items con variaciones usar update_variation_stocks_directly() en su lugar.
-        Si el item tiene variaciones, lanza ValueError para forzar el flujo correcto.
+        """Actualiza el stock de un item.
+        Si el item tiene variaciones, MeLi devuelve 'not modifiable' al actualizar
+        available_quantity del item raiz. En ese caso, actualizamos todas las variaciones.
         """
         try:
             return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
@@ -719,12 +719,13 @@ class MeliClient:
             err_msg = str(e).lower()
             if "not modifiable" not in err_msg and "not_modifiable" not in err_msg:
                 raise
-        # Item tiene variaciones — NO redistribuir; el caller debe usar sync-variation-stocks
-        raise ValueError(
-            f"El item {item_id} tiene variaciones. "
-            "Usa /api/items/{item_id}/sync-variation-stocks para sincronizar "
-            "cada variacion con su propio SKU de BinManager."
-        )
+        # Item tiene variaciones → obtener y actualizar cada variacion con la misma cantidad
+        item_data = await self.get(f"/items/{item_id}")
+        variations = item_data.get("variations", [])
+        if not variations:
+            raise ValueError(f"Stock de {item_id} no es modificable y no tiene variaciones conocidas")
+        var_updates = [{"id": v["id"], "available_quantity": quantity} for v in variations]
+        return await self.update_variation_stocks_directly(item_id, var_updates)
 
     async def update_variation_stocks_directly(self, item_id: str, var_updates: list) -> dict:
         """Actualiza stock de variaciones especificas SIN redistribuir las demas.

@@ -366,6 +366,13 @@ async def update_stock(item_id: str, data: StockUpdate):
     try:
         result = await client.update_item_stock(item_id, data.quantity)
         return result
+    except MeliApiError as e:
+        body = e.body
+        if isinstance(body, dict):
+            detail = body.get("message") or body.get("error") or str(body)
+        else:
+            detail = str(body)
+        raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
