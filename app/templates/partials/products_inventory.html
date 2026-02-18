@@ -33,7 +33,7 @@
     </div>
     <!-- Mobile alert cards -->
     <div class="md:hidden space-y-2">
-        {% for a in stock_alerts[:10] %}
+        {% for a in stock_alerts %}
         <div class="bg-white rounded-lg p-2.5 border border-red-100" id="alert-row-{{ a.id }}">
             <div class="flex items-center gap-2 mb-2">
                 {% if a.thumbnail %}
@@ -42,10 +42,11 @@
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-gray-800 line-clamp-1">{{ a.title[:50] }}</p>
                     <p class="text-[10px] text-gray-400 font-mono">{{ a.sku or '-' }}</p>
-                    <div class="flex gap-3 text-[10px] mt-0.5">
+                    <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] mt-0.5">
                         <span class="text-gray-500">Ventas: <strong>{{ a.get('units', 0) }}</strong></span>
                         <span class="text-red-600">MeLi: <strong>0</strong></span>
                         <span class="text-green-600">BM: <strong>{{ a.get('_bm_total', 0) }}</strong></span>
+                        <span class="text-gray-400">MTY:{{ a.get('_bm_mty', 0) }} CDMX:{{ a.get('_bm_cdmx', 0) }} TJ:{{ a.get('_bm_tj', 0) }}</span>
                     </div>
                 </div>
             </div>
@@ -72,13 +73,16 @@
                     <th class="text-left py-1.5 px-2 font-medium">ID / SKU</th>
                     <th class="text-right py-1.5 px-2 font-medium">Ventas {{ alert_days }}d</th>
                     <th class="text-right py-1.5 px-2 font-medium">Stock MeLi</th>
-                    <th class="text-right py-1.5 px-2 font-medium">Stock BM</th>
+                    <th class="text-right py-1.5 px-2 font-medium">BM Total</th>
+                    <th class="text-right py-1.5 px-2 font-medium">MTY</th>
+                    <th class="text-right py-1.5 px-2 font-medium">CDMX</th>
+                    <th class="text-right py-1.5 px-2 font-medium">TJ</th>
                     <th class="text-right py-1.5 px-2 font-medium">Rev. Perdido Est.</th>
                     <th class="text-center py-1.5 px-2 font-medium">Acciones</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-red-100">
-                {% for a in stock_alerts[:10] %}
+                {% for a in stock_alerts %}
                 <tr class="hover:bg-red-100/50" id="alert-row-d-{{ a.id }}">
                     <td class="py-1.5 px-2">
                         <div class="flex items-center gap-2">
@@ -95,6 +99,9 @@
                     <td class="py-1.5 px-2 text-right font-bold text-gray-800">{{ a.get('units', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-600">0</td>
                     <td class="py-1.5 px-2 text-right font-bold text-green-600">{{ a.get('_bm_total', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right {{ 'text-green-600' if (a.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_mty', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right {{ 'text-green-600' if (a.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_cdmx', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right {{ 'text-blue-400' if (a.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_tj', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-700">
                         {% if a.get('_est_lost_revenue', 0) > 0 %}
                         ${{ "{:,.0f}".format(a._est_lost_revenue) }}
@@ -117,9 +124,6 @@
             </tbody>
         </table>
     </div>
-    {% if stock_alerts|length > 10 %}
-    <p class="text-xs text-red-500 mt-2 text-center">... y {{ stock_alerts|length - 10 }} producto(s) mas</p>
-    {% endif %}
     <span id="bulk-sync-msg" class="text-xs mt-2 block text-center"></span>
 </div>
 {% endif %}
@@ -848,7 +852,7 @@ window.syncAlertItem = function(itemId, bmQty, btn) {
 
 window.bulkSyncAlerts = function() {
     var alertData = [
-        {% for a in stock_alerts[:10] %}
+        {% for a in stock_alerts %}
         {id: '{{ a.id }}', qty: {{ a.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];

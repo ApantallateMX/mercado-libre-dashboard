@@ -1103,19 +1103,10 @@ async def items_grid_partial(
                 for coro in asyncio.as_completed(tasks):
                     queried_sku, data = await coro
                     if data:
-                        base = _extract_base_sku(queried_sku)
+                        # SOLO MainQty — AltQty mezcla stock de otros productos
                         _mty = max(0, data.get("MainQtyMTY", 0) or 0)
                         _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
                         _tj = max(0, data.get("MainQtyTJ", 0) or 0)
-                        # SIEMPRE sumar AltQty de sufijos del mismo base
-                        alt_str = data.get("AlternativeSKUs", "") or ""
-                        all_alts = [a.strip() for a in alt_str.split(",") if a.strip()]
-                        same_base = [a for a in all_alts if a.upper().startswith(base.upper())]
-                        if same_base and all_alts:
-                            ratio = len(same_base) / len(all_alts)
-                            _mty += int(max(0, data.get("AltQtyMTY", 0) or 0) * ratio)
-                            _cdmx += int(max(0, data.get("AltQtyCDMX", 0) or 0) * ratio)
-                            _tj += int(max(0, data.get("AltQtyTJ", 0) or 0) * ratio)
                         inv = {
                             "MTY": _mty,
                             "CDMX": _cdmx,
@@ -1549,24 +1540,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         if not clean:
             return sku, False
 
-        # 1a) FF exacto — SIEMPRE sumar AlternativeSKUs del mismo base
+        # 1a) FF exacto — SOLO usar MainQty (stock del ProductSKU asignado)
+        # NO usar AltQty: incluye stock de OTROS productos, no del mismo SKU
         base = _extract_base_sku(clean)
         _, data = await _ff_fetch(clean, http)
         if data:
-            _mty = max(0, data.get("MainQtyMTY", 0) or 0)
-            _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
-            _tj = max(0, data.get("MainQtyTJ", 0) or 0)
-            # Sumar AltQty proporcional de sufijos del mismo base SKU
-            alt_skus_str = data.get("AlternativeSKUs", "") or ""
-            all_alts = [a.strip() for a in alt_skus_str.split(",") if a.strip()]
-            same_base_alts = [a for a in all_alts if a.upper().startswith(base.upper())]
-            if same_base_alts and all_alts:
-                ratio = len(same_base_alts) / len(all_alts)
-                _mty += int(max(0, data.get("AltQtyMTY", 0) or 0) * ratio)
-                _cdmx += int(max(0, data.get("AltQtyCDMX", 0) or 0) * ratio)
-                _tj += int(max(0, data.get("AltQtyTJ", 0) or 0) * ratio)
-            agg_data = {"MainQtyMTY": _mty, "MainQtyCDMX": _cdmx, "MainQtyTJ": _tj}
-            if _store(sku, agg_data):
+            if _store(sku, data):
                 return sku, True
 
         # 1b) FF con sufijos
@@ -2441,19 +2420,10 @@ async def products_not_published_partial(request: Request):
                         data = resp.json()
                         if data and isinstance(data, list) and data:
                             row = data[0]
+                            # SOLO MainQty — AltQty mezcla stock de otros productos
                             _mty = max(0, row.get("MainQtyMTY", 0) or 0)
                             _cdmx = max(0, row.get("MainQtyCDMX", 0) or 0)
                             _tj = max(0, row.get("MainQtyTJ", 0) or 0)
-                            # SIEMPRE sumar AltQty de sufijos del mismo base
-                            alt_str = row.get("AlternativeSKUs", "") or ""
-                            _base = _extract_base_sku(query_sku)
-                            all_alts = [a.strip() for a in alt_str.split(",") if a.strip()]
-                            same_base = [a for a in all_alts if a.upper().startswith(_base.upper())]
-                            if same_base and all_alts:
-                                ratio = len(same_base) / len(all_alts)
-                                _mty += int(max(0, row.get("AltQtyMTY", 0) or 0) * ratio)
-                                _cdmx += int(max(0, row.get("AltQtyCDMX", 0) or 0) * ratio)
-                                _tj += int(max(0, row.get("AltQtyTJ", 0) or 0) * ratio)
                             total = _mty + _cdmx  # TJ informativo
                             if total > 0:
                                 return query_sku, {
