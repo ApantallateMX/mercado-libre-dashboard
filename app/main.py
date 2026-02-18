@@ -1586,6 +1586,18 @@ def _enrich_sku_from_orders(products: list, orders: list):
             p["sku"] = sku_map[p["id"]]
 
 
+def _get_var_sku(v: dict) -> str:
+    """Extrae SKU de una variación (seller_custom_field o SELLER_SKU attribute)."""
+    v_sku = v.get("seller_custom_field") or ""
+    if not v_sku or v_sku == "None":
+        v_sku = ""
+        for va in v.get("attributes", []):
+            if va.get("id") == "SELLER_SKU" and va.get("value_name"):
+                v_sku = va["value_name"]
+                break
+    return v_sku
+
+
 def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
     """Construye lista de productos desde item bodies con SKU y ventas."""
     products = []
@@ -1595,13 +1607,27 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
             continue
         sku = _get_item_sku(body)
         shipping = body.get("shipping", {})
+
+        # Para items con variaciones, usar el stock de la variacion especifica del SKU,
+        # no el total del item (que suma todas las variaciones).
+        # Ejemplo: SHIL000286 (Dorado=0), SHIL000287 (Negro=10), SHIL000288 (Plateado=34)
+        # item.available_quantity=44 (suma), pero SHIL000286 tiene 0.
+        raw_vars = body.get("variations", [])
+        avail_qty = body.get("available_quantity", 0)
+        if raw_vars and sku:
+            for v in raw_vars:
+                v_sku = _get_var_sku(v)
+                if v_sku and v_sku.upper() == sku.upper():
+                    avail_qty = v.get("available_quantity", 0)
+                    break
+
         p = {
             "id": iid,
             "title": body.get("title", ""),
             "thumbnail": body.get("thumbnail", ""),
             "price": body.get("price", 0),
             "original_price": body.get("original_price"),
-            "available_quantity": body.get("available_quantity", 0),
+            "available_quantity": avail_qty,
             "sku": sku,
             "permalink": body.get("permalink", ""),
             "pictures_count": len(body.get("pictures", [])),
@@ -1622,19 +1648,10 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
             p["revenue_30d"] = 0
 
         # Extraer variaciones si hay mas de 1
-        raw_vars = body.get("variations", [])
         if len(raw_vars) > 1:
             variations = []
             for v in raw_vars:
-                # SKU de variacion
-                v_sku = v.get("seller_custom_field") or ""
-                if not v_sku or v_sku == "None":
-                    v_sku = ""
-                    for va in v.get("attributes", []):
-                        if va.get("id") == "SELLER_SKU" and va.get("value_name"):
-                            v_sku = va["value_name"]
-                            break
-                # Nombre de combinacion (ej. "Talla: M, Color: Negro")
+                v_sku = _get_var_sku(v)
                 combos = []
                 for ac in v.get("attribute_combinations", []):
                     combos.append(f"{ac.get('name', '')}: {ac.get('value_name', '')}")
