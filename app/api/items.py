@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import httpx
 import asyncio
-from app.services.meli_client import get_meli_client
+from app.services.meli_client import get_meli_client, MeliApiError
 
 BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 BM_COMPANY_ID = 1
@@ -431,6 +431,13 @@ async def update_shipping(item_id: str, data: ShippingUpdate):
             shipping["logistic_type"] = data.logistic_type
         result = await client.update_item_shipping(item_id, shipping)
         return result
+    except MeliApiError as e:
+        body = e.body
+        if isinstance(body, dict):
+            detail = body.get("message") or body.get("error") or body.get("cause", [{}])[0].get("message", str(body))
+        else:
+            detail = str(body)
+        raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
     finally:
         await client.close()
 
