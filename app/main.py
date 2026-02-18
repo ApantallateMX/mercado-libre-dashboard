@@ -1513,6 +1513,23 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         else:
             to_fetch.append(sku)
 
+    # También incluir SKUs de variaciones para calcular BM correcto por variación
+    seen_skus = set(s.upper() for s in to_fetch)
+    seen_skus.update(s.upper() for s in result_map)
+    for p in products:
+        if not p.get("has_variations"):
+            continue
+        for v in p.get("variations", []):
+            v_sku = v.get("sku", "")
+            if not v_sku or v_sku.upper() in seen_skus:
+                continue
+            cached = _bm_stock_cache.get(v_sku.upper())
+            if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+                result_map[v_sku] = cached[1]
+            else:
+                to_fetch.append(v_sku)
+            seen_skus.add(v_sku.upper())
+
     if not to_fetch:
         return result_map
 
@@ -1574,12 +1591,28 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
     """Aplica datos de stock BM a la lista de productos."""
     for p in products:
-        inv = bm_map.get(p.get(sku_key))
-        if inv:
-            p["_bm_mty"] = inv["mty"]
-            p["_bm_cdmx"] = inv["cdmx"]
-            p["_bm_tj"] = inv["tj"]
-            p["_bm_total"] = inv["total"]
+        if p.get("has_variations"):
+            # Para items con variaciones: sumar BM de cada variación individual
+            tot_mty = tot_cdmx = tot_tj = 0
+            for v in p.get("variations", []):
+                v_sku = v.get("sku", "")
+                inv = bm_map.get(v_sku) if v_sku else None
+                v["_bm_total"] = inv["total"] if inv else 0
+                if inv:
+                    tot_mty += inv["mty"]
+                    tot_cdmx += inv["cdmx"]
+                    tot_tj += inv["tj"]
+            p["_bm_mty"] = tot_mty
+            p["_bm_cdmx"] = tot_cdmx
+            p["_bm_tj"] = tot_tj
+            p["_bm_total"] = tot_mty + tot_cdmx
+        else:
+            inv = bm_map.get(p.get(sku_key))
+            if inv:
+                p["_bm_mty"] = inv["mty"]
+                p["_bm_cdmx"] = inv["cdmx"]
+                p["_bm_tj"] = inv["tj"]
+                p["_bm_total"] = inv["total"]
 
 
 def _enrich_sku_from_orders(products: list, orders: list):
