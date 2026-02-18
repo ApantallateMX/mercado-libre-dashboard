@@ -36,6 +36,17 @@ def _extract_base_sku(sku: str) -> str:
     return sku
 
 
+def _bm_conditions_for_sku(sku: str) -> str:
+    """Retorna condiciones BM segun sufijo del SKU.
+    SKUs publicados como ICB/ICC incluyen todo el stock (producto dañado permitido).
+    SKUs normales (GR o sin sufijo) excluyen ICB/ICC — no son vendibles en listings regulares.
+    """
+    upper = sku.upper()
+    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+        return "GRA,GRB,GRC,ICB,ICC,NEW"
+    return "GRA,GRB,GRC,NEW"
+
+
 import re as _re
 
 def _clean_sku_for_bm(sku: str) -> str:
@@ -374,14 +385,15 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
 
     async def _fetch(sku, http):
         async with sem:
-            base = _extract_base_sku(_clean_sku_for_bm(sku))
+            clean_sku = _clean_sku_for_bm(sku)
+            base = _extract_base_sku(clean_sku)
             if not base:
                 return sku, None
             try:
                 resp = await http.post(BM_WH_URL, json={
                     "COMPANYID": 1, "SKU": base, "WarehouseID": None,
                     "LocationID": "47,62,68", "BINID": None,
-                    "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                    "Condition": _bm_conditions_for_sku(clean_sku), "ForInventory": 0, "SUPPLIERS": None,
                 }, timeout=15.0)
                 if resp.status_code == 200:
                     rows = resp.json() or []
@@ -1093,13 +1105,13 @@ async def items_grid_partial(
 
         if sku_to_items:
             sem = asyncio.Semaphore(10)
-            async def _fetch_inv(base_sku: str, http: _httpx.AsyncClient):
+            async def _fetch_inv(base_sku: str, full_sku: str, http: _httpx.AsyncClient):
                 async with sem:
                     try:
                         resp = await http.post(BM_WH_URL, json={
                             "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
                             "LocationID": "47,62,68", "BINID": None,
-                            "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                            "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
                         }, timeout=15.0)
                         if resp.status_code == 200:
                             rows = resp.json() or []
@@ -1119,7 +1131,7 @@ async def items_grid_partial(
                     return base_sku, None
 
             async with _httpx.AsyncClient() as http:
-                tasks = [_fetch_inv(base, http) for base in sku_to_items.keys()]
+                tasks = [_fetch_inv(base, sku_to_items[base]["sku"], http) for base in sku_to_items.keys()]
                 for coro in asyncio.as_completed(tasks):
                     queried_base, inv = await coro
                     if inv:
@@ -1540,7 +1552,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 resp = await http.post(BM_WH_URL, json={
                     "COMPANYID": 1, "SKU": base, "WarehouseID": None,
                     "LocationID": "47,62,68", "BINID": None,
-                    "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                    "Condition": _bm_conditions_for_sku(clean), "ForInventory": 0, "SUPPLIERS": None,
                 }, timeout=15.0)
                 if resp.status_code == 200:
                     _store_wh(sku, resp.json())
@@ -2351,7 +2363,7 @@ async def products_not_published_partial(request: Request):
                     resp = await http.post(BM_WH_URL2, json={
                         "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
                         "LocationID": "47,62,68", "BINID": None,
-                        "Condition": "GRA,GRB,GRC,ICB,ICC,NEW", "ForInventory": 0, "SUPPLIERS": None,
+                        "Condition": _bm_conditions_for_sku(base_sku), "ForInventory": 0, "SUPPLIERS": None,
                     }, timeout=10.0)
                     if resp.status_code == 200:
                         rows = resp.json() or []

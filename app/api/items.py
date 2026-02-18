@@ -8,22 +8,36 @@ from app.services.meli_client import get_meli_client
 BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 BM_COMPANY_ID = 1
 BM_LOCATION_IDS = "47,62,68"
-BM_CONDITIONS = "GRA,GRB,GRC,ICB,ICC,NEW"
+BM_CONDITIONS_GR = "GRA,GRB,GRC,NEW"           # SKUs sin sufijo IC: solo condicion buena
+BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"  # SKUs con sufijo ICB/ICC: todas las condiciones
 
 router = APIRouter(prefix="/api/items", tags=["items"])
 
 
-async def _bm_warehouse_qty(base_sku: str, client: httpx.AsyncClient) -> dict | None:
+def _bm_conditions(sku: str) -> str:
+    """Retorna el string de condiciones BM segun el sufijo del SKU.
+    SKUs publicados como ICB/ICC incluyen todo el stock.
+    SKUs normales (GR o sin sufijo) excluyen ICB/ICC — son producto dañado, no vendible.
+    """
+    upper = sku.upper()
+    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+        return BM_CONDITIONS_ALL
+    return BM_CONDITIONS_GR
+
+
+async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
     """Consulta stock real de BinManager via Warehouse endpoint.
+    Usa condiciones GR-only para SKUs normales, todas las condiciones para SKUs IC.
     Retorna dict con MainQtyMTY, MainQtyCDMX, MainQtyTJ (para compatibilidad con templates).
     """
+    base, _ = _get_base_and_type(sku)
     payload = {
         "COMPANYID": BM_COMPANY_ID,
-        "SKU": base_sku,
+        "SKU": base,
         "WarehouseID": None,
         "LocationID": BM_LOCATION_IDS,
         "BINID": None,
-        "Condition": BM_CONDITIONS,
+        "Condition": _bm_conditions(sku),
         "ForInventory": 0,
         "SUPPLIERS": None,
     }
@@ -43,7 +57,7 @@ async def _bm_warehouse_qty(base_sku: str, client: httpx.AsyncClient) -> dict | 
                     tj += qty
             if mty + cdmx + tj > 0:
                 return {"MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
-                        "WebSKU": base_sku, "ProductSKU": base_sku}
+                        "WebSKU": sku, "ProductSKU": base}
     except Exception:
         pass
     return None
@@ -214,9 +228,8 @@ async def get_inventory_bulk(skus: str = Query(..., description="Comma-separated
         return {}
 
     async def fetch_one(sku: str, client: httpx.AsyncClient):
-        """Consulta BM Warehouse endpoint para obtener stock real."""
-        base, _ = _get_base_and_type(sku)
-        data = await _bm_warehouse_qty(base, client)
+        """Consulta BM Warehouse endpoint. Condiciones segun sufijo del SKU."""
+        data = await _bm_warehouse_qty(sku, client)
         return sku, data
 
     results = {}
@@ -269,8 +282,7 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
 
     async def fetch_one(query_sku: str, client: httpx.AsyncClient):
         async with sem:
-            base, _ = _get_base_and_type(query_sku)
-            data = await _bm_warehouse_qty(base, client)
+            data = await _bm_warehouse_qty(query_sku, client)
             return query_sku, data
 
     base_data = {}
@@ -300,11 +312,12 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
 
 @router.get("/inventory/{web_sku}")
 async def get_inventory(web_sku: str):
-    """Consulta inventario BinManager para un SKU via Warehouse endpoint (stock real)."""
-    base, _ = _get_base_and_type(web_sku)
+    """Consulta inventario BinManager para un SKU via Warehouse endpoint (stock real).
+    SKUs con sufijo ICB/ICC incluyen todo el stock. SKUs GR/sin sufijo excluyen ICB/ICC.
+    """
     try:
         async with httpx.AsyncClient() as client:
-            data = await _bm_warehouse_qty(base, client)
+            data = await _bm_warehouse_qty(web_sku, client)
             if data:
                 return data
             return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku,

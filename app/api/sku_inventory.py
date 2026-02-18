@@ -19,7 +19,18 @@ BINMANAGER_INVENTORY_URL = "https://binmanager.mitechnologiesinc.com/InventoryRe
 BINMANAGER_COMPANY_ID = 1
 BINMANAGER_CONCEPT_ID = 8
 BM_LOCATION_IDS = "47,62,68"
-BM_CONDITIONS = "GRA,GRB,GRC,ICB,ICC,NEW"
+BM_CONDITIONS_GR  = "GRA,GRB,GRC,NEW"           # SKUs sin sufijo IC
+BM_CONDITIONS_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"   # SKUs con sufijo ICB/ICC
+
+
+def _bm_conditions_for_sku(sku: str) -> str:
+    """Retorna condiciones BM segun sufijo del SKU.
+    ICB/ICC pueden incluir todo el stock. GR y base solo condicion buena.
+    """
+    upper = sku.upper()
+    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+        return BM_CONDITIONS_ALL
+    return BM_CONDITIONS_GR
 
 # SKU suffix handling
 _GR_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC")
@@ -78,13 +89,15 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     import json as _json
     base = _extract_base_sku(sku)
 
+    conditions = _bm_conditions_for_sku(sku)
+
     wh_payload = {
         "COMPANYID": BINMANAGER_COMPANY_ID,
         "SKU": base,
         "WarehouseID": None,
         "LocationID": BM_LOCATION_IDS,
         "BINID": None,
-        "Condition": BM_CONDITIONS,
+        "Condition": conditions,
         "ForInventory": 0,
         "SUPPLIERS": None,
     }
@@ -94,7 +107,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "WAREHOUSEID": None,
         "LOCATIONID": BM_LOCATION_IDS,
         "BINID": None,
-        "CONDITION": BM_CONDITIONS,
+        "CONDITION": conditions,
         "FORINVENTORY": 0,
         "SUPPLIERS": None,
     }
