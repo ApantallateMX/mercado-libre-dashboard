@@ -1592,20 +1592,33 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
     """Aplica datos de stock BM a la lista de productos."""
     for p in products:
         if p.get("has_variations"):
-            # Para items con variaciones: sumar BM de cada variación individual
+            # Para items con variaciones: sumar BM de cada variación individual (si tienen SKU propio)
             tot_mty = tot_cdmx = tot_tj = 0
+            any_var_sku = False
             for v in p.get("variations", []):
                 v_sku = v.get("sku", "")
+                if v_sku:
+                    any_var_sku = True
                 inv = bm_map.get(v_sku) if v_sku else None
                 v["_bm_total"] = inv["total"] if inv else 0
                 if inv:
                     tot_mty += inv["mty"]
                     tot_cdmx += inv["cdmx"]
                     tot_tj += inv["tj"]
-            p["_bm_mty"] = tot_mty
-            p["_bm_cdmx"] = tot_cdmx
-            p["_bm_tj"] = tot_tj
-            p["_bm_total"] = tot_mty + tot_cdmx
+            if any_var_sku:
+                # Variaciones con SKU individual → usar suma de sus BMs
+                p["_bm_mty"] = tot_mty
+                p["_bm_cdmx"] = tot_cdmx
+                p["_bm_tj"] = tot_tj
+                p["_bm_total"] = tot_mty + tot_cdmx
+            else:
+                # Variaciones sin SKU individual → fallback al SKU padre
+                inv = bm_map.get(p.get(sku_key))
+                if inv:
+                    p["_bm_mty"] = inv["mty"]
+                    p["_bm_cdmx"] = inv["cdmx"]
+                    p["_bm_tj"] = inv["tj"]
+                    p["_bm_total"] = inv["total"]
         else:
             inv = bm_map.get(p.get(sku_key))
             if inv:
