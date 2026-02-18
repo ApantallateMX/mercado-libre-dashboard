@@ -550,13 +550,30 @@
 
 <script>
 // --- Helpers ---
+function _updateSectionCounts() {
+    var rCount = document.querySelectorAll('[id^="restock-d-"]').length;
+    var kCount = document.querySelectorAll('[id^="risk-d-"]').length;
+    var aCount = document.querySelectorAll('[id^="act-d-"]').length;
+    var rb = document.getElementById('bulk-restock-btn');
+    if (rb) rb.textContent = 'Sincronizar Todos (' + rCount + ')';
+    var zb = document.getElementById('bulk-zero-btn');
+    if (zb) zb.textContent = 'Stock -> 0 Todos (' + kCount + ')';
+    var pb = document.getElementById('bulk-pause-btn');
+    if (pb) pb.textContent = 'Pausar Todos (' + kCount + ')';
+    var ab = document.getElementById('bulk-activate-btn');
+    if (ab) ab.textContent = 'Activar Todos (' + aCount + ')';
+}
+
 function _removeStockRows(itemId) {
     ['restock-m', 'restock-d', 'risk-m', 'risk-d', 'act-m', 'act-d'].forEach(function(pfx) {
         var r = document.getElementById(pfx + '-' + itemId);
         if (r) {
             r.style.transition = 'opacity 0.4s';
             r.style.opacity = '0';
-            setTimeout(function() { if (r.parentNode) r.parentNode.removeChild(r); }, 450);
+            setTimeout(function() {
+                if (r.parentNode) r.parentNode.removeChild(r);
+                _updateSectionCounts();
+            }, 450);
         }
     });
 }
@@ -628,12 +645,16 @@ function syncRestockItem(itemId, bmTotal, btn) {
 }
 
 function bulkSyncRestock() {
-    var items = [
+    var allItems = [
         {% for p in restock %}
-        {% if not p.get('is_full') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{{ ',' if not loop.last else '' }}{% endif %}
+        {% if not p.get('is_full') and not p.get('has_variations') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{% if not loop.last %},{% endif %}{% endif %}
         {% endfor %}
     ].filter(Boolean);
-    if (!items.length) { alert('No hay items syncronizables (todos son FULL o variaciones).'); return; }
+    // Filtrar solo los que siguen en DOM (no procesados aún)
+    var items = allItems.filter(function(x) {
+        return document.getElementById('restock-d-' + x.id) || document.getElementById('restock-m-' + x.id);
+    });
+    if (!items.length) { alert('No hay items pendientes en Reabastecer.'); return; }
     var btn = document.getElementById('bulk-restock-btn');
     var msg = document.getElementById('bulk-restock-msg');
     btn.disabled = true;
@@ -722,21 +743,22 @@ function pauseItem(itemId, btn) {
     });
 }
 
-// --- Bulk set stock to 0 for all risk items ---
+// --- Bulk set stock to 0 for all risk items (solo los visibles en DOM) ---
 function bulkStockZeroRisk() {
-    if (!confirm('Poner stock en 0 para TODOS los productos en riesgo de sobreventa?\n\n' + {{ oversell_risk|length }} + ' productos seran afectados.')) return;
-    var items = [
-        {% for p in oversell_risk %}
-        '{{ p.id }}'{{ ',' if not loop.last else '' }}
-        {% endfor %}
-    ];
+    var allIds = [{% for p in oversell_risk %}'{{ p.id }}'{{ ',' if not loop.last else '' }}{% endfor %}];
+    var items = allIds.filter(function(id) {
+        return document.getElementById('risk-d-' + id) || document.getElementById('risk-m-' + id);
+    });
+    if (!items.length) { alert('No hay items pendientes en Riesgo Sobreventa.'); return; }
+    if (!confirm('Poner stock en 0 para ' + items.length + ' productos en riesgo?\n\n(Solo los aún no procesados)')) return;
     var btn = document.getElementById('bulk-zero-btn');
     var msg = document.getElementById('bulk-pause-msg');
     btn.disabled = true;
     btn.textContent = 'Procesando...';
     var done = 0, errors = 0, total = items.length;
     function updateProgress() {
-        msg.textContent = 'Stock->0: ' + done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        var ok = done - errors;
+        msg.textContent = 'Stock->0: ' + ok + ' OK / ' + errors + ' err (' + done + '/' + total + ')';
         msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
     }
     items.forEach(function(itemId) {
@@ -751,7 +773,8 @@ function bulkStockZeroRisk() {
             else { setTimeout(function() { _removeStockRows(itemId); }, 800); }
             updateProgress();
             if (done === total) {
-                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                var ok = done - errors;
+                btn.textContent = errors > 0 ? ok + ' OK / ' + errors + ' err' : 'Completado';
                 btn.className = btn.className.replace('bg-red-500', errors > 0 ? 'bg-yellow-500' : 'bg-green-600');
             }
         })
@@ -759,21 +782,22 @@ function bulkStockZeroRisk() {
     });
 }
 
-// --- Bulk pause all risk items ---
+// --- Bulk pause all risk items (solo los visibles en DOM) ---
 function bulkPauseRisk() {
-    if (!confirm('Pausar todos los productos en riesgo de sobreventa?\n\nEstos productos tienen stock en MeLi pero 0 en BinManager.')) return;
-    var items = [
-        {% for p in oversell_risk %}
-        '{{ p.id }}'{{ ',' if not loop.last else '' }}
-        {% endfor %}
-    ];
+    var allIds = [{% for p in oversell_risk %}'{{ p.id }}'{{ ',' if not loop.last else '' }}{% endfor %}];
+    var items = allIds.filter(function(id) {
+        return document.getElementById('risk-d-' + id) || document.getElementById('risk-m-' + id);
+    });
+    if (!items.length) { alert('No hay items pendientes en Riesgo Sobreventa.'); return; }
+    if (!confirm('Pausar ' + items.length + ' productos en riesgo de sobreventa?\n\n(Solo los aún no procesados)')) return;
     var btn = document.getElementById('bulk-pause-btn');
     var msg = document.getElementById('bulk-pause-msg');
     btn.disabled = true;
     btn.textContent = 'Pausando...';
     var done = 0, errors = 0, total = items.length;
     function updateProgress() {
-        msg.textContent = done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
+        var ok = done - errors;
+        msg.textContent = 'Pausar: ' + ok + ' OK / ' + errors + ' err (' + done + '/' + total + ')';
         msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
     }
     items.forEach(function(itemId) {
@@ -788,7 +812,8 @@ function bulkPauseRisk() {
             else { setTimeout(function() { _removeStockRows(itemId); }, 800); }
             updateProgress();
             if (done === total) {
-                btn.textContent = errors > 0 ? done + ' OK / ' + errors + ' err' : 'Completado';
+                var ok = done - errors;
+                btn.textContent = errors > 0 ? ok + ' OK / ' + errors + ' err' : 'Completado';
                 btn.className = btn.className.replace('bg-yellow-500', errors > 0 ? 'bg-yellow-600' : 'bg-green-600');
             }
         })
@@ -1019,12 +1044,17 @@ function confirmSyncVariations(itemId, confirmBtn) {
 }
 
 function bulkActivateAll() {
-    if (!confirm('Activar TODOS los productos?\n\nSe sincronizara 60% del stock BM y se activaran los pausados.\n\n' + {{ activate|length }} + ' productos seran afectados.')) return;
-    var items = [
+    var allItems = [
         {% for p in activate %}
         {id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
+    // Solo los que siguen visibles en DOM
+    var items = allItems.filter(function(x) {
+        return document.getElementById('act-d-' + x.id) || document.getElementById('act-m-' + x.id);
+    });
+    if (!items.length) { alert('No hay items pendientes en Activar.'); return; }
+    if (!confirm('Activar ' + items.length + ' productos?\n\nSe sincronizara 60% del stock BM y se activaran los pausados.')) return;
     var btn = document.getElementById('bulk-activate-btn');
     var msg = document.getElementById('bulk-activate-msg');
     btn.disabled = true;
