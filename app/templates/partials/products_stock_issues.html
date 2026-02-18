@@ -84,10 +84,18 @@
                 {% endif %}
             </div>
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                {% if p.get('has_variations') %}
+                <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                        class="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg font-medium active:bg-indigo-700 min-h-[36px]"
+                        title="Sincroniza cada variacion con su propio SKU en BM (seguro)">
+                    Sync Var. ({{ p.variations|length }})
+                </button>
+                {% else %}
                 <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
                         class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
                     Sync 60%
                 </button>
+                {% endif %}
                 <button onclick="openEditModal('{{ p.id }}')"
                         class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300 min-h-[36px]">
                     Editar
@@ -123,7 +131,12 @@
                             {% if p.thumbnail %}
                             <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
                             {% endif %}
-                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                            <div>
+                                <span class="text-gray-800 truncate max-w-[200px] text-xs block" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                                {% if p.get('has_variations') %}
+                                <span class="text-[10px] text-indigo-600 font-medium">{{ p.variations|length }} variaciones</span>
+                                {% endif %}
+                            </div>
                         </div>
                     </td>
                     <td class="px-3 py-2">
@@ -141,17 +154,31 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
-                    <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
-                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_total', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if p.get('_bm_total', 0) > 0 else 'text-gray-400' }}">
+                        {% if p.get('has_variations') %}
+                        <span class="text-indigo-500 text-[10px]">por var.</span>
+                        {% else %}
+                        {{ p.get('_bm_total', 0) }}
+                        {% endif %}
+                    </td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1">
+                            {% if p.get('has_variations') %}
+                            <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                                    class="px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs font-medium transition"
+                                    title="Sync seguro por variacion">
+                                Sync Var.
+                            </button>
+                            {% else %}
                             <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
                                     class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
                                 Sync 60%
                             </button>
+                            {% endif %}
                             <button onclick="openEditModal('{{ p.id }}')"
                                     class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
                                 Editar
@@ -222,10 +249,19 @@
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
             </div>
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                {% if p.get('has_variations') %}
+                <!-- Multi-variacion: NO poner todo en 0; usar sync por variacion -->
+                <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                        class="flex-1 py-1.5 text-xs bg-indigo-600 text-white rounded-lg font-medium active:bg-indigo-700 min-h-[36px]"
+                        title="Sincroniza cada variacion con su propio stock BM">
+                    Sync Var. ({{ p.variations|length }})
+                </button>
+                {% else %}
                 <button onclick="setStockZero('{{ p.id }}', this)"
                         class="flex-1 py-1.5 text-xs bg-red-500 text-white rounded-lg font-medium active:bg-red-600 min-h-[36px]">
                     Stock -> 0
                 </button>
+                {% endif %}
                 <button onclick="pauseItem('{{ p.id }}', this)"
                         class="flex-1 py-1.5 text-xs bg-yellow-500 text-white rounded-lg font-medium active:bg-yellow-600 min-h-[36px]">
                     Pausar
@@ -252,13 +288,20 @@
             </thead>
             <tbody class="divide-y divide-gray-100">
                 {% for p in oversell_risk %}
-                <tr class="hover:bg-yellow-50/30" id="risk-d-{{ p.id }}">
+                <tr class="{{ 'bg-indigo-50/40' if p.get('has_variations') else 'hover:bg-yellow-50/30' }}" id="risk-d-{{ p.id }}">
                     <td class="px-3 py-2">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}
                             <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
                             {% endif %}
-                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                            <div>
+                                <span class="text-gray-800 truncate max-w-[200px] text-xs block" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                                {% if p.get('has_variations') %}
+                                <span class="text-[10px] text-indigo-600 font-medium">
+                                    {{ p.variations|length }} variaciones — consultar BM por variacion
+                                </span>
+                                {% endif %}
+                            </div>
                         </div>
                     </td>
                     <td class="px-3 py-2">
@@ -276,14 +319,28 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-yellow-600">{{ p.available_quantity }}</td>
-                    <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('_bm_total', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">
+                        {% if p.get('has_variations') %}
+                        <span class="text-indigo-500 text-[10px] font-normal">por var.</span>
+                        {% else %}
+                        {{ p.get('_bm_total', 0) or 0 }}
+                        {% endif %}
+                    </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-center">
-                        <div class="flex items-center justify-center gap-1">
+                        <div class="flex items-center justify-center gap-1 flex-wrap">
+                            {% if p.get('has_variations') %}
+                            <button onclick="syncVariationStocks('{{ p.id }}', this)"
+                                    class="px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs font-medium transition"
+                                    title="Sync por variacion — seguro">
+                                Sync Var.
+                            </button>
+                            {% else %}
                             <button onclick="setStockZero('{{ p.id }}', this)"
                                     class="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs font-medium transition">
                                 Stock -> 0
                             </button>
+                            {% endif %}
                             <button onclick="pauseItem('{{ p.id }}', this)"
                                     class="px-2 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-xs font-medium transition">
                                 Pausar
@@ -699,6 +756,66 @@ function activateItem(itemId, bmTotal, status, btn) {
         btn.textContent = 'Error';
         btn.disabled = false;
         if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+    });
+}
+
+// --- Sync per-variation stocks (multi-variation items) ---
+function syncVariationStocks(itemId, btn) {
+    btn.disabled = true;
+    var origText = btn.textContent;
+    btn.textContent = '...';
+    var msgEl = document.getElementById('restock-msg-' + itemId)
+             || document.getElementById('restock-msg-d-' + itemId)
+             || document.getElementById('risk-msg-' + itemId)
+             || document.getElementById('risk-msg-d-' + itemId);
+
+    fetch('/api/items/' + itemId + '/sync-variation-stocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({pct: 0.6})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        if (!res.ok) throw new Error(res.data.detail || 'Error');
+        var d = res.data;
+        var results = d.results || [];
+        var updated = results.filter(function(v) { return v.updated; }).length;
+        var errors  = results.filter(function(v) { return v.error; }).length;
+
+        // Build tooltip with per-variation summary
+        var lines = results.map(function(v) {
+            var status = v.error ? '✗' : '✓';
+            var combo = v.combo ? v.combo.substring(0, 20) : v.sku;
+            return status + ' ' + combo + ': BM=' + v.bm_total + ' → MeLi=' + v.meli_qty;
+        });
+        var summary = updated + '/' + results.length + ' var. OK'
+                    + (errors > 0 ? ' (' + errors + ' err)' : '');
+
+        btn.textContent = summary;
+        btn.title = lines.join('\n');
+        btn.className = btn.className
+            .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
+            .replace('hover:bg-indigo-700', errors > 0 ? 'hover:bg-yellow-600' : 'hover:bg-green-700')
+            .replace('active:bg-indigo-700', '');
+
+        if (msgEl) {
+            msgEl.textContent = summary;
+            msgEl.className = 'text-[10px] ml-1 font-semibold ' + (errors > 0 ? 'text-yellow-600' : 'text-green-600');
+            // Show detail tooltip on hover via title attribute
+            msgEl.title = lines.join('\n');
+        }
+
+        var row = document.getElementById('restock-m-' + itemId)
+               || document.getElementById('restock-d-' + itemId)
+               || document.getElementById('risk-m-' + itemId)
+               || document.getElementById('risk-d-' + itemId);
+        if (row) row.classList.add('opacity-60');
+    })
+    .catch(function(e) {
+        btn.textContent = origText;
+        btn.disabled = false;
+        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+        else { alert('Error sync variaciones: ' + e.message); }
     });
 }
 

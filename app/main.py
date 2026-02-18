@@ -1676,6 +1676,7 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
                     "combo": ", ".join(combos) if combos else f"Var {v.get('id', '')}",
                 })
             p["variations"] = variations
+            p["has_variations"] = True
 
         products.append(p)
     return products
@@ -5111,7 +5112,8 @@ async def delete_item_promotion_api(item_id: str, promotion_type: str):
 
 @app.put("/api/items/{item_id}/stock")
 async def update_item_stock_api(item_id: str, request: Request):
-    """Actualiza el stock de un item."""
+    """Actualiza el stock de un item SIN variaciones.
+    Para items con variaciones, usa /api/items/{item_id}/sync-variation-stocks."""
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -5120,8 +5122,136 @@ async def update_item_stock_api(item_id: str, request: Request):
         quantity = int(body.get("quantity", 0))
         result = await client.update_item_stock(item_id, quantity)
         return {"ok": True, "quantity": quantity}
+    except ValueError as e:
+        # Item tiene variaciones — rechazar con mensaje claro
+        return JSONResponse({"ok": False, "has_variations": True, "detail": str(e)}, status_code=409)
     except Exception as e:
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
+@app.post("/api/items/{item_id}/sync-variation-stocks")
+async def sync_variation_stocks_api(item_id: str, request: Request):
+    """Sincroniza stock de CADA variacion de un item multi-variacion con su propio SKU en BinManager.
+
+    Para cada variacion:
+    1. Obtiene su SKU (SELLER_SKU o seller_custom_field)
+    2. Consulta BinManager con ese SKU base
+    3. Actualiza SOLO ESA variacion con floor(bm_stock * pct)
+       No toca las demas variaciones.
+
+    Body (optional): { "pct": 0.6 }  — porcentaje del stock BM a usar (default 60%)
+    Returns: { ok, item_id, results: [{variation_id, sku, combo, bm_total, meli_qty, updated}] }
+    """
+    import httpx
+    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        pct = float(body.get("pct", 0.6))
+        pct = max(0.0, min(1.0, pct))
+
+        # 1. Fetch item de MeLi para obtener variaciones + SKUs
+        item = await client.get(f"/items/{item_id}")
+        raw_vars = item.get("variations", [])
+        if not raw_vars:
+            return JSONResponse({"ok": False, "detail": "El item no tiene variaciones"}, status_code=400)
+
+        # 2. Para cada variacion: obtener SKU y consultar BM
+        async def _fetch_var_bm(v: dict, http: httpx.AsyncClient):
+            v_sku = _get_var_sku(v)
+            combos = []
+            for ac in v.get("attribute_combinations", []):
+                combos.append(f"{ac.get('name','')}: {ac.get('value_name','')}")
+            combo_str = ", ".join(combos) if combos else f"Var {v.get('id','')}"
+            result = {
+                "variation_id": v.get("id"),
+                "sku": v_sku,
+                "combo": combo_str,
+                "meli_stock": v.get("available_quantity", 0),
+                "bm_mty": 0,
+                "bm_cdmx": 0,
+                "bm_total": 0,
+                "meli_qty": 0,
+                "updated": False,
+                "error": None,
+            }
+            if not v_sku:
+                result["error"] = "Sin SKU en variacion"
+                return result
+            base_sku = _extract_base_sku(v_sku)
+            clean_sku = _clean_sku_for_bm(base_sku)
+            if not clean_sku:
+                result["error"] = "SKU no mapeable a BM"
+                return result
+            try:
+                resp = await http.post(BM_WH_URL, json={
+                    "COMPANYID": 1, "SKU": clean_sku, "WarehouseID": None,
+                    "LocationID": "47,62,68", "BINID": None,
+                    "Condition": _bm_conditions_for_sku(v_sku), "ForInventory": 0, "SUPPLIERS": None,
+                }, headers={"Content-Type": "application/json"}, timeout=15.0)
+                if resp.status_code == 200:
+                    rows = resp.json() or []
+                    mty = cdmx = tj = 0
+                    for row in rows:
+                        qty = row.get("QtyTotal", 0) or 0
+                        wname = (row.get("WarehouseName") or "").lower()
+                        if "monterrey" in wname or "maxx" in wname:
+                            mty += qty
+                        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+                            cdmx += qty
+                        else:
+                            tj += qty
+                    result["bm_mty"] = mty
+                    result["bm_cdmx"] = cdmx
+                    result["bm_total"] = mty + cdmx
+            except Exception as ex:
+                result["error"] = f"BM error: {ex}"
+            return result
+
+        async with httpx.AsyncClient() as http:
+            var_results = await asyncio.gather(*[_fetch_var_bm(v, http) for v in raw_vars])
+
+        # 3. Actualizar cada variacion con su propio stock BM
+        var_updates = []
+        for r in var_results:
+            qty = int(r["bm_total"] * pct)
+            r["meli_qty"] = qty
+            if r["error"]:
+                continue  # No actualizar variaciones con error en BM
+            var_updates.append({"id": r["variation_id"], "available_quantity": qty})
+
+        if var_updates:
+            try:
+                await client.update_variation_stocks_directly(item_id, var_updates)
+                # Marcar como actualizadas
+                updated_ids = {u["id"] for u in var_updates}
+                for r in var_results:
+                    if r["variation_id"] in updated_ids:
+                        r["updated"] = True
+                # Invalidar cache de stock issues para reflejar cambio
+                _synced_alert_items.add(item_id)
+                _stock_issues_cache.clear()
+            except Exception as ex:
+                for r in var_results:
+                    if not r["error"]:
+                        r["error"] = f"MeLi update error: {ex}"
+
+        return JSONResponse({
+            "ok": True,
+            "item_id": item_id,
+            "pct": pct,
+            "results": list(var_results),
+            "updated_count": sum(1 for r in var_results if r["updated"]),
+        })
     finally:
         await client.close()
 

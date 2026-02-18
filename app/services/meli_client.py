@@ -709,39 +709,29 @@ class MeliClient:
         return await self.put(f"/items/{item_id}", json={"price": price})
 
     async def update_item_stock(self, item_id: str, quantity: int) -> dict:
-        """Actualiza el stock de un item. Si tiene variaciones, distribuye entre ellas."""
+        """Actualiza el stock de un item SIN variaciones.
+        Para items con variaciones usar update_variation_stocks_directly() en su lugar.
+        Si el item tiene variaciones, lanza ValueError para forzar el flujo correcto.
+        """
         try:
             return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
         except MeliApiError as e:
             err_msg = str(e).lower()
             if "not modifiable" not in err_msg and "not_modifiable" not in err_msg:
                 raise
-        # Item tiene variaciones — obtener detalles y distribuir
-        item = await self.get(f"/items/{item_id}")
-        variations = item.get("variations", [])
-        if not variations:
-            raise MeliApiError(400, f"/items/{item_id}", "No se puede modificar stock y no tiene variaciones")
-        # Distribuir: proporcionalmente al stock actual, o igual si todos en 0
-        current_totals = [v.get("available_quantity", 0) for v in variations]
-        total_current = sum(current_totals)
-        var_updates = []
-        if total_current > 0 and len(variations) > 1:
-            # Proporcional
-            remaining = quantity
-            for i, v in enumerate(variations):
-                if i == len(variations) - 1:
-                    alloc = remaining  # ultimo se lleva el resto
-                else:
-                    alloc = round(quantity * current_totals[i] / total_current)
-                    remaining -= alloc
-                var_updates.append({"id": v["id"], "available_quantity": max(alloc, 0)})
-        else:
-            # Igual (o solo 1 variacion)
-            base = quantity // len(variations)
-            extra = quantity % len(variations)
-            for i, v in enumerate(variations):
-                alloc = base + (1 if i < extra else 0)
-                var_updates.append({"id": v["id"], "available_quantity": alloc})
+        # Item tiene variaciones — NO redistribuir; el caller debe usar sync-variation-stocks
+        raise ValueError(
+            f"El item {item_id} tiene variaciones. "
+            "Usa /api/items/{item_id}/sync-variation-stocks para sincronizar "
+            "cada variacion con su propio SKU de BinManager."
+        )
+
+    async def update_variation_stocks_directly(self, item_id: str, var_updates: list) -> dict:
+        """Actualiza stock de variaciones especificas SIN redistribuir las demas.
+
+        var_updates: list of {"id": variation_id, "available_quantity": qty}
+        Solo las variaciones listadas se modifican; el resto no cambia.
+        """
         return await self.put(f"/items/{item_id}", json={"variations": var_updates})
 
     # === Item Updates (Optimizar Listados) ===
