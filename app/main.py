@@ -1104,15 +1104,24 @@ async def items_grid_partial(
                     queried_sku, data = await coro
                     if data:
                         base = _extract_base_sku(queried_sku)
-                        # CRITICO: usar MainQty (stock propio), NO TotalQty
                         _mty = max(0, data.get("MainQtyMTY", 0) or 0)
                         _cdmx = max(0, data.get("MainQtyCDMX", 0) or 0)
                         _tj = max(0, data.get("MainQtyTJ", 0) or 0)
+                        # Si MainQty=0 vendible, verificar AlternativeSKUs del mismo base
+                        if (_mty + _cdmx) == 0:
+                            alt_str = data.get("AlternativeSKUs", "") or ""
+                            all_alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                            same_base = [a for a in all_alts if a.upper().startswith(base.upper())]
+                            if same_base and all_alts:
+                                ratio = len(same_base) / len(all_alts)
+                                _mty += int(max(0, data.get("AltQtyMTY", 0) or 0) * ratio)
+                                _cdmx += int(max(0, data.get("AltQtyCDMX", 0) or 0) * ratio)
+                                _tj += int(max(0, data.get("AltQtyTJ", 0) or 0) * ratio)
                         inv = {
                             "MTY": _mty,
                             "CDMX": _cdmx,
                             "TJ": _tj,
-                            "total": _mty + _cdmx + _tj,
+                            "total": _mty + _cdmx,  # TJ informativo
                         }
                         for iid in sku_to_items[base]["item_ids"]:
                             inventory_map[iid] = inv
@@ -1542,13 +1551,43 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             return sku, False
 
         # 1a) FF exacto
+        base = _extract_base_sku(clean)
         _, data = await _ff_fetch(clean, http)
         if data:
-            if _store(sku, data):
-                return sku, True
+            main_total = max(0, data.get("MainQtyMTY", 0) or 0) + max(0, data.get("MainQtyCDMX", 0) or 0)
+            if main_total > 0:
+                if _store(sku, data):
+                    return sku, True
+            else:
+                # MainQty=0 pero puede haber stock en AlternativeSKUs del mismo base
+                # Filtrar AlternativeSKUs que pertenecen al mismo base SKU
+                alt_skus_str = data.get("AlternativeSKUs", "") or ""
+                same_base_alts = [
+                    a.strip() for a in alt_skus_str.split(",")
+                    if a.strip() and a.strip().upper().startswith(base.upper())
+                ]
+                if same_base_alts:
+                    # Hay sufijos del mismo producto con stock — usar TotalQty
+                    # (TotalQty = Main + Alt del mismo base = stock real del producto)
+                    alt_mty = max(0, data.get("AltQtyMTY", 0) or 0)
+                    alt_cdmx = max(0, data.get("AltQtyCDMX", 0) or 0)
+                    alt_tj = max(0, data.get("AltQtyTJ", 0) or 0)
+                    # Solo sumar alt de sufijos del mismo base (no de otros SKUs)
+                    # Proporcion: same_base_alts / total_alts
+                    all_alts = [a.strip() for a in alt_skus_str.split(",") if a.strip()]
+                    if all_alts:
+                        same_ratio = len(same_base_alts) / len(all_alts)
+                    else:
+                        same_ratio = 0
+                    agg_data = {
+                        "MainQtyMTY": max(0, data.get("MainQtyMTY", 0) or 0) + int(alt_mty * same_ratio),
+                        "MainQtyCDMX": max(0, data.get("MainQtyCDMX", 0) or 0) + int(alt_cdmx * same_ratio),
+                        "MainQtyTJ": max(0, data.get("MainQtyTJ", 0) or 0) + int(alt_tj * same_ratio),
+                    }
+                    if _store(sku, agg_data):
+                        return sku, True
 
         # 1b) FF con sufijos
-        base = _extract_base_sku(clean)
         suffix_results = await asyncio.gather(
             *[_ff_fetch(f"{base}{sfx}", http) for sfx in _ALL_SUFFIXES],
             return_exceptions=True
@@ -2420,13 +2459,26 @@ async def products_not_published_partial(request: Request):
                         data = resp.json()
                         if data and isinstance(data, list) and data:
                             row = data[0]
-                            # CRITICO: usar MainQty (stock propio), NO TotalQty
-                            total = max(0, row.get("MainQtyMTY", 0) or 0) + max(0, row.get("MainQtyCDMX", 0) or 0) + max(0, row.get("MainQtyTJ", 0) or 0)
+                            _mty = max(0, row.get("MainQtyMTY", 0) or 0)
+                            _cdmx = max(0, row.get("MainQtyCDMX", 0) or 0)
+                            _tj = max(0, row.get("MainQtyTJ", 0) or 0)
+                            # Si MainQty=0, verificar AlternativeSKUs del mismo base
+                            if (_mty + _cdmx) == 0:
+                                alt_str = row.get("AlternativeSKUs", "") or ""
+                                _base = _extract_base_sku(query_sku)
+                                all_alts = [a.strip() for a in alt_str.split(",") if a.strip()]
+                                same_base = [a for a in all_alts if a.upper().startswith(_base.upper())]
+                                if same_base and all_alts:
+                                    ratio = len(same_base) / len(all_alts)
+                                    _mty += int(max(0, row.get("AltQtyMTY", 0) or 0) * ratio)
+                                    _cdmx += int(max(0, row.get("AltQtyCDMX", 0) or 0) * ratio)
+                                    _tj += int(max(0, row.get("AltQtyTJ", 0) or 0) * ratio)
+                            total = _mty + _cdmx  # TJ informativo
                             if total > 0:
                                 return query_sku, {
-                                    "mty": max(0, row.get("MainQtyMTY", 0) or 0),
-                                    "cdmx": max(0, row.get("MainQtyCDMX", 0) or 0),
-                                    "tj": max(0, row.get("MainQtyTJ", 0) or 0),
+                                    "mty": _mty,
+                                    "cdmx": _cdmx,
+                                    "tj": _tj,
                                     "total": total,
                                 }
                 except Exception:
