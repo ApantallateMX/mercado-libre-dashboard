@@ -1,0 +1,187 @@
+{% if categories %}
+{% if from_cache %}
+<div class="px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs text-blue-600 flex items-center gap-1">
+    <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+    Datos en caché (se actualizan cada 30 min)
+</div>
+{% endif %}
+
+<!-- Grafico de barras top 10 categorias -->
+<div class="px-4 py-3 border-b border-gray-200">
+    <h3 class="text-sm font-semibold text-gray-700 mb-2">Top 10 categorias por Ingresos Ads</h3>
+    <div style="position:relative;height:220px;">
+        <canvas id="cat-chart"></canvas>
+    </div>
+</div>
+
+<!-- Resumen de totales -->
+<div class="px-4 py-3 bg-gray-50 border-b border-gray-200">
+    <div class="flex flex-wrap gap-6 text-sm">
+        <span class="text-gray-600">Categorias: <strong class="text-gray-800">{{ categories|length }}</strong></span>
+        <span class="text-gray-600">Gasto total: <strong class="text-red-600">${{ "%.2f"|format(categories|sum(attribute='cost')) }}</strong></span>
+        <span class="text-gray-600">Ingresos: <strong class="text-green-600">${{ "%.2f"|format(categories|sum(attribute='revenue')) }}</strong></span>
+        <span class="text-gray-600">Unidades: <strong class="text-gray-800">{{ categories|sum(attribute='units') }}</strong></span>
+    </div>
+</div>
+
+<!-- Mobile cards -->
+<div class="md:hidden space-y-2 p-3">
+    {% for cat in categories %}
+    <div class="bg-white rounded-lg shadow p-3 cursor-pointer hover:bg-gray-50"
+         onclick="filterPerformanceByCategory('{{ cat.category_id }}', '{{ cat.category_name }}')">
+        <div class="flex items-start justify-between gap-2 mb-2">
+            <p class="text-sm font-medium text-gray-800">{{ cat.category_name }}</p>
+            <span class="text-xs px-2 py-0.5 rounded-full flex-shrink-0
+                {% if cat.roas >= 5 %}bg-green-100 text-green-700
+                {% elif cat.roas >= 2 %}bg-yellow-100 text-yellow-700
+                {% else %}bg-red-100 text-red-700{% endif %}">
+                ROAS {{ "%.2f"|format(cat.roas) }}x
+            </span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+            <div><span class="text-gray-400 block">Gasto</span><span class="font-medium text-red-600">${{ "%.0f"|format(cat.cost) }}</span></div>
+            <div><span class="text-gray-400 block">Ingresos</span><span class="font-medium text-green-600">${{ "%.0f"|format(cat.revenue) }}</span></div>
+            <div><span class="text-gray-400 block">Productos</span><span class="font-medium text-gray-800">{{ cat.count }}</span></div>
+        </div>
+        {% if cat.best_title %}
+        <p class="text-xs text-gray-400 mt-1 truncate">Mejor: {{ cat.best_title[:50] }}</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Desktop table -->
+<div class="hidden md:block overflow-x-auto">
+    <table class="w-full">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Categoria</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300"># Productos</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Gasto</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingresos</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROAS</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ACOS</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Unidades</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Clics</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Mejor Producto</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200">
+            {% for cat in categories %}
+            <tr class="hover:bg-blue-50 cursor-pointer transition"
+                onclick="filterPerformanceByCategory('{{ cat.category_id }}', '{{ cat.category_name }}')">
+                <td class="px-4 py-3">
+                    <div class="text-sm font-medium text-gray-800">{{ cat.category_name }}</div>
+                    <div class="text-xs text-gray-400">{{ cat.category_id }}</div>
+                </td>
+                <td class="px-4 py-3 text-sm text-right text-gray-800">{{ cat.count }}</td>
+                <td class="px-4 py-3 text-sm text-right font-medium text-red-600">${{ "%.2f"|format(cat.cost) }}</td>
+                <td class="px-4 py-3 text-sm text-right font-medium text-green-600">${{ "%.2f"|format(cat.revenue) }}</td>
+                <td class="px-4 py-3 text-sm text-right font-bold
+                    {% if cat.roas >= 5 %}text-green-600
+                    {% elif cat.roas >= 2 %}text-yellow-600
+                    {% else %}text-red-600{% endif %}">
+                    {{ "%.2f"|format(cat.roas) }}x
+                </td>
+                <td class="px-4 py-3 text-sm text-right font-medium
+                    {% if cat.acos <= 15 %}text-green-600
+                    {% elif cat.acos <= 30 %}text-yellow-600
+                    {% else %}text-red-600{% endif %}">
+                    {{ "%.1f"|format(cat.acos) }}%
+                </td>
+                <td class="px-4 py-3 text-sm text-right text-gray-800">{{ cat.units }}</td>
+                <td class="px-4 py-3 text-sm text-right text-gray-800">{{ cat.clicks }}</td>
+                <td class="px-4 py-3">
+                    {% if cat.best_title %}
+                    <span class="text-xs text-gray-600">{{ cat.best_title[:55] }}{% if cat.best_title|length > 55 %}...{% endif %}</span>
+                    {% else %}
+                    <span class="text-xs text-gray-400">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="px-4 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500 text-center">
+    Haz clic en una categoria para filtrar el tab <strong>Rendimiento</strong> por esa categoria
+</div>
+
+<script>
+(function() {
+    var top10 = {{ categories[:10] | tojson }};
+    var labels = top10.map(function(c) { return c.category_name.length > 25 ? c.category_name.substring(0,25)+'...' : c.category_name; });
+    var revenues = top10.map(function(c) { return c.revenue; });
+    var costs = top10.map(function(c) { return c.cost; });
+    var roas = top10.map(function(c) { return c.roas; });
+
+    var colors = roas.map(function(r) {
+        if (r >= 5) return 'rgba(16,185,129,0.7)';
+        if (r >= 2) return 'rgba(251,191,36,0.7)';
+        return 'rgba(239,68,68,0.7)';
+    });
+
+    var canvas = document.getElementById('cat-chart');
+    if (canvas) {
+        new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Ingresos ($)',
+                        data: revenues,
+                        backgroundColor: colors,
+                        borderColor: colors.map(function(c) { return c.replace('0.7','1'); }),
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        order: 2
+                    },
+                    {
+                        label: 'Gasto ($)',
+                        data: costs,
+                        backgroundColor: 'rgba(239,68,68,0.3)',
+                        borderColor: 'rgba(239,68,68,0.7)',
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        order: 3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                return ctx.dataset.label + ': $' + ctx.parsed.y.toLocaleString('es-MX', {minimumFractionDigits:2});
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { ticks: { maxRotation: 35, font: { size: 10 } }, grid: { display: false } },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { callback: function(v) { return '$' + v.toLocaleString('es-MX'); }, font: { size: 10 } }
+                    }
+                }
+            }
+        });
+    }
+})();
+</script>
+
+{% else %}
+<div class="px-6 py-8 text-center text-gray-500">
+    <svg class="mx-auto h-10 w-10 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+    </svg>
+    <p class="font-medium">No hay datos de Ads por categoria para el periodo seleccionado</p>
+    <p class="text-sm text-gray-400 mt-1">Asegurate de tener campanas activas con gasto en el periodo</p>
+</div>
+{% endif %}

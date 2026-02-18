@@ -1,9 +1,44 @@
 {% if products %}
+{% set top_candidates = products | selectattr('sold_quantity', '>', 10) | list %}
+{% set otros = products | selectattr('sold_quantity', '<=', 10) | list %}
+
+<!-- Seccion candidatos TOP -->
+{% if top_candidates %}
+<div class="px-4 py-3 bg-green-50 border-b border-green-200">
+    <div class="flex items-center justify-between gap-2 mb-2">
+        <h3 class="text-sm font-semibold text-green-800">Candidatos TOP — {{ top_candidates|length }} productos con +10 ventas organicas</h3>
+        <span class="text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded-full">Mayor potencial</span>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {% for p in top_candidates[:6] %}
+        <div class="bg-white rounded-lg p-2 flex items-center gap-3 shadow-sm">
+            {% if p.thumbnail %}
+            <img src="{{ p.thumbnail }}" alt="" class="w-10 h-10 rounded object-cover flex-shrink-0" loading="lazy">
+            {% else %}
+            <div class="w-10 h-10 rounded bg-gray-200 flex-shrink-0"></div>
+            {% endif %}
+            <div class="flex-1 min-w-0">
+                <p class="text-xs font-medium text-gray-800 truncate">{{ p.title[:50] }}{% if p.title|length > 50 %}...{% endif %}</p>
+                <p class="text-xs text-gray-500">{{ p.sold_quantity }} vendidos · ${{ "{:,.0f}".format(p.price or 0) }}</p>
+            </div>
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium flex-shrink-0">Recomendado</span>
+        </div>
+        {% endfor %}
+        {% if top_candidates|length > 6 %}
+        <div class="bg-white rounded-lg p-2 flex items-center justify-center text-xs text-gray-500">
+            +{{ top_candidates|length - 6 }} mas abajo en la tabla
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
 <div class="px-4 md:px-6 py-3 bg-blue-50 border-b border-blue-200">
     <div class="flex flex-col md:flex-row md:flex-wrap md:items-center justify-between gap-2">
         <p class="text-sm text-blue-800">
             <strong>{{ products|length }}</strong> productos activos sin publicidad
             (de {{ total_active }} activos, {{ total_with_ads }} ya tienen Ads).
+            Ordenados por mas vendidos primero.
         </p>
         <div class="flex flex-col md:flex-row items-stretch md:items-center gap-2">
             {% if campaigns %}
@@ -137,7 +172,7 @@
                     {% if p.stock == 0 %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700">Sin stock</span>
                     {% elif p.sold_quantity > 10 %}
-                    <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">Oportunidad</span>
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Recomendado</span>
                     {% else %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700">Nuevo</span>
                     {% endif %}

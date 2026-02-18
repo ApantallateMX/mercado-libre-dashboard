@@ -4435,8 +4435,10 @@ async def ads_performance_partial(
     sort: str = Query("cost"),
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1),
+    category: str = Query(""),
+    tier: str = Query("all"),
 ):
-    """Tabla unificada de rendimiento por producto con paginacion."""
+    """Tabla unificada de rendimiento por producto con paginacion, tiers y filtro categoria."""
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p class='p-6 text-center text-gray-500'>No autenticado</p>")
@@ -4444,12 +4446,19 @@ async def ads_performance_partial(
         date_from, date_to = _default_dates(date_from, date_to)
         sort_key = sort if sort in ("cost", "roas", "revenue", "clicks", "units", "acos") else "cost"
         show_all = per_page >= 9999
+        valid_tiers = ("all", "top", "medio", "bajo", "sin_venta")
+        tier_filter = tier if tier in valid_tiers else "all"
 
         # Obtener campanas como fallback
         camps = None
+        camp_name_map = {}  # campaign_id -> name
         try:
             campaigns_data = await client.get_ads_campaigns(date_from, date_to)
             camps = _enrich_campaigns(campaigns_data)
+            # Mapear campaign_id -> name para enriquecer items
+            for c in campaigns_data.get("results", []):
+                cid = str(c.get("id", c.get("campaign_id", "")))
+                camp_name_map[cid] = c.get("name", cid)
         except Exception:
             pass
 
@@ -4466,19 +4475,66 @@ async def ads_performance_partial(
                 revenue = metrics.get("total_amount", 0) or 0
                 roas = (revenue / cost) if cost > 0 else 0
                 acos = (cost / revenue * 100) if revenue > 0 else 0
+                # Tier classification
+                if units == 0:
+                    tier_val = "sin_venta"
+                elif roas >= 5:
+                    tier_val = "top"
+                elif roas >= 2:
+                    tier_val = "medio"
+                else:
+                    tier_val = "bajo"
+                camp_id = str(item.get("campaign_id", ""))
                 products.append({
                     "item_id": item.get("item_id", item.get("id", "-")),
                     "title": item.get("title", item.get("item_id", "-")),
+                    "category_id": item.get("category_id", ""),
+                    "category_name": item.get("category_name", ""),
+                    "campaign_name": camp_name_map.get(camp_id, ""),
                     "cost": cost,
                     "clicks": clicks,
                     "units": units,
                     "revenue": revenue,
                     "roas": roas,
                     "acos": acos,
+                    "tier": tier_val,
                 })
+
+            # Enriquecer category_name si falta (batch fetch)
+            missing_cat_ids = {p["category_id"] for p in products if p["category_id"] and not p["category_name"]}
+            if missing_cat_ids:
+                for cid in missing_cat_ids:
+                    if cid in _category_cache:
+                        continue
+                    try:
+                        cat = await client.get(f"/categories/{cid}")
+                        _category_cache[cid] = cat.get("name", cid)
+                    except Exception:
+                        _category_cache[cid] = cid
+                for p in products:
+                    if p["category_id"] and not p["category_name"]:
+                        p["category_name"] = _category_cache.get(p["category_id"], p["category_id"])
+
+            # Contar tiers antes de filtrar
+            tier_counts = {
+                "top": sum(1 for p in products if p["tier"] == "top"),
+                "medio": sum(1 for p in products if p["tier"] == "medio"),
+                "bajo": sum(1 for p in products if p["tier"] == "bajo"),
+                "sin_venta": sum(1 for p in products if p["tier"] == "sin_venta"),
+            }
+
+            # Aplicar filtro de tier
+            if tier_filter != "all":
+                products = [p for p in products if p["tier"] == tier_filter]
+
+            # Aplicar filtro de categoria
+            if category:
+                products = [p for p in products if p["category_id"] == category or p["category_name"] == category]
 
             products.sort(key=lambda x: x[sort_key], reverse=True)
             total_count = len(products)
+            all_products_cost = sum(p["cost"] for p in products)
+            all_products_revenue = sum(p["revenue"] for p in products)
 
             if show_all:
                 page_products = products
@@ -4490,17 +4546,27 @@ async def ads_performance_partial(
                 start = (page - 1) * per_page
                 page_products = products[start:start + per_page]
 
+            # Categorias unicas para el filtro dropdown
+            all_categories = sorted(
+                {(p["category_id"], p["category_name"]) for p in products if p["category_id"]},
+                key=lambda x: x[1]
+            )
+
             return templates.TemplateResponse("partials/ads_performance.html", {
                 "request": request,
                 "products": page_products,
-                "total_cost": sum(p["cost"] for p in products),
-                "total_revenue": sum(p["revenue"] for p in products),
+                "total_cost": all_products_cost,
+                "total_revenue": all_products_revenue,
                 "current_sort": sort_key,
                 "page": page,
                 "per_page": per_page,
                 "total_pages": total_pages,
                 "total_count": total_count,
                 "show_all": show_all,
+                "tier_filter": tier_filter,
+                "category_filter": category,
+                "tier_counts": tier_counts,
+                "all_categories": all_categories,
             })
         except Exception:
             pass
@@ -4521,6 +4587,10 @@ async def ads_performance_partial(
                 "total_pages": 1,
                 "total_count": len(camps_with_cost),
                 "show_all": False,
+                "tier_filter": "all",
+                "category_filter": "",
+                "tier_counts": {},
+                "all_categories": [],
             })
 
         return templates.TemplateResponse("partials/ads_performance.html", {
@@ -4535,6 +4605,10 @@ async def ads_performance_partial(
             "total_pages": 1,
             "total_count": 0,
             "show_all": False,
+            "tier_filter": "all",
+            "category_filter": "",
+            "tier_counts": {},
+            "all_categories": [],
         })
     finally:
         await client.close()
@@ -4737,6 +4811,210 @@ async def create_campaign_api(request: Request):
         return {"ok": True, "result": result}
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        await client.close()
+
+
+# Cache para ads-by-category: key -> (timestamp, data)
+_ads_category_cache: dict[str, tuple[float, list]] = {}
+_ADS_CATEGORY_CACHE_TTL = 1800  # 30 minutos
+
+
+@app.post("/api/ads/campaigns-with-items")
+async def create_campaign_with_items_api(request: Request):
+    """Crea campaña y asigna items TOP en un solo flujo."""
+    from app.services.meli_client import MeliApiError
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = await request.json()
+        name = body.get("name", "")
+        budget = body.get("budget", 0)
+        acos_target = body.get("acos_target")
+        item_ids = body.get("item_ids", [])
+        if not name or not budget:
+            return JSONResponse({"detail": "name y budget son requeridos"}, status_code=400)
+        # 1. Crear campaña
+        campaign = await client.create_campaign(
+            name=name,
+            budget=float(budget),
+            acos_target=acos_target,
+            status="active",
+        )
+        campaign_id = campaign.get("id", campaign.get("campaign_id"))
+        assigned_count = 0
+        errors = []
+        # 2. Asignar items en lotes de 50
+        if item_ids and campaign_id:
+            for i in range(0, len(item_ids), 50):
+                batch = item_ids[i:i+50]
+                try:
+                    result = await client.assign_items_to_campaign(batch, int(campaign_id))
+                    assigned_count += len(result.get("results", []))
+                    errors.extend(result.get("errors", []))
+                except Exception as e:
+                    errors.append({"batch_start": i, "error": str(e)})
+        return JSONResponse({
+            "ok": True,
+            "campaign_id": campaign_id,
+            "campaign_name": name,
+            "assigned_count": assigned_count,
+            "errors": errors,
+        })
+    except MeliApiError as e:
+        return JSONResponse({"detail": str(e)}, status_code=e.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/partials/ads-by-category", response_class=HTMLResponse)
+async def ads_by_category_partial(
+    request: Request,
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+):
+    """Agrupacion de metricas de ads por categoria de producto."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p class='p-6 text-center text-gray-500'>No autenticado</p>")
+    try:
+        import time as _time_mod
+        date_from, date_to = _default_dates(date_from, date_to)
+        cache_key = f"ads_cat:{date_from}:{date_to}"
+        cached = _ads_category_cache.get(cache_key)
+        if cached and (_time_mod.time() - cached[0]) < _ADS_CATEGORY_CACHE_TTL:
+            categories = cached[1]
+            return templates.TemplateResponse("partials/ads_by_category.html", {
+                "request": request,
+                "categories": categories,
+                "from_cache": True,
+            })
+
+        # 1. Obtener todos los items con metricas (paginado)
+        adv_id = await client._get_advertiser_id()
+        all_items = []
+        offset = 0
+        limit = 100
+        while True:
+            params = {
+                "metrics": "clicks,prints,cost,units_quantity,total_amount",
+                "limit": limit,
+                "offset": offset,
+            }
+            if date_from:
+                params["date_from"] = date_from
+            if date_to:
+                params["date_to"] = date_to
+            try:
+                data = await client.get(
+                    f"/advertising/advertisers/{adv_id}/product_ads/items",
+                    params=params,
+                )
+            except Exception:
+                break
+            results = data.get("results", data if isinstance(data, list) else [])
+            if not results:
+                break
+            all_items.extend(results)
+            if len(results) < limit:
+                break
+            offset += limit
+
+        # 2. Extraer item_ids únicos con métricas
+        item_id_to_metrics = {}
+        for item in all_items:
+            iid = item.get("item_id", item.get("id", ""))
+            if not iid:
+                continue
+            metrics = item.get("metrics", item)
+            item_id_to_metrics[iid] = {
+                "cost": metrics.get("cost", 0) or 0,
+                "clicks": metrics.get("clicks", 0) or 0,
+                "units": metrics.get("units_quantity", 0) or 0,
+                "revenue": metrics.get("total_amount", 0) or 0,
+                "title": item.get("title", ""),
+            }
+
+        # 3. Fetch category_id via batch (grupos de 20)
+        item_ids = list(item_id_to_metrics.keys())
+        item_cat_map = {}  # item_id -> category_id
+        item_title_map = {}  # item_id -> title (from MeLi item data)
+        for i in range(0, len(item_ids), 20):
+            batch = item_ids[i:i+20]
+            try:
+                details = await client.get_items_details(batch)
+                for d in details:
+                    body = d.get("body", d)
+                    if not body:
+                        continue
+                    iid = body.get("id", "")
+                    if iid:
+                        item_cat_map[iid] = body.get("category_id", "")
+                        item_title_map[iid] = body.get("title", item_id_to_metrics.get(iid, {}).get("title", ""))
+            except Exception:
+                pass
+
+        # 4. Lookup category names via cache
+        missing_cats = {cid for cid in item_cat_map.values() if cid and cid not in _category_cache}
+        for cid in missing_cats:
+            try:
+                cat = await client.get(f"/categories/{cid}")
+                _category_cache[cid] = cat.get("name", cid)
+            except Exception:
+                _category_cache[cid] = cid
+
+        # 5. Agrupar por category_id
+        cat_groups: dict[str, dict] = {}
+        for iid, met in item_id_to_metrics.items():
+            cat_id = item_cat_map.get(iid, "")
+            cat_name = _category_cache.get(cat_id, cat_id) if cat_id else "Sin categoría"
+            key = cat_id or "unknown"
+            if key not in cat_groups:
+                cat_groups[key] = {
+                    "category_id": cat_id,
+                    "category_name": cat_name,
+                    "count": 0,
+                    "cost": 0.0,
+                    "revenue": 0.0,
+                    "units": 0,
+                    "clicks": 0,
+                    "best_title": "",
+                    "best_revenue": 0.0,
+                }
+            g = cat_groups[key]
+            g["count"] += 1
+            g["cost"] += met["cost"]
+            g["revenue"] += met["revenue"]
+            g["units"] += met["units"]
+            g["clicks"] += met["clicks"]
+            title = item_title_map.get(iid, met.get("title", ""))
+            if met["revenue"] > g["best_revenue"]:
+                g["best_revenue"] = met["revenue"]
+                g["best_title"] = title
+
+        # 6. Calcular ROAS, ACOS, CTR
+        categories = []
+        for g in cat_groups.values():
+            cost = g["cost"]
+            revenue = g["revenue"]
+            g["roas"] = round(revenue / cost, 2) if cost > 0 else 0.0
+            g["acos"] = round(cost / revenue * 100, 1) if revenue > 0 else 0.0
+            categories.append(g)
+
+        # Ordenar por ingresos desc
+        categories.sort(key=lambda x: x["revenue"], reverse=True)
+
+        # Guardar en cache
+        _ads_category_cache[cache_key] = (_time_mod.time(), categories)
+
+        return templates.TemplateResponse("partials/ads_by_category.html", {
+            "request": request,
+            "categories": categories,
+            "from_cache": False,
+        })
     finally:
         await client.close()
 

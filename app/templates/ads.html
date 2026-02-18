@@ -3,13 +3,22 @@
 {% block title %}Mercado Ads{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Mercado Ads</h1>
-    <p class="text-gray-600">Rendimiento de tu publicidad en Mercado Libre</p>
+<div class="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Mercado Ads</h1>
+        <p class="text-gray-600 text-sm">Rendimiento de tu publicidad en Mercado Libre</p>
+    </div>
+    <button type="button" onclick="openCrearCampana()"
+            class="flex items-center gap-2 bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-yellow-500 transition text-sm shadow">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        Nueva Campana
+    </button>
 </div>
 
 <!-- Filtro de fechas -->
-<div class="bg-white p-4 rounded-lg shadow mb-6">
+<div class="bg-white p-4 rounded-lg shadow mb-4">
     <div class="flex flex-wrap gap-4 items-end">
         <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">Desde</label>
@@ -30,18 +39,18 @@
     </div>
 </div>
 
-<!-- 1. KPIs primarios (5 columnas) -->
-<div id="ads-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+<!-- KPIs primarios (5 columnas) -->
+<div id="ads-metrics" class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-3">
     {% for i in range(5) %}
-    <div class="bg-white p-6 rounded-lg shadow animate-pulse">
-        <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-        <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+    <div class="bg-white p-5 rounded-lg shadow animate-pulse">
+        <div class="h-3 bg-gray-200 rounded w-1/2 mb-2"></div>
+        <div class="h-7 bg-gray-200 rounded w-3/4"></div>
     </div>
     {% endfor %}
 </div>
 
-<!-- 2. KPIs secundarios (4 columnas, compactas) -->
-<div id="ads-metrics-2" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+<!-- KPIs secundarios (4 columnas) -->
+<div id="ads-metrics-2" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
     {% for i in range(4) %}
     <div class="bg-white p-3 rounded-lg shadow animate-pulse">
         <div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div>
@@ -50,8 +59,8 @@
     {% endfor %}
 </div>
 
-<!-- 3. Grafica Gasto vs Ingresos (compacta) -->
-<div class="bg-white rounded-lg shadow mb-6">
+<!-- Grafica Gasto vs Ingresos -->
+<div class="bg-white rounded-lg shadow mb-4">
     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
         <h2 class="text-base font-semibold text-gray-800">Gasto vs Ingresos</h2>
         <div class="flex gap-2">
@@ -73,65 +82,203 @@
     </div>
 </div>
 
-<!-- 4. Campanas (gestion con acciones) -->
-<div class="bg-white rounded-lg shadow mb-6">
-    <div class="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-        <h2 class="text-lg font-semibold text-gray-800">Campanas</h2>
-        <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Gestion</span>
+<!-- TABS DE NAVEGACION -->
+<div class="bg-white rounded-lg shadow mb-2">
+    <div class="border-b border-gray-200 overflow-x-auto">
+        <nav class="flex min-w-max" id="ads-tabs">
+            <button onclick="showTab('campaigns')" id="tab-campaigns"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600 whitespace-nowrap">
+                Campanas
+            </button>
+            <button onclick="showTab('performance')" id="tab-performance"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Rendimiento
+            </button>
+            <button onclick="showTab('by-category')" id="tab-by-category"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Por Categoria
+            </button>
+            <button onclick="showTab('burning')" id="tab-burning"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Diagnostico
+            </button>
+            <button onclick="showTab('no-ads')" id="tab-no-ads"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Sin Publicidad
+            </button>
+        </nav>
     </div>
-    <div id="ads-campaigns-table">
-        <div class="animate-pulse p-4 space-y-3">
-            {% for i in range(5) %}
-            <div class="h-12 bg-gray-200 rounded"></div>
-            {% endfor %}
+
+    <!-- Campanas -->
+    <div id="panel-campaigns">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-gray-800">Campanas</h2>
+                <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Gestion</span>
+            </div>
+            <button onclick="openCrearCampana()"
+                    class="text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 border border-yellow-300 px-3 py-1.5 rounded transition">
+                + Nueva Campana
+            </button>
+        </div>
+        <div id="ads-campaigns-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(4) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Rendimiento -->
+    <div id="panel-performance" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-gray-800">Rendimiento por Producto</h2>
+            <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Tiers + Filtros</span>
+        </div>
+        <div id="ads-performance-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(5) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Por Categoria -->
+    <div id="panel-by-category" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-gray-800">Rendimiento por Categoria</h2>
+            <span class="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">Nuevo</span>
+        </div>
+        <div id="ads-by-category-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(5) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Diagnostico (burning) -->
+    <div id="panel-burning" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-red-600">Productos sin Ventas con Gasto</h2>
+            <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Requiere atencion</span>
+        </div>
+        <div id="ads-burning-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(3) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Sin Publicidad -->
+    <div id="panel-no-ads" class="hidden">
+        <div class="px-6 py-3 border-b border-blue-100 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-blue-700">Productos Sin Publicidad</h2>
+            <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Oportunidades</span>
+        </div>
+        <div id="ads-no-ads-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(3) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
         </div>
     </div>
 </div>
 
-<!-- 5. Rendimiento por Producto (tabla unificada ordenable) -->
-<div class="bg-white rounded-lg shadow mb-6">
-    <div class="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-        <h2 class="text-lg font-semibold text-gray-800">Rendimiento por Producto</h2>
-        <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Ordenable</span>
-    </div>
-    <div id="ads-performance-table">
-        <div class="animate-pulse p-4 space-y-3">
-            {% for i in range(5) %}
-            <div class="h-12 bg-gray-200 rounded"></div>
-            {% endfor %}
+
+<!-- MODAL CREAR CAMPANA -->
+<div id="modal-crear-campana" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <!-- Overlay -->
+    <div class="absolute inset-0 bg-black bg-opacity-50" onclick="closeCrearCampana()"></div>
+    <!-- Modal -->
+    <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-gray-800">Nueva Campana de Ads</h3>
+            <button onclick="closeCrearCampana()" class="text-gray-400 hover:text-gray-600">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="space-y-4">
+            <!-- Nombre -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Nombre de la campana <span class="text-red-500">*</span></label>
+                <input type="text" id="modal-camp-name" placeholder="ej. Televisores 4K - Escalar"
+                       class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none">
+            </div>
+
+            <!-- Presupuesto diario -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Presupuesto diario ($MXN) <span class="text-red-500">*</span></label>
+                <input type="number" id="modal-camp-budget" min="1" step="50" placeholder="500"
+                       class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none">
+            </div>
+
+            <!-- Estrategia -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Estrategia</label>
+                <div class="grid grid-cols-3 gap-2">
+                    <button type="button" onclick="selectEstrategia('rentabilidad', this)"
+                            class="estrategia-btn border-2 border-green-200 bg-green-50 rounded-lg p-2 text-center hover:border-green-400 transition">
+                        <div class="text-green-600 font-semibold text-xs">Rentabilidad</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ACOS 15%</div>
+                    </button>
+                    <button type="button" onclick="selectEstrategia('crecimiento', this)"
+                            class="estrategia-btn border-2 border-blue-200 bg-blue-50 rounded-lg p-2 text-center hover:border-blue-400 transition">
+                        <div class="text-blue-600 font-semibold text-xs">Crecimiento</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ACOS 25%</div>
+                    </button>
+                    <button type="button" onclick="selectEstrategia('visibilidad', this)"
+                            class="estrategia-btn border-2 border-orange-200 bg-orange-50 rounded-lg p-2 text-center hover:border-orange-400 transition">
+                        <div class="text-orange-600 font-semibold text-xs">Visibilidad</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ACOS 40%</div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ACOS objetivo (auto-llenado) -->
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">ACOS objetivo (%)</label>
+                <input type="number" id="modal-camp-acos" min="3" max="500" step="1" placeholder="25"
+                       class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none">
+                <p class="text-xs text-gray-400 mt-1">Se auto-llena segun estrategia, pero puedes editarlo</p>
+            </div>
+
+            <!-- Items pre-seleccionados (oculto) -->
+            <input type="hidden" id="modal-camp-items" value="">
+
+            <!-- Items prefill display -->
+            <div id="modal-camp-items-preview" class="hidden">
+                <p class="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1.5">
+                    <span class="font-medium text-gray-700" id="modal-items-count">0</span> productos pre-seleccionados para asignar
+                </p>
+            </div>
+
+            <!-- Status -->
+            <div id="modal-camp-status" class="hidden text-sm"></div>
+        </div>
+
+        <div class="flex gap-3 mt-6">
+            <button onclick="closeCrearCampana()"
+                    class="flex-1 border border-gray-300 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition">
+                Cancelar
+            </button>
+            <button onclick="submitCrearCampana()" id="btn-submit-campana"
+                    class="flex-1 bg-yellow-400 text-gray-800 font-semibold px-4 py-2.5 rounded-lg text-sm hover:bg-yellow-500 transition">
+                Crear Campana
+            </button>
         </div>
     </div>
 </div>
 
-<!-- 6. Productos quemando dinero -->
-<div class="bg-white rounded-lg shadow mb-6">
-    <div class="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
-        <h2 class="text-lg font-semibold text-red-600">Productos sin Ventas con Gasto</h2>
-        <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Requiere atencion</span>
-    </div>
-    <div id="ads-burning-table">
-        <div class="animate-pulse p-4 space-y-3">
-            {% for i in range(3) %}
-            <div class="h-12 bg-gray-200 rounded"></div>
-            {% endfor %}
-        </div>
-    </div>
-</div>
-
-<!-- 7. Productos Sin Publicidad (oportunidades) -->
-<div class="bg-white rounded-lg shadow">
-    <div class="px-6 py-4 border-b border-blue-200 flex items-center gap-2">
-        <h2 class="text-lg font-semibold text-blue-700">Productos Sin Publicidad</h2>
-        <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Oportunidades</span>
-    </div>
-    <div id="ads-no-ads-table">
-        <div class="animate-pulse p-4 space-y-3">
-            {% for i in range(3) %}
-            <div class="h-12 bg-gray-200 rounded"></div>
-            {% endfor %}
-        </div>
-    </div>
-</div>
 {% endblock %}
 
 {% block scripts %}
@@ -156,76 +303,95 @@
         el.innerHTML = '<div class="p-8 text-center text-gray-500"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando datos de Ads...</div>';
     }
 
-    // === No-Ads functions (defined globally so they work when partial loads) ===
+    // === TABS ===
+    var activeTab = 'campaigns';
+    var tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false };
 
-    function toggleAllNoAds(master) {
-        document.querySelectorAll('.noads-check').forEach(function(cb) { cb.checked = master.checked; });
-        updateAssignBtn();
-    }
-
-    function updateAssignBtn() {
-        var checked = document.querySelectorAll('.noads-check:checked').length;
-        var btn = document.getElementById('btn-assign-ads');
-        var select = document.getElementById('noads-campaign-select');
-        if (btn) {
-            btn.disabled = checked === 0 || !select.value;
-            btn.textContent = checked > 0 ? 'Asignar ' + checked + ' producto' + (checked > 1 ? 's' : '') : 'Asignar seleccionados';
+    function showTab(name) {
+        activeTab = name;
+        // Ocultar todos los panels
+        ['campaigns', 'performance', 'by-category', 'burning', 'no-ads'].forEach(function(t) {
+            var panel = document.getElementById('panel-' + t);
+            var tab = document.getElementById('tab-' + t);
+            if (panel) panel.classList.add('hidden');
+            if (tab) {
+                tab.classList.remove('border-yellow-400', 'text-yellow-600');
+                tab.classList.add('border-transparent', 'text-gray-500');
+            }
+        });
+        // Mostrar panel activo
+        var activePanel = document.getElementById('panel-' + name);
+        var activeTabEl = document.getElementById('tab-' + name);
+        if (activePanel) activePanel.classList.remove('hidden');
+        if (activeTabEl) {
+            activeTabEl.classList.remove('border-transparent', 'text-gray-500');
+            activeTabEl.classList.add('border-yellow-400', 'text-yellow-600');
+        }
+        // Cargar si no se ha cargado
+        if (!tabLoaded[name]) {
+            loadTab(name);
         }
     }
 
-    function assignSelectedToAds() {
-        var campaignId = document.getElementById('noads-campaign-select').value;
-        if (!campaignId) { alert('Selecciona una campana'); return; }
-
-        var checks = document.querySelectorAll('.noads-check:checked');
-        var itemIds = [];
-        checks.forEach(function(cb) { itemIds.push(cb.value); });
-        if (itemIds.length === 0) return;
-
-        var btn = document.getElementById('btn-assign-ads');
-        var status = document.getElementById('assign-status');
-        btn.disabled = true;
-        btn.textContent = 'Asignando...';
-        status.textContent = '';
-
-        fetch('/api/ads/assign-to-campaign', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({item_ids: itemIds, campaign_id: parseInt(campaignId)})
-        })
-        .then(function(r) {
-            if (r.ok) return r.json();
-            return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
-        })
-        .then(function(data) {
-            status.textContent = itemIds.length + ' producto(s) asignado(s)';
-            status.className = 'text-xs text-green-600 font-medium';
-            itemIds.forEach(function(id) {
-                var row = document.getElementById('noads-row-' + id);
-                if (row) {
-                    row.classList.add('opacity-30');
-                    var cb = row.querySelector('.noads-check');
-                    if (cb) { cb.checked = false; cb.disabled = true; }
-                }
-            });
-            updateAssignBtn();
-        })
-        .catch(function(e) {
-            var msg = e.message;
-            if (msg.indexOf('permiso') > -1 || msg.indexOf('Unauthorized') > -1 || msg.indexOf('permission') > -1) {
-                msg = 'Sin permiso de escritura en Product Ads. Revisa los permisos de tu app en developers.mercadolibre.com.mx';
-            }
-            status.textContent = msg;
-            status.className = 'text-xs text-red-600 max-w-md';
-            btn.disabled = false;
-            updateAssignBtn();
-        });
+    function loadTab(name) {
+        var p = getDateParams();
+        if (name === 'campaigns') {
+            showSpinner(document.getElementById('ads-campaigns-table'));
+            fetch('/partials/ads-campaigns?' + p)
+                .then(r => r.text())
+                .then(html => { document.getElementById('ads-campaigns-table').innerHTML = html; tabLoaded.campaigns = true; });
+        } else if (name === 'performance') {
+            perfPage = 1;
+            perfPerPage = 10;
+            perfTier = 'all';
+            perfCategory = '';
+            loadPerformance('cost');
+            tabLoaded.performance = true;
+        } else if (name === 'by-category') {
+            loadByCategory();
+        } else if (name === 'burning') {
+            showSpinner(document.getElementById('ads-burning-table'));
+            fetch('/partials/ads-burning?' + p)
+                .then(r => r.text())
+                .then(html => { document.getElementById('ads-burning-table').innerHTML = html; tabLoaded.burning = true; });
+        } else if (name === 'no-ads') {
+            showSpinner(document.getElementById('ads-no-ads-table'));
+            fetch('/partials/ads-no-ads?' + p)
+                .then(r => r.text())
+                .then(html => {
+                    document.getElementById('ads-no-ads-table').innerHTML = html;
+                    var sel = document.getElementById('noads-campaign-select');
+                    if (sel) sel.addEventListener('change', updateAssignBtn);
+                    tabLoaded['no-ads'] = true;
+                });
+        }
     }
 
-    // === Performance table ===
+    function loadByCategory() {
+        var p = getDateParams();
+        showSpinner(document.getElementById('ads-by-category-table'));
+        fetch('/partials/ads-by-category?' + p)
+            .then(r => r.text())
+            .then(html => {
+                document.getElementById('ads-by-category-table').innerHTML = html;
+                tabLoaded['by-category'] = true;
+            });
+    }
 
+    // Llamado desde ads_by_category template cuando se hace click en categoria
+    window.filterPerformanceByCategory = function(catId, catName) {
+        showTab('performance');
+        perfCategory = catId;
+        perfTier = 'all';
+        perfPage = 1;
+        loadPerformance('cost');
+    };
+
+    // === PERFORMANCE TABLE ===
     var perfPage = 1;
     var perfPerPage = 10;
+    var perfTier = 'all';
+    var perfCategory = '';
 
     function loadPerformance(sortCol) {
         var el = document.getElementById('ads-performance-table');
@@ -234,19 +400,35 @@
         var url = '/partials/ads-performance?' + p
             + '&sort=' + (sortCol || 'cost')
             + '&page=' + perfPage
-            + '&per_page=' + perfPerPage;
+            + '&per_page=' + perfPerPage
+            + '&tier=' + perfTier
+            + '&category=' + encodeURIComponent(perfCategory);
         fetch(url)
             .then(function(r) { return r.text(); })
             .then(function(html) { el.innerHTML = html; });
     }
 
-    // === Main load ===
+    window.filterByTier = function(tier) {
+        perfTier = tier;
+        perfPage = 1;
+        loadPerformance('cost');
+    };
 
+    window.filterByCategory = function(catId) {
+        perfCategory = catId;
+        perfPage = 1;
+        loadPerformance('cost');
+    };
+
+    // === MAIN LOAD ===
     function loadAll() {
         var p = getDateParams();
         var btn = document.getElementById('btn-ads-filtrar');
         btn.disabled = true;
         btn.classList.add('opacity-50');
+
+        // Reset tab loaded state
+        tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false };
 
         // KPIs
         fetch('/api/ads/metrics?' + p)
@@ -257,14 +439,12 @@
                     document.getElementById('ads-metrics-2').innerHTML = '';
                     return;
                 }
-                // Fila 1: 5 KPIs primarios
                 document.getElementById('ads-metrics').innerHTML =
                     kpiCard('Gasto Total', '$' + fmt(data.total_cost), 'text-red-600') +
                     kpiCard('Ingresos Ads', '$' + fmt(data.total_revenue), 'text-green-600') +
                     kpiCard('Ventas', fmtInt(data.sales) + ' uds', 'text-gray-800') +
                     kpiCard('ROAS', data.roas + 'x', parseFloat(data.roas) >= 3 ? 'text-green-600' : parseFloat(data.roas) >= 1 ? 'text-yellow-600' : 'text-red-600') +
                     kpiCard('ACOS', data.acos + '%', parseFloat(data.acos) <= 15 ? 'text-green-600' : parseFloat(data.acos) <= 30 ? 'text-yellow-600' : 'text-red-600');
-                // Fila 2: 4 KPIs secundarios compactos
                 document.getElementById('ads-metrics-2').innerHTML =
                     kpiCardSmall('Impresiones', fmtInt(data.impressions), 'text-gray-700') +
                     kpiCardSmall('Clics', fmtInt(data.clicks), 'text-blue-600') +
@@ -276,42 +456,14 @@
                 document.getElementById('ads-metrics-2').innerHTML = '';
             });
 
-        // Campanas
-        showSpinner(document.getElementById('ads-campaigns-table'));
-        fetch('/partials/ads-campaigns?' + p)
-            .then(r => r.text())
-            .then(html => { document.getElementById('ads-campaigns-table').innerHTML = html; });
-
-        // Rendimiento por Producto (tabla unificada)
-        perfPage = 1;
-        perfPerPage = 10;
-        loadPerformance('cost');
-
-        // Productos quemando dinero
-        showSpinner(document.getElementById('ads-burning-table'));
-        fetch('/partials/ads-burning?' + p)
-            .then(r => r.text())
-            .then(html => { document.getElementById('ads-burning-table').innerHTML = html; });
-
-        // Productos sin publicidad
-        showSpinner(document.getElementById('ads-no-ads-table'));
-        fetch('/partials/ads-no-ads?' + p)
-            .then(r => r.text())
-            .then(html => {
-                document.getElementById('ads-no-ads-table').innerHTML = html;
-                // Re-attach campaign select listener after partial loads
-                var sel = document.getElementById('noads-campaign-select');
-                if (sel) sel.addEventListener('change', updateAssignBtn);
-                btn.disabled = false;
-                btn.classList.remove('opacity-50');
-            })
-            .catch(() => {
-                btn.disabled = false;
-                btn.classList.remove('opacity-50');
-            });
+        // Cargar tab activo
+        loadTab(activeTab);
 
         // Grafica
         loadSpendChart('day');
+
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
     }
 
     var spendChartInstance = null;
@@ -325,13 +477,9 @@
         loading.classList.remove('hidden');
         canvas.classList.add('hidden');
 
-        var btnDay = 'px-2 py-1 text-xs rounded font-medium ';
-        document.getElementById('btn-chart-day').className = btnDay + (groupBy === 'day'
-            ? 'bg-yellow-400 text-gray-800'
-            : 'bg-gray-200 text-gray-600 hover:bg-gray-300');
-        document.getElementById('btn-chart-month').className = btnDay + (groupBy === 'month'
-            ? 'bg-yellow-400 text-gray-800'
-            : 'bg-gray-200 text-gray-600 hover:bg-gray-300');
+        var btnCls = 'px-2 py-1 text-xs rounded font-medium ';
+        document.getElementById('btn-chart-day').className = btnCls + (groupBy === 'day' ? 'bg-yellow-400 text-gray-800' : 'bg-gray-200 text-gray-600 hover:bg-gray-300');
+        document.getElementById('btn-chart-month').className = btnCls + (groupBy === 'month' ? 'bg-yellow-400 text-gray-800' : 'bg-gray-200 text-gray-600 hover:bg-gray-300');
 
         fetch('/api/ads/spend-timeline?' + p + '&group_by=' + groupBy)
             .then(r => r.json())
@@ -340,16 +488,11 @@
                 canvas.classList.remove('hidden');
                 renderSpendChart(data.timeline, groupBy);
             })
-            .catch(() => {
-                loading.innerHTML = '<span class="text-red-500">Error cargando grafica</span>';
-            });
+            .catch(() => { loading.innerHTML = '<span class="text-red-500">Error cargando grafica</span>'; });
     }
 
     function renderSpendChart(timeline, groupBy) {
-        if (spendChartInstance) {
-            spendChartInstance.destroy();
-            spendChartInstance = null;
-        }
+        if (spendChartInstance) { spendChartInstance.destroy(); spendChartInstance = null; }
         var monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
         var labels = timeline.map(function(d) {
             if (groupBy === 'month') {
@@ -359,61 +502,25 @@
             var parts = d.date.split('-');
             return parseInt(parts[2]) + '/' + monthNames[parseInt(parts[1]) - 1];
         });
-
         var ctx = document.getElementById('spend-chart').getContext('2d');
         spendChartInstance = new Chart(ctx, {
             type: 'bar',
             data: {
                 labels: labels,
                 datasets: [
-                    {
-                        label: 'Gasto ($)',
-                        data: timeline.map(function(d) { return d.cost; }),
-                        backgroundColor: 'rgba(239, 68, 68, 0.6)',
-                        borderColor: '#EF4444',
-                        borderWidth: 1,
-                        borderRadius: 4,
-                        yAxisID: 'y',
-                        order: 2
-                    },
-                    {
-                        label: 'Ingresos ($)',
-                        data: timeline.map(function(d) { return d.revenue || 0; }),
-                        type: 'line',
-                        borderColor: '#10B981',
-                        backgroundColor: 'rgba(16,185,129,0.08)',
-                        fill: true,
-                        tension: 0.3,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#10B981',
-                        borderWidth: 2,
-                        yAxisID: 'y',
-                        order: 1
-                    }
+                    { label: 'Gasto ($)', data: timeline.map(d => d.cost), backgroundColor: 'rgba(239,68,68,0.6)', borderColor: '#EF4444', borderWidth: 1, borderRadius: 4, yAxisID: 'y', order: 2 },
+                    { label: 'Ingresos ($)', data: timeline.map(d => d.revenue || 0), type: 'line', borderColor: '#10B981', backgroundColor: 'rgba(16,185,129,0.08)', fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#10B981', borderWidth: 2, yAxisID: 'y', order: 1 }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
+                responsive: true, maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
                 plugins: {
                     legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
-                    tooltip: {
-                        callbacks: {
-                            label: function(ctx) {
-                                return ctx.dataset.label + ': $' + ctx.parsed.y.toLocaleString('es-MX', {minimumFractionDigits: 2});
-                            }
-                        }
-                    }
+                    tooltip: { callbacks: { label: function(ctx) { return ctx.dataset.label + ': $' + ctx.parsed.y.toLocaleString('es-MX', {minimumFractionDigits:2}); } } }
                 },
                 scales: {
-                    y: {
-                        beginAtZero: true,
-                        position: 'left',
-                        title: { display: true, text: 'Monto ($)', font: { size: 11 } },
-                        ticks: { callback: function(v) { return '$' + v.toLocaleString('es-MX'); }, font: { size: 10 } },
-                        grid: { color: 'rgba(0,0,0,0.05)' }
-                    },
+                    y: { beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString('es-MX'), font: { size: 10 } }, grid: { color: 'rgba(0,0,0,0.05)' } },
                     x: { ticks: { maxRotation: 45, font: { size: 10 } }, grid: { display: false } }
                 }
             }
@@ -424,44 +531,31 @@
     document.getElementById('btn-chart-month').addEventListener('click', function() { loadSpendChart('month'); });
 
     function kpiCard(label, value, colorClass) {
-        return '<div class="bg-white p-6 rounded-lg shadow"><p class="text-gray-500 text-sm">' + label + '</p><p class="text-3xl font-bold ' + colorClass + '">' + value + '</p></div>';
+        return '<div class="bg-white p-5 rounded-lg shadow"><p class="text-gray-500 text-sm">' + label + '</p><p class="text-2xl font-bold ' + colorClass + '">' + value + '</p></div>';
     }
-
     function kpiCardSmall(label, value, colorClass) {
         return '<div class="bg-white p-3 rounded-lg shadow"><p class="text-gray-400 text-xs">' + label + '</p><p class="text-lg font-bold ' + colorClass + '">' + value + '</p></div>';
     }
+    function fmt(n) { return parseFloat(n).toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+    function fmtInt(n) { return parseInt(n).toLocaleString('es-MX'); }
 
-    function fmt(n) {
-        return parseFloat(n).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-    }
-
-    function fmtInt(n) {
-        return parseInt(n).toLocaleString('es-MX');
-    }
-
-    // === Campaign quick actions ===
-
+    // === CAMPAIGN QUICK ACTIONS (referenciados desde ads_campaigns.html) ===
     function _campAction(campaignId, payload, btn, successText) {
         var origText = btn.textContent;
         btn.disabled = true;
         btn.textContent = 'Guardando...';
         fetch('/api/ads/campaigns/' + campaignId, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload)
-        })
-        .then(r => r.json())
-        .then(data => {
+        }).then(r => r.json()).then(data => {
             if (data.error) {
-                btn.textContent = 'Error';
-                btn.classList.add('bg-red-200');
+                btn.textContent = 'Error'; btn.classList.add('bg-red-200');
                 setTimeout(function() { btn.textContent = origText; btn.disabled = false; btn.classList.remove('bg-red-200'); }, 2000);
             } else {
                 btn.textContent = successText || 'Guardado';
                 setTimeout(function() { btn.textContent = origText; btn.disabled = false; }, 2000);
             }
-        })
-        .catch(function() {
+        }).catch(function() {
             btn.textContent = 'Error';
             setTimeout(function() { btn.textContent = origText; btn.disabled = false; }, 2000);
         });
@@ -499,40 +593,179 @@
         _campAction(campaignId, {acos_target: val}, btn, 'Guardado');
     }
 
-    document.getElementById('btn-ads-filtrar').addEventListener('click', loadAll);
-    document.getElementById('btn-ads-limpiar').addEventListener('click', function() {
-        document.getElementById('ads_date_from').value = weekAgo.toISOString().split('T')[0];
-        document.getElementById('ads_date_to').value = today.toISOString().split('T')[0];
-        loadAll();
-    });
+    // === NO-ADS FUNCTIONS ===
+    function toggleAllNoAds(master) {
+        document.querySelectorAll('.noads-check').forEach(function(cb) { cb.checked = master.checked; });
+        updateAssignBtn();
+    }
 
-    // === Descarga Excel de productos sin ads ===
+    function updateAssignBtn() {
+        var checked = document.querySelectorAll('.noads-check:checked').length;
+        var btn = document.getElementById('btn-assign-ads');
+        var select = document.getElementById('noads-campaign-select');
+        if (btn) {
+            btn.disabled = checked === 0 || !select.value;
+            btn.textContent = checked > 0 ? 'Asignar ' + checked + ' producto' + (checked > 1 ? 's' : '') : 'Asignar seleccionados';
+        }
+    }
 
+    function assignSelectedToAds() {
+        var campaignId = document.getElementById('noads-campaign-select').value;
+        if (!campaignId) { alert('Selecciona una campana'); return; }
+        var checks = document.querySelectorAll('.noads-check:checked');
+        var itemIds = [];
+        checks.forEach(function(cb) { itemIds.push(cb.value); });
+        if (itemIds.length === 0) return;
+        var btn = document.getElementById('btn-assign-ads');
+        var status = document.getElementById('assign-status');
+        btn.disabled = true;
+        btn.textContent = 'Asignando...';
+        status.textContent = '';
+        fetch('/api/ads/assign-to-campaign', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_ids: itemIds, campaign_id: parseInt(campaignId)})
+        }).then(function(r) {
+            if (r.ok) return r.json();
+            return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+        }).then(function(data) {
+            status.textContent = itemIds.length + ' producto(s) asignado(s)';
+            status.className = 'text-xs text-green-600 font-medium';
+            itemIds.forEach(function(id) {
+                var row = document.getElementById('noads-row-' + id);
+                if (row) { row.classList.add('opacity-30'); var cb = row.querySelector('.noads-check'); if (cb) { cb.checked = false; cb.disabled = true; } }
+            });
+            updateAssignBtn();
+        }).catch(function(e) {
+            var msg = e.message;
+            if (msg.indexOf('permiso') > -1 || msg.indexOf('Unauthorized') > -1 || msg.indexOf('permission') > -1) {
+                msg = 'Sin permiso de escritura en Product Ads. Revisa los permisos de tu app en developers.mercadolibre.com.mx';
+            }
+            status.textContent = msg; status.className = 'text-xs text-red-600 max-w-md';
+            btn.disabled = false; updateAssignBtn();
+        });
+    }
+
+    // === MODAL CREAR CAMPANA ===
+    window.openCrearCampana = function(prefillItems) {
+        var modal = document.getElementById('modal-crear-campana');
+        modal.classList.remove('hidden');
+        modal.style.display = 'flex';
+        document.getElementById('modal-camp-name').value = '';
+        document.getElementById('modal-camp-budget').value = '';
+        document.getElementById('modal-camp-acos').value = '';
+        document.getElementById('modal-camp-items').value = '';
+        document.getElementById('modal-camp-status').classList.add('hidden');
+        document.getElementById('modal-camp-items-preview').classList.add('hidden');
+        // Reset estrategia buttons
+        document.querySelectorAll('.estrategia-btn').forEach(function(b) {
+            b.classList.remove('ring-2', 'ring-yellow-400');
+        });
+        // Prefill items si vienen
+        if (prefillItems && prefillItems.length > 0) {
+            document.getElementById('modal-camp-items').value = JSON.stringify(prefillItems);
+            document.getElementById('modal-items-count').textContent = prefillItems.length;
+            document.getElementById('modal-camp-items-preview').classList.remove('hidden');
+        }
+    };
+
+    window.closeCrearCampana = function() {
+        var modal = document.getElementById('modal-crear-campana');
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
+    };
+
+    window.selectEstrategia = function(tipo, btn) {
+        document.querySelectorAll('.estrategia-btn').forEach(function(b) {
+            b.classList.remove('ring-2', 'ring-yellow-400', 'ring-green-400', 'ring-blue-400', 'ring-orange-400');
+        });
+        var acosMap = { rentabilidad: 15, crecimiento: 25, visibilidad: 40 };
+        document.getElementById('modal-camp-acos').value = acosMap[tipo] || 25;
+        var ringMap = { rentabilidad: 'ring-green-400', crecimiento: 'ring-blue-400', visibilidad: 'ring-orange-400' };
+        btn.classList.add('ring-2', ringMap[tipo] || 'ring-yellow-400');
+    };
+
+    window.submitCrearCampana = function() {
+        var name = document.getElementById('modal-camp-name').value.trim();
+        var budget = parseFloat(document.getElementById('modal-camp-budget').value);
+        var acos = parseFloat(document.getElementById('modal-camp-acos').value);
+        var itemsRaw = document.getElementById('modal-camp-items').value;
+        var statusEl = document.getElementById('modal-camp-status');
+
+        if (!name) { showModalStatus('El nombre es requerido', 'error'); return; }
+        if (!budget || budget < 1) { showModalStatus('El presupuesto debe ser mayor a 0', 'error'); return; }
+
+        var payload = { name: name, budget: budget };
+        if (!isNaN(acos) && acos >= 3) payload.acos_target = acos;
+
+        var btn = document.getElementById('btn-submit-campana');
+        btn.disabled = true;
+        btn.textContent = 'Creando...';
+
+        var itemIds = [];
+        try { if (itemsRaw) itemIds = JSON.parse(itemsRaw); } catch(e) {}
+
+        var endpoint = itemIds.length > 0 ? '/api/ads/campaigns-with-items' : '/api/ads/campaigns';
+        if (itemIds.length > 0) payload.item_ids = itemIds;
+
+        fetch(endpoint, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        }).then(function(r) {
+            return r.json().then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            if (!res.ok || res.data.error) {
+                showModalStatus(res.data.detail || res.data.error || 'Error al crear campana', 'error');
+                btn.disabled = false; btn.textContent = 'Crear Campana';
+                return;
+            }
+            var msg = 'Campana "' + name + '" creada exitosamente';
+            if (res.data.assigned_count > 0) msg += ' (' + res.data.assigned_count + ' productos asignados)';
+            showModalStatus(msg, 'success');
+            // Recargar tab campanas
+            tabLoaded.campaigns = false;
+            setTimeout(function() {
+                closeCrearCampana();
+                if (activeTab === 'campaigns') loadTab('campaigns');
+            }, 1800);
+            btn.disabled = false; btn.textContent = 'Crear Campana';
+        }).catch(function(e) {
+            showModalStatus('Error: ' + e.message, 'error');
+            btn.disabled = false; btn.textContent = 'Crear Campana';
+        });
+    };
+
+    function showModalStatus(msg, type) {
+        var el = document.getElementById('modal-camp-status');
+        el.classList.remove('hidden');
+        el.textContent = msg;
+        el.className = 'text-sm rounded px-3 py-2 ' + (type === 'error' ? 'bg-red-50 text-red-700' : 'bg-green-50 text-green-700');
+    }
+
+    window.crearCampanaTopProductos = function(itemIds) {
+        openCrearCampana(itemIds);
+        // Sugerir nombre automatico
+        document.getElementById('modal-camp-name').value = 'TOP ' + new Date().toLocaleDateString('es-MX');
+        selectEstrategia('rentabilidad', document.querySelector('.estrategia-btn'));
+    };
+
+    // === CSV DESCARGA (sin publicidad) ===
     function downloadNoAdsExcel() {
         var rows = document.querySelectorAll('#ads-no-ads-inner-table tbody tr[id^="noads-row-"]');
         if (rows.length === 0) { alert('No hay productos para descargar'); return; }
-
         var checked = document.querySelectorAll('.noads-check:checked');
         var useSelected = checked.length > 0;
-
         var csv = 'MLM,Titulo,Categoria,Precio,Precio Original,Descuento %,Stock,Vendidos\n';
         rows.forEach(function(row) {
             var cb = row.querySelector('.noads-check');
             if (useSelected && cb && !cb.checked) return;
-
             var id = row.id.replace('noads-row-', '');
             var cells = row.querySelectorAll('td');
-            // Titulo: buscar el link o span con texto del producto
             var titleEl = row.querySelector('a.font-medium, span.font-medium');
             var title = titleEl ? titleEl.textContent.trim() : '';
-            // Categoria: buscar el rounded-full badge
             var catEl = row.querySelector('.rounded-full');
             var cat = catEl ? catEl.textContent.trim() : '';
-            // Precio: buscar en la celda correspondiente (4ta columna, index 3)
             var priceCell = cells[3];
-            var originalPrice = '';
-            var currentPrice = '';
-            var discount = '';
+            var originalPrice = '', currentPrice = '', discount = '';
             if (priceCell) {
                 var strikeEl = priceCell.querySelector('.line-through');
                 var greenEl = priceCell.querySelector('.text-green-600');
@@ -540,22 +773,14 @@
                     originalPrice = strikeEl.textContent.trim().replace('$','').replace(/,/g,'');
                     currentPrice = greenEl.textContent.trim().replace('$','').replace(/,/g,'');
                     var discountEls = priceCell.querySelectorAll('.text-green-600');
-                    if (discountEls.length > 1) {
-                        discount = discountEls[1].textContent.trim();
-                    }
-                } else {
-                    currentPrice = priceCell.textContent.trim().replace('$','').replace(/,/g,'').replace(/\s+/g,'');
-                }
+                    if (discountEls.length > 1) discount = discountEls[1].textContent.trim();
+                } else { currentPrice = priceCell.textContent.trim().replace('$','').replace(/,/g,'').replace(/\s+/g,''); }
             }
-            // Stock y vendidos
             var stock = cells[4] ? cells[4].textContent.trim() : '';
             var sold = cells[5] ? cells[5].textContent.trim() : '';
-
-            title = title.replace(/"/g, '""');
-            cat = cat.replace(/"/g, '""');
+            title = title.replace(/"/g, '""'); cat = cat.replace(/"/g, '""');
             csv += id + ',"' + title + '","' + cat + '",' + currentPrice + ',' + originalPrice + ',"' + discount + '",' + stock + ',' + sold + '\n';
         });
-
         var blob = new Blob(['\ufeff' + csv], {type: 'text/csv;charset=utf-8;'});
         var link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
@@ -564,6 +789,14 @@
         link.click();
         URL.revokeObjectURL(link.href);
     }
+
+    // === INIT ===
+    document.getElementById('btn-ads-filtrar').addEventListener('click', loadAll);
+    document.getElementById('btn-ads-limpiar').addEventListener('click', function() {
+        document.getElementById('ads_date_from').value = weekAgo.toISOString().split('T')[0];
+        document.getElementById('ads_date_to').value = today.toISOString().split('T')[0];
+        loadAll();
+    });
 
     // Carga inicial
     loadAll();
