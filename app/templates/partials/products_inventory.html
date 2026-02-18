@@ -57,13 +57,19 @@
                 {% if a.get('is_full') %}
                 <div class="flex-1 flex flex-col gap-1">
                     <span class="flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-[10px] font-semibold">
-                        ⚠️ FULL — no se puede actualizar stock directo
+                        ⚠️ FULL — cambia logística en Seller Center primero
                     </span>
-                    <button onclick="changeToMerchantAndSync('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
-                            class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600"
-                            title="Cambia de FULL a envío propio y luego sincroniza el stock">
-                        Quitar FULL → Sync Stock
-                    </button>
+                    <div class="flex gap-1">
+                        <a href="https://articulo.mercadolibre.com.mx/{{ a.id | replace('MLM', 'MLM-') }}" target="_blank"
+                           class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
+                            Ver en MeLi ↗
+                        </a>
+                        <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                                class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600"
+                                title="Usa después de cambiar logística en Seller Center">
+                            Ya cambié → Sync
+                        </button>
+                    </div>
                 </div>
                 {% else %}
                 <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
@@ -130,10 +136,14 @@
                             <span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">
                                 ⚠️ Es FULL
                             </span>
-                            <button onclick="changeToMerchantAndSync('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                            <a href="https://articulo.mercadolibre.com.mx/{{ a.id | replace('MLM', 'MLM-') }}" target="_blank"
+                               class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium transition whitespace-nowrap text-center">
+                                Ver en MeLi ↗
+                            </a>
+                            <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
                                     class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium transition whitespace-nowrap"
-                                    title="Cambia de FULL a envío propio y luego sincroniza el stock BM">
-                                Quitar FULL → Sync
+                                    title="Úsalo después de cambiar logística en Seller Center">
+                                Ya cambié → Sync
                             </button>
                             <button onclick="openEditModal('{{ a.id }}')"
                                     class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
@@ -967,46 +977,23 @@ function _setFullMsg(itemId, msg, cls) {
     });
 }
 
-// Cambiar de FULL a envio propio y luego sincronizar stock BM
-window.changeToMerchantAndSync = function(itemId, bmQty, btn) {
-    if (!confirm('¿Cambiar "' + itemId + '" de FULL a envío propio?\n\n' +
-                 '• El producto dejará de estar en el centro de distribución de MeLi\n' +
-                 '• El envío pasa a ser responsabilidad tuya\n' +
-                 '• Después se sincronizará el stock BM automáticamente')) return;
+// Sync stock BM para item FULL que ya fue cambiado a merchant manualmente en Seller Center
+window.syncFullItem = function(itemId, bmQty, btn) {
+    _setFullMsg(itemId, '', '');
     btn.disabled = true;
-    btn.textContent = 'Quitando FULL...';
-    _setFullMsg(itemId, 'Cambiando a envío propio...', 'text-[10px] text-orange-600 block mt-1');
-
-    // Paso 1: cambiar logística a xd_drop_off (self service)
-    fetch('/api/items/' + itemId + '/shipping', {
+    btn.textContent = 'Sincronizando...';
+    var safeQty = Math.floor(bmQty * 0.6);
+    fetch('/api/items/' + itemId + '/stock', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-        body: JSON.stringify({logistic_type: 'xd_drop_off'})
+        body: JSON.stringify({quantity: safeQty})
     })
     .then(function(r) {
         return r.text().then(function(t) {
             if (!r.ok) {
-                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error logistica ' + r.status); }
-                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error('Error ' + r.status + ': ' + t.substring(0, 200)); }
+                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error ' + r.status); }
+                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error('Error ' + r.status); }
             }
-        });
-    })
-    .then(function() {
-        // Paso 2: sincronizar stock BM
-        _setFullMsg(itemId, 'Logística cambiada. Sincronizando stock...', 'text-[10px] text-orange-600 block mt-1');
-        btn.textContent = 'Sync Stock...';
-        var safeQty = Math.floor(bmQty * 0.6);
-        return fetch('/api/items/' + itemId + '/stock', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-            body: JSON.stringify({quantity: safeQty})
-        }).then(function(r2) {
-            return r2.text().then(function(t2) {
-                if (!r2.ok) {
-                    try { var d2 = JSON.parse(t2); throw new Error('Logística OK, stock falló: ' + (d2.detail || r2.status)); }
-                    catch(pe) { if (pe.message && pe.message !== t2) throw pe; throw new Error('Logística OK, stock falló: ' + t2.substring(0, 200)); }
-                }
-            });
         });
     })
     .then(function() {
@@ -1015,12 +1002,17 @@ window.changeToMerchantAndSync = function(itemId, bmQty, btn) {
     })
     .catch(function(e) {
         btn.disabled = false;
-        btn.textContent = 'Error';
-        btn.className = 'px-2 py-1 bg-red-600 text-white rounded text-xs font-medium';
-        var errMsg = e.message || 'Error desconocido';
+        btn.textContent = 'Ya cambié → Sync';
+        var errMsg = e.message || 'Error';
         _setFullMsg(itemId, errMsg, 'text-[10px] text-red-600 block mt-1');
-        // Mostrar también como alerta para que no se pierda
-        alert('Error al quitar FULL en ' + itemId + ':\n\n' + errMsg);
+        var isFull = errMsg.toLowerCase().indexOf('cannot update') >= 0
+                  || errMsg.toLowerCase().indexOf('not modifiable') >= 0
+                  || errMsg.toLowerCase().indexOf('full') >= 0;
+        if (isFull) {
+            alert('El item sigue siendo FULL en MeLi.\n\nPasos:\n1. Clic en "Ver en MeLi ↗"\n2. Editar publicación → cambiar logística a "Envío por cuenta propia"\n3. Guardar en MeLi\n4. Volver aquí y clic en "Ya cambié → Sync"');
+        } else {
+            alert('Error al sincronizar ' + itemId + ':\n' + errMsg);
+        }
     });
 };
 
