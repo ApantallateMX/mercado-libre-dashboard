@@ -1917,8 +1917,64 @@ async def products_inventory_partial(
             products = [p for p in products if not p.get("is_full")]
 
         # Busqueda por texto (incluye SKUs de variaciones)
+        # Ademas busca directamente en MeLi API para encontrar items que no esten en cache
         if search and search.strip():
             q = search.strip().lower()
+
+            # 1. Busqueda directa en MeLi API por seller_sku y keyword
+            existing_ids = {p["id"] for p in products}
+            extra_ids = set()
+            try:
+                # Buscar por seller_sku (mas preciso)
+                sku_results = await client.get(
+                    f"/users/{client.user_id}/items/search",
+                    params={"seller_sku": search.strip(), "limit": 50},
+                )
+                for rid in sku_results.get("results", []):
+                    if rid not in existing_ids:
+                        extra_ids.add(rid)
+                # Buscar por keyword (titulo, etc)
+                kw_results = await client.get(
+                    f"/users/{client.user_id}/items/search",
+                    params={"q": search.strip(), "limit": 50},
+                )
+                for rid in kw_results.get("results", []):
+                    if rid not in existing_ids:
+                        extra_ids.add(rid)
+            except Exception:
+                pass
+
+            # 2. Fetch detalles de items extra encontrados
+            if extra_ids:
+                extra_list = list(extra_ids)
+                sem = asyncio.Semaphore(5)
+                async def _fbatch(ids):
+                    async with sem:
+                        try:
+                            return await client.get_items_details(ids)
+                        except Exception:
+                            return []
+                batches = [extra_list[i:i+20] for i in range(0, len(extra_list), 20)]
+                batch_results = await asyncio.gather(*[_fbatch(b) for b in batches])
+                extra_bodies = [b for br in batch_results for b in br]
+                extra_products = _build_product_list(extra_bodies, sales_map)
+                _enrich_sku_from_orders(extra_products, all_orders)
+                # Aplicar BM cache
+                for p in extra_products:
+                    sku_val = p.get("sku", "")
+                    if sku_val:
+                        cached = _bm_stock_cache.get(sku_val.upper())
+                        if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+                            bm_data = cached[1]
+                            p["_bm_total"] = bm_data.get("total", 0)
+                            p["_bm_mty"] = bm_data.get("mty", 0)
+                            p["_bm_cdmx"] = bm_data.get("cdmx", 0)
+                            p["_bm_tj"] = bm_data.get("tj", 0)
+                            p["_bm_has_data"] = True
+                products.extend(extra_products)
+                existing_ids.update(extra_ids)
+
+            # 3. Filtrar por texto
             def _matches(p):
                 if q in p.get("id", "").lower():
                     return True
@@ -1926,7 +1982,6 @@ async def products_inventory_partial(
                     return True
                 if q in p.get("title", "").lower():
                     return True
-                # Buscar en SKUs de variaciones
                 for v in p.get("variations", []):
                     if q in (v.get("sku") or "").lower():
                         return True
