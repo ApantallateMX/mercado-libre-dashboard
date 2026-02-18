@@ -135,7 +135,10 @@
                             <div>
                                 <span class="text-gray-800 truncate max-w-[200px] text-xs block" title="{{ p.title }}">{{ p.title[:50] }}</span>
                                 {% if p.get('has_variations') %}
-                                <span class="text-[10px] text-indigo-600 font-medium">{{ p.variations|length }} variaciones</span>
+                                <span class="text-[10px] text-indigo-600 font-medium cursor-pointer underline decoration-dotted"
+                                      data-variations='{{ p.variations | tojson }}'
+                                      onclick="showVarStockPanel('{{ p.id }}', this)"
+                                      title="Ver stock por variacion">{{ p.variations|length }} variaciones 👁</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -158,7 +161,10 @@
                     <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if p.get('_bm_total', 0) > 0 else 'text-gray-400' }}">
                         {% if p.get('has_variations') %}
-                        <span class="text-indigo-500 text-[10px]">por var.</span>
+                        <span class="text-indigo-500 text-[10px] cursor-pointer underline decoration-dotted"
+                              data-variations='{{ p.variations | tojson }}'
+                              onclick="showVarStockPanel('{{ p.id }}', this)"
+                              title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
                         {{ p.get('_bm_total', 0) }}
                         {% endif %}
@@ -300,9 +306,10 @@
                             <div>
                                 <span class="text-gray-800 truncate max-w-[200px] text-xs block" title="{{ p.title }}">{{ p.title[:50] }}</span>
                                 {% if p.get('has_variations') %}
-                                <span class="text-[10px] text-indigo-600 font-medium">
-                                    {{ p.variations|length }} variaciones — consultar BM por variacion
-                                </span>
+                                <span class="text-[10px] text-indigo-600 font-medium cursor-pointer underline decoration-dotted"
+                                      data-variations='{{ p.variations | tojson }}'
+                                      onclick="showVarStockPanel('{{ p.id }}', this)"
+                                      title="Ver stock por variacion">{{ p.variations|length }} variaciones 👁</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -324,7 +331,10 @@
                     <td class="px-3 py-2 text-right font-bold text-yellow-600">{{ p.available_quantity }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">
                         {% if p.get('has_variations') %}
-                        <span class="text-indigo-500 text-[10px] font-normal">por var.</span>
+                        <span class="text-indigo-500 text-[10px] font-normal cursor-pointer underline decoration-dotted"
+                              data-variations='{{ p.variations | tojson }}'
+                              onclick="showVarStockPanel('{{ p.id }}', this)"
+                              title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
                         {{ p.get('_bm_total', 0) or 0 }}
                         {% endif %}
@@ -763,87 +773,187 @@ function activateItem(itemId, bmTotal, status, btn) {
     });
 }
 
-// --- Sync per-variation stocks (multi-variation items) ---
-function syncVariationStocks(itemId, btn) {
-    btn.disabled = true;
-    var origText = btn.textContent.trim();
-    btn.textContent = '...';
-
-    // Leer variaciones desde data-attribute (ya tienen SKUs correctos desde el server)
-    var knownVariations = [];
-    try { knownVariations = JSON.parse(btn.getAttribute('data-variations') || '[]'); } catch(e) {}
-
-    // Panel de resultados (se inserta junto al boton)
-    var panelId = 'var-panel-' + itemId;
+// --- Helpers de panel flotante ---
+function _getOrCreatePanel(anchorEl, panelId) {
     var panel = document.getElementById(panelId);
     if (!panel) {
         panel = document.createElement('div');
         panel.id = panelId;
-        panel.style.cssText = 'position:absolute;z-index:50;background:#fff;border:1px solid #c7d2fe;border-radius:8px;padding:8px 10px;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.15);min-width:240px;max-width:340px;right:0;top:calc(100% + 4px)';
-        btn.parentElement.style.position = 'relative';
-        btn.parentElement.appendChild(panel);
+        panel.style.cssText = 'position:absolute;z-index:100;background:#fff;border:1px solid #c7d2fe;border-radius:10px;padding:10px 12px;font-size:11px;box-shadow:0 6px 20px rgba(0,0,0,.18);min-width:260px;max-width:380px;right:0;top:calc(100% + 6px)';
+        anchorEl.parentElement.style.position = 'relative';
+        anchorEl.parentElement.appendChild(panel);
     }
-    panel.innerHTML = '<span style="color:#6366f1;font-weight:600">Consultando BM...</span>';
     panel.style.display = 'block';
+    // Cerrar al click fuera
+    setTimeout(function() {
+        function closeMe(e) {
+            if (!panel.contains(e.target) && e.target !== anchorEl) {
+                panel.style.display = 'none';
+                document.removeEventListener('click', closeMe);
+            }
+        }
+        document.addEventListener('click', closeMe);
+    }, 150);
+    return panel;
+}
+
+function _closeBtn(panelId) {
+    return '<span style="float:right;cursor:pointer;color:#94a3b8;font-size:13px;line-height:1" onclick="document.getElementById(\'' + panelId + '\').style.display=\'none\'">✕</span>';
+}
+
+function _varRow(v, showSync) {
+    var icon = v.error ? '❌' : (v.bm_total === 0 ? '⚠️' : '✅');
+    var combo = (v.combo || 'Var ' + v.variation_id);
+    var sku = v.sku || v.sku_label || '';
+    var skuHtml = sku ? '<div style="color:#64748b;font-size:10px">' + sku + '</div>' : '';
+    var detail = v.error
+        ? '<span style="color:#dc2626;font-size:10px">' + v.error + '</span>'
+        : '<span>BM <b>' + v.bm_total + '</b> → <b>' + v.meli_qty + '</b></span>';
+    return '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #f1f5f9">'
+        + '<span>' + icon + '</span>'
+        + '<div style="flex:1"><div style="font-weight:500">' + combo + '</div>' + skuHtml + '</div>'
+        + '<div style="text-align:right;white-space:nowrap">' + detail + '</div></div>';
+}
+
+// --- Ver stock MeLi por variacion (sin llamada API, datos del template) ---
+function showVarStockPanel(itemId, triggerEl) {
+    var vars = [];
+    try { vars = JSON.parse(triggerEl.getAttribute('data-variations') || '[]'); } catch(e) {}
+    var panelId = 'vp-meli-' + itemId;
+    var panel = _getOrCreatePanel(triggerEl, panelId);
+
+    var rows = vars.map(function(v) {
+        var combo = v.combo || ('Var ' + v.id);
+        var sku = v.sku || '';
+        var skuHtml = sku ? '<div style="color:#64748b;font-size:10px">' + sku + '</div>' : '<div style="color:#f59e0b;font-size:10px">Sin SKU</div>';
+        var stock = typeof v.stock !== 'undefined' ? v.stock : '?';
+        var stockColor = stock > 0 ? '#16a34a' : '#dc2626';
+        return '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #f1f5f9">'
+            + '<div style="flex:1"><div style="font-weight:500">' + combo + '</div>' + skuHtml + '</div>'
+            + '<div style="text-align:right"><span style="color:' + stockColor + ';font-weight:700">' + stock + '</span><div style="color:#94a3b8;font-size:9px">MeLi</div></div>'
+            + '</div>';
+    }).join('');
+
+    panel.innerHTML = '<div style="font-weight:700;color:#4338ca;margin-bottom:6px">Stock MeLi por variacion ' + _closeBtn(panelId) + '</div>'
+        + rows
+        + '<div style="color:#94a3b8;font-size:10px;margin-top:6px">BM: haz clic en "Sync Var." para ver stock BM</div>';
+}
+
+// --- Sync per-variation: 2 pasos (preview BM → confirmar → sync real) ---
+function syncVariationStocks(itemId, btn) {
+    var knownVariations = [];
+    try { knownVariations = JSON.parse(btn.getAttribute('data-variations') || '[]'); } catch(e) {}
+    var panelId = 'vp-sync-' + itemId;
+    var panel = _getOrCreatePanel(btn, panelId);
+    panel.innerHTML = '<div style="color:#6366f1;font-weight:600">Consultando BM... ⏳</div>';
+    btn.disabled = true;
+    var origText = btn.textContent.trim();
+    btn.textContent = 'Cargando...';
+
+    // Paso 1: dry_run → obtener BM sin sincronizar
+    fetch('/api/items/' + itemId + '/sync-variation-stocks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({pct: 0.6, dry_run: true, variations: knownVariations})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        if (!res.ok) throw new Error(res.data.detail || 'Error');
+        var results = res.data.results || [];
+        var hasErrors = results.some(function(v) { return v.error; });
+
+        // Encabezado
+        var headerColor = hasErrors ? '#b45309' : '#4338ca';
+        var html = '<div style="font-weight:700;color:' + headerColor + ';margin-bottom:6px">Stock BM por variacion ' + _closeBtn(panelId) + '</div>';
+
+        // Tabla con header
+        html += '<div style="display:flex;font-size:10px;color:#94a3b8;padding:2px 0;border-bottom:2px solid #e0e7ff;gap:6px">'
+            + '<div style="flex:1">Variacion / SKU</div>'
+            + '<div style="width:40px;text-align:center">MeLi</div>'
+            + '<div style="width:40px;text-align:center">BM</div>'
+            + '<div style="width:50px;text-align:center">→ 60%</div>'
+            + '</div>';
+
+        results.forEach(function(v) {
+            var icon = v.error ? '❌' : (v.bm_total === 0 ? '⚠️' : '✅');
+            var combo = (v.combo || 'Var ' + v.variation_id);
+            var sku = v.sku || '';
+            var skuHtml = sku ? '<div style="color:#64748b;font-size:10px">' + sku + '</div>' : '';
+            var detail = v.error
+                ? '<div style="color:#dc2626;font-size:10px;grid-column:span 3">' + v.error + '</div>'
+                : '<div style="width:40px;text-align:center;color:#f59e0b;font-weight:700">' + v.meli_stock + '</div>'
+                  + '<div style="width:40px;text-align:center;color:#2563eb;font-weight:700">' + v.bm_total + '</div>'
+                  + '<div style="width:50px;text-align:center;color:#16a34a;font-weight:700">' + v.meli_qty + '</div>';
+            html += '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #f1f5f9">'
+                + '<span>' + icon + '</span>'
+                + '<div style="flex:1"><div style="font-weight:500">' + combo + '</div>' + skuHtml + '</div>'
+                + (!v.error ? detail : '<div style="flex:1;color:#dc2626;font-size:10px">' + v.error + '</div>')
+                + '</div>';
+        });
+
+        // Botón confirmar (solo si hay algo que actualizar)
+        var hasUpdatable = results.some(function(v) { return !v.error; });
+        if (hasUpdatable) {
+            html += '<button onclick="confirmSyncVariations(\'' + itemId + '\', this)" '
+                + 'style="margin-top:8px;width:100%;padding:6px;background:#4f46e5;color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer">'
+                + '✓ Confirmar Sync 60% en MeLi</button>';
+        }
+        panel.innerHTML = html;
+
+        // Guardar datos para confirmar
+        panel._syncVars = knownVariations;
+        panel._syncBtn = btn;
+    })
+    .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        panel.innerHTML = '<span style="color:#dc2626">Error: ' + e.message + '</span>';
+    });
+}
+
+function confirmSyncVariations(itemId, confirmBtn) {
+    var panelId = 'vp-sync-' + itemId;
+    var panel = document.getElementById(panelId);
+    var knownVariations = panel ? (panel._syncVars || []) : [];
+    var origBtn = panel ? panel._syncBtn : null;
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Sincronizando...';
 
     fetch('/api/items/' + itemId + '/sync-variation-stocks', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-        body: JSON.stringify({pct: 0.6, variations: knownVariations})
+        body: JSON.stringify({pct: 0.6, dry_run: false, variations: knownVariations})
     })
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
         if (!res.ok) throw new Error(res.data.detail || 'Error');
-        var d = res.data;
-        var results = d.results || [];
+        var results = res.data.results || [];
         var updated = results.filter(function(v) { return v.updated; }).length;
         var errors  = results.filter(function(v) { return v.error; }).length;
-        var summary = updated + '/' + results.length + ' var. OK' + (errors > 0 ? ' (' + errors + ' err)' : '');
+        var summary = updated + '/' + results.length + ' OK' + (errors > 0 ? ', ' + errors + ' err' : '');
 
-        btn.textContent = summary;
-        btn.className = btn.className
-            .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
-            .replace('hover:bg-indigo-700', errors > 0 ? 'hover:bg-yellow-600' : 'hover:bg-green-700')
-            .replace('active:bg-indigo-700', '');
+        confirmBtn.textContent = '✓ ' + summary;
+        confirmBtn.style.background = errors > 0 ? '#d97706' : '#16a34a';
 
-        // Construir panel con tabla de resultados por variacion
-        var rows = results.map(function(v) {
-            var icon = v.error ? '❌' : (v.bm_total === 0 ? '⚠️' : '✅');
-            var skuLabel = v.sku ? ('<span style="color:#64748b;font-size:10px">' + v.sku + '</span>') : '';
-            var comboShort = (v.combo || ('Var ' + v.variation_id)).substring(0, 25);
-            var detail = v.error
-                ? '<span style="color:#dc2626">' + v.error + '</span>'
-                : 'BM <b>' + v.bm_total + '</b> → MeLi <b>' + v.meli_qty + '</b>';
-            return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #f1f5f9">'
-                + icon + ' <div style="flex:1"><div>' + comboShort + '</div>' + skuLabel + '</div>'
-                + '<div style="text-align:right">' + detail + '</div></div>';
-        }).join('');
-
-        panel.innerHTML = '<div style="font-weight:600;color:#4338ca;margin-bottom:6px">'
-            + summary + ' <span style="float:right;cursor:pointer;color:#94a3b8" onclick="document.getElementById(\'' + panelId + '\').style.display=\'none\'">✕</span></div>'
-            + rows
-            + '<div style="color:#94a3b8;font-size:10px;margin-top:5px">Sincronizado al 60% del stock BM</div>';
-
+        if (origBtn) {
+            origBtn.textContent = summary;
+            origBtn.className = origBtn.className
+                .replace('bg-indigo-600', errors > 0 ? 'bg-yellow-500' : 'bg-green-600')
+                .replace('hover:bg-indigo-700', '').replace('active:bg-indigo-700', '');
+        }
         var row = document.getElementById('restock-m-' + itemId)
                || document.getElementById('restock-d-' + itemId)
                || document.getElementById('risk-m-' + itemId)
                || document.getElementById('risk-d-' + itemId);
         if (row) row.classList.add('opacity-60');
-
-        // Auto-cerrar panel al click fuera
-        setTimeout(function() {
-            document.addEventListener('click', function closePnl(e) {
-                if (!panel.contains(e.target) && e.target !== btn) {
-                    panel.style.display = 'none';
-                    document.removeEventListener('click', closePnl);
-                }
-            });
-        }, 100);
     })
     .catch(function(e) {
-        btn.textContent = origText;
-        btn.disabled = false;
-        panel.innerHTML = '<span style="color:#dc2626">Error: ' + e.message + '</span>';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Error: ' + e.message;
+        confirmBtn.style.background = '#dc2626';
     });
 }
 

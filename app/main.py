@@ -5158,6 +5158,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             pass
         pct = float(body.get("pct", 0.6))
         pct = max(0.0, min(1.0, pct))
+        dry_run = bool(body.get("dry_run", False))  # Si True: consulta BM pero NO actualiza MeLi
 
         # 1. Obtener variaciones con SKUs
         # El batch fetch (GET /items?ids=) no devuelve attributes por variacion.
@@ -5275,7 +5276,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 continue  # No actualizar variaciones con error en BM
             var_updates.append({"id": r["variation_id"], "available_quantity": qty})
 
-        if var_updates:
+        if var_updates and not dry_run:
             try:
                 await client.update_variation_stocks_directly(item_id, var_updates)
                 # Marcar como actualizadas
@@ -5295,6 +5296,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             "ok": True,
             "item_id": item_id,
             "pct": pct,
+            "dry_run": dry_run,
             "results": list(var_results),
             "updated_count": sum(1 for r in var_results if r["updated"]),
         })
