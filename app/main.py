@@ -1233,7 +1233,7 @@ async def products_stock_issues_partial(request: Request):
         date_to = now.strftime("%Y-%m-%d")
 
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_paused=True),
+            _get_all_products_cached(client, include_all=True),
             _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
@@ -1319,10 +1319,19 @@ _STOCK_ISSUES_TTL = 300      # 5 min
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 
 
-async def _get_all_products_cached(client, include_paused=False) -> list[dict]:
-    """Devuelve todos los items (active + opcionalmente paused), cacheado 15 min.
+_ALL_MELI_STATUSES = ["active", "paused", "closed", "inactive", "under_review"]
+
+async def _get_all_products_cached(client, include_paused=False, include_all=False) -> list[dict]:
+    """Devuelve todos los items, cacheado 15 min.
+    include_all=True trae TODOS los statuses (active, paused, closed, inactive, under_review).
+    include_paused=True trae active + paused.
     Lock previene doble fetch cuando multiples requests concurrentes."""
-    suffix = ":with_paused" if include_paused else ""
+    if include_all:
+        suffix = ":all_statuses"
+    elif include_paused:
+        suffix = ":with_paused"
+    else:
+        suffix = ""
     key = f"products:{client.user_id}{suffix}"
     entry = _products_cache.get(key)
     if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
@@ -1333,7 +1342,9 @@ async def _get_all_products_cached(client, include_paused=False) -> list[dict]:
         if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
             return entry[1]
 
-        if include_paused:
+        if include_all:
+            all_ids = await client.get_all_item_ids_by_statuses(_ALL_MELI_STATUSES)
+        elif include_paused:
             all_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
         else:
             all_ids = await client.get_all_active_item_ids()
@@ -1430,7 +1441,7 @@ async def _prewarm_caches():
             date_to = now.strftime("%Y-%m-%d")
 
             all_bodies, all_orders = await asyncio.gather(
-                _get_all_products_cached(client, include_paused=True),
+                _get_all_products_cached(client, include_all=True),
                 _get_orders_cached(client, date_from, date_to),
             )
             sales_map = _aggregate_sales_by_item(all_orders)
@@ -1844,7 +1855,7 @@ async def products_inventory_partial(
 
         # Fase 1: fetch paralelo (products + orders)
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
+            _get_all_products_cached(client, include_all=True),
             _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
@@ -2149,7 +2160,7 @@ async def products_deals_partial(request: Request):
 
         # Items + orders en paralelo (ambos cached)
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
+            _get_all_products_cached(client, include_all=True),
             client.fetch_all_orders(date_from=date_from, date_to=date_to),
         )
 
@@ -2281,7 +2292,7 @@ async def products_not_published_partial(request: Request):
 
         # Items (cached) + ordenes (cached) en paralelo
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client),
+            _get_all_products_cached(client, include_all=True),
             client.fetch_all_orders(date_from=date_from, date_to=date_to),
         )
 
