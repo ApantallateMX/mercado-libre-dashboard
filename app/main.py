@@ -4866,25 +4866,41 @@ async def get_campaigns_list():
 
 @app.get("/api/ads/check-write-permission")
 async def check_ads_write_permission():
-    """Verifica si la app tiene permiso de escritura en Product Ads intentando un PUT inocuo."""
+    """Verifica certification_status de la app y si tiene permiso de escritura en Product Ads."""
+    import os
     from app.services.meli_client import MeliApiError
     client = await get_meli_client()
     if not client:
         return JSONResponse({"write_enabled": False, "error": "not_authenticated"}, status_code=401)
     try:
-        # Intentar PUT con status=idle, campaign_id=0 (sin cambios reales)
-        await client._request_raw(
-            "PUT",
-            "/marketplace/advertising/MLM/product_ads/ads/MLM1346239567",
-            extra_headers={"api-version": "2"},
-            json={"status": "idle", "campaign_id": 0},
-        )
-        return JSONResponse({"write_enabled": True})
-    except MeliApiError as e:
-        if e.status_code == 401:
-            return JSONResponse({"write_enabled": False, "error": "permission_denied", "detail": str(e)})
-        # Otro error (404, 400...) pero NO es de permisos -> write access funciona
-        return JSONResponse({"write_enabled": True, "note": f"Got {e.status_code} but not auth error"})
+        app_id = os.environ.get("MELI_CLIENT_ID", "")
+        # 1. Verificar certification_status de la app
+        cert_status = "unknown"
+        try:
+            app_info = await client._request_raw("GET", f"/applications/{app_id}")
+            cert_status = app_info.get("certification_status", "unknown")
+        except Exception:
+            pass
+
+        # 2. Intentar el PUT de todas formas para comprobar si ya funciona
+        try:
+            await client._request_raw(
+                "PUT",
+                "/marketplace/advertising/MLM/product_ads/ads/MLM1346239567",
+                extra_headers={"api-version": "2"},
+                json={"status": "idle", "campaign_id": 0},
+            )
+            return JSONResponse({"write_enabled": True, "certification_status": cert_status})
+        except MeliApiError as e:
+            if e.status_code == 401:
+                return JSONResponse({
+                    "write_enabled": False,
+                    "error": "not_certified",
+                    "certification_status": cert_status,
+                    "detail": "La app requiere certificacion MeLi para escribir en Product Ads"
+                })
+            # Cualquier otro error != 401 significa que el write ya funciona
+            return JSONResponse({"write_enabled": True, "certification_status": cert_status})
     except Exception as e:
         return JSONResponse({"write_enabled": False, "error": str(e)}, status_code=500)
     finally:

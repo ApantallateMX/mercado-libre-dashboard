@@ -226,56 +226,73 @@
 
             <!-- Aviso de permisos (detallado) -->
             <div id="asignar-permisos-aviso" class="hidden mt-4">
-                <div class="bg-red-50 border border-red-200 rounded-lg p-5">
+                <div class="bg-amber-50 border border-amber-300 rounded-lg p-5">
                     <div class="flex items-start gap-3 mb-4">
-                        <svg class="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        <svg class="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
                         </svg>
                         <div>
-                            <p class="text-sm font-bold text-red-800">La app no tiene permiso de escritura en Product Ads</p>
-                            <p class="text-xs text-red-700 mt-1">
-                                MeLi requiere activar el permiso funcional "Advertising &gt; Write" en el portal de developers.
-                                Este es un permiso de la <strong>app</strong>, no del token OAuth.
+                            <p class="text-sm font-bold text-amber-800">Requiere certificacion de la app en MeLi</p>
+                            <p class="text-xs text-amber-700 mt-1">
+                                La API de escritura de Product Ads requiere que la app este <strong>certificada</strong> por Mercado Libre.
+                                Los permisos del portal estan correctos — el bloqueo es a nivel de plataforma MeLi para apps no certificadas.
                             </p>
                         </div>
                     </div>
 
-                    <!-- Pasos para resolver -->
-                    <div class="bg-white rounded-lg border border-red-100 p-4 mb-4">
-                        <p class="text-xs font-bold text-gray-700 mb-3">Pasos para habilitar:</p>
+                    <!-- Explicacion tecnica -->
+                    <div class="bg-white rounded-lg border border-amber-100 p-4 mb-4">
+                        <p class="text-xs font-bold text-gray-700 mb-2">Que significa esto:</p>
+                        <ul class="space-y-1.5 text-xs text-gray-600 mb-4">
+                            <li class="flex items-start gap-2">
+                                <span class="text-green-500 font-bold mt-0.5">✓</span>
+                                <span>Los scopes OAuth estan correctos: <code class="bg-gray-100 px-1 rounded">urn:ml:mktp:ads:/read-write</code></span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="text-green-500 font-bold mt-0.5">✓</span>
+                                <span>Los permisos del portal: "Publicidad > Lectura y escritura" habilitado</span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="text-red-500 font-bold mt-0.5">✗</span>
+                                <span>La app <strong>CLAUDE</strong> (ID: 7997483236761265) tiene <code class="bg-amber-100 text-amber-800 px-1 rounded">certification_status: not_certified</code></span>
+                            </li>
+                        </ul>
+                        <p class="text-xs font-bold text-gray-700 mb-3">Como solicitar la certificacion:</p>
                         <ol class="space-y-2 text-xs text-gray-700">
                             <li class="flex items-start gap-2">
-                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">1</span>
-                                <span>Ve a <a href="https://developers.mercadolibre.com.mx/devcenter" target="_blank" class="text-blue-600 font-semibold underline">developers.mercadolibre.com.mx</a> e inicia sesion</span>
+                                <span class="bg-amber-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">1</span>
+                                <span>Ve a <a href="https://developers.mercadolibre.com.mx/devcenter" target="_blank" class="text-blue-600 font-semibold underline">developers.mercadolibre.com.mx</a> → tu app <strong>CLAUDE</strong></span>
                             </li>
                             <li class="flex items-start gap-2">
-                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">2</span>
-                                <span>Busca tu app <strong>"CLAUDE"</strong> (ID: 7997483236761265) y haz clic en <strong>Editar</strong></span>
+                                <span class="bg-amber-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">2</span>
+                                <span>Busca la seccion <strong>"Certificacion"</strong> o <strong>"Solicitar certificacion"</strong> en el dashboard de la app</span>
                             </li>
                             <li class="flex items-start gap-2">
-                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">3</span>
-                                <span>En la seccion <strong>"Permisos"</strong> o <strong>"Scopes"</strong>, busca <strong>Publicidad / Advertising</strong></span>
+                                <span class="bg-amber-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">3</span>
+                                <span>Completa el formulario explicando el uso de Product Ads API (gestion de campanas del seller)</span>
                             </li>
                             <li class="flex items-start gap-2">
-                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">4</span>
-                                <span>Cambia el permiso de <span class="bg-gray-100 px-1 rounded">Solo lectura</span> a <span class="bg-green-100 text-green-700 px-1 rounded font-semibold">Lectura y escritura</span></span>
-                            </li>
-                            <li class="flex items-start gap-2">
-                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">5</span>
-                                <span>Guarda los cambios y luego <a href="/auth/connect" class="text-blue-600 font-semibold underline">re-autentica aqui</a> para aplicarlos</span>
+                                <span class="bg-amber-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">4</span>
+                                <span>MeLi revisa y aprueba (puede tomar algunos dias). Una vez certificada, los writes funcionan automaticamente.</span>
                             </li>
                         </ol>
+                    </div>
+
+                    <!-- Alternativa manual -->
+                    <div class="bg-blue-50 rounded-lg border border-blue-100 p-3 mb-4">
+                        <p class="text-xs font-semibold text-blue-800 mb-1">Mientras tanto — asignar manualmente:</p>
+                        <p class="text-xs text-blue-700">
+                            Ve a <a href="https://ads.mercadolibre.com.mx" target="_blank" class="font-semibold underline">ads.mercadolibre.com.mx</a>
+                            → selecciona la campana → agrega el item MLM1346239567 desde el portal web de MeLi Ads.
+                        </p>
                     </div>
 
                     <!-- Boton de verificar -->
                     <div class="flex items-center gap-3">
                         <button onclick="verificarPermisoAds()" id="btn-verificar-permiso"
-                                class="text-xs bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-yellow-500 transition">
-                            Verificar permisos ahora
+                                class="text-xs bg-amber-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-amber-500 transition">
+                            Verificar si ya esta certificada
                         </button>
-                        <a href="/auth/connect" class="text-xs bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-                            Re-autorizar app
-                        </a>
                         <span id="verificar-result" class="text-xs text-gray-600"></span>
                     </div>
                 </div>
