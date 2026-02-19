@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN
+from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN, MELI_USER_ID_2, MELI_REFRESH_TOKEN_2
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -18,7 +18,7 @@ from app.api.health import router as health_router
 from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
 from app.services import token_store
-from app.services.meli_client import get_meli_client
+from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
 
 # ---------- SKU suffix helpers ----------
@@ -94,14 +94,8 @@ def _calc_margins(products: list, usd_to_mxn: float):
             p["_margen_pct"] = None
 
 
-async def _seed_tokens():
-    """Auto-recover MeLi tokens from env vars after Railway deploy."""
-    if not MELI_REFRESH_TOKEN or not MELI_USER_ID:
-        return
-    existing = await token_store.get_any_tokens()
-    if existing:
-        return
-    # DB empty but env vars present → refresh to get new access_token
+async def _seed_one(user_id: str, refresh_token: str, label: str):
+    """Intenta recuperar tokens para una cuenta via refresh_token."""
     import httpx
     from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET
     try:
@@ -110,21 +104,35 @@ async def _seed_tokens():
                 "grant_type": "refresh_token",
                 "client_id": MELI_CLIENT_ID,
                 "client_secret": MELI_CLIENT_SECRET,
-                "refresh_token": MELI_REFRESH_TOKEN,
+                "refresh_token": refresh_token,
             })
             if resp.status_code == 200:
                 data = resp.json()
                 await token_store.save_tokens(
-                    MELI_USER_ID,
+                    user_id,
                     data["access_token"],
                     data["refresh_token"],
                     data.get("expires_in", 21600),
                 )
-                print(f"[SEED] Tokens recovered for user {MELI_USER_ID}")
+                print(f"[SEED] Tokens recovered for {label} (user {user_id})")
             else:
-                print(f"[SEED] Token refresh failed: {resp.status_code} {resp.text[:200]}")
+                print(f"[SEED] Token refresh failed for {label}: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
-        print(f"[SEED] Error recovering tokens: {e}")
+        print(f"[SEED] Error recovering tokens for {label}: {e}")
+
+
+async def _seed_tokens():
+    """Auto-recover MeLi tokens from env vars after Railway deploy."""
+    # Cuenta principal
+    if MELI_REFRESH_TOKEN and MELI_USER_ID:
+        existing = await token_store.get_tokens(MELI_USER_ID)
+        if not existing:
+            await _seed_one(MELI_USER_ID, MELI_REFRESH_TOKEN, "cuenta1")
+    # Cuenta 2
+    if MELI_REFRESH_TOKEN_2 and MELI_USER_ID_2:
+        existing2 = await token_store.get_tokens(MELI_USER_ID_2)
+        if not existing2:
+            await _seed_one(MELI_USER_ID_2, MELI_REFRESH_TOKEN_2, "cuenta2")
 
 
 @asynccontextmanager
@@ -158,7 +166,23 @@ class PinMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class AccountMiddleware(BaseHTTPMiddleware):
+    """Setea el ContextVar de cuenta activa basado en la cookie active_account_id."""
+    async def dispatch(self, request: Request, call_next):
+        cookie_uid = request.cookies.get("active_account_id")
+        if cookie_uid:
+            tokens = await token_store.get_tokens(cookie_uid)
+            if tokens:
+                token = _meli_user_id_ctx.set(cookie_uid)
+                try:
+                    return await call_next(request)
+                finally:
+                    _meli_user_id_ctx.reset(token)
+        return await call_next(request)
+
+
 app.add_middleware(PinMiddleware)
+app.add_middleware(AccountMiddleware)
 
 
 # ---------- PIN routes ----------
@@ -196,6 +220,35 @@ app.include_router(metrics_router)
 app.include_router(health_router)
 app.include_router(sku_inventory_router)
 app.include_router(health_ai_router)
+
+
+# ---------- Account switcher ----------
+
+@app.post("/auth/switch-account")
+async def switch_account(request: Request):
+    """Cambia la cuenta activa y setea la cookie active_account_id."""
+    form = await request.form()
+    uid = form.get("user_id", "")
+    if uid:
+        tokens = await token_store.get_tokens(uid)
+        if tokens:
+            referer = request.headers.get("referer", "/dashboard")
+            response = RedirectResponse(referer, status_code=303)
+            response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
+            return response
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+async def _accounts_ctx(request: Request) -> dict:
+    """Contexto común de cuentas para templates de página."""
+    accounts = await token_store.get_all_tokens()
+    active_uid = request.cookies.get("active_account_id")
+    # Si la cookie apunta a una cuenta inexistente, usar la primera disponible
+    if active_uid and not any(a["user_id"] == active_uid for a in accounts):
+        active_uid = None
+    if not active_uid and accounts:
+        active_uid = accounts[0]["user_id"]
+    return {"accounts": accounts, "active_user_id": active_uid}
 
 
 async def _enrich_with_sale_prices(client, products: list, id_key: str = "id", price_key: str = "price"):
@@ -515,10 +568,12 @@ async def dashboard_page(request: Request):
     global _prewarm_task
     if _prewarm_task is None or _prewarm_task.done():
         _prewarm_task = asyncio.create_task(_prewarm_caches())
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "user": user,
-        "active": "dashboard"
+        "active": "dashboard",
+        **ctx
     })
 
 
@@ -527,10 +582,12 @@ async def orders_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("orders.html", {
         "request": request,
         "user": user,
-        "active": "orders"
+        "active": "orders",
+        **ctx
     })
 
 
@@ -543,10 +600,12 @@ async def items_page(request: Request):
     global _prewarm_task
     if _prewarm_task is None or _prewarm_task.done():
         _prewarm_task = asyncio.create_task(_prewarm_caches())
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("items.html", {
         "request": request,
         "user": user,
-        "active": "items"
+        "active": "items",
+        **ctx
     })
 
 
@@ -555,10 +614,12 @@ async def sku_sales_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("sku_sales.html", {
         "request": request,
         "user": user,
-        "active": "sku_sales"
+        "active": "sku_sales",
+        **ctx
     })
 
 
@@ -567,10 +628,12 @@ async def sku_compare_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("sku_compare.html", {
         "request": request,
         "user": user,
-        "active": "sku_compare"
+        "active": "sku_compare",
+        **ctx
     })
 
 
@@ -579,10 +642,12 @@ async def sku_inventory_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("sku_inventory.html", {
         "request": request,
         "user": user,
-        "active": "sku_inventory"
+        "active": "sku_inventory",
+        **ctx
     })
 
 
@@ -772,10 +837,12 @@ async def ads_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("ads.html", {
         "request": request,
         "user": user,
-        "active": "ads"
+        "active": "ads",
+        **ctx
     })
 
 
@@ -784,10 +851,12 @@ async def health_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("health.html", {
         "request": request,
         "user": user,
-        "active": "health"
+        "active": "health",
+        **ctx
     })
 
 
@@ -796,10 +865,12 @@ async def items_health_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
     return templates.TemplateResponse("items_health.html", {
         "request": request,
         "user": user,
-        "active": "items_health"
+        "active": "items_health",
+        **ctx
     })
 
 

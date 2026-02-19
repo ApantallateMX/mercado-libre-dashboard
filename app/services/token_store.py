@@ -14,9 +14,16 @@ async def init_db():
                 access_token TEXT NOT NULL,
                 refresh_token TEXT NOT NULL,
                 expires_at TIMESTAMP NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                nickname TEXT DEFAULT ''
             )
         """)
+        # Migration: add nickname column if table already exists without it
+        try:
+            await db.execute("ALTER TABLE tokens ADD COLUMN nickname TEXT DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass  # Column already exists
         await db.execute("""
             CREATE TABLE IF NOT EXISTS oauth_states (
                 state TEXT PRIMARY KEY,
@@ -56,19 +63,20 @@ async def pop_oauth_state(state: str) -> Optional[str]:
         return row["code_verifier"]
 
 
-async def save_tokens(user_id: str, access_token: str, refresh_token: str, expires_in: int):
+async def save_tokens(user_id: str, access_token: str, refresh_token: str, expires_in: int, nickname: str = ""):
     """Guarda o actualiza los tokens de un usuario."""
     expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
-            INSERT INTO tokens (user_id, access_token, refresh_token, expires_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO tokens (user_id, access_token, refresh_token, expires_at, nickname)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 access_token = excluded.access_token,
                 refresh_token = excluded.refresh_token,
-                expires_at = excluded.expires_at
-        """, (user_id, access_token, refresh_token, expires_at))
+                expires_at = excluded.expires_at,
+                nickname = CASE WHEN excluded.nickname != '' THEN excluded.nickname ELSE tokens.nickname END
+        """, (user_id, access_token, refresh_token, expires_at, nickname))
         await db.commit()
 
 
@@ -94,6 +102,15 @@ async def get_any_tokens() -> Optional[dict]:
         if row:
             return dict(row)
         return None
+
+
+async def get_all_tokens() -> list:
+    """Devuelve todas las cuentas almacenadas (user_id + nickname)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT user_id, nickname FROM tokens ORDER BY created_at")
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def delete_tokens(user_id: str):

@@ -9,7 +9,8 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from app.config import (
     MELI_AUTH_URL, MELI_TOKEN_URL, MELI_API_URL,
-    MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI, SECRET_KEY
+    MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI, SECRET_KEY,
+    MELI_USER_ID, MELI_USER_ID_2
 )
 from app.services import token_store
 
@@ -138,13 +139,16 @@ async def callback(code: str = None, state: str = None, error: str = None):
         user_data = user_response.json()
 
     new_refresh = token_data.get("refresh_token", "")
+    uid = str(user_data["id"])
+    nickname = user_data.get("nickname", "")
 
-    # Guardar tokens en DB
+    # Guardar tokens en DB con nickname
     await token_store.save_tokens(
-        user_id=str(user_data["id"]),
+        user_id=uid,
         access_token=token_data["access_token"],
         refresh_token=new_refresh,
-        expires_in=token_data.get("expires_in", 21600)
+        expires_in=token_data.get("expires_in", 21600),
+        nickname=nickname,
     )
 
     # Persistir nuevo refresh_token en .env.production para sobrevivir redeploys de Railway
@@ -155,16 +159,32 @@ async def callback(code: str = None, state: str = None, error: str = None):
             if _os.path.exists(path):
                 try:
                     text = open(path, encoding="utf-8").read()
-                    if "MELI_REFRESH_TOKEN" in text:
-                        text = _re.sub(r"MELI_REFRESH_TOKEN=.*", f"MELI_REFRESH_TOKEN={new_refresh}", text)
+                    if uid == MELI_USER_ID:
+                        # Cuenta principal (1)
+                        text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN=.*$", f"MELI_REFRESH_TOKEN={new_refresh}", text)
+                        if "MELI_REFRESH_TOKEN=" not in text:
+                            text += f"\nMELI_REFRESH_TOKEN={new_refresh}\n"
                     else:
-                        text += f"\nMELI_REFRESH_TOKEN={new_refresh}\n"
+                        # Cuenta 2 (u otras)
+                        if _re.search(r"(?m)^MELI_REFRESH_TOKEN_2=", text):
+                            text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN_2=.*$", f"MELI_REFRESH_TOKEN_2={new_refresh}", text)
+                        else:
+                            text += f"\nMELI_REFRESH_TOKEN_2={new_refresh}\n"
+                        # Actualizar MELI_USER_ID_2 si esta vacio
+                        if not MELI_USER_ID_2:
+                            if _re.search(r"(?m)^MELI_USER_ID_2=", text):
+                                text = _re.sub(r"(?m)^MELI_USER_ID_2=.*$", f"MELI_USER_ID_2={uid}", text)
+                            else:
+                                text += f"\nMELI_USER_ID_2={uid}\n"
                     open(path, "w", encoding="utf-8").write(text)
-                    print(f"[AUTH] Refresh token updated in {env_file}")
+                    print(f"[AUTH] Tokens updated for user {uid} in {env_file}")
                 except Exception as _e:
                     print(f"[AUTH] Could not update {env_file}: {_e}")
 
-    return RedirectResponse(url="/dashboard")
+    # Setear cookie de cuenta activa
+    response = RedirectResponse(url="/dashboard", status_code=303)
+    response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
+    return response
 
 
 @router.post("/logout")

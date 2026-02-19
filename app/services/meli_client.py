@@ -1,9 +1,13 @@
 import asyncio
 import time
 import httpx
+from contextvars import ContextVar
 from typing import Optional
 from app.config import MELI_API_URL, MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI
 from app.services import token_store
+
+# ContextVar para la cuenta activa — lo setea AccountMiddleware por request
+_active_user_id: ContextVar[str | None] = ContextVar('active_user_id', default=None)
 
 
 class MeliApiError(Exception):
@@ -1291,9 +1295,17 @@ class MeliClient:
             return {"error": str(e)}
 
 
-async def get_meli_client() -> Optional[MeliClient]:
-    """Factory para obtener un cliente MeLi con tokens almacenados."""
-    tokens = await token_store.get_any_tokens()
+async def get_meli_client(user_id: str = None) -> Optional[MeliClient]:
+    """Factory para obtener un cliente MeLi con tokens almacenados.
+    Si user_id es None, usa el ContextVar de la cuenta activa (seteado por AccountMiddleware).
+    Si tampoco hay ContextVar, usa get_any_tokens() para compatibilidad con single-user.
+    """
+    if user_id is None:
+        user_id = _active_user_id.get()
+    if user_id:
+        tokens = await token_store.get_tokens(user_id)
+    else:
+        tokens = await token_store.get_any_tokens()
     if not tokens:
         return None
 
