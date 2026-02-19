@@ -143,7 +143,7 @@ app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_PATH / "templates")
 
 # ---------- PIN access middleware ----------
-_PIN_EXEMPT = ("/pin", "/pin/verify", "/static", "/favicon.ico")
+_PIN_EXEMPT = ("/pin", "/pin/verify", "/static", "/favicon.ico", "/auth/")
 
 
 class PinMiddleware(BaseHTTPMiddleware):
