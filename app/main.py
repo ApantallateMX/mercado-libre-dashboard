@@ -259,8 +259,16 @@ async def switch_account(request: Request):
 async def debug_accounts(request: Request):
     """Diagnóstico temporal: env vars + cuentas en DB."""
     from fastapi.responses import JSONResponse
-    import os
+    import os, aiosqlite
     from pathlib import Path
+    from app.config import DATABASE_PATH
+
+    # Env vars
+    uid2_env = os.getenv("MELI_USER_ID_2", "")
+    rt2_env = os.getenv("MELI_REFRESH_TOKEN_2", "")
+    rt1_env = os.getenv("MELI_REFRESH_TOKEN", "")
+
+    # .env.production en disco
     env_file = Path(__file__).resolve().parent.parent / ".env.production"
     env_disk = {}
     if env_file.exists():
@@ -269,26 +277,33 @@ async def debug_accounts(request: Request):
             if '=' in line and not line.startswith('#'):
                 k, _, v = line.partition('=')
                 env_disk[k.strip()] = v.strip()
-    rows = await token_store.get_all_tokens()
-    db_accounts = []
-    for row in rows:
-        tokens = await token_store.get_tokens(row["user_id"])
-        db_accounts.append({
-            "user_id": row["user_id"],
-            "nickname": row.get("nickname", ""),
-            "has_refresh_token": bool(tokens and tokens.get("refresh_token")),
-        })
+
+    # Query directa a DB para evitar wrappers
+    raw_rows = []
+    db_error = None
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT user_id, nickname, substr(refresh_token,1,25) as rt_preview FROM tokens")
+            raw_rows = [dict(r) for r in await cur.fetchall()]
+    except Exception as e:
+        db_error = str(e)
+
     return JSONResponse({
+        "db_path": str(DATABASE_PATH),
+        "db_error": db_error,
+        "db_rows": raw_rows,
         "env_vars": {
-            "MELI_USER_ID": os.getenv("MELI_USER_ID", "")[:8] + "...",
-            "MELI_USER_ID_2": os.getenv("MELI_USER_ID_2", "") or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": (os.getenv("MELI_REFRESH_TOKEN_2", "") or "(vacío)")[:20] + "...",
+            "MELI_USER_ID": os.getenv("MELI_USER_ID", "")[:10] + "...",
+            "MELI_REFRESH_TOKEN": (rt1_env or "(vacío)")[:25] + "...",
+            "MELI_USER_ID_2": uid2_env or "(vacío)",
+            "MELI_REFRESH_TOKEN_2": (rt2_env or "(vacío)")[:25] + "...",
         },
-        "env_production_disk": {
-            "MELI_USER_ID_2": env_disk.get("MELI_USER_ID_2", "(no encontrado)") or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": (env_disk.get("MELI_REFRESH_TOKEN_2", "") or "(vacío)")[:20] + "...",
+        "env_disk": {
+            "MELI_USER_ID_2": env_disk.get("MELI_USER_ID_2", "") or "(vacío)",
+            "MELI_REFRESH_TOKEN_2": (env_disk.get("MELI_REFRESH_TOKEN_2", "") or "(vacío)")[:25] + "...",
         },
-        "db_accounts": db_accounts,
+        "cookie_active_account": request.cookies.get("active_account_id", "(sin cookie)"),
     })
 
 
