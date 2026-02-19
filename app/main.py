@@ -255,6 +255,23 @@ async def switch_account(request: Request):
     return RedirectResponse("/dashboard", status_code=303)
 
 
+@app.get("/api/admin/accounts-export")
+async def accounts_export(request: Request):
+    """Endpoint temporal: exporta user_id + refresh_token de todas las cuentas en DB."""
+    from fastapi.responses import JSONResponse
+    rows = await token_store.get_all_tokens()
+    result = []
+    for row in rows:
+        uid = row["user_id"]
+        tokens = await token_store.get_tokens(uid)
+        result.append({
+            "user_id": uid,
+            "nickname": row.get("nickname", ""),
+            "refresh_token": tokens["refresh_token"] if tokens else None,
+        })
+    return JSONResponse(result)
+
+
 async def _accounts_ctx(request: Request) -> dict:
     """Contexto común de cuentas para templates de página."""
     accounts = await token_store.get_all_tokens()
