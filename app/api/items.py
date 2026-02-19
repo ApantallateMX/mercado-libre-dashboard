@@ -6,6 +6,7 @@ import asyncio
 from app.services.meli_client import get_meli_client, MeliApiError
 
 BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 BM_COMPANY_ID = 1
 BM_LOCATION_IDS = "47,62,68"
 BM_CONDITIONS_GR = "GRA,GRB,GRC,NEW"           # SKUs sin sufijo IC: solo condicion buena
@@ -41,35 +42,50 @@ def _parse_wh_rows_items(rows):
 
 
 async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
-    """Consulta stock real de BinManager via Warehouse endpoint (reserve + available en paralelo).
-    ForInventory:0 = total/reserve. ForInventory:1 = available (excluye reservados para órdenes).
-    Retorna dict con MainQtyMTY/CDMX/TJ (total) y AvailQtyMTY/CDMX (disponible).
+    """Consulta en paralelo:
+    1) Warehouse endpoint (ForInventory:0) → MTY/CDMX/TJ totales físicos
+    2) InventoryBySKUAndCondicion_Quantity → stock realmente disponible (Available),
+       excluyendo unidades reservadas para órdenes pendientes.
+    Retorna dict con MainQtyMTY/CDMX/TJ y AvailTotal.
     """
     base, _ = _get_base_and_type(sku)
-    base_payload = {
+    conditions = _bm_conditions(sku)
+    wh_payload = {
         "COMPANYID": BM_COMPANY_ID,
         "SKU": base,
         "WarehouseID": None,
         "LocationID": BM_LOCATION_IDS,
         "BINID": None,
-        "Condition": _bm_conditions(sku),
+        "Condition": conditions,
         "SUPPLIERS": None,
+        "ForInventory": 0,
+    }
+    avail_payload = {
+        "COMPANYID": BM_COMPANY_ID,
+        "TYPEINVENTORY": 0,
+        "WAREHOUSEID": None,
+        "LOCATIONID": BM_LOCATION_IDS,
+        "BINID": None,
+        "PRODUCTSKU": base,
+        "CONDITION": conditions,
+        "SUPPLIERS": None,
+        "LCN": None,
+        "SEARCH": base,
     }
     try:
-        r0, r1 = await asyncio.gather(
-            client.post(BM_WAREHOUSE_URL, json={**base_payload, "ForInventory": 0}, timeout=15.0),
-            client.post(BM_WAREHOUSE_URL, json={**base_payload, "ForInventory": 1}, timeout=15.0),
+        r_wh, r_avail = await asyncio.gather(
+            client.post(BM_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
+            client.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
             return_exceptions=True,
         )
-        rows_reserve = r0.json() if not isinstance(r0, Exception) and r0.status_code == 200 else []
-        rows_avail = r1.json() if not isinstance(r1, Exception) and r1.status_code == 200 else []
-        mty, cdmx, tj = _parse_wh_rows_items(rows_reserve)
-        avail_mty, avail_cdmx, _ = _parse_wh_rows_items(rows_avail)
+        rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+        avail_rows = r_avail.json() if not isinstance(r_avail, Exception) and r_avail.status_code == 200 else []
+        mty, cdmx, tj = _parse_wh_rows_items(rows_wh)
+        avail_total = sum(row.get("Available", 0) or 0 for row in avail_rows)
         if mty + cdmx + tj > 0:
             return {
                 "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
-                "AvailQtyMTY": avail_mty, "AvailQtyCDMX": avail_cdmx,
-                "AvailTotal": avail_mty + avail_cdmx,
+                "AvailTotal": avail_total,
                 "WebSKU": sku, "ProductSKU": base,
             }
     except Exception:

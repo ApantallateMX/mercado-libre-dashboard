@@ -1566,11 +1566,13 @@ async def _prewarm_caches():
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
-    """Devuelve {sku: {mty, cdmx, tj, total}} para products, con cache.
-    Usa Warehouse endpoint (Get_GlobalStock_InventoryBySKU_Warehouse) para stock real.
+    """Devuelve {sku: {mty, cdmx, tj, total, avail_total}} para products, con cache.
+    Usa Warehouse endpoint para desglose MTY/CDMX/TJ y InventoryBySKUAndCondicion_Quantity
+    para stock verdaderamente disponible (Available, excluyendo reservados).
     """
     import httpx
     BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+    BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 
     result_map = {}
     to_fetch = []
@@ -1620,12 +1622,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_reserve, rows_avail=None):
-        """Parsea filas del Warehouse endpoint (reserve + available) y cachea."""
-        mty, cdmx, tj = _parse_wh_rows(rows_reserve)
-        avail_mty, avail_cdmx, _ = _parse_wh_rows(rows_avail or [])
+    def _store_wh(sku, rows_wh, avail_rows=None):
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y Condition endpoint (Available) y cachea."""
+        mty, cdmx, tj = _parse_wh_rows(rows_wh)
+        # avail_rows es de InventoryBySKUAndCondicion_Quantity → suma campo Available por condición
+        avail_total = sum(row.get("Available", 0) or 0 for row in (avail_rows or []))
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx,
-               "avail_total": avail_mty + avail_cdmx}
+               "avail_total": avail_total}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:
             result_map[sku] = inv
@@ -1637,29 +1640,38 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     wh_sem = asyncio.Semaphore(20)
 
     async def _wh_phase(sku, http):
-        """Consulta Warehouse endpoint con ForInventory:0 (reserve/total) y
-        ForInventory:1 (available) en paralelo para detectar stock reservado."""
+        """Consulta en paralelo:
+        1) Warehouse endpoint (ForInventory:0) → MTY/CDMX/TJ breakdown (totales físicos)
+        2) InventoryBySKUAndCondicion_Quantity → stock realmente disponible (Available),
+           excluyendo unidades reservadas para órdenes pendientes.
+        """
         clean = _clean_sku_for_bm(sku)
         if not clean:
             _store_empty(sku)
             return
         base = _extract_base_sku(clean)
         conditions = _bm_conditions_for_sku(clean)
-        base_payload = {
+        wh_payload = {
             "COMPANYID": 1, "SKU": base, "WarehouseID": None,
             "LocationID": "47,62,68", "BINID": None,
-            "Condition": conditions, "SUPPLIERS": None,
+            "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
+        }
+        avail_payload = {
+            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+            "LOCATIONID": "47,62,68", "BINID": None,
+            "PRODUCTSKU": base, "CONDITION": conditions,
+            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
         }
         async with wh_sem:
             try:
-                r0, r1 = await asyncio.gather(
-                    http.post(BM_WH_URL, json={**base_payload, "ForInventory": 0}, timeout=15.0),
-                    http.post(BM_WH_URL, json={**base_payload, "ForInventory": 1}, timeout=15.0),
+                r_wh, r_avail = await asyncio.gather(
+                    http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
+                    http.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
                     return_exceptions=True,
                 )
-                rows_reserve = r0.json() if not isinstance(r0, Exception) and r0.status_code == 200 else []
-                rows_avail = r1.json() if not isinstance(r1, Exception) and r1.status_code == 200 else []
-                _store_wh(sku, rows_reserve, rows_avail)
+                rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+                avail_rows = r_avail.json() if not isinstance(r_avail, Exception) and r_avail.status_code == 200 else []
+                _store_wh(sku, rows_wh, avail_rows)
                 return
             except Exception:
                 pass
