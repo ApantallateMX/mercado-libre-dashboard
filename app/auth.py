@@ -1,13 +1,15 @@
 import secrets
 import hashlib
+import hmac
 import base64
+import json
 import httpx
 from urllib.parse import urlencode
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse
 from app.config import (
     MELI_AUTH_URL, MELI_TOKEN_URL, MELI_API_URL,
-    MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI
+    MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI, SECRET_KEY
 )
 from app.services import token_store
 
@@ -25,6 +27,39 @@ def _generate_code_challenge(code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+def _build_state(code_verifier: str) -> str:
+    """
+    Codifica el code_verifier dentro del state (firmado con SECRET_KEY).
+    Así no se necesita DB — funciona en Railway, local, o cualquier servidor.
+    Formato: base64(json({nonce, cv})).hmac_signature
+    """
+    nonce = secrets.token_urlsafe(16)
+    payload = json.dumps({"n": nonce, "cv": code_verifier}, separators=(",", ":"))
+    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    sig = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:20]
+    return f"{payload_b64}.{sig}"
+
+
+def _parse_state(state: str) -> str | None:
+    """
+    Extrae el code_verifier del state firmado.
+    Retorna None si la firma es invalida o el formato es incorrecto.
+    """
+    try:
+        payload_b64, sig = state.rsplit(".", 1)
+        expected = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:20]
+        if not hmac.compare_digest(sig, expected):
+            return None
+        # Añadir padding si falta
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload["cv"]
+    except Exception:
+        return None
+
+
 @router.get("/connect")
 async def connect():
     """Inicia el flujo OAuth redirigiendo a Mercado Libre."""
@@ -34,11 +69,9 @@ async def connect():
             detail="MELI_CLIENT_ID no configurado. Revisa el archivo .env"
         )
 
-    state = secrets.token_urlsafe(32)
     code_verifier = _generate_code_verifier()
     code_challenge = _generate_code_challenge(code_verifier)
-
-    await token_store.save_oauth_state(state, code_verifier)
+    state = _build_state(code_verifier)
 
     params = {
         "response_type": "code",
@@ -64,7 +97,10 @@ async def callback(code: str = None, state: str = None, error: str = None):
     if not code:
         raise HTTPException(status_code=400, detail="No se recibio codigo de autorizacion")
 
-    code_verifier = await token_store.pop_oauth_state(state)
+    if not state:
+        raise HTTPException(status_code=400, detail="State requerido")
+
+    code_verifier = _parse_state(state)
     if not code_verifier:
         raise HTTPException(status_code=400, detail="State invalido - posible CSRF")
 
@@ -78,7 +114,6 @@ async def callback(code: str = None, state: str = None, error: str = None):
             "redirect_uri": MELI_REDIRECT_URI,
             "code_verifier": code_verifier
         }
-        print(f"[AUTH DEBUG] Sending token request with code_verifier: {code_verifier[:10]}...")
         response = await client.post(
             MELI_TOKEN_URL,
             headers={"accept": "application/json", "content-type": "application/x-www-form-urlencoded"},
