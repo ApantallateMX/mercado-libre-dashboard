@@ -106,6 +106,10 @@
                     class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
                 Sin Publicidad
             </button>
+            <button onclick="showTab('asignar')" id="tab-asignar"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Asignar a Campana
+            </button>
         </nav>
     </div>
 
@@ -186,6 +190,55 @@
                 {% for i in range(3) %}
                 <div class="h-12 bg-gray-200 rounded"></div>
                 {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Asignar a Campana -->
+    <div id="panel-asignar" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <h2 class="text-base font-semibold text-gray-800">Asignar Item a Campana</h2>
+                <span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">Buscar y asignar</span>
+            </div>
+        </div>
+
+        <div class="p-6 max-w-2xl">
+            <!-- Buscador por MLM ID -->
+            <div class="mb-5">
+                <label class="block text-sm font-medium text-gray-700 mb-1">MLM ID del producto</label>
+                <div class="flex gap-2">
+                    <input type="text" id="asignar-item-input"
+                           placeholder="ej. MLM1346239567"
+                           class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none font-mono">
+                    <button onclick="buscarItemAds()" id="btn-buscar-item"
+                            class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-yellow-500 transition text-sm">
+                        Buscar
+                    </button>
+                </div>
+                <p class="text-xs text-gray-400 mt-1">Ingresa el ID completo del producto de Mercado Libre</p>
+            </div>
+
+            <!-- Resultado del item -->
+            <div id="asignar-item-result" class="hidden">
+                <!-- Se llena via JS -->
+            </div>
+
+            <!-- Aviso de permisos -->
+            <div id="asignar-permisos-aviso" class="hidden mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    <div>
+                        <p class="text-sm font-semibold text-amber-800">Permiso de escritura requerido</p>
+                        <p class="text-xs text-amber-700 mt-1">
+                            Para asignar items a campanas, necesitas autorizar la app con permisos de escritura en Product Ads.
+                            <a href="/auth/connect" class="font-semibold underline hover:text-amber-900">Haz clic aqui para re-autorizar</a>
+                            y luego intenta de nuevo.
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -305,12 +358,12 @@
 
     // === TABS ===
     var activeTab = 'campaigns';
-    var tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false };
+    var tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false, asignar: false };
 
     function showTab(name) {
         activeTab = name;
         // Ocultar todos los panels
-        ['campaigns', 'performance', 'by-category', 'burning', 'no-ads'].forEach(function(t) {
+        ['campaigns', 'performance', 'by-category', 'burning', 'no-ads', 'asignar'].forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
             var tab = document.getElementById('tab-' + t);
             if (panel) panel.classList.add('hidden');
@@ -335,7 +388,10 @@
 
     function loadTab(name) {
         var p = getDateParams();
-        if (name === 'campaigns') {
+        if (name === 'asignar') {
+            tabLoaded.asignar = true; // El panel se renderiza estaticamente, no necesita carga
+            return;
+        } else if (name === 'campaigns') {
             showSpinner(document.getElementById('ads-campaigns-table'));
             fetch('/partials/ads-campaigns?' + p)
                 .then(r => r.text())
@@ -428,7 +484,7 @@
         btn.classList.add('opacity-50');
 
         // Reset tab loaded state
-        tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false };
+        tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false, asignar: false };
 
         // KPIs
         fetch('/api/ads/metrics?' + p)
@@ -789,6 +845,169 @@
         link.click();
         URL.revokeObjectURL(link.href);
     }
+
+    // === ASIGNAR A CAMPANA ===
+    var _campaignsList = null; // Cache de campanas
+
+    function loadCampaignsList(callback) {
+        if (_campaignsList) { callback(_campaignsList); return; }
+        fetch('/api/ads/campaigns-list')
+            .then(r => r.json())
+            .then(data => {
+                _campaignsList = data.campaigns || [];
+                callback(_campaignsList);
+            })
+            .catch(() => callback([]));
+    }
+
+    function buscarItemAds() {
+        var itemId = document.getElementById('asignar-item-input').value.trim().toUpperCase();
+        if (!itemId) { alert('Ingresa un MLM ID'); return; }
+        if (!itemId.startsWith('MLM')) itemId = 'MLM' + itemId;
+
+        var resultEl = document.getElementById('asignar-item-result');
+        var avisoEl = document.getElementById('asignar-permisos-aviso');
+        var btn = document.getElementById('btn-buscar-item');
+
+        btn.disabled = true;
+        btn.textContent = 'Buscando...';
+        avisoEl.classList.add('hidden');
+        resultEl.innerHTML = '<div class="animate-pulse bg-gray-100 rounded-lg p-4 h-24"></div>';
+        resultEl.classList.remove('hidden');
+
+        Promise.all([
+            fetch('/api/ads/item/' + itemId).then(r => r.json()),
+            fetch('/api/ads/campaigns-list').then(r => r.json())
+        ]).then(function([itemData, campaignsData]) {
+            btn.disabled = false;
+            btn.textContent = 'Buscar';
+
+            if (itemData.detail) {
+                resultEl.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">Error: ' + itemData.detail + '</div>';
+                return;
+            }
+
+            _campaignsList = campaignsData.campaigns || [];
+            var camps = _campaignsList;
+            var currentCampId = itemData.campaign_id || 0;
+            var currentCampName = camps.find(c => c.id === currentCampId)?.name || (currentCampId === 0 ? 'Sin campana' : 'Campana #' + currentCampId);
+            var statusColor = { active: 'text-green-600 bg-green-50', idle: 'text-gray-500 bg-gray-50', paused: 'text-yellow-600 bg-yellow-50' };
+            var sc = statusColor[itemData.status] || 'text-gray-500 bg-gray-50';
+            var price = itemData.price ? '$' + itemData.price.toLocaleString('es-MX', {minimumFractionDigits: 2}) : '';
+
+            var campOptions = camps.map(c =>
+                '<option value="' + c.id + '"' + (c.id === currentCampId ? ' selected' : '') + '>' +
+                c.name + (c.status === 'paused' ? ' (pausada)' : '') + '</option>'
+            ).join('');
+
+            resultEl.innerHTML = [
+                '<div class="border border-gray-200 rounded-lg overflow-hidden">',
+                '  <div class="bg-gray-50 px-4 py-3 border-b border-gray-200 flex items-center gap-3">',
+                '    <div class="w-10 h-10 bg-white rounded border border-gray-200 flex items-center justify-center flex-shrink-0">',
+                '      <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>',
+                '    </div>',
+                '    <div class="flex-1 min-w-0">',
+                '      <p class="text-sm font-semibold text-gray-800 truncate">' + (itemData.title || itemId) + '</p>',
+                '      <p class="text-xs text-gray-500 font-mono">' + itemId + (price ? ' &nbsp;|&nbsp; ' + price : '') + '</p>',
+                '    </div>',
+                '    <span class="text-xs px-2 py-1 rounded-full font-medium ' + sc + '">' + (itemData.status || 'desconocido') + '</span>',
+                '  </div>',
+                '  <div class="px-4 py-4 space-y-4">',
+                '    <div class="flex items-center gap-3 text-sm">',
+                '      <span class="text-gray-500 w-28 flex-shrink-0">Campana actual:</span>',
+                '      <span class="font-medium text-gray-800">' + currentCampName + '</span>',
+                '    </div>',
+                '    <div>',
+                '      <label class="block text-sm font-medium text-gray-700 mb-1">Asignar a campana:</label>',
+                '      <div class="flex gap-2">',
+                '        <select id="asignar-camp-select" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none">',
+                '          <option value="">— Selecciona campana —</option>',
+                campOptions,
+                '        </select>',
+                '        <button onclick="ejecutarAsignacion(\'' + itemId + '\')" id="btn-ejecutar-asignar"',
+                '                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-yellow-500 transition text-sm whitespace-nowrap">',
+                '          Asignar',
+                '        </button>',
+                '      </div>',
+                '    </div>',
+                '    <div id="asignar-action-status" class="hidden text-sm rounded px-3 py-2"></div>',
+                '  </div>',
+                '</div>'
+            ].join('');
+        }).catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = 'Buscar';
+            resultEl.innerHTML = '<div class="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">Error al buscar: ' + e.message + '</div>';
+        });
+    }
+
+    window.ejecutarAsignacion = function(itemId) {
+        var select = document.getElementById('asignar-camp-select');
+        var campaignId = select ? select.value : '';
+        if (!campaignId) { alert('Selecciona una campana'); return; }
+
+        var btn = document.getElementById('btn-ejecutar-asignar');
+        var statusEl = document.getElementById('asignar-action-status');
+        var avisoEl = document.getElementById('asignar-permisos-aviso');
+
+        btn.disabled = true;
+        btn.textContent = 'Asignando...';
+        statusEl.classList.add('hidden');
+        avisoEl.classList.add('hidden');
+
+        fetch('/api/ads/assign-to-campaign', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({item_ids: [itemId], campaign_id: parseInt(campaignId)})
+        }).then(function(r) {
+            return r.json().then(function(d) { return {ok: r.ok, data: d}; });
+        }).then(function(res) {
+            btn.disabled = false;
+            btn.textContent = 'Asignar';
+            if (!res.ok || res.data.detail) {
+                var msg = res.data.detail || 'Error desconocido';
+                var esPermisos = msg.indexOf('permiso') > -1 || msg.indexOf('Unauthorized') > -1 || msg.indexOf('permission') > -1;
+                if (esPermisos) {
+                    avisoEl.classList.remove('hidden');
+                } else {
+                    statusEl.textContent = msg;
+                    statusEl.className = 'text-sm rounded px-3 py-2 bg-red-50 text-red-700';
+                    statusEl.classList.remove('hidden');
+                }
+                return;
+            }
+            var result = res.data.result || {};
+            var errors = result.errors || [];
+            if (errors.length > 0 && (result.results || []).length === 0) {
+                var errMsg = errors[0].error || 'Error al asignar';
+                var esPermisos = errMsg.indexOf('Unauthorized') > -1 || errMsg.indexOf('permission') > -1;
+                if (esPermisos) {
+                    avisoEl.classList.remove('hidden');
+                } else {
+                    statusEl.textContent = errMsg;
+                    statusEl.className = 'text-sm rounded px-3 py-2 bg-red-50 text-red-700';
+                    statusEl.classList.remove('hidden');
+                }
+            } else {
+                var campName = (_campaignsList || []).find(c => c.id == campaignId)?.name || 'campana seleccionada';
+                statusEl.textContent = '✓ Item asignado exitosamente a "' + campName + '"';
+                statusEl.className = 'text-sm rounded px-3 py-2 bg-green-50 text-green-700';
+                statusEl.classList.remove('hidden');
+            }
+        }).catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = 'Asignar';
+            statusEl.textContent = 'Error: ' + e.message;
+            statusEl.className = 'text-sm rounded px-3 py-2 bg-red-50 text-red-700';
+            statusEl.classList.remove('hidden');
+        });
+    };
+
+    // Habilitar buscar con Enter
+    document.addEventListener('DOMContentLoaded', function() {
+        var inp = document.getElementById('asignar-item-input');
+        if (inp) inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') buscarItemAds(); });
+    });
 
     // === INIT ===
     document.getElementById('btn-ads-filtrar').addEventListener('click', loadAll);

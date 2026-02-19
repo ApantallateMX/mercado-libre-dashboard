@@ -4816,6 +4816,54 @@ async def assign_items_to_campaign_api(request: Request):
         await client.close()
 
 
+@app.get("/api/ads/item/{item_id}")
+async def get_ad_item_status_api(item_id: str):
+    """Estado de un item en Product Ads via marketplace API v2."""
+    from app.services.meli_client import MeliApiError
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        resp = await client._request_raw(
+            "GET",
+            f"/marketplace/advertising/MLM/product_ads/ads/{item_id}",
+            extra_headers={"api-version": "2"},
+        )
+        return JSONResponse(resp)
+    except MeliApiError as e:
+        return JSONResponse({"detail": str(e)}, status_code=e.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/api/ads/campaigns-list")
+async def get_campaigns_list():
+    """Lista todas las campanas con ID y nombre (sin metricas, rapido)."""
+    from app.services.meli_client import MeliApiError
+    from datetime import date, timedelta
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        today = date.today().isoformat()
+        week_ago = (date.today() - timedelta(days=7)).isoformat()
+        data = await client.get_ads_campaigns(date_from=week_ago, date_to=today)
+        results = data.get("results", [])
+        campaigns = [
+            {"id": c.get("id"), "name": c.get("name"), "status": c.get("status")}
+            for c in results
+        ]
+        return JSONResponse({"campaigns": campaigns})
+    except MeliApiError as e:
+        return JSONResponse({"detail": str(e)}, status_code=e.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @app.post("/api/ads/campaigns/{campaign_id}")
 async def update_campaign_api(request: Request, campaign_id: str):
     """Actualiza una campaña de Product Ads (status, budget, acos_target)."""
