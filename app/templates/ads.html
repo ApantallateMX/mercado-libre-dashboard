@@ -224,19 +224,59 @@
                 <!-- Se llena via JS -->
             </div>
 
-            <!-- Aviso de permisos -->
-            <div id="asignar-permisos-aviso" class="hidden mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <div class="flex items-start gap-3">
-                    <svg class="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                    </svg>
-                    <div>
-                        <p class="text-sm font-semibold text-amber-800">Permiso de escritura requerido</p>
-                        <p class="text-xs text-amber-700 mt-1">
-                            Para asignar items a campanas, necesitas autorizar la app con permisos de escritura en Product Ads.
-                            <a href="/auth/connect" class="font-semibold underline hover:text-amber-900">Haz clic aqui para re-autorizar</a>
-                            y luego intenta de nuevo.
-                        </p>
+            <!-- Aviso de permisos (detallado) -->
+            <div id="asignar-permisos-aviso" class="hidden mt-4">
+                <div class="bg-red-50 border border-red-200 rounded-lg p-5">
+                    <div class="flex items-start gap-3 mb-4">
+                        <svg class="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                        <div>
+                            <p class="text-sm font-bold text-red-800">La app no tiene permiso de escritura en Product Ads</p>
+                            <p class="text-xs text-red-700 mt-1">
+                                MeLi requiere activar el permiso funcional "Advertising &gt; Write" en el portal de developers.
+                                Este es un permiso de la <strong>app</strong>, no del token OAuth.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Pasos para resolver -->
+                    <div class="bg-white rounded-lg border border-red-100 p-4 mb-4">
+                        <p class="text-xs font-bold text-gray-700 mb-3">Pasos para habilitar:</p>
+                        <ol class="space-y-2 text-xs text-gray-700">
+                            <li class="flex items-start gap-2">
+                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">1</span>
+                                <span>Ve a <a href="https://developers.mercadolibre.com.mx/devcenter" target="_blank" class="text-blue-600 font-semibold underline">developers.mercadolibre.com.mx</a> e inicia sesion</span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">2</span>
+                                <span>Busca tu app <strong>"CLAUDE"</strong> (ID: 7997483236761265) y haz clic en <strong>Editar</strong></span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">3</span>
+                                <span>En la seccion <strong>"Permisos"</strong> o <strong>"Scopes"</strong>, busca <strong>Publicidad / Advertising</strong></span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">4</span>
+                                <span>Cambia el permiso de <span class="bg-gray-100 px-1 rounded">Solo lectura</span> a <span class="bg-green-100 text-green-700 px-1 rounded font-semibold">Lectura y escritura</span></span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <span class="bg-yellow-400 text-gray-800 font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0 text-xs">5</span>
+                                <span>Guarda los cambios y luego <a href="/auth/connect" class="text-blue-600 font-semibold underline">re-autentica aqui</a> para aplicarlos</span>
+                            </li>
+                        </ol>
+                    </div>
+
+                    <!-- Boton de verificar -->
+                    <div class="flex items-center gap-3">
+                        <button onclick="verificarPermisoAds()" id="btn-verificar-permiso"
+                                class="text-xs bg-yellow-400 text-gray-800 font-semibold px-4 py-2 rounded-lg hover:bg-yellow-500 transition">
+                            Verificar permisos ahora
+                        </button>
+                        <a href="/auth/connect" class="text-xs bg-blue-600 text-white font-semibold px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+                            Re-autorizar app
+                        </a>
+                        <span id="verificar-result" class="text-xs text-gray-600"></span>
                     </div>
                 </div>
             </div>
@@ -1008,6 +1048,37 @@
         var inp = document.getElementById('asignar-item-input');
         if (inp) inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') buscarItemAds(); });
     });
+
+    window.verificarPermisoAds = function() {
+        var btn = document.getElementById('btn-verificar-permiso');
+        var resultEl = document.getElementById('verificar-result');
+        btn.disabled = true;
+        btn.textContent = 'Verificando...';
+        resultEl.textContent = '';
+        fetch('/api/ads/check-write-permission')
+            .then(r => r.json())
+            .then(function(data) {
+                btn.disabled = false;
+                btn.textContent = 'Verificar permisos ahora';
+                if (data.write_enabled) {
+                    resultEl.textContent = '✓ Permiso de escritura ACTIVO. Ya puedes asignar items.';
+                    resultEl.className = 'text-xs text-green-700 font-semibold';
+                    // Ocultar aviso despues de 2s para que el usuario intente de nuevo
+                    setTimeout(function() {
+                        document.getElementById('asignar-permisos-aviso').classList.add('hidden');
+                    }, 2000);
+                } else {
+                    resultEl.textContent = '✗ Permiso NO activo. Sigue los pasos indicados.';
+                    resultEl.className = 'text-xs text-red-700 font-semibold';
+                }
+            })
+            .catch(function(e) {
+                btn.disabled = false;
+                btn.textContent = 'Verificar permisos ahora';
+                resultEl.textContent = 'Error al verificar: ' + e.message;
+                resultEl.className = 'text-xs text-red-700';
+            });
+    };
 
     // === INIT ===
     document.getElementById('btn-ads-filtrar').addEventListener('click', loadAll);
