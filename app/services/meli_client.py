@@ -499,6 +499,20 @@ class MeliClient:
 
     # === Advertising (Mercado Ads / Product Ads) ===
 
+    # === Helpers para Advertising API v2 ===
+
+    async def _ads_get(self, path: str, params: dict = None) -> dict:
+        """GET con api-version: 2 para endpoints de advertising."""
+        return await self._request_raw("GET", path, extra_headers={"api-version": "2"}, params=params)
+
+    async def _ads_put(self, path: str, json: dict = None, params: dict = None) -> dict:
+        """PUT con api-version: 2 para endpoints de advertising."""
+        return await self._request_raw("PUT", path, extra_headers={"api-version": "2"}, json=json, params=params)
+
+    async def _ads_post(self, path: str, json: dict = None) -> dict:
+        """POST con api-version: 2 para endpoints de advertising."""
+        return await self._request_raw("POST", path, extra_headers={"api-version": "2"}, json=json)
+
     async def _get_advertiser_id(self) -> str:
         """Obtiene el advertiser_id del usuario (diferente al user_id)."""
         if self._advertiser_id:
@@ -516,28 +530,31 @@ class MeliClient:
         return await self.get("/advertising/advertisers", params={"product_id": "PADS"})
 
     async def get_ads_campaigns(self, date_from: str = None, date_to: str = None) -> dict:
-        """Obtiene campanas con metricas."""
+        """Obtiene campanas con metricas (nuevo endpoint API v2, Feb 2026)."""
         adv_id = await self._get_advertiser_id()
         params = {
-            "metrics": "clicks,prints,cost,cpc,acos,units_quantity,total_amount",
+            "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
             "metrics_summary": "true",
         }
         if date_from:
             params["date_from"] = date_from
         if date_to:
             params["date_to"] = date_to
-        return await self.get(f"/advertising/advertisers/{adv_id}/product_ads/campaigns", params=params)
+        return await self._ads_get(
+            f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns/search",
+            params=params
+        )
 
     async def get_ads_campaign_detail(self, campaign_id: str, date_from: str = None, date_to: str = None) -> dict:
-        """Obtiene detalle de una campana con metricas."""
+        """Obtiene detalle de una campana con metricas (nuevo endpoint API v2)."""
         params = {
-            "metrics": "clicks,prints,cost,cpc,acos,units_quantity,total_amount",
+            "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
         }
         if date_from:
             params["date_from"] = date_from
         if date_to:
             params["date_to"] = date_to
-        return await self.get(f"/advertising/product_ads/campaigns/{campaign_id}", params=params)
+        return await self._ads_get(f"/advertising/MLM/product_ads/campaigns/{campaign_id}", params=params)
 
     async def get_all_active_item_ids(self) -> list[str]:
         """Obtiene todos los item_ids activos del seller usando scroll."""
@@ -587,58 +604,103 @@ class MeliClient:
         return all_ids
 
     async def update_campaign(self, campaign_id: str, status: str = None,
-                              budget: float = None, acos_target: float = None) -> dict:
-        """Actualiza una campaña de Product Ads (status, budget, acos_target)."""
-        adv_id = await self._get_advertiser_id()
+                              budget: float = None, acos_target: float = None,
+                              roas_target: float = None) -> dict:
+        """Actualiza una campaña de Product Ads (nuevo endpoint API v2)."""
         payload = {}
         if status is not None:
             payload["status"] = status
         if budget is not None:
             payload["budget"] = budget
-        if acos_target is not None:
+        if roas_target is not None:
+            payload["roas_target"] = max(1.0, min(35.0, roas_target))
+        elif acos_target is not None:
             payload["acos_target"] = max(3, min(500, acos_target))
-        return await self.put(
-            f"/advertising/advertisers/{adv_id}/product_ads/campaigns/{campaign_id}",
+        return await self._ads_put(
+            f"/marketplace/advertising/MLM/product_ads/campaigns/{campaign_id}",
             json=payload
         )
 
-    async def create_campaign(self, name: str, budget: float,
-                              acos_target: float = None, status: str = "active") -> dict:
-        """Crea una nueva campaña de Product Ads."""
+    async def create_campaign(self, name: str, budget: float, acos_target: float = None,
+                              roas_target: float = None, status: str = "active",
+                              strategy: str = "profitability") -> dict:
+        """Crea una nueva campaña de Product Ads (nuevo endpoint API v2)."""
         adv_id = await self._get_advertiser_id()
         payload = {
             "name": name,
             "status": status,
             "budget": budget,
+            "strategy": strategy,
+            "channel": "marketplace",
         }
-        if acos_target is not None:
+        if roas_target is not None:
+            payload["roas_target"] = max(1.0, min(35.0, roas_target))
+        elif acos_target is not None:
             payload["acos_target"] = max(3, min(500, acos_target))
-        return await self.post(
-            f"/advertising/advertisers/{adv_id}/product_ads/campaigns",
+        return await self._ads_post(
+            f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns",
             json=payload
         )
 
     async def assign_items_to_campaign(self, item_ids: list[str], campaign_id: int) -> dict:
-        """Asigna uno o mas items a una campana de Product Ads (API V2)."""
-        # PUT por cada item usando el endpoint documentado de V2
-        # Requiere que la app tenga permisos de escritura en Product Ads
+        """Asigna items a una campana usando bulk endpoint (hasta 10,000 items)."""
+        adv_id = await self._get_advertiser_id()
         results = []
         errors = []
-        for item_id in item_ids[:50]:
-            try:
-                resp = await self._request_raw(
-                    "PUT",
-                    f"/marketplace/advertising/MLM/product_ads/ads/{item_id}",
-                    params={"channel": "marketplace"},
-                    json={"status": "active", "campaign_id": campaign_id},
-                    extra_headers={"api-version": "2"},
-                )
-                results.append({"item_id": item_id, "status": "ok"})
-            except MeliApiError as e:
-                errors.append({"item_id": item_id, "error": str(e)})
+        # Procesar en lotes de 50 (sincrono), resto asíncrono
+        batch = item_ids[:10000]
+        try:
+            resp = await self._ads_put(
+                f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/ads",
+                params={"channel": "marketplace"},
+                json={
+                    "target": batch,
+                    "payload": {"status": "active", "campaign_id": campaign_id}
+                }
+            )
+            # Bulk retorna lista de resultados o dict con results/errors
+            if isinstance(resp, list):
+                for r in resp:
+                    if r.get("error"):
+                        errors.append({"item_id": r.get("item_id", ""), "error": r["error"]})
+                    else:
+                        results.append({"item_id": r.get("item_id", ""), "status": "ok"})
+            else:
+                results = [{"item_id": iid, "status": "queued"} for iid in batch]
+        except MeliApiError as e:
+            # Fallback: intentar item por item si el bulk falla
+            if e.status_code == 404:
+                for item_id in item_ids[:50]:
+                    try:
+                        await self._request_raw(
+                            "PUT",
+                            f"/marketplace/advertising/MLM/product_ads/ads/{item_id}",
+                            params={"channel": "marketplace"},
+                            json={"status": "active", "campaign_id": campaign_id},
+                            extra_headers={"api-version": "2"},
+                        )
+                        results.append({"item_id": item_id, "status": "ok"})
+                    except MeliApiError as e2:
+                        errors.append({"item_id": item_id, "error": str(e2)})
+            else:
+                raise
         if not results and errors:
             raise MeliApiError(401, "product_ads/ads", errors[0]["error"])
         return {"results": results, "errors": errors}
+
+    async def update_ad_item_status(self, item_id: str, status: str,
+                                    campaign_id: int = None) -> dict:
+        """Activa, pausa o remueve un item individual de Product Ads."""
+        payload: dict = {"status": status}
+        if campaign_id is not None:
+            payload["campaign_id"] = campaign_id
+        return await self._request_raw(
+            "PUT",
+            f"/marketplace/advertising/MLM/product_ads/ads/{item_id}",
+            params={"channel": "marketplace"},
+            json=payload,
+            extra_headers={"api-version": "2"},
+        )
 
     async def _request_raw(self, method: str, endpoint: str, extra_headers: dict = None, **kwargs):
         """Request con headers adicionales (para api-version etc)."""
@@ -659,10 +721,10 @@ class MeliClient:
         return response.json()
 
     async def get_ads_items(self, date_from: str = None, date_to: str = None) -> dict:
-        """Obtiene metricas de ads a nivel de item/producto."""
+        """Obtiene metricas de ads a nivel de item/producto (nuevo endpoint ads/search)."""
         adv_id = await self._get_advertiser_id()
         params = {
-            "metrics": "clicks,prints,cost,cpc,acos,units_quantity,total_amount",
+            "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
             "metrics_summary": "true",
             "limit": 100,
         }
@@ -670,11 +732,13 @@ class MeliClient:
             params["date_from"] = date_from
         if date_to:
             params["date_to"] = date_to
-        return await self.get(f"/advertising/advertisers/{adv_id}/product_ads/items", params=params)
+        return await self._ads_get(
+            f"/advertising/MLM/advertisers/{adv_id}/product_ads/ads/search",
+            params=params
+        )
 
     async def get_all_ads_item_ids(self) -> set[str]:
-        """Obtiene TODOS los item_ids que tienen ads activos (sin filtro de fechas).
-        Pagina a traves de todos los resultados para no perder items sin metricas recientes."""
+        """Obtiene TODOS los item_ids que tienen ads (nuevo endpoint ads/search, sin metricas)."""
         adv_id = await self._get_advertiser_id()
         all_ids: set[str] = set()
         offset = 0
@@ -682,8 +746,8 @@ class MeliClient:
         while True:
             params = {"limit": limit, "offset": offset}
             try:
-                data = await self.get(
-                    f"/advertising/advertisers/{adv_id}/product_ads/items",
+                data = await self._ads_get(
+                    f"/advertising/MLM/advertisers/{adv_id}/product_ads/ads/search",
                     params=params,
                 )
             except Exception:

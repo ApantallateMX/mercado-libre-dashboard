@@ -1,5 +1,108 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-02-19 — Feat: Migración completa Product Ads API v2 (Feb 2026)
+
+### Causa raíz bloqueante (no es código)
+- App "CLAUDE" (ID: 7997483236761265) tiene `certification_status: not_certified`
+- MeLi bloquea TODOS los writes en Product Ads para apps no certificadas
+- Permisos OAuth correctos, portal DevCenter correcto — la certificación es el único bloqueante
+
+### Cambios en `app/services/meli_client.py`
+- Añadidos helpers `_ads_get()`, `_ads_put()`, `_ads_post()` con header `api-version: 2`
+- `get_ads_campaigns()` → nuevo endpoint `/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns/search` con `roas` en metrics
+- `get_ads_campaign_detail()` → `/advertising/MLM/product_ads/campaigns/{id}`
+- `update_campaign()` → `/marketplace/advertising/MLM/product_ads/campaigns/{id}` (sin advertiser_id), acepta `roas_target`
+- `create_campaign()` → `/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns`, añade `strategy`, `channel: marketplace`, `roas_target`
+- `assign_items_to_campaign()` → bulk PUT `/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/ads` (hasta 10k items), con fallback individual
+- `get_ads_items()` → `/advertising/MLM/advertisers/{adv_id}/product_ads/ads/search` con `roas` en metrics
+- `get_all_ads_item_ids()` → mismo endpoint sin metrics (no requiere fechas)
+- NUEVO `update_ad_item_status()` → PUT `/marketplace/advertising/MLM/product_ads/ads/{item_id}` con `status` + opcional `campaign_id`
+
+### Cambios en `app/main.py`
+- NUEVO `GET /api/ads/check-write-permission` → verifica `certification_status` + prueba PUT real
+- NUEVO `POST /api/ads/item/{item_id}/status` → pausa/activa/reactiva un item individual en ads
+- Fix: `check-write-permission` ahora usa `MELI_CLIENT_ID` de `app.config` (no `os.environ`)
+
+### Cambios en `app/templates/ads.html`
+- `#asignar-permisos-aviso`: reescrito para mostrar error de certificación con pasos claros
+- NUEVO `toggleAdItem()`: pausa/activa item con feedback visual, detecta error de certificación
+- `verificarPermisoAds()`: llama check-write-permission, actualiza UI con resultado
+- `selectEstrategia()`: usa `profitability`/`increase`/`visibility` (antes `rentabilidad`/etc.) y ROAS (7x/4x/2x)
+- `submitCrearCampana()`: envía `roas_target` y `strategy` (antes `acos_target`)
+- `crearCampanaTopProductos()`: corregido para usar `profitability` (antes `rentabilidad`)
+- Input `modal-camp-acos` → `modal-camp-roas` (range 1-35)
+
+### Cambios en `app/templates/partials/ads_performance.html`
+- Nueva columna "Accion" en tabla desktop y tarjetas mobile
+- Botones Pausar/Activar por item (llaman `toggleAdItem()`)
+- `id="perf-row-{item_id}"` en cada fila para actualización futura
+
+### Endpoints deprecados por MeLi (efectivo Feb 26 2026) — YA MIGRADOS
+- `GET /advertising/advertisers/{adv_id}/product_ads/items` → migrado
+- `GET /advertising/product_ads/items/{item_id}` → migrado
+- `GET /advertising/product_ads/campaigns/{id}/metrics` → migrado
+- `GET /advertising/product_ads/ads/search` → migrado
+
+### Acción pendiente del usuario
+1. Crear nueva app en DevCenter bajo cuenta APANTALLATEMX, O
+2. Certificar la app "CLAUDE" (7997483236761265) con MeLi
+3. Actualizar `.env` con nuevas credenciales → re-autenticar via /auth/connect
+
+---
+
+## 2026-02-19 — Feat: Ads — Tab "Asignar a Campana" completo + check-write-permission
+
+### Cambios adicionales (sesion 2)
+- **`app/main.py`**: nuevo endpoint `GET /api/ads/check-write-permission`
+  - Hace PUT inocuo (status=idle, campaign_id=0) sobre MLM1346239567
+  - Retorna `write_enabled: true/false` segun si el error es 401 de permisos
+  - Cualquier otro error (400/404) se interpreta como "write funciona" (problema diferente)
+- **`app/templates/ads.html`**: funcion `verificarPermisoAds()` implementada
+  - Llama al endpoint y muestra feedback instantaneo en la UI
+  - Si permiso activo: oculta aviso de error y muestra "✓ Permiso ACTIVO"
+  - Si no activo: muestra "✗ Permiso NO activo. Sigue los pasos indicados."
+
+### Diagnostico confirmado (sesion 1 + 2)
+- Token OK: `APP_USR-7997483236761265-021914-ccf2903eda6b7d146d...`
+- Scopes OAuth correctos: `urn:ml:mktp:ads:/read-write` incluido
+- GET funciona: item MLM1346239567 = status:idle, campaign_id:0
+- PUT da 401 siempre: `com.mercadolibre.ads_search_pads_core.api.exceptions.UnauthorizedException`
+- Causa raiz: permiso funcional "Advertising > Write" NO habilitado en portal MeLi
+
+### Accion requerida por el usuario (NO es codigo)
+1. Ir a https://developers.mercadolibre.com.mx/devcenter
+2. Editar app "CLAUDE" (ID: 7997483236761265)
+3. En Permisos/Scopes: cambiar Publicidad de "Solo lectura" a "Lectura y escritura"
+4. Guardar cambios
+5. Re-autenticar en /auth/connect
+6. Usar boton "Verificar permisos ahora" en tab "Asignar a Campana"
+7. Una vez verificado, asignar MLM1346239567 a campana 351749769 "001 TV 55 DWN Visibilidad"
+
+## 2026-02-19 — Feat: Ads — Nuevo tab "Asignar a Campana" + endpoints API v2
+
+### Investigacion realizada
+- Explorado completamente el flujo de la seccion de ads (MeLi Product Ads)
+- Item MLM1346239567 existe en ads con `status: idle` y `campaign_id: 0` (sin campana)
+- GET en `/marketplace/advertising/MLM/product_ads/ads/{item_id}?api-version=2` funciona OK
+- PUT da 401 "User does not have permission to write" — requiere re-autorizar la app
+- La app tiene scope `urn:ml:mktp:ads:/read-write` configurado, pero el token existente no lo incluia
+
+### Cambios
+- **`app/templates/ads.html`**: nuevo tab "Asignar a Campana"
+  - Busqueda por MLM ID con Enter key
+  - Muestra titulo, precio, status actual, campana actual del item
+  - Dropdown con todas las campanas disponibles
+  - Boton Asignar con manejo de errores
+  - Aviso claro cuando hay error de permisos con link a `/auth/connect`
+- **`app/main.py`**: dos nuevos endpoints:
+  - `GET /api/ads/item/{item_id}` — estado del item via marketplace API v2
+  - `GET /api/ads/campaigns-list` — lista rapida de campanas (sin metricas)
+- **`app/auth.py`**: scope OAuth actualizado con `urn:ml:mktp:ads:read-write`
+
+### Para resolver el permiso de escritura
+El usuario debe ir a `/auth/connect` para re-autorizar la app con los nuevos scopes.
+El nuevo scope `urn:ml:mktp:ads:read-write` deberia incluirse en el nuevo token.
+
 ## 2026-02-18 — Fix: BM variaciones corregido → items multi-variacion ya no son falsos positivos en Riesgo
 
 ### Problema resuelto

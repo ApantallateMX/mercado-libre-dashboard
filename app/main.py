@@ -4838,6 +4838,33 @@ async def get_ad_item_status_api(item_id: str):
         await client.close()
 
 
+@app.post("/api/ads/item/{item_id}/status")
+async def update_ad_item_status_api(item_id: str, request: Request):
+    """Activa, pausa o remueve un item de Product Ads."""
+    from app.services.meli_client import MeliApiError
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = await request.json()
+        status = body.get("status")  # "active", "paused", "idle"
+        campaign_id = body.get("campaign_id")
+        if not status:
+            return JSONResponse({"detail": "Campo 'status' requerido"}, status_code=400)
+        result = await client.update_ad_item_status(item_id, status, campaign_id)
+        return JSONResponse({"ok": True, "result": result})
+    except MeliApiError as e:
+        is_cert = e.status_code == 401
+        return JSONResponse({
+            "detail": str(e),
+            "requires_certification": is_cert
+        }, status_code=e.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @app.get("/api/ads/campaigns-list")
 async def get_campaigns_list():
     """Lista todas las campanas con ID y nombre (sin metricas, rapido)."""
@@ -4867,13 +4894,13 @@ async def get_campaigns_list():
 @app.get("/api/ads/check-write-permission")
 async def check_ads_write_permission():
     """Verifica certification_status de la app y si tiene permiso de escritura en Product Ads."""
-    import os
     from app.services.meli_client import MeliApiError
+    from app.config import MELI_CLIENT_ID as _app_id
     client = await get_meli_client()
     if not client:
         return JSONResponse({"write_enabled": False, "error": "not_authenticated"}, status_code=401)
     try:
-        app_id = os.environ.get("MELI_CLIENT_ID", "")
+        app_id = _app_id
         # 1. Verificar certification_status de la app
         cert_status = "unknown"
         try:

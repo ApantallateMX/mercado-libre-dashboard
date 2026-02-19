@@ -336,30 +336,30 @@
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-1">Estrategia</label>
                 <div class="grid grid-cols-3 gap-2">
-                    <button type="button" onclick="selectEstrategia('rentabilidad', this)"
+                    <button type="button" onclick="selectEstrategia('profitability', this)"
                             class="estrategia-btn border-2 border-green-200 bg-green-50 rounded-lg p-2 text-center hover:border-green-400 transition">
                         <div class="text-green-600 font-semibold text-xs">Rentabilidad</div>
-                        <div class="text-gray-400 text-xs mt-0.5">ACOS 15%</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ROAS 7x</div>
                     </button>
-                    <button type="button" onclick="selectEstrategia('crecimiento', this)"
+                    <button type="button" onclick="selectEstrategia('increase', this)"
                             class="estrategia-btn border-2 border-blue-200 bg-blue-50 rounded-lg p-2 text-center hover:border-blue-400 transition">
                         <div class="text-blue-600 font-semibold text-xs">Crecimiento</div>
-                        <div class="text-gray-400 text-xs mt-0.5">ACOS 25%</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ROAS 4x</div>
                     </button>
-                    <button type="button" onclick="selectEstrategia('visibilidad', this)"
+                    <button type="button" onclick="selectEstrategia('visibility', this)"
                             class="estrategia-btn border-2 border-orange-200 bg-orange-50 rounded-lg p-2 text-center hover:border-orange-400 transition">
                         <div class="text-orange-600 font-semibold text-xs">Visibilidad</div>
-                        <div class="text-gray-400 text-xs mt-0.5">ACOS 40%</div>
+                        <div class="text-gray-400 text-xs mt-0.5">ROAS 2x</div>
                     </button>
                 </div>
             </div>
 
-            <!-- ACOS objetivo (auto-llenado) -->
+            <!-- ROAS objetivo (nuevo estandar MeLi 2026, reemplaza ACOS) -->
             <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">ACOS objetivo (%)</label>
-                <input type="number" id="modal-camp-acos" min="3" max="500" step="1" placeholder="25"
+                <label class="block text-sm font-medium text-gray-700 mb-1">ROAS objetivo (x veces)</label>
+                <input type="number" id="modal-camp-roas" min="1" max="35" step="0.5" placeholder="7"
                        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none">
-                <p class="text-xs text-gray-400 mt-1">Se auto-llena segun estrategia, pero puedes editarlo</p>
+                <p class="text-xs text-gray-400 mt-1">Retorno por cada peso en ads. Se auto-llena segun estrategia.</p>
             </div>
 
             <!-- Items pre-seleccionados (oculto) -->
@@ -765,7 +765,7 @@
         modal.style.display = 'flex';
         document.getElementById('modal-camp-name').value = '';
         document.getElementById('modal-camp-budget').value = '';
-        document.getElementById('modal-camp-acos').value = '';
+        document.getElementById('modal-camp-roas').value = '';
         document.getElementById('modal-camp-items').value = '';
         document.getElementById('modal-camp-status').classList.add('hidden');
         document.getElementById('modal-camp-items-preview').classList.add('hidden');
@@ -791,24 +791,30 @@
         document.querySelectorAll('.estrategia-btn').forEach(function(b) {
             b.classList.remove('ring-2', 'ring-yellow-400', 'ring-green-400', 'ring-blue-400', 'ring-orange-400');
         });
-        var acosMap = { rentabilidad: 15, crecimiento: 25, visibilidad: 40 };
-        document.getElementById('modal-camp-acos').value = acosMap[tipo] || 25;
-        var ringMap = { rentabilidad: 'ring-green-400', crecimiento: 'ring-blue-400', visibilidad: 'ring-orange-400' };
+        // ROAS por estrategia (nuevo estandar MeLi 2026)
+        var roasMap = { profitability: 7, increase: 4, visibility: 2 };
+        document.getElementById('modal-camp-roas').value = roasMap[tipo] || 4;
+        var ringMap = { profitability: 'ring-green-400', increase: 'ring-blue-400', visibility: 'ring-orange-400' };
         btn.classList.add('ring-2', ringMap[tipo] || 'ring-yellow-400');
     };
 
     window.submitCrearCampana = function() {
         var name = document.getElementById('modal-camp-name').value.trim();
         var budget = parseFloat(document.getElementById('modal-camp-budget').value);
-        var acos = parseFloat(document.getElementById('modal-camp-acos').value);
+        var roas = parseFloat(document.getElementById('modal-camp-roas').value);
         var itemsRaw = document.getElementById('modal-camp-items').value;
         var statusEl = document.getElementById('modal-camp-status');
+
+        // Obtener estrategia del boton seleccionado
+        var estrategiaMap = { profitability: 'profitability', increase: 'increase', visibility: 'visibility' };
+        var selectedBtn = document.querySelector('.estrategia-btn.ring-2');
+        var strategy = selectedBtn ? (selectedBtn.getAttribute('onclick') || '').match(/'([^']+)'/)?.[1] || 'profitability' : 'profitability';
 
         if (!name) { showModalStatus('El nombre es requerido', 'error'); return; }
         if (!budget || budget < 1) { showModalStatus('El presupuesto debe ser mayor a 0', 'error'); return; }
 
-        var payload = { name: name, budget: budget };
-        if (!isNaN(acos) && acos >= 3) payload.acos_target = acos;
+        var payload = { name: name, budget: budget, strategy: strategy };
+        if (!isNaN(roas) && roas >= 1) payload.roas_target = roas;
 
         var btn = document.getElementById('btn-submit-campana');
         btn.disabled = true;
@@ -858,7 +864,7 @@
         openCrearCampana(itemIds);
         // Sugerir nombre automatico
         document.getElementById('modal-camp-name').value = 'TOP ' + new Date().toLocaleDateString('es-MX');
-        selectEstrategia('rentabilidad', document.querySelector('.estrategia-btn'));
+        selectEstrategia('profitability', document.querySelector('.estrategia-btn'));
     };
 
     // === CSV DESCARGA (sin publicidad) ===
@@ -1065,6 +1071,58 @@
         var inp = document.getElementById('asignar-item-input');
         if (inp) inp.addEventListener('keydown', function(e) { if (e.key === 'Enter') buscarItemAds(); });
     });
+
+    window.toggleAdItem = function(itemId, newStatus, btn) {
+        var originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '...';
+        fetch('/api/ads/item/' + itemId + '/status', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({status: newStatus})
+        }).then(function(r) {
+            return r.json().then(function(d) { return {ok: r.ok, data: d, status: r.status}; });
+        }).then(function(res) {
+            if (res.data.requires_certification || res.status === 401) {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                // Mostrar tooltip de error de certificacion
+                var tip = document.createElement('span');
+                tip.className = 'text-xs text-red-600 ml-1';
+                tip.textContent = 'Requiere certificacion MeLi';
+                btn.parentNode.appendChild(tip);
+                setTimeout(function() { tip.remove(); }, 4000);
+                return;
+            }
+            if (res.ok || res.data.ok) {
+                // Actualizar UI del boton segun nuevo estado
+                btn.disabled = false;
+                if (newStatus === 'paused') {
+                    btn.textContent = 'Activar';
+                    btn.className = btn.className.replace('yellow', 'green').replace('bg-yellow-100 text-yellow-800', 'bg-green-100 text-green-800');
+                    btn.onclick = function() { toggleAdItem(itemId, 'active', btn); };
+                } else {
+                    btn.textContent = 'Pausar';
+                    btn.className = btn.className.replace('green', 'yellow').replace('bg-green-100 text-green-800', 'bg-yellow-100 text-yellow-800');
+                    btn.onclick = function() { toggleAdItem(itemId, 'paused', btn); };
+                }
+                // Flash verde de confirmacion
+                var flash = document.createElement('span');
+                flash.className = 'text-xs text-green-600 ml-1 font-medium';
+                flash.textContent = newStatus === 'paused' ? '✓ Pausado' : '✓ Activado';
+                btn.parentNode.appendChild(flash);
+                setTimeout(function() { flash.remove(); }, 3000);
+            } else {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                alert('Error: ' + (res.data.detail || 'No se pudo actualizar el anuncio'));
+            }
+        }).catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+            alert('Error de conexion: ' + e.message);
+        });
+    };
 
     window.verificarPermisoAds = function() {
         var btn = document.getElementById('btn-verificar-permiso');
