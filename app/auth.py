@@ -13,9 +13,6 @@ from app.services import token_store
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Almacen temporal de states y code_verifiers para CSRF/PKCE
-_pending_auth = {}
-
 
 def _generate_code_verifier() -> str:
     """Genera un code_verifier aleatorio para PKCE."""
@@ -41,7 +38,7 @@ async def connect():
     code_verifier = _generate_code_verifier()
     code_challenge = _generate_code_challenge(code_verifier)
 
-    _pending_auth[state] = code_verifier
+    await token_store.save_oauth_state(state, code_verifier)
 
     params = {
         "response_type": "code",
@@ -66,10 +63,9 @@ async def callback(code: str = None, state: str = None, error: str = None):
     if not code:
         raise HTTPException(status_code=400, detail="No se recibio codigo de autorizacion")
 
-    if state not in _pending_auth:
+    code_verifier = await token_store.pop_oauth_state(state)
+    if not code_verifier:
         raise HTTPException(status_code=400, detail="State invalido - posible CSRF")
-
-    code_verifier = _pending_auth.pop(state)
 
     # Intercambiar code por access_token
     async with httpx.AsyncClient() as client:
