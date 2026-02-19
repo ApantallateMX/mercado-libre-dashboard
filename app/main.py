@@ -284,7 +284,7 @@ async def debug_accounts(request: Request):
     try:
         async with aiosqlite.connect(DATABASE_PATH) as db:
             db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT user_id, nickname, substr(refresh_token,1,25) as rt_preview FROM tokens")
+            cur = await db.execute("SELECT user_id, nickname, refresh_token FROM tokens")
             raw_rows = [dict(r) for r in await cur.fetchall()]
     except Exception as e:
         db_error = str(e)
@@ -294,16 +294,17 @@ async def debug_accounts(request: Request):
         "db_error": db_error,
         "db_rows": raw_rows,
         "env_vars": {
-            "MELI_USER_ID": os.getenv("MELI_USER_ID", "")[:10] + "...",
-            "MELI_REFRESH_TOKEN": (rt1_env or "(vacío)")[:25] + "...",
+            "MELI_USER_ID": os.getenv("MELI_USER_ID", ""),
+            "MELI_REFRESH_TOKEN_expired": rt1_env,
             "MELI_USER_ID_2": uid2_env or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": (rt2_env or "(vacío)")[:25] + "...",
+            "MELI_REFRESH_TOKEN_2": rt2_env or "(vacío)",
         },
         "env_disk": {
             "MELI_USER_ID_2": env_disk.get("MELI_USER_ID_2", "") or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": (env_disk.get("MELI_REFRESH_TOKEN_2", "") or "(vacío)")[:25] + "...",
+            "MELI_REFRESH_TOKEN_2": env_disk.get("MELI_REFRESH_TOKEN_2", "") or "(vacío)",
         },
         "cookie_active_account": request.cookies.get("active_account_id", "(sin cookie)"),
+        "instruccion": "Ve a /login, re-autentica APANTALLATEMX, luego BLOW via +cuenta. Despues recarga este endpoint para ver los tokens frescos.",
     })
 
 
