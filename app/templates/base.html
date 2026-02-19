@@ -49,12 +49,13 @@
                 <!-- User info / Account switcher -->
                 <div class="flex items-center gap-2">
                     {% if accounts and accounts|length > 1 %}
-                    <div class="relative group">
-                        <button type="button" class="flex items-center gap-1 text-gray-700 text-sm hidden sm:flex hover:text-gray-900 cursor-pointer select-none">
+                    <!-- Multi-cuenta: dropdown click-based -->
+                    <div class="relative hidden sm:block" id="account-menu-wrap">
+                        <button type="button" onclick="document.getElementById('account-dropdown').classList.toggle('hidden')" class="flex items-center gap-1 text-gray-700 text-sm hover:text-gray-900 cursor-pointer select-none bg-yellow-300 px-2 py-1 rounded">
                             {{ user.nickname }}
                             <svg class="w-3 h-3 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                         </button>
-                        <div class="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-100 hidden group-hover:block z-50 min-w-[180px] py-1">
+                        <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-lg shadow-xl border border-gray-100 z-50 min-w-[200px] py-1">
                             {% for account in accounts %}
                             <form action="/auth/switch-account" method="POST">
                                 <input type="hidden" name="user_id" value="{{ account.user_id }}">
@@ -70,15 +71,16 @@
                             {% endfor %}
                             <hr class="my-1 border-gray-100">
                             <a href="/auth/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-blue-600 hover:bg-yellow-50 transition-colors">
-                                <span>+</span> Agregar cuenta
+                                + Agregar cuenta
                             </a>
                         </div>
                     </div>
                     {% else %}
+                    <!-- Una sola cuenta: mostrar nickname + botón agregar -->
                     <span class="text-gray-700 text-sm hidden sm:inline">{{ user.nickname }}</span>
-                    {% if accounts and accounts|length == 1 %}
-                    <a href="/auth/connect" class="text-gray-500 text-xs hidden sm:inline hover:text-gray-700" title="Agregar segunda cuenta">+</a>
-                    {% endif %}
+                    <a href="/auth/connect" class="hidden sm:inline-flex items-center gap-1 bg-gray-700 text-white text-xs px-2 py-1 rounded hover:bg-gray-600 transition-colors" title="Agregar segunda cuenta MeLi">
+                        + cuenta
+                    </a>
                     {% endif %}
                     <form action="/auth/logout" method="POST" class="inline">
                         <button type="submit" class="bg-gray-800 text-white px-3 py-1.5 text-sm rounded hover:bg-gray-700">
@@ -86,6 +88,14 @@
                         </button>
                     </form>
                 </div>
+                <!-- Cerrar dropdown al click fuera -->
+                <script>
+                document.addEventListener('click', function(e) {
+                    var wrap = document.getElementById('account-menu-wrap');
+                    var dd = document.getElementById('account-dropdown');
+                    if (wrap && dd && !wrap.contains(e.target)) dd.classList.add('hidden');
+                });
+                </script>
             </div>
         </div>
         <!-- Mobile menu -->
