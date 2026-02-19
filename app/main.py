@@ -4894,80 +4894,65 @@ async def get_campaigns_list():
 @app.get("/api/ads/debug-assign/{item_id}/{campaign_id}")
 async def debug_ads_assign(item_id: str, campaign_id: str):
     """Prueba TODOS los patrones de endpoint para asignar item a campaña. Retorna raw MeLi responses."""
-    import httpx as _httpx
     client = await get_meli_client()
     if not client:
         return JSONResponse({"error": "No autenticado"}, status_code=401)
-    token = client.access_token
-    adv_id = await client._get_advertiser_id()
-    results = {}
+    try:
+        token = client.access_token
+        adv_id = await client._get_advertiser_id()
+        cid = int(campaign_id)
+        results = {}
 
-    async with _httpx.AsyncClient(timeout=15) as h:
-        h2 = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "api-version": "2"}
-        h1 = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Api-Version": "1"}
+        async def try_req(label, method, url, **kwargs):
+            try:
+                r = await client._client.request(method, url, **kwargs)
+                try:
+                    body = r.json()
+                except Exception:
+                    body = r.text[:300]
+                results[label] = {"status": r.status_code, "body": body}
+            except Exception as ex:
+                results[label] = {"status": "error", "body": str(ex)}
 
-        # Patrón 1: PUT marketplace con campaign_id (actual)
-        r = await h.put(
-            f"https://api.mercadolibre.com/marketplace/advertising/MLM/product_ads/ads/{item_id}",
+        h2 = {"api-version": "2"}
+        h1 = {"Api-Version": "1"}
+
+        await try_req("PUT_marketplace_v2",
+            "PUT", f"https://api.mercadolibre.com/marketplace/advertising/MLM/product_ads/ads/{item_id}",
+            params={"channel": "marketplace"}, json={"status": "active", "campaign_id": cid}, headers=h2)
+
+        await try_req("PUT_advertising_v2",
+            "PUT", f"https://api.mercadolibre.com/advertising/product_ads/ads/{item_id}",
+            json={"status": "active", "campaign_id": cid}, headers=h2)
+
+        await try_req("PUT_with_advertiser",
+            "PUT", f"https://api.mercadolibre.com/advertising/MLM/advertisers/{adv_id}/product_ads/ads/{item_id}",
+            json={"status": "active", "campaign_id": cid}, headers=h2)
+
+        await try_req("POST_campaign_ads",
+            "POST", f"https://api.mercadolibre.com/advertising/product_ads_2/campaigns/{campaign_id}/ads",
+            json={"item_id": item_id, "status": "active"}, headers=h2)
+
+        await try_req("POST_ads_direct",
+            "POST", f"https://api.mercadolibre.com/advertising/product_ads/ads",
+            json={"item_id": item_id, "campaign_id": cid, "status": "active"}, headers=h2)
+
+        await try_req("PUT_bulk_advertiser",
+            "PUT", f"https://api.mercadolibre.com/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/ads",
             params={"channel": "marketplace"},
-            json={"status": "active", "campaign_id": int(campaign_id)},
-            headers=h2
-        )
-        results["PUT_marketplace_v2"] = {"status": r.status_code, "body": r.json()}
+            json={"target": [item_id], "payload": {"status": "active", "campaign_id": cid}}, headers=h2)
 
-        # Patrón 2: PUT sin marketplace prefix
-        r = await h.put(
-            f"https://api.mercadolibre.com/advertising/product_ads/ads/{item_id}",
-            json={"status": "active", "campaign_id": int(campaign_id)},
-            headers=h2
-        )
-        results["PUT_advertising_v2"] = {"status": r.status_code, "body": r.json()}
+        await try_req("PUT_v1",
+            "PUT", f"https://api.mercadolibre.com/advertising/advertisers/{adv_id}/product_ads/items/{item_id}",
+            json={"status": "active", "campaign_id": cid}, headers=h1)
 
-        # Patrón 3: PUT con advertiser_id en path
-        r = await h.put(
-            f"https://api.mercadolibre.com/advertising/MLM/advertisers/{adv_id}/product_ads/ads/{item_id}",
-            json={"status": "active", "campaign_id": int(campaign_id)},
-            headers=h2
-        )
-        results["PUT_with_advertiser"] = {"status": r.status_code, "body": r.json()}
-
-        # Patrón 4: POST ads en campaign (product_ads_2)
-        r = await h.post(
-            f"https://api.mercadolibre.com/advertising/product_ads_2/campaigns/{campaign_id}/ads",
-            json={"item_id": item_id, "status": "active"},
-            headers=h2
-        )
-        results["POST_campaign_ads_v2"] = {"status": r.status_code, "body": r.json()}
-
-        # Patrón 5: POST directo a /ads
-        r = await h.post(
-            f"https://api.mercadolibre.com/advertising/product_ads/ads",
-            json={"item_id": item_id, "campaign_id": int(campaign_id), "status": "active"},
-            headers=h2
-        )
-        results["POST_ads_v2"] = {"status": r.status_code, "body": r.json()}
-
-        # Patrón 6: PUT bulk con advertiser
-        r = await h.put(
-            f"https://api.mercadolibre.com/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/ads",
-            params={"channel": "marketplace"},
-            json={"target": [item_id], "payload": {"status": "active", "campaign_id": int(campaign_id)}},
-            headers=h2
-        )
-        results["PUT_bulk_advertiser"] = {"status": r.status_code, "body": r.json()}
-
-        # Patrón 7: v1 PUT
-        r = await h.put(
-            f"https://api.mercadolibre.com/advertising/advertisers/{adv_id}/product_ads/items/{item_id}",
-            json={"status": "active", "campaign_id": int(campaign_id)},
-            headers=h1
-        )
-        results["PUT_v1_advertiser_items"] = {"status": r.status_code, "body": r.json()}
-
-    await client.close()
-    # Mostrar cuáles NO dieron 401
-    working = {k: v for k, v in results.items() if v["status"] != 401}
-    return JSONResponse({"advertiser_id": adv_id, "working_patterns": working, "all_results": results})
+        working = {k: v for k, v in results.items() if v.get("status") not in (401, 403, "error")}
+        return JSONResponse({"advertiser_id": adv_id, "item": item_id, "campaign": campaign_id,
+                             "working_patterns": working, "all_results": results})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
 
 
 @app.get("/api/ads/check-write-permission")
