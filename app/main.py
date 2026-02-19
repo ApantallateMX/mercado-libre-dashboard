@@ -255,58 +255,6 @@ async def switch_account(request: Request):
     return RedirectResponse("/dashboard", status_code=303)
 
 
-@app.get("/api/admin/debug-accounts")
-async def debug_accounts(request: Request):
-    """Diagnóstico temporal: env vars + cuentas en DB."""
-    from fastapi.responses import JSONResponse
-    import os, aiosqlite
-    from pathlib import Path
-    from app.config import DATABASE_PATH
-
-    # Env vars
-    uid2_env = os.getenv("MELI_USER_ID_2", "")
-    rt2_env = os.getenv("MELI_REFRESH_TOKEN_2", "")
-    rt1_env = os.getenv("MELI_REFRESH_TOKEN", "")
-
-    # .env.production en disco
-    env_file = Path(__file__).resolve().parent.parent / ".env.production"
-    env_disk = {}
-    if env_file.exists():
-        for line in env_file.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if '=' in line and not line.startswith('#'):
-                k, _, v = line.partition('=')
-                env_disk[k.strip()] = v.strip()
-
-    # Query directa a DB para evitar wrappers
-    raw_rows = []
-    db_error = None
-    try:
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cur = await db.execute("SELECT user_id, nickname, refresh_token FROM tokens")
-            raw_rows = [dict(r) for r in await cur.fetchall()]
-    except Exception as e:
-        db_error = str(e)
-
-    return JSONResponse({
-        "db_path": str(DATABASE_PATH),
-        "db_error": db_error,
-        "db_rows": raw_rows,
-        "env_vars": {
-            "MELI_USER_ID": os.getenv("MELI_USER_ID", ""),
-            "MELI_REFRESH_TOKEN_expired": rt1_env,
-            "MELI_USER_ID_2": uid2_env or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": rt2_env or "(vacío)",
-        },
-        "env_disk": {
-            "MELI_USER_ID_2": env_disk.get("MELI_USER_ID_2", "") or "(vacío)",
-            "MELI_REFRESH_TOKEN_2": env_disk.get("MELI_REFRESH_TOKEN_2", "") or "(vacío)",
-        },
-        "cookie_active_account": request.cookies.get("active_account_id", "(sin cookie)"),
-        "instruccion": "Ve a /login, re-autentica APANTALLATEMX, luego BLOW via +cuenta. Despues recarga este endpoint para ver los tokens frescos.",
-    })
-
 
 async def _accounts_ctx(request: Request) -> dict:
     """Contexto común de cuentas para templates de página."""
