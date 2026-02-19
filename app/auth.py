@@ -137,13 +137,32 @@ async def callback(code: str = None, state: str = None, error: str = None):
         )
         user_data = user_response.json()
 
-    # Guardar tokens
+    new_refresh = token_data.get("refresh_token", "")
+
+    # Guardar tokens en DB
     await token_store.save_tokens(
         user_id=str(user_data["id"]),
         access_token=token_data["access_token"],
-        refresh_token=token_data.get("refresh_token", ""),
+        refresh_token=new_refresh,
         expires_in=token_data.get("expires_in", 21600)
     )
+
+    # Persistir nuevo refresh_token en .env.production para sobrevivir redeploys de Railway
+    if new_refresh:
+        import re as _re, os as _os
+        for env_file in (".env.production", ".env"):
+            path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), env_file)
+            if _os.path.exists(path):
+                try:
+                    text = open(path, encoding="utf-8").read()
+                    if "MELI_REFRESH_TOKEN" in text:
+                        text = _re.sub(r"MELI_REFRESH_TOKEN=.*", f"MELI_REFRESH_TOKEN={new_refresh}", text)
+                    else:
+                        text += f"\nMELI_REFRESH_TOKEN={new_refresh}\n"
+                    open(path, "w", encoding="utf-8").write(text)
+                    print(f"[AUTH] Refresh token updated in {env_file}")
+                except Exception as _e:
+                    print(f"[AUTH] Could not update {env_file}: {_e}")
 
     return RedirectResponse(url="/dashboard")
 
