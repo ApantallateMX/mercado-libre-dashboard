@@ -4955,6 +4955,20 @@ async def debug_ads_assign(item_id: str, campaign_id: str):
         await client.close()
 
 
+@app.get("/api/token-refresh")
+async def get_refresh_token():
+    """Muestra el refresh token actual para configurar Railway Variables."""
+    tokens = await token_store.get_any_tokens()
+    if not tokens:
+        return JSONResponse({"error": "No autenticado — ve primero a /auth/connect"}, status_code=401)
+    rt = tokens.get("refresh_token", "")
+    return JSONResponse({
+        "refresh_token": rt,
+        "user_id": tokens.get("user_id"),
+        "instrucciones": "Copia el refresh_token y agrégalo como variable MELI_REFRESH_TOKEN en Railway Variables panel"
+    })
+
+
 @app.get("/api/ads/check-write-permission")
 async def check_ads_write_permission():
     """Verifica certification_status de la app y si tiene permiso de escritura en Product Ads."""
