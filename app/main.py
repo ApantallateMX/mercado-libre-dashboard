@@ -122,17 +122,33 @@ async def _seed_one(user_id: str, refresh_token: str, label: str):
 
 
 async def _seed_tokens():
-    """Auto-recover MeLi tokens from env vars after Railway deploy."""
-    # Cuenta principal
-    if MELI_REFRESH_TOKEN and MELI_USER_ID:
-        existing = await token_store.get_tokens(MELI_USER_ID)
+    """Auto-recover MeLi tokens. Re-lee .env.production desde disco para detectar
+    credenciales escritas por auth.py o _do_refresh_token() en el mismo container."""
+    from pathlib import Path as _Path
+
+    # Leer .env.production desde disco (más reciente que vars de módulo cargadas al inicio)
+    env_vars = {}
+    env_file = _Path(__file__).resolve().parent.parent / ".env.production"
+    if env_file.exists():
+        for line in env_file.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if '=' in line and not line.startswith('#'):
+                k, _, v = line.partition('=')
+                env_vars[k.strip()] = v.strip()
+
+    uid1 = env_vars.get("MELI_USER_ID") or MELI_USER_ID
+    rt1 = env_vars.get("MELI_REFRESH_TOKEN") or MELI_REFRESH_TOKEN
+    uid2 = env_vars.get("MELI_USER_ID_2") or MELI_USER_ID_2
+    rt2 = env_vars.get("MELI_REFRESH_TOKEN_2") or MELI_REFRESH_TOKEN_2
+
+    if rt1 and uid1:
+        existing = await token_store.get_tokens(uid1)
         if not existing:
-            await _seed_one(MELI_USER_ID, MELI_REFRESH_TOKEN, "cuenta1")
-    # Cuenta 2
-    if MELI_REFRESH_TOKEN_2 and MELI_USER_ID_2:
-        existing2 = await token_store.get_tokens(MELI_USER_ID_2)
+            await _seed_one(uid1, rt1, "cuenta1")
+    if rt2 and uid2:
+        existing2 = await token_store.get_tokens(uid2)
         if not existing2:
-            await _seed_one(MELI_USER_ID_2, MELI_REFRESH_TOKEN_2, "cuenta2")
+            await _seed_one(uid2, rt2, "cuenta2")
 
 
 @asynccontextmanager
@@ -1338,16 +1354,18 @@ async def products_stock_issues_partial(request: Request):
         bm_map = await _get_bm_stock_cached(products)
         _apply_bm_stock(products, bm_map)
 
-        # Seccion A: Reabastecer (MeLi=0, BM>0, tiene ventas)
+        # Seccion A: Reabastecer (MeLi=0, BM disponible>0, tiene ventas)
+        # Usa _bm_avail (no _bm_total) para excluir stock reservado para órdenes pendientes
         restock = [
             p for p in products
             if p.get("available_quantity", 0) == 0
-            and (p.get("_bm_total") or 0) > 0
+            and (p.get("_bm_avail") or 0) > 0
             and p.get("units", 0) > 0
         ]
         restock.sort(key=lambda x: x.get("units", 0), reverse=True)
 
-        # Seccion B: Riesgo Sobreventa (MeLi>0, BM=0, no FULL)
+        # Seccion B: Riesgo Sobreventa (MeLi>0, BM total=0, no FULL)
+        # Usa _bm_total: si hay stock físico (aunque reservado) no es riesgo real
         oversell_risk = [
             p for p in products
             if p.get("available_quantity", 0) > 0
@@ -1357,15 +1375,15 @@ async def products_stock_issues_partial(request: Request):
         ]
         oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
 
-        # Seccion C: Activar (MeLi=0, BM>0, sin ventas)
+        # Seccion C: Activar (MeLi=0, BM disponible>0, sin ventas)
         restock_ids = {p["id"] for p in restock}
         activate = [
             p for p in products
             if p.get("available_quantity", 0) == 0
-            and (p.get("_bm_total") or 0) > 0
+            and (p.get("_bm_avail") or 0) > 0
             and p["id"] not in restock_ids
         ]
-        activate.sort(key=lambda x: x.get("_bm_total", 0), reverse=True)
+        activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
 
         # KPIs
         restock_count = len(restock)
@@ -1373,7 +1391,7 @@ async def products_stock_issues_partial(request: Request):
         risk_count = len(oversell_risk)
         risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
         activate_count = len(activate)
-        activate_stock = sum(p.get("_bm_total", 0) for p in activate)
+        activate_stock = sum(p.get("_bm_avail", 0) for p in activate)
 
         ctx = {
             "restock": restock,
@@ -1546,18 +1564,18 @@ async def _prewarm_caches():
             _apply_bm_stock(products, bm_map)
 
             # Pre-computar stock issues result
-            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_total") or 0) > 0 and p.get("units", 0) > 0]
+            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0]
             restock.sort(key=lambda x: x.get("units", 0), reverse=True)
             oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
             oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
             restock_ids = {p["id"] for p in restock}
-            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_total") or 0) > 0 and p["id"] not in restock_ids]
-            activate.sort(key=lambda x: x.get("_bm_total", 0), reverse=True)
+            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids]
+            activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
             _stock_issues_cache[f"stock_issues:{client.user_id}"] = (_time.time(), {
                 "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                 "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
                 "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
-                "activate_count": len(activate), "activate_stock": sum(p.get("_bm_total", 0) for p in activate),
+                "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
             })
         finally:
             await client.close()
@@ -1989,11 +2007,12 @@ async def products_inventory_partial(
             p["recommendations"] = recs
 
         # --- Stock alerts from cached BM data (no waiting) ---
+        # Muestra items con ventas, sin stock MeLi, y BM disponible>0 para alertar al usuario
         stock_alerts = [
             p for p in products
             if p.get("units", 0) > 0
             and p.get("available_quantity", 0) == 0
-            and (p.get("_bm_total") or 0) > 0
+            and (p.get("_bm_total") or 0) > 0  # tiene stock físico (aunque sea reservado)
             and p.get("id") not in _synced_alert_items
         ]
         stock_alerts.sort(key=lambda x: x.get("units", 0), reverse=True)
@@ -5488,11 +5507,12 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
     3. Actualiza SOLO ESA variacion con floor(bm_stock * pct)
        No toca las demas variaciones.
 
-    Body (optional): { "pct": 0.6 }  — porcentaje del stock BM a usar (default 60%)
-    Returns: { ok, item_id, results: [{variation_id, sku, combo, bm_total, meli_qty, updated}] }
+    Body (optional): { "pct": 1.0 }  — porcentaje del stock BM DISPONIBLE a usar (default 100%)
+    Returns: { ok, item_id, results: [{variation_id, sku, combo, bm_total, bm_avail, meli_qty, updated}] }
     """
     import httpx
     BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+    BM_AVAIL_URL_SYNC = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 
     client = await get_meli_client()
     if not client:
@@ -5503,7 +5523,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             body = await request.json()
         except Exception:
             pass
-        pct = float(body.get("pct", 0.6))
+        pct = float(body.get("pct", 1.0))
         pct = max(0.0, min(1.0, pct))
         dry_run = bool(body.get("dry_run", False))  # Si True: consulta BM pero NO actualiza MeLi
 
@@ -5574,6 +5594,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 "bm_mty": 0,
                 "bm_cdmx": 0,
                 "bm_total": 0,
+                "bm_avail": 0,
                 "meli_qty": 0,
                 "updated": False,
                 "error": None,
@@ -5586,14 +5607,24 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             if not clean_sku:
                 result["error"] = "SKU no mapeable a BM"
                 return result
+            conditions = _bm_conditions_for_sku(v_sku)
             try:
-                resp = await http.post(BM_WH_URL, json={
-                    "COMPANYID": 1, "SKU": clean_sku, "WarehouseID": None,
-                    "LocationID": "47,62,68", "BINID": None,
-                    "Condition": _bm_conditions_for_sku(v_sku), "ForInventory": 0, "SUPPLIERS": None,
-                }, headers={"Content-Type": "application/json"}, timeout=15.0)
-                if resp.status_code == 200:
-                    rows = resp.json() or []
+                r_wh, r_avail = await asyncio.gather(
+                    http.post(BM_WH_URL, json={
+                        "COMPANYID": 1, "SKU": clean_sku, "WarehouseID": None,
+                        "LocationID": "47,62,68", "BINID": None,
+                        "Condition": conditions, "ForInventory": 0, "SUPPLIERS": None,
+                    }, headers={"Content-Type": "application/json"}, timeout=15.0),
+                    http.post(BM_AVAIL_URL_SYNC, json={
+                        "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+                        "LOCATIONID": "47,62,68", "BINID": None,
+                        "PRODUCTSKU": clean_sku, "CONDITION": conditions,
+                        "SUPPLIERS": None, "LCN": None, "SEARCH": clean_sku,
+                    }, headers={"Content-Type": "application/json"}, timeout=15.0),
+                    return_exceptions=True,
+                )
+                if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
+                    rows = r_wh.json() or []
                     mty = cdmx = tj = 0
                     for row in rows:
                         qty = row.get("QtyTotal", 0) or 0
@@ -5607,6 +5638,9 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     result["bm_mty"] = mty
                     result["bm_cdmx"] = cdmx
                     result["bm_total"] = mty + cdmx
+                if not isinstance(r_avail, Exception) and r_avail.status_code == 200:
+                    avail_rows = r_avail.json() or []
+                    result["bm_avail"] = sum(row.get("Available", 0) or 0 for row in avail_rows)
             except Exception as ex:
                 result["error"] = f"BM error: {ex}"
             return result
@@ -5614,10 +5648,10 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
         async with httpx.AsyncClient() as http:
             var_results = await asyncio.gather(*[_fetch_var_bm(v, http) for v in raw_vars])
 
-        # 3. Actualizar cada variacion con su propio stock BM
+        # 3. Actualizar cada variacion con su propio stock BM disponible
         var_updates = []
         for r in var_results:
-            qty = int(r["bm_total"] * pct)
+            qty = int(r["bm_avail"] * pct)  # Usa Available (excluye reservados), no bm_total
             r["meli_qty"] = qty
             if r["error"]:
                 continue  # No actualizar variaciones con error en BM
