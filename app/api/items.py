@@ -25,39 +25,53 @@ def _bm_conditions(sku: str) -> str:
     return BM_CONDITIONS_GR
 
 
+def _parse_wh_rows_items(rows):
+    """Suma QtyTotal por almacen. Retorna (mty, cdmx, tj)."""
+    mty = cdmx = tj = 0
+    for row in (rows or []):
+        qty = row.get("QtyTotal", 0) or 0
+        wname = (row.get("WarehouseName") or "").lower()
+        if "monterrey" in wname or "maxx" in wname:
+            mty += qty
+        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+            cdmx += qty
+        else:
+            tj += qty
+    return mty, cdmx, tj
+
+
 async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
-    """Consulta stock real de BinManager via Warehouse endpoint.
-    Usa condiciones GR-only para SKUs normales, todas las condiciones para SKUs IC.
-    Retorna dict con MainQtyMTY, MainQtyCDMX, MainQtyTJ (para compatibilidad con templates).
+    """Consulta stock real de BinManager via Warehouse endpoint (reserve + available en paralelo).
+    ForInventory:0 = total/reserve. ForInventory:1 = available (excluye reservados para órdenes).
+    Retorna dict con MainQtyMTY/CDMX/TJ (total) y AvailQtyMTY/CDMX (disponible).
     """
     base, _ = _get_base_and_type(sku)
-    payload = {
+    base_payload = {
         "COMPANYID": BM_COMPANY_ID,
         "SKU": base,
         "WarehouseID": None,
         "LocationID": BM_LOCATION_IDS,
         "BINID": None,
         "Condition": _bm_conditions(sku),
-        "ForInventory": 0,
         "SUPPLIERS": None,
     }
     try:
-        resp = await client.post(BM_WAREHOUSE_URL, json=payload, timeout=15.0)
-        if resp.status_code == 200:
-            rows = resp.json() or []
-            mty = cdmx = tj = 0
-            for row in rows:
-                qty = row.get("QtyTotal", 0) or 0
-                wname = (row.get("WarehouseName") or "").lower()
-                if "monterrey" in wname or "maxx" in wname:
-                    mty += qty
-                elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                    cdmx += qty
-                else:
-                    tj += qty
-            if mty + cdmx + tj > 0:
-                return {"MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
-                        "WebSKU": sku, "ProductSKU": base}
+        r0, r1 = await asyncio.gather(
+            client.post(BM_WAREHOUSE_URL, json={**base_payload, "ForInventory": 0}, timeout=15.0),
+            client.post(BM_WAREHOUSE_URL, json={**base_payload, "ForInventory": 1}, timeout=15.0),
+            return_exceptions=True,
+        )
+        rows_reserve = r0.json() if not isinstance(r0, Exception) and r0.status_code == 200 else []
+        rows_avail = r1.json() if not isinstance(r1, Exception) and r1.status_code == 200 else []
+        mty, cdmx, tj = _parse_wh_rows_items(rows_reserve)
+        avail_mty, avail_cdmx, _ = _parse_wh_rows_items(rows_avail)
+        if mty + cdmx + tj > 0:
+            return {
+                "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
+                "AvailQtyMTY": avail_mty, "AvailQtyCDMX": avail_cdmx,
+                "AvailTotal": avail_mty + avail_cdmx,
+                "WebSKU": sku, "ProductSKU": base,
+            }
     except Exception:
         pass
     return None

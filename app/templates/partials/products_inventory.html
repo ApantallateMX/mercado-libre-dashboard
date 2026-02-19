@@ -45,11 +45,15 @@
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-gray-800 line-clamp-1">{{ a.title[:50] }}</p>
                     <p class="text-[10px] text-gray-400 font-mono">{{ a.sku or '-' }}</p>
+                    {% set a_avail = a.get('_bm_avail', 0) or 0 %}
+                    {% set a_total = a.get('_bm_total', 0) or 0 %}
+                    {% set a_reserved = [a_total - a_avail, 0] | max %}
                     <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] mt-0.5">
                         <span class="text-gray-500">Ventas: <strong>{{ a.get('units', 0) }}</strong></span>
                         <span class="text-red-600">MeLi: <strong>0</strong></span>
-                        <span class="text-green-600">BM: <strong>{{ a.get('_bm_total', 0) }}</strong></span>
-                        <span class="text-gray-400">MTY:{{ a.get('_bm_mty', 0) }} CDMX:{{ a.get('_bm_cdmx', 0) }} TJ:{{ a.get('_bm_tj', 0) }}</span>
+                        <span class="{{ 'text-green-600' if a_avail > 0 else 'text-red-500' }}">Disp: <strong>{{ a_avail }}</strong></span>
+                        {% if a_reserved > 0 %}<span class="text-orange-500">Res: <strong>{{ a_reserved }}</strong></span>{% endif %}
+                        <span class="text-gray-400">MTY:{{ a.get('_bm_mty', 0) }} CDMX:{{ a.get('_bm_cdmx', 0) }}</span>
                     </div>
                 </div>
             </div>
@@ -64,7 +68,7 @@
                            class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
                             Ver en MeLi ↗
                         </a>
-                        <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                        <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_avail', 0) or 0 }}, this)"
                                 class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600"
                                 title="Usa después de cambiar logística en Seller Center">
                             Ya cambié → Sync
@@ -72,10 +76,17 @@
                     </div>
                 </div>
                 {% else %}
-                <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                {% set a_avail = a.get('_bm_avail', 0) or 0 %}
+                {% if a_avail == 0 and (a.get('_bm_total', 0) or 0) > 0 %}
+                <span class="flex-1 py-1.5 text-xs bg-orange-100 text-orange-700 rounded-lg text-center font-medium">
+                    ⚠️ Todo reservado
+                </span>
+                {% else %}
+                <button onclick="syncAlertItem('{{ a.id }}', {{ a_avail }}, this)"
                         class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700">
-                    Sincronizar
+                    Sync ({{ a_avail }})
                 </button>
+                {% endif %}
                 {% endif %}
                 <button onclick="openEditModal('{{ a.id }}')"
                         class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300">
@@ -95,10 +106,10 @@
                     <th class="text-left py-1.5 px-2 font-medium">ID / SKU</th>
                     <th class="text-right py-1.5 px-2 font-medium">Ventas {{ alert_days }}d</th>
                     <th class="text-right py-1.5 px-2 font-medium">Stock MeLi</th>
+                    <th class="text-right py-1.5 px-2 font-medium">BM Disp.</th>
                     <th class="text-right py-1.5 px-2 font-medium">BM Total</th>
                     <th class="text-right py-1.5 px-2 font-medium">MTY</th>
                     <th class="text-right py-1.5 px-2 font-medium">CDMX</th>
-                    <th class="text-right py-1.5 px-2 font-medium">TJ</th>
                     <th class="text-right py-1.5 px-2 font-medium">Rev. Perdido Est.</th>
                     <th class="text-center py-1.5 px-2 font-medium">Acciones</th>
                 </tr>
@@ -119,12 +130,17 @@
                         <span class="font-mono text-red-700 text-xs">{{ a.id }}</span>
                         <br><span class="font-mono text-[10px] text-gray-400">{{ a.sku or '-' }}</span>
                     </td>
+                    {% set a_avail = a.get('_bm_avail', 0) or 0 %}
+                    {% set a_total = a.get('_bm_total', 0) or 0 %}
                     <td class="py-1.5 px-2 text-right font-bold text-gray-800">{{ a.get('units', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-600">0</td>
-                    <td class="py-1.5 px-2 text-right font-bold text-green-600">{{ a.get('_bm_total', 0) }}</td>
+                    <td class="py-1.5 px-2 text-right font-bold {{ 'text-green-600' if a_avail > 0 else 'text-red-500' }}">
+                        {{ a_avail }}
+                        {% if a_avail == 0 and a_total > 0 %}<span class="ml-1 text-[9px] bg-orange-100 text-orange-600 px-1 rounded">res</span>{% endif %}
+                    </td>
+                    <td class="py-1.5 px-2 text-right text-gray-400">{{ a_total }}</td>
                     <td class="py-1.5 px-2 text-right {{ 'text-green-600' if (a.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_mty', 0) }}</td>
                     <td class="py-1.5 px-2 text-right {{ 'text-green-600' if (a.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_cdmx', 0) }}</td>
-                    <td class="py-1.5 px-2 text-right {{ 'text-blue-400' if (a.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_tj', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-700">
                         {% if a.get('_est_lost_revenue', 0) > 0 %}
                         ${{ "{:,.0f}".format(a._est_lost_revenue) }}
@@ -140,7 +156,7 @@
                                class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium transition whitespace-nowrap text-center">
                                 Ver en MeLi ↗
                             </a>
-                            <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
+                            <button onclick="syncFullItem('{{ a.id }}', {{ a.get('_bm_avail', 0) or 0 }}, this)"
                                     class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium transition whitespace-nowrap"
                                     title="Úsalo después de cambiar logística en Seller Center">
                                 Ya cambié → Sync
@@ -153,10 +169,16 @@
                         </div>
                         {% else %}
                         <div class="flex items-center justify-center gap-1">
-                            <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_total', 0) }}, this)"
-                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 font-medium transition">
-                                Sincronizar
+                            {% if (a.get('_bm_avail', 0) or 0) == 0 and (a.get('_bm_total', 0) or 0) > 0 %}
+                            <span class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-medium whitespace-nowrap">
+                                ⚠️ Todo reservado
+                            </span>
+                            {% else %}
+                            <button onclick="syncAlertItem('{{ a.id }}', {{ a.get('_bm_avail', 0) or 0 }}, this)"
+                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 font-medium transition whitespace-nowrap">
+                                Sync ({{ a.get('_bm_avail', 0) or 0 }})
                             </button>
+                            {% endif %}
                             <button onclick="openEditModal('{{ a.id }}')"
                                     class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 font-medium transition">
                                 Editar
@@ -342,20 +364,25 @@
                 <span class="px-1 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                 {% else %}
                 {% set bm = p.get('_bm_total', 0) or 0 %}
+                {% set bm_avail = p.get('_bm_avail', 0) or 0 %}
                 <span data-stock-val class="font-bold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
                       onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
-                {% if bm > 0 and bm != p.available_quantity %}
-                <button data-bm-btn onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
-                        class="px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200">BM:{{ bm }}</button>
+                {% if bm_avail > 0 and bm_avail != p.available_quantity %}
+                <button data-bm-btn onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm_avail }})"
+                        class="px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200">BM:{{ bm_avail }}</button>
                 {% endif %}
                 {% endif %}
                 <span data-stock-msg></span>
             </div>
-            <!-- Stock BM -->
+            <!-- Stock BM: disponible y reservado -->
             {% if p.get('_bm_total') is not none %}
+            {% set p_avail_m = p.get('_bm_avail', 0) or 0 %}
+            {% set p_total_m = p._bm_total or 0 %}
+            {% set p_res_m = [p_total_m - p_avail_m, 0] | max %}
             <div>
-                <span class="text-gray-500">BM:</span>
-                <span class="font-bold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">{{ p._bm_total }}</span>
+                <span class="text-gray-500">BM Disp:</span>
+                <span class="font-bold {{ 'text-green-600' if p_avail_m > 20 else 'text-yellow-600' if p_avail_m > 4 else 'text-red-600' }}">{{ p_avail_m }}</span>
+                {% if p_res_m > 0 %}<span class="text-[10px] text-orange-500 ml-1">{{ p_res_m }}↩res</span>{% endif %}
             </div>
             {% endif %}
             <!-- Ventas -->
@@ -396,9 +423,9 @@
                     class="flex-1 text-center py-2 text-sm font-medium text-purple-700 bg-purple-50 rounded-lg active:bg-purple-100 min-h-[40px]">Deal</button>
             {% endif %}
             {% if not p.get('is_full') %}
-            {% set bm = p.get('_bm_total', 0) or 0 %}
-            {% if bm > 0 and bm != p.available_quantity %}
-            <button onclick="quickSyncBM(this, '{{ p.id }}', {{ bm }})" class="flex-1 text-center py-2 text-sm font-medium text-purple-700 bg-purple-50 rounded-lg active:bg-purple-100 min-h-[40px]">Sync BM</button>
+            {% set bm_avail_mob = p.get('_bm_avail', 0) or 0 %}
+            {% if bm_avail_mob > 0 and bm_avail_mob != p.available_quantity %}
+            <button onclick="quickSyncBM(this, '{{ p.id }}', {{ bm_avail_mob }})" class="flex-1 text-center py-2 text-sm font-medium text-purple-700 bg-purple-50 rounded-lg active:bg-purple-100 min-h-[40px]">Sync ({{ bm_avail_mob }})</button>
             {% endif %}
             {% endif %}
         </div>
@@ -417,7 +444,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Deal</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs" data-col="bm">Stock BM</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs" data-col="bm">BM Disp. / Total</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">MTY</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">TJ</th>
@@ -507,24 +534,33 @@
                     <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                     {% else %}
                     {% set bm = p.get('_bm_total', 0) or 0 %}
+                    {% set bm_avail = p.get('_bm_avail', 0) or 0 %}
                     <span data-stock-val
                           class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
                           onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
-                    {% if bm > 0 and bm != p.available_quantity %}
+                    {% if bm_avail > 0 and bm_avail != p.available_quantity %}
                     <button data-bm-btn
-                            onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
+                            onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm_avail }})"
                             class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition"
-                            title="Sync stock MeLi = BM ({{ bm }})">BM</button>
+                            title="Sync stock MeLi = BM disponible ({{ bm_avail }})">BM:{{ bm_avail }}</button>
                     {% endif %}
                     {% endif %}
                     <span data-stock-msg></span>
                 </td>
-                <!-- Stock BM -->
+                <!-- Stock BM: disponible / total (reserve) -->
                 <td class="px-3 py-2 text-right" data-col="bm">
                     {% if p.get('_bm_total') is not none %}
-                    <span class="font-semibold text-xs {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">
-                        {{ p._bm_total }}
-                    </span>
+                    {% set p_avail = p.get('_bm_avail', 0) or 0 %}
+                    {% set p_total = p._bm_total or 0 %}
+                    {% set p_reserved = [p_total - p_avail, 0] | max %}
+                    <div class="flex flex-col items-end gap-0.5">
+                        <span class="font-semibold text-xs {{ 'text-green-600' if p_avail > 20 else 'text-yellow-600' if p_avail > 4 else 'text-red-600' }}">
+                            {{ p_avail }}
+                        </span>
+                        {% if p_reserved > 0 %}
+                        <span class="text-[10px] text-gray-400">{{ p_total }} <span class="text-orange-500">{{ p_reserved }}↩</span></span>
+                        {% endif %}
+                    </div>
                     {% else %}
                     <span class="text-gray-300">-</span>
                     {% endif %}
@@ -927,7 +963,11 @@ function _removeAlertRows(itemId) {
 
 window.syncAlertItem = function(itemId, bmQty, btn) {
     var msgEl = document.getElementById('alert-msg-' + itemId);
-    var safeQty = Math.floor(bmQty * 0.6);
+    if (bmQty <= 0) {
+        if (msgEl) { msgEl.textContent = 'Sin stock disponible (reservado)'; msgEl.className = 'text-[10px] ml-1 text-orange-600'; }
+        return;
+    }
+    var safeQty = bmQty;  // usar disponible directamente (sin buffer — ya excluye reservados)
     btn.disabled = true;
     btn.textContent = '...';
     fetch('/api/items/' + itemId + '/stock', {
@@ -982,7 +1022,7 @@ window.syncFullItem = function(itemId, bmQty, btn) {
     _setFullMsg(itemId, '', '');
     btn.disabled = true;
     btn.textContent = 'Sincronizando...';
-    var safeQty = Math.floor(bmQty * 0.6);
+    var safeQty = bmQty;  // usar disponible directamente
     fetch('/api/items/' + itemId + '/stock', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
@@ -1019,7 +1059,7 @@ window.syncFullItem = function(itemId, bmQty, btn) {
 window.bulkSyncAlerts = function() {
     var alertData = [
         {% for a in stock_alerts %}
-        {id: '{{ a.id }}', qty: {{ a.get('_bm_total', 0) }}, is_full: {{ 'true' if a.get('is_full') else 'false' }} }{{ ',' if not loop.last else '' }}
+        {id: '{{ a.id }}', qty: {{ a.get('_bm_avail', 0) or 0 }}, is_full: {{ 'true' if a.get('is_full') else 'false' }} }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
     // Filtrar FULL — no se pueden sincronizar en bulk
