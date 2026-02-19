@@ -47,7 +47,8 @@ async def connect():
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
-        "scope": "offline_access read write urn:ml:mktp:ads:read-write"
+        "scope": "offline_access read write urn:ml:mktp:ads:read-write",
+        "prompt": "consent",
     }
 
     auth_url = f"{MELI_AUTH_URL}?{urlencode(params)}"
