@@ -1,5 +1,34 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-02-19 — Feat: Stock Reservado vs Disponible BinManager
+
+### Problema
+- BinManager UI muestra "Reserve" (físico total) y "Available" (no comprometido a órdenes)
+- El código usaba QtyTotal (ForInventory:0 = Reserve) para actualizar MeLi → sobreventas
+- SNAF000022: Reserve=19, Available=0 → se empujaban 19 a MeLi cuando debía ser 0
+
+### Solución implementada
+- `_get_bm_stock_cached()` ahora hace 2 llamadas paralelas por SKU: ForInventory:0 + ForInventory:1
+- Cache almacena `avail_total` además de `total` (mty/cdmx/tj)
+- `_apply_bm_stock()` propaga `_bm_avail` a todos los productos y variaciones
+- Dashboard muestra columna "BM Disp./Total": disponible en verde/rojo + total/reservados en gris
+- Botones Sync usan `_bm_avail` en lugar de `_bm_total`
+- Si `avail=0` y `total>0`: badge "⚠️ Todo reservado" bloquea el sync
+- Eliminado buffer 0.6 en todos los sync (innecesario con Available real)
+
+### Archivos modificados
+- `app/main.py` (funciones _get_bm_stock_cached, _apply_bm_stock, 2 lecturas cache)
+- `app/api/items.py` (_bm_warehouse_qty con doble llamada paralela)
+- `app/templates/partials/products_inventory.html` (UI + JS)
+- `app/templates/items.html` (quickSyncBM sin buffer)
+
+### Git tag backup
+- `backup-pre-reserved-fix` → estado anterior funcional
+
+### Nota pendiente
+- ForInventory:1 es un proxy de "Available" — validar con BinManager IT si coincide exactamente
+- Para SNAF000022: ForInventory:1=44 no coincide con Available=0 en UI → puede haber discrepancia en algunos casos
+
 ## 2026-02-19 — Feat: Migración completa Product Ads API v2 (Feb 2026)
 
 ### Causa raíz bloqueante (no es código)
