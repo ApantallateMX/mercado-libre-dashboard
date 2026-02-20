@@ -1475,6 +1475,9 @@ _ORDERS_CACHE_TTL = 900     # 15 min
 _sale_price_cache: dict[str, tuple[float, dict | None]] = {}
 _SALE_PRICE_CACHE_TTL = 300  # 5 min
 _stock_issues_cache: dict[str, tuple[float, dict]] = {}
+# Cache cross-account para dashboard general (independiente de cuenta activa)
+_multi_account_cache: dict[str, tuple[float, dict]] = {}
+_MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
 _STOCK_ISSUES_TTL = 300      # 5 min
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 _synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
@@ -5797,6 +5800,316 @@ async def update_item_status_api(item_id: str, request: Request):
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
     finally:
         await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-ACCOUNT DASHBOARD — Vista General de todas las cuentas
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/multi-dashboard", response_class=HTMLResponse)
+async def multi_dashboard_page(request: Request):
+    """Vista general consolidada de todas las cuentas MeLi."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse("multi_dashboard.html", {
+        "request": request,
+        "user": user,
+        "active": "multi_dashboard",
+        **ctx
+    })
+
+
+@app.get("/api/dashboard/multi-account")
+async def get_multi_account_dashboard(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Dashboard consolidado: métricas de todas las cuentas en una sola respuesta.
+    Cache de 5 minutos cross-account (independiente de la cuenta activa).
+    """
+    import time as _time
+    now = datetime.utcnow()
+    if not date_from:
+        date_from = now.replace(day=1).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now.strftime("%Y-%m-%d")
+
+    cache_key = f"multi_account:{date_from}:{date_to}"
+    cached = _multi_account_cache.get(cache_key)
+    if cached and (_time.time() - cached[0]) < _MULTI_ACCOUNT_CACHE_TTL:
+        return cached[1]
+
+    accounts_list = await token_store.get_all_tokens()
+    today_str = now.strftime("%Y-%m-%d")
+    week_start_str = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+
+    ACC_COLORS = {
+        "523916436": "#3B82F6",  # APANTALLATEMX - azul
+        "292395685": "#10B981",  # AUTOBOT - verde
+        "391393176": "#8B5CF6",  # BLOWTECHNOLOGIES - morado
+        "515061615": "#F97316",  # LUTEMAMEXICO - naranja
+    }
+
+    async def _fetch_account_data(account):
+        uid = account["user_id"]
+        nickname = account.get("nickname") or uid
+        try:
+            client = await get_meli_client(user_id=uid)
+            all_orders, items_data = await asyncio.gather(
+                client.fetch_all_orders(date_from=date_from, date_to=date_to),
+                client.get_items(limit=1)
+            )
+            await client.close()
+
+            paid = [o for o in all_orders if o.get("status") in ("paid", "delivered")]
+
+            def _in_period(order, start_str):
+                try:
+                    od = datetime.fromisoformat(
+                        order["date_created"].replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    return od.strftime("%Y-%m-%d") >= start_str
+                except Exception:
+                    return False
+
+            today_orders = [o for o in paid if _in_period(o, today_str)]
+            week_orders = [o for o in paid if _in_period(o, week_start_str)]
+
+            def _agg(orders):
+                units = sum(
+                    sum(oi.get("quantity", 1) for oi in o.get("order_items", []))
+                    for o in orders
+                )
+                revenue = sum(order_net_revenue(o) for o in orders)
+                return {"orders": len(orders), "units": units, "revenue": round(revenue, 2)}
+
+            # Daily revenues para la gráfica comparativa
+            daily_revenues: dict[str, float] = {}
+            for o in paid:
+                try:
+                    od = datetime.fromisoformat(
+                        o["date_created"].replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                    dk = od.strftime("%Y-%m-%d")
+                    daily_revenues[dk] = daily_revenues.get(dk, 0) + order_net_revenue(o)
+                except Exception:
+                    pass
+
+            # Items más vendidos (agrupados por item_id)
+            items_sales: dict[str, dict] = {}
+            for o in paid:
+                for oi in o.get("order_items", []):
+                    item = oi.get("item", {})
+                    iid = item.get("id", "")
+                    if not iid:
+                        continue
+                    title = item.get("title", "")
+                    seller_sku = item.get("seller_sku", "")
+                    qty = oi.get("quantity", 0)
+                    rev = qty * oi.get("unit_price", 0)
+                    if iid not in items_sales:
+                        items_sales[iid] = {
+                            "title": title,
+                            "sku": seller_sku,
+                            "units": 0,
+                            "revenue": 0,
+                            "user_id": uid,
+                            "nickname": nickname,
+                        }
+                    items_sales[iid]["units"] += qty
+                    items_sales[iid]["revenue"] += rev
+
+            return {
+                "user_id": uid,
+                "nickname": nickname,
+                "color": ACC_COLORS.get(uid, "#6B7280"),
+                "today": _agg(today_orders),
+                "week": _agg(week_orders),
+                "month": _agg(paid),
+                "active_items": items_data.get("paging", {}).get("total", 0),
+                "items_sales": items_sales,
+                "daily_revenues": daily_revenues,
+                "error": None,
+            }
+        except Exception as e:
+            return {
+                "user_id": uid,
+                "nickname": nickname,
+                "color": ACC_COLORS.get(uid, "#6B7280"),
+                "today": {"orders": 0, "units": 0, "revenue": 0},
+                "week": {"orders": 0, "units": 0, "revenue": 0},
+                "month": {"orders": 0, "units": 0, "revenue": 0},
+                "active_items": 0,
+                "items_sales": {},
+                "daily_revenues": {},
+                "error": str(e),
+            }
+
+    accounts_data = list(await asyncio.gather(*[_fetch_account_data(a) for a in accounts_list]))
+
+    def _sum_period(period):
+        return {
+            "orders": sum(a[period]["orders"] for a in accounts_data),
+            "units": sum(a[period]["units"] for a in accounts_data),
+            "revenue": round(sum(a[period]["revenue"] for a in accounts_data), 2),
+        }
+
+    totals = {
+        "today": _sum_period("today"),
+        "week": _sum_period("week"),
+        "month": _sum_period("month"),
+        "active_items": sum(a["active_items"] for a in accounts_data),
+    }
+
+    def _leader(period):
+        best = max(accounts_data, key=lambda a: a[period]["revenue"])
+        return {
+            "user_id": best["user_id"],
+            "nickname": best["nickname"],
+            "revenue": best[period]["revenue"],
+            "color": best["color"],
+        }
+
+    # Top productos cross-account
+    global_items: dict[str, dict] = {}
+    for acc in accounts_data:
+        for iid, idata in acc.get("items_sales", {}).items():
+            if iid not in global_items:
+                global_items[iid] = {
+                    "title": idata["title"],
+                    "sku": idata["sku"],
+                    "total_units": 0,
+                    "total_revenue": 0,
+                    "by_account": [],
+                }
+            global_items[iid]["total_units"] += idata["units"]
+            global_items[iid]["total_revenue"] += idata["revenue"]
+            if idata["units"] > 0:
+                global_items[iid]["by_account"].append({
+                    "user_id": acc["user_id"],
+                    "nickname": acc["nickname"],
+                    "color": acc["color"],
+                    "units": idata["units"],
+                })
+
+    top_products = sorted(
+        global_items.values(),
+        key=lambda x: x["total_units"],
+        reverse=True
+    )[:15]
+    for p in top_products:
+        p["total_revenue"] = round(p["total_revenue"], 2)
+
+    result = {
+        "date_from": date_from,
+        "date_to": date_to,
+        "accounts": accounts_data,
+        "totals": totals,
+        "top_products": top_products,
+        "leader_today": _leader("today"),
+        "leader_week": _leader("week"),
+        "leader_month": _leader("month"),
+    }
+
+    _multi_account_cache[cache_key] = (_time.time(), result)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONCENTRACIÓN INTELIGENTE DE STOCK
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/stock/concentration/preview")
+async def stock_concentration_preview_api(
+    sku: str = Query(..., description="SKU base a analizar"),
+):
+    """Analiza cómo se concentraría el stock de un SKU. No ejecuta ningún cambio."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    await client.close()
+    from app.services.stock_concentrator import preview_concentration
+    return await preview_concentration(sku)
+
+
+@app.post("/api/stock/concentration/execute")
+async def stock_concentration_execute_api(request: Request):
+    """Ejecuta la concentración de stock de un SKU en la cuenta ganadora.
+
+    Body: {sku, winner_user_id, total_stock, dry_run (default true)}
+    Por seguridad, dry_run=true por defecto. Pasar dry_run=false para ejecutar.
+    """
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    await client.close()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+
+    sku = body.get("sku", "").strip()
+    winner_uid = body.get("winner_user_id", "").strip()
+    total_stock = int(body.get("total_stock", 0))
+    dry_run = bool(body.get("dry_run", True))
+    trigger = body.get("trigger", "manual")
+
+    if not sku or not winner_uid:
+        return JSONResponse({"detail": "sku y winner_user_id son requeridos"}, status_code=400)
+
+    from app.services.stock_concentrator import execute_concentration
+    return await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
+
+
+@app.post("/api/stock/concentration/scan")
+async def stock_concentration_scan_api(request: Request):
+    """Escanea los productos de la cuenta activa y detecta candidatos a concentración.
+
+    Filtra productos con _bm_avail < threshold (default 5).
+    Para cada candidato, obtiene el preview de concentración.
+
+    Body (opcional): {threshold: int}
+    """
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        threshold = int(body.get("threshold", 5))
+
+        # Obtener productos con BM stock ya cargado (usa cache si disponible)
+        uid = client.user_id
+        products = await _get_all_products_cached(client, include_all=True)
+        if products:
+            bm_map = await _get_bm_stock_cached(products)
+            _apply_bm_stock(products, bm_map)
+        # También necesita _bm_avail (de _wh_phase / InventoryBySKUAndCondicion_Quantity)
+        # Si no está en cache, la función scan_low_stock_skus usa lo que haya en _bm_avail
+
+        from app.services.stock_concentrator import scan_low_stock_skus
+        result = await scan_low_stock_skus(products, threshold)
+        return result
+    finally:
+        await client.close()
+
+
+@app.get("/api/stock/concentration/log")
+async def stock_concentration_log_api(
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Historial de concentraciones ejecutadas (reales y simuladas)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    await client.close()
+    entries = await token_store.get_concentration_log(limit=limit)
+    return {"entries": entries}
 
 
 if __name__ == "__main__":

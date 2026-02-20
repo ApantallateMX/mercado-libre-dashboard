@@ -1,0 +1,834 @@
+{% extends "base.html" %}
+{% block title %}Vista General{% endblock %}
+
+{% block content %}
+
+<!-- ═══ HEADER ═══ -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-yellow-400">
+    <div class="px-4 md:px-6 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0 bg-yellow-400 text-gray-800">
+                ⊕
+            </div>
+            <div>
+                <h1 class="font-bold text-gray-800 text-base leading-tight">Vista General — {{ accounts|length }} Cuentas</h1>
+                <p class="text-xs text-gray-400">Comparativa consolidada de todas las cuentas</p>
+            </div>
+        </div>
+        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
+            <div class="pr-5 text-center">
+                <p class="text-xs text-gray-400">Total hoy</p>
+                <p class="font-bold text-gray-800 text-lg" id="md-total-today">—</p>
+            </div>
+            <div class="px-5 text-center">
+                <p class="text-xs text-gray-400">Total semana</p>
+                <p class="font-bold text-gray-800 text-lg" id="md-total-week">—</p>
+            </div>
+            <div class="pl-5 text-center">
+                <p class="text-xs text-gray-400">Total mes</p>
+                <p class="font-bold text-green-600 text-lg" id="md-total-month">—</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ FILTRO DE FECHAS ═══ -->
+<div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
+    <div class="flex flex-wrap gap-2 items-end">
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs font-medium text-gray-600 mb-1">Desde</label>
+            <input type="date" id="md-date-from" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 outline-none">
+        </div>
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
+            <input type="date" id="md-date-to" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 outline-none">
+        </div>
+        <button type="button" onclick="loadMultiDashboard()"
+                class="bg-yellow-400 text-gray-800 font-semibold px-5 py-2.5 min-h-[44px] rounded-lg hover:bg-yellow-500 transition text-sm">
+            Actualizar
+        </button>
+        <button type="button" onclick="setMdRange(30)"
+                class="border border-gray-300 text-gray-600 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-gray-100 transition text-sm">30d</button>
+        <button type="button" onclick="setMdRange(7)"
+                class="border border-gray-300 text-gray-600 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-gray-100 transition text-sm">7d</button>
+    </div>
+</div>
+
+<!-- ═══ LÍDERES ═══ -->
+<div id="md-leaders" class="grid grid-cols-3 gap-3 md:gap-4 mb-5">
+    {% for _ in range(3) %}
+    <div class="bg-white p-3 md:p-4 rounded-xl shadow animate-pulse">
+        <div class="h-2 bg-gray-200 rounded w-1/2 mb-3"></div>
+        <div class="h-6 bg-gray-200 rounded w-3/4 mb-2"></div>
+        <div class="h-3 bg-gray-100 rounded w-1/3"></div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ═══ CARDS POR CUENTA ═══ -->
+<div id="md-account-cards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4 mb-5">
+    {% for account in accounts %}
+    <div class="bg-white rounded-xl shadow animate-pulse p-4">
+        <div class="h-4 bg-gray-200 rounded w-2/3 mb-4"></div>
+        <div class="h-8 bg-gray-100 rounded w-1/2 mb-2"></div>
+        <div class="h-3 bg-gray-100 rounded w-3/4"></div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ═══ GRÁFICA COMPARATIVA + TOP PRODUCTOS ═══ -->
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
+    <!-- Gráfica (2/3) -->
+    <div class="xl:col-span-2 bg-white rounded-xl shadow p-4">
+        <h2 class="font-semibold text-gray-700 mb-3">Comparativa de Ventas (Neto)</h2>
+        <div id="md-chart-container" class="relative h-64">
+            <div class="absolute inset-0 flex items-center justify-center">
+                <div class="text-gray-400 text-sm animate-pulse">Cargando gráfica...</div>
+            </div>
+            <canvas id="md-chart" class="hidden"></canvas>
+        </div>
+    </div>
+    <!-- Tabla comparativa (1/3) -->
+    <div class="bg-white rounded-xl shadow p-4">
+        <h2 class="font-semibold text-gray-700 mb-3">Resumen del Período</h2>
+        <div id="md-summary-table">
+            <div class="animate-pulse space-y-3">
+                {% for _ in range(4) %}
+                <div class="h-12 bg-gray-100 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ TOP PRODUCTOS ═══ -->
+<div class="bg-white rounded-xl shadow p-4 mb-5">
+    <div class="flex items-center justify-between mb-3">
+        <h2 class="font-semibold text-gray-700">Top Productos — Todas las Cuentas</h2>
+        <span id="md-top-period" class="text-xs text-gray-400"></span>
+    </div>
+    <div id="md-top-products">
+        <div class="animate-pulse space-y-2">
+            {% for _ in range(5) %}
+            <div class="h-12 bg-gray-100 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- ═══ CONCENTRACIÓN DE STOCK ═══ -->
+<div class="bg-white rounded-xl shadow p-4 mb-5" id="concentration-section">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <h2 class="font-semibold text-gray-700">Concentración Inteligente de Stock</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Concentra el stock de un SKU en la cuenta con más ventas para evitar sobreventa</p>
+        </div>
+        <button type="button" onclick="openScanModal()"
+                class="bg-blue-500 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-600 transition font-medium">
+            Escanear Stock Bajo
+        </button>
+    </div>
+
+    <!-- Búsqueda manual por SKU -->
+    <div class="flex gap-2 mb-4">
+        <input type="text" id="concentration-sku-input" placeholder="Ingresa un SKU base (ej: SNTV001763)"
+               class="flex-1 border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-400 outline-none">
+        <button type="button" onclick="previewConcentration()"
+                class="bg-gray-700 text-white px-4 py-2.5 rounded-lg text-sm hover:bg-gray-600 transition font-medium">
+            Analizar
+        </button>
+    </div>
+
+    <!-- Resultado del análisis -->
+    <div id="concentration-result" class="hidden"></div>
+
+    <!-- Historial reciente -->
+    <div class="mt-4">
+        <button type="button" onclick="loadConcentrationLog()" class="text-xs text-blue-500 hover:underline">
+            Ver historial de concentraciones →
+        </button>
+        <div id="concentration-log" class="hidden mt-3"></div>
+    </div>
+</div>
+
+<!-- ═══ MODAL: Scan Stock Bajo ═══ -->
+<div id="scan-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+        <div class="p-5">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-gray-800 text-lg">Escanear SKUs con Stock Bajo</h3>
+                <button onclick="document.getElementById('scan-modal').classList.add('hidden')"
+                        class="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+            </div>
+            <p class="text-sm text-gray-500 mb-4">Escanea todos los productos de la cuenta activa con stock BM disponible menor al umbral.</p>
+            <div class="flex gap-2 mb-4">
+                <div class="flex-1">
+                    <label class="block text-xs font-medium text-gray-600 mb-1">Umbral de stock (unidades)</label>
+                    <input type="number" id="scan-threshold" value="5" min="1" max="100"
+                           class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none">
+                </div>
+                <div class="flex items-end">
+                    <button type="button" onclick="runScan()"
+                            class="bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm hover:bg-blue-600 transition font-medium">
+                        Iniciar Scan
+                    </button>
+                </div>
+            </div>
+            <div id="scan-result"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ MODAL: Confirmar Concentración ═══ -->
+<div id="confirm-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full">
+        <div class="p-5">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-bold text-gray-800">Confirmar Concentración</h3>
+                <button onclick="document.getElementById('confirm-modal').classList.add('hidden')"
+                        class="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+            </div>
+            <div id="confirm-modal-content"></div>
+            <div class="flex gap-3 mt-5">
+                <button type="button" onclick="document.getElementById('confirm-modal').classList.add('hidden')"
+                        class="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-lg text-sm hover:bg-gray-50 transition">
+                    Cancelar
+                </button>
+                <button type="button" id="confirm-execute-btn"
+                        class="flex-1 bg-blue-500 text-white py-2.5 rounded-lg text-sm hover:bg-blue-600 transition font-semibold">
+                    Confirmar y Ejecutar
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ─── Colores por cuenta ────────────────────────────────────────────────────
+const ACC_COLORS = {
+    "523916436": "#3B82F6",  // APANTALLATEMX - azul
+    "292395685": "#10B981",  // AUTOBOT - verde
+    "391393176": "#8B5CF6",  // BLOWTECHNOLOGIES - morado
+    "515061615": "#F97316",  // LUTEMAMEXICO - naranja
+};
+const ACC_COLOR_DEFAULT = "#6B7280";
+function accColor(uid) { return ACC_COLORS[uid] || ACC_COLOR_DEFAULT; }
+
+// ─── Formatters ───────────────────────────────────────────────────────────
+function fmt(n) {
+    if (n == null || isNaN(n)) return '—';
+    if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000) return '$' + (n/1000).toFixed(1) + 'K';
+    return '$' + n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function fmtN(n) { return n != null ? n.toLocaleString() : '—'; }
+
+// ─── Date helpers ─────────────────────────────────────────────────────────
+function today() { return new Date().toISOString().slice(0,10); }
+function daysAgo(n) {
+    const d = new Date(); d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0,10);
+}
+function monthStart() {
+    const d = new Date(); d.setDate(1);
+    return d.toISOString().slice(0,10);
+}
+
+function setMdRange(days) {
+    document.getElementById('md-date-from').value = days === 30 ? monthStart() : daysAgo(days - 1);
+    document.getElementById('md-date-to').value = today();
+    loadMultiDashboard();
+}
+
+// ─── Chart instance ───────────────────────────────────────────────────────
+let mdChart = null;
+
+// ─── Load dashboard data ──────────────────────────────────────────────────
+async function loadMultiDashboard() {
+    const from = document.getElementById('md-date-from').value || monthStart();
+    const to = document.getElementById('md-date-to').value || today();
+
+    // Show skeletons
+    showLeaderSkeletons();
+    showAccountSkeletons();
+
+    const url = `/api/dashboard/multi-account?date_from=${from}&date_to=${to}`;
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) { console.error('API error', resp.status); return; }
+        const data = await resp.json();
+        renderAll(data);
+    } catch(e) {
+        console.error('Error loading multi dashboard:', e);
+    }
+}
+
+function renderAll(data) {
+    renderHeader(data.totals);
+    renderLeaders(data);
+    renderAccountCards(data.accounts);
+    renderChart(data);
+    renderSummaryTable(data.accounts);
+    renderTopProducts(data.top_products, data.date_from, data.date_to);
+}
+
+// ─── Header totals ────────────────────────────────────────────────────────
+function renderHeader(totals) {
+    document.getElementById('md-total-today').textContent = fmt(totals.today.revenue);
+    document.getElementById('md-total-week').textContent = fmt(totals.week.revenue);
+    document.getElementById('md-total-month').textContent = fmt(totals.month.revenue);
+}
+
+// ─── Leaders ──────────────────────────────────────────────────────────────
+function showLeaderSkeletons() {
+    document.getElementById('md-leaders').innerHTML = `
+        ${['Hoy','Semana','Mes'].map(p => `
+        <div class="bg-white p-3 md:p-4 rounded-xl shadow animate-pulse">
+            <div class="h-2 bg-gray-200 rounded w-1/2 mb-3"></div>
+            <div class="h-6 bg-gray-200 rounded w-3/4 mb-2"></div>
+            <div class="h-3 bg-gray-100 rounded w-1/3"></div>
+        </div>`).join('')}`;
+}
+
+function renderLeaders(data) {
+    const periods = [
+        { key: 'leader_today', label: 'Líder Hoy' },
+        { key: 'leader_week',  label: 'Líder Semana' },
+        { key: 'leader_month', label: 'Líder Mes' },
+    ];
+    document.getElementById('md-leaders').innerHTML = periods.map(({ key, label }) => {
+        const leader = data[key];
+        if (!leader) return `<div class="bg-white p-4 rounded-xl shadow text-gray-400 text-sm">Sin datos</div>`;
+        const color = accColor(leader.user_id);
+        const all = data.accounts;
+        const total = all.reduce((s, a) => s + (a.today ? a.today.revenue : 0), 0);
+        const period_revenue = key === 'leader_today' ? data.totals.today.revenue
+                             : key === 'leader_week' ? data.totals.week.revenue
+                             : data.totals.month.revenue;
+        const pct = period_revenue > 0 ? Math.round(leader.revenue / period_revenue * 100) : 0;
+        return `
+        <div class="bg-white p-3 md:p-4 rounded-xl shadow border-t-4" style="border-top-color:${color}">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">${label}</span>
+                <span class="text-xs font-bold text-white px-2 py-0.5 rounded-full" style="background:${color}">${pct}%</span>
+            </div>
+            <p class="font-bold text-gray-800 text-sm md:text-base truncate">${leader.nickname}</p>
+            <p class="text-lg font-bold mt-1" style="color:${color}">${fmt(leader.revenue)}</p>
+        </div>`;
+    }).join('');
+}
+
+// ─── Account cards ────────────────────────────────────────────────────────
+function showAccountSkeletons() {
+    const count = document.getElementById('md-account-cards').children.length || 4;
+    document.getElementById('md-account-cards').innerHTML =
+        Array.from({length: count}, () => `
+        <div class="bg-white rounded-xl shadow animate-pulse p-4">
+            <div class="h-4 bg-gray-200 rounded w-2/3 mb-4"></div>
+            <div class="h-8 bg-gray-100 rounded w-1/2 mb-2"></div>
+            <div class="h-3 bg-gray-100 rounded w-3/4"></div>
+        </div>`).join('');
+}
+
+function renderAccountCards(accounts) {
+    document.getElementById('md-account-cards').innerHTML = accounts.map(acc => {
+        const color = accColor(acc.user_id);
+        const initials = (acc.nickname || 'ML').slice(0, 2).toUpperCase();
+        const todayOrders = acc.today.orders;
+        const weekOrders = acc.week.orders;
+        const monthOrders = acc.month.orders;
+        const errorBanner = acc.error ? `<div class="text-xs text-red-400 mt-2 truncate">⚠ ${acc.error}</div>` : '';
+        return `
+        <div class="bg-white rounded-xl shadow overflow-hidden border-l-4" style="border-left-color:${color}">
+            <div class="p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0" style="background:${color}">${initials}</div>
+                    <div class="min-w-0">
+                        <p class="font-semibold text-gray-800 text-sm truncate">${acc.nickname}</p>
+                        <p class="text-xs text-gray-400">${acc.active_items} productos activos</p>
+                    </div>
+                </div>
+                <div class="space-y-2">
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs text-gray-500">Hoy</span>
+                        <div class="text-right">
+                            <span class="font-bold text-gray-800 text-sm">${fmt(acc.today.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${todayOrders} ventas</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs text-gray-500">Semana</span>
+                        <div class="text-right">
+                            <span class="font-bold text-gray-700 text-sm">${fmt(acc.week.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${weekOrders} ventas</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center pt-1 border-t border-gray-100">
+                        <span class="text-xs text-gray-500">Mes</span>
+                        <div class="text-right">
+                            <span class="font-bold text-sm" style="color:${color}">${fmt(acc.month.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${monthOrders} ventas</span>
+                        </div>
+                    </div>
+                </div>
+                ${errorBanner}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ─── Chart ────────────────────────────────────────────────────────────────
+function renderChart(data) {
+    const canvas = document.getElementById('md-chart');
+    const container = document.getElementById('md-chart-container');
+    canvas.classList.remove('hidden');
+    container.querySelector('.animate-pulse') && container.querySelector('div').remove();
+
+    // Build daily revenue per account
+    const accounts = data.accounts;
+    if (!accounts.length) return;
+
+    // Get date range
+    const from = document.getElementById('md-date-from').value || monthStart();
+    const to = document.getElementById('md-date-to').value || today();
+    const dates = getDatesRange(from, to);
+    if (dates.length > 31) {
+        // For large ranges, show summary bar chart by account
+        renderBarChart(canvas, data);
+        return;
+    }
+
+    // Build daily datasets per account
+    const datasets = accounts.map(acc => {
+        const color = accColor(acc.user_id);
+        // daily_revenues is an array parallel to dates
+        const revenues = buildDailyRevenues(acc, dates);
+        return {
+            label: acc.nickname,
+            data: revenues,
+            borderColor: color,
+            backgroundColor: color + '20',
+            fill: false,
+            tension: 0.3,
+            pointRadius: 3,
+            borderWidth: 2,
+        };
+    });
+
+    if (mdChart) mdChart.destroy();
+    mdChart = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: dates.map(d => d.slice(5)), // MM-DD
+            datasets,
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    ticks: {
+                        callback: v => fmt(v),
+                        font: { size: 11 }
+                    }
+                },
+                x: { ticks: { font: { size: 10 } } }
+            }
+        }
+    });
+}
+
+function renderBarChart(canvas, data) {
+    const accounts = data.accounts;
+    if (mdChart) mdChart.destroy();
+    mdChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: accounts.map(a => a.nickname),
+            datasets: [
+                {
+                    label: 'Ingresos del período',
+                    data: accounts.map(a => a.month.revenue),
+                    backgroundColor: accounts.map(a => accColor(a.user_id) + 'CC'),
+                    borderColor: accounts.map(a => accColor(a.user_id)),
+                    borderWidth: 2,
+                    borderRadius: 8,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => fmt(ctx.raw) } }
+            },
+            scales: {
+                y: { ticks: { callback: v => fmt(v), font: { size: 11 } } }
+            }
+        }
+    });
+}
+
+function getDatesRange(from, to) {
+    const dates = [];
+    let cur = new Date(from + 'T00:00:00');
+    const end = new Date(to + 'T00:00:00');
+    while (cur <= end) {
+        dates.push(cur.toISOString().slice(0, 10));
+        cur.setDate(cur.getDate() + 1);
+    }
+    return dates;
+}
+
+function buildDailyRevenues(acc, dates) {
+    // acc.daily_revenues is a dict {date: revenue} if available
+    const dr = acc.daily_revenues || {};
+    return dates.map(d => dr[d] || 0);
+}
+
+// ─── Summary table ────────────────────────────────────────────────────────
+function renderSummaryTable(accounts) {
+    const sorted = [...accounts].sort((a, b) => b.month.revenue - a.month.revenue);
+    document.getElementById('md-summary-table').innerHTML = sorted.map((acc, i) => {
+        const color = accColor(acc.user_id);
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i+1}.`;
+        return `
+        <div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-sm">${medal}</span>
+                <div class="w-2.5 h-2.5 rounded-full shrink-0" style="background:${color}"></div>
+                <span class="text-sm font-medium text-gray-700 truncate">${acc.nickname}</span>
+            </div>
+            <div class="text-right shrink-0 ml-2">
+                <p class="text-sm font-bold" style="color:${color}">${fmt(acc.month.revenue)}</p>
+                <p class="text-xs text-gray-400">${acc.month.orders} ventas</p>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ─── Top products ─────────────────────────────────────────────────────────
+function renderTopProducts(products, dateFrom, dateTo) {
+    document.getElementById('md-top-period').textContent = `${dateFrom} → ${dateTo}`;
+    if (!products || !products.length) {
+        document.getElementById('md-top-products').innerHTML =
+            '<p class="text-sm text-gray-400 py-4 text-center">No hay ventas en el período seleccionado.</p>';
+        return;
+    }
+    document.getElementById('md-top-products').innerHTML = `
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide border-b">
+                    <th class="pb-2 pr-3">#</th>
+                    <th class="pb-2 pr-3">Producto</th>
+                    <th class="pb-2 pr-3 text-center">Unidades</th>
+                    <th class="pb-2 pr-3 text-right">Ingresos</th>
+                    <th class="pb-2">Cuentas</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${products.slice(0, 15).map((p, i) => `
+                <tr class="border-b border-gray-50 hover:bg-gray-50">
+                    <td class="py-2 pr-3 text-gray-400 font-medium">${i+1}</td>
+                    <td class="py-2 pr-3">
+                        <p class="font-medium text-gray-800 truncate max-w-[200px]">${escapeHtml(p.title || '—')}</p>
+                        ${p.sku ? `<p class="text-xs text-gray-400">${escapeHtml(p.sku)}</p>` : ''}
+                    </td>
+                    <td class="py-2 pr-3 text-center font-bold text-gray-700">${fmtN(p.total_units)}</td>
+                    <td class="py-2 pr-3 text-right font-bold text-green-600">${fmt(p.total_revenue)}</td>
+                    <td class="py-2">
+                        <div class="flex flex-wrap gap-1">
+                            ${(p.by_account || []).map(ba =>
+                                `<span class="text-xs px-1.5 py-0.5 rounded font-medium text-white" style="background:${accColor(ba.user_id || '')}">${ba.nickname.slice(0,5)} (${ba.units})</span>`
+                            ).join('')}
+                        </div>
+                    </td>
+                </tr>`).join('')}
+            </tbody>
+        </table>
+    </div>`;
+}
+
+// ─── Concentration preview ────────────────────────────────────────────────
+async function previewConcentration() {
+    const sku = document.getElementById('concentration-sku-input').value.trim();
+    if (!sku) return notify('Ingresa un SKU primero.', 'warning');
+
+    const container = document.getElementById('concentration-result');
+    container.classList.remove('hidden');
+    container.innerHTML = `<div class="text-center py-6 text-gray-400 animate-pulse text-sm">Analizando ${escapeHtml(sku)}...</div>`;
+
+    try {
+        const resp = await fetch(`/api/stock/concentration/preview?sku=${encodeURIComponent(sku)}`);
+        const data = await resp.json();
+        renderConcentrationPreview(data, container);
+    } catch(e) {
+        container.innerHTML = `<div class="text-red-400 text-sm p-3">Error: ${e.message}</div>`;
+    }
+}
+
+function renderConcentrationPreview(data, container) {
+    const actionColors = {
+        concentrar: 'blue',
+        no_concentrar: 'gray',
+        single_account: 'gray',
+        no_items_found: 'red',
+    };
+    const color = actionColors[data.action] || 'gray';
+    const bgClass = `bg-${color}-50 border border-${color}-200 text-${color}-800`;
+
+    let html = `
+    <div class="rounded-xl p-4 ${color === 'blue' ? 'bg-blue-50 border border-blue-200' : color === 'red' ? 'bg-red-50 border border-red-200' : 'bg-gray-50 border border-gray-200'} mb-3">
+        <p class="text-sm font-semibold mb-1">SKU: <span class="font-mono">${escapeHtml(data.sku)}</span></p>
+        <p class="text-sm">${escapeHtml(data.message)}</p>
+    </div>`;
+
+    if (data.details && data.details.length > 0) {
+        html += `<div class="overflow-x-auto mb-3">
+        <table class="w-full text-sm">
+            <thead><tr class="text-left text-xs text-gray-400 uppercase border-b">
+                <th class="pb-1 pr-3">Cuenta</th>
+                <th class="pb-1 pr-3">Item</th>
+                <th class="pb-1 pr-3 text-right">Stock MeLi</th>
+                <th class="pb-1 pr-3 text-right">Ventas 30d</th>
+                <th class="pb-1 text-right">Históricas</th>
+            </tr></thead>
+            <tbody>
+            ${data.details.map(d => {
+                const isWinner = data.winner && d.item_id === data.winner.item_id;
+                return `<tr class="${isWinner ? 'bg-blue-50 font-semibold' : 'hover:bg-gray-50'} border-b border-gray-50">
+                    <td class="py-2 pr-3">
+                        <div class="flex items-center gap-1.5">
+                            <div class="w-2 h-2 rounded-full shrink-0" style="background:${accColor(d.user_id)}"></div>
+                            <span class="truncate">${escapeHtml(d.nickname)}</span>
+                            ${isWinner ? '<span class="text-xs text-blue-600 ml-1">✓ GANADOR</span>' : ''}
+                        </div>
+                    </td>
+                    <td class="py-2 pr-3 text-xs text-gray-500 font-mono">${d.item_id}</td>
+                    <td class="py-2 pr-3 text-right">${d.available_quantity}</td>
+                    <td class="py-2 pr-3 text-right font-bold ${d.sold_30d > 0 ? 'text-green-600' : 'text-gray-400'}">${d.sold_30d}</td>
+                    <td class="py-2 text-right text-gray-500">${d.sold_total}</td>
+                </tr>`;
+            }).join('')}
+            </tbody>
+        </table></div>`;
+    }
+
+    if (data.action === 'concentrar' && data.winner) {
+        // Store data for execution
+        window._pendingConcentration = {
+            sku: data.sku,
+            winner_user_id: data.winner.user_id,
+            total_stock: data.total_stock,
+            winner_nickname: data.winner.nickname,
+            losers_count: (data.losers || []).length,
+        };
+        html += `
+        <div class="flex gap-2">
+            <button type="button" onclick="openConfirmModal()"
+                    class="bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm hover:bg-blue-600 transition font-semibold">
+                Ejecutar Concentración
+            </button>
+            <span class="text-xs text-gray-400 self-center">Se pausará primero en las cuentas perdedoras.</span>
+        </div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+function openConfirmModal() {
+    const p = window._pendingConcentration;
+    if (!p) return;
+    document.getElementById('confirm-modal-content').innerHTML = `
+        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-4">
+            <p class="font-semibold text-gray-800 mb-2">⚠️ Esta acción modificará el stock en MeLi</p>
+            <ul class="text-sm text-gray-700 space-y-1.5">
+                <li>✅ <strong>${escapeHtml(p.winner_nickname)}</strong> recibirá <strong>${p.total_stock} unidades</strong></li>
+                <li>🚫 <strong>${p.losers_count} cuenta(s)</strong> quedarán con stock <strong>0</strong></li>
+                <li>📋 SKU: <code class="font-mono bg-gray-100 px-1 rounded">${escapeHtml(p.sku)}</code></li>
+            </ul>
+        </div>
+        <p class="text-xs text-gray-400">Esta acción se registra en el historial y puede deshacerse manualmente.</p>`;
+    document.getElementById('confirm-execute-btn').onclick = executeConcentration;
+    document.getElementById('confirm-modal').classList.remove('hidden');
+}
+
+async function executeConcentration() {
+    const p = window._pendingConcentration;
+    if (!p) return;
+    document.getElementById('confirm-execute-btn').textContent = 'Ejecutando...';
+    document.getElementById('confirm-execute-btn').disabled = true;
+
+    try {
+        const resp = await fetch('/api/stock/concentration/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                sku: p.sku,
+                winner_user_id: p.winner_user_id,
+                total_stock: p.total_stock,
+                dry_run: false,
+            }),
+        });
+        const data = await resp.json();
+        document.getElementById('confirm-modal').classList.add('hidden');
+        if (data.ok) {
+            notify(`✅ Concentración ejecutada: ${data.summary}`, 'success');
+        } else {
+            notify(`⚠️ Completado con errores: ${data.summary}`, 'warning');
+        }
+        // Clear pending state
+        window._pendingConcentration = null;
+        document.getElementById('concentration-result').innerHTML = '';
+    } catch(e) {
+        notify(`Error: ${e.message}`, 'error');
+    } finally {
+        document.getElementById('confirm-execute-btn').textContent = 'Confirmar y Ejecutar';
+        document.getElementById('confirm-execute-btn').disabled = false;
+    }
+}
+
+// ─── Scan modal ───────────────────────────────────────────────────────────
+function openScanModal() {
+    document.getElementById('scan-result').innerHTML = '';
+    document.getElementById('scan-modal').classList.remove('hidden');
+}
+
+async function runScan() {
+    const threshold = parseInt(document.getElementById('scan-threshold').value) || 5;
+    const result = document.getElementById('scan-result');
+    result.innerHTML = `<div class="text-center py-6 text-gray-400 animate-pulse text-sm">Escaneando inventario...</div>`;
+
+    try {
+        const resp = await fetch('/api/stock/concentration/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ threshold }),
+        });
+        const data = await resp.json();
+        renderScanResult(data, result);
+    } catch(e) {
+        result.innerHTML = `<div class="text-red-400 text-sm p-3">Error: ${e.message}</div>`;
+    }
+}
+
+function renderScanResult(data, container) {
+    let html = `<div class="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-3 text-sm">${escapeHtml(data.message || '')}</div>`;
+
+    if (!data.candidates || data.candidates.length === 0) {
+        container.innerHTML = html + `<p class="text-sm text-gray-400 text-center py-4">No se encontraron candidatos para concentración.</p>`;
+        return;
+    }
+
+    html += `<div class="space-y-3">`;
+    data.candidates.forEach(c => {
+        const preview = c.preview || {};
+        const winner = preview.winner || {};
+        const color = accColor(winner.user_id || '');
+        html += `
+        <div class="border border-gray-200 rounded-xl p-3">
+            <div class="flex items-center justify-between mb-2">
+                <div>
+                    <span class="font-mono text-sm font-semibold text-gray-800">${escapeHtml(c.sku)}</span>
+                    <span class="ml-2 text-xs text-orange-500 font-medium">${c.bm_avail} disponibles en BM</span>
+                </div>
+                <span class="text-xs text-gray-400">${c.found_in} cuenta(s)</span>
+            </div>
+            ${winner.nickname ? `
+            <p class="text-sm mb-2">
+                Ganador: <span class="font-semibold" style="color:${color}">${escapeHtml(winner.nickname)}</span>
+                (${winner.sold_30d} ventas/30d)
+            </p>` : ''}
+            <button type="button"
+                    onclick="document.getElementById('scan-modal').classList.add('hidden'); document.getElementById('concentration-sku-input').value='${escapeHtml(c.sku)}'; previewConcentration();"
+                    class="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg hover:bg-blue-600 transition">
+                Ver detalle y ejecutar →
+            </button>
+        </div>`;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+}
+
+// ─── Concentration log ────────────────────────────────────────────────────
+async function loadConcentrationLog() {
+    const container = document.getElementById('concentration-log');
+    container.classList.remove('hidden');
+    container.innerHTML = `<div class="text-sm text-gray-400 animate-pulse py-3">Cargando historial...</div>`;
+
+    try {
+        const resp = await fetch('/api/stock/concentration/log?limit=20');
+        const data = await resp.json();
+        if (!data.entries || data.entries.length === 0) {
+            container.innerHTML = `<p class="text-sm text-gray-400 py-3">No hay entradas en el historial aún.</p>`;
+            return;
+        }
+        container.innerHTML = `<div class="overflow-x-auto">
+        <table class="w-full text-xs">
+            <thead><tr class="text-left text-gray-400 uppercase border-b">
+                <th class="pb-1 pr-2">Fecha</th>
+                <th class="pb-1 pr-2">SKU</th>
+                <th class="pb-1 pr-2">Ganador</th>
+                <th class="pb-1 pr-2">Stock</th>
+                <th class="pb-1 pr-2">Tipo</th>
+                <th class="pb-1">Estado</th>
+            </tr></thead>
+            <tbody>
+            ${data.entries.map(e => `
+            <tr class="border-b border-gray-50 hover:bg-gray-50">
+                <td class="py-1.5 pr-2 text-gray-400">${(e.executed_at || '').slice(0,16)}</td>
+                <td class="py-1.5 pr-2 font-mono font-semibold">${escapeHtml(e.base_sku)}</td>
+                <td class="py-1.5 pr-2">${escapeHtml(e.winner_nickname || e.winner_user_id)}</td>
+                <td class="py-1.5 pr-2">${e.total_bm_avail}</td>
+                <td class="py-1.5 pr-2">
+                    <span class="px-1.5 py-0.5 rounded text-xs ${e.dry_run ? 'bg-gray-100 text-gray-500' : 'bg-blue-100 text-blue-700'}">${e.dry_run ? 'simulado' : 'real'}</span>
+                </td>
+                <td class="py-1.5">
+                    <span class="px-1.5 py-0.5 rounded text-xs ${e.status === 'ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}">${e.status}</span>
+                </td>
+            </tr>`).join('')}
+            </tbody>
+        </table></div>`;
+    } catch(e) {
+        container.innerHTML = `<div class="text-red-400 text-sm">Error: ${e.message}</div>`;
+    }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+function escapeHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function notify(msg, type) {
+    const colors = { success: 'bg-green-500', warning: 'bg-yellow-500 text-gray-800', error: 'bg-red-500' };
+    const el = document.createElement('div');
+    el.className = `${colors[type] || 'bg-gray-700'} text-white px-4 py-3 rounded-xl shadow-lg text-sm flex items-center justify-between gap-3 transition`;
+    el.innerHTML = `<span>${msg}</span><button onclick="this.parentElement.remove()" class="opacity-70 hover:opacity-100 text-lg leading-none">×</button>`;
+    const container = document.getElementById('notif-container');
+    if (container) container.prepend(el);
+    setTimeout(() => el.remove(), 8000);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    // Set default dates: current month
+    document.getElementById('md-date-from').value = monthStart();
+    document.getElementById('md-date-to').value = today();
+    loadMultiDashboard();
+});
+</script>
+{% endblock %}

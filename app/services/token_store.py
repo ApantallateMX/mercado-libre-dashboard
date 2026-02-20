@@ -43,6 +43,23 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_concentration_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                base_sku TEXT NOT NULL,
+                trigger TEXT NOT NULL,
+                winner_user_id TEXT NOT NULL,
+                winner_nickname TEXT NOT NULL DEFAULT '',
+                winner_item_id TEXT NOT NULL DEFAULT '',
+                winner_units_30d INTEGER NOT NULL DEFAULT 0,
+                total_bm_avail INTEGER NOT NULL DEFAULT 0,
+                accounts_zeroed TEXT NOT NULL DEFAULT '[]',
+                dry_run INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'ok',
+                notes TEXT DEFAULT '',
+                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -162,6 +179,62 @@ async def delete_tokens(user_id: str):
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
         await db.commit()
+
+
+async def log_concentration(
+    base_sku: str, trigger: str, winner_user_id: str, winner_nickname: str,
+    winner_item_id: str, winner_units_30d: int, total_bm_avail: int,
+    accounts_zeroed: list, dry_run: bool = True, status: str = "ok", notes: str = ""
+):
+    """Registra una concentración de stock (real o simulada)."""
+    import json as _json
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO stock_concentration_log
+            (base_sku, trigger, winner_user_id, winner_nickname, winner_item_id,
+             winner_units_30d, total_bm_avail, accounts_zeroed, dry_run, status, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            base_sku, trigger, winner_user_id, winner_nickname, winner_item_id,
+            winner_units_30d, total_bm_avail,
+            _json.dumps(accounts_zeroed, ensure_ascii=False),
+            1 if dry_run else 0, status, notes
+        ))
+        await db.commit()
+
+
+async def get_concentration_log(limit: int = 50) -> list:
+    """Obtiene el historial de concentraciones."""
+    import json as _json
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM stock_concentration_log ORDER BY executed_at DESC LIMIT ?", (limit,)
+        )
+        rows = await cursor.fetchall()
+        result = []
+        for row in rows:
+            r = dict(row)
+            try:
+                r["accounts_zeroed"] = _json.loads(r.get("accounts_zeroed") or "[]")
+            except Exception:
+                r["accounts_zeroed"] = []
+            result.append(r)
+        return result
+
+
+async def last_concentration_for_sku(base_sku: str, hours: int = 24) -> Optional[dict]:
+    """Verifica si ya se concentró este SKU en las últimas N horas (para evitar duplicados)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT * FROM stock_concentration_log
+            WHERE base_sku = ? AND dry_run = 0 AND status = 'ok'
+              AND executed_at >= datetime('now', ?)
+            ORDER BY executed_at DESC LIMIT 1
+        """, (base_sku, f"-{hours} hours"))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
 
 async def is_token_expired(user_id: str) -> bool:
