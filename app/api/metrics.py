@@ -1,10 +1,35 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime, timedelta
 from collections import defaultdict
 from app.services.meli_client import get_meli_client
+from app.services import token_store
 from app import order_net_revenue
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+
+
+@router.get("/goal")
+async def get_goal(request: Request):
+    """Obtiene la meta diaria de la cuenta activa."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    await client.close()
+    goal = await token_store.get_daily_goal(client.user_id)
+    return {"user_id": client.user_id, "daily_goal": goal}
+
+
+@router.post("/goal")
+async def set_goal(request: Request):
+    """Guarda la meta diaria de la cuenta activa."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    await client.close()
+    body = await request.json()
+    goal = float(body.get("daily_goal", 500000))
+    await token_store.set_daily_goal(client.user_id, goal)
+    return {"user_id": client.user_id, "daily_goal": goal}
 
 
 @router.get("")
@@ -141,7 +166,7 @@ async def get_dashboard_data(
 async def get_daily_sales(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
-    goal: float = Query(500000, description="Meta diaria en MXN"),
+    goal: float = Query(0, description="Meta diaria en MXN (0 = leer de DB)"),
 ):
     """Ventas agrupadas por dia con % de meta."""
     client = await get_meli_client()
@@ -153,10 +178,11 @@ async def get_daily_sales(
             date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
         if not date_to:
             date_to = now.strftime("%Y-%m-%d")
+        # Leer meta de DB si no se pasa como parámetro
+        if goal <= 0:
+            goal = await token_store.get_daily_goal(client.user_id)
 
         all_orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
-        # Enriquecer con net_received_amount real de MeLi (incluye todos los cargos e impuestos)
-        await client.enrich_orders_with_net_amount(all_orders)
 
         start = datetime.strptime(date_from, "%Y-%m-%d")
         end = datetime.strptime(date_to, "%Y-%m-%d")
@@ -201,6 +227,7 @@ async def get_daily_sales(
 
         return {
             "daily_data": daily_data,
+            "goal": goal,
             "totals": {
                 "units": total_units,
                 "revenue_gross": round(total_gross, 2),

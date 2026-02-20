@@ -36,6 +36,13 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS account_settings (
+                user_id TEXT PRIMARY KEY,
+                daily_goal REAL NOT NULL DEFAULT 500000,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -116,6 +123,28 @@ async def get_all_tokens() -> list:
         cursor = await db.execute("SELECT user_id, nickname FROM tokens ORDER BY created_at")
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+async def get_daily_goal(user_id: str) -> float:
+    """Obtiene la meta diaria de una cuenta. Default: 500,000."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT daily_goal FROM account_settings WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return float(row["daily_goal"]) if row else 500000.0
+
+
+async def set_daily_goal(user_id: str, goal: float):
+    """Guarda la meta diaria de una cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO account_settings (user_id, daily_goal, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET daily_goal=excluded.daily_goal, updated_at=excluded.updated_at
+        """, (user_id, goal))
+        await db.commit()
 
 
 async def update_nickname(user_id: str, nickname: str):

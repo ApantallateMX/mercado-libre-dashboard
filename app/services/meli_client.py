@@ -41,8 +41,8 @@ _orders_cache: dict[str, tuple[float, list]] = {}
 _CACHE_TTL = 300  # 5 minutos
 
 
-def _cache_key(date_from: str, date_to: str) -> str:
-    return f"orders:{date_from or ''}:{date_to or ''}"
+def _cache_key(user_id: str, date_from: str, date_to: str) -> str:
+    return f"orders:{user_id}:{date_from or ''}:{date_to or ''}"
 
 
 def _get_cached(key: str):
@@ -241,7 +241,7 @@ class MeliClient:
 
     async def fetch_all_orders(self, date_from: str = None, date_to: str = None) -> list:
         """Pagina TODAS las ordenes con paginacion concurrente + cache."""
-        key = _cache_key(date_from, date_to)
+        key = _cache_key(self.user_id, date_from, date_to)
         cached = _get_cached(key)
         if cached is not None:
             return cached
