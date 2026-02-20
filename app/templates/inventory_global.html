@@ -31,10 +31,12 @@
             <span class="text-sm font-medium text-gray-700" id="progress-label">Iniciando escaneo...</span>
             <span class="text-xs text-gray-500" id="progress-pct">0%</span>
         </div>
-        <div class="w-full bg-gray-200 rounded-full h-2">
-            <div id="progress-bar" class="bg-indigo-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+            <div id="progress-bar" class="bg-indigo-600 h-3 rounded-full transition-all duration-500 relative overflow-hidden" style="width: 2%">
+                <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse"></div>
+            </div>
         </div>
-        <p class="text-xs text-gray-400 mt-2" id="progress-detail"></p>
+        <p class="text-xs text-gray-500 mt-2 font-mono" id="progress-detail"></p>
     </div>
 
     <!-- KPI summary (hidden initially) -->
@@ -156,46 +158,89 @@ function getStatus(row, threshold) {
     return 'ok';
 }
 
+var _activeScanReader = null;
+
 function startScan() {
     var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+
+    // Cancelar scan anterior si hay uno activo
+    if (_activeScanReader) {
+        try { _activeScanReader.cancel(); } catch(e) {}
+        _activeScanReader = null;
+    }
+
     document.getElementById('scan-btn').disabled = true;
-    document.getElementById('scan-btn').textContent = 'Escaneando...';
+    document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="2" stroke-dasharray="30 10" stroke-linecap="round"/></svg> Escaneando...';
     document.getElementById('scan-progress').classList.remove('hidden');
     document.getElementById('results-container').classList.add('hidden');
     document.getElementById('kpi-grid').classList.add('hidden');
     document.getElementById('filter-tabs').classList.add('hidden');
     document.getElementById('empty-state').classList.add('hidden');
-    setProgress(0, 'Obteniendo lista de productos...');
+    document.getElementById('progress-label').className = 'text-sm font-medium text-gray-700';
+    setProgress(2, 'Iniciando escaneo...', 'Conectando con MeLi y BinManager');
 
-    fetch('/api/inventory/global-scan?threshold=' + threshold, {
-        headers: {'ngrok-skip-browser-warning': 'true'}
+    fetch('/api/inventory/global-scan-stream?threshold=' + threshold, {
+        headers: {'ngrok-skip-browser-warning': 'true', 'Accept': 'text/event-stream'}
     })
-    .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) { throw new Error(t || 'Error ' + r.status); });
-        return r.json();
-    })
-    .then(function(data) {
-        setProgress(100, 'Escaneo completo');
-        _scanData = data.rows || [];
-        _accountNicknames = data.account_nicknames || {};
-        renderResults(threshold);
+    .then(function(resp) {
+        if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Error ' + resp.status); });
+        var reader = resp.body.getReader();
+        _activeScanReader = reader;
+        var decoder = new TextDecoder();
+        var buf = '';
+
+        function pump() {
+            return reader.read().then(function(chunk) {
+                if (chunk.done) return;
+                buf += decoder.decode(chunk.value, {stream: true});
+                var lines = buf.split('\n');
+                buf = lines.pop();
+
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    if (!line.startsWith('data:')) continue;
+                    try {
+                        var msg = JSON.parse(line.slice(5).trim());
+                        if (msg.type === 'progress') {
+                            setProgress(msg.pct, msg.label, msg.detail || '');
+                        } else if (msg.type === 'complete') {
+                            setProgress(100, '✓ Escaneo completo — ' + (msg.data.total || 0) + ' SKUs', '');
+                            _scanData = msg.data.rows || [];
+                            _accountNicknames = msg.data.account_nicknames || {};
+                            _activeScanReader = null;
+                            renderResults(threshold);
+                            resetScanBtn();
+                            return;
+                        } else if (msg.type === 'error') {
+                            throw new Error(msg.message);
+                        }
+                    } catch(parseErr) { /* línea incompleta */ }
+                }
+                return pump();
+            });
+        }
+        return pump();
     })
     .catch(function(e) {
         document.getElementById('progress-label').textContent = 'Error: ' + e.message;
         document.getElementById('progress-label').className = 'text-sm font-medium text-red-600';
         document.getElementById('empty-state').classList.remove('hidden');
-    })
-    .finally(function() {
-        document.getElementById('scan-btn').disabled = false;
-        document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Escanear Inventario';
+        document.getElementById('scan-progress').classList.add('hidden');
+        _activeScanReader = null;
+        resetScanBtn();
     });
+}
+
+function resetScanBtn() {
+    document.getElementById('scan-btn').disabled = false;
+    document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Escanear Inventario';
 }
 
 function setProgress(pct, label, detail) {
     document.getElementById('progress-bar').style.width = pct + '%';
-    document.getElementById('progress-pct').textContent = pct + '%';
-    if (label) document.getElementById('progress-label').textContent = label;
-    if (detail) document.getElementById('progress-detail').textContent = detail;
+    document.getElementById('progress-pct').textContent = Math.round(pct) + '%';
+    if (label !== undefined) document.getElementById('progress-label').textContent = label;
+    if (detail !== undefined) document.getElementById('progress-detail').textContent = detail;
 }
 
 function renderResults(threshold) {

@@ -5849,116 +5849,165 @@ async def inventory_global_page(request: Request):
 
 @app.get("/api/inventory/global-scan")
 async def inventory_global_scan(threshold: int = 10):
-    """Escaneo cross-account: todos los SKUs con su estado en BM y en cada cuenta MeLi.
-    Cache de 15 minutos. Puede tardar 30-60s en la primera ejecución."""
+    """Versión no-streaming (para uso de API). Usa la misma cache que el stream."""
     cache_key = f"inv_global:{threshold}"
     cached = _inventory_global_cache.get(cache_key)
     if cached and (_time_module.time() - cached[0]) < _INVENTORY_GLOBAL_TTL:
         return cached[1]
+    return {"rows": [], "account_nicknames": {}, "total": 0, "pending": True,
+            "message": "Usa /api/inventory/global-scan-stream para el escaneo completo"}
 
-    accounts_list = await token_store.get_all_tokens()
-    if not accounts_list:
-        return {"rows": [], "account_nicknames": {}, "total": 0, "error": "No hay cuentas autenticadas"}
 
-    now = datetime.utcnow()
-    date_from_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-    date_to = now.strftime("%Y-%m-%d")
+@app.get("/api/inventory/global-scan-stream")
+async def inventory_global_scan_stream(threshold: int = 10):
+    """SSE: reporta progreso en tiempo real mientras escanea BM × 4 cuentas."""
+    import json as _json
 
-    async def _fetch_account_products(account):
-        uid = account["user_id"]
-        nickname = account.get("nickname") or uid
-        try:
-            client = await get_meli_client(user_id=uid)
-            all_bodies, all_orders = await asyncio.gather(
-                _get_all_products_cached(client, include_all=False),  # solo activos/pausados
-                _get_orders_cached(client, date_from_30d, date_to),
-            )
-            await client.close()
-            sales_map = _aggregate_sales_by_item(all_orders)
-            products = _build_product_list(all_bodies, sales_map)
-            _enrich_sku_from_orders(products, all_orders)
-            return {"uid": uid, "nickname": nickname, "products": products}
-        except Exception as e:
-            return {"uid": uid, "nickname": nickname, "products": [], "error": str(e)}
+    async def event_stream():
+        def _evt(data: dict) -> str:
+            return f"data: {_json.dumps(data)}\n\n"
 
-    acc_results = await asyncio.gather(*[_fetch_account_products(a) for a in accounts_list])
+        # Cache hit → devolver inmediato
+        cache_key = f"inv_global:{threshold}"
+        cached = _inventory_global_cache.get(cache_key)
+        if cached and (_time_module.time() - cached[0]) < _INVENTORY_GLOBAL_TTL:
+            yield _evt({"type": "progress", "pct": 99, "label": "Resultado desde caché..."})
+            yield _evt({"type": "complete", "data": cached[1]})
+            return
 
-    # 1. Collect unique base SKUs and per-account data
-    sku_accounts: dict[str, dict] = {}  # base_sku → {uid → {meli_stock, sold_30d, nickname}}
-    sku_titles: dict[str, str] = {}
+        accounts_list = await token_store.get_all_tokens()
+        if not accounts_list:
+            yield _evt({"type": "error", "message": "No hay cuentas autenticadas"})
+            return
 
-    for acc_result in acc_results:
-        uid = acc_result["uid"]
-        nickname = acc_result["nickname"]
-        for p in acc_result["products"]:
-            sku = p.get("sku") or ""
-            if not sku:
-                continue
-            clean = _clean_sku_for_bm(sku)
-            if not clean:
-                continue
-            base = _extract_base_sku(clean).upper()
-            if base not in sku_accounts:
-                sku_accounts[base] = {}
-                sku_titles[base] = p.get("title", "")
-            sku_accounts[base][uid] = {
-                "listed": True,
-                "meli_stock": p.get("available_quantity", 0) or 0,
-                "sold_30d": p.get("units", 0) or 0,
-                "nickname": nickname,
-            }
+        yield _evt({"type": "progress", "pct": 3, "label": f"Iniciando — {len(accounts_list)} cuentas MeLi..."})
 
-    if not sku_accounts:
-        return {"rows": [], "account_nicknames": {a["user_id"]: a.get("nickname", a["user_id"]) for a in accounts_list}, "total": 0}
+        now = datetime.utcnow()
+        date_from_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
 
-    # 2. Build synthetic product list for BM queries (one per unique SKU)
-    synthetic = [{"sku": base, "title": sku_titles.get(base, "")} for base in sku_accounts]
+        async def _fetch_one(account):
+            uid = account["user_id"]
+            nickname = account.get("nickname") or uid
+            try:
+                client = await get_meli_client(user_id=uid)
+                all_bodies, all_orders = await asyncio.gather(
+                    _get_all_products_cached(client, include_all=False),
+                    _get_orders_cached(client, date_from_30d, date_to),
+                )
+                await client.close()
+                sales_map = _aggregate_sales_by_item(all_orders)
+                products = _build_product_list(all_bodies, sales_map)
+                _enrich_sku_from_orders(products, all_orders)
+                return {"uid": uid, "nickname": nickname, "products": products, "count": len(products)}
+            except Exception as e:
+                return {"uid": uid, "nickname": nickname, "products": [], "count": 0, "error": str(e)}
 
-    # 3. Get BM stock for all unique SKUs (uses _bm_stock_cache)
-    bm_map = await _get_bm_stock_cached(synthetic)
-    _apply_bm_stock(synthetic, bm_map)
+        # Lanzar todas las cuentas en paralelo, reportar cada una al completar
+        tasks = [asyncio.ensure_future(_fetch_one(a)) for a in accounts_list]
+        acc_results = []
+        done = 0
+        total_acc = len(accounts_list)
 
-    # 4. Get BM metadata (RetailPrice, Brand) in chunks of 25 to bypass internal limit
-    CHUNK = 25
-    for i in range(0, len(synthetic), CHUNK):
-        await _enrich_with_bm_product_info(synthetic[i:i + CHUNK])
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            acc_results.append(result)
+            done += 1
+            pct = 8 + int(done / total_acc * 45)
+            err_suffix = f" ⚠️ {result['error'][:40]}" if result.get("error") else ""
+            yield _evt({
+                "type": "progress",
+                "pct": pct,
+                "label": f"✓ {result['nickname']}: {result['count']} productos ({done}/{total_acc}){err_suffix}",
+                "detail": f"Cuentas completadas: {done}/{total_acc}"
+            })
 
-    # 5. Build final rows
-    rows = []
-    for p_bm in synthetic:
-        base = p_bm["sku"]
-        rows.append({
-            "sku": base,
-            "title": p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, ""),
-            "brand": p_bm.get("_bm_brand", ""),
-            "bm_avail": p_bm.get("_bm_avail", 0) or 0,
-            "bm_total": p_bm.get("_bm_total", 0) or 0,
-            "mty": p_bm.get("_bm_mty", 0) or 0,
-            "cdmx": p_bm.get("_bm_cdmx", 0) or 0,
-            "tj": p_bm.get("_bm_tj", 0) or 0,
-            "retail_price_usd": p_bm.get("_bm_retail_price", 0) or 0,
-            "accounts": sku_accounts.get(base, {}),
-        })
+        # Agregar SKUs únicos
+        yield _evt({"type": "progress", "pct": 55, "label": "Agrupando SKUs únicos...", "detail": ""})
 
-    # Sort: critical first (BM avail ascending), then zero, then ok
-    def _sort_key(r):
-        avail = r["bm_avail"]
-        if avail == 0:
-            return (1, 0)
-        if avail <= threshold:
-            return (0, avail)
-        return (2, avail)
+        sku_accounts: dict[str, dict] = {}
+        sku_titles: dict[str, str] = {}
+        for acc_result in acc_results:
+            uid = acc_result["uid"]
+            nickname = acc_result["nickname"]
+            for p in acc_result["products"]:
+                sku = p.get("sku") or ""
+                if not sku:
+                    continue
+                clean = _clean_sku_for_bm(sku)
+                if not clean:
+                    continue
+                base = _extract_base_sku(clean).upper()
+                if base not in sku_accounts:
+                    sku_accounts[base] = {}
+                    sku_titles[base] = p.get("title", "")
+                sku_accounts[base][uid] = {
+                    "listed": True,
+                    "meli_stock": p.get("available_quantity", 0) or 0,
+                    "sold_30d": p.get("units", 0) or 0,
+                    "nickname": nickname,
+                }
 
-    rows.sort(key=_sort_key)
+        unique_count = len(sku_accounts)
+        account_nicknames = {a["user_id"]: a.get("nickname", a["user_id"]) for a in accounts_list}
 
-    account_nicknames = {a["user_id"]: a.get("nickname", a["user_id"]) for a in accounts_list}
-    result = {
-        "rows": rows,
-        "account_nicknames": account_nicknames,
-        "total": len(rows),
-    }
-    _inventory_global_cache[cache_key] = (_time_module.time(), result)
-    return result
+        if not sku_accounts:
+            result_data = {"rows": [], "account_nicknames": account_nicknames, "total": 0}
+            _inventory_global_cache[cache_key] = (_time_module.time(), result_data)
+            yield _evt({"type": "complete", "data": result_data})
+            return
+
+        yield _evt({"type": "progress", "pct": 58, "label": f"{unique_count} SKUs únicos. Consultando BinManager stock...", "detail": "Paso 2/3"})
+        synthetic = [{"sku": base, "title": sku_titles.get(base, "")} for base in sku_accounts]
+        bm_map = await _get_bm_stock_cached(synthetic)
+        _apply_bm_stock(synthetic, bm_map)
+
+        yield _evt({"type": "progress", "pct": 72, "label": f"BinManager: obteniendo precios y marca ({unique_count} SKUs)...", "detail": "Paso 3/3"})
+        CHUNK = 25
+        chunks_total = max(1, (len(synthetic) + CHUNK - 1) // CHUNK)
+        for i in range(0, len(synthetic), CHUNK):
+            await _enrich_with_bm_product_info(synthetic[i:i + CHUNK])
+            chunk_num = i // CHUNK + 1
+            pct = 72 + int(chunk_num / chunks_total * 22)
+            yield _evt({"type": "progress", "pct": min(pct, 93), "label": f"BinManager metadata: lote {chunk_num}/{chunks_total}...", "detail": f"{min(i+CHUNK, len(synthetic))}/{len(synthetic)} SKUs procesados"})
+
+        yield _evt({"type": "progress", "pct": 96, "label": "Construyendo tabla final...", "detail": ""})
+
+        rows = []
+        for p_bm in synthetic:
+            base = p_bm["sku"]
+            rows.append({
+                "sku": base,
+                "title": p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, ""),
+                "brand": p_bm.get("_bm_brand", ""),
+                "bm_avail": p_bm.get("_bm_avail", 0) or 0,
+                "bm_total": p_bm.get("_bm_total", 0) or 0,
+                "mty": p_bm.get("_bm_mty", 0) or 0,
+                "cdmx": p_bm.get("_bm_cdmx", 0) or 0,
+                "tj": p_bm.get("_bm_tj", 0) or 0,
+                "retail_price_usd": p_bm.get("_bm_retail_price", 0) or 0,
+                "accounts": sku_accounts.get(base, {}),
+            })
+
+        def _sort_key(r):
+            avail = r["bm_avail"]
+            if avail == 0:
+                return (1, 0)
+            if avail <= threshold:
+                return (0, avail)
+            return (2, avail)
+        rows.sort(key=_sort_key)
+
+        result_data = {"rows": rows, "account_nicknames": account_nicknames, "total": len(rows)}
+        _inventory_global_cache[cache_key] = (_time_module.time(), result_data)
+        yield _evt({"type": "complete", "data": result_data})
+
+    from fastapi.responses import StreamingResponse as _StreamResp
+    return _StreamResp(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
