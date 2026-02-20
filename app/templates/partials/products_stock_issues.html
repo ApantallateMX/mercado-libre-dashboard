@@ -30,9 +30,15 @@
         <p class="text-2xl font-bold text-green-600">{{ activate_stock }}</p>
         <p class="text-[10px] text-gray-400">Unidades para activar</p>
     </div>
+    <div onclick="document.getElementById('critical-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+        <p class="text-xs text-gray-500">Stock Crítico (&lt;{{ threshold }})</p>
+        <p class="text-2xl font-bold text-red-600">{{ critical_count }}</p>
+        <p class="text-[10px] text-gray-400">{{ critical_bm_total }} uds. BM disponible</p>
+    </div>
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
 </div>
@@ -131,6 +137,7 @@
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
@@ -171,6 +178,13 @@
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                         {% else %}
                         <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
@@ -328,6 +342,7 @@
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
@@ -365,6 +380,13 @@
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                         {% else %}
                         <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-yellow-600">
@@ -421,6 +443,156 @@
     </div>
     {% endif %}
     <span id="bulk-pause-msg" class="text-xs mt-2 block text-center"></span>
+</div>
+
+<!-- ===== Seccion D: Stock Crítico ===== -->
+<div class="mb-8" id="critical-section">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-red-400 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Stock Crítico</h3>
+            <span class="text-xs text-gray-400">(MeLi activo, BM &lt; {{ threshold }} uds.)</span>
+        </div>
+        {% if critical %}
+        <button onclick="bulkConcentrateCritical()" id="bulk-critical-btn"
+                class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
+            Concentrar Análisis ({{ critical|length }})
+        </button>
+        {% endif %}
+    </div>
+
+    {% if critical %}
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2">
+        {% for p in critical %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-red-300" id="crit-m-{{ p.id }}">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <p class="text-[10px] text-gray-400 font-mono mt-0.5">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div>
+                    {% if p.original_price and p.original_price > p.price %}
+                    <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                    <span class="font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% else %}
+                    <span class="font-bold text-gray-800">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% endif %}
+                </div>
+                {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                <div><span class="text-gray-500">Retail:</span> <span class="font-bold text-blue-600">${{ "{:,.0f}".format(p._bm_retail_price) }}</span></div>
+                {% endif %}
+                <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-red-600">{{ p.get('_bm_avail', 0) }}</span></div>
+                {% if p.get('_bm_mty') is not none %}
+                <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }}</div>
+                {% endif %}
+            </div>
+            <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                {% if p.sku %}
+                <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:40] }}', {{ p.get('_bm_avail', 0) }}, this)"
+                        class="flex-1 py-1.5 text-xs bg-red-600 text-white rounded-lg font-medium active:bg-red-700 min-h-[36px]">
+                    Concentrar
+                </button>
+                {% endif %}
+                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
+                    Sync BM
+                </button>
+                <span id="crit-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Desktop table -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-red-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in critical %}
+                <tr class="hover:bg-red-50/30" id="crit-d-{{ p.id }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.original_price and p.original_price > p.price %}
+                        <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                        <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% else %}
+                        <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-yellow-600">{{ p.available_quantity }}</td>
+                    <td class="px-3 py-2 text-right">
+                        <span class="font-bold {{ 'text-red-600' if (p.get('_bm_avail') or 0) <= 3 else 'text-orange-500' }}">{{ p.get('_bm_avail', 0) }}</span>
+                    </td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <div class="flex items-center justify-center gap-1 flex-wrap">
+                            {% if p.sku %}
+                            <button onclick="concentrateItem('{{ p.sku }}', '{{ p.title[:30]|replace("'","") }}', {{ p.get('_bm_avail', 0) }}, this)"
+                                    class="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs font-medium transition">
+                                Concentrar
+                            </button>
+                            {% endif %}
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
+                                Sync BM
+                            </button>
+                            <span id="crit-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
+        No hay productos con stock crítico (BM &lt; {{ threshold }} unidades activas en MeLi)
+    </div>
+    {% endif %}
+    <span id="bulk-critical-msg" class="text-xs mt-2 block text-center"></span>
 </div>
 
 <!-- ===== Seccion C: Activar ===== -->
@@ -495,6 +667,7 @@
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Status</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
@@ -526,6 +699,13 @@
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                         {% else %}
                         <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center">
@@ -584,7 +764,7 @@ function _updateSectionCounts() {
 }
 
 function _removeStockRows(itemId) {
-    ['restock-m', 'restock-d', 'risk-m', 'risk-d', 'act-m', 'act-d'].forEach(function(pfx) {
+    ['restock-m', 'restock-d', 'risk-m', 'risk-d', 'crit-m', 'crit-d', 'act-m', 'act-d'].forEach(function(pfx) {
         var r = document.getElementById(pfx + '-' + itemId);
         if (r) {
             r.style.transition = 'opacity 0.4s';
@@ -1081,6 +1261,124 @@ function confirmSyncVariations(itemId, confirmBtn) {
         confirmBtn.textContent = 'Error: ' + e.message;
         confirmBtn.style.background = '#dc2626';
     });
+}
+
+// --- Stock Crítico: Concentrar SKU en mejor cuenta ---
+function concentrateItem(sku, title, bmAvail, btn) {
+    if (!sku) { alert('Este producto no tiene SKU registrado.'); return; }
+    btn.disabled = true;
+    var origText = btn.textContent;
+    btn.textContent = 'Analizando...';
+    fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
+        headers: {'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        if (d.error) { alert('Error al analizar SKU ' + sku + ':\n' + d.error); return; }
+        var winner = d.winner || {};
+        var accounts = d.accounts || [];
+        var lines = ['SKU: ' + sku + ' — BM Disponible: ' + (d.total_bm_avail || bmAvail)];
+        lines.push('');
+        accounts.forEach(function(a) {
+            var marker = a.user_id === winner.user_id ? '★ GANADOR' : '';
+            lines.push((marker || '  ') + ' ' + (a.nickname || a.user_id) + ': ' + a.sold_30d + ' ventas / MeLi=' + (a.meli_stock || 0) + ' ' + marker);
+        });
+        if (!winner.user_id) {
+            lines.push('');
+            lines.push('Sin ganador claro (producto nuevo o sin ventas en todas las cuentas)');
+            alert(lines.join('\n'));
+            return;
+        }
+        lines.push('');
+        lines.push('→ Concentrar todo el stock (' + d.total_bm_avail + ') en ' + (winner.nickname || winner.user_id));
+        lines.push('→ Las demás cuentas quedarán en stock = 0');
+        lines.push('');
+        lines.push('¿Confirmar concentración?');
+        if (!confirm(lines.join('\n'))) return;
+        btn.disabled = true;
+        btn.textContent = 'Ejecutando...';
+        fetch('/api/stock/concentration/execute', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({
+                sku: sku,
+                winner_user_id: winner.user_id,
+                total_stock: d.total_bm_avail,
+                dry_run: false
+            })
+        })
+        .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+        .then(function(res) {
+            btn.disabled = false;
+            if (!res.ok) { btn.textContent = 'Error'; alert('Error: ' + (res.data.detail || JSON.stringify(res.data))); return; }
+            btn.textContent = 'OK';
+            btn.className = btn.className.replace('bg-red-600', 'bg-green-600').replace('hover:bg-red-700', '');
+            var zeroed = res.data.zeroed_accounts || [];
+            var msg = 'Concentrado en ' + (winner.nickname || winner.user_id) + '\n';
+            if (zeroed.length) msg += 'Stock→0 en: ' + zeroed.join(', ');
+            alert(msg);
+        })
+        .catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = 'Error';
+            alert('Error ejecutando: ' + e.message);
+        });
+    })
+    .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = origText;
+        alert('Error al consultar: ' + e.message);
+    });
+}
+
+function bulkConcentrateCritical() {
+    var skus = [
+        {% for p in critical %}
+        {% if p.sku %}{ sku: '{{ p.sku }}', avail: {{ p.get('_bm_avail', 0) }} }{{ ',' if not loop.last else '' }}{% endif %}
+        {% endfor %}
+    ].filter(Boolean);
+    if (!skus.length) { alert('No hay SKUs en la sección crítica.'); return; }
+    if (!confirm('¿Analizar y concentrar automáticamente ' + skus.length + ' SKUs con stock crítico?\n\nEsto pondrá en 0 las cuentas con menos ventas.')) return;
+    var btn = document.getElementById('bulk-critical-btn');
+    var msg = document.getElementById('bulk-critical-msg');
+    btn.disabled = true;
+    btn.textContent = 'Procesando...';
+    var done = 0, skipped = 0, errors = 0, total = skus.length;
+    function updateProgress() {
+        msg.textContent = 'Concentrando: ' + done + '/' + total + ' OK, ' + skipped + ' omitidos, ' + errors + ' errores';
+        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
+    }
+    function processNext(i) {
+        if (i >= skus.length) {
+            btn.textContent = 'Completado';
+            btn.disabled = false;
+            return;
+        }
+        var s = skus[i];
+        fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(s.sku), {
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var winner = d.winner;
+            if (!winner || !winner.user_id) { skipped++; updateProgress(); processNext(i + 1); return; }
+            return fetch('/api/stock/concentration/execute', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                body: JSON.stringify({ sku: s.sku, winner_user_id: winner.user_id, total_stock: d.total_bm_avail, dry_run: false })
+            })
+            .then(function(r2) { return r2.json().then(function(data) { return {ok: r2.ok, data: data}; }); })
+            .then(function(res) {
+                if (res.ok) done++; else errors++;
+                updateProgress();
+                processNext(i + 1);
+            });
+        })
+        .catch(function() { errors++; updateProgress(); processNext(i + 1); });
+    }
+    processNext(0);
 }
 
 function bulkActivateAll() {

@@ -1372,14 +1372,14 @@ async def items_no_stock_redirect(request: Request):
 
 
 @app.get("/partials/products-stock-issues", response_class=HTMLResponse)
-async def products_stock_issues_partial(request: Request):
+async def products_stock_issues_partial(request: Request, threshold: int = 10):
     """Stock tab: Reabastecer + Riesgo + Activar. Resultado cacheado 5 min."""
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
         # Cache de resultado completo (evita re-computar cada vez)
-        key = f"stock_issues:{client.user_id}"
+        key = f"stock_issues:{client.user_id}:t{threshold}"
         entry = _stock_issues_cache.get(key)
         if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
             ctx = entry[1].copy()
@@ -1403,6 +1403,9 @@ async def products_stock_issues_partial(request: Request):
         # BM stock para todos
         bm_map = await _get_bm_stock_cached(products)
         _apply_bm_stock(products, bm_map)
+
+        # BM metadata: RetailPrice USD, AvgCost, Brand
+        await _enrich_with_bm_product_info(products)
 
         # Seccion A: Reabastecer (MeLi=0, BM disponible>0, tiene ventas)
         # Usa _bm_avail (no _bm_total) para excluir stock reservado para órdenes pendientes
@@ -1435,6 +1438,17 @@ async def products_stock_issues_partial(request: Request):
         ]
         activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
 
+        # Seccion D: Stock Crítico (MeLi>0, BM disponible bajo, no FULL)
+        # Productos activos con poco stock en BM — riesgo de quedarse sin mercancía pronto
+        critical = [
+            p for p in products
+            if p.get("available_quantity", 0) > 0
+            and 0 < (p.get("_bm_avail") or 0) <= threshold
+            and not p.get("is_full")
+            and p.get("sku")
+        ]
+        critical.sort(key=lambda x: x.get("units", 0), reverse=True)
+
         # KPIs
         restock_count = len(restock)
         lost_revenue = sum(p.get("revenue", 0) for p in restock)
@@ -1442,17 +1456,23 @@ async def products_stock_issues_partial(request: Request):
         risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
         activate_count = len(activate)
         activate_stock = sum(p.get("_bm_avail", 0) for p in activate)
+        critical_count = len(critical)
+        critical_bm_total = sum(p.get("_bm_avail", 0) for p in critical)
 
         ctx = {
             "restock": restock,
             "oversell_risk": oversell_risk,
             "activate": activate,
+            "critical": critical,
             "restock_count": restock_count,
             "lost_revenue": lost_revenue,
             "risk_count": risk_count,
             "risk_stock": risk_stock,
             "activate_count": activate_count,
             "activate_stock": activate_stock,
+            "critical_count": critical_count,
+            "critical_bm_total": critical_bm_total,
+            "threshold": threshold,
         }
         _stock_issues_cache[key] = (_time.time(), ctx)
         ctx_with_req = ctx.copy()
@@ -5802,6 +5822,143 @@ async def update_item_status_api(item_id: str, request: Request):
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
     finally:
         await client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GLOBAL INVENTORY CENTER — BinManager × 4 cuentas MeLi
+# ═══════════════════════════════════════════════════════════════════════════
+
+_inventory_global_cache: dict[str, tuple[float, dict]] = {}
+_INVENTORY_GLOBAL_TTL = 900  # 15 min
+
+
+@app.get("/inventory-global", response_class=HTMLResponse)
+async def inventory_global_page(request: Request):
+    """Centro de inventario global: BM × 4 cuentas MeLi."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse("inventory_global.html", {
+        "request": request,
+        "user": user,
+        "active": "inventory_global",
+        **ctx
+    })
+
+
+@app.get("/api/inventory/global-scan")
+async def inventory_global_scan(threshold: int = 10):
+    """Escaneo cross-account: todos los SKUs con su estado en BM y en cada cuenta MeLi.
+    Cache de 15 minutos. Puede tardar 30-60s en la primera ejecución."""
+    cache_key = f"inv_global:{threshold}"
+    cached = _inventory_global_cache.get(cache_key)
+    if cached and (_time_module.time() - cached[0]) < _INVENTORY_GLOBAL_TTL:
+        return cached[1]
+
+    accounts_list = await token_store.get_all_tokens()
+    if not accounts_list:
+        return {"rows": [], "account_nicknames": {}, "total": 0, "error": "No hay cuentas autenticadas"}
+
+    now = datetime.utcnow()
+    date_from_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    date_to = now.strftime("%Y-%m-%d")
+
+    async def _fetch_account_products(account):
+        uid = account["user_id"]
+        nickname = account.get("nickname") or uid
+        try:
+            client = await get_meli_client(user_id=uid)
+            all_bodies, all_orders = await asyncio.gather(
+                _get_all_products_cached(client, include_all=False),  # solo activos/pausados
+                _get_orders_cached(client, date_from_30d, date_to),
+            )
+            await client.close()
+            sales_map = _aggregate_sales_by_item(all_orders)
+            products = _build_product_list(all_bodies, sales_map)
+            _enrich_sku_from_orders(products, all_orders)
+            return {"uid": uid, "nickname": nickname, "products": products}
+        except Exception as e:
+            return {"uid": uid, "nickname": nickname, "products": [], "error": str(e)}
+
+    acc_results = await asyncio.gather(*[_fetch_account_products(a) for a in accounts_list])
+
+    # 1. Collect unique base SKUs and per-account data
+    sku_accounts: dict[str, dict] = {}  # base_sku → {uid → {meli_stock, sold_30d, nickname}}
+    sku_titles: dict[str, str] = {}
+
+    for acc_result in acc_results:
+        uid = acc_result["uid"]
+        nickname = acc_result["nickname"]
+        for p in acc_result["products"]:
+            sku = p.get("sku") or ""
+            if not sku:
+                continue
+            clean = _clean_sku_for_bm(sku)
+            if not clean:
+                continue
+            base = _extract_base_sku(clean).upper()
+            if base not in sku_accounts:
+                sku_accounts[base] = {}
+                sku_titles[base] = p.get("title", "")
+            sku_accounts[base][uid] = {
+                "listed": True,
+                "meli_stock": p.get("available_quantity", 0) or 0,
+                "sold_30d": p.get("units", 0) or 0,
+                "nickname": nickname,
+            }
+
+    if not sku_accounts:
+        return {"rows": [], "account_nicknames": {a["user_id"]: a.get("nickname", a["user_id"]) for a in accounts_list}, "total": 0}
+
+    # 2. Build synthetic product list for BM queries (one per unique SKU)
+    synthetic = [{"sku": base, "title": sku_titles.get(base, "")} for base in sku_accounts]
+
+    # 3. Get BM stock for all unique SKUs (uses _bm_stock_cache)
+    bm_map = await _get_bm_stock_cached(synthetic)
+    _apply_bm_stock(synthetic, bm_map)
+
+    # 4. Get BM metadata (RetailPrice, Brand) in chunks of 25 to bypass internal limit
+    CHUNK = 25
+    for i in range(0, len(synthetic), CHUNK):
+        await _enrich_with_bm_product_info(synthetic[i:i + CHUNK])
+
+    # 5. Build final rows
+    rows = []
+    for p_bm in synthetic:
+        base = p_bm["sku"]
+        rows.append({
+            "sku": base,
+            "title": p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, ""),
+            "brand": p_bm.get("_bm_brand", ""),
+            "bm_avail": p_bm.get("_bm_avail", 0) or 0,
+            "bm_total": p_bm.get("_bm_total", 0) or 0,
+            "mty": p_bm.get("_bm_mty", 0) or 0,
+            "cdmx": p_bm.get("_bm_cdmx", 0) or 0,
+            "tj": p_bm.get("_bm_tj", 0) or 0,
+            "retail_price_usd": p_bm.get("_bm_retail_price", 0) or 0,
+            "accounts": sku_accounts.get(base, {}),
+        })
+
+    # Sort: critical first (BM avail ascending), then zero, then ok
+    def _sort_key(r):
+        avail = r["bm_avail"]
+        if avail == 0:
+            return (1, 0)
+        if avail <= threshold:
+            return (0, avail)
+        return (2, avail)
+
+    rows.sort(key=_sort_key)
+
+    account_nicknames = {a["user_id"]: a.get("nickname", a["user_id"]) for a in accounts_list}
+    result = {
+        "rows": rows,
+        "account_nicknames": account_nicknames,
+        "total": len(rows),
+    }
+    _inventory_global_cache[cache_key] = (_time_module.time(), result)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════

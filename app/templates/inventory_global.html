@@ -1,0 +1,429 @@
+{% extends "base.html" %}
+{% block title %}Inventario Global — MeLi Dashboard{% endblock %}
+
+{% block content %}
+<div class="max-w-full mx-auto px-4 py-6">
+    <!-- Header -->
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-xl font-bold text-gray-900">Centro de Inventario Global</h1>
+            <p class="text-xs text-gray-500 mt-1">BinManager × 4 cuentas MeLi — SKUs con stock disponible</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+                <label class="text-xs text-gray-600">Threshold crítico:</label>
+                <input type="number" id="threshold-input" value="10" min="1" max="50"
+                       class="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center">
+            </div>
+            <button onclick="startScan()" id="scan-btn"
+                    class="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                </svg>
+                Escanear Inventario
+            </button>
+        </div>
+    </div>
+
+    <!-- Progress bar (hidden initially) -->
+    <div id="scan-progress" class="hidden mb-4 bg-white rounded-lg shadow p-4">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-gray-700" id="progress-label">Iniciando escaneo...</span>
+            <span class="text-xs text-gray-500" id="progress-pct">0%</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2">
+            <div id="progress-bar" class="bg-indigo-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-2" id="progress-detail"></p>
+    </div>
+
+    <!-- KPI summary (hidden initially) -->
+    <div id="kpi-grid" class="hidden grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-indigo-400">
+            <p class="text-xs text-gray-500">SKUs Escaneados</p>
+            <p class="text-2xl font-bold text-indigo-600" id="kpi-total">—</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-green-400">
+            <p class="text-xs text-gray-500">Con Stock BM</p>
+            <p class="text-2xl font-bold text-green-600" id="kpi-with-stock">—</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-red-400">
+            <p class="text-xs text-gray-500">Stock Crítico</p>
+            <p class="text-2xl font-bold text-red-600" id="kpi-critical">—</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-yellow-400">
+            <p class="text-xs text-gray-500">Sin Stock BM</p>
+            <p class="text-2xl font-bold text-yellow-600" id="kpi-zero">—</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-purple-400">
+            <p class="text-xs text-gray-500">Oportunidad</p>
+            <p class="text-2xl font-bold text-purple-600" id="kpi-opportunity">—</p>
+            <p class="text-[10px] text-gray-400">BM>0, MeLi=0</p>
+        </div>
+    </div>
+
+    <!-- Filter tabs -->
+    <div id="filter-tabs" class="hidden flex gap-2 mb-4 flex-wrap">
+        <button onclick="filterTable('all')" class="filter-tab active px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white" data-filter="all">Todos</button>
+        <button onclick="filterTable('critical')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="critical">Stock Crítico</button>
+        <button onclick="filterTable('opportunity')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="opportunity">Oportunidad</button>
+        <button onclick="filterTable('zero')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="zero">Sin Stock</button>
+        <button onclick="filterTable('ok')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="ok">OK</button>
+        <div class="ml-auto flex items-center gap-2">
+            <input type="text" id="search-input" placeholder="Buscar SKU / producto..."
+                   oninput="searchTable(this.value)"
+                   class="px-3 py-1.5 border border-gray-300 rounded-lg text-xs w-48 focus:ring-2 focus:ring-indigo-300">
+        </div>
+    </div>
+
+    <!-- Results table -->
+    <div id="results-container" class="hidden">
+        <div class="bg-white rounded-lg shadow overflow-x-auto">
+            <table class="w-full text-xs" id="inventory-table">
+                <thead class="bg-indigo-50 border-b sticky top-0">
+                    <tr>
+                        <th class="text-left px-3 py-2.5 text-gray-600 font-semibold">SKU</th>
+                        <th class="text-left px-3 py-2.5 text-gray-600 font-semibold">Producto / Marca</th>
+                        <th class="text-right px-3 py-2.5 text-gray-600 font-semibold">Retail USD</th>
+                        <th class="text-right px-3 py-2.5 text-gray-600 font-semibold">BM Disp.</th>
+                        <th class="text-right px-3 py-2.5 text-gray-600 font-semibold">MTY</th>
+                        <th class="text-right px-3 py-2.5 text-gray-600 font-semibold">CDMX</th>
+                        <!-- Account columns inserted dynamically -->
+                        <th class="text-center px-3 py-2.5 text-gray-600 font-semibold" id="th-accounts" colspan="4">Cuentas MeLi</th>
+                        <th class="text-center px-3 py-2.5 text-gray-600 font-semibold">Estado</th>
+                        <th class="text-center px-3 py-2.5 text-gray-600 font-semibold">Acción</th>
+                    </tr>
+                </thead>
+                <tbody id="inventory-tbody" class="divide-y divide-gray-100">
+                    <!-- Filled dynamically -->
+                </tbody>
+            </table>
+        </div>
+        <p class="text-xs text-gray-400 mt-2 text-center" id="table-footer"></p>
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty-state" class="bg-white rounded-lg shadow p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+        </svg>
+        <p class="text-gray-500 font-medium">Haz clic en "Escanear Inventario" para ver el estado de todos los SKUs</p>
+        <p class="text-gray-400 text-xs mt-1">Se consultará BinManager y las 4 cuentas MeLi en paralelo</p>
+    </div>
+</div>
+
+<!-- Concentration Modal -->
+<div id="conc-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+        <h3 class="text-base font-bold text-gray-900 mb-1" id="conc-modal-title">Concentrar Stock</h3>
+        <p class="text-xs text-gray-500 mb-4" id="conc-modal-sku"></p>
+        <div id="conc-modal-body" class="space-y-2 mb-4 max-h-64 overflow-y-auto text-sm"></div>
+        <div class="flex gap-3 pt-3 border-t border-gray-100">
+            <button onclick="document.getElementById('conc-modal').classList.add('hidden')"
+                    class="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">
+                Cancelar
+            </button>
+            <button id="conc-confirm-btn" onclick="executeConcentration()"
+                    class="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">
+                Confirmar Concentrar
+            </button>
+        </div>
+        <span id="conc-modal-msg" class="text-xs block text-center mt-2"></span>
+    </div>
+</div>
+
+<script>
+var _scanData = [];
+var _currentFilter = 'all';
+var _pendingConc = null;
+var _accountNicknames = {};
+
+// Status badge config
+var _statusConfig = {
+    ok:          { label: 'OK',          cls: 'bg-green-100 text-green-700' },
+    critical:    { label: 'Crítico',     cls: 'bg-red-100 text-red-700' },
+    opportunity: { label: 'Oportunidad', cls: 'bg-purple-100 text-purple-700' },
+    zero:        { label: 'Sin Stock',   cls: 'bg-gray-100 text-gray-500' },
+};
+
+function getStatus(row, threshold) {
+    var bmAvail = row.bm_avail || 0;
+    var hasMeliActive = Object.values(row.accounts || {}).some(function(a) { return (a.meli_stock || 0) > 0; });
+    var hasMeliZero = Object.values(row.accounts || {}).some(function(a) { return (a.meli_stock || 0) === 0 && a.listed; });
+    if (bmAvail === 0) return 'zero';
+    if (bmAvail > 0 && bmAvail <= threshold && hasMeliActive) return 'critical';
+    if (bmAvail > 0 && !hasMeliActive) return 'opportunity';
+    return 'ok';
+}
+
+function startScan() {
+    var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+    document.getElementById('scan-btn').disabled = true;
+    document.getElementById('scan-btn').textContent = 'Escaneando...';
+    document.getElementById('scan-progress').classList.remove('hidden');
+    document.getElementById('results-container').classList.add('hidden');
+    document.getElementById('kpi-grid').classList.add('hidden');
+    document.getElementById('filter-tabs').classList.add('hidden');
+    document.getElementById('empty-state').classList.add('hidden');
+    setProgress(0, 'Obteniendo lista de productos...');
+
+    fetch('/api/inventory/global-scan?threshold=' + threshold, {
+        headers: {'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) {
+        if (!r.ok) return r.text().then(function(t) { throw new Error(t || 'Error ' + r.status); });
+        return r.json();
+    })
+    .then(function(data) {
+        setProgress(100, 'Escaneo completo');
+        _scanData = data.rows || [];
+        _accountNicknames = data.account_nicknames || {};
+        renderResults(threshold);
+    })
+    .catch(function(e) {
+        document.getElementById('progress-label').textContent = 'Error: ' + e.message;
+        document.getElementById('progress-label').className = 'text-sm font-medium text-red-600';
+        document.getElementById('empty-state').classList.remove('hidden');
+    })
+    .finally(function() {
+        document.getElementById('scan-btn').disabled = false;
+        document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Escanear Inventario';
+    });
+}
+
+function setProgress(pct, label, detail) {
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('progress-pct').textContent = pct + '%';
+    if (label) document.getElementById('progress-label').textContent = label;
+    if (detail) document.getElementById('progress-detail').textContent = detail;
+}
+
+function renderResults(threshold) {
+    var rows = _scanData;
+    var total = rows.length;
+    var withStock = rows.filter(function(r) { return (r.bm_avail || 0) > 0; }).length;
+    var critical = rows.filter(function(r) { return getStatus(r, threshold) === 'critical'; }).length;
+    var zero = rows.filter(function(r) { return getStatus(r, threshold) === 'zero'; }).length;
+    var opportunity = rows.filter(function(r) { return getStatus(r, threshold) === 'opportunity'; }).length;
+
+    document.getElementById('kpi-total').textContent = total;
+    document.getElementById('kpi-with-stock').textContent = withStock;
+    document.getElementById('kpi-critical').textContent = critical;
+    document.getElementById('kpi-zero').textContent = zero;
+    document.getElementById('kpi-opportunity').textContent = opportunity;
+    document.getElementById('kpi-grid').classList.remove('hidden');
+    document.getElementById('filter-tabs').classList.remove('hidden');
+    document.getElementById('results-container').classList.remove('hidden');
+    document.getElementById('scan-progress').classList.add('hidden');
+
+    filterTable(_currentFilter, threshold);
+}
+
+function filterTable(filter, threshold) {
+    _currentFilter = filter;
+    threshold = threshold || parseInt(document.getElementById('threshold-input').value) || 10;
+
+    // Update active tab
+    document.querySelectorAll('.filter-tab').forEach(function(t) {
+        if (t.getAttribute('data-filter') === filter) {
+            t.className = 'filter-tab active px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white';
+        } else {
+            t.className = 'filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200';
+        }
+    });
+
+    var filtered = _scanData.filter(function(r) {
+        if (filter === 'all') return true;
+        return getStatus(r, threshold) === filter;
+    });
+
+    renderTable(filtered, threshold);
+}
+
+function searchTable(q) {
+    var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+    var lq = q.toLowerCase();
+    var filtered = _scanData.filter(function(r) {
+        if (_currentFilter !== 'all' && getStatus(r, threshold) !== _currentFilter) return false;
+        return !lq || (r.sku || '').toLowerCase().includes(lq) || (r.title || '').toLowerCase().includes(lq) || (r.brand || '').toLowerCase().includes(lq);
+    });
+    renderTable(filtered, threshold);
+}
+
+var _ACCOUNT_COLORS = {
+    'APANTALLATEMX':    '#3B82F6',
+    'AUTOBOT':          '#10B981',
+    'BLOWTECHNOLOGIES': '#8B5CF6',
+    'LUTEMAMEXICO':     '#F97316',
+};
+
+function renderTable(rows, threshold) {
+    var tbody = document.getElementById('inventory-tbody');
+    var accountIds = Object.keys(_accountNicknames);
+
+    if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="12" class="px-4 py-8 text-center text-gray-400 text-sm">No hay resultados para este filtro</td></tr>';
+        document.getElementById('table-footer').textContent = '';
+        return;
+    }
+
+    var html = '';
+    rows.forEach(function(row) {
+        var status = getStatus(row, threshold);
+        var sc = _statusConfig[status] || _statusConfig.ok;
+        var bmAvail = row.bm_avail || 0;
+        var bmColor = bmAvail === 0 ? '#dc2626' : (bmAvail <= threshold ? '#ea580c' : '#16a34a');
+        var retail = row.retail_price_usd;
+        var retailHtml = (retail && retail > 0 && retail < 9999)
+            ? '<span class="text-blue-600 font-mono">$' + retail.toLocaleString('en', {maximumFractionDigits:0}) + '</span>'
+            : '<span class="text-gray-300">—</span>';
+
+        // Account cells
+        var accCells = '';
+        accountIds.forEach(function(uid) {
+            var acc = (row.accounts || {})[uid] || {};
+            var nick = _accountNicknames[uid] || uid;
+            var shortNick = nick.split(/[^A-Z0-9]/i)[0].slice(0,8);
+            var color = _ACCOUNT_COLORS[nick.toUpperCase()] || '#6B7280';
+            if (!acc.listed) {
+                accCells += '<td class="px-2 py-2 text-center"><span class="text-gray-200 text-[10px]">—</span></td>';
+            } else {
+                var meli = acc.meli_stock || 0;
+                var sold30 = acc.sold_30d || 0;
+                var cellColor = meli === 0 ? '#dc2626' : '#16a34a';
+                accCells += '<td class="px-2 py-2 text-center">'
+                    + '<div class="flex flex-col items-center">'
+                    + '<span style="color:' + cellColor + '" class="font-bold text-xs">' + meli + '</span>'
+                    + '<span class="text-[9px] text-gray-400">' + sold30 + 'v</span>'
+                    + '</div></td>';
+            }
+        });
+
+        var actionHtml = '';
+        if (status === 'critical' || status === 'opportunity') {
+            if (row.sku) {
+                actionHtml = '<button onclick="openConcModal(\'' + row.sku.replace(/'/g, '') + '\')"'
+                    + ' class="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-medium hover:bg-red-700">Concentrar</button>';
+            }
+        }
+
+        html += '<tr class="hover:bg-gray-50/50" data-status="' + status + '" data-sku="' + (row.sku || '').toLowerCase() + '">'
+            + '<td class="px-3 py-2"><span class="font-mono text-xs text-gray-700 font-semibold">' + (row.sku || '—') + '</span></td>'
+            + '<td class="px-3 py-2 max-w-[180px]">'
+            + '<div class="truncate text-xs text-gray-800" title="' + (row.title || '') + '">' + (row.title || '—').slice(0,50) + '</div>'
+            + (row.brand ? '<div class="text-[10px] text-gray-400">' + row.brand + '</div>' : '')
+            + '</td>'
+            + '<td class="px-3 py-2 text-right">' + retailHtml + '</td>'
+            + '<td class="px-3 py-2 text-right"><span style="color:' + bmColor + '" class="font-bold text-xs">' + bmAvail + '</span></td>'
+            + '<td class="px-3 py-2 text-right text-xs ' + ((row.mty||0) > 0 ? 'text-green-600 font-semibold' : 'text-gray-300') + '">' + (row.mty||0) + '</td>'
+            + '<td class="px-3 py-2 text-right text-xs ' + ((row.cdmx||0) > 0 ? 'text-green-600 font-semibold' : 'text-gray-300') + '">' + (row.cdmx||0) + '</td>'
+            + accCells
+            + '<td class="px-3 py-2 text-center"><span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ' + sc.cls + '">' + sc.label + '</span></td>'
+            + '<td class="px-3 py-2 text-center">' + actionHtml + '</td>'
+            + '</tr>';
+    });
+
+    tbody.innerHTML = html;
+    document.getElementById('table-footer').textContent = rows.length + ' de ' + _scanData.length + ' SKUs mostrados';
+
+    // Update account header
+    var thAccounts = document.getElementById('th-accounts');
+    if (thAccounts) {
+        thAccounts.colSpan = accountIds.length;
+        var nickLabels = accountIds.map(function(uid) {
+            var nick = _accountNicknames[uid] || uid;
+            var color = _ACCOUNT_COLORS[nick.toUpperCase()] || '#6B7280';
+            return '<span style="color:' + color + '" class="font-semibold">' + nick.slice(0,8) + '</span>';
+        }).join(' / ');
+        thAccounts.innerHTML = 'Cuentas MeLi<div class="text-[9px] font-normal">' + nickLabels + '</div>';
+    }
+}
+
+function openConcModal(sku) {
+    document.getElementById('conc-modal-title').textContent = 'Concentrar Stock — ' + sku;
+    document.getElementById('conc-modal-sku').textContent = 'Consultando análisis...';
+    document.getElementById('conc-modal-body').innerHTML = '<div class="text-center text-gray-400 py-4">Cargando...</div>';
+    document.getElementById('conc-modal-msg').textContent = '';
+    document.getElementById('conc-modal').classList.remove('hidden');
+    _pendingConc = null;
+
+    fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
+        headers: {'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        _pendingConc = d;
+        var winner = d.winner || {};
+        var accounts = d.accounts || [];
+        document.getElementById('conc-modal-sku').textContent = 'SKU: ' + sku + ' — BM Disponible: ' + (d.total_bm_avail || 0);
+
+        if (!winner.user_id) {
+            document.getElementById('conc-modal-body').innerHTML = '<div class="text-yellow-600 bg-yellow-50 rounded p-3 text-sm">Sin ganador claro — producto nuevo o sin ventas en todas las cuentas.<br>No se puede concentrar automáticamente.</div>';
+            document.getElementById('conc-confirm-btn').disabled = true;
+            return;
+        }
+        document.getElementById('conc-confirm-btn').disabled = false;
+
+        var html = '<div class="space-y-2">';
+        accounts.forEach(function(a) {
+            var isWinner = a.user_id === winner.user_id;
+            var borderCls = isWinner ? 'border-green-400 bg-green-50' : 'border-gray-200';
+            var action = isWinner ? '<span class="text-green-700 font-bold text-xs">→ Recibe stock (' + d.total_bm_avail + ')</span>' : '<span class="text-red-500 text-xs">→ Stock = 0</span>';
+            html += '<div class="flex items-center justify-between p-2 border rounded-lg ' + borderCls + '">'
+                + '<div>'
+                + '<span class="font-semibold text-sm">' + (a.nickname || a.user_id) + '</span>'
+                + (isWinner ? ' <span class="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded">GANADOR</span>' : '')
+                + '<div class="text-xs text-gray-500">' + a.sold_30d + ' ventas 30d / MeLi: ' + (a.meli_stock || 0) + '</div>'
+                + '</div>'
+                + action
+                + '</div>';
+        });
+        html += '</div>';
+        document.getElementById('conc-modal-body').innerHTML = html;
+    })
+    .catch(function(e) {
+        document.getElementById('conc-modal-body').innerHTML = '<div class="text-red-600 text-sm">Error: ' + e.message + '</div>';
+    });
+}
+
+function executeConcentration() {
+    if (!_pendingConc || !_pendingConc.winner) return;
+    var btn = document.getElementById('conc-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Ejecutando...';
+    document.getElementById('conc-modal-msg').textContent = '';
+
+    fetch('/api/stock/concentration/execute', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({
+            sku: _pendingConc.sku || _pendingConc.winner.sku,
+            winner_user_id: _pendingConc.winner.user_id,
+            total_stock: _pendingConc.total_bm_avail,
+            dry_run: false
+        })
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+        if (!res.ok) throw new Error(res.data.detail || JSON.stringify(res.data));
+        var zeroed = res.data.zeroed_accounts || [];
+        var msg = '✓ Concentrado en ' + (_pendingConc.winner.nickname || _pendingConc.winner.user_id);
+        if (zeroed.length) msg += ' · Stock→0 en: ' + zeroed.join(', ');
+        document.getElementById('conc-modal-msg').textContent = msg;
+        document.getElementById('conc-modal-msg').className = 'text-xs block text-center mt-2 text-green-600 font-semibold';
+        btn.textContent = 'OK';
+        btn.className = 'flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-bold';
+        setTimeout(function() {
+            document.getElementById('conc-modal').classList.add('hidden');
+        }, 2000);
+    })
+    .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Confirmar Concentrar';
+        var msgEl = document.getElementById('conc-modal-msg');
+        msgEl.textContent = 'Error: ' + e.message;
+        msgEl.className = 'text-xs block text-center mt-2 text-red-600';
+    });
+}
+</script>
+{% endblock %}

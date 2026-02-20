@@ -100,6 +100,7 @@
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
@@ -132,6 +133,13 @@
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                         {% else %}
                         <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>

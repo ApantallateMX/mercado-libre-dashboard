@@ -36,6 +36,9 @@
                     <a href="/multi-dashboard" class="text-gray-700 hover:text-gray-900 {% if active == 'multi_dashboard' %}font-semibold{% endif %} flex items-center gap-1">
                         <span class="text-yellow-600">⊕</span> Vista General
                     </a>
+                    <a href="/inventory-global" class="text-gray-700 hover:text-gray-900 {% if active == 'inventory_global' %}font-semibold{% endif %} flex items-center gap-1">
+                        <span class="text-indigo-500">▦</span> Inv. Global
+                    </a>
                     <a href="/dashboard" class="text-gray-700 hover:text-gray-900 {% if active == 'dashboard' %}font-semibold{% endif %}">Dashboard</a>
                     <a href="/orders" class="text-gray-700 hover:text-gray-900 {% if active == 'orders' %}font-semibold{% endif %}">Ventas</a>
                     <a href="/items" class="text-gray-700 hover:text-gray-900 {% if active == 'items' %}font-semibold{% endif %}">Productos</a>
@@ -106,6 +109,10 @@
                 <a href="/multi-dashboard" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'multi_dashboard' %}bg-yellow-500 font-semibold{% endif %}">
                     <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                     <span class="text-sm text-gray-800">General</span>
+                </a>
+                <a href="/inventory-global" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'inventory_global' %}bg-yellow-500 font-semibold{% endif %}">
+                    <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
+                    <span class="text-sm text-gray-800">Inv. Global</span>
                 </a>
                 <a href="/dashboard" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'dashboard' %}bg-yellow-500 font-semibold{% endif %}">
                     <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
