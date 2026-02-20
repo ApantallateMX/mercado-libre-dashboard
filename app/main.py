@@ -5860,14 +5860,21 @@ async def inventory_global_scan(threshold: int = 10):
 
 @app.get("/api/inventory/global-scan-stream")
 async def inventory_global_scan_stream(threshold: int = 10):
-    """SSE: reporta progreso en tiempo real mientras escanea BM × 4 cuentas."""
+    """SSE con keepalive: reporta progreso en tiempo real. Evita timeout de Railway."""
     import json as _json
 
     async def event_stream():
         def _evt(data: dict) -> str:
             return f"data: {_json.dumps(data)}\n\n"
 
-        # Cache hit → devolver inmediato
+        def _ka() -> str:
+            # SSE comment: mantiene la conexión abierta sin enviar datos al cliente
+            return ": keepalive\n\n"
+
+        # ── PRIMER evento inmediato para establecer conexión antes de cualquier await ──
+        yield _evt({"type": "progress", "pct": 1, "label": "Conectando...", "detail": ""})
+
+        # Cache hit
         cache_key = f"inv_global:{threshold}"
         cached = _inventory_global_cache.get(cache_key)
         if cached and (_time_module.time() - cached[0]) < _INVENTORY_GLOBAL_TTL:
@@ -5880,11 +5887,11 @@ async def inventory_global_scan_stream(threshold: int = 10):
             yield _evt({"type": "error", "message": "No hay cuentas autenticadas"})
             return
 
-        yield _evt({"type": "progress", "pct": 3, "label": f"Iniciando — {len(accounts_list)} cuentas MeLi..."})
-
         now = datetime.utcnow()
         date_from_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
+
+        yield _evt({"type": "progress", "pct": 3, "label": f"Cargando productos de {len(accounts_list)} cuentas...", "detail": "Puede tardar 1-2 min en primera ejecución"})
 
         async def _fetch_one(account):
             uid = account["user_id"]
@@ -5903,26 +5910,35 @@ async def inventory_global_scan_stream(threshold: int = 10):
             except Exception as e:
                 return {"uid": uid, "nickname": nickname, "products": [], "count": 0, "error": str(e)}
 
-        # Lanzar todas las cuentas en paralelo, reportar cada una al completar
-        tasks = [asyncio.ensure_future(_fetch_one(a)) for a in accounts_list]
-        acc_results = []
-        done = 0
+        # Cuentas: cola + keepalive para no perder la conexión
+        result_q: asyncio.Queue = asyncio.Queue()
         total_acc = len(accounts_list)
 
-        for coro in asyncio.as_completed(tasks):
-            result = await coro
-            acc_results.append(result)
-            done += 1
-            pct = 8 + int(done / total_acc * 45)
-            err_suffix = f" ⚠️ {result['error'][:40]}" if result.get("error") else ""
-            yield _evt({
-                "type": "progress",
-                "pct": pct,
-                "label": f"✓ {result['nickname']}: {result['count']} productos ({done}/{total_acc}){err_suffix}",
-                "detail": f"Cuentas completadas: {done}/{total_acc}"
-            })
+        async def _fetch_and_queue(account):
+            r = await _fetch_one(account)
+            await result_q.put(r)
 
-        # Agregar SKUs únicos
+        for a in accounts_list:
+            asyncio.ensure_future(_fetch_and_queue(a))
+
+        acc_results = []
+        done = 0
+        while done < total_acc:
+            try:
+                result = await asyncio.wait_for(result_q.get(), timeout=8.0)
+                acc_results.append(result)
+                done += 1
+                pct = 8 + int(done / total_acc * 45)
+                err_suffix = f" ⚠️" if result.get("error") else ""
+                yield _evt({
+                    "type": "progress",
+                    "pct": pct,
+                    "label": f"✓ {result['nickname']}: {result['count']} productos ({done}/{total_acc}){err_suffix}",
+                    "detail": result.get("error", f"Cuentas procesadas: {done}/{total_acc}")
+                })
+            except asyncio.TimeoutError:
+                yield _ka()  # keepalive silencioso
+
         yield _evt({"type": "progress", "pct": 55, "label": "Agrupando SKUs únicos...", "detail": ""})
 
         sku_accounts: dict[str, dict] = {}
@@ -5957,19 +5973,34 @@ async def inventory_global_scan_stream(threshold: int = 10):
             yield _evt({"type": "complete", "data": result_data})
             return
 
-        yield _evt({"type": "progress", "pct": 58, "label": f"{unique_count} SKUs únicos. Consultando BinManager stock...", "detail": "Paso 2/3"})
+        yield _evt({"type": "progress", "pct": 58, "label": f"{unique_count} SKUs únicos — consultando BinManager stock...", "detail": "Paso 2/3"})
         synthetic = [{"sku": base, "title": sku_titles.get(base, "")} for base in sku_accounts]
-        bm_map = await _get_bm_stock_cached(synthetic)
+
+        # BM stock: puede tardar mucho → keepalive cada 8s
+        bm_task = asyncio.ensure_future(_get_bm_stock_cached(synthetic))
+        _bm_pct = 58
+        while not bm_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(bm_task), timeout=8.0)
+            except asyncio.TimeoutError:
+                _bm_pct = min(_bm_pct + 2, 70)
+                yield _evt({"type": "progress", "pct": _bm_pct, "label": f"BinManager stock... ({unique_count} SKUs)", "detail": "Consultando disponibilidad"})
+        bm_map = bm_task.result()
         _apply_bm_stock(synthetic, bm_map)
 
-        yield _evt({"type": "progress", "pct": 72, "label": f"BinManager: obteniendo precios y marca ({unique_count} SKUs)...", "detail": "Paso 3/3"})
+        yield _evt({"type": "progress", "pct": 72, "label": f"BinManager precios/marca ({unique_count} SKUs)...", "detail": "Paso 3/3"})
         CHUNK = 25
         chunks_total = max(1, (len(synthetic) + CHUNK - 1) // CHUNK)
         for i in range(0, len(synthetic), CHUNK):
             await _enrich_with_bm_product_info(synthetic[i:i + CHUNK])
             chunk_num = i // CHUNK + 1
             pct = 72 + int(chunk_num / chunks_total * 22)
-            yield _evt({"type": "progress", "pct": min(pct, 93), "label": f"BinManager metadata: lote {chunk_num}/{chunks_total}...", "detail": f"{min(i+CHUNK, len(synthetic))}/{len(synthetic)} SKUs procesados"})
+            yield _evt({
+                "type": "progress",
+                "pct": min(pct, 93),
+                "label": f"BinManager metadata: {chunk_num}/{chunks_total} lotes",
+                "detail": f"{min(i + CHUNK, len(synthetic))}/{len(synthetic)} SKUs"
+            })
 
         yield _evt({"type": "progress", "pct": 96, "label": "Construyendo tabla final...", "detail": ""})
 
