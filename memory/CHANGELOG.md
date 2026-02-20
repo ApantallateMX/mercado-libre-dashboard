@@ -1,5 +1,29 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-02-20 — Fix: 4 cuentas MeLi persistidas en .env.production
+
+### Cuentas registradas (permanentes)
+- Slot 1: APANTALLATEMX (523916436)
+- Slot 2: AUTOBOT MEXICO (292395685)
+- Slot 3: BLOWTECHNOLOGIES (391393176)
+- Slot 4: LUTEMAMEXICO (515061615)
+- Tokens frescos al 2026-02-20 — se auto-actualizan en cada uso
+- Commit: `5eadb5b`
+
+---
+
+## 2026-02-20 — Feat: Multi-cuenta dinámico (N cuentas sin límite)
+
+### Cambio
+- Sistema hardcodeado para 2 cuentas → dinámico para N cuentas
+- Slot 1: `MELI_USER_ID` / `MELI_REFRESH_TOKEN` (backwards compat)
+- Slots 2+: `MELI_USER_ID_N` / `MELI_REFRESH_TOKEN_N` (auto-descubiertos)
+- `/auth/connect` en una nueva cuenta crea automáticamente su slot en `.env.production`
+- Railway restaura TODAS las cuentas en cada redeploy sin intervención manual
+- Commits: `6d36c7b`
+
+---
+
 ## 2026-02-19 — Feat: Stock Reservado vs Disponible BinManager
 
 ### Problema
