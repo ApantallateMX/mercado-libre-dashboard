@@ -95,9 +95,10 @@ def _calc_margins(products: list, usd_to_mxn: float):
 
 
 async def _seed_one(user_id: str, refresh_token: str, label: str):
-    """Intenta recuperar tokens para una cuenta via refresh_token."""
+    """Intenta recuperar tokens para una cuenta via refresh_token.
+    También obtiene el nickname desde la API de MeLi para mostrarlo en el dropdown."""
     import httpx
-    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET
+    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_API_URL
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(MELI_TOKEN_URL, data={
@@ -108,17 +109,49 @@ async def _seed_one(user_id: str, refresh_token: str, label: str):
             })
             if resp.status_code == 200:
                 data = resp.json()
+                access_token = data["access_token"]
+                # Obtener nickname desde MeLi API
+                nickname = ""
+                try:
+                    me_resp = await client.get(
+                        f"{MELI_API_URL}/users/{user_id}",
+                        headers={"Authorization": f"Bearer {access_token}"}
+                    )
+                    if me_resp.status_code == 200:
+                        nickname = me_resp.json().get("nickname", "")
+                except Exception:
+                    pass
                 await token_store.save_tokens(
                     user_id,
-                    data["access_token"],
+                    access_token,
                     data["refresh_token"],
                     data.get("expires_in", 21600),
+                    nickname=nickname,
                 )
-                print(f"[SEED] Tokens recovered for {label} (user {user_id})")
+                print(f"[SEED] Tokens recovered for {label} (user {user_id}, nickname={nickname})")
             else:
                 print(f"[SEED] Token refresh failed for {label}: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         print(f"[SEED] Error recovering tokens for {label}: {e}")
+
+
+async def _backfill_nickname(user_id: str, access_token: str):
+    """Rellena el nickname de una cuenta existente en DB que no lo tiene."""
+    import httpx
+    from app.config import MELI_API_URL
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{MELI_API_URL}/users/{user_id}",
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            if resp.status_code == 200:
+                nickname = resp.json().get("nickname", "")
+                if nickname:
+                    await token_store.update_nickname(user_id, nickname)
+                    print(f"[SEED] Nickname actualizado: {user_id} → {nickname}")
+    except Exception as e:
+        print(f"[SEED] Error obteniendo nickname para {user_id}: {e}")
 
 
 def _parse_env_slots(env_vars: dict) -> list:
@@ -160,6 +193,9 @@ async def _seed_tokens():
         existing = await token_store.get_tokens(uid)
         if not existing:
             await _seed_one(uid, rt, label)
+        elif not existing.get("nickname"):
+            # Cuenta existente sin nickname — rellenar desde MeLi API
+            await _backfill_nickname(uid, existing.get("access_token", ""))
 
 
 @asynccontextmanager

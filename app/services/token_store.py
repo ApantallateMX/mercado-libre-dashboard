@@ -118,6 +118,16 @@ async def get_all_tokens() -> list:
         return [dict(row) for row in rows]
 
 
+async def update_nickname(user_id: str, nickname: str):
+    """Actualiza el nickname de una cuenta existente."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE tokens SET nickname = ? WHERE user_id = ?",
+            (nickname, user_id)
+        )
+        await db.commit()
+
+
 async def delete_tokens(user_id: str):
     """Elimina los tokens de un usuario."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
