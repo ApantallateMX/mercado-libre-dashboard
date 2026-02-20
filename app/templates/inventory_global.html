@@ -139,6 +139,7 @@ var _scanData = [];
 var _currentFilter = 'all';
 var _pendingConc = null;
 var _accountNicknames = {};
+var _pollInterval = null;
 
 // Status badge config
 var _statusConfig = {
@@ -151,24 +152,14 @@ var _statusConfig = {
 function getStatus(row, threshold) {
     var bmAvail = row.bm_avail || 0;
     var hasMeliActive = Object.values(row.accounts || {}).some(function(a) { return (a.meli_stock || 0) > 0; });
-    var hasMeliZero = Object.values(row.accounts || {}).some(function(a) { return (a.meli_stock || 0) === 0 && a.listed; });
     if (bmAvail === 0) return 'zero';
     if (bmAvail > 0 && bmAvail <= threshold && hasMeliActive) return 'critical';
     if (bmAvail > 0 && !hasMeliActive) return 'opportunity';
     return 'ok';
 }
 
-var _activeScanReader = null;
-
 function startScan() {
     var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
-
-    // Cancelar scan anterior si hay uno activo
-    if (_activeScanReader) {
-        try { _activeScanReader.cancel(); } catch(e) {}
-        _activeScanReader = null;
-    }
-
     document.getElementById('scan-btn').disabled = true;
     document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="2" stroke-dasharray="30 10" stroke-linecap="round"/></svg> Escaneando...';
     document.getElementById('scan-progress').classList.remove('hidden');
@@ -177,64 +168,84 @@ function startScan() {
     document.getElementById('filter-tabs').classList.add('hidden');
     document.getElementById('empty-state').classList.add('hidden');
     document.getElementById('progress-label').className = 'text-sm font-medium text-gray-700';
-    setProgress(2, 'Iniciando escaneo...', 'Conectando con MeLi y BinManager');
+    setProgress(1, 'Iniciando escaneo...', 'Conectando con MeLi y BinManager');
 
-    fetch('/api/inventory/global-scan-stream?threshold=' + threshold, {
-        headers: {'ngrok-skip-browser-warning': 'true', 'Accept': 'text/event-stream'}
+    fetch('/api/inventory/global-scan-start?threshold=' + threshold, {
+        method: 'POST',
+        headers: {'ngrok-skip-browser-warning': 'true'}
     })
-    .then(function(resp) {
-        if (!resp.ok) return resp.text().then(function(t) { throw new Error(t || 'Error ' + resp.status); });
-        var reader = resp.body.getReader();
-        _activeScanReader = reader;
-        var decoder = new TextDecoder();
-        var buf = '';
+    .then(function(r) { return r.json(); })
+    .then(function() { _startPolling(); })
+    .catch(function(e) { _onScanError('Error iniciando scan: ' + e.message); });
+}
 
-        function pump() {
-            return reader.read().then(function(chunk) {
-                if (chunk.done) return;
-                buf += decoder.decode(chunk.value, {stream: true});
-                var lines = buf.split('\n');
-                buf = lines.pop();
+function _startPolling() {
+    if (_pollInterval) clearInterval(_pollInterval);
+    _pollInterval = setInterval(_pollStatus, 2000);
+    _pollStatus(); // poll inmediato
+}
 
-                for (var i = 0; i < lines.length; i++) {
-                    var line = lines[i].trim();
-                    if (!line.startsWith('data:')) continue;
-                    try {
-                        var msg = JSON.parse(line.slice(5).trim());
-                        if (msg.type === 'progress') {
-                            setProgress(msg.pct, msg.label, msg.detail || '');
-                        } else if (msg.type === 'complete') {
-                            setProgress(100, '✓ Escaneo completo — ' + (msg.data.total || 0) + ' SKUs', '');
-                            _scanData = msg.data.rows || [];
-                            _accountNicknames = msg.data.account_nicknames || {};
-                            _activeScanReader = null;
-                            renderResults(threshold);
-                            resetScanBtn();
-                            return;
-                        } else if (msg.type === 'error') {
-                            throw new Error(msg.message);
-                        }
-                    } catch(parseErr) { /* línea incompleta */ }
-                }
-                return pump();
-            });
+function _pollStatus() {
+    fetch('/api/inventory/global-scan-status', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(state) {
+        if (state.status === 'running') {
+            setProgress(state.pct || 0, state.label || '', state.detail || '');
+        } else if (state.status === 'done') {
+            clearInterval(_pollInterval);
+            _pollInterval = null;
+            if (state.result) {
+                var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+                _scanData = state.result.rows || [];
+                _accountNicknames = state.result.account_nicknames || {};
+                renderResults(threshold);
+            }
+            resetScanBtn();
+        } else if (state.status === 'error') {
+            clearInterval(_pollInterval);
+            _pollInterval = null;
+            _onScanError(state.error || 'Error desconocido');
         }
-        return pump();
     })
     .catch(function(e) {
-        document.getElementById('progress-label').textContent = 'Error: ' + e.message;
-        document.getElementById('progress-label').className = 'text-sm font-medium text-red-600';
-        document.getElementById('empty-state').classList.remove('hidden');
-        document.getElementById('scan-progress').classList.add('hidden');
-        _activeScanReader = null;
-        resetScanBtn();
+        // Error de red transitorio — seguir intentando
+        console.warn('Poll error:', e);
     });
+}
+
+function _onScanError(msg) {
+    document.getElementById('progress-label').textContent = 'Error: ' + msg;
+    document.getElementById('progress-label').className = 'text-sm font-medium text-red-600';
+    document.getElementById('empty-state').classList.remove('hidden');
+    document.getElementById('scan-progress').classList.add('hidden');
+    resetScanBtn();
 }
 
 function resetScanBtn() {
     document.getElementById('scan-btn').disabled = false;
     document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Escanear Inventario';
 }
+
+window.addEventListener('DOMContentLoaded', function() {
+    // Verificar si hay un scan en curso o ya completado al cargar la página
+    fetch('/api/inventory/global-scan-status', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(state) {
+        if (state.status === 'running') {
+            document.getElementById('scan-progress').classList.remove('hidden');
+            document.getElementById('scan-btn').disabled = true;
+            document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="2" stroke-dasharray="30 10" stroke-linecap="round"/></svg> Escaneando...';
+            setProgress(state.pct || 0, state.label || '', state.detail || '');
+            _startPolling();
+        } else if (state.status === 'done' && state.result) {
+            var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+            _scanData = state.result.rows || [];
+            _accountNicknames = state.result.account_nicknames || {};
+            renderResults(threshold);
+        }
+    })
+    .catch(function() { /* silencioso — el usuario puede iniciar manualmente */ });
+});
 
 function setProgress(pct, label, detail) {
     document.getElementById('progress-bar').style.width = pct + '%';

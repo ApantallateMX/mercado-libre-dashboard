@@ -5831,6 +5831,18 @@ async def update_item_status_api(item_id: str, request: Request):
 _inventory_global_cache: dict[str, tuple[float, dict]] = {}
 _INVENTORY_GLOBAL_TTL = 900  # 15 min
 
+# Estado del scan global — persiste entre requests HTTP
+_scan_state: dict = {
+    "status": "idle",   # idle | running | done | error
+    "pct": 0,
+    "label": "",
+    "detail": "",
+    "result": None,
+    "error": None,
+    "threshold": 10,
+}
+_scan_bg_task: asyncio.Task | None = None
+
 
 @app.get("/inventory-global", response_class=HTMLResponse)
 async def inventory_global_page(request: Request):
@@ -5858,40 +5870,29 @@ async def inventory_global_scan(threshold: int = 10):
             "message": "Usa /api/inventory/global-scan-stream para el escaneo completo"}
 
 
-@app.get("/api/inventory/global-scan-stream")
-async def inventory_global_scan_stream(threshold: int = 10):
-    """SSE con keepalive: reporta progreso en tiempo real. Evita timeout de Railway."""
-    import json as _json
-
-    async def event_stream():
-        def _evt(data: dict) -> str:
-            return f"data: {_json.dumps(data)}\n\n"
-
-        def _ka() -> str:
-            # SSE comment: mantiene la conexión abierta sin enviar datos al cliente
-            return ": keepalive\n\n"
-
-        # ── PRIMER evento inmediato para establecer conexión antes de cualquier await ──
-        yield _evt({"type": "progress", "pct": 1, "label": "Conectando...", "detail": ""})
+async def _run_global_scan(threshold: int):
+    """Background task: corre independientemente de cualquier request HTTP."""
+    global _scan_state
+    try:
+        _scan_state.update({"status": "running", "pct": 1, "label": "Conectando...", "detail": ""})
 
         # Cache hit
         cache_key = f"inv_global:{threshold}"
         cached = _inventory_global_cache.get(cache_key)
         if cached and (_time_module.time() - cached[0]) < _INVENTORY_GLOBAL_TTL:
-            yield _evt({"type": "progress", "pct": 99, "label": "Resultado desde caché..."})
-            yield _evt({"type": "complete", "data": cached[1]})
+            _scan_state.update({"status": "done", "pct": 100, "label": "Resultado desde caché", "detail": "", "result": cached[1]})
             return
 
         accounts_list = await token_store.get_all_tokens()
         if not accounts_list:
-            yield _evt({"type": "error", "message": "No hay cuentas autenticadas"})
+            _scan_state.update({"status": "error", "error": "No hay cuentas autenticadas", "label": "Error: No hay cuentas autenticadas"})
             return
 
         now = datetime.utcnow()
         date_from_30d = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
-        yield _evt({"type": "progress", "pct": 3, "label": f"Cargando productos de {len(accounts_list)} cuentas...", "detail": "Puede tardar 1-2 min en primera ejecución"})
+        _scan_state.update({"pct": 3, "label": f"Cargando productos de {len(accounts_list)} cuentas...", "detail": "Puede tardar 1-2 min en primera ejecución"})
 
         async def _fetch_one(account):
             uid = account["user_id"]
@@ -5910,7 +5911,6 @@ async def inventory_global_scan_stream(threshold: int = 10):
             except Exception as e:
                 return {"uid": uid, "nickname": nickname, "products": [], "count": 0, "error": str(e)}
 
-        # Cuentas: cola + keepalive para no perder la conexión
         result_q: asyncio.Queue = asyncio.Queue()
         total_acc = len(accounts_list)
 
@@ -5924,22 +5924,18 @@ async def inventory_global_scan_stream(threshold: int = 10):
         acc_results = []
         done = 0
         while done < total_acc:
-            try:
-                result = await asyncio.wait_for(result_q.get(), timeout=8.0)
-                acc_results.append(result)
-                done += 1
-                pct = 8 + int(done / total_acc * 45)
-                err_suffix = f" ⚠️" if result.get("error") else ""
-                yield _evt({
-                    "type": "progress",
-                    "pct": pct,
-                    "label": f"✓ {result['nickname']}: {result['count']} productos ({done}/{total_acc}){err_suffix}",
-                    "detail": result.get("error", f"Cuentas procesadas: {done}/{total_acc}")
-                })
-            except asyncio.TimeoutError:
-                yield _ka()  # keepalive silencioso
+            result = await result_q.get()
+            acc_results.append(result)
+            done += 1
+            pct = 8 + int(done / total_acc * 45)
+            err_suffix = " ⚠" if result.get("error") else ""
+            _scan_state.update({
+                "pct": pct,
+                "label": f"✓ {result['nickname']}: {result['count']} productos ({done}/{total_acc}){err_suffix}",
+                "detail": result.get("error", f"Cuentas procesadas: {done}/{total_acc}"),
+            })
 
-        yield _evt({"type": "progress", "pct": 55, "label": "Agrupando SKUs únicos...", "detail": ""})
+        _scan_state.update({"pct": 55, "label": "Agrupando SKUs únicos...", "detail": ""})
 
         sku_accounts: dict[str, dict] = {}
         sku_titles: dict[str, str] = {}
@@ -5970,39 +5966,30 @@ async def inventory_global_scan_stream(threshold: int = 10):
         if not sku_accounts:
             result_data = {"rows": [], "account_nicknames": account_nicknames, "total": 0}
             _inventory_global_cache[cache_key] = (_time_module.time(), result_data)
-            yield _evt({"type": "complete", "data": result_data})
+            _scan_state.update({"status": "done", "pct": 100, "label": "Completado — 0 SKUs", "detail": "", "result": result_data})
             return
 
-        yield _evt({"type": "progress", "pct": 58, "label": f"{unique_count} SKUs únicos — consultando BinManager stock...", "detail": "Paso 2/3"})
+        _scan_state.update({"pct": 58, "label": f"{unique_count} SKUs únicos — consultando BinManager stock...", "detail": "Paso 2/3"})
         synthetic = [{"sku": base, "title": sku_titles.get(base, "")} for base in sku_accounts]
 
-        # BM stock: puede tardar mucho → keepalive cada 8s
-        bm_task = asyncio.ensure_future(_get_bm_stock_cached(synthetic))
-        _bm_pct = 58
-        while not bm_task.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(bm_task), timeout=8.0)
-            except asyncio.TimeoutError:
-                _bm_pct = min(_bm_pct + 2, 70)
-                yield _evt({"type": "progress", "pct": _bm_pct, "label": f"BinManager stock... ({unique_count} SKUs)", "detail": "Consultando disponibilidad"})
-        bm_map = bm_task.result()
+        # BM stock: await directo (sin keepalive — no hay HTTP en medio)
+        bm_map = await _get_bm_stock_cached(synthetic)
         _apply_bm_stock(synthetic, bm_map)
 
-        yield _evt({"type": "progress", "pct": 72, "label": f"BinManager precios/marca ({unique_count} SKUs)...", "detail": "Paso 3/3"})
+        _scan_state.update({"pct": 72, "label": f"BinManager precios/marca ({unique_count} SKUs)...", "detail": "Paso 3/3"})
         CHUNK = 25
         chunks_total = max(1, (len(synthetic) + CHUNK - 1) // CHUNK)
         for i in range(0, len(synthetic), CHUNK):
             await _enrich_with_bm_product_info(synthetic[i:i + CHUNK])
             chunk_num = i // CHUNK + 1
             pct = 72 + int(chunk_num / chunks_total * 22)
-            yield _evt({
-                "type": "progress",
+            _scan_state.update({
                 "pct": min(pct, 93),
                 "label": f"BinManager metadata: {chunk_num}/{chunks_total} lotes",
-                "detail": f"{min(i + CHUNK, len(synthetic))}/{len(synthetic)} SKUs"
+                "detail": f"{min(i + CHUNK, len(synthetic))}/{len(synthetic)} SKUs",
             })
 
-        yield _evt({"type": "progress", "pct": 96, "label": "Construyendo tabla final...", "detail": ""})
+        _scan_state.update({"pct": 96, "label": "Construyendo tabla final...", "detail": ""})
 
         rows = []
         for p_bm in synthetic:
@@ -6031,14 +6018,30 @@ async def inventory_global_scan_stream(threshold: int = 10):
 
         result_data = {"rows": rows, "account_nicknames": account_nicknames, "total": len(rows)}
         _inventory_global_cache[cache_key] = (_time_module.time(), result_data)
-        yield _evt({"type": "complete", "data": result_data})
+        _scan_state.update({"status": "done", "pct": 100, "label": f"Completado — {len(rows)} SKUs", "detail": "", "result": result_data})
 
-    from fastapi.responses import StreamingResponse as _StreamResp
-    return _StreamResp(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
-    )
+    except Exception as e:
+        _scan_state.update({"status": "error", "pct": 0, "error": str(e), "label": f"Error: {str(e)[:80]}", "detail": ""})
+
+
+@app.post("/api/inventory/global-scan-start")
+async def start_global_scan(threshold: int = 10):
+    """Inicia el scan de inventario global como background task."""
+    global _scan_bg_task, _scan_state
+    if _scan_state["status"] == "running":
+        return {"status": "already_running", "pct": _scan_state["pct"]}
+    _scan_state = {
+        "status": "running", "pct": 1, "label": "Iniciando...", "detail": "",
+        "result": None, "error": None, "threshold": threshold,
+    }
+    _scan_bg_task = asyncio.create_task(_run_global_scan(threshold))
+    return {"status": "started"}
+
+
+@app.get("/api/inventory/global-scan-status")
+async def get_global_scan_status():
+    """Devuelve el estado actual del scan (para polling desde el browser)."""
+    return _scan_state
 
 
 # ═══════════════════════════════════════════════════════════════════════════
