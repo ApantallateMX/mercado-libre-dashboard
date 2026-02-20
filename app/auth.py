@@ -209,25 +209,6 @@ async def callback(code: str = None, state: str = None, error: str = None):
     return response
 
 
-@router.get("/export-tokens")
-async def export_tokens(request: Request, pin: str = ""):
-    """ENDPOINT TEMPORAL — exporta credenciales para persistir en git.
-    Doble protección: cookie PIN + query param ?pin=XXXX"""
-    from app.config import APP_PIN
-    if pin != APP_PIN:
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    accounts = await token_store.get_all_tokens()
-    result = []
-    for a in accounts:
-        tokens = await token_store.get_tokens(a["user_id"])
-        result.append({
-            "user_id": a["user_id"],
-            "nickname": a.get("nickname", ""),
-            "refresh_token": tokens.get("refresh_token", "") if tokens else "",
-        })
-    return {"accounts": result, "count": len(result)}
-
 
 @router.post("/logout")
 async def logout():
