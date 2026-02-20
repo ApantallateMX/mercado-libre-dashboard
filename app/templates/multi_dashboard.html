@@ -254,17 +254,49 @@ async function loadMultiDashboard() {
     // Show skeletons
     showLeaderSkeletons();
     showAccountSkeletons();
+    clearError();
 
     const url = `/api/dashboard/multi-account?date_from=${from}&date_to=${to}`;
+    // Timeout de 60 segundos — primera carga puede tomar 8-15s con 4 cuentas
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+
     try {
-        const resp = await fetch(url);
-        if (!resp.ok) { console.error('API error', resp.status); return; }
+        const resp = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            let errText = `Error ${resp.status}`;
+            try { const e = await resp.json(); errText = e.detail || errText; } catch(_) {}
+            showError(`No se pudo cargar el dashboard: ${errText}`);
+            return;
+        }
         const data = await resp.json();
         renderAll(data);
     } catch(e) {
-        console.error('Error loading multi dashboard:', e);
+        clearTimeout(timeout);
+        if (e.name === 'AbortError') {
+            showError('El servidor tardó demasiado (>60s). Intenta con un rango de fechas más corto.');
+        } else {
+            showError(`Error de conexión: ${e.message}`);
+        }
     }
 }
+
+function showError(msg) {
+    // Muestra el error en el área de líderes (visible arriba)
+    document.getElementById('md-leaders').innerHTML = `
+        <div class="col-span-3 bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+            <p class="text-red-600 font-semibold mb-1">Error al cargar</p>
+            <p class="text-red-500 text-sm">${escapeHtml(msg)}</p>
+            <button onclick="loadMultiDashboard()" class="mt-3 bg-red-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-600 transition">
+                Reintentar
+            </button>
+        </div>`;
+    // Limpiar skeletons de account cards
+    document.getElementById('md-account-cards').innerHTML = '';
+}
+
+function clearError() { /* se limpia con showLeaderSkeletons */ }
 
 function renderAll(data) {
     renderHeader(data.totals);
@@ -385,7 +417,9 @@ function renderChart(data) {
     const canvas = document.getElementById('md-chart');
     const container = document.getElementById('md-chart-container');
     canvas.classList.remove('hidden');
-    container.querySelector('.animate-pulse') && container.querySelector('div').remove();
+    // Limpiar el div de "Cargando gráfica..."
+    const loadingDiv = container.querySelector('.animate-pulse');
+    if (loadingDiv) loadingDiv.remove();
 
     // Build daily revenue per account
     const accounts = data.accounts;

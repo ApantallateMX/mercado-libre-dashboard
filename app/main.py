@@ -1,5 +1,7 @@
 import asyncio
 import json
+import time as _time_module
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query
@@ -5829,7 +5831,6 @@ async def get_multi_account_dashboard(
     """Dashboard consolidado: métricas de todas las cuentas en una sola respuesta.
     Cache de 5 minutos cross-account (independiente de la cuenta activa).
     """
-    import time as _time
     now = datetime.utcnow()
     if not date_from:
         date_from = now.replace(day=1).strftime("%Y-%m-%d")
@@ -5838,7 +5839,7 @@ async def get_multi_account_dashboard(
 
     cache_key = f"multi_account:{date_from}:{date_to}"
     cached = _multi_account_cache.get(cache_key)
-    if cached and (_time.time() - cached[0]) < _MULTI_ACCOUNT_CACHE_TTL:
+    if cached and (_time_module.time() - cached[0]) < _MULTI_ACCOUNT_CACHE_TTL:
         return cached[1]
 
     accounts_list = await token_store.get_all_tokens()
@@ -5963,6 +5964,15 @@ async def get_multi_account_dashboard(
         "active_items": sum(a["active_items"] for a in accounts_data),
     }
 
+    # Guard: sin cuentas, devolver estructura vacía para no crashear
+    if not accounts_data:
+        return {"date_from": date_from, "date_to": date_to, "accounts": [],
+                "totals": {"today": {"orders": 0, "units": 0, "revenue": 0},
+                           "week": {"orders": 0, "units": 0, "revenue": 0},
+                           "month": {"orders": 0, "units": 0, "revenue": 0},
+                           "active_items": 0},
+                "top_products": [], "leader_today": None, "leader_week": None, "leader_month": None}
+
     def _leader(period):
         best = max(accounts_data, key=lambda a: a[period]["revenue"])
         return {
@@ -6013,7 +6023,7 @@ async def get_multi_account_dashboard(
         "leader_month": _leader("month"),
     }
 
-    _multi_account_cache[cache_key] = (_time.time(), result)
+    _multi_account_cache[cache_key] = (_time_module.time(), result)
     return result
 
 
