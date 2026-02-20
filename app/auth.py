@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from app.config import (
     MELI_AUTH_URL, MELI_TOKEN_URL, MELI_API_URL,
     MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI, SECRET_KEY,
-    MELI_USER_ID, MELI_USER_ID_2
+    MELI_USER_ID,
 )
 from app.services import token_store
 
@@ -152,34 +152,56 @@ async def callback(code: str = None, state: str = None, error: str = None):
     )
 
     # Persistir nuevo refresh_token en .env.production para sobrevivir redeploys de Railway
+    # Sistema dinámico: busca el slot existente del user o crea uno nuevo (cuentaN)
     if new_refresh:
         import re as _re, os as _os
         for env_file in (".env.production", ".env"):
             path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), env_file)
-            if _os.path.exists(path):
-                try:
-                    text = open(path, encoding="utf-8").read()
-                    if uid == MELI_USER_ID:
-                        # Cuenta principal (1)
-                        text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN=.*$", f"MELI_REFRESH_TOKEN={new_refresh}", text)
-                        if "MELI_REFRESH_TOKEN=" not in text:
-                            text += f"\nMELI_REFRESH_TOKEN={new_refresh}\n"
-                    else:
-                        # Cuenta 2 (u otras)
-                        if _re.search(r"(?m)^MELI_REFRESH_TOKEN_2=", text):
-                            text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN_2=.*$", f"MELI_REFRESH_TOKEN_2={new_refresh}", text)
-                        else:
-                            text += f"\nMELI_REFRESH_TOKEN_2={new_refresh}\n"
-                        # Actualizar MELI_USER_ID_2 si esta vacio
-                        if not MELI_USER_ID_2:
-                            if _re.search(r"(?m)^MELI_USER_ID_2=", text):
-                                text = _re.sub(r"(?m)^MELI_USER_ID_2=.*$", f"MELI_USER_ID_2={uid}", text)
-                            else:
-                                text += f"\nMELI_USER_ID_2={uid}\n"
-                    open(path, "w", encoding="utf-8").write(text)
-                    print(f"[AUTH] Tokens updated for user {uid} in {env_file}")
-                except Exception as _e:
-                    print(f"[AUTH] Could not update {env_file}: {_e}")
+            if not _os.path.exists(path):
+                continue
+            try:
+                text = open(path, encoding="utf-8").read()
+                # Parsear env actual para encontrar slots existentes
+                env_vars = {}
+                for line in text.splitlines():
+                    line = line.strip()
+                    if '=' in line and not line.startswith('#'):
+                        k, _, v = line.partition('=')
+                        env_vars[k.strip()] = v.strip()
+
+                # Buscar si este user_id ya tiene un slot asignado
+                rt_key = None
+                uid_key = None
+                if env_vars.get("MELI_USER_ID") == uid:
+                    rt_key = "MELI_REFRESH_TOKEN"
+                else:
+                    n = 2
+                    while True:
+                        k_uid = f"MELI_USER_ID_{n}"
+                        if k_uid not in env_vars:
+                            break
+                        if env_vars[k_uid] == uid:
+                            rt_key = f"MELI_REFRESH_TOKEN_{n}"
+                            break
+                        n += 1
+
+                if rt_key:
+                    # Slot existente — solo actualizar refresh token
+                    text = _re.sub(rf"(?m)^{rt_key}=.*$", f"{rt_key}={new_refresh}", text)
+                else:
+                    # Cuenta nueva — encontrar próximo slot disponible
+                    n = 2
+                    while f"MELI_USER_ID_{n}" in env_vars:
+                        n += 1
+                    uid_key = f"MELI_USER_ID_{n}"
+                    rt_key = f"MELI_REFRESH_TOKEN_{n}"
+                    text += f"\n{uid_key}={uid}\n{rt_key}={new_refresh}\n"
+                    print(f"[AUTH] Nueva cuenta registrada en slot {n}: {uid} ({nickname})")
+
+                open(path, "w", encoding="utf-8").write(text)
+                print(f"[AUTH] Tokens updated for user {uid} ({nickname}) in {env_file}")
+            except Exception as _e:
+                print(f"[AUTH] Could not update {env_file}: {_e}")
 
     # Setear cookie de cuenta activa
     response = RedirectResponse(url="/dashboard", status_code=303)

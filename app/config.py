@@ -25,10 +25,10 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", "tokens.db")
 APP_PIN = os.getenv("APP_PIN", "8741")
 
 # Seed tokens for auto-recovery on deploy (Railway ephemeral storage)
+# Slot 1 usa MELI_USER_ID / MELI_REFRESH_TOKEN (backwards compat)
+# Slots 2+ usan MELI_USER_ID_N / MELI_REFRESH_TOKEN_N (dinámico, sin límite)
 MELI_USER_ID = os.getenv("MELI_USER_ID", "")
 MELI_REFRESH_TOKEN = os.getenv("MELI_REFRESH_TOKEN", "")
-MELI_USER_ID_2 = os.getenv("MELI_USER_ID_2", "")
-MELI_REFRESH_TOKEN_2 = os.getenv("MELI_REFRESH_TOKEN_2", "")
 
 # Ollama Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

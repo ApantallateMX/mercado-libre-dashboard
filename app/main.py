@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN, MELI_USER_ID_2, MELI_REFRESH_TOKEN_2
+from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -121,12 +121,32 @@ async def _seed_one(user_id: str, refresh_token: str, label: str):
         print(f"[SEED] Error recovering tokens for {label}: {e}")
 
 
+def _parse_env_slots(env_vars: dict) -> list:
+    """Devuelve lista de (uid, rt, label) para todos los slots encontrados en env_vars.
+    Slot 1: MELI_USER_ID / MELI_REFRESH_TOKEN
+    Slot N: MELI_USER_ID_N / MELI_REFRESH_TOKEN_N (sin límite)"""
+    accounts = []
+    uid = env_vars.get("MELI_USER_ID", "") or MELI_USER_ID
+    rt = env_vars.get("MELI_REFRESH_TOKEN", "") or MELI_REFRESH_TOKEN
+    if uid and rt:
+        accounts.append((uid, rt, "cuenta1"))
+    n = 2
+    while True:
+        uid = env_vars.get(f"MELI_USER_ID_{n}", "")
+        rt = env_vars.get(f"MELI_REFRESH_TOKEN_{n}", "")
+        if not uid or not rt:
+            break
+        accounts.append((uid, rt, f"cuenta{n}"))
+        n += 1
+    return accounts
+
+
 async def _seed_tokens():
     """Auto-recover MeLi tokens. Re-lee .env.production desde disco para detectar
-    credenciales escritas por auth.py o _do_refresh_token() en el mismo container."""
+    credenciales escritas por auth.py o _do_refresh_token() en el mismo container.
+    Soporta N cuentas dinámicamente (cuenta1, cuenta2, cuenta3, ...)."""
     from pathlib import Path as _Path
 
-    # Leer .env.production desde disco (más reciente que vars de módulo cargadas al inicio)
     env_vars = {}
     env_file = _Path(__file__).resolve().parent.parent / ".env.production"
     if env_file.exists():
@@ -136,19 +156,10 @@ async def _seed_tokens():
                 k, _, v = line.partition('=')
                 env_vars[k.strip()] = v.strip()
 
-    uid1 = env_vars.get("MELI_USER_ID") or MELI_USER_ID
-    rt1 = env_vars.get("MELI_REFRESH_TOKEN") or MELI_REFRESH_TOKEN
-    uid2 = env_vars.get("MELI_USER_ID_2") or MELI_USER_ID_2
-    rt2 = env_vars.get("MELI_REFRESH_TOKEN_2") or MELI_REFRESH_TOKEN_2
-
-    if rt1 and uid1:
-        existing = await token_store.get_tokens(uid1)
+    for uid, rt, label in _parse_env_slots(env_vars):
+        existing = await token_store.get_tokens(uid)
         if not existing:
-            await _seed_one(uid1, rt1, "cuenta1")
-    if rt2 and uid2:
-        existing2 = await token_store.get_tokens(uid2)
-        if not existing2:
-            await _seed_one(uid2, rt2, "cuenta2")
+            await _seed_one(uid, rt, label)
 
 
 @asynccontextmanager

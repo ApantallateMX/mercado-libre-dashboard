@@ -80,24 +80,42 @@ def _item_has_sku(item: dict, sku_upper: str) -> bool:
     return False
 
 
+def _find_rt_key_for_user(user_id: str, env_vars: dict) -> str | None:
+    """Devuelve el nombre de la variable MELI_REFRESH_TOKEN_N que corresponde a user_id."""
+    if env_vars.get("MELI_USER_ID") == user_id:
+        return "MELI_REFRESH_TOKEN"
+    n = 2
+    while True:
+        uid_key = f"MELI_USER_ID_{n}"
+        if uid_key not in env_vars:
+            break
+        if env_vars[uid_key] == user_id:
+            return f"MELI_REFRESH_TOKEN_{n}"
+        n += 1
+    return None
+
+
 def _persist_refresh_token(user_id: str, new_refresh: str):
-    """Actualiza MELI_REFRESH_TOKEN o MELI_REFRESH_TOKEN_2 en .env.production.
-    Se llama silenciosamente después de cada token refresh para que el próximo
-    Railway restart/redeploy pueda hacer seed con el token más reciente."""
+    """Actualiza MELI_REFRESH_TOKEN_N en .env.production para el slot que corresponde
+    a user_id. Soporta N cuentas dinámicamente. Se llama silenciosamente después de
+    cada token refresh para que el próximo Railway restart pueda hacer seed."""
     try:
         import re as _re
         from pathlib import Path as _Path
-        from app.config import MELI_USER_ID, MELI_USER_ID_2
         env_file = _Path(__file__).resolve().parent.parent.parent / ".env.production"
         if not env_file.exists():
             return
         text = env_file.read_text(encoding='utf-8')
-        if user_id == MELI_USER_ID:
-            text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN=.*$", f"MELI_REFRESH_TOKEN={new_refresh}", text)
-        elif user_id == MELI_USER_ID_2 and MELI_USER_ID_2:
-            text = _re.sub(r"(?m)^MELI_REFRESH_TOKEN_2=.*$", f"MELI_REFRESH_TOKEN_2={new_refresh}", text)
-        else:
+        env_vars = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if '=' in line and not line.startswith('#'):
+                k, _, v = line.partition('=')
+                env_vars[k.strip()] = v.strip()
+        rt_key = _find_rt_key_for_user(user_id, env_vars)
+        if not rt_key:
             return
+        text = _re.sub(rf"(?m)^{rt_key}=.*$", f"{rt_key}={new_refresh}", text)
         env_file.write_text(text, encoding='utf-8')
     except Exception:
         pass  # Silent fail — es solo un mecanismo de recuperación
