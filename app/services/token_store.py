@@ -1,11 +1,16 @@
+import os
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional
+from pathlib import Path
 from app.config import DATABASE_PATH
 
 
 async def init_db():
-    """Inicializa la base de datos SQLite."""
+    """Inicializa la base de datos SQLite. Crea el directorio si no existe (Railway Volume)."""
+    db_path = Path(DATABASE_PATH)
+    if db_path.parent != Path("."):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tokens (
