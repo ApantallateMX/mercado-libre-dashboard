@@ -194,13 +194,20 @@ function _pollStatus() {
         } else if (state.status === 'done') {
             clearInterval(_pollInterval);
             _pollInterval = null;
-            if (state.result) {
-                var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
-                _scanData = state.result.rows || [];
-                _accountNicknames = state.result.account_nicknames || {};
-                renderResults(threshold);
-            }
-            resetScanBtn();
+            // Mostrar 100% brevemente antes de renderizar
+            setProgress(100, state.label || 'Completado', '');
+            document.getElementById('progress-label').className = 'text-sm font-medium text-green-600';
+            setTimeout(function() {
+                if (state.result) {
+                    var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+                    _scanData = state.result.rows || [];
+                    _accountNicknames = state.result.account_nicknames || {};
+                    renderResults(threshold);
+                } else {
+                    document.getElementById('scan-progress').classList.add('hidden');
+                }
+                resetScanBtn();
+            }, 800);
         } else if (state.status === 'error') {
             clearInterval(_pollInterval);
             _pollInterval = null;
@@ -271,6 +278,7 @@ function renderResults(threshold) {
     document.getElementById('filter-tabs').classList.remove('hidden');
     document.getElementById('results-container').classList.remove('hidden');
     document.getElementById('scan-progress').classList.add('hidden');
+    document.getElementById('empty-state').classList.add('hidden');
 
     filterTable(_currentFilter, threshold);
 }
