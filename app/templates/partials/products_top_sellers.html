@@ -41,6 +41,11 @@
                 {% endif %}
                 <span data-stock-msg></span>
             </div>
+            <div>
+                <span class="text-gray-500">BM Disp:</span>
+                <span class="font-bold {{ 'text-green-600' if bm > 20 else 'text-yellow-600' if bm > 4 else 'text-red-600' }}">{{ bm }}</span>
+                {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<span class="text-[10px] text-orange-500 ml-1">{{ p.get('_bm_reserved', 0) }}↩res</span>{% endif %}
+            </div>
             {% if p.get('_margen_pct') is not none %}
             <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold
                 {% if p._margen_pct >= 20 %}bg-green-100 text-green-700

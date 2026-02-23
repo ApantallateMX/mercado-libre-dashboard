@@ -72,7 +72,11 @@
                 </div>
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span></div>
+                <div>
+                    <span class="text-gray-500">BM Disp:</span>
+                    <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>
+                    {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<span class="text-[10px] text-orange-500 ml-1">{{ p.get('_bm_reserved', 0) }}↩res</span>{% endif %}
+                </div>
                 {% if p.get('_bm_mty') is not none %}
                 <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
                 {% endif %}
@@ -144,7 +148,10 @@
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
-                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold">
+                        <span class="text-green-600">{{ p.get('_bm_avail', 0) }}</span>
+                        {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<div class="text-[10px] text-orange-500">{{ p.get('_bm_reserved', 0) }}↩res</div>{% endif %}
+                    </td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
@@ -214,7 +221,11 @@
                     {% endif %}
                 </div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span></div>
+                <div>
+                    <span class="text-gray-500">BM Disp:</span>
+                    <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>
+                    {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<span class="text-[10px] text-orange-500 ml-1">{{ p.get('_bm_reserved', 0) }}↩res</span>{% endif %}
+                </div>
                 {% if p.get('_bm_mty') is not none %}
                 <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
                 {% endif %}
@@ -288,7 +299,10 @@
                         <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[10px] font-medium">{{ p.status }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold">
+                        <span class="text-green-600">{{ p.get('_bm_avail', 0) }}</span>
+                        {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<div class="text-[10px] text-orange-500">{{ p.get('_bm_reserved', 0) }}↩res</div>{% endif %}
+                    </td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>

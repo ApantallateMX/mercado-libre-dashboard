@@ -89,6 +89,22 @@
                 {% endif %}
             </div>
 
+            <!-- BM Disponible / Reservado -->
+            {% set _bm_disp = item.get('_bm_avail', 0) or 0 %}
+            {% set _bm_res = item.get('_bm_reserved', 0) or 0 %}
+            {% if _bm_disp > 0 or _bm_res > 0 %}
+            <div class="flex gap-2 mb-2 text-xs">
+                <div class="flex-1 text-center py-1 rounded font-medium {{ 'bg-green-100 text-green-700' if _bm_disp > 0 else 'bg-gray-100 text-gray-400' }}">
+                    BM Disp: <strong>{{ _bm_disp }}</strong>
+                </div>
+                {% if _bm_res > 0 %}
+                <div class="flex-1 text-center py-1 rounded font-medium bg-orange-100 text-orange-700">
+                    Reservado: <strong>{{ _bm_res }}</strong>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
             <!-- Actualizar Stock -->
             {% if item.get('is_full') %}
             <div class="flex items-center gap-2 text-xs text-cyan-700 bg-cyan-50 rounded px-2 py-1.5">
