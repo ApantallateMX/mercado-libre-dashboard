@@ -2214,7 +2214,7 @@ async def products_inventory_partial(
         sort_keys = {
             "stock": lambda p: p.get("available_quantity", 0),
             "units": lambda p: p.get("units", 0),
-            "bm": lambda p: p.get("_bm_total", 0),
+            "bm": lambda p: p.get("_bm_avail", 0),
             "price": lambda p: p.get("price", 0),
             "revenue": lambda p: p.get("revenue", 0),
             "margin": lambda p: p.get("_margen_pct") if p.get("_margen_pct") is not None else -999,

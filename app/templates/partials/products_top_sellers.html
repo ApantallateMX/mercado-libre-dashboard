@@ -33,7 +33,7 @@
             <div><span class="text-gray-500">Rev:</span> <span class="font-bold">${{ "{:,.0f}".format(p.revenue) }}</span></div>
             <div data-stock-cell>
                 <span class="text-gray-500">Stock:</span>
-                {% set bm = p.get('_bm_total', 0) or 0 %}
+                {% set bm = p.get('_bm_avail', 0) or 0 %}
                 <span data-stock-val class="font-bold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}">{{ p.available_quantity }}</span>
                 {% if bm > 0 and bm != p.available_quantity %}
                 <button data-bm-btn onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm }})"
@@ -152,7 +152,7 @@
                     <span class="font-semibold text-cyan-600">{{ p.available_quantity }}</span>
                     <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                     {% else %}
-                    {% set bm = p.get('_bm_total', 0) or 0 %}
+                    {% set bm = p.get('_bm_avail', 0) or 0 %}
                     <span data-stock-val
                           class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
                           onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
@@ -166,11 +166,12 @@
                     <span data-stock-msg></span>
                 </td>
                 <td class="px-3 py-3 text-right">
-                    {% if p.get('_bm_total') is not none %}
+                    {% if p.get('_bm_avail') is not none %}
                     <div class="flex flex-col items-end text-xs">
-                        <span class="font-semibold {{ 'text-green-600' if p._bm_total > 20 else 'text-yellow-600' if p._bm_total > 4 else 'text-red-600' }}">
-                            {{ p._bm_total }}
+                        <span class="font-semibold {{ 'text-green-600' if p._bm_avail > 20 else 'text-yellow-600' if p._bm_avail > 4 else 'text-red-600' }}">
+                            {{ p._bm_avail }}
                         </span>
+                        {% if p.get('_bm_reserved', 0) > 0 %}<span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}
                         <span class="text-[10px] text-gray-400">
                             M:{{ p._bm_mty }} C:{{ p._bm_cdmx }}{% if p._bm_tj %} T:{{ p._bm_tj }}{% endif %}
                         </span>

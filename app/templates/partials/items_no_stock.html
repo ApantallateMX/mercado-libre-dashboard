@@ -97,14 +97,14 @@
             </div>
             {% else %}
             <div class="flex gap-2">
-                <input type="number" min="0" value="{{ item.get('bm_total', 0) or 0 }}" id="new-stock-{{ item.id }}"
+                <input type="number" min="0" value="{{ item.get('_bm_avail', 0) or 0 }}" id="new-stock-{{ item.id }}"
                        class="flex-1 border rounded px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-blue-300 focus:border-blue-400 outline-none">
                 <button onclick="updateStock('{{ item.id }}')"
                         class="bg-blue-500 text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-blue-600 transition">
                     Actualizar
                 </button>
             </div>
-            {% set bm_t = item.get('bm_total', 0) or 0 %}
+            {% set bm_t = item.get('_bm_avail', 0) or 0 %}
             {% if bm_t > 0 %}
             {% set bm_safe = (bm_t * 0.6)|int %}
             <button onclick="var inp=document.getElementById('new-stock-{{ item.id }}');inp.value={{ bm_safe }};inp.focus();inp.select()"

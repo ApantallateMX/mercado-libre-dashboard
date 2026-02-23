@@ -65,7 +65,7 @@
                     <span class="font-semibold text-cyan-600">{{ p.available_quantity }}</span>
                     <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                     {% else %}
-                    {% set bm = p.get('_bm_total', 0) or 0 %}
+                    {% set bm = p.get('_bm_avail', 0) or 0 %}
                     <span data-stock-val
                           class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
                           onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
@@ -79,10 +79,11 @@
                     <span data-stock-msg></span>
                 </td>
                 <td class="px-3 py-3 text-right">
-                    {% if p.get('_bm_total') is not none %}
-                    <span class="{{ 'text-green-600' if p._bm_total > 5 else 'text-red-600' if p._bm_total == 0 else 'text-yellow-600' }} font-semibold">
-                        {{ p._bm_total }}
+                    {% if p.get('_bm_avail') is not none %}
+                    <span class="{{ 'text-green-600' if p._bm_avail > 5 else 'text-red-600' if p._bm_avail == 0 else 'text-yellow-600' }} font-semibold">
+                        {{ p._bm_avail }}
                     </span>
+                    {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</div>{% endif %}
                     {% else %}
                     <span class="text-gray-300">-</span>
                     {% endif %}

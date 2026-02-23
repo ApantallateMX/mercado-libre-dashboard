@@ -84,7 +84,7 @@
                 </div>
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-green-600">{{ p.get('_bm_total', 0) }}</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
                 <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
                 {% endif %}
@@ -100,7 +100,7 @@
                            class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
                             Ver en MeLi ↗
                         </a>
-                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                                 class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600">
                             Ya cambié → Sync
                         </button>
@@ -114,7 +114,7 @@
                     Sync Var. ({{ p.variations|length }})
                 </button>
                 {% else %}
-                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                         class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
                     Sync 60%
                 </button>
@@ -140,7 +140,7 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disponible</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">TJ</th>
@@ -189,14 +189,15 @@
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) }}</td>
-                    <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if p.get('_bm_total', 0) > 0 else 'text-gray-400' }}">
+                    <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if p.get('_bm_avail', 0) > 0 else 'text-gray-400' }}">
                         {% if p.get('has_variations') %}
                         <span class="text-indigo-500 text-[10px] cursor-pointer underline decoration-dotted"
                               data-variations='{{ p.variations | tojson }}'
                               onclick="showVarStockPanel('{{ p.id }}', this)"
                               title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
-                        {{ p.get('_bm_total', 0) }}
+                        {{ p.get('_bm_avail', 0) }}
+                        {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
@@ -208,7 +209,7 @@
                             <span class="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">⚠️ FULL</span>
                             <a href="https://articulo.mercadolibre.com.mx/{{ p.id | replace('MLM', 'MLM-') }}" target="_blank"
                                class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium whitespace-nowrap">Ver en MeLi ↗</a>
-                            <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                            <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                                     class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium whitespace-nowrap">
                                 Ya cambié → Sync
                             </button>
@@ -224,7 +225,7 @@
                                 Sync Var.
                             </button>
                             {% else %}
-                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, this)"
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                                     class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
                                 Sync 60%
                             </button>
@@ -344,7 +345,7 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disponible</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
@@ -406,7 +407,8 @@
                               onclick="showVarStockPanel('{{ p.id }}', this)"
                               title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
-                        {{ p.get('_bm_total', 0) or 0 }}
+                        {{ p.get('_bm_avail', 0) or 0 }}
+                        {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
@@ -635,7 +637,7 @@
                     {% endif %}
                 </div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-green-600">{{ p.get('_bm_total', 0) }}</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
                 <div class="text-[10px] text-gray-400">MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}</div>
                 {% endif %}
@@ -645,7 +647,7 @@
                 </div>
             </div>
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, '{{ p.status }}', this)"
+                <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this)"
                         class="flex-1 py-1.5 text-xs bg-green-600 text-white rounded-lg font-medium active:bg-green-700 min-h-[36px]">
                     Sync + Activar
                 </button>
@@ -669,7 +671,7 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Status</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Total</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disponible</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">TJ</th>
@@ -717,13 +719,13 @@
                         <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[10px] font-medium">{{ p.status }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_total', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_avail', 0) }}{% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1">
-                            <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_total', 0) }}, '{{ p.status }}', this)"
+                            <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this)"
                                     class="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium transition">
                                 Sync + Activar
                             </button>
@@ -846,7 +848,7 @@ function syncRestockItem(itemId, bmTotal, btn) {
 function bulkSyncRestock() {
     var allItems = [
         {% for p in restock %}
-        {% if not p.get('is_full') and not p.get('has_variations') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }} }{% if not loop.last %},{% endif %}{% endif %}
+        {% if not p.get('is_full') and not p.get('has_variations') %}{id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }} }{% if not loop.last %},{% endif %}{% endif %}
         {% endfor %}
     ].filter(Boolean);
     // Filtrar solo los que siguen en DOM (no procesados aún)
