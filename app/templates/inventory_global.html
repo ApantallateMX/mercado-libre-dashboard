@@ -15,6 +15,13 @@
                 <input type="number" id="threshold-input" value="10" min="1" max="50"
                        class="w-16 px-2 py-1 border border-gray-300 rounded text-xs text-center">
             </div>
+            <button onclick="startBulkConcentration()" id="bulk-btn"
+                    class="hidden px-4 py-2 bg-amber-600 text-white text-sm font-bold rounded-lg hover:bg-amber-700 transition flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                </svg>
+                Concentrar en Bulk
+            </button>
             <button onclick="startScan()" id="scan-btn"
                     class="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-2">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -121,16 +128,44 @@
         <p class="text-xs text-gray-500 mb-4" id="conc-modal-sku"></p>
         <div id="conc-modal-body" class="space-y-2 mb-4 max-h-64 overflow-y-auto text-sm"></div>
         <div class="flex gap-3 pt-3 border-t border-gray-100">
-            <button onclick="document.getElementById('conc-modal').classList.add('hidden')"
+            <button id="conc-cancel-btn" onclick="document.getElementById('conc-modal').classList.add('hidden')"
                     class="flex-1 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200">
                 Cancelar
             </button>
-            <button id="conc-confirm-btn" onclick="executeConcentration()"
+            <button id="conc-confirm-btn"
                     class="flex-1 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700">
                 Confirmar Concentrar
             </button>
         </div>
         <span id="conc-modal-msg" class="text-xs block text-center mt-2"></span>
+    </div>
+</div>
+
+<!-- Bulk Concentration Modal -->
+<div id="bulk-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+        <h3 class="text-base font-bold text-gray-900 mb-1">Concentración en Bulk</h3>
+        <p class="text-xs text-gray-500 mb-3" id="bulk-subtitle">Procesando SKUs con ganador claro...</p>
+        <div class="w-full bg-gray-100 rounded-full h-2 mb-1">
+            <div id="bulk-bar" class="bg-amber-500 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
+        </div>
+        <div class="flex justify-between text-[10px] text-gray-400 mb-3">
+            <span id="bulk-progress-label">0 / 0</span>
+            <span id="bulk-pct">0%</span>
+        </div>
+        <div id="bulk-current-sku" class="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1 mb-3 font-mono min-h-[24px]">—</div>
+        <div id="bulk-log" class="text-[10px] text-gray-500 max-h-32 overflow-y-auto space-y-0.5 mb-4 border rounded p-2 bg-gray-50 hidden"></div>
+        <div class="flex gap-3">
+            <button id="bulk-stop-btn" onclick="stopBulk()"
+                    class="flex-1 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300">
+                Detener
+            </button>
+            <button id="bulk-close-btn" onclick="document.getElementById('bulk-modal').classList.add('hidden')"
+                    class="hidden flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700">
+                Cerrar
+            </button>
+        </div>
+        <div id="bulk-summary" class="hidden mt-3 text-xs text-center text-gray-600 font-medium"></div>
     </div>
 </div>
 
@@ -279,6 +314,7 @@ function renderResults(threshold) {
     document.getElementById('results-container').classList.remove('hidden');
     document.getElementById('scan-progress').classList.add('hidden');
     document.getElementById('empty-state').classList.add('hidden');
+    document.getElementById('bulk-btn').classList.remove('hidden');
 
     filterTable(_currentFilter, threshold);
 }
@@ -404,13 +440,30 @@ function renderTable(rows, threshold) {
 }
 
 var _selectedWinnerUid = null;
+var _concExecuted = false;
+var _bulkRunning = false;
+
+function _resetConcBtn() {
+    var btn = document.getElementById('conc-confirm-btn');
+    btn.textContent = 'Confirmar Concentrar';
+    btn.className = 'flex-1 py-2 bg-red-600 text-white rounded-lg text-sm font-bold hover:bg-red-700';
+    btn.disabled = false;
+    btn.onclick = executeConcentration;
+    var cancelBtn = document.getElementById('conc-cancel-btn');
+    if (cancelBtn) {
+        cancelBtn.textContent = 'Cancelar';
+        cancelBtn.onclick = function() { document.getElementById('conc-modal').classList.add('hidden'); };
+    }
+}
 
 function openConcModal(sku, bmAvail) {
     var totalBmAvail = bmAvail || 0;
+    _concExecuted = false;
     document.getElementById('conc-modal-title').textContent = 'Concentrar Stock — ' + sku;
     document.getElementById('conc-modal-sku').textContent = 'Consultando análisis...';
     document.getElementById('conc-modal-body').innerHTML = '<div class="text-center text-gray-400 py-4">Cargando...</div>';
     document.getElementById('conc-modal-msg').textContent = '';
+    _resetConcBtn();
     document.getElementById('conc-modal').classList.remove('hidden');
     _pendingConc = null;
     _selectedWinnerUid = null;
@@ -541,7 +594,7 @@ function selectConcWinner(uid) {
 }
 
 function executeConcentration() {
-    if (!_pendingConc || !_selectedWinnerUid) return;
+    if (!_pendingConc || !_selectedWinnerUid || _concExecuted) return;
     var btn = document.getElementById('conc-confirm-btn');
     btn.disabled = true;
     btn.textContent = 'Ejecutando...';
@@ -563,6 +616,7 @@ function executeConcentration() {
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
         if (!res.ok) throw new Error(res.data.detail || JSON.stringify(res.data));
+        _concExecuted = true;
         var data = res.data;
         var winnerNick = data.winner_nickname || winner.nickname || _selectedWinnerUid;
         var winnerItemId = data.winner_item_id || '';
@@ -571,7 +625,7 @@ function executeConcentration() {
 
         var msgEl = document.getElementById('conc-modal-msg');
         var lines = [];
-        lines.push('✓ ' + winnerNick + ' (' + winnerItemId + ') recibe ' + (_pendingConc._bmAvail || 0) + ' u.');
+        lines.push('✓ ' + winnerNick + ' (' + winnerItemId + ') ← ' + (_pendingConc._bmAvail || 0) + ' u.');
         if (zeroed.length) lines.push('→ 0 en: ' + zeroed.join(', '));
         if (fullSkipped.length) lines.push('FULL sin cambio: ' + fullSkipped.join(', '));
         if (data.errors && data.errors.length) lines.push('⚠ ' + data.errors.length + ' error(es)');
@@ -580,30 +634,167 @@ function executeConcentration() {
             ? 'text-xs block text-center mt-2 text-green-700 font-semibold'
             : 'text-xs block text-center mt-2 text-orange-600 font-semibold';
 
-        btn.textContent = 'Cerrar';
-        btn.className = 'flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-bold';
-        btn.onclick = function() {
-            document.getElementById('conc-modal').classList.add('hidden');
-        };
+        // Cambiar botón a "Siguiente" que cierra el modal
+        btn.disabled = false;
+        btn.textContent = 'Siguiente SKU';
+        btn.className = 'flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-bold hover:bg-green-700';
+        btn.onclick = function() { document.getElementById('conc-modal').classList.add('hidden'); };
 
-        // Remover el row de la tabla (ya fue concentrado)
+        // Remover el row de la tabla
         var sku = _pendingConc.sku || '';
-        var rows = document.querySelectorAll('[data-sku="' + sku.toLowerCase() + '"]');
-        rows.forEach(function(row) {
-            row.style.opacity = '0.4';
-            row.style.transition = 'opacity 0.5s';
-        });
-        // Limpiar del _scanData para que no reaparezca al filtrar
-        _scanData = (_scanData || []).filter(function(r) {
-            return (r.sku || '').toLowerCase() !== sku.toLowerCase();
-        });
+        _removeSKUFromList(sku);
     })
     .catch(function(e) {
         btn.disabled = false;
         btn.textContent = 'Confirmar Concentrar';
+        btn.onclick = executeConcentration;
         var msgEl = document.getElementById('conc-modal-msg');
         msgEl.textContent = 'Error: ' + e.message;
         msgEl.className = 'text-xs block text-center mt-2 text-red-600';
+    });
+}
+
+function _removeSKUFromList(sku) {
+    var rows = document.querySelectorAll('[data-sku="' + sku.toLowerCase() + '"]');
+    rows.forEach(function(row) {
+        row.style.opacity = '0.3';
+        row.style.transition = 'opacity 0.4s';
+        setTimeout(function() { row.style.display = 'none'; }, 500);
+    });
+    _scanData = (_scanData || []).filter(function(r) {
+        return (r.sku || '').toLowerCase() !== sku.toLowerCase();
+    });
+    // Actualizar contador del footer
+    var visible = document.querySelectorAll('#inventory-tbody tr:not([style*="display: none"])').length;
+    var footer = document.getElementById('table-footer');
+    if (footer) footer.textContent = visible + ' de ' + _scanData.length + ' SKUs';
+}
+
+// ─── Bulk Concentration ──────────────────────────────────────────────────────
+
+function startBulkConcentration() {
+    // Candidatos: SKUs visibles con estado crítico u oportunidad
+    var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
+    var candidates = (_scanData || []).filter(function(r) {
+        var st = getStatus(r, threshold);
+        return (st === 'critical' || st === 'opportunity') && r.sku;
+    });
+
+    if (!candidates.length) {
+        alert('No hay SKUs candidatos visibles para concentrar.');
+        return;
+    }
+
+    if (!confirm('Se procesarán ' + candidates.length + ' SKUs.\n'
+        + 'Solo se ejecutarán los que tengan ganador claro (no manual).\n'
+        + '¿Continuar?')) return;
+
+    // Inicializar modal de bulk
+    document.getElementById('bulk-modal').classList.remove('hidden');
+    document.getElementById('bulk-subtitle').textContent = candidates.length + ' SKUs candidatos';
+    document.getElementById('bulk-bar').style.width = '0%';
+    document.getElementById('bulk-progress-label').textContent = '0 / ' + candidates.length;
+    document.getElementById('bulk-pct').textContent = '0%';
+    document.getElementById('bulk-current-sku').textContent = '—';
+    document.getElementById('bulk-log').innerHTML = '';
+    document.getElementById('bulk-log').classList.remove('hidden');
+    document.getElementById('bulk-summary').classList.add('hidden');
+    document.getElementById('bulk-stop-btn').classList.remove('hidden');
+    document.getElementById('bulk-close-btn').classList.add('hidden');
+    _bulkRunning = true;
+
+    _runBulk(candidates, 0, {done: 0, skipped: 0, errors: 0});
+}
+
+function stopBulk() {
+    _bulkRunning = false;
+    document.getElementById('bulk-stop-btn').classList.add('hidden');
+    document.getElementById('bulk-close-btn').classList.remove('hidden');
+    document.getElementById('bulk-subtitle').textContent = 'Detenido por el usuario';
+}
+
+function _addBulkLog(sku, status, msg) {
+    var logEl = document.getElementById('bulk-log');
+    var icons = {ok: '✓', skip: '—', error: '✗'};
+    var colors = {ok: 'text-green-600', skip: 'text-gray-400', error: 'text-red-500'};
+    var div = document.createElement('div');
+    div.className = 'flex gap-1 ' + (colors[status] || 'text-gray-500');
+    div.innerHTML = '<span class="font-mono w-28 shrink-0">' + sku + '</span>'
+        + '<span>' + (icons[status] || '') + ' ' + msg + '</span>';
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function _runBulk(candidates, idx, stats) {
+    if (!_bulkRunning || idx >= candidates.length) {
+        // Finalizado
+        _bulkRunning = false;
+        document.getElementById('bulk-stop-btn').classList.add('hidden');
+        document.getElementById('bulk-close-btn').classList.remove('hidden');
+        var summEl = document.getElementById('bulk-summary');
+        summEl.classList.remove('hidden');
+        summEl.textContent = '✓ ' + stats.done + ' concentrados · '
+            + stats.skipped + ' omitidos · '
+            + stats.errors + ' errores de ' + candidates.length + ' SKUs';
+        document.getElementById('bulk-subtitle').textContent = 'Completado';
+        renderTable();
+        return;
+    }
+
+    var row = candidates[idx];
+    var sku = row.sku;
+    var bmAvail = row.bm_avail || 0;
+    var pct = Math.round((idx / candidates.length) * 100);
+    document.getElementById('bulk-bar').style.width = pct + '%';
+    document.getElementById('bulk-progress-label').textContent = (idx + 1) + ' / ' + candidates.length;
+    document.getElementById('bulk-pct').textContent = pct + '%';
+    document.getElementById('bulk-current-sku').textContent = sku;
+
+    fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
+        headers: {'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(preview) {
+        if (preview.action !== 'concentrar' || !preview.winner || preview.manual_selection) {
+            var reason = preview.manual_selection ? 'sin ventas (manual)' : preview.action;
+            _addBulkLog(sku, 'skip', reason);
+            stats.skipped++;
+            setTimeout(function() { _runBulk(candidates, idx + 1, stats); }, 200);
+            return;
+        }
+        // Ejecutar
+        fetch('/api/stock/concentration/execute', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({
+                sku: sku,
+                winner_user_id: preview.winner.user_id,
+                total_stock: bmAvail,
+                dry_run: false
+            })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                _addBulkLog(sku, 'ok', preview.winner.nickname + ' ← ' + bmAvail + 'u');
+                stats.done++;
+                _removeSKUFromList(sku);
+            } else {
+                _addBulkLog(sku, 'error', data.summary || 'error');
+                stats.errors++;
+            }
+            setTimeout(function() { _runBulk(candidates, idx + 1, stats); }, 600);
+        })
+        .catch(function(e) {
+            _addBulkLog(sku, 'error', e.message);
+            stats.errors++;
+            setTimeout(function() { _runBulk(candidates, idx + 1, stats); }, 600);
+        });
+    })
+    .catch(function(e) {
+        _addBulkLog(sku, 'error', e.message);
+        stats.errors++;
+        setTimeout(function() { _runBulk(candidates, idx + 1, stats); }, 600);
     });
 }
 </script>
