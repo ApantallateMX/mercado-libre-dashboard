@@ -366,7 +366,7 @@ function renderTable(rows, threshold) {
         var actionHtml = '';
         if (status === 'critical' || status === 'opportunity') {
             if (row.sku) {
-                actionHtml = '<button onclick="openConcModal(\'' + row.sku.replace(/'/g, '') + '\')"'
+                actionHtml = '<button onclick="openConcModal(\'' + row.sku.replace(/'/g, '') + '\',' + bmAvail + ')"'
                     + ' class="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-medium hover:bg-red-700">Concentrar</button>';
             }
         }
@@ -403,13 +403,17 @@ function renderTable(rows, threshold) {
     }
 }
 
-function openConcModal(sku) {
+var _selectedWinnerUid = null;
+
+function openConcModal(sku, bmAvail) {
+    var totalBmAvail = bmAvail || 0;
     document.getElementById('conc-modal-title').textContent = 'Concentrar Stock — ' + sku;
     document.getElementById('conc-modal-sku').textContent = 'Consultando análisis...';
     document.getElementById('conc-modal-body').innerHTML = '<div class="text-center text-gray-400 py-4">Cargando...</div>';
     document.getElementById('conc-modal-msg').textContent = '';
     document.getElementById('conc-modal').classList.remove('hidden');
     _pendingConc = null;
+    _selectedWinnerUid = null;
 
     fetch('/api/stock/concentration/preview?sku=' + encodeURIComponent(sku), {
         headers: {'ngrok-skip-browser-warning': 'true'}
@@ -417,53 +421,102 @@ function openConcModal(sku) {
     .then(function(r) { return r.json(); })
     .then(function(d) {
         _pendingConc = d;
-        var winner = d.winner || {};
-        var accounts = d.accounts || [];
-        document.getElementById('conc-modal-sku').textContent = 'SKU: ' + sku + ' — BM Disponible: ' + (d.total_bm_avail || 0);
+        _pendingConc._bmAvail = totalBmAvail;
+        document.getElementById('conc-modal-sku').textContent = 'SKU: ' + sku + ' — BM Disponible: ' + totalBmAvail;
 
-        if (!winner.user_id) {
-            document.getElementById('conc-modal-body').innerHTML = '<div class="text-yellow-600 bg-yellow-50 rounded p-3 text-sm">Sin ganador claro — producto nuevo o sin ventas en todas las cuentas.<br>No se puede concentrar automáticamente.</div>';
+        var details = d.details || [];
+        var winner = d.winner || {};
+        _selectedWinnerUid = winner.user_id || null;
+
+        if (d.action === 'no_items_found') {
+            document.getElementById('conc-modal-body').innerHTML =
+                '<div class="text-red-600 bg-red-50 rounded p-3 text-sm">No se encontró el SKU en ninguna cuenta de MeLi.</div>';
             document.getElementById('conc-confirm-btn').disabled = true;
             return;
         }
-        document.getElementById('conc-confirm-btn').disabled = false;
 
-        var html = '<div class="space-y-2">';
-        accounts.forEach(function(a) {
-            var isWinner = a.user_id === winner.user_id;
-            var borderCls = isWinner ? 'border-green-400 bg-green-50' : 'border-gray-200';
-            var action = isWinner ? '<span class="text-green-700 font-bold text-xs">→ Recibe stock (' + d.total_bm_avail + ')</span>' : '<span class="text-red-500 text-xs">→ Stock = 0</span>';
-            html += '<div class="flex items-center justify-between p-2 border rounded-lg ' + borderCls + '">'
-                + '<div>'
-                + '<span class="font-semibold text-sm">' + (a.nickname || a.user_id) + '</span>'
-                + (isWinner ? ' <span class="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded">GANADOR</span>' : '')
-                + '<div class="text-xs text-gray-500">' + a.sold_30d + ' ventas 30d / MeLi: ' + (a.meli_stock || 0) + '</div>'
-                + '</div>'
-                + action
-                + '</div>';
-        });
-        html += '</div>';
-        document.getElementById('conc-modal-body').innerHTML = html;
+        if (d.action === 'single_account') {
+            document.getElementById('conc-modal-body').innerHTML =
+                '<div class="text-blue-600 bg-blue-50 rounded p-3 text-sm">' + (d.message || 'Solo existe en una cuenta.') + '</div>';
+            document.getElementById('conc-confirm-btn').disabled = true;
+            return;
+        }
+
+        document.getElementById('conc-confirm-btn').disabled = false;
+        _renderConcDetails(details, totalBmAvail, d);
     })
     .catch(function(e) {
         document.getElementById('conc-modal-body').innerHTML = '<div class="text-red-600 text-sm">Error: ' + e.message + '</div>';
     });
 }
 
+function _renderConcDetails(details, totalBmAvail, d) {
+    var periodLabels = {
+        '30 días':    '<span class="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded ml-1">Últimos 30d</span>',
+        'histórico':  '<span class="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded ml-1">Histórico</span>',
+        'sin_ventas': '<span class="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded ml-1">Sin ventas — elige manualmente</span>',
+    };
+    var periodBadge = periodLabels[d.period_used] || '';
+    var msgCls = d.manual_selection ? 'text-yellow-700 bg-yellow-50' : 'text-gray-600 bg-gray-50';
+    var msgHtml = '<div class="text-xs ' + msgCls + ' rounded p-2 mb-3">'
+        + (d.message || '') + periodBadge + '</div>';
+
+    var html = msgHtml + '<div class="space-y-2">';
+    details.forEach(function(a) {
+        var isWinner = a.user_id === _selectedWinnerUid;
+        var borderCls = isWinner ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:border-gray-300';
+        var actionSpan = isWinner
+            ? '<span class="text-green-700 font-bold text-xs whitespace-nowrap">→ Recibe ' + totalBmAvail + ' u.</span>'
+            : '<span class="text-red-500 text-xs whitespace-nowrap">→ Stock = 0</span>';
+        var winnerBadge = isWinner
+            ? ' <span class="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded">GANADOR</span>' : '';
+        var v30cls = a.sold_30d > 0 ? 'text-blue-600 font-semibold' : 'text-gray-400';
+        html += '<label class="flex items-center justify-between p-2 border rounded-lg ' + borderCls + ' cursor-pointer">'
+            + '<div class="flex items-center gap-2">'
+            + '<input type="radio" name="conc-winner" value="' + a.user_id + '"' + (isWinner ? ' checked' : '')
+            + ' class="accent-green-600 shrink-0" onchange="selectConcWinner(\'' + a.user_id + '\')">'
+            + '<div>'
+            + '<span class="font-semibold text-sm">' + (a.nickname || a.user_id) + '</span>' + winnerBadge
+            + '<div class="text-xs text-gray-500 mt-0.5">'
+            + '<span class="' + v30cls + '">' + a.sold_30d + ' v/30d</span>'
+            + ' · hist: <span class="font-medium">' + (a.sold_total || 0) + '</span>'
+            + ' · MeLi: <span class="font-medium">' + (a.available_quantity || 0) + ' u.</span>'
+            + '</div>'
+            + '</div>'
+            + '</div>'
+            + actionSpan
+            + '</label>';
+    });
+    html += '</div>';
+    document.getElementById('conc-modal-body').innerHTML = html;
+}
+
+function selectConcWinner(uid) {
+    _selectedWinnerUid = uid;
+    if (_pendingConc) {
+        var winner = (_pendingConc.details || []).find(function(d) { return d.user_id === uid; });
+        if (winner) _pendingConc.winner = winner;
+        _renderConcDetails(_pendingConc.details || [], _pendingConc._bmAvail || 0, _pendingConc);
+    }
+}
+
 function executeConcentration() {
-    if (!_pendingConc || !_pendingConc.winner) return;
+    if (!_pendingConc || !_selectedWinnerUid) return;
     var btn = document.getElementById('conc-confirm-btn');
     btn.disabled = true;
     btn.textContent = 'Ejecutando...';
     document.getElementById('conc-modal-msg').textContent = '';
 
+    var winner = (_pendingConc.details || []).find(function(d) { return d.user_id === _selectedWinnerUid; })
+        || _pendingConc.winner || {};
+
     fetch('/api/stock/concentration/execute', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
         body: JSON.stringify({
-            sku: _pendingConc.sku || _pendingConc.winner.sku,
-            winner_user_id: _pendingConc.winner.user_id,
-            total_stock: _pendingConc.total_bm_avail,
+            sku: _pendingConc.sku,
+            winner_user_id: _selectedWinnerUid,
+            total_stock: _pendingConc._bmAvail || _pendingConc.total_stock || 0,
             dry_run: false
         })
     })
@@ -471,7 +524,8 @@ function executeConcentration() {
     .then(function(res) {
         if (!res.ok) throw new Error(res.data.detail || JSON.stringify(res.data));
         var zeroed = res.data.zeroed_accounts || [];
-        var msg = '✓ Concentrado en ' + (_pendingConc.winner.nickname || _pendingConc.winner.user_id);
+        var winnerNick = winner.nickname || _selectedWinnerUid;
+        var msg = '✓ Concentrado en ' + winnerNick;
         if (zeroed.length) msg += ' · Stock→0 en: ' + zeroed.join(', ');
         document.getElementById('conc-modal-msg').textContent = msg;
         document.getElementById('conc-modal-msg').className = 'text-xs block text-center mt-2 text-green-600 font-semibold';

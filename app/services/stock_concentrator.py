@@ -182,40 +182,48 @@ async def preview_concentration(base_sku: str) -> dict:
     has_30d_sales = any(d["sold_30d"] > 0 for d in details)
     has_any_sales = any(d["sold_total"] > 0 for d in details)
 
-    if not has_any_sales:
-        return {
-            "sku": base_sku,
-            "action": "no_concentrar",
-            "message": "Producto nuevo sin ventas en ninguna cuenta. Se mantiene en todas hasta que genere su primera venta.",
-            "winner": None,
-            "losers": [],
-            "total_stock": sum(d["available_quantity"] for d in details),
-            "details": details,
-        }
+    total_stock = sum(d["available_quantity"] for d in details)
 
     if has_30d_sales:
         winner = max(details, key=lambda d: (d["sold_30d"], d["sold_total"]))
-    else:
-        # Sin ventas recientes, usar histórico acumulado
-        winner = max(details, key=lambda d: d["sold_total"])
-
-    losers = [d for d in details if d["item_id"] != winner["item_id"]]
-    total_stock = sum(d["available_quantity"] for d in details)
-
-    period_label = "30 días" if has_30d_sales else "histórico"
-    return {
-        "sku": base_sku,
-        "action": "concentrar",
-        "message": (
+        period_label = "30 días"
+        manual_selection = False
+        message = (
             f"GANADOR: {winner['nickname']} ({winner['sold_30d']} ventas últimos 30d / "
             f"{winner['sold_total']} históricas). "
             f"Stock total: {total_stock} unidades → "
-            f"{total_stock} al ganador, 0 a {len(losers)} cuenta(s)."
-        ),
+            f"{total_stock} al ganador, 0 a {len([d for d in details if d['item_id'] != winner['item_id']])} cuenta(s)."
+        )
+    elif has_any_sales:
+        # Sin ventas recientes pero sí historial — usar acumulado
+        winner = max(details, key=lambda d: d["sold_total"])
+        period_label = "histórico"
+        manual_selection = False
+        message = (
+            f"GANADOR (histórico): {winner['nickname']} ({winner['sold_total']} ventas acumuladas). "
+            f"Stock total: {total_stock} → {total_stock} al ganador."
+        )
+    else:
+        # Sin ventas en ninguna cuenta — sugerir la de mayor stock MeLi, permitir cambio manual
+        winner = max(details, key=lambda d: (d["available_quantity"], d["sold_30d"]))
+        period_label = "sin_ventas"
+        manual_selection = True
+        message = (
+            f"Sin ventas registradas en ninguna cuenta. "
+            f"Se sugiere concentrar en {winner['nickname']} (mayor stock MeLi). "
+            f"Puedes seleccionar otra cuenta manualmente."
+        )
+
+    losers = [d for d in details if d["item_id"] != winner["item_id"]]
+    return {
+        "sku": base_sku,
+        "action": "concentrar",
+        "message": message,
         "winner": winner,
         "losers": losers,
         "total_stock": total_stock,
         "period_used": period_label,
+        "manual_selection": manual_selection,
         "details": details,
     }
 
