@@ -307,7 +307,11 @@
                     <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span>
                     {% endif %}
                 </div>
-                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-red-600">{{ p.get('_bm_total', 0) or 0 }}</span></div>
+                <div>
+                    <span class="text-gray-500">BM Disp:</span>
+                    <span class="font-bold {{ 'text-red-600' if (p.get('_bm_avail', 0) or 0) == 0 else 'text-blue-600' }}">{{ p.get('_bm_avail', 0) or 0 }}</span>
+                    {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<span class="text-[9px] text-orange-500 ml-1">{{ p.get('_bm_reserved', 0) }}↩res</span>{% endif %}
+                </div>
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
             </div>
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
@@ -1127,7 +1131,7 @@ function showVarStockPanel(itemId, triggerEl) {
     var panelId = 'vp-meli-' + itemId;
     var panel = _getOrCreatePanel(triggerEl, panelId);
 
-    var hasBm = vars.some(function(v) { return typeof v._bm_total !== 'undefined'; });
+    var hasBm = vars.some(function(v) { return typeof v._bm_avail !== 'undefined'; });
     var rows = vars.map(function(v) {
         var combo = v.combo || ('Var ' + v.id);
         var sku = v.sku || '';
@@ -1135,7 +1139,7 @@ function showVarStockPanel(itemId, triggerEl) {
         var stock = typeof v.stock !== 'undefined' ? v.stock : '?';
         var stockColor = stock > 0 ? '#16a34a' : '#dc2626';
         var bmHtml = hasBm
-            ? '<div style="text-align:right;margin-left:8px"><span style="color:' + ((v._bm_total||0) > 0 ? '#2563eb' : '#dc2626') + ';font-weight:700">' + (v._bm_total||0) + '</span><div style="color:#94a3b8;font-size:9px">BM</div></div>'
+            ? '<div style="text-align:right;margin-left:8px"><span style="color:' + ((v._bm_avail||0) > 0 ? '#2563eb' : '#dc2626') + ';font-weight:700">' + (v._bm_avail||0) + '</span><div style="color:#94a3b8;font-size:9px">BM Disp</div></div>'
             : '';
         return '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid #f1f5f9">'
             + '<div style="flex:1"><div style="font-weight:500">' + combo + '</div>' + skuHtml + '</div>'
@@ -1386,7 +1390,7 @@ function bulkConcentrateCritical() {
 function bulkActivateAll() {
     var allItems = [
         {% for p in activate %}
-        {id: '{{ p.id }}', bm: {{ p.get('_bm_total', 0) }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
+        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
     // Solo los que siguen visibles en DOM

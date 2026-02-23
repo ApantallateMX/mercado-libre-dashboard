@@ -1731,17 +1731,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     def _store_wh(sku, rows_wh, avail_rows=None):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y Condition endpoint (Available/Required) y cachea.
-        Usa max(0, Available - Required) como valor neto vendible para ser conservador:
-        si BM tiene Available=1 pero Required=1 (datos inconsistentes), el vendible real es 0.
+        BM calcula: Available = TotalQty - Required (ya es neto, excluye reservados).
+        avail_total = suma directa de Available; NO restar Required de nuevo (doble substracción).
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         # avail_rows es de InventoryBySKUAndCondicion_Quantity
         avail_sum = sum(row.get("Available", 0) or 0 for row in (avail_rows or []))
         required_sum = sum(row.get("Required", 0) or 0 for row in (avail_rows or []))
-        # Valor conservador: excluir cualquier unidad marcada como requerida
-        # Si BM ya neta (Available = TotalQty - Required) el resultado es el mismo.
-        # Si no (Available=1, Required=1 por inconsistencia), devolvemos 0.
-        avail_total = max(0, avail_sum - required_sum)
+        # Available en BM YA excluye reservados (Available = TotalQty - Required)
+        # Usar directamente avail_sum sin restar required_sum de nuevo
+        avail_total = avail_sum
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx,
                "avail_total": avail_total, "reserved_total": required_sum}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)

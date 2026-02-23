@@ -47,7 +47,7 @@
                     <p class="text-[10px] text-gray-400 font-mono">{{ a.sku or '-' }}</p>
                     {% set a_avail = a.get('_bm_avail', 0) or 0 %}
                     {% set a_total = a.get('_bm_total', 0) or 0 %}
-                    {% set a_reserved = [a_total - a_avail, 0] | max %}
+                    {% set a_reserved = a.get('_bm_reserved', 0) or 0 %}
                     <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] mt-0.5">
                         <span class="text-gray-500">Ventas: <strong>{{ a.get('units', 0) }}</strong></span>
                         <span class="text-red-600">MeLi: <strong>0</strong></span>
@@ -77,7 +77,7 @@
                 </div>
                 {% else %}
                 {% set a_avail = a.get('_bm_avail', 0) or 0 %}
-                {% if a_avail == 0 and (a.get('_bm_total', 0) or 0) > 0 %}
+                {% if a_avail == 0 and (a.get('_bm_reserved', 0) or 0) > 0 %}
                 <span class="flex-1 py-1.5 text-xs bg-orange-100 text-orange-700 rounded-lg text-center font-medium">
                     ⚠️ Todo reservado
                 </span>
@@ -132,11 +132,12 @@
                     </td>
                     {% set a_avail = a.get('_bm_avail', 0) or 0 %}
                     {% set a_total = a.get('_bm_total', 0) or 0 %}
+                    {% set a_reserved_t = a.get('_bm_reserved', 0) or 0 %}
                     <td class="py-1.5 px-2 text-right font-bold text-gray-800">{{ a.get('units', 0) }}</td>
                     <td class="py-1.5 px-2 text-right font-bold text-red-600">0</td>
                     <td class="py-1.5 px-2 text-right font-bold {{ 'text-green-600' if a_avail > 0 else 'text-red-500' }}">
                         {{ a_avail }}
-                        {% if a_avail == 0 and a_total > 0 %}<span class="ml-1 text-[9px] bg-orange-100 text-orange-600 px-1 rounded">res</span>{% endif %}
+                        {% if a_avail == 0 and a_reserved_t > 0 %}<span class="ml-1 text-[9px] bg-orange-100 text-orange-600 px-1 rounded">res</span>{% endif %}
                     </td>
                     <td class="py-1.5 px-2 text-right text-gray-400">{{ a_total }}</td>
                     <td class="py-1.5 px-2 text-right {{ 'text-green-600' if (a.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ a.get('_bm_mty', 0) }}</td>
@@ -169,7 +170,7 @@
                         </div>
                         {% else %}
                         <div class="flex items-center justify-center gap-1">
-                            {% if (a.get('_bm_avail', 0) or 0) == 0 and (a.get('_bm_total', 0) or 0) > 0 %}
+                            {% if (a.get('_bm_avail', 0) or 0) == 0 and (a.get('_bm_reserved', 0) or 0) > 0 %}
                             <span class="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-medium whitespace-nowrap">
                                 ⚠️ Todo reservado
                             </span>
@@ -363,10 +364,9 @@
                 <span class="font-bold text-cyan-600">{{ p.available_quantity }}</span>
                 <span class="px-1 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                 {% else %}
-                {% set bm = p.get('_bm_total', 0) or 0 %}
                 {% set bm_avail = p.get('_bm_avail', 0) or 0 %}
                 <span data-stock-val class="font-bold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
-                      onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
+                      onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm_avail }})">{{ p.available_quantity }}</span>
                 {% if bm_avail > 0 and bm_avail != p.available_quantity %}
                 <button data-bm-btn onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm_avail }})"
                         class="px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200">BM:{{ bm_avail }}</button>
@@ -378,7 +378,7 @@
             {% if p.get('_bm_total') is not none %}
             {% set p_avail_m = p.get('_bm_avail', 0) or 0 %}
             {% set p_total_m = p._bm_total or 0 %}
-            {% set p_res_m = [p_total_m - p_avail_m, 0] | max %}
+            {% set p_res_m = p.get('_bm_reserved', 0) or 0 %}
             <div>
                 <span class="text-gray-500">BM Disp:</span>
                 <span class="font-bold {{ 'text-green-600' if p_avail_m > 20 else 'text-yellow-600' if p_avail_m > 4 else 'text-red-600' }}">{{ p_avail_m }}</span>
@@ -466,7 +466,7 @@
                 data-id="{{ p.id }}"
                 data-units="{{ p.get('units', 0) }}"
                 data-stock="{{ p.available_quantity }}"
-                data-bm="{{ p.get('_bm_total', 0) or 0 }}"
+                data-bm="{{ p.get('_bm_avail', 0) or 0 }}"
                 data-price="{{ p.price }}"
                 data-margin="{{ p.get('_margen_pct', -999) or -999 }}"
                 data-is-full="{{ '1' if p.is_full else '0' }}"
@@ -533,11 +533,10 @@
                     <span class="font-semibold text-cyan-600">{{ p.available_quantity }}</span>
                     <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-cyan-100 text-cyan-700 rounded">FULL</span>
                     {% else %}
-                    {% set bm = p.get('_bm_total', 0) or 0 %}
                     {% set bm_avail = p.get('_bm_avail', 0) or 0 %}
                     <span data-stock-val
                           class="cursor-pointer font-semibold hover:text-purple-600 hover:underline {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}"
-                          onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm }})">{{ p.available_quantity }}</span>
+                          onclick="showStockEditor(this, '{{ p.id }}', {{ p.available_quantity }}, {{ bm_avail }})">{{ p.available_quantity }}</span>
                     {% if bm_avail > 0 and bm_avail != p.available_quantity %}
                     <button data-bm-btn
                             onclick="event.stopPropagation(); quickSyncBM(this, '{{ p.id }}', {{ bm_avail }})"
@@ -552,7 +551,7 @@
                     {% if p.get('_bm_total') is not none %}
                     {% set p_avail = p.get('_bm_avail', 0) or 0 %}
                     {% set p_total = p._bm_total or 0 %}
-                    {% set p_reserved = [p_total - p_avail, 0] | max %}
+                    {% set p_reserved = p.get('_bm_reserved', 0) or 0 %}
                     <div class="flex flex-col items-end gap-0.5">
                         <span class="font-semibold text-xs {{ 'text-green-600' if p_avail > 20 else 'text-yellow-600' if p_avail > 4 else 'text-red-600' }}">
                             {{ p_avail }}
