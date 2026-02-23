@@ -565,15 +565,24 @@
                     <span class="text-gray-300">-</span>
                     {% endif %}
                 </td>
-                <!-- MTY / CDMX / TJ -->
+                <!-- MTY / CDMX / TJ — naranja cuando todo el stock es reservado -->
+                {% set _all_res = (p.get('_bm_avail', 0) or 0) == 0 and (p.get('_bm_reserved', 0) or 0) > 0 %}
                 <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">
-                    <span class="{{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_mty', 0) or 0 }}</span>
+                    <span class="{{ 'text-orange-500 font-semibold' if _all_res and (p.get('_bm_mty') or 0) > 0 else ('text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300') }}"
+                          {% if _all_res and (p.get('_bm_mty') or 0) > 0 %}title="Reservado para órdenes pendientes"{% endif %}>
+                        {{ p.get('_bm_mty', 0) or 0 }}{% if _all_res and (p.get('_bm_mty') or 0) > 0 %}<span class="text-[9px] ml-0.5">↩</span>{% endif %}
+                    </span>
                 </td>
                 <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">
-                    <span class="{{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_cdmx', 0) or 0 }}</span>
+                    <span class="{{ 'text-orange-500 font-semibold' if _all_res and (p.get('_bm_cdmx') or 0) > 0 else ('text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300') }}"
+                          {% if _all_res and (p.get('_bm_cdmx') or 0) > 0 %}title="Reservado para órdenes pendientes"{% endif %}>
+                        {{ p.get('_bm_cdmx', 0) or 0 }}{% if _all_res and (p.get('_bm_cdmx') or 0) > 0 %}<span class="text-[9px] ml-0.5">↩</span>{% endif %}
+                    </span>
                 </td>
                 <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">
-                    <span class="{{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</span>
+                    <span class="{{ 'text-gray-400' if _all_res and (p.get('_bm_tj') or 0) > 0 else ('text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300') }}">
+                        {{ p.get('_bm_tj', 0) or 0 }}
+                    </span>
                 </td>
                 <!-- Ventas -->
                 <td class="px-3 py-2 text-right">

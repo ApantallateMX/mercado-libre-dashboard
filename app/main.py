@@ -1500,7 +1500,7 @@ _stock_issues_cache: dict[str, tuple[float, dict]] = {}
 # Cache cross-account para dashboard general (independiente de cuenta activa)
 _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
-_STOCK_ISSUES_TTL = 300      # 5 min
+_STOCK_ISSUES_TTL = 900      # 15 min — mismo TTL que BM cache para evitar re-fetch innecesario
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 _synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
 
@@ -1636,7 +1636,11 @@ async def _prewarm_caches():
             bm_map = await _get_bm_stock_cached(products)
             _apply_bm_stock(products, bm_map)
 
-            # Pre-computar stock issues result
+            # BM metadata: RetailPrice USD, AvgCost, Brand (necesario para stock_issues)
+            await _enrich_with_bm_product_info(products)
+
+            # Pre-computar stock issues result — threshold default=10
+            _DEFAULT_THRESHOLD = 10
             restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0]
             restock.sort(key=lambda x: x.get("units", 0), reverse=True)
             oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
@@ -1644,11 +1648,23 @@ async def _prewarm_caches():
             restock_ids = {p["id"] for p in restock}
             activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids]
             activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-            _stock_issues_cache[f"stock_issues:{client.user_id}"] = (_time.time(), {
+            critical = [
+                p for p in products
+                if p.get("available_quantity", 0) > 0
+                and 0 < (p.get("_bm_avail") or 0) <= _DEFAULT_THRESHOLD
+                and not p.get("is_full")
+                and p.get("sku")
+            ]
+            critical.sort(key=lambda x: x.get("_bm_avail", 0))
+            # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
+            _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
                 "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
+                "critical": critical,
                 "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
                 "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
                 "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
+                "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
+                "threshold": _DEFAULT_THRESHOLD,
             })
         finally:
             await client.close()
