@@ -1697,7 +1697,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     if not to_fetch:
         return result_map
 
-    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0}
+    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
 
     def _parse_wh_rows(rows):
         """Suma QtyTotal por almacen. Retorna (mty, cdmx, tj)."""
@@ -1714,12 +1714,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         return mty, cdmx, tj
 
     def _store_wh(sku, rows_wh, avail_rows=None):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y Condition endpoint (Available) y cachea."""
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y Condition endpoint (Available/Required) y cachea.
+        Usa max(0, Available - Required) como valor neto vendible para ser conservador:
+        si BM tiene Available=1 pero Required=1 (datos inconsistentes), el vendible real es 0.
+        """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
-        # avail_rows es de InventoryBySKUAndCondicion_Quantity → suma campo Available por condición
-        avail_total = sum(row.get("Available", 0) or 0 for row in (avail_rows or []))
+        # avail_rows es de InventoryBySKUAndCondicion_Quantity
+        avail_sum = sum(row.get("Available", 0) or 0 for row in (avail_rows or []))
+        required_sum = sum(row.get("Required", 0) or 0 for row in (avail_rows or []))
+        # Valor conservador: excluir cualquier unidad marcada como requerida
+        # Si BM ya neta (Available = TotalQty - Required) el resultado es el mismo.
+        # Si no (Available=1, Required=1 por inconsistencia), devolvemos 0.
+        avail_total = max(0, avail_sum - required_sum)
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx,
-               "avail_total": avail_total}
+               "avail_total": avail_total, "reserved_total": required_sum}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         if inv["total"] > 0:
             result_map[sku] = inv
@@ -1778,11 +1786,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
 
 def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
-    """Aplica datos de stock BM a la lista de productos (total/reserve + available)."""
+    """Aplica datos de stock BM a la lista de productos.
+    _bm_avail = disponible real (excluye reservados para órdenes pendientes).
+    _bm_reserved = unidades reservadas (Required en BM).
+    _bm_total = stock físico total (incluye reservados) — solo para referencia.
+    """
     for p in products:
         if p.get("has_variations"):
-            # Para items con variaciones: sumar BM de cada variación individual (si tienen SKU propio)
-            tot_mty = tot_cdmx = tot_tj = tot_avail = 0
+            tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
             any_var_sku = False
             for v in p.get("variations", []):
                 v_sku = v.get("sku", "")
@@ -1791,20 +1802,21 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 inv = bm_map.get(v_sku) if v_sku else None
                 v["_bm_total"] = inv["total"] if inv else 0
                 v["_bm_avail"] = inv.get("avail_total", 0) if inv else 0
+                v["_bm_reserved"] = inv.get("reserved_total", 0) if inv else 0
                 if inv:
                     tot_mty += inv["mty"]
                     tot_cdmx += inv["cdmx"]
                     tot_tj += inv["tj"]
                     tot_avail += inv.get("avail_total", 0)
+                    tot_reserved += inv.get("reserved_total", 0)
             if any_var_sku:
-                # Variaciones con SKU individual → usar suma de sus BMs
                 p["_bm_mty"] = tot_mty
                 p["_bm_cdmx"] = tot_cdmx
                 p["_bm_tj"] = tot_tj
                 p["_bm_total"] = tot_mty + tot_cdmx
                 p["_bm_avail"] = tot_avail
+                p["_bm_reserved"] = tot_reserved
             else:
-                # Variaciones sin SKU individual → fallback al SKU padre
                 inv = bm_map.get(p.get(sku_key))
                 if inv:
                     p["_bm_mty"] = inv["mty"]
@@ -1812,6 +1824,7 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                     p["_bm_tj"] = inv["tj"]
                     p["_bm_total"] = inv["total"]
                     p["_bm_avail"] = inv.get("avail_total", 0)
+                    p["_bm_reserved"] = inv.get("reserved_total", 0)
         else:
             inv = bm_map.get(p.get(sku_key))
             if inv:
@@ -1820,6 +1833,7 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 p["_bm_tj"] = inv["tj"]
                 p["_bm_total"] = inv["total"]
                 p["_bm_avail"] = inv.get("avail_total", 0)
+                p["_bm_reserved"] = inv.get("reserved_total", 0)
 
 
 def _enrich_sku_from_orders(products: list, orders: list):
@@ -2064,6 +2078,7 @@ async def products_inventory_partial(
                     p["_bm_cdmx"] = data.get("cdmx", 0)
                     p["_bm_tj"] = data.get("tj", 0)
                     p["_bm_avail"] = data.get("avail_total", 0)
+                    p["_bm_reserved"] = data.get("reserved_total", 0)
                     p["_bm_has_data"] = True
 
         # Recomendaciones
@@ -2085,7 +2100,7 @@ async def products_inventory_partial(
             p for p in products
             if p.get("units", 0) > 0
             and p.get("available_quantity", 0) == 0
-            and (p.get("_bm_total") or 0) > 0  # tiene stock físico (aunque sea reservado)
+            and (p.get("_bm_avail") or 0) > 0  # tiene stock disponible (excluye reservados)
             and p.get("id") not in _synced_alert_items
         ]
         stock_alerts.sort(key=lambda x: x.get("units", 0), reverse=True)
@@ -2094,7 +2109,7 @@ async def products_inventory_partial(
         if preset == "top":
             products = [p for p in products if p.get("units", 0) > 0]
         elif preset == "stock":
-            products = [p for p in products if p.get("_bm_total", 0) > 0]
+            products = [p for p in products if p.get("_bm_avail", 0) > 0]
         elif preset == "low":
             products = [p for p in products if p.get("units", 0) <= 2]
         elif preset == "full":
@@ -2163,6 +2178,7 @@ async def products_inventory_partial(
                             p["_bm_cdmx"] = bm_data.get("cdmx", 0)
                             p["_bm_tj"] = bm_data.get("tj", 0)
                             p["_bm_avail"] = bm_data.get("avail_total", 0)
+                            p["_bm_reserved"] = bm_data.get("reserved_total", 0)
                             p["_bm_has_data"] = True
                 products.extend(extra_products)
                 existing_ids.update(extra_ids)
@@ -2499,15 +2515,15 @@ async def products_deals_partial(request: Request):
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p['units_30d']} uds, margen {p['_margen_pct']:.0f}%"} for p in good_sellers_no_deal[:5]],
             })
         # 4. Stock BM disponible pero poco stock en MeLi
-        bm_available = [p for p in candidates if p.get("_bm_total") is not None and p["_bm_total"] > 20 and p["available_quantity"] <= 5]
+        bm_available = [p for p in candidates if p.get("_bm_avail") is not None and p["_bm_avail"] > 20 and p["available_quantity"] <= 5]
         if bm_available:
-            bm_available.sort(key=lambda p: p["_bm_total"], reverse=True)
+            bm_available.sort(key=lambda p: p["_bm_avail"], reverse=True)
             recs.append({
                 "type": "info",
                 "icon": "R",
-                "title": f"{len(bm_available)} producto(s) con stock BM alto pero poco en MeLi",
+                "title": f"{len(bm_available)} producto(s) con stock BM disponible alto pero poco en MeLi",
                 "desc": "Reabastecer MeLi y activar deal para impulsar rotacion.",
-                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"BM: {p['_bm_total']}, MeLi: {p['available_quantity']}"} for p in bm_available[:5]],
+                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"BM disp: {p['_bm_avail']}, MeLi: {p['available_quantity']}"} for p in bm_available[:5]],
             })
 
         # Categorias unicas para filtro
@@ -5713,7 +5729,9 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     result["bm_total"] = mty + cdmx
                 if not isinstance(r_avail, Exception) and r_avail.status_code == 200:
                     avail_rows = r_avail.json() or []
-                    result["bm_avail"] = sum(row.get("Available", 0) or 0 for row in avail_rows)
+                    avail_sum = sum(row.get("Available", 0) or 0 for row in avail_rows)
+                    required_sum = sum(row.get("Required", 0) or 0 for row in avail_rows)
+                    result["bm_avail"] = max(0, avail_sum - required_sum)  # conservador: excluye reservados
             except Exception as ex:
                 result["error"] = f"BM error: {ex}"
             return result
@@ -5999,6 +6017,7 @@ async def _run_global_scan(threshold: int):
                 "title": p_bm.get("_bm_title") or p_bm.get("title") or sku_titles.get(base, ""),
                 "brand": p_bm.get("_bm_brand", ""),
                 "bm_avail": p_bm.get("_bm_avail", 0) or 0,
+                "bm_reserved": p_bm.get("_bm_reserved", 0) or 0,
                 "bm_total": p_bm.get("_bm_total", 0) or 0,
                 "mty": p_bm.get("_bm_mty", 0) or 0,
                 "cdmx": p_bm.get("_bm_cdmx", 0) or 0,

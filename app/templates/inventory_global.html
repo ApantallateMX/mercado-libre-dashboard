@@ -372,6 +372,7 @@ function renderTable(rows, threshold) {
         var status = getStatus(row, threshold);
         var sc = _statusConfig[status] || _statusConfig.ok;
         var bmAvail = row.bm_avail || 0;
+        var bmReserved = row.bm_reserved || 0;
         var bmColor = bmAvail === 0 ? '#dc2626' : (bmAvail <= threshold ? '#ea580c' : '#16a34a');
         var retail = row.retail_price_usd;
         var retailHtml = (retail && retail > 0 && retail < 9999)
@@ -414,7 +415,10 @@ function renderTable(rows, threshold) {
             + (row.brand ? '<div class="text-[10px] text-gray-400">' + row.brand + '</div>' : '')
             + '</td>'
             + '<td class="px-3 py-2 text-right">' + retailHtml + '</td>'
-            + '<td class="px-3 py-2 text-right"><span style="color:' + bmColor + '" class="font-bold text-xs">' + bmAvail + '</span></td>'
+            + '<td class="px-3 py-2 text-right">'
+            + '<span style="color:' + bmColor + '" class="font-bold text-xs">' + bmAvail + '</span>'
+            + (bmReserved > 0 ? '<div class="text-[10px] text-orange-500 font-medium">Res: ' + bmReserved + '</div>' : '')
+            + '</td>'
             + '<td class="px-3 py-2 text-right text-xs ' + ((row.mty||0) > 0 ? 'text-green-600 font-semibold' : 'text-gray-300') + '">' + (row.mty||0) + '</td>'
             + '<td class="px-3 py-2 text-right text-xs ' + ((row.cdmx||0) > 0 ? 'text-green-600 font-semibold' : 'text-gray-300') + '">' + (row.cdmx||0) + '</td>'
             + accCells
