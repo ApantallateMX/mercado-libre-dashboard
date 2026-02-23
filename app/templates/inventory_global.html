@@ -451,44 +451,84 @@ function openConcModal(sku, bmAvail) {
 }
 
 function _renderConcDetails(details, totalBmAvail, d) {
+    var fullItems = d.full_items || [];
+    var fullIds = fullItems.map(function(f) { return f.item_id; });
+
     var periodLabels = {
-        '30 días':    '<span class="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded ml-1">Últimos 30d</span>',
-        'histórico':  '<span class="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded ml-1">Histórico</span>',
-        'sin_ventas': '<span class="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded ml-1">Sin ventas — elige manualmente</span>',
+        '30 días':    '<span class="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">30d</span>',
+        'histórico':  '<span class="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Histórico</span>',
+        'sin_ventas': '<span class="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">Sin ventas</span>',
     };
     var periodBadge = periodLabels[d.period_used] || '';
-    var msgCls = d.manual_selection ? 'text-yellow-700 bg-yellow-50' : 'text-gray-600 bg-gray-50';
-    var msgHtml = '<div class="text-xs ' + msgCls + ' rounded p-2 mb-3">'
-        + (d.message || '') + periodBadge + '</div>';
+    var msgCls = d.manual_selection ? 'text-yellow-700 bg-yellow-50 border border-yellow-200' : 'text-gray-600 bg-gray-50';
+    var msgHtml = '<div class="text-xs ' + msgCls + ' rounded p-2 mb-2 flex items-center gap-1">'
+        + periodBadge + ' <span>' + (d.message || '') + '</span></div>';
 
-    var html = msgHtml + '<div class="space-y-2">';
+    // Tabla resumen de acciones
+    var tableHtml = '<table class="w-full text-xs mb-3 border-collapse">'
+        + '<thead><tr class="bg-gray-100 text-gray-500 text-[10px]">'
+        + '<th class="px-2 py-1 text-left">Cuenta</th>'
+        + '<th class="px-2 py-1 text-left">MLM</th>'
+        + '<th class="px-2 py-1 text-center">30d</th>'
+        + '<th class="px-2 py-1 text-center">Hist.</th>'
+        + '<th class="px-2 py-1 text-center">MeLi</th>'
+        + '<th class="px-2 py-1 text-center">Acción</th>'
+        + '</tr></thead><tbody>';
+
+    // Filas de items Merchant (seleccionables)
     details.forEach(function(a) {
+        if (a.is_full) return; // FULL se muestra aparte
         var isWinner = a.user_id === _selectedWinnerUid;
-        var borderCls = isWinner ? 'border-green-400 bg-green-50' : 'border-gray-200 hover:border-gray-300';
-        var actionSpan = isWinner
-            ? '<span class="text-green-700 font-bold text-xs whitespace-nowrap">→ Recibe ' + totalBmAvail + ' u.</span>'
-            : '<span class="text-red-500 text-xs whitespace-nowrap">→ Stock = 0</span>';
-        var winnerBadge = isWinner
-            ? ' <span class="text-[10px] bg-green-200 text-green-800 px-1.5 py-0.5 rounded">GANADOR</span>' : '';
-        var v30cls = a.sold_30d > 0 ? 'text-blue-600 font-semibold' : 'text-gray-400';
-        html += '<label class="flex items-center justify-between p-2 border rounded-lg ' + borderCls + ' cursor-pointer">'
-            + '<div class="flex items-center gap-2">'
-            + '<input type="radio" name="conc-winner" value="' + a.user_id + '"' + (isWinner ? ' checked' : '')
-            + ' class="accent-green-600 shrink-0" onchange="selectConcWinner(\'' + a.user_id + '\')">'
-            + '<div>'
-            + '<span class="font-semibold text-sm">' + (a.nickname || a.user_id) + '</span>' + winnerBadge
-            + '<div class="text-xs text-gray-500 mt-0.5">'
-            + '<span class="' + v30cls + '">' + a.sold_30d + ' v/30d</span>'
-            + ' · hist: <span class="font-medium">' + (a.sold_total || 0) + '</span>'
-            + ' · MeLi: <span class="font-medium">' + (a.available_quantity || 0) + ' u.</span>'
-            + '</div>'
-            + '</div>'
-            + '</div>'
-            + actionSpan
-            + '</label>';
+        var rowCls = isWinner ? 'bg-green-50' : 'hover:bg-gray-50';
+        var accionHtml = isWinner
+            ? '<span class="text-green-700 font-bold">→ +' + totalBmAvail + ' u.</span>'
+            : '<span class="text-red-500">→ 0 u.</span>';
+        var winnerCol = isWinner
+            ? '<span class="text-[10px] bg-green-200 text-green-800 px-1 rounded">★</span> '
+            : '';
+        var radioHtml = '<input type="radio" name="conc-winner" value="' + a.user_id + '"'
+            + (isWinner ? ' checked' : '')
+            + ' class="accent-green-600 mr-1" onchange="selectConcWinner(\'' + a.user_id + '\')">';
+        var v30cls = a.sold_30d > 0 ? 'text-blue-600 font-bold' : 'text-gray-400';
+        var histCls = a.sold_total > 0 ? 'font-bold text-gray-700' : 'text-gray-400';
+        tableHtml += '<tr class="border-t ' + rowCls + ' cursor-pointer" onclick="selectConcWinner(\'' + a.user_id + '\')">'
+            + '<td class="px-2 py-1.5">' + radioHtml + winnerCol
+            + '<span class="font-semibold">' + (a.nickname || a.user_id).slice(0,12) + '</span></td>'
+            + '<td class="px-2 py-1.5 font-mono text-[10px] text-gray-500">'
+            + '<a href="https://www.mercadolibre.com.mx/p/' + a.item_id + '" target="_blank" class="hover:text-blue-600">'
+            + a.item_id + '</a></td>'
+            + '<td class="px-2 py-1.5 text-center ' + v30cls + '">' + (a.sold_30d || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center ' + histCls + '">' + (a.sold_total || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center text-gray-600 font-medium">' + (a.available_quantity || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center">' + accionHtml + '</td>'
+            + '</tr>';
     });
-    html += '</div>';
-    document.getElementById('conc-modal-body').innerHTML = html;
+
+    // Filas FULL (no seleccionables, solo informativas)
+    fullItems.forEach(function(f) {
+        tableHtml += '<tr class="border-t bg-blue-50">'
+            + '<td class="px-2 py-1.5">'
+            + '<span class="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-bold mr-1">FULL</span>'
+            + '<span class="font-semibold text-xs">' + (f.nickname || '').slice(0,12) + '</span></td>'
+            + '<td class="px-2 py-1.5 font-mono text-[10px] text-gray-500">' + f.item_id + '</td>'
+            + '<td class="px-2 py-1.5 text-center text-gray-400">' + (f.sold_30d || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center text-gray-400">' + (f.sold_total || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center text-blue-600 font-medium">' + (f.available_quantity || 0) + '</td>'
+            + '<td class="px-2 py-1.5 text-center"><span class="text-blue-600 text-xs">Sin cambio</span></td>'
+            + '</tr>';
+    });
+
+    tableHtml += '</tbody></table>';
+
+    // Nota FULL si aplica
+    var fullNote = '';
+    if (fullItems.length) {
+        fullNote = '<div class="text-[10px] text-blue-600 bg-blue-50 rounded px-2 py-1 mb-2">'
+            + '&#9432; Los items FULL permanecen activos — su inventario lo gestiona MeLi. '
+            + 'El stock BM disponible se asigna al listado Merchant ganador.</div>';
+    }
+
+    document.getElementById('conc-modal-body').innerHTML = msgHtml + fullNote + tableHtml;
 }
 
 function selectConcWinner(uid) {
@@ -523,17 +563,40 @@ function executeConcentration() {
     .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
     .then(function(res) {
         if (!res.ok) throw new Error(res.data.detail || JSON.stringify(res.data));
-        var zeroed = res.data.zeroed_accounts || [];
-        var winnerNick = winner.nickname || _selectedWinnerUid;
-        var msg = '✓ Concentrado en ' + winnerNick;
-        if (zeroed.length) msg += ' · Stock→0 en: ' + zeroed.join(', ');
-        document.getElementById('conc-modal-msg').textContent = msg;
-        document.getElementById('conc-modal-msg').className = 'text-xs block text-center mt-2 text-green-600 font-semibold';
-        btn.textContent = 'OK';
+        var data = res.data;
+        var winnerNick = data.winner_nickname || winner.nickname || _selectedWinnerUid;
+        var winnerItemId = data.winner_item_id || '';
+        var zeroed = data.zeroed_accounts || [];
+        var fullSkipped = data.full_skipped || [];
+
+        var msgEl = document.getElementById('conc-modal-msg');
+        var lines = [];
+        lines.push('✓ ' + winnerNick + ' (' + winnerItemId + ') recibe ' + (_pendingConc._bmAvail || 0) + ' u.');
+        if (zeroed.length) lines.push('→ 0 en: ' + zeroed.join(', '));
+        if (fullSkipped.length) lines.push('FULL sin cambio: ' + fullSkipped.join(', '));
+        if (data.errors && data.errors.length) lines.push('⚠ ' + data.errors.length + ' error(es)');
+        msgEl.innerHTML = lines.map(function(l) { return '<div>' + l + '</div>'; }).join('');
+        msgEl.className = data.ok
+            ? 'text-xs block text-center mt-2 text-green-700 font-semibold'
+            : 'text-xs block text-center mt-2 text-orange-600 font-semibold';
+
+        btn.textContent = 'Cerrar';
         btn.className = 'flex-1 py-2 bg-green-600 text-white rounded-lg text-sm font-bold';
-        setTimeout(function() {
+        btn.onclick = function() {
             document.getElementById('conc-modal').classList.add('hidden');
-        }, 2000);
+        };
+
+        // Remover el row de la tabla (ya fue concentrado)
+        var sku = _pendingConc.sku || '';
+        var rows = document.querySelectorAll('[data-sku="' + sku.toLowerCase() + '"]');
+        rows.forEach(function(row) {
+            row.style.opacity = '0.4';
+            row.style.transition = 'opacity 0.5s';
+        });
+        // Limpiar del _scanData para que no reaparezca al filtrar
+        _scanData = (_scanData || []).filter(function(r) {
+            return (r.sku || '').toLowerCase() !== sku.toLowerCase();
+        });
     })
     .catch(function(e) {
         btn.disabled = false;
