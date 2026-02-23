@@ -294,10 +294,7 @@
     <!-- Column toggles (desktop only) -->
     <div class="hidden md:flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
         <span class="font-medium">Columnas:</span>
-        <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="bm" checked onchange="toggleColumn('bm', this.checked)">
-            <span>Stock BM</span>
-        </label>
+        <span class="text-blue-600 font-medium">BM Disp. + Res. siempre visible</span>
         <label class="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" class="col-toggle rounded" data-col="warehouse" {{ 'checked' if preset in ('stock',) }} onchange="toggleColumn('warehouse', this.checked)">
             <span>MTY/CDMX/TJ</span>
@@ -374,15 +371,17 @@
                 {% endif %}
                 <span data-stock-msg></span>
             </div>
-            <!-- Stock BM: disponible y reservado -->
-            {% if p.get('_bm_total') is not none %}
+            <!-- BM Disponible + Reservado (siempre visible en mobile) -->
             {% set p_avail_m = p.get('_bm_avail', 0) or 0 %}
-            {% set p_total_m = p._bm_total or 0 %}
             {% set p_res_m = p.get('_bm_reserved', 0) or 0 %}
-            <div>
-                <span class="text-gray-500">BM Disp:</span>
-                <span class="font-bold {{ 'text-green-600' if p_avail_m > 20 else 'text-yellow-600' if p_avail_m > 4 else 'text-red-600' }}">{{ p_avail_m }}</span>
-                {% if p_res_m > 0 %}<span class="text-[10px] text-orange-500 ml-1">{{ p_res_m }}↩res</span>{% endif %}
+            {% if p.get('_bm_total') is not none %}
+            <div class="flex gap-2">
+                <div class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-green-100 text-green-700' if p_avail_m > 20 else 'bg-yellow-100 text-yellow-700' if p_avail_m > 4 else 'bg-red-100 text-red-600' }}">
+                    Disp: {{ p_avail_m }}
+                </div>
+                <div class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-orange-100 text-orange-700' if p_res_m > 0 else 'bg-gray-100 text-gray-400' }}">
+                    Res: {{ p_res_m }}
+                </div>
             </div>
             {% endif %}
             <!-- Ventas -->
@@ -444,7 +443,8 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Precio</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Deal</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs" data-col="bm">BM Disp. / Total</th>
+                <th class="text-right px-3 py-3 text-blue-700 font-bold text-xs bg-blue-50">BM Disp.</th>
+                <th class="text-right px-3 py-3 text-orange-600 font-bold text-xs bg-orange-50">BM Res.</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">MTY</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">TJ</th>
@@ -546,22 +546,28 @@
                     {% endif %}
                     <span data-stock-msg></span>
                 </td>
-                <!-- Stock BM: disponible / total (reserve) -->
-                <td class="px-3 py-2 text-right" data-col="bm">
+                <!-- BM Disponible (siempre visible) -->
+                {% set p_avail = p.get('_bm_avail', 0) or 0 %}
+                {% set p_reserved = p.get('_bm_reserved', 0) or 0 %}
+                <td class="px-3 py-2 text-right bg-blue-50/40">
                     {% if p.get('_bm_total') is not none %}
-                    {% set p_avail = p.get('_bm_avail', 0) or 0 %}
-                    {% set p_total = p._bm_total or 0 %}
-                    {% set p_reserved = p.get('_bm_reserved', 0) or 0 %}
-                    <div class="flex flex-col items-end gap-0.5">
-                        <span class="font-semibold text-xs {{ 'text-green-600' if p_avail > 20 else 'text-yellow-600' if p_avail > 4 else 'text-red-600' }}">
-                            {{ p_avail }}
-                        </span>
-                        {% if p_reserved > 0 %}
-                        <span class="text-[10px] text-gray-400">{{ p_total }} <span class="text-orange-500">{{ p_reserved }}↩</span></span>
-                        {% endif %}
-                    </div>
+                    <span class="font-bold text-sm {{ 'text-green-600' if p_avail > 20 else 'text-yellow-600' if p_avail > 4 else 'text-red-600' }}">
+                        {{ p_avail }}
+                    </span>
                     {% else %}
-                    <span class="text-gray-300">-</span>
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
+                </td>
+                <!-- BM Reservado (siempre visible) -->
+                <td class="px-3 py-2 text-right bg-orange-50/40">
+                    {% if p.get('_bm_total') is not none %}
+                    {% if p_reserved > 0 %}
+                    <span class="font-bold text-sm text-orange-600">{{ p_reserved }}</span>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">0</span>
+                    {% endif %}
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
                 <!-- MTY / CDMX / TJ — naranja cuando todo el stock es reservado -->
