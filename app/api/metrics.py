@@ -458,3 +458,287 @@ async def get_amazon_daily_sales(
     _amazon_daily_cache[cache_key] = (_time.time(), {k: v for k, v in ctx.items() if k != "request"})
 
     return _templates.TemplateResponse("partials/amazon_daily_card.html", ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON — Nuevos endpoints para el dashboard rediseñado
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Caché de órdenes crudas — compartida entre todos los endpoints Amazon
+_amazon_orders_cache: dict[str, tuple[float, list]] = {}
+_AMAZON_ORDERS_TTL = 300  # 5 minutos
+
+
+async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> list:
+    """Obtiene y cachea la lista cruda de órdenes Amazon para un rango de fechas."""
+    cache_key = f"raw:{client.seller_id}:{date_from}:{date_to}"
+    if cache_key in _amazon_orders_cache:
+        ts, orders = _amazon_orders_cache[cache_key]
+        if _time.time() - ts < _AMAZON_ORDERS_TTL:
+            return orders
+    orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+    _amazon_orders_cache[cache_key] = (_time.time(), orders)
+    return orders
+
+
+def _build_amazon_chart_data(orders: list, date_from: str, date_to: str):
+    """Construye datos de chart (órdenes + revenue) agrupados por día o mes."""
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end = datetime.strptime(date_to, "%Y-%m-%d")
+    delta_days = (end - start).days
+
+    if delta_days <= 31:
+        group_by = "day"
+        buckets: dict = {}
+        for i in range(delta_days + 1):
+            d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            buckets[d] = {"orders": 0, "revenue": 0.0}
+
+        for order in orders:
+            raw_date = order.get("PurchaseDate", "")
+            if not raw_date:
+                continue
+            try:
+                order_dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                continue
+            date_key = order_dt.strftime("%Y-%m-%d")
+            if date_key in buckets:
+                buckets[date_key]["orders"] += 1
+                try:
+                    amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
+                except (TypeError, ValueError):
+                    amount = 0.0
+                buckets[date_key]["revenue"] += amount
+
+        chart_data = [
+            {"date": d, "orders": v["orders"], "revenue": round(v["revenue"], 2)}
+            for d, v in sorted(buckets.items())
+        ]
+    else:
+        group_by = "month"
+        buckets = {}
+        current = start.replace(day=1)
+        while current <= end:
+            buckets[current.strftime("%Y-%m")] = {"orders": 0, "revenue": 0.0}
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
+
+        for order in orders:
+            raw_date = order.get("PurchaseDate", "")
+            if not raw_date:
+                continue
+            try:
+                order_dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
+            except ValueError:
+                continue
+            month_key = order_dt.strftime("%Y-%m")
+            if month_key in buckets:
+                buckets[month_key]["orders"] += 1
+                try:
+                    amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
+                except (TypeError, ValueError):
+                    amount = 0.0
+                buckets[month_key]["revenue"] += amount
+
+        chart_data = [
+            {"date": d, "orders": v["orders"], "revenue": round(v["revenue"], 2)}
+            for d, v in sorted(buckets.items())
+        ]
+
+    return chart_data, group_by
+
+
+@router.get("/amazon-dashboard-data")
+async def get_amazon_dashboard_data(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Métricas + chart de Amazon en una sola llamada."""
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")
+
+    now = datetime.utcnow()
+    if not date_from:
+        date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now.strftime("%Y-%m-%d")
+
+    try:
+        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    valid_statuses = {"Shipped", "Delivered", "Unshipped"}
+    valid_orders = [o for o in orders if o.get("OrderStatus") in valid_statuses]
+
+    total_revenue = 0.0
+    total_units = 0
+    for order in valid_orders:
+        try:
+            amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        total_revenue += amount
+        total_units += int(order.get("NumberOfItemsShipped", 0) or 0)
+        total_units += int(order.get("NumberOfItemsUnshipped", 0) or 0)
+
+    avg_per_order = (total_revenue / len(valid_orders)) if valid_orders else 0.0
+
+    metrics = {
+        "total_orders": len(orders),
+        "shipped_orders": len(valid_orders),
+        "total_revenue": round(total_revenue, 2),
+        "avg_per_order": round(avg_per_order, 2),
+        "total_units": total_units,
+    }
+
+    chart_data, group_by = _build_amazon_chart_data(valid_orders, date_from, date_to)
+
+    return {
+        "metrics": metrics,
+        "chart": {"data": chart_data, "group_by": group_by},
+    }
+
+
+@router.get("/amazon-goal")
+async def get_amazon_goal(request: Request):
+    """Obtiene la meta diaria de Amazon de la cuenta activa."""
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
+    goal = await token_store.get_daily_goal(f"amz_{client.seller_id}")
+    return {"seller_id": client.seller_id, "daily_goal": goal}
+
+
+@router.post("/amazon-goal")
+async def set_amazon_goal(request: Request):
+    """Guarda la meta diaria de Amazon de la cuenta activa."""
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
+    body = await request.json()
+    goal = float(body.get("daily_goal", 50000))
+    await token_store.set_daily_goal(f"amz_{client.seller_id}", goal)
+    return {"seller_id": client.seller_id, "daily_goal": goal}
+
+
+@router.get("/amazon-daily-sales-data")
+async def get_amazon_daily_sales_data(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+    goal: float = Query(0, description="Meta diaria (0 = leer de DB)"),
+):
+    """Ventas diarias de Amazon como JSON con % de meta — para el dashboard rediseñado."""
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
+
+    now = datetime.utcnow()
+    if not date_from:
+        date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now.strftime("%Y-%m-%d")
+    if goal <= 0:
+        goal = await token_store.get_daily_goal(f"amz_{client.seller_id}")
+
+    try:
+        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end = datetime.strptime(date_to, "%Y-%m-%d")
+    buckets: dict[str, dict] = {}
+    cur = start
+    while cur <= end:
+        buckets[cur.strftime("%Y-%m-%d")] = {"orders": 0, "units": 0, "revenue": 0.0}
+        cur += timedelta(days=1)
+
+    for order in orders:
+        raw_date = order.get("PurchaseDate", "")
+        if not raw_date:
+            continue
+        try:
+            order_dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            continue
+        date_key = order_dt.strftime("%Y-%m-%d")
+        if date_key not in buckets:
+            continue
+        status = order.get("OrderStatus", "")
+        if status not in ("Shipped", "Delivered", "Unshipped"):
+            continue
+        buckets[date_key]["orders"] += 1
+        try:
+            amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        buckets[date_key]["revenue"] += amount
+        buckets[date_key]["units"] += int(order.get("NumberOfItemsShipped", 0) or 0)
+        buckets[date_key]["units"] += int(order.get("NumberOfItemsUnshipped", 0) or 0)
+
+    daily_data = []
+    for date_key in sorted(buckets.keys(), reverse=True):
+        d = buckets[date_key]
+        pct = (d["revenue"] / goal * 100) if goal > 0 else 0
+        daily_data.append({
+            "date": date_key,
+            "orders": d["orders"],
+            "units": d["units"],
+            "revenue": round(d["revenue"], 2),
+            "pct_of_goal": round(pct, 1),
+        })
+
+    total_orders = sum(d["orders"] for d in daily_data)
+    total_units = sum(d["units"] for d in daily_data)
+    total_revenue = round(sum(d["revenue"] for d in daily_data), 2)
+    days_met = sum(1 for d in daily_data if d["pct_of_goal"] >= 100)
+    avg_pct = round(sum(d["pct_of_goal"] for d in daily_data) / len(daily_data), 1) if daily_data else 0
+
+    return {
+        "daily_data": daily_data,
+        "goal": goal,
+        "totals": {
+            "orders": total_orders,
+            "units": total_units,
+            "revenue": total_revenue,
+            "days_met": days_met,
+            "avg_pct": avg_pct,
+            "total_days": len(daily_data),
+            "days_with_sales": sum(1 for d in daily_data if d["orders"] > 0),
+        },
+    }
+
+
+@router.get("/amazon-recent-orders", response_class=HTMLResponse)
+async def get_amazon_recent_orders(request: Request):
+    """Últimas 5 órdenes de Amazon — HTML partial para el dashboard."""
+    client = await get_amazon_client()
+    if not client:
+        return HTMLResponse(
+            '<p class="text-center text-gray-400 py-6 text-sm">Sin cuenta Amazon conectada</p>'
+        )
+
+    now = datetime.utcnow()
+    date_from = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    date_to = now.strftime("%Y-%m-%d")
+
+    try:
+        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+    except Exception as exc:
+        return HTMLResponse(
+            f'<p class="text-center text-red-400 py-6 text-sm">Error: {str(exc)[:120]}</p>'
+        )
+
+    valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped")]
+    valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
+    recent = valid[:5]
+
+    return _templates.TemplateResponse(
+        "partials/amazon_recent_orders.html",
+        {"request": request, "orders": recent},
+    )

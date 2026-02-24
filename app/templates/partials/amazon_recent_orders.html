@@ -1,0 +1,48 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     amazon_recent_orders.html — Últimas 5 órdenes de Amazon
+     Variables: orders (lista de dicts de SP-API Orders v0)
+───────────────────────────────────────────────────────────────────────── -->
+
+{% if not orders %}
+<p class="text-center text-gray-400 py-6 text-sm">Sin órdenes en los últimos 14 días</p>
+{% else %}
+<div class="divide-y divide-gray-100">
+    {% for order in orders %}
+    {% set status = order.get('OrderStatus', '') %}
+    {% set amount = order.get('OrderTotal', {}).get('Amount', '0') | float %}
+    {% set currency = order.get('OrderTotal', {}).get('CurrencyCode', 'MXN') %}
+    {% set raw_date = order.get('PurchaseDate', '') %}
+    {% set units = (order.get('NumberOfItemsShipped', 0) | int) + (order.get('NumberOfItemsUnshipped', 0) | int) %}
+    <div class="flex items-center justify-between py-3 px-1 hover:bg-orange-50/40 transition rounded">
+        <!-- Izquierda: ID + fecha -->
+        <div class="flex items-center gap-3 min-w-0">
+            <div class="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center shrink-0">
+                <span class="text-orange-600 text-xs font-bold">📦</span>
+            </div>
+            <div class="min-w-0">
+                <p class="text-sm font-semibold text-gray-800 truncate">{{ order.get('AmazonOrderId', '—') }}</p>
+                <p class="text-xs text-gray-400">
+                    {{ raw_date[:10] if raw_date else '—' }}
+                    {% if units %} · {{ units }} ud{{ 's' if units != 1 else '' }}{% endif %}
+                </p>
+            </div>
+        </div>
+        <!-- Derecha: monto + badge -->
+        <div class="flex items-center gap-3 shrink-0">
+            <span class="text-sm font-bold text-orange-700">
+                ${{ "{:,.2f}".format(amount) }} <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
+            </span>
+            {% if status == 'Shipped' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-medium">Enviado</span>
+            {% elif status == 'Unshipped' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 font-medium">Por enviar</span>
+            {% elif status == 'Delivered' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 font-medium">Entregado</span>
+            {% else %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">{{ status }}</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
