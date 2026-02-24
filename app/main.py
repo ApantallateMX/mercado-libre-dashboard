@@ -202,9 +202,19 @@ async def _seed_tokens():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Inicializa la base de datos al iniciar."""
+    """
+    Inicializa la base de datos y siembra credenciales al arrancar el servidor.
+
+    Orden de inicialización:
+    1. init_db()           → Crea tablas si no existen (tokens, amazon_accounts, etc.)
+    2. _seed_tokens()      → Siembra cuentas MeLi desde .env.production
+    3. _seed_amazon_accounts() → Siembra cuentas Amazon desde .env.production
+    """
     await token_store.init_db()
     await _seed_tokens()
+    # Sembrar cuentas Amazon desde .env.production (igual que MeLi)
+    from app.services.amazon_client import _seed_amazon_accounts
+    await _seed_amazon_accounts()
     yield
 
 

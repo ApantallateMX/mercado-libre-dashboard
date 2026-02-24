@@ -1,18 +1,46 @@
+"""
+auth.py — Rutas de autenticación OAuth para todas las plataformas
+
+MERCADO LIBRE:
+    Flujo: OAuth 2.0 + PKCE (Proof Key for Code Exchange)
+    - /auth/connect      → genera code_verifier + challenge → redirige a MeLi
+    - /auth/callback     → recibe code → intercambia por tokens → guarda en DB
+
+AMAZON:
+    Flujo: LWA (Login with Amazon) — OAuth 2.0 sin PKCE
+    - /auth/amazon/connect   → construye URL de autorización con App Solution ID
+    - /auth/amazon/callback  → recibe spapi_oauth_code → intercambia → guarda refresh_token
+
+DIFERENCIAS CLAVE entre MeLi y Amazon:
+    - MeLi usa PKCE + state firmado con HMAC para anti-CSRF
+    - Amazon usa state simple (nonce) firmado con SECRET_KEY
+    - MeLi callback recibe: ?code=X&state=Y
+    - Amazon callback recibe: ?spapi_oauth_code=X&state=Y&selling_partner_id=Z
+    - MeLi refresh_token expira y se renueva en cada uso
+    - Amazon refresh_token NO expira (hasta que se revoca manualmente)
+"""
+
 import secrets
 import hashlib
 import hmac
 import base64
 import json
 import httpx
+import logging
 from urllib.parse import urlencode
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from app.config import (
     MELI_AUTH_URL, MELI_TOKEN_URL, MELI_API_URL,
     MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_REDIRECT_URI, SECRET_KEY,
     MELI_USER_ID,
+    AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, AMAZON_REDIRECT_URI,
+    AMAZON_APP_SOLUTION_ID, AMAZON_SELLER_ID, AMAZON_MARKETPLACE_ID,
+    AMAZON_MARKETPLACE_NAME, AMAZON_NICKNAME,
 )
 from app.services import token_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -217,3 +245,221 @@ async def logout():
     if tokens:
         await token_store.delete_tokens(tokens["user_id"])
     return RedirectResponse(url="/login", status_code=303)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AMAZON — Rutas de autenticación LWA (Login with Amazon)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _build_amazon_state() -> str:
+    """
+    Genera un state anti-CSRF firmado para el flujo OAuth de Amazon.
+
+    A diferencia de MeLi (que embebe el code_verifier en el state),
+    Amazon no usa PKCE — solo necesitamos un nonce para anti-CSRF.
+
+    Formato: base64(json({nonce})).hmac_signature[:20]
+    """
+    nonce = secrets.token_urlsafe(16)
+    payload = json.dumps({"n": nonce}, separators=(",", ":"))
+    payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    sig = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:20]
+    return f"{payload_b64}.{sig}"
+
+
+def _verify_amazon_state(state: str) -> bool:
+    """
+    Verifica que el state del callback de Amazon sea válido (no manipulado).
+
+    Returns:
+        True si la firma es válida, False si posible CSRF.
+    """
+    try:
+        payload_b64, sig = state.rsplit(".", 1)
+        expected = hmac.new(SECRET_KEY.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()[:20]
+        return hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+
+@router.get("/amazon/connect")
+async def amazon_connect():
+    """
+    Inicia el flujo OAuth de Amazon SP-API.
+
+    Construye la URL de autorización de Seller Central y redirige al vendedor
+    para que autorice nuestra app (VeKtorClaude) a acceder a su cuenta.
+
+    URL de autorización:
+        https://sellercentral.amazon.com.mx/apps/authorize/consent
+        ?application_id={AMAZON_APP_SOLUTION_ID}
+        &state={SIGNED_STATE}
+        &version=beta    ← requerido para apps Draft
+
+    Después de que el vendedor autoriza, Amazon redirige a AMAZON_REDIRECT_URI
+    con: ?spapi_oauth_code=XXX&state=YYY&selling_partner_id=ZZZ
+    """
+    if not AMAZON_APP_SOLUTION_ID:
+        raise HTTPException(
+            status_code=500,
+            detail="AMAZON_APP_SOLUTION_ID no configurado. Obtenerlo desde Developer Central → App ID."
+        )
+    if not AMAZON_CLIENT_ID:
+        raise HTTPException(
+            status_code=500,
+            detail="AMAZON_CLIENT_ID no configurado. Revisar .env.production"
+        )
+
+    state = _build_amazon_state()
+
+    # URL de Seller Central México para autorizar la app
+    # version=beta es requerido para apps en estado Draft (no publicadas)
+    auth_url = (
+        f"https://sellercentral.amazon.com.mx/apps/authorize/consent"
+        f"?application_id={AMAZON_APP_SOLUTION_ID}"
+        f"&state={state}"
+        f"&version=beta"
+    )
+
+    logger.info(f"[Amazon OAuth] Iniciando autorización → {auth_url[:80]}...")
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/amazon/callback")
+async def amazon_callback(
+    request: Request,
+    spapi_oauth_code: str = None,
+    state: str = None,
+    selling_partner_id: str = None,
+    error: str = None,
+):
+    """
+    Callback de Amazon SP-API OAuth.
+
+    Amazon redirige aquí después de que el vendedor autoriza la app.
+    Parámetros recibidos:
+        spapi_oauth_code:   Código temporal para intercambiar por tokens
+        state:              Nuestro state firmado (anti-CSRF)
+        selling_partner_id: Merchant Token del vendedor que autorizó
+
+    Proceso:
+        1. Verificar state (anti-CSRF)
+        2. Intercambiar spapi_oauth_code por access_token + refresh_token
+        3. Guardar refresh_token en DB (amazon_accounts)
+        4. Persistir en .env.production para sobrevivir redeploys de Railway
+        5. Redirigir al dashboard
+
+    El refresh_token de Amazon NO expira — es de larga duración.
+    Solo se invalida si el vendedor revoca el acceso manualmente.
+    """
+    if error:
+        raise HTTPException(status_code=400, detail=f"Amazon rechazó la autorización: {error}")
+
+    if not spapi_oauth_code:
+        raise HTTPException(status_code=400, detail="No se recibió spapi_oauth_code")
+
+    if not state or not _verify_amazon_state(state):
+        raise HTTPException(status_code=400, detail="State inválido — posible CSRF")
+
+    # selling_partner_id puede ser None si el vendedor solo tiene una cuenta
+    # En ese caso usamos el AMAZON_SELLER_ID de .env como fallback
+    effective_seller_id = selling_partner_id or AMAZON_SELLER_ID
+    if not effective_seller_id:
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo determinar el Seller ID. Configurar AMAZON_SELLER_ID en .env"
+        )
+
+    # ── Intercambiar código por tokens ──────────────────────────────────
+    # Amazon LWA token endpoint (igual para todos los marketplaces)
+    async with httpx.AsyncClient(timeout=15) as http:
+        token_resp = await http.post(
+            "https://api.amazon.com/auth/o2/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": spapi_oauth_code,
+                "redirect_uri": AMAZON_REDIRECT_URI,
+                "client_id": AMAZON_CLIENT_ID,
+                "client_secret": AMAZON_CLIENT_SECRET,
+            },
+        )
+
+        if token_resp.status_code != 200:
+            error_data = token_resp.json()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error al obtener tokens Amazon: {error_data.get('error_description', token_resp.text)}"
+            )
+
+        token_data = token_resp.json()
+
+    refresh_token = token_data.get("refresh_token", "")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Amazon no devolvió refresh_token. Verificar que la app tenga scope offline_access."
+        )
+
+    logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id}")
+
+    # ── Guardar en DB ────────────────────────────────────────────────────
+    await token_store.save_amazon_account(
+        seller_id=effective_seller_id,
+        nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
+        client_id=AMAZON_CLIENT_ID,
+        client_secret=AMAZON_CLIENT_SECRET,
+        refresh_token=refresh_token,
+        marketplace_id=AMAZON_MARKETPLACE_ID,
+        marketplace_name=AMAZON_MARKETPLACE_NAME,
+        app_solution_id=AMAZON_APP_SOLUTION_ID,
+    )
+
+    # ── Persistir refresh_token en .env.production (Railway) ────────────
+    # Mismo patrón que MeLi: guardamos el refresh_token para que el server
+    # pueda arrancar con él aunque la DB esté vacía (Railway ephemeral storage)
+    if refresh_token:
+        import re as _re, os as _os
+        for env_file in (".env.production", ".env"):
+            env_path = _os.path.join(
+                _os.path.dirname(_os.path.dirname(__file__)), env_file
+            )
+            if not _os.path.exists(env_path):
+                continue
+            try:
+                text = open(env_path, encoding="utf-8").read()
+                # Actualizar o agregar AMAZON_REFRESH_TOKEN
+                if "AMAZON_REFRESH_TOKEN=" in text:
+                    text = _re.sub(
+                        r"(?m)^AMAZON_REFRESH_TOKEN=.*$",
+                        f"AMAZON_REFRESH_TOKEN={refresh_token}",
+                        text,
+                    )
+                else:
+                    text += f"\nAMAZON_REFRESH_TOKEN={refresh_token}\n"
+                open(env_path, "w", encoding="utf-8").write(text)
+                logger.info(f"[Amazon OAuth] refresh_token guardado en {env_file}")
+            except Exception as e:
+                logger.warning(f"[Amazon OAuth] No se pudo actualizar {env_file}: {e}")
+
+    # ── Redirigir al dashboard ───────────────────────────────────────────
+    # NO seteamos la cookie active_account_id aquí porque es un seller_id
+    # de Amazon y la cuenta activa actual puede ser MeLi.
+    # El usuario puede cambiar de cuenta desde el dropdown del header.
+    response = RedirectResponse(url="/dashboard", status_code=303)
+    return response
+
+
+@router.post("/amazon/disconnect")
+async def amazon_disconnect(request: Request):
+    """
+    Desconecta una cuenta de Amazon eliminando sus credenciales de la DB.
+
+    No revoca el token en Amazon (el vendedor tendría que hacerlo en
+    Seller Central → Apps → Manage Authorizations).
+    """
+    form = await request.form()
+    seller_id = form.get("seller_id", "")
+    if seller_id:
+        await token_store.delete_amazon_account(seller_id)
+        logger.info(f"[Amazon] Cuenta desconectada: {seller_id}")
+    return RedirectResponse(url="/dashboard", status_code=303)

@@ -40,6 +40,33 @@ RESEARCH_TIMEOUT = int(os.getenv("RESEARCH_TIMEOUT", "10"))
 RESEARCH_MAX_PAGES = int(os.getenv("RESEARCH_MAX_PAGES", "5"))
 RESEARCH_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
+# ─────────────────────────────────────────────────────────────────────────
+# Amazon Selling Partner API (SP-API) — Configuración
+#
+# Cómo obtener estas credenciales:
+#   1. Seller Central MX → Apps and Services → Develop Apps
+#   2. Developer Central → Create app → Production + Sellers
+#   3. LWA credentials: Client ID + Client Secret
+#   4. Seller ID: Seller Central → Settings → Account Info → Merchant Token
+#   5. App Solution ID: Developer Central → App ID (amzn1.sp.solution.XXX)
+#   6. Refresh Token: se obtiene automáticamente en /auth/amazon/callback
+#
+# AMAZON_MARKETPLACE_ID:
+#   México = A1AM78C64UM0Y8 | USA = ATVPDKIKX0DER | Canadá = A2EUQ1WTGCTBG2
+# ─────────────────────────────────────────────────────────────────────────
+AMAZON_CLIENT_ID = os.getenv("AMAZON_CLIENT_ID", "")
+AMAZON_CLIENT_SECRET = os.getenv("AMAZON_CLIENT_SECRET", "")
+AMAZON_SELLER_ID = os.getenv("AMAZON_SELLER_ID", "")           # Merchant Token
+AMAZON_REFRESH_TOKEN = os.getenv("AMAZON_REFRESH_TOKEN", "")   # Se llena tras primer OAuth
+AMAZON_MARKETPLACE_ID = os.getenv("AMAZON_MARKETPLACE_ID", "A1AM78C64UM0Y8")  # MX por default
+AMAZON_MARKETPLACE_NAME = os.getenv("AMAZON_MARKETPLACE_NAME", "MX")
+AMAZON_APP_SOLUTION_ID = os.getenv("AMAZON_APP_SOLUTION_ID", "")  # amzn1.sp.solution.XXX (para OAuth URL)
+AMAZON_REDIRECT_URI = os.getenv(
+    "AMAZON_REDIRECT_URI",
+    "https://apantallatemx.up.railway.app/auth/amazon/callback"
+)
+AMAZON_NICKNAME = os.getenv("AMAZON_NICKNAME", "VECKTOR IMPORTS")
+
 # Anthropic Claude API (for AI features)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 if not ANTHROPIC_API_KEY:

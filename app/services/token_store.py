@@ -12,6 +12,11 @@ async def init_db():
     if db_path.parent != Path("."):
         db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: tokens (cuentas de Mercado Libre)
+        # Almacena access_token + refresh_token por user_id de MeLi.
+        # El refresh_token se usa para renovar el access_token cuando expira.
+        # ─────────────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tokens (
                 id INTEGER PRIMARY KEY,
@@ -43,6 +48,48 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: amazon_accounts (cuentas de Amazon Seller)
+        # Almacena credenciales LWA (Login with Amazon) para SP-API.
+        #
+        # Campos clave:
+        #   seller_id       → Merchant Token de Amazon (ej. A20NFIUQNEYZ1E)
+        #   client_id       → ID de la app LWA (amzn1.application-oa2-client.XXX)
+        #   client_secret   → Secret de la app LWA
+        #   refresh_token   → Token de larga duración para renovar access_token
+        #   access_token    → Token de corta duración (1 hora), se renueva automáticamente
+        #   marketplace_id  → ID del marketplace (México = A1AM78C64UM0Y8)
+        #   marketplace_name→ Código legible (MX, US, CA)
+        #
+        # La tabla se separa de 'tokens' (MeLi) para mantener claridad
+        # entre plataformas — las estructuras de auth son distintas.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_accounts (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id        TEXT UNIQUE NOT NULL,
+                nickname         TEXT NOT NULL DEFAULT '',
+                client_id        TEXT NOT NULL DEFAULT '',
+                client_secret    TEXT NOT NULL DEFAULT '',
+                refresh_token    TEXT NOT NULL DEFAULT '',
+                access_token     TEXT DEFAULT NULL,
+                token_expires_at TIMESTAMP DEFAULT NULL,
+                marketplace_id   TEXT NOT NULL DEFAULT 'A1AM78C64UM0Y8',
+                marketplace_name TEXT NOT NULL DEFAULT 'MX',
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migración: agregar columna app_id si ya existe la tabla sin ella
+        # (para instancias de Railway que ya tienen la tabla creada)
+        try:
+            await db.execute("ALTER TABLE amazon_accounts ADD COLUMN app_solution_id TEXT DEFAULT ''")
+            await db.commit()
+        except Exception:
+            pass  # Columna ya existe, ignorar
+
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_concentration_log (historial de concentraciones)
+        # ─────────────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS stock_concentration_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,3 +305,113 @@ async def is_token_expired(user_id: str) -> bool:
         return True
     expires_at = datetime.fromisoformat(tokens["expires_at"])
     return datetime.utcnow() >= expires_at
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AMAZON ACCOUNTS — Funciones CRUD para cuentas de Amazon Seller
+#
+# Separadas completamente de las funciones de Mercado Libre para
+# mantener claridad. Amazon usa LWA (Login with Amazon) mientras que
+# MeLi usa OAuth 2.0 + PKCE — son flujos distintos.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def save_amazon_account(
+    seller_id: str,
+    nickname: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    marketplace_id: str = "A1AM78C64UM0Y8",
+    marketplace_name: str = "MX",
+    app_solution_id: str = "",
+):
+    """
+    Guarda o actualiza una cuenta de Amazon Seller.
+
+    Se llama en dos momentos:
+    1. Al hacer bootstrap desde .env.production (solo seller_id + credenciales)
+    2. Después del callback OAuth (ya con refresh_token real)
+
+    El access_token NO se guarda aquí — se renueva en memoria por AmazonClient.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO amazon_accounts
+                (seller_id, nickname, client_id, client_secret, refresh_token,
+                 marketplace_id, marketplace_name, app_solution_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(seller_id) DO UPDATE SET
+                nickname         = CASE WHEN excluded.nickname != '' THEN excluded.nickname ELSE amazon_accounts.nickname END,
+                client_id        = CASE WHEN excluded.client_id != '' THEN excluded.client_id ELSE amazon_accounts.client_id END,
+                client_secret    = CASE WHEN excluded.client_secret != '' THEN excluded.client_secret ELSE amazon_accounts.client_secret END,
+                refresh_token    = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE amazon_accounts.refresh_token END,
+                marketplace_id   = excluded.marketplace_id,
+                marketplace_name = excluded.marketplace_name,
+                app_solution_id  = CASE WHEN excluded.app_solution_id != '' THEN excluded.app_solution_id ELSE amazon_accounts.app_solution_id END
+        """, (seller_id, nickname, client_id, client_secret, refresh_token,
+              marketplace_id, marketplace_name, app_solution_id))
+        await db.commit()
+
+
+async def get_amazon_account(seller_id: str) -> Optional[dict]:
+    """
+    Obtiene los datos de una cuenta Amazon por su seller_id.
+    Retorna None si no existe.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM amazon_accounts WHERE seller_id = ?", (seller_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_all_amazon_accounts() -> list:
+    """
+    Devuelve todas las cuentas Amazon configuradas.
+    Cada elemento incluye: seller_id, nickname, marketplace_id, marketplace_name.
+    Usado por el selector de cuentas en el header del dashboard.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT seller_id, nickname, marketplace_id, marketplace_name FROM amazon_accounts ORDER BY created_at"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def delete_amazon_account(seller_id: str):
+    """Elimina una cuenta Amazon de la base de datos."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
+        await db.commit()
+
+
+async def get_all_accounts() -> dict:
+    """
+    Devuelve TODAS las cuentas de TODAS las plataformas en un solo dict.
+
+    Estructura retornada:
+    {
+        "meli":   [{"user_id": "...", "nickname": "...", "platform": "meli"}, ...],
+        "amazon": [{"seller_id": "...", "nickname": "...", "platform": "amazon", ...}, ...]
+    }
+
+    Usado por el dropdown de cuentas en el header del dashboard para
+    mostrar secciones separadas: "MERCADO LIBRE" y "AMAZON".
+    """
+    meli_accounts = await get_all_tokens()
+    # Agregar campo platform a cada cuenta MeLi para que el template sepa el ícono
+    for acc in meli_accounts:
+        acc["platform"] = "meli"
+
+    amazon_accounts = await get_all_amazon_accounts()
+    for acc in amazon_accounts:
+        acc["platform"] = "amazon"
+
+    return {
+        "meli": meli_accounts,
+        "amazon": amazon_accounts,
+    }
