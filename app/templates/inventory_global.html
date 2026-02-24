@@ -632,7 +632,15 @@ function executeConcentration() {
         lines.push('✓ ' + winnerNick + ' (' + winnerItemId + ') ← ' + (_pendingConc._bmAvail || 0) + ' u.');
         if (zeroed.length) lines.push('→ 0 en: ' + zeroed.join(', '));
         if (fullSkipped.length) lines.push('FULL sin cambio: ' + fullSkipped.join(', '));
-        if (data.errors && data.errors.length) lines.push('⚠ ' + data.errors.length + ' error(es)');
+        if (data.errors && data.errors.length) {
+            lines.push('⚠ ' + data.errors.length + ' error(es):');
+            data.errors.forEach(function(err) {
+                var acct = err.nickname || err.user_id || '?';
+                var item = err.item_id ? ' (' + err.item_id + ')' : '';
+                var msg = err.error || err.action || 'Error desconocido';
+                lines.push('  • ' + acct + item + ': ' + msg);
+            });
+        }
         msgEl.innerHTML = lines.map(function(l) { return '<div>' + l + '</div>'; }).join('');
         msgEl.className = data.ok
             ? 'text-xs block text-center mt-2 text-green-700 font-semibold'
@@ -784,7 +792,10 @@ function _runBulk(candidates, idx, stats) {
                 stats.done++;
                 _removeSKUFromList(sku);
             } else {
-                _addBulkLog(sku, 'error', data.summary || 'error');
+                var errDetail = (data.errors || []).map(function(e) {
+                    return (e.nickname || e.user_id || '?') + ': ' + (e.error || e.action || '?');
+                }).join(' | ');
+                _addBulkLog(sku, 'error', (data.summary || 'error') + (errDetail ? ' — ' + errDetail : ''));
                 stats.errors++;
             }
             setTimeout(function() { _runBulk(candidates, idx + 1, stats); }, 600);
