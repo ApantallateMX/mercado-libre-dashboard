@@ -1,0 +1,231 @@
+{% if no_account or error %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-orange-500 font-semibold">{{ error or 'Sin cuenta Amazon conectada' }}</p>
+    {% if no_account %}
+    <a href="/auth/amazon/connect" class="mt-3 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm">Conectar Amazon</a>
+    {% endif %}
+</div>
+{% else %}
+
+<!-- ─── EXPLICACIÓN DEL BUY BOX ───────────────────────────────────────────── -->
+<div class="bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl p-4 mb-5 text-white">
+    <div class="flex items-start gap-3">
+        <span class="text-3xl">🏆</span>
+        <div>
+            <h2 class="font-bold text-lg">Análisis de Buy Box</h2>
+            <p class="text-orange-100 text-sm mt-0.5">
+                El Buy Box es el botón "Añadir al carrito" en Amazon. Ganar el Buy Box = ~90% de las ventas.
+                Analizando top {{ total_analyzed }} SKUs por stock FBA.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- ─── KPI CARDS BUY BOX ─────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+
+    <!-- BB Ganados -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-500">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">BB Ganados</span>
+            <span class="text-xl">🏆</span>
+        </div>
+        <p class="text-3xl font-extrabold text-green-600">{{ bb_won }}</p>
+        <p class="text-xs text-gray-400 mt-1">de {{ total_analyzed }} analizados</p>
+        {% if total_analyzed > 0 %}
+        <div class="mt-2 bg-gray-100 rounded-full h-1.5">
+            <div class="bg-green-500 h-1.5 rounded-full" style="width: {{ (bb_won / total_analyzed * 100)|int }}%"></div>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">{{ (bb_won / total_analyzed * 100)|int }}% win rate</p>
+        {% endif %}
+    </div>
+
+    <!-- BB Perdidos -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-red-500' if bb_lost > 0 else 'border-gray-200' }}">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">BB Perdidos</span>
+            <span class="text-xl">{{ '😰' if bb_lost > 0 else '😊' }}</span>
+        </div>
+        <p class="text-3xl font-extrabold {{ 'text-red-600' if bb_lost > 0 else 'text-gray-400' }}">{{ bb_lost }}</p>
+        <p class="text-xs text-gray-400 mt-1">vendiendo un competidor</p>
+        {% if bb_lost > 0 and total_opportunity > 0 %}
+        <p class="text-xs text-red-500 mt-0.5">Brecha: ${{ "{:,.0f}".format(total_opportunity) }}</p>
+        {% endif %}
+    </div>
+
+    <!-- Vendedor Único -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-blue-400">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">Vendedor Único</span>
+            <span class="text-xl">⭐</span>
+        </div>
+        <p class="text-3xl font-extrabold text-blue-600">{{ solo }}</p>
+        <p class="text-xs text-gray-400 mt-1">sin competencia directa</p>
+        {% if solo > 0 %}
+        <p class="text-xs text-blue-500 mt-0.5">Potencial de subir precio</p>
+        {% endif %}
+    </div>
+
+    <!-- Oportunidad Total -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-orange-500' if total_opportunity > 0 else 'border-gray-200' }}">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">Brecha Precio</span>
+            <span class="text-xl">📉</span>
+        </div>
+        <p class="text-3xl font-extrabold {{ 'text-orange-600' if total_opportunity > 0 else 'text-gray-400' }}">
+            ${{ "{:,.0f}".format(total_opportunity / 1000) }}K
+        </p>
+        <p class="text-xs text-gray-400 mt-1">MXN sobre precio del BB</p>
+    </div>
+
+</div>
+
+<!-- ─── TABLA DE ANÁLISIS BB ──────────────────────────────────────────────── -->
+{% if not buybox_results %}
+<div class="bg-white rounded-xl shadow py-16 text-center text-gray-400">
+    <div class="text-4xl mb-3">📊</div>
+    <p class="font-semibold">Sin datos de Buy Box disponibles</p>
+    <p class="text-sm mt-1">Asegúrate de tener listings activos con stock en FBA</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden mb-5">
+    <div class="px-5 py-4 border-b border-gray-100">
+        <h3 class="font-bold text-gray-800">Estado Buy Box por SKU</h3>
+        <p class="text-xs text-gray-400 mt-0.5">
+            Top {{ total_analyzed }} SKUs por stock FBA · Análisis en tiempo real via Product Pricing API
+        </p>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-4 font-semibold">Producto</th>
+                    <th class="py-3 px-3 font-semibold text-right">Nuestro Precio</th>
+                    <th class="py-3 px-3 font-semibold text-right">Precio BB</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden md:table-cell">FBA Stock</th>
+                    <th class="py-3 px-3 font-semibold text-center hidden md:table-cell">Competidores</th>
+                    <th class="py-3 px-3 font-semibold text-center">BB Status</th>
+                    <th class="py-3 px-3 font-semibold text-left hidden lg:table-cell">Sugerencia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in buybox_results %}
+                <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition">
+                    <td class="py-3 px-4">
+                        <div>
+                            <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[260px]">{{ r.title }}</p>
+                            <div class="flex items-center gap-2 mt-0.5">
+                                <p class="text-xs text-gray-400">{{ r.sku }}</p>
+                                {% if r.asin %}
+                                <span class="text-xs text-orange-400">{{ r.asin }}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        {% if r.our_price > 0 %}
+                        <span class="font-semibold text-gray-800">${{ "{:,.0f}".format(r.our_price) }}</span>
+                        {% else %}
+                        <span class="text-gray-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        {% if r.bb_price %}
+                        {% if r.bb_won %}
+                        <span class="font-bold text-green-600">${{ "{:,.0f}".format(r.bb_price) }}</span>
+                        {% elif r.bb_price < r.our_price %}
+                        <span class="font-bold text-red-600">${{ "{:,.0f}".format(r.bb_price) }}</span>
+                        {% else %}
+                        <span class="font-semibold text-orange-600">${{ "{:,.0f}".format(r.bb_price) }}</span>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-gray-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell">
+                        <span class="{{ 'text-green-600 font-bold' if r.fba_stock >= 10 else ('text-yellow-600' if r.fba_stock > 0 else 'text-red-600') }} font-medium">
+                            {{ r.fba_stock }}
+                        </span>
+                    </td>
+                    <td class="py-3 px-3 text-center hidden md:table-cell">
+                        {% if r.competitors == 0 %}
+                        <span class="text-blue-600 font-semibold">Solo</span>
+                        {% elif r.competitors == 1 %}
+                        <span class="text-gray-600">1 más</span>
+                        {% else %}
+                        <span class="text-gray-600">{{ r.competitors }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        {% if r.bb_won %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-bold whitespace-nowrap">🏆 Ganado</span>
+                        {% elif r.bb_price %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">❌ Perdido</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 font-medium whitespace-nowrap">Sin BB</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-3 hidden lg:table-cell">
+                        {% if r.suggestion %}
+                        <p class="text-xs max-w-[260px]
+                            {% if 'Bajar' in r.suggestion %}text-red-600
+                            {% elif '✅' in r.suggestion or 'Tienes' in r.suggestion %}text-green-600
+                            {% elif 'único' in r.suggestion or 'sube' in r.suggestion or 'subir' in r.suggestion %}text-blue-600
+                            {% else %}text-gray-500{% endif %}">
+                            {{ r.suggestion }}
+                        </p>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-1 text-xs text-gray-400">
+        <span>{{ total_analyzed }} SKUs analizados · {{ marketplace }}</span>
+        <span>Caché 10 min · Rate limit: 1 req/s · Datos de Product Pricing API</span>
+    </div>
+</div>
+
+<!-- ─── ESTRATEGIAS DE BUY BOX ─────────────────────────────────────────────── -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <!-- Estrategia 1 -->
+    <div class="bg-white rounded-xl shadow p-4 border-t-4 border-green-500">
+        <div class="text-2xl mb-2">🎯</div>
+        <h4 class="font-bold text-gray-800 text-sm mb-1">Ganar el Buy Box</h4>
+        <ul class="text-xs text-gray-500 space-y-1">
+            <li>• Usa FBA (Amazon prefiere FBA para el BB)</li>
+            <li>• Mantén precio competitivo vs BB actual</li>
+            <li>• Métricas altas: ODR &lt; 1%, envíos a tiempo</li>
+            <li>• Stock suficiente para demanda (sin agotarse)</li>
+        </ul>
+    </div>
+    <!-- Estrategia 2 -->
+    <div class="bg-white rounded-xl shadow p-4 border-t-4 border-orange-500">
+        <div class="text-2xl mb-2">💰</div>
+        <h4 class="font-bold text-gray-800 text-sm mb-1">Maximizar Margen</h4>
+        <ul class="text-xs text-gray-500 space-y-1">
+            <li>• Si eres único vendedor: sube precio gradualmente</li>
+            <li>• Si tienes el BB: prueba subir 3-5% — monitorea</li>
+            <li>• Evita guerra de precios; el BB rota si hay empate</li>
+            <li>• Usa repricing automático con piso de margen</li>
+        </ul>
+    </div>
+    <!-- Estrategia 3 -->
+    <div class="bg-white rounded-xl shadow p-4 border-t-4 border-blue-500">
+        <div class="text-2xl mb-2">🛡</div>
+        <h4 class="font-bold text-gray-800 text-sm mb-1">Proteger Posición</h4>
+        <ul class="text-xs text-gray-500 space-y-1">
+            <li>• Responde rápido a cambios de precio del competidor</li>
+            <li>• Mantén ratio de feedback &gt;95% positivo</li>
+            <li>• Resuelve issues de listing para evitar supresión</li>
+            <li>• Mantén inventario FBA para evitar desabasto</li>
+        </ul>
+    </div>
+</div>
+
+{% endif %}
+
+{% endif %}

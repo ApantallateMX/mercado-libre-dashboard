@@ -19,6 +19,7 @@ from app.api.metrics import router as metrics_router
 from app.api.health import router as health_router
 from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
+from app.api.amazon_products import router as amazon_products_router
 from app.services import token_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
@@ -295,6 +296,7 @@ app.include_router(metrics_router)
 app.include_router(health_router)
 app.include_router(sku_inventory_router)
 app.include_router(health_ai_router)
+app.include_router(amazon_products_router)
 
 
 # ---------- Account switcher ----------
@@ -6499,6 +6501,21 @@ async def amazon_dashboard(request: Request):
 
     ctx["amazon_account"] = amazon_account
     return templates.TemplateResponse("amazon_dashboard.html", {"request": request, **ctx})
+
+
+@app.get("/amazon/products", response_class=HTMLResponse)
+async def amazon_products_page(request: Request):
+    """
+    Centro de Productos Amazon — catálogo, FBA inventory, Buy Box y sugerencias.
+    Usa tabs con carga lazy via JS fetch a los endpoints /api/amazon/products/*.
+    """
+    ctx = await _accounts_ctx(request)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+    ctx["amazon_account"] = amazon_account
+    return templates.TemplateResponse("amazon_products.html", {"request": request, **ctx})
 
 
 if __name__ == "__main__":

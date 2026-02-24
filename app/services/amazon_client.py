@@ -538,6 +538,174 @@ class AmazonClient:
             total += amount
         return total
 
+    # ─────────────────────────────────────────────────────────────────────
+    # CATÁLOGO — Todos los listings del vendedor
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def get_all_listings(
+        self,
+        included_data: list = None,
+        page_size: int = 20,
+    ) -> list:
+        """
+        Obtiene TODOS los listings del vendedor con paginación automática.
+
+        Usa el endpoint searchListingsItems de la Listings Items API v2021-08-01.
+        Retorna todos los SKUs activos, pausados y suprimidos del marketplace.
+
+        Args:
+            included_data: Campos a incluir. Default: summaries, offers,
+                           fulfillmentAvailability, issues.
+            page_size: Items por página (máx 20 en Amazon).
+
+        Returns:
+            Lista de listings con: sku, summaries, offers, fulfillmentAvailability
+
+        Rate limit: 5 req/s — seguro llamar con pageSize=20 y sleep 0.2s entre páginas.
+        """
+        if included_data is None:
+            included_data = ["summaries", "offers", "fulfillmentAvailability", "issues"]
+
+        all_items = []
+        page_token = None
+        max_pages = 50  # Seguridad: máximo 50 páginas (1000 listings)
+
+        for _ in range(max_pages):
+            params: list = [
+                ("marketplaceIds", self.marketplace_id),
+                ("includedData", ",".join(included_data)),
+                ("pageSize", str(page_size)),
+            ]
+            if page_token:
+                params.append(("pageToken", page_token))
+
+            try:
+                result = await self._request(
+                    "GET",
+                    f"/listings/2021-08-01/items/{self.seller_id}",
+                    params=params,
+                )
+            except Exception as e:
+                logger.warning(f"[Amazon] Error en searchListingsItems: {e}")
+                break
+
+            items = result.get("items", [])
+            all_items.extend(items)
+
+            page_token = result.get("pagination", {}).get("nextToken")
+            if not page_token:
+                break
+
+            await asyncio.sleep(0.2)  # Rate limit: 5 req/s
+
+        return all_items
+
+    async def get_fba_inventory_all(self) -> list:
+        """
+        Obtiene TODO el inventario FBA con paginación.
+
+        Retorna todas las SKUs que tienen o tuvieron inventario en Amazon FBA,
+        con breakdown detallado: disponible, reservado, dañado, en camino.
+
+        Campos clave del inventoryDetails:
+          - fulfillableQuantity: disponible para vender
+          - reservedQuantity: en órdenes pendientes
+          - unfulfillableQuantity: dañado/defectuoso
+          - inboundWorkingQuantity + inboundShippedQuantity: envíos en camino
+
+        Rate limit: 2 req/s — pausar 0.5s entre páginas.
+        """
+        all_summaries = []
+        next_token = None
+        max_pages = 100
+
+        for _ in range(max_pages):
+            params: list = [
+                ("granularityType", "Marketplace"),
+                ("granularityId", self.marketplace_id),
+                ("marketplaceIds", self.marketplace_id),
+                ("details", "true"),
+            ]
+            if next_token:
+                params.append(("nextToken", next_token))
+
+            try:
+                result = await self._request(
+                    "GET", "/fba/inventory/v1/summaries", params=params
+                )
+            except Exception as e:
+                logger.warning(f"[Amazon] Error en FBA inventory: {e}")
+                break
+
+            summaries = result.get("payload", {}).get("inventorySummaries", [])
+            all_summaries.extend(summaries)
+
+            next_token = result.get("payload", {}).get("nextToken")
+            if not next_token:
+                break
+
+            await asyncio.sleep(0.5)  # Rate limit: 2 req/s
+
+        return all_summaries
+
+    async def get_catalog_item(self, asin: str) -> Optional[dict]:
+        """
+        Obtiene datos del catálogo Amazon para un ASIN específico.
+
+        Incluye: imágenes oficiales, BSR (Best Seller Rank), marca, modelo,
+        dimensiones y clasificación en categorías de Browse.
+
+        BSR alto = buena posición en su categoría.
+        Múltiples imágenes mejoran la conversión si se usan en el listing.
+
+        Rate limit: 2 req/s — usar solo para ASINs top.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/catalog/2022-04-01/items/{asin}",
+                params=[
+                    ("marketplaceIds", self.marketplace_id),
+                    ("includedData", "summaries,images,salesRanks"),
+                ],
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Amazon] Error obteniendo catalog para ASIN {asin}: {e}")
+            return None
+
+    async def get_listing_offers(self, sku: str) -> Optional[dict]:
+        """
+        Obtiene las ofertas competitivas de un listing propio (por SellerSKU).
+
+        Retorna información del Buy Box: quién lo tiene, a qué precio, cuántos
+        competidores hay, y si el propio seller tiene el Buy Box.
+
+        El Buy Box es crítico en Amazon: ~90% de las ventas van al winner.
+        Si perdemos el Buy Box, perdemos la mayoría de ventas aunque tengamos stock.
+
+        Campos clave de la respuesta:
+          - Summary.BuyBoxPrices: precio actual del Buy Box
+          - Offers[].IsBuyBoxWinner: si este seller tiene el Buy Box
+          - Summary.TotalOfferCount: cuántos competidores hay
+          - ListPrice: precio de lista "tachado" en la página
+
+        Rate limit: 1 req/s — pausar 1.1s entre llamadas.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/products/pricing/v0/listings/{sku}/offers",
+                params=[
+                    ("MarketplaceId", self.marketplace_id),
+                    ("ItemCondition", "New"),
+                ],
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Amazon] Error obteniendo offers para SKU {sku}: {e}")
+            return None
+
     async def fetch_orders_range(
         self,
         date_from: str,

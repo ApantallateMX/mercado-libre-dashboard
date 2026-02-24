@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}Productos Amazon{% endblock %}
+
+{% block content %}
+
+<!-- ─── BREADCRUMB / NAVEGACIÓN AMAZON ────────────────────────────────────── -->
+<div class="flex items-center gap-2 mb-4 text-sm">
+    <a href="/amazon" class="flex items-center gap-1.5 text-orange-500 hover:text-orange-700 font-medium transition">
+        <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
+        Dashboard
+    </a>
+    <span class="text-gray-400">›</span>
+    <span class="text-gray-700 font-semibold">Centro de Productos</span>
+</div>
+
+<!-- ─── HEADER ────────────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-orange-400">
+    <div class="px-4 md:px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+            <div class="flex items-center gap-2 mb-1">
+                <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
+                <h1 class="text-xl font-bold text-gray-800">Centro de Productos</h1>
+            </div>
+            <p class="text-xs text-gray-400">
+                Catálogo, FBA inventory, Buy Box y alertas de optimización &middot;
+                {% if amazon_account %}
+                    {{ amazon_account.nickname }} · {{ amazon_account.marketplace_name }}
+                {% endif %}
+            </p>
+        </div>
+        <!-- Link de regreso -->
+        <a href="/amazon" class="text-xs text-orange-500 hover:text-orange-700 border border-orange-200 hover:border-orange-400 px-3 py-1.5 rounded-lg transition font-medium">
+            ← Volver al Dashboard
+        </a>
+    </div>
+</div>
+
+{% if not amazon_accounts %}
+<!-- Sin cuenta conectada -->
+<div class="flex flex-col items-center justify-center py-20 text-center">
+    <div class="w-20 h-20 rounded-full bg-orange-100 flex items-center justify-center mb-4">
+        <span class="text-3xl font-black text-orange-400">AMZ</span>
+    </div>
+    <h2 class="text-xl font-bold text-gray-700 mb-2">Sin cuenta Amazon conectada</h2>
+    <p class="text-gray-400 text-sm mb-5">Conecta tu cuenta para ver el catálogo de productos</p>
+    <a href="/auth/amazon/connect" class="bg-orange-500 text-white font-semibold px-6 py-3 rounded-xl hover:bg-orange-600 transition text-sm">
+        Conectar Amazon
+    </a>
+</div>
+
+{% else %}
+
+<!-- ─── TABS ───────────────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
+    <div class="flex border-b border-gray-100 overflow-x-auto" id="amz-product-tabs">
+        <!-- Tab Resumen -->
+        <button data-tab="summary" data-url="/api/amazon/products/summary"
+                class="amz-tab-btn flex-1 md:flex-none px-4 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap
+                       border-orange-400 text-orange-700 bg-orange-50">
+            📊 Resumen
+        </button>
+        <!-- Tab Catálogo -->
+        <button data-tab="catalog" data-url="/api/amazon/products/catalog"
+                class="amz-tab-btn flex-1 md:flex-none px-4 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            📦 Catálogo
+        </button>
+        <!-- Tab FBA Inventory -->
+        <button data-tab="inventory" data-url="/api/amazon/products/inventory"
+                class="amz-tab-btn flex-1 md:flex-none px-4 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🏭 FBA Inventory
+        </button>
+        <!-- Tab Buy Box -->
+        <button data-tab="buybox" data-url="/api/amazon/products/buybox"
+                class="amz-tab-btn flex-1 md:flex-none px-4 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🏆 Buy Box
+        </button>
+    </div>
+</div>
+
+<!-- ─── CONTENEDOR DEL TAB ACTIVO ─────────────────────────────────────────── -->
+<div id="amz-tab-content">
+    <!-- Skeleton inicial -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {% for i in range(4) %}
+        <div class="bg-white p-5 rounded-xl shadow animate-pulse">
+            <div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div>
+            <div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div>
+            <div class="h-3 bg-gray-100 rounded w-1/3"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if amazon_accounts %}
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Centro de Productos Amazon — navegación entre tabs
+// Carga cada partial via fetch y lo inyecta en #amz-tab-content
+// ─────────────────────────────────────────────────────────────────────────────
+
+var activeAmzTab = null;
+
+function loadAmzTab(tabName, url, btn) {
+    if (activeAmzTab === tabName) return;
+    activeAmzTab = tabName;
+
+    // Resaltar tab activo
+    document.querySelectorAll('.amz-tab-btn').forEach(function(b) {
+        b.classList.remove('border-orange-400', 'text-orange-700', 'bg-orange-50');
+        b.classList.add('border-transparent', 'text-gray-500');
+    });
+    if (btn) {
+        btn.classList.add('border-orange-400', 'text-orange-700', 'bg-orange-50');
+        btn.classList.remove('border-transparent', 'text-gray-500');
+    }
+
+    // Skeleton mientras carga
+    var container = document.getElementById('amz-tab-content');
+    container.innerHTML =
+        '<div class="grid grid-cols-2 md:grid-cols-4 gap-4">' +
+        Array(4).fill(
+            '<div class="bg-white p-5 rounded-xl shadow animate-pulse">' +
+            '<div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div>' +
+            '<div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div>' +
+            '<div class="h-3 bg-gray-100 rounded w-1/3"></div></div>'
+        ).join('') + '</div>';
+
+    fetch(url)
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        })
+        .then(function(html) {
+            container.innerHTML = html;
+        })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold mb-1">Error cargando sección</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+}
+
+// Clic en tabs
+document.querySelectorAll('.amz-tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        loadAmzTab(
+            this.getAttribute('data-tab'),
+            this.getAttribute('data-url'),
+            this
+        );
+    });
+});
+
+// Carga inicial: tab Resumen
+var firstTab = document.querySelector('.amz-tab-btn[data-tab="summary"]');
+if (firstTab) {
+    loadAmzTab('summary', firstTab.getAttribute('data-url'), firstTab);
+}
+
+// Función global para cambiar de tab desde los partials (links entre tabs)
+window.switchAmzTab = function(tabName) {
+    var btn = document.querySelector('.amz-tab-btn[data-tab="' + tabName + '"]');
+    if (btn) {
+        activeAmzTab = null; // Forzar recarga
+        loadAmzTab(tabName, btn.getAttribute('data-url'), btn);
+    }
+};
+
+// Función global para actualizar precio inline
+window.updateAmzPrice = function(sku, currentPrice) {
+    var newPrice = parseFloat(prompt('Nuevo precio para ' + sku + ':\n(Precio actual: $' + currentPrice + ')', currentPrice));
+    if (!newPrice || isNaN(newPrice) || newPrice <= 0) return;
+
+    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/price', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({price: newPrice})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.ok) {
+            alert('✅ Precio actualizado a $' + newPrice.toLocaleString('es-MX'));
+            // Recargar tab actual para reflejar cambio
+            activeAmzTab = null;
+            var btn = document.querySelector('.amz-tab-btn[data-tab="catalog"]');
+            if (btn) loadAmzTab('catalog', btn.getAttribute('data-url'), btn);
+        } else {
+            alert('Error actualizando precio: ' + JSON.stringify(data));
+        }
+    })
+    .catch(function(e) { alert('Error: ' + e.message); });
+};
+</script>
+{% endif %}
+{% endblock %}

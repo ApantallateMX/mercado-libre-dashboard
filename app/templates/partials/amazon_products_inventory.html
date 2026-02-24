@@ -1,0 +1,261 @@
+{% if no_account or error %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-orange-500 font-semibold">{{ error or 'Sin cuenta Amazon conectada' }}</p>
+    {% if no_account %}
+    <a href="/auth/amazon/connect" class="mt-3 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm">Conectar Amazon</a>
+    {% endif %}
+</div>
+{% else %}
+
+<!-- ─── KPI CARDS FBA ─────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+
+    <!-- Fulfillable -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-500">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">Disponible</span>
+            <span class="text-xl">✅</span>
+        </div>
+        <p class="text-2xl md:text-3xl font-extrabold text-green-600">{{ "{:,}".format(total_fulfillable) }}</p>
+        <p class="text-xs text-gray-400 mt-1">uds. vendibles en FBA</p>
+    </div>
+
+    <!-- Reserved -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-blue-400">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">Reservado</span>
+            <span class="text-xl">🔒</span>
+        </div>
+        <p class="text-2xl md:text-3xl font-extrabold text-blue-600">{{ "{:,}".format(total_reserved) }}</p>
+        <p class="text-xs text-gray-400 mt-1">en órdenes activas</p>
+    </div>
+
+    <!-- Inbound -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-indigo-400">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">En Camino</span>
+            <span class="text-xl">🚚</span>
+        </div>
+        <p class="text-2xl md:text-3xl font-extrabold text-indigo-600">{{ "{:,}".format(total_inbound) }}</p>
+        <p class="text-xs text-gray-400 mt-1">llegando al warehouse</p>
+    </div>
+
+    <!-- Unfulfillable -->
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 {{ 'border-red-500' if total_unfulfillable > 0 else 'border-gray-200' }}">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-xs text-gray-400 font-medium">No Vendible</span>
+            <span class="text-xl">{{ '⚠️' if total_unfulfillable > 0 else '✓' }}</span>
+        </div>
+        <p class="text-2xl md:text-3xl font-extrabold {{ 'text-red-600' if total_unfulfillable > 0 else 'text-gray-400' }}">
+            {{ "{:,}".format(total_unfulfillable) }}
+        </p>
+        <p class="text-xs text-gray-400 mt-1">dañado / defectuoso</p>
+        {% if damaged_skus > 0 %}
+        <p class="text-xs text-red-500 mt-0.5">{{ damaged_skus }} SKUs afectados</p>
+        {% endif %}
+    </div>
+
+</div>
+
+<!-- ─── ALERTAS DE STOCK ───────────────────────────────────────────────────── -->
+{% if zero_stock_skus > 0 or low_stock_skus > 0 or damaged_skus > 0 %}
+<div class="mb-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+    {% if zero_stock_skus > 0 %}
+    <div class="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2 cursor-pointer"
+         onclick="document.getElementById('inv-filter-zero').click()">
+        <span class="text-xl mt-0.5">📭</span>
+        <div>
+            <p class="text-sm font-bold text-red-800">{{ zero_stock_skus }} SKUs sin stock</p>
+            <p class="text-xs text-red-600 mt-0.5">No pueden venderse. Envía inventario.</p>
+        </div>
+    </div>
+    {% endif %}
+    {% if low_stock_skus > 0 %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-3 flex items-start gap-2 cursor-pointer"
+         onclick="document.getElementById('inv-filter-low').click()">
+        <span class="text-xl mt-0.5">⚡</span>
+        <div>
+            <p class="text-sm font-bold text-yellow-800">{{ low_stock_skus }} SKUs con stock bajo</p>
+            <p class="text-xs text-yellow-600 mt-0.5">Menos de 5 unidades disponibles.</p>
+        </div>
+    </div>
+    {% endif %}
+    {% if damaged_skus > 0 %}
+    <div class="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-start gap-2 cursor-pointer"
+         onclick="document.getElementById('inv-filter-damaged').click()">
+        <span class="text-xl mt-0.5">🛠</span>
+        <div>
+            <p class="text-sm font-bold text-orange-800">{{ damaged_skus }} SKUs con unidades dañadas</p>
+            <p class="text-xs text-orange-600 mt-0.5">Considera orden de remoción o liquidación.</p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- ─── FILTROS DE INVENTARIO ─────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-4 p-4">
+    <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs text-gray-500 font-medium">Filtrar:</span>
+        {% set inv_filters = [
+            ('all',     'Todos',           total_items),
+            ('zero',    'Sin Stock',       zero_stock_skus),
+            ('low',     'Stock Bajo',      low_stock_skus),
+            ('damaged', 'Con Daños',       damaged_skus),
+            ('inbound', 'En Camino',       none),
+        ] %}
+        {% for val, label, count in inv_filters %}
+        <a id="inv-filter-{{ val }}"
+           href="/api/amazon/products/inventory?filter_type={{ val }}"
+           hx-get="/api/amazon/products/inventory?filter_type={{ val }}"
+           hx-target="#amz-tab-content"
+           hx-swap="innerHTML"
+           class="px-2.5 py-1 rounded-full text-xs font-medium transition
+           {{ 'bg-orange-500 text-white' if filter_type == val else 'bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700' }}">
+            {{ label }}{% if count %} ({{ count }}){% endif %}
+        </a>
+        {% endfor %}
+        <span class="ml-auto text-xs text-gray-400">{{ items|length }} de {{ total_items }} SKUs</span>
+    </div>
+</div>
+
+<!-- ─── TABLA FBA BREAKDOWN ───────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    {% if not items %}
+    <div class="py-16 text-center text-gray-400">
+        <div class="text-4xl mb-3">🎉</div>
+        <p class="font-semibold">Sin SKUs en esta categoría</p>
+        <p class="text-sm mt-1">
+            {% if filter_type == 'zero' %}¡Excelente! Todos los SKUs tienen stock disponible.
+            {% elif filter_type == 'damaged' %}¡Perfecto! No hay unidades dañadas en Amazon.
+            {% elif filter_type == 'low' %}Sin SKUs con stock crítico.
+            {% else %}Sin datos de FBA inventory.{% endif %}
+        </p>
+    </div>
+    {% else %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-4 font-semibold">SKU / Producto</th>
+                    <th class="py-3 px-3 font-semibold text-right">Disponible</th>
+                    <th class="py-3 px-3 font-semibold text-right">Reservado</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden md:table-cell">En Camino</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden md:table-cell">Dañado</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell">Total</th>
+                    <th class="py-3 px-3 font-semibold text-center">Estado</th>
+                    <th class="py-3 px-3 font-semibold text-center hidden md:table-cell">Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                {% set row_bg = 'bg-red-50/40' if item.fba_status == 'empty' else ('bg-yellow-50/40' if item.fba_status == 'low' else '') %}
+                <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition {{ row_bg }}">
+                    <td class="py-2.5 px-4">
+                        <div>
+                            <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.name }}</p>
+                            <div class="flex items-center gap-2 mt-0.5">
+                                <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                                {% if item.asin %}
+                                <span class="text-xs text-orange-400">{{ item.asin }}</span>
+                                {% endif %}
+                                {% if item.last_updated %}
+                                <span class="text-xs text-gray-300 hidden lg:inline">· {{ item.last_updated }}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-right">
+                        <span class="font-bold text-base
+                            {{ 'text-green-600' if item.fulfillable >= 10 else ('text-yellow-600' if item.fulfillable > 0 else 'text-red-600') }}">
+                            {{ item.fulfillable }}
+                        </span>
+                    </td>
+                    <td class="py-2.5 px-3 text-right">
+                        {% if item.reserved > 0 %}
+                        <span class="text-blue-600 font-medium">{{ item.reserved }}</span>
+                        <span class="text-xs text-gray-400 hidden md:inline"> ({{ item.pending_cust }} cust)</span>
+                        {% else %}
+                        <span class="text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden md:table-cell">
+                        {% if item.inbound > 0 %}
+                        <span class="text-indigo-600 font-medium">{{ item.inbound }}</span>
+                        {% else %}
+                        <span class="text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden md:table-cell">
+                        {% if item.unfulfillable > 0 %}
+                        <span class="text-red-500 font-medium">{{ item.unfulfillable }}</span>
+                        {% if item.damaged > 0 %}
+                        <span class="text-xs text-red-400 hidden lg:inline"> ({{ item.damaged }} dañ.)</span>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-green-400 text-xs">✓</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell text-gray-500 font-medium">
+                        {{ item.total_qty }}
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        {% if item.fba_status == 'empty' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-medium whitespace-nowrap">Sin Stock</span>
+                        {% elif item.fba_status == 'incoming' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-indigo-100 text-indigo-700 font-medium whitespace-nowrap">En Camino</span>
+                        {% elif item.fba_status == 'low' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800 font-medium whitespace-nowrap">Stock Bajo</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-medium whitespace-nowrap">OK</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center hidden md:table-cell">
+                        {% if item.amazon_url %}
+                        <a href="{{ item.amazon_url }}" target="_blank"
+                           class="text-xs text-orange-500 hover:text-orange-700 transition">Ver →</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-1 text-xs text-gray-400">
+        <span>{{ items|length }} SKUs mostrados · {{ total_items }} totales en FBA · {{ marketplace }}</span>
+        <span>Datos en caché &lt;5 min · Actualización real desde Amazon Seller Central</span>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ─── GUÍA DE CAMPOS FBA ─────────────────────────────────────────────────── -->
+<div class="mt-4 bg-blue-50 border border-blue-200 rounded-xl p-4">
+    <div class="flex items-start gap-2">
+        <span class="text-lg mt-0.5">ℹ️</span>
+        <div>
+            <p class="text-sm font-bold text-blue-800 mb-2">Guía de estado de inventario FBA</p>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-blue-700">
+                <div>
+                    <p class="font-semibold text-green-700">✅ Disponible</p>
+                    <p class="text-gray-500 mt-0.5">Unidades listas para vender. Aparecen en tu listing activo.</p>
+                </div>
+                <div>
+                    <p class="font-semibold text-blue-700">🔒 Reservado</p>
+                    <p class="text-gray-500 mt-0.5">Ya vendido pero pendiente de envío. Se descuenta pronto del disponible.</p>
+                </div>
+                <div>
+                    <p class="font-semibold text-indigo-700">🚚 En Camino</p>
+                    <p class="text-gray-500 mt-0.5">Tu envío llegando al warehouse Amazon. Disponible en 1-3 días hábiles.</p>
+                </div>
+                <div>
+                    <p class="font-semibold text-red-600">⚠️ Dañado</p>
+                    <p class="text-gray-500 mt-0.5">No se puede vender. Solicita remoción o liquidación en Seller Central.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endif %}
