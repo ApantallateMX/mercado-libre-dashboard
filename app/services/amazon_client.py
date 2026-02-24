@@ -208,7 +208,34 @@ class AmazonClient:
                     json=json_body,
                 )
 
-            resp.raise_for_status()
+            if not resp.is_success:
+                # Capturar el body del error para mostrar mensaje claro
+                try:
+                    err_body = resp.json()
+                    errs = err_body.get("errors", [])
+                    if errs:
+                        details = errs[0].get("details") or errs[0].get("message", "")
+                        code    = errs[0].get("code", "")
+                        amz_msg = f"[{code}] {details}" if details else str(err_body)
+                    else:
+                        amz_msg = str(err_body)
+                except Exception:
+                    amz_msg = resp.text[:300]
+
+                logger.error(f"[Amazon] HTTP {resp.status_code} en {path}: {amz_msg}")
+
+                # Si el token está expirado, limpiarlo para forzar renovación
+                if resp.status_code in (401, 403):
+                    self._access_token = None
+                    self._token_expires_at = None
+
+                # Lanzar error con mensaje legible (incluye el mensaje de Amazon)
+                raise httpx.HTTPStatusError(
+                    f"HTTP {resp.status_code} — {amz_msg}",
+                    request=resp.request,
+                    response=resp,
+                )
+
             return resp.json()
 
     # ─────────────────────────────────────────────────────────────────────

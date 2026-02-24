@@ -441,11 +441,11 @@ async def amazon_callback(
             except Exception as e:
                 logger.warning(f"[Amazon OAuth] No se pudo actualizar {env_file}: {e}")
 
-    # ── Redirigir al dashboard ───────────────────────────────────────────
-    # NO seteamos la cookie active_account_id aquí porque es un seller_id
-    # de Amazon y la cuenta activa actual puede ser MeLi.
-    # El usuario puede cambiar de cuenta desde el dropdown del header.
-    response = RedirectResponse(url="/dashboard", status_code=303)
+    # ── Redirigir al dashboard Amazon ───────────────────────────────────
+    # Seteamos la cookie active_amazon_id para que el dashboard Amazon
+    # quede seleccionado automáticamente tras la re-autorización.
+    response = RedirectResponse(url="/amazon", status_code=303)
+    response.set_cookie("active_amazon_id", effective_seller_id, max_age=86400 * 30, httponly=False)
     return response
 
 
