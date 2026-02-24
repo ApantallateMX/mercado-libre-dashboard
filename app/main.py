@@ -6372,6 +6372,127 @@ async def get_multi_account_dashboard(
     return result
 
 
+@app.get("/api/dashboard/multi-account-amazon")
+async def get_multi_account_amazon_dashboard(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Dashboard consolidado de todas las cuentas Amazon configuradas."""
+    from app.services.amazon_client import get_amazon_client as _get_amz_client
+
+    now = datetime.utcnow()
+    if not date_from:
+        date_from = now.replace(day=1).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now.strftime("%Y-%m-%d")
+
+    cache_key = f"multi_amazon:{date_from}:{date_to}"
+    cached = _multi_account_cache.get(cache_key)
+    if cached and (_time_module.time() - cached[0]) < _MULTI_ACCOUNT_CACHE_TTL:
+        return cached[1]
+
+    amazon_accounts_list = await token_store.get_all_amazon_accounts()
+    today_str = now.strftime("%Y-%m-%d")
+    week_start_str = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+
+    async def _fetch_amz_data(account: dict) -> dict:
+        seller_id = account["seller_id"]
+        nickname  = account.get("nickname") or seller_id
+        marketplace = account.get("marketplace_name", "MX")
+        try:
+            client = await _get_amz_client(seller_id=seller_id)
+            if not client:
+                raise ValueError("No client para seller_id=" + seller_id)
+
+            orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+            valid  = [o for o in orders if o.get("OrderStatus") in {"Shipped", "Delivered", "Unshipped"}]
+
+            def _parse_dt(o):
+                try:
+                    return datetime.fromisoformat(
+                        o.get("PurchaseDate", "").replace("Z", "+00:00")
+                    ).replace(tzinfo=None)
+                except Exception:
+                    return None
+
+            def _agg(order_list: list) -> dict:
+                rev = 0.0
+                units = 0
+                for o in order_list:
+                    try:
+                        rev += float(o.get("OrderTotal", {}).get("Amount", 0) or 0)
+                    except (TypeError, ValueError):
+                        pass
+                    units += int(o.get("NumberOfItemsShipped", 0) or 0)
+                    units += int(o.get("NumberOfItemsUnshipped", 0) or 0)
+                return {"orders": len(order_list), "units": units, "revenue": round(rev, 2)}
+
+            today_orders = [o for o in valid if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= today_str]
+            week_orders  = [o for o in valid if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= week_start_str]
+
+            daily_revenues: dict[str, float] = {}
+            for o in valid:
+                dt = _parse_dt(o)
+                if dt:
+                    dk = dt.strftime("%Y-%m-%d")
+                    try:
+                        daily_revenues[dk] = daily_revenues.get(dk, 0.0) + float(
+                            o.get("OrderTotal", {}).get("Amount", 0) or 0
+                        )
+                    except (TypeError, ValueError):
+                        pass
+
+            return {
+                "seller_id":      seller_id,
+                "nickname":       nickname,
+                "marketplace":    marketplace,
+                "platform":       "amazon",
+                "color":          "#F97316",
+                "today":          _agg(today_orders),
+                "week":           _agg(week_orders),
+                "month":          _agg(valid),
+                "active_items":   0,
+                "daily_revenues": {k: round(v, 2) for k, v in daily_revenues.items()},
+                "error":          None,
+            }
+        except Exception as exc:
+            return {
+                "seller_id":      seller_id,
+                "nickname":       nickname,
+                "marketplace":    marketplace,
+                "platform":       "amazon",
+                "color":          "#F97316",
+                "today":          {"orders": 0, "units": 0, "revenue": 0},
+                "week":           {"orders": 0, "units": 0, "revenue": 0},
+                "month":          {"orders": 0, "units": 0, "revenue": 0},
+                "active_items":   0,
+                "daily_revenues": {},
+                "error":          str(exc),
+            }
+
+    amazon_data = list(await asyncio.gather(*[_fetch_amz_data(a) for a in amazon_accounts_list]))
+
+    def _sum_p(period: str) -> dict:
+        return {
+            "orders":  sum(a[period]["orders"]  for a in amazon_data),
+            "units":   sum(a[period]["units"]   for a in amazon_data),
+            "revenue": round(sum(a[period]["revenue"] for a in amazon_data), 2),
+        }
+
+    result = {
+        "date_from":       date_from,
+        "date_to":         date_to,
+        "amazon_accounts": amazon_data,
+        "totals": {
+            "today": _sum_p("today"),
+            "week":  _sum_p("week"),
+            "month": _sum_p("month"),
+        },
+    }
+    _multi_account_cache[cache_key] = (_time_module.time(), result)
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # CONCENTRACIÓN INTELIGENTE DE STOCK
 # ═══════════════════════════════════════════════════════════════════════════

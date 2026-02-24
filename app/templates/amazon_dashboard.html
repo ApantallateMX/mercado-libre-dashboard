@@ -33,11 +33,7 @@
         <!-- Izquierda: avatar + nombre -->
         <div class="flex items-center gap-3">
             <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0 bg-orange-500" id="amz-account-avatar">
-                {% if amazon_account %}
-                    {{ (amazon_account.nickname or 'AMZ')[:2]|upper }}
-                {% else %}
-                    AM
-                {% endif %}
+                {% if amazon_account %}{{ (amazon_account.nickname or 'AMZ')[:2]|upper }}{% else %}AM{% endif %}
             </div>
             <div>
                 <div class="flex items-center gap-2">
@@ -47,17 +43,14 @@
                     </h1>
                 </div>
                 <p class="text-xs text-gray-400">
-                    {% if amazon_account %}
-                        {{ amazon_account.marketplace_name }} &middot; {{ amazon_account.seller_id }}
-                    {% endif %}
+                    {% if amazon_account %}{{ amazon_account.marketplace_name }} &middot; {{ amazon_account.seller_id }}{% endif %}
                     &middot; <span id="amz-period-label">Últimos 30 días</span>
-                    &middot; <a href="/amazon/products" class="text-orange-600 hover:underline font-semibold">📦 Productos</a>
-                    &middot; <a href="/dashboard" class="text-orange-500 hover:underline font-medium">← MeLi Dashboard</a>
+                    &middot; <a href="/dashboard" class="text-orange-500 hover:underline font-medium">← Vista General</a>
                 </p>
             </div>
         </div>
-        <!-- Derecha: stats de hoy -->
-        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
+        <!-- Derecha: stats de hoy (solo en tab Ventas) -->
+        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100" id="amz-banner-stats">
             <div class="pr-5">
                 <p class="text-xs text-gray-400">Órdenes hoy</p>
                 <p class="font-bold text-gray-800 text-lg" id="amz-qs-orders">—</p>
@@ -80,7 +73,27 @@
     </div>
 </div>
 
-<!-- ═══ FILTRO DE FECHAS ═══ -->
+<!-- ═══ TABS DE NAVEGACIÓN ═══ -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
+    <div class="flex border-b border-gray-100 overflow-x-auto">
+        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-semibold border-b-2 border-orange-500 text-orange-600 whitespace-nowrap shrink-0" data-tab="ventas">
+            <span>📊</span> Ventas
+        </button>
+        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-orange-500 whitespace-nowrap shrink-0 transition" data-tab="productos">
+            <span>📦</span> Productos
+        </button>
+        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-orange-500 whitespace-nowrap shrink-0 transition" data-tab="salud">
+            <span>💚</span> Salud
+        </button>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: VENTAS
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-ventas">
+
+<!-- ─── Filtro de fechas ───────────────────────────────────────────────── -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
     <div class="flex flex-wrap gap-1.5 md:gap-2 mb-3" id="amz-range-buttons">
         <button type="button" data-days="7"  class="amz-range-btn px-3 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-orange-400 hover:text-white hover:border-orange-400 transition">7d</button>
@@ -108,7 +121,7 @@
     </div>
 </div>
 
-<!-- ═══ MÉTRICAS PRINCIPALES ═══ -->
+<!-- ─── Métricas principales ──────────────────────────────────────────── -->
 <div id="amz-metric-cards" class="mb-5">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
         {% for i in range(4) %}
@@ -121,7 +134,7 @@
     </div>
 </div>
 
-<!-- ═══ META DIARIA ═══ -->
+<!-- ─── Meta diaria ────────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden" id="amz-daily-goal-section">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
@@ -141,7 +154,7 @@
     </div>
 
     <!-- Barra de hoy -->
-    <div class="px-4 md:px-6 py-4 border-b border-gray-50" id="amz-today-goal-bar">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-50">
         <div class="flex justify-between items-center mb-2">
             <span class="text-sm font-semibold text-gray-700">Hoy</span>
             <span id="amz-today-goal-text" class="text-sm font-bold text-gray-600">Cargando...</span>
@@ -168,7 +181,7 @@
     </div>
 </div>
 
-<!-- ═══ GRÁFICO DE VENTAS ═══ -->
+<!-- ─── Gráfico de ventas ──────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
         <div>
@@ -192,11 +205,11 @@
     </div>
 </div>
 
-<!-- ═══ ÚLTIMAS ÓRDENES ═══ -->
+<!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 class="text-base font-bold text-gray-800">Últimas Órdenes Amazon</h2>
-        <a href="/amazon/products" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver productos →</a>
+        <button onclick="switchAmzTab('productos')" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver catálogo →</button>
     </div>
     <div id="amz-recent-orders" class="p-4 md:p-6">
         <div class="animate-pulse space-y-3">
@@ -207,19 +220,48 @@
     </div>
 </div>
 
-{% endif %}
+</div><!-- /amz-tab-ventas -->
 
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: PRODUCTOS
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-productos" class="hidden">
+    <div id="amz-products-content">
+        <div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">
+            {% for i in range(6) %}
+            <div class="h-12 bg-orange-50 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: SALUD
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-salud" class="hidden">
+    <div id="amz-health-content">
+        <div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">
+            {% for i in range(4) %}
+            <div class="h-20 bg-orange-50 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 {% if amazon_accounts %}
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
-// Dashboard Amazon — JS (espejo del dashboard MeLi, tema naranja)
+// Dashboard Amazon — JS (Ventas + Productos + Salud)
 // ─────────────────────────────────────────────────────────────────────────────
 
 var amzChartInstance = null;
 var amzDailyGoal = 50000;
+var amzActiveTab = 'ventas';
+var amzTabLoaded = { ventas: true, productos: false, salud: false };
 
 function toDateStr(d) { return d.toISOString().split('T')[0]; }
 
@@ -228,12 +270,48 @@ function fmtMoney(n) {
     return n.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 
+function fmtCompact(n) {
+    if (n == null) return '—';
+    if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000)    return '$' + (n/1000).toFixed(1) + 'K';
+    return '$' + fmtMoney(n);
+}
+
+// ─── Tab navigation ───────────────────────────────────────────────────────────
+function switchAmzTab(tabName) {
+    ['ventas', 'productos', 'salud'].forEach(function(t) {
+        document.getElementById('amz-tab-' + t).classList.toggle('hidden', t !== tabName);
+    });
+    document.querySelectorAll('.amz-tab-btn').forEach(function(btn) {
+        var active = btn.getAttribute('data-tab') === tabName;
+        btn.classList.toggle('border-orange-500', active);
+        btn.classList.toggle('text-orange-600',  active);
+        btn.classList.toggle('font-semibold',    active);
+        btn.classList.toggle('border-transparent', !active);
+        btn.classList.toggle('text-gray-500',    !active);
+        btn.classList.toggle('font-medium',      !active);
+    });
+    // Ocultar banner stats cuando no es Ventas
+    var bannerStats = document.getElementById('amz-banner-stats');
+    if (bannerStats) bannerStats.classList.toggle('hidden', tabName !== 'ventas');
+
+    amzActiveTab = tabName;
+    if (!amzTabLoaded[tabName]) {
+        if (tabName === 'productos') loadAmzProductosTab();
+        else if (tabName === 'salud')    loadAmzSaludTab();
+    }
+}
+
+document.querySelectorAll('.amz-tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { switchAmzTab(this.getAttribute('data-tab')); });
+});
+
+// ─── Range helpers ────────────────────────────────────────────────────────────
 function setRange(days) {
-    var end = new Date();
-    var start = new Date();
+    var end = new Date(), start = new Date();
     start.setDate(start.getDate() - (days - 1));
     document.getElementById('amz_date_from').value = toDateStr(start);
-    document.getElementById('amz_date_to').value = toDateStr(end);
+    document.getElementById('amz_date_to').value   = toDateStr(end);
     var labels = {7:'Últimos 7 días', 15:'Últimos 15 días', 30:'Últimos 30 días', 90:'Últimos 3 meses'};
     document.getElementById('amz-period-label').textContent = labels[days] || 'Periodo personalizado';
 }
@@ -259,152 +337,93 @@ function getDateParams() {
     return p.join('&');
 }
 
-// ─── Tarjetas de métricas ─────────────────────────────────────────────────────
+// ─── TAB VENTAS ───────────────────────────────────────────────────────────────
+
 function renderAmazonMetrics(m) {
     var cards = [
-        {
-            label: 'Órdenes del Período', value: m.total_orders,
-            icon: '📦', color: '#F97316', hint: m.shipped_orders + ' enviadas / entregadas'
-        },
-        {
-            label: 'Unidades Vendidas', value: m.total_units,
-            icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? (m.total_units / m.total_orders).toFixed(1) + ' uds por orden' : '—'
-        },
-        {
-            label: 'Revenue Total', value: '$' + fmtMoney(m.total_revenue),
-            icon: '💰', color: '#C2410C', hint: m.shipped_orders > 0 ? '$' + fmtMoney(m.avg_per_order) + ' por orden' : '—'
-        },
-        {
-            label: 'Promedio por Orden', value: '$' + fmtMoney(m.avg_per_order),
-            icon: '📈', color: '#9A3412', hint: m.shipped_orders + ' órdenes procesadas'
-        }
+        { label: 'Órdenes del Período', value: m.total_orders,
+          icon: '📦', color: '#F97316', hint: m.shipped_orders + ' enviadas / entregadas' },
+        { label: 'Unidades Vendidas',   value: m.total_units,
+          icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? (m.total_units/m.total_orders).toFixed(1)+' uds por orden' : '—' },
+        { label: 'Revenue Total',       value: '$' + fmtMoney(m.total_revenue),
+          icon: '💰', color: '#C2410C', hint: m.shipped_orders > 0 ? '$'+fmtMoney(m.avg_per_order)+' por orden' : '—' },
+        { label: 'Promedio por Orden',  value: '$' + fmtMoney(m.avg_per_order),
+          icon: '📈', color: '#9A3412', hint: m.shipped_orders + ' órdenes procesadas' }
     ];
-
     var html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">';
     cards.forEach(function(c) {
-        html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4" style="border-bottom-color:' + c.color + '">' +
-            '<div class="flex items-center justify-between mb-2">' +
-                '<span class="text-xs text-gray-400 font-medium">' + c.label + '</span>' +
-                '<span class="text-xl">' + c.icon + '</span>' +
-            '</div>' +
-            '<p class="text-2xl md:text-3xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
-            '<p class="text-xs mt-2 text-gray-400">' + c.hint + '</p>' +
-        '</div>';
+        html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4" style="border-bottom-color:'+c.color+'">' +
+            '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">'+c.label+'</span><span class="text-xl">'+c.icon+'</span></div>' +
+            '<p class="text-2xl md:text-3xl font-extrabold" style="color:'+c.color+'">'+c.value+'</p>' +
+            '<p class="text-xs mt-2 text-gray-400">'+c.hint+'</p></div>';
     });
     html += '</div>';
     document.getElementById('amz-metric-cards').innerHTML = html;
 }
 
-// ─── Gráfico ─────────────────────────────────────────────────────────────────
 function renderAmazonChart(chartObj) {
     var loading = document.getElementById('amz-chart-loading');
-    var canvas = document.getElementById('amzSalesChart');
+    var canvas  = document.getElementById('amzSalesChart');
     loading.classList.add('hidden');
     canvas.classList.remove('hidden');
-
     if (amzChartInstance) { amzChartInstance.destroy(); amzChartInstance = null; }
 
-    var data = chartObj.data;
-    var group_by = chartObj.group_by;
+    var data = chartObj.data, group_by = chartObj.group_by;
     var months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
     var labels = data.map(function(d) {
         var p = d.date.split('-');
-        if (group_by === 'month') return months[parseInt(p[1])-1] + ' ' + p[0];
-        return parseInt(p[2]) + '/' + months[parseInt(p[1])-1];
+        return group_by === 'month' ? months[parseInt(p[1])-1]+' '+p[0] : parseInt(p[2])+'/'+months[parseInt(p[1])-1];
     });
-
-    var totalOrders = data.reduce(function(s,d){return s+d.orders;},0);
-    var totalRev = data.reduce(function(s,d){return s+d.revenue;},0);
     var df = document.getElementById('amz_date_from').value;
     var dt = document.getElementById('amz_date_to').value;
-    document.getElementById('amz-chart-title').textContent = 'Ventas ' + (group_by==='month'?'Mensuales':'Diarias') + ' · ' + df + ' – ' + dt;
-    document.getElementById('amz-chart-subtitle').textContent = totalOrders + ' órdenes · $' + fmtMoney(totalRev) + ' revenue';
+    document.getElementById('amz-chart-title').textContent    = 'Ventas '+(group_by==='month'?'Mensuales':'Diarias')+' · '+df+' – '+dt;
+    document.getElementById('amz-chart-subtitle').textContent = data.reduce(function(s,d){return s+d.orders;},0)+' órdenes · $'+fmtMoney(data.reduce(function(s,d){return s+d.revenue;},0))+' revenue';
 
-    var ctx = canvas.getContext('2d');
-    amzChartInstance = new Chart(ctx, {
+    amzChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'bar',
         data: {
             labels: labels,
             datasets: [
-                {
-                    label: 'Órdenes',
-                    data: data.map(function(d){return d.orders;}),
-                    backgroundColor: 'rgba(249,115,22,0.75)',
-                    borderColor: '#F97316', borderWidth: 1, borderRadius: 4,
-                    yAxisID: 'y', order: 2
-                },
-                {
-                    label: 'Revenue ($)',
-                    data: data.map(function(d){return d.revenue;}),
-                    type: 'line',
-                    borderColor: '#3B82F6',
-                    backgroundColor: 'rgba(59,130,246,0.06)',
-                    fill: true, tension: 0.35, pointRadius: 3,
-                    pointBackgroundColor: '#3B82F6', borderWidth: 2,
-                    yAxisID: 'y1', order: 1
-                }
+                { label: 'Órdenes', data: data.map(function(d){return d.orders;}),
+                  backgroundColor: 'rgba(249,115,22,0.75)', borderColor: '#F97316', borderWidth: 1, borderRadius: 4, yAxisID: 'y', order: 2 },
+                { label: 'Revenue ($)', data: data.map(function(d){return d.revenue;}),
+                  type: 'line', borderColor: '#3B82F6', backgroundColor: 'rgba(59,130,246,0.06)',
+                  fill: true, tension: 0.35, pointRadius: 3, pointBackgroundColor: '#3B82F6', borderWidth: 2, yAxisID: 'y1', order: 1 }
             ]
         },
         options: {
-            responsive: true,
-            interaction: {mode:'index',intersect:false},
-            plugins: {
-                legend: {display:false},
-                tooltip: {
-                    callbacks: {
-                        label: function(ctx) {
-                            if (ctx.dataset.yAxisID === 'y1')
-                                return 'Revenue: $' + ctx.parsed.y.toLocaleString('es-MX',{minimumFractionDigits:2});
-                            return 'Órdenes: ' + ctx.parsed.y;
-                        }
-                    }
-                }
-            },
+            responsive: true, interaction: {mode:'index',intersect:false},
+            plugins: { legend: {display:false}, tooltip: { callbacks: { label: function(ctx) {
+                return ctx.dataset.yAxisID==='y1' ? 'Revenue: $'+ctx.parsed.y.toLocaleString('es-MX',{minimumFractionDigits:2}) : 'Órdenes: '+ctx.parsed.y;
+            }}}},
             scales: {
-                y: {
-                    beginAtZero:true, position:'left',
-                    title:{display:true,text:'Órdenes',color:'#C2410C',font:{weight:'bold'}},
-                    ticks:{stepSize:1,color:'#C2410C'}, grid:{color:'rgba(0,0,0,0.04)'}
-                },
-                y1: {
-                    beginAtZero:true, position:'right',
-                    title:{display:true,text:'Revenue ($)',color:'#2563EB',font:{weight:'bold'}},
-                    ticks:{color:'#2563EB', callback:function(v){return '$'+v.toLocaleString('es-MX');}},
-                    grid:{drawOnChartArea:false}
-                },
-                x: { ticks:{maxRotation:45,minRotation:0,font:{size:11}}, grid:{display:false} }
+                y:  { beginAtZero:true, position:'left',  title:{display:true,text:'Órdenes',color:'#C2410C',font:{weight:'bold'}}, ticks:{stepSize:1,color:'#C2410C'}, grid:{color:'rgba(0,0,0,0.04)'} },
+                y1: { beginAtZero:true, position:'right', title:{display:true,text:'Revenue ($)',color:'#2563EB',font:{weight:'bold'}}, ticks:{color:'#2563EB', callback:function(v){return '$'+v.toLocaleString('es-MX');}}, grid:{drawOnChartArea:false} },
+                x:  { ticks:{maxRotation:45,minRotation:0,font:{size:11}}, grid:{display:false} }
             }
         }
     });
 }
 
-// ─── Barra de hoy ────────────────────────────────────────────────────────────
 function updateAmazonTodayBar(todayRevenue, todayOrders, todayUnits) {
     var pct = amzDailyGoal > 0 ? (todayRevenue / amzDailyGoal * 100) : 0;
     var cappedPct = Math.min(pct, 100);
+    var barColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#F97316' : '#EF4444');
 
     var fill = document.getElementById('amz-today-goal-fill');
-    var barColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#F97316' : '#EF4444');
     fill.style.background = barColor;
     fill.style.width = Math.max(cappedPct, pct > 0 ? 2 : 0) + '%';
-    var pctLabel = document.getElementById('amz-today-pct-label');
-    if (cappedPct > 15) {
-        pctLabel.classList.remove('hidden');
-        pctLabel.textContent = pct.toFixed(1) + '%';
-    } else {
-        pctLabel.classList.add('hidden');
-    }
+    var lbl = document.getElementById('amz-today-pct-label');
+    if (cappedPct > 15) { lbl.classList.remove('hidden'); lbl.textContent = pct.toFixed(1) + '%'; }
+    else lbl.classList.add('hidden');
 
-    document.getElementById('amz-today-goal-text').textContent =
-        '$' + fmtMoney(todayRevenue) + ' / $' + fmtMoney(amzDailyGoal) + ' (' + pct.toFixed(1) + '%)';
-    document.getElementById('amz-today-sold-label').textContent = '$' + fmtMoney(todayRevenue) + ' vendido';
+    document.getElementById('amz-today-goal-text').textContent = '$'+fmtMoney(todayRevenue)+' / $'+fmtMoney(amzDailyGoal)+' ('+pct.toFixed(1)+'%)';
+    document.getElementById('amz-today-sold-label').textContent = '$'+fmtMoney(todayRevenue)+' vendido';
     var rem = Math.max(amzDailyGoal - todayRevenue, 0);
-    document.getElementById('amz-today-remaining-label').textContent =
-        rem > 0 ? ('Faltan $' + fmtMoney(rem)) : '🎯 ¡Meta alcanzada!';
+    document.getElementById('amz-today-remaining-label').textContent = rem > 0 ? 'Faltan $'+fmtMoney(rem) : '🎯 ¡Meta alcanzada!';
 
-    // Banner superior
-    document.getElementById('amz-qs-orders').textContent = (todayOrders || 0) + ' órd.';
-    document.getElementById('amz-qs-units').textContent = (todayUnits || 0) + ' uds';
+    document.getElementById('amz-qs-orders').textContent  = (todayOrders||0) + ' órd.';
+    document.getElementById('amz-qs-units').textContent   = (todayUnits||0)  + ' uds';
     document.getElementById('amz-qs-revenue').textContent = '$' + fmtMoney(todayRevenue);
     var qsPct = document.getElementById('amz-qs-pct');
     qsPct.textContent = pct.toFixed(1) + '%';
@@ -413,21 +432,13 @@ function updateAmazonTodayBar(todayRevenue, todayOrders, todayUnits) {
     document.getElementById('amz-qs-bar').style.background = barColor;
 }
 
-// ─── Tabla de ventas diarias ─────────────────────────────────────────────────
 function renderAmazonDailyTable(data) {
-    if (data.goal) {
-        amzDailyGoal = data.goal;
-        document.getElementById('amz-daily-goal-input').value = amzDailyGoal;
-    }
-
-    var daily = data.daily_data || [];
-    var totals = data.totals || {};
+    if (data.goal) { amzDailyGoal = data.goal; document.getElementById('amz-daily-goal-input').value = amzDailyGoal; }
+    var daily = data.daily_data || [], totals = data.totals || {};
     if (!daily.length) {
-        document.getElementById('amz-daily-sales-table').innerHTML =
-            '<p class="text-center py-6 text-gray-400 text-sm">Sin datos para el periodo</p>';
+        document.getElementById('amz-daily-sales-table').innerHTML = '<p class="text-center py-6 text-gray-400 text-sm">Sin datos para el periodo</p>';
         return;
     }
-
     var todayStr = toDateStr(new Date());
     var todayRevenue = 0, todayOrders = 0, todayUnits = 0;
 
@@ -443,117 +454,182 @@ function renderAmazonDailyTable(data) {
     html += '</tr></thead><tbody>';
 
     daily.forEach(function(day) {
-        var pct = day.pct_of_goal;
-        var isToday = day.date === todayStr;
+        var pct = day.pct_of_goal, isToday = day.date === todayStr;
         if (isToday) { todayRevenue = day.revenue; todayOrders = day.orders; todayUnits = day.units; }
-
-        var rowBg = isToday ? 'bg-orange-50' : (pct >= 100 ? 'bg-green-50' : (pct >= 80 ? 'bg-yellow-50' : ''));
-        var barColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#F97316' : '#EF4444');
-        var badge, badgeClass;
-        if (pct >= 120) { badge = 'Sobre'; badgeClass = 'bg-emerald-100 text-emerald-800'; }
-        else if (pct >= 100) { badge = 'Meta'; badgeClass = 'bg-green-100 text-green-800'; }
-        else if (pct >= 80) { badge = 'Cerca'; badgeClass = 'bg-yellow-100 text-yellow-800'; }
-        else if (pct > 0) { badge = 'Bajo'; badgeClass = 'bg-red-100 text-red-700'; }
-        else { badge = '—'; badgeClass = 'bg-gray-100 text-gray-400'; }
-
-        var dateDisplay = isToday ? '<span class="font-bold text-orange-500">● Hoy</span>' : day.date;
-        var barW = Math.min(pct, 100);
-
-        html += '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">';
-        html += '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">' + dateDisplay + '</td>';
-        html += '<td class="py-2.5 px-3 text-right text-gray-600">' + day.orders + '</td>';
-        html += '<td class="py-2.5 px-3 text-right text-gray-600">' + day.units + '</td>';
-        html += '<td class="py-2.5 px-3 text-right font-semibold text-orange-700">$' + fmtMoney(day.revenue) + '</td>';
-        html += '<td class="py-2.5 px-3 text-right font-bold" style="color:' + barColor + '">' + pct.toFixed(1) + '%</td>';
-        html += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + barW + '%;background:' + barColor + '"></div></div></td>';
-        html += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold ' + badgeClass + '">' + badge + '</span></td>';
+        var rowBg   = isToday ? 'bg-orange-50' : (pct>=100?'bg-green-50':(pct>=80?'bg-yellow-50':''));
+        var barColor= pct>=100?'#10B981':(pct>=80?'#F97316':'#EF4444');
+        var badge, bc;
+        if (pct>=120){badge='Sobre';bc='bg-emerald-100 text-emerald-800';}
+        else if(pct>=100){badge='Meta';bc='bg-green-100 text-green-800';}
+        else if(pct>=80){badge='Cerca';bc='bg-yellow-100 text-yellow-800';}
+        else if(pct>0){badge='Bajo';bc='bg-red-100 text-red-700';}
+        else{badge='—';bc='bg-gray-100 text-gray-400';}
+        var dateDisp = isToday ? '<span class="font-bold text-orange-500">● Hoy</span>' : day.date;
+        html += '<tr class="'+rowBg+' border-b border-gray-100 hover:bg-gray-50 transition">';
+        html += '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">'+dateDisp+'</td>';
+        html += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.orders+'</td>';
+        html += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.units+'</td>';
+        html += '<td class="py-2.5 px-3 text-right font-semibold text-orange-700">$'+fmtMoney(day.revenue)+'</td>';
+        html += '<td class="py-2.5 px-3 text-right font-bold" style="color:'+barColor+'">'+pct.toFixed(1)+'%</td>';
+        html += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:'+Math.min(pct,100)+'%;background:'+barColor+'"></div></div></td>';
+        html += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold '+bc+'">'+badge+'</span></td>';
         html += '</tr>';
     });
 
-    html += '</tbody>';
-    html += '<tfoot class="bg-orange-50/50 text-sm font-semibold border-t-2 border-orange-200">';
-    html += '<tr>';
-    html += '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">(' + totals.total_days + ' días)</span></td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">' + totals.orders + '</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">' + totals.units + '</td>';
-    html += '<td class="py-3 px-3 text-right text-orange-700">$' + fmtMoney(totals.revenue) + '</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-500">Prom: ' + totals.avg_pct.toFixed(1) + '%</td>';
+    html += '</tbody><tfoot class="bg-orange-50/50 text-sm font-semibold border-t-2 border-orange-200"><tr>';
+    html += '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">('+totals.total_days+' días)</span></td>';
+    html += '<td class="py-3 px-3 text-right text-gray-800">'+totals.orders+'</td>';
+    html += '<td class="py-3 px-3 text-right text-gray-800">'+totals.units+'</td>';
+    html += '<td class="py-3 px-3 text-right text-orange-700">$'+fmtMoney(totals.revenue)+'</td>';
+    html += '<td class="py-3 px-3 text-right text-gray-500">Prom: '+totals.avg_pct.toFixed(1)+'%</td>';
     html += '<td class="py-3 px-4"></td>';
-    html += '<td class="py-3 px-3 text-center text-xs text-gray-500">' + totals.days_met + '/' + totals.total_days + ' días</td>';
+    html += '<td class="py-3 px-3 text-center text-xs text-gray-500">'+totals.days_met+'/'+totals.total_days+' días</td>';
     html += '</tr></tfoot></table>';
 
     document.getElementById('amz-daily-sales-table').innerHTML = html;
     updateAmazonTodayBar(todayRevenue, todayOrders, todayUnits);
 }
 
-// ─── Carga principal ──────────────────────────────────────────────────────────
 function loadAmazonDashboard() {
     var p = getDateParams();
     var btn = document.getElementById('btn-amz-filtrar');
     btn.disabled = true; btn.classList.add('opacity-50');
 
-    // Skeletons métricas
     document.getElementById('amz-metric-cards').innerHTML =
-        '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">' +
-        Array(4).fill('<div class="bg-white p-4 md:p-5 rounded-xl shadow animate-pulse">' +
-            '<div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div>' +
-            '<div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div>' +
-            '<div class="h-3 bg-gray-100 rounded w-1/3"></div></div>').join('') + '</div>';
+        '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">'+
+        Array(4).fill('<div class="bg-white p-4 md:p-5 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div><div class="h-3 bg-gray-100 rounded w-1/3"></div></div>').join('')+'</div>';
 
-    // Skeleton gráfico
     document.getElementById('amz-chart-loading').classList.remove('hidden');
     document.getElementById('amzSalesChart').classList.add('hidden');
 
-    // Skeleton tabla
     document.getElementById('amz-daily-sales-table').innerHTML =
-        '<div class="animate-pulse px-4 py-3 space-y-2">' +
-        Array(6).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('') + '</div>';
+        '<div class="animate-pulse px-4 py-3 space-y-2">'+
+        Array(6).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('')+'</div>';
 
-    // 1. Métricas + Chart
     fetch('/api/metrics/amazon-dashboard-data?' + p)
         .then(function(r){return r.json();})
-        .then(function(resp){
-            renderAmazonMetrics(resp.metrics);
-            renderAmazonChart(resp.chart);
-        })
+        .then(function(resp){ renderAmazonMetrics(resp.metrics); renderAmazonChart(resp.chart); })
         .catch(function(e){
-            document.getElementById('amz-metric-cards').innerHTML =
-                '<p class="text-red-500 py-4 text-center text-sm col-span-4">Error: ' + e.message + '</p>';
+            document.getElementById('amz-metric-cards').innerHTML = '<p class="text-red-500 py-4 text-center text-sm col-span-4">Error: '+e.message+'</p>';
         });
 
-    // 2. Daily sales con meta
     fetch('/api/metrics/amazon-daily-sales-data?' + p)
         .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
         .then(function(data){ renderAmazonDailyTable(data); })
         .catch(function(e){
-            document.getElementById('amz-daily-sales-table').innerHTML =
-                '<p class="text-center text-red-400 py-4 text-sm">Error: ' + e.message + '</p>';
-            updateAmazonTodayBar(0, 0, 0);
+            document.getElementById('amz-daily-sales-table').innerHTML = '<p class="text-center text-red-400 py-4 text-sm">Error: '+e.message+'</p>';
+            updateAmazonTodayBar(0,0,0);
         })
         .finally(function(){ btn.disabled = false; btn.classList.remove('opacity-50'); });
 
-    // 3. Últimas órdenes
     document.getElementById('amz-recent-orders').innerHTML =
-        '<div class="animate-pulse space-y-3">' +
-        Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('') + '</div>';
+        '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
     fetch('/api/metrics/amazon-recent-orders')
         .then(function(r){return r.text();})
-        .then(function(html){
-            document.getElementById('amz-recent-orders').innerHTML = html;
-        })
-        .catch(function(){
-            document.getElementById('amz-recent-orders').innerHTML =
-                '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>';
-        });
+        .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
+        .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
 }
 
-// ─── Meta diaria — guardar ────────────────────────────────────────────────────
+// ─── TAB PRODUCTOS ────────────────────────────────────────────────────────────
+function loadAmzProductosTab() {
+    var cont = document.getElementById('amz-products-content');
+    cont.innerHTML = '<div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">'+Array(6).fill('<div class="h-12 bg-orange-50 rounded"></div>').join('')+'</div>';
+    fetch('/api/amazon/products/summary')
+        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+        .then(function(html){ cont.innerHTML = html; amzTabLoaded.productos = true; })
+        .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 text-sm bg-white rounded-xl shadow p-6">Error cargando productos: '+e.message+'</p>'; });
+}
+
+// ─── TAB SALUD ────────────────────────────────────────────────────────────────
+function loadAmzSaludTab() {
+    var cont = document.getElementById('amz-health-content');
+    cont.innerHTML = '<div class="animate-pulse space-y-3">'+Array(4).fill('<div class="h-20 bg-orange-50 rounded-xl"></div>').join('')+'</div>';
+    fetch('/api/metrics/amazon-health-data')
+        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+        .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
+        .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
+}
+
+function renderAmzHealth(d, cont) {
+    var score = d.health_score || 0;
+    var scoreColor = score >= 80 ? '#10B981' : (score >= 50 ? '#F97316' : '#EF4444');
+    var scoreLabel = score >= 80 ? 'Excelente' : (score >= 50 ? 'Regular' : 'Crítico');
+    var o = d.orders || {}, fba = d.fba || {};
+
+    // Alerts
+    var alertsHtml = (d.alerts || []).map(function(a) {
+        var bg = a.level==='error'?'bg-red-50 border-red-200 text-red-700': a.level==='warning'?'bg-yellow-50 border-yellow-200 text-yellow-700':'bg-green-50 border-green-200 text-green-700';
+        var icon = a.level==='error'?'⛔':a.level==='warning'?'⚠️':'✅';
+        return '<div class="flex items-center gap-3 p-3 rounded-lg border '+bg+'"><span class="text-lg shrink-0">'+icon+'</span><p class="text-sm font-medium">'+a.msg+'</p></div>';
+    }).join('');
+
+    var html = '<!-- Score de salud -->' +
+    '<div class="bg-white rounded-xl shadow p-5 mb-4 border-l-4 border-orange-400">' +
+        '<div class="flex items-center justify-between mb-4">' +
+            '<div><h2 class="text-base font-bold text-gray-800">Salud de la Cuenta</h2>' +
+            '<p class="text-xs text-gray-400 mt-0.5">' + (d.nickname||'Amazon') + ' · ' + (d.marketplace||'MX') + ' · Últimos 30 días</p></div>' +
+            '<div class="text-center">' +
+                '<div class="text-4xl font-extrabold" style="color:'+scoreColor+'">'+score+'</div>' +
+                '<div class="text-xs font-semibold mt-1" style="color:'+scoreColor+'">'+scoreLabel+'</div>' +
+                '<div class="text-xs text-gray-400">/ 100</div>' +
+            '</div>' +
+        '</div>' +
+        '<div class="w-full bg-gray-100 rounded-full h-3 mb-2"><div class="h-3 rounded-full transition-all" style="width:'+score+'%;background:'+scoreColor+'"></div></div>' +
+        '<div class="flex gap-6 text-xs text-gray-500 mt-2">' +
+            '<span>Cancelaciones: <b style="color:'+scoreColor+'">'+o.cancel_rate+'%</b></span>' +
+            '<span>Sin enviar: <b>'+o.unshipped+'</b></span>' +
+            '<span>FBA no vendible: <b>'+fba.unfulfillable+'</b></span>' +
+        '</div>' +
+    '</div>' +
+
+    '<!-- Alertas -->' +
+    '<div class="space-y-2 mb-4">' + alertsHtml + '</div>' +
+
+    '<!-- Cards Órdenes y FBA -->' +
+    '<div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">' +
+        '<!-- Órdenes -->' +
+        '<div class="bg-white rounded-xl shadow p-5">' +
+            '<h3 class="font-bold text-gray-700 mb-3 text-sm">📦 Órdenes (30 días)</h3>' +
+            '<div class="space-y-2">' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Total órdenes</span><span class="font-bold text-gray-800">'+o.total_30d+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Enviadas / Entregadas</span><span class="font-bold text-green-600">'+o.shipped+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Pendientes de envío</span><span class="font-bold text-yellow-600">'+o.unshipped+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Pendientes pago</span><span class="font-semibold text-gray-500">'+o.pending+'</span></div>' +
+                '<div class="flex justify-between text-sm border-t pt-2 mt-2"><span class="text-gray-500">Canceladas</span><span class="font-bold '+(o.canceled>0?'text-red-600':'text-gray-500')+'">'+o.canceled+' ('+o.cancel_rate+'%)</span></div>' +
+            '</div>' +
+        '</div>' +
+        '<!-- FBA -->' +
+        '<div class="bg-white rounded-xl shadow p-5">' +
+            '<h3 class="font-bold text-gray-700 mb-3 text-sm">🏭 Inventario FBA</h3>' +
+            '<div class="space-y-2">' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">SKUs en FBA</span><span class="font-bold text-gray-800">'+fba.sku_count+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Disponible (vendible)</span><span class="font-bold text-green-600">'+fba.fulfillable+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">Reservado (en órdenes)</span><span class="font-semibold text-blue-600">'+fba.reserved+'</span></div>' +
+                '<div class="flex justify-between text-sm"><span class="text-gray-500">En camino</span><span class="font-semibold text-indigo-600">'+fba.inbound+'</span></div>' +
+                '<div class="flex justify-between text-sm border-t pt-2 mt-2"><span class="text-gray-500">No vendible (dañado)</span><span class="font-bold '+(fba.unfulfillable>0?'text-red-600':'text-gray-500')+'">'+fba.unfulfillable+'</span></div>' +
+            '</div>' +
+        '</div>' +
+    '</div>' +
+
+    '<!-- Guía de salud -->' +
+    '<div class="bg-orange-50 rounded-xl p-4 text-xs text-orange-700 border border-orange-100">' +
+        '<p class="font-semibold mb-1">📋 Criterios de salud Amazon</p>' +
+        '<ul class="space-y-1 list-disc ml-4">' +
+            '<li>Tasa de cancelación &lt; 2.5% (40 pts) — Amazon penaliza cuentas &gt; 2.5%</li>' +
+            '<li>Órdenes sin enviar &lt; 15% del total (30 pts) — impacta el Buy Box</li>' +
+            '<li>Inventario FBA sin unidades dañadas (30 pts) — generar removal order si aplica</li>' +
+        '</ul>' +
+    '</div>';
+
+    cont.innerHTML = html;
+}
+
+// ─── Meta diaria ──────────────────────────────────────────────────────────────
 document.getElementById('btn-amz-update-goal').addEventListener('click', function() {
     var newGoal = parseFloat(document.getElementById('amz-daily-goal-input').value) || 50000;
     amzDailyGoal = newGoal;
     fetch('/api/metrics/amazon-goal', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({daily_goal: newGoal})
     }).then(function(){
         var p = getDateParams();
@@ -563,7 +639,7 @@ document.getElementById('btn-amz-update-goal').addEventListener('click', functio
     });
 });
 
-// ─── Event listeners ──────────────────────────────────────────────────────────
+// ─── Range buttons ────────────────────────────────────────────────────────────
 document.querySelectorAll('.amz-range-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
         setRange(parseInt(this.getAttribute('data-days')));

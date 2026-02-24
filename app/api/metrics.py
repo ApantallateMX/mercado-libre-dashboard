@@ -742,3 +742,104 @@ async def get_amazon_recent_orders(request: Request):
         "partials/amazon_recent_orders.html",
         {"request": request, "orders": recent},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON — Salud de la cuenta (tab Salud del dashboard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _amazon_health_alerts(cancel_rate: float, unshipped: int, unfulfillable: int) -> list:
+    alerts = []
+    if cancel_rate >= 5:
+        alerts.append({"level": "error", "msg": f"Tasa de cancelación crítica: {cancel_rate:.1f}% (límite Amazon: 2.5%)"})
+    elif cancel_rate >= 2.5:
+        alerts.append({"level": "warning", "msg": f"Tasa de cancelación elevada: {cancel_rate:.1f}% (recomendado: <2.5%)"})
+    if unshipped >= 10:
+        alerts.append({"level": "warning", "msg": f"{unshipped} órdenes pendientes sin enviar"})
+    if unfulfillable > 0:
+        alerts.append({"level": "warning", "msg": f"{unfulfillable} unidades no vendibles en FBA (dañadas/vencidas)"})
+    if not alerts:
+        alerts.append({"level": "success", "msg": "Cuenta saludable — sin alertas activas en los últimos 30 días"})
+    return alerts
+
+
+@router.get("/amazon-health-data")
+async def get_amazon_health_data():
+    """Métricas de salud de la cuenta Amazon: órdenes, FBA, cancelaciones."""
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")
+
+    now = datetime.utcnow()
+    date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    date_to = now.strftime("%Y-%m-%d")
+
+    # ── 1. Órdenes de los últimos 30 días (desde caché compartida) ────────
+    try:
+        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    by_status: dict[str, int] = {}
+    for o in orders:
+        s = o.get("OrderStatus", "Unknown")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    total_orders = len(orders)
+    shipped   = by_status.get("Shipped", 0) + by_status.get("Delivered", 0)
+    unshipped = by_status.get("Unshipped", 0)
+    pending   = by_status.get("Pending", 0)
+    canceled  = by_status.get("Canceled", 0)
+    cancel_rate = round(canceled / total_orders * 100, 1) if total_orders > 0 else 0.0
+
+    # ── 2. Inventario FBA (primer página ≤ 50 SKUs — rápido) ─────────────
+    try:
+        fba_items = await client.get_fba_inventory()
+    except Exception:
+        fba_items = []
+
+    fulfillable   = 0
+    unfulfillable = 0
+    reserved      = 0
+    inbound       = 0
+    for item in fba_items:
+        inv = item.get("inventoryDetails", {}) or {}
+        fulfillable   += inv.get("fulfillableQuantity", 0) or 0
+        unf = inv.get("unfulfillableQuantity", {}) or {}
+        unfulfillable += unf.get("totalUnfulfillableQuantity", 0) or 0
+        res = inv.get("reservedQuantity", {}) or {}
+        reserved  += res.get("pendingCustomerOrderQuantity", 0) or 0
+        inbound   += (inv.get("inboundWorkingQuantity", 0) or 0) + (inv.get("inboundShippedQuantity", 0) or 0)
+
+    # ── 3. Score de salud (0–100) ─────────────────────────────────────────
+    # Cancelaciones (40 pts): 0% → 40, 10% → 0
+    cancel_score      = max(0, int(40 - cancel_rate * 4))
+    # Órdenes sin enviar (30 pts): 0% → 30, 15% → 0
+    unshipped_rate    = unshipped / max(total_orders, 1) * 100
+    unshipped_score   = max(0, int(30 - unshipped_rate * 2))
+    # Unidades no vendibles FBA (30 pts): 0 → 30, ≥30 → 0
+    unfulfillable_score = max(0, 30 - min(unfulfillable, 30))
+    health_score = cancel_score + unshipped_score + unfulfillable_score
+
+    return {
+        "orders": {
+            "total_30d":   total_orders,
+            "shipped":     shipped,
+            "unshipped":   unshipped,
+            "pending":     pending,
+            "canceled":    canceled,
+            "cancel_rate": cancel_rate,
+            "by_status":   by_status,
+        },
+        "fba": {
+            "sku_count":     len(fba_items),
+            "fulfillable":   fulfillable,
+            "unfulfillable": unfulfillable,
+            "reserved":      reserved,
+            "inbound":       inbound,
+        },
+        "health_score": health_score,
+        "alerts": _amazon_health_alerts(cancel_rate, unshipped, unfulfillable),
+        "nickname": client.nickname,
+        "marketplace": client.marketplace_name,
+    }

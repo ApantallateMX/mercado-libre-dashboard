@@ -11,23 +11,29 @@
                 ⊕
             </div>
             <div>
-                <h1 class="font-bold text-gray-800 text-base leading-tight">Vista General — {{ accounts|length }} Cuentas</h1>
-                <p class="text-xs text-gray-400">Comparativa consolidada de todas las cuentas</p>
+                <h1 class="font-bold text-gray-800 text-base leading-tight">Vista General — {{ accounts|length }} Cuentas MeLi{% if amazon_accounts %} + {{ amazon_accounts|length }} Amazon{% endif %}</h1>
+                <p class="text-xs text-gray-400">Comparativa consolidada de todas las cuentas · <span id="md-period-lbl">este mes</span></p>
             </div>
         </div>
         <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
             <div class="pr-5 text-center">
-                <p class="text-xs text-gray-400">Total hoy</p>
+                <p class="text-xs text-gray-400">MeLi hoy</p>
                 <p class="font-bold text-gray-800 text-lg" id="md-total-today">—</p>
             </div>
             <div class="px-5 text-center">
-                <p class="text-xs text-gray-400">Total semana</p>
+                <p class="text-xs text-gray-400">MeLi semana</p>
                 <p class="font-bold text-gray-800 text-lg" id="md-total-week">—</p>
             </div>
-            <div class="pl-5 text-center">
-                <p class="text-xs text-gray-400">Total mes</p>
+            <div class="px-5 text-center">
+                <p class="text-xs text-gray-400">MeLi mes</p>
                 <p class="font-bold text-green-600 text-lg" id="md-total-month">—</p>
             </div>
+            {% if amazon_accounts %}
+            <div class="pl-5 text-center">
+                <p class="text-xs text-orange-400">AMZ mes</p>
+                <p class="font-bold text-orange-600 text-lg" id="md-amz-month">—</p>
+            </div>
+            {% endif %}
         </div>
     </div>
 </div>
@@ -43,7 +49,7 @@
             <label class="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
             <input type="date" id="md-date-to" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 outline-none">
         </div>
-        <button type="button" onclick="loadMultiDashboard()"
+        <button type="button" onclick="loadMultiDashboard(); loadAmazonSection();"
                 class="bg-yellow-400 text-gray-800 font-semibold px-5 py-2.5 min-h-[44px] rounded-lg hover:bg-yellow-500 transition text-sm">
             Actualizar
         </button>
@@ -75,6 +81,28 @@
     </div>
     {% endfor %}
 </div>
+
+{% if amazon_accounts %}
+<!-- ═══ CUENTAS AMAZON ═══ -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-orange-400">
+    <div class="px-4 md:px-6 py-3 flex items-center justify-between border-b border-gray-100">
+        <div class="flex items-center gap-2">
+            <span class="text-xs font-bold bg-orange-500 text-white px-2 py-0.5 rounded">AMZ</span>
+            <h2 class="font-bold text-gray-800 text-sm">Amazon — Comparativa de Cuentas</h2>
+        </div>
+        <a href="/amazon" class="text-xs text-orange-500 hover:text-orange-700 font-medium transition">Ver dashboard Amazon →</a>
+    </div>
+    <div id="md-amazon-cards" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4 p-4">
+        {% for acc in amazon_accounts %}
+        <div class="bg-orange-50 rounded-xl border border-orange-200 p-4 animate-pulse">
+            <div class="h-4 bg-orange-100 rounded w-2/3 mb-4"></div>
+            <div class="h-8 bg-orange-100 rounded w-1/2 mb-2"></div>
+            <div class="h-3 bg-orange-100 rounded w-3/4"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 
 <!-- ═══ GRÁFICA COMPARATIVA + TOP PRODUCTOS ═══ -->
 <div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-5">
@@ -240,7 +268,9 @@ function monthStart() {
 function setMdRange(days) {
     document.getElementById('md-date-from').value = days === 30 ? monthStart() : daysAgo(days - 1);
     document.getElementById('md-date-to').value = today();
+    document.getElementById('md-period-lbl').textContent = days === 30 ? 'este mes' : 'últimos ' + days + ' días';
     loadMultiDashboard();
+    loadAmazonSection();
 }
 
 // ─── Chart instance ───────────────────────────────────────────────────────
@@ -857,12 +887,90 @@ function notify(msg, type) {
     setTimeout(() => el.remove(), 8000);
 }
 
+// ─── Amazon section ───────────────────────────────────────────────────────
+async function loadAmazonSection() {
+    const amzCards = document.getElementById('md-amazon-cards');
+    const amzMonthEl = document.getElementById('md-amz-month');
+    if (!amzCards) return;  // No hay cuentas Amazon configuradas
+
+    const from = document.getElementById('md-date-from').value || monthStart();
+    const to   = document.getElementById('md-date-to').value   || today();
+
+    try {
+        const resp = await fetch(`/api/dashboard/multi-account-amazon?date_from=${from}&date_to=${to}`);
+        if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
+        const data = await resp.json();
+        renderAmazonCards(data.amazon_accounts);
+        if (amzMonthEl && data.totals) {
+            amzMonthEl.textContent = fmt(data.totals.month.revenue);
+        }
+    } catch(e) {
+        amzCards.innerHTML = `<div class="col-span-4 text-center py-4 text-orange-400 text-sm">Error cargando cuentas Amazon: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderAmazonCards(accounts) {
+    const amzCards = document.getElementById('md-amazon-cards');
+    if (!amzCards) return;
+    if (!accounts || !accounts.length) {
+        amzCards.innerHTML = '<div class="col-span-4 text-center py-4 text-gray-400 text-sm">Sin datos de cuentas Amazon</div>';
+        return;
+    }
+    amzCards.innerHTML = accounts.map(acc => {
+        const color = '#F97316';
+        const initials = (acc.nickname || 'AMZ').slice(0, 2).toUpperCase();
+        const errorBanner = acc.error ? `<div class="text-xs text-red-400 mt-2 truncate">⚠ ${escapeHtml(acc.error)}</div>` : '';
+        return `
+        <div class="bg-white rounded-xl shadow overflow-hidden border-l-4" style="border-left-color:${color}">
+            <div class="p-4">
+                <div class="flex items-center gap-2 mb-3">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0" style="background:${color}">${initials}</div>
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-xs font-bold bg-orange-500 text-white px-1 py-0.5 rounded">AMZ</span>
+                            <p class="font-semibold text-gray-800 text-sm truncate">${escapeHtml(acc.nickname)}</p>
+                        </div>
+                        <p class="text-xs text-gray-400">${acc.marketplace || 'MX'}</p>
+                    </div>
+                </div>
+                <div class="space-y-2">
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs text-gray-500">Hoy</span>
+                        <div class="text-right">
+                            <span class="font-bold text-gray-800 text-sm">${fmt(acc.today.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${acc.today.orders} órd.</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-xs text-gray-500">Semana</span>
+                        <div class="text-right">
+                            <span class="font-bold text-gray-700 text-sm">${fmt(acc.week.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${acc.week.orders} órd.</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between items-center pt-1 border-t border-gray-100">
+                        <span class="text-xs text-gray-500">Mes</span>
+                        <div class="text-right">
+                            <span class="font-bold text-sm" style="color:${color}">${fmt(acc.month.revenue)}</span>
+                            <span class="text-xs text-gray-400 ml-1">${acc.month.orders} órd.</span>
+                        </div>
+                    </div>
+                </div>
+                ${errorBanner}
+                <a href="/amazon" class="mt-3 block text-center text-xs text-orange-500 hover:text-orange-700 font-medium transition">Ver dashboard →</a>
+            </div>
+        </div>`;
+    }).join('');
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     // Set default dates: current month
     document.getElementById('md-date-from').value = monthStart();
     document.getElementById('md-date-to').value = today();
+    document.getElementById('md-period-lbl').textContent = 'este mes';
     loadMultiDashboard();
+    loadAmazonSection();  // Load Amazon in parallel
 });
 </script>
 {% endblock %}
