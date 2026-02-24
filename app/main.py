@@ -327,14 +327,15 @@ async def switch_amazon_account(request: Request):
     if seller_id:
         account = await token_store.get_amazon_account(seller_id)
         if account:
-            referer = request.headers.get("referer", "/dashboard")
-            response = RedirectResponse(referer, status_code=303)
+            # Prioridad: campo "next" > referer > /amazon (siempre va al dashboard Amazon)
+            next_url = form.get("next") or "/amazon"
+            response = RedirectResponse(next_url, status_code=303)
             response.set_cookie(
                 "active_amazon_id", seller_id,
                 max_age=2592000, httponly=True, samesite="lax"
             )
             return response
-    return RedirectResponse("/dashboard", status_code=303)
+    return RedirectResponse("/amazon", status_code=303)
 
 
 async def _accounts_ctx(request: Request) -> dict:
@@ -1555,6 +1556,10 @@ _PRODUCTS_CACHE_TTL = 900   # 15 min
 _BM_CACHE_TTL = 900         # 15 min
 _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
+# Cache para órdenes de Amazon — TTL corto porque es el dashboard del día
+# Key: "{seller_id}:{date}" para invalidar automáticamente al cambiar de día
+_amazon_daily_cache: dict[str, tuple[float, dict]] = {}
+_AMAZON_DAILY_CACHE_TTL = 180  # 3 min — más fresco que MeLi porque Amazon tiene rate limits estrictos
 _sale_price_cache: dict[str, tuple[float, dict | None]] = {}
 _SALE_PRICE_CACHE_TTL = 300  # 5 min
 _stock_issues_cache: dict[str, tuple[float, dict]] = {}
@@ -6465,6 +6470,32 @@ async def stock_concentration_processed_skus_api(
     Usado por el frontend para ocultar productos ya procesados del bulk."""
     skus = await token_store.get_concentrated_skus(days=days)
     return {"skus": skus, "days": days, "count": len(skus)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON — Dashboard principal de la cuenta Amazon activa
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/amazon", response_class=HTMLResponse)
+async def amazon_dashboard(request: Request):
+    """
+    Dashboard Amazon — muestra ventas diarias, métricas y contexto de la
+    cuenta Amazon activa (seleccionada con active_amazon_id cookie).
+
+    Si no hay cuentas Amazon configuradas, muestra pantalla de bienvenida
+    con botón para conectar.
+    El PIN se valida automáticamente via PinMiddleware.
+    """
+    ctx = await _accounts_ctx(request)
+
+    # Obtener info de la cuenta Amazon activa (para el banner)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+
+    ctx["amazon_account"] = amazon_account
+    return templates.TemplateResponse("amazon_dashboard.html", {"request": request, **ctx})
 
 
 if __name__ == "__main__":

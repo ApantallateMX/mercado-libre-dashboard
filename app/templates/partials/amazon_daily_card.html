@@ -70,6 +70,9 @@
     </div>
 </div>
 
+<!-- Elemento oculto con totales serializados — usado por JS para las tarjetas de métricas -->
+<div data-totals='{"orders":{{ totals.orders }},"units":{{ totals.units }},"revenue":{{ totals.revenue }},"total_days":{{ totals.total_days }},"days_with_sales":{{ totals.days_with_sales }}}' class="hidden"></div>
+
 <!-- ── Tabla de ventas por día ────────────────────────────────────────── -->
 <div class="overflow-x-auto">
     <table class="w-full text-sm">

@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Amazon Dashboard{% endblock %}
+
+{% block content %}
+
+{% if not amazon_accounts %}
+<!-- ══════════════════════════════════════════════════════════════════════════
+     Estado: sin cuenta Amazon conectada
+     ══════════════════════════════════════════════════════════════════════ -->
+<div class="flex flex-col items-center justify-center py-24 text-center">
+    <div class="w-24 h-24 rounded-full bg-orange-100 flex items-center justify-center mb-6">
+        <span class="text-4xl font-black text-orange-400">AMZ</span>
+    </div>
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">Conecta tu cuenta de Amazon</h1>
+    <p class="text-gray-500 text-sm mb-6 max-w-sm">
+        Conecta tu cuenta de Amazon Seller para ver tus ventas, órdenes y métricas
+        directamente en este dashboard.
+    </p>
+    <a href="/auth/amazon/connect"
+       class="bg-orange-500 hover:bg-orange-600 text-white font-semibold px-6 py-3 rounded-xl transition text-sm">
+        Conectar cuenta Amazon
+    </a>
+</div>
+
+{% else %}
+<!-- ══════════════════════════════════════════════════════════════════════════
+     Dashboard Amazon — cuenta activa
+     ══════════════════════════════════════════════════════════════════════ -->
+
+<!-- ─── BANNER DE CUENTA ───────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-orange-400">
+    <div class="px-4 md:px-6 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <!-- Izquierda: avatar + nombre -->
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0 bg-orange-500">
+                {% if amazon_account %}
+                    {{ (amazon_account.nickname or 'AMZ')[:2]|upper }}
+                {% else %}
+                    AM
+                {% endif %}
+            </div>
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
+                    <h1 class="font-bold text-gray-800 leading-tight text-base">
+                        {{ amazon_account.nickname if amazon_account else 'Amazon Seller' }}
+                    </h1>
+                </div>
+                <p class="text-xs text-gray-400">
+                    {% if amazon_account %}
+                        {{ amazon_account.marketplace_name }} &middot; {{ amazon_account.seller_id }}
+                    {% endif %}
+                    &middot; <span id="period-label">Últimos 30 días</span>
+                </p>
+            </div>
+        </div>
+        <!-- Derecha: stats rápidos del período -->
+        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
+            <div class="pr-5">
+                <p class="text-xs text-gray-400">Órdenes</p>
+                <p class="font-bold text-gray-800 text-lg" id="qs-orders">—</p>
+            </div>
+            <div class="px-5">
+                <p class="text-xs text-gray-400">Unidades</p>
+                <p class="font-bold text-gray-800 text-lg" id="qs-units">—</p>
+            </div>
+            <div class="pl-5">
+                <p class="text-xs text-gray-400">Revenue</p>
+                <p class="font-bold text-orange-600 text-lg" id="qs-revenue">—</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ─── FILTRO DE FECHAS ───────────────────────────────────────────────── -->
+<div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
+    <div class="flex flex-wrap gap-1.5 md:gap-2 mb-3" id="range-buttons">
+        <button type="button" data-days="7"  class="range-btn px-3 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-orange-400 hover:text-white hover:border-orange-400 transition">7d</button>
+        <button type="button" data-days="15" class="range-btn px-3 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-orange-400 hover:text-white hover:border-orange-400 transition">15d</button>
+        <button type="button" data-days="30" class="range-btn px-3 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-orange-400 hover:text-white hover:border-orange-400 transition">1 mes</button>
+        <button type="button" data-days="90" class="range-btn px-3 py-1.5 text-xs md:text-sm rounded-full font-medium border border-gray-300 text-gray-600 hover:bg-orange-400 hover:text-white hover:border-orange-400 transition">3 mes</button>
+    </div>
+    <div class="flex flex-wrap gap-2 md:gap-4 items-end">
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs font-medium text-gray-600 mb-1">Desde</label>
+            <input type="date" id="amz_date_from" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none">
+        </div>
+        <div class="flex-1 min-w-[120px]">
+            <label class="block text-xs font-medium text-gray-600 mb-1">Hasta</label>
+            <input type="date" id="amz_date_to" class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-400 focus:border-orange-400 outline-none">
+        </div>
+        <button type="button" id="btn-amz-filtrar"
+                class="bg-orange-500 text-white font-semibold px-4 py-2.5 min-h-[44px] rounded-lg hover:bg-orange-600 transition text-sm">
+            Filtrar
+        </button>
+        <button type="button" id="btn-amz-limpiar"
+                class="border border-gray-300 text-gray-600 px-3 py-2.5 min-h-[44px] rounded-lg hover:bg-gray-100 transition text-sm">
+            Limpiar
+        </button>
+    </div>
+</div>
+
+<!-- ─── MÉTRICAS RÁPIDAS ───────────────────────────────────────────────── -->
+<div id="amz-metric-cards" class="mb-5">
+    <div class="grid grid-cols-3 gap-3 md:gap-4">
+        {% for i in range(3) %}
+        <div class="bg-white p-4 md:p-5 rounded-xl shadow animate-pulse">
+            <div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div>
+            <div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div>
+            <div class="h-3 bg-gray-100 rounded w-1/3"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- ─── TABLA DE VENTAS DIARIAS ────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-2 overflow-hidden border-l-4 border-orange-400">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+        <div>
+            <h2 class="text-base font-bold text-gray-800">Ventas Diarias</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Órdenes de Amazon agrupadas por día</p>
+        </div>
+        <button onclick="loadAmazonData()" title="Refrescar"
+                class="text-xs text-orange-500 hover:text-orange-700 border border-orange-200 hover:border-orange-400 px-2.5 py-1 rounded-lg transition">
+            ↺ Refrescar
+        </button>
+    </div>
+    <!-- El partial se inyecta aquí via fetch JS -->
+    <div id="amz-daily-container" class="p-4 md:p-6">
+        <div class="animate-pulse space-y-2">
+            {% for i in range(7) %}
+            <div class="h-8 bg-orange-50 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+{% if amazon_accounts %}
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboard Amazon — lógica JS
+// Fetch del partial HTML del endpoint /api/metrics/amazon-daily-sales
+// y renderizado de tarjetas de métricas rápidas.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function toDateStr(d) { return d.toISOString().split('T')[0]; }
+
+function fmtMoney(n) {
+    if (n == null || n === undefined) return '—';
+    return n.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function setRange(days) {
+    var end = new Date();
+    var start = new Date();
+    start.setDate(start.getDate() - (days - 1));
+    document.getElementById('amz_date_from').value = toDateStr(start);
+    document.getElementById('amz_date_to').value = toDateStr(end);
+    var labels = {7:'Últimos 7 días', 15:'Últimos 15 días', 30:'Últimos 30 días', 90:'Últimos 3 meses'};
+    document.getElementById('period-label').textContent = labels[days] || 'Periodo personalizado';
+}
+
+function highlightRangeBtn(btn) {
+    document.querySelectorAll('.range-btn').forEach(function(b) {
+        b.classList.remove('bg-orange-400', 'text-white', 'font-bold', 'border-orange-400');
+        b.classList.add('border-gray-300', 'text-gray-600');
+        b.style.background = '';
+    });
+    if (btn) {
+        btn.classList.add('bg-orange-400', 'text-white', 'font-bold', 'border-orange-400');
+        btn.classList.remove('border-gray-300', 'text-gray-600');
+    }
+}
+
+function getDateParams() {
+    var df = document.getElementById('amz_date_from').value;
+    var dt = document.getElementById('amz_date_to').value;
+    var p = [];
+    if (df) p.push('date_from=' + df);
+    if (dt) p.push('date_to=' + dt);
+    return p.join('&');
+}
+
+// ─── Tarjetas de métricas rápidas ────────────────────────────────────────────
+function renderMetricCards(totals) {
+    if (!totals || !totals.orders) return;
+
+    // Actualizar banner superior
+    document.getElementById('qs-orders').textContent = totals.orders + ' órd.';
+    document.getElementById('qs-units').textContent = totals.units + ' uds';
+    document.getElementById('qs-revenue').textContent = '$' + fmtMoney(totals.revenue);
+
+    var cards = [
+        {
+            label: 'Órdenes del Período',
+            value: totals.orders,
+            sub: totals.days_with_sales + ' días con ventas',
+            color: '#F97316',
+            icon: '📦'
+        },
+        {
+            label: 'Unidades Vendidas',
+            value: totals.units,
+            sub: totals.total_days + ' días en el rango',
+            color: '#EA580C',
+            icon: '📊'
+        },
+        {
+            label: 'Revenue Total',
+            value: '$' + fmtMoney(totals.revenue),
+            sub: totals.orders > 0 ? '$' + fmtMoney(totals.revenue / totals.orders) + ' por orden' : '—',
+            color: '#C2410C',
+            icon: '💰'
+        }
+    ];
+
+    var html = '<div class="grid grid-cols-3 gap-3 md:gap-4">';
+    cards.forEach(function(c) {
+        html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4"' +
+                ' style="border-bottom-color:' + c.color + '">' +
+                '<div class="flex items-center justify-between mb-2">' +
+                    '<span class="text-xs text-gray-400 font-medium">' + c.label + '</span>' +
+                    '<span class="text-xl">' + c.icon + '</span>' +
+                '</div>' +
+                '<p class="text-2xl md:text-3xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
+                '<p class="text-xs mt-2 text-gray-400">' + c.sub + '</p>' +
+                '</div>';
+    });
+    html += '</div>';
+    document.getElementById('amz-metric-cards').innerHTML = html;
+}
+
+// ─── Parsear totales del HTML del partial para las tarjetas ──────────────────
+// El partial devuelve HTML, extraemos los datos desde los atributos data-* en el tfoot
+function extractTotalsFromPartialHTML(html) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+    var tfoot = doc.querySelector('tfoot td');
+    // Intentar extraer desde atributo data-totals si está presente
+    var totalsEl = doc.querySelector('[data-totals]');
+    if (totalsEl) {
+        try { return JSON.parse(totalsEl.getAttribute('data-totals')); } catch(e) {}
+    }
+    return null;
+}
+
+// ─── Carga principal ──────────────────────────────────────────────────────────
+function loadAmazonData() {
+    var p = getDateParams();
+    var container = document.getElementById('amz-daily-container');
+
+    // Skeleton mientras carga
+    container.innerHTML =
+        '<div class="animate-pulse space-y-2">' +
+        Array(7).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('') +
+        '</div>';
+
+    // Skeleton en métricas
+    document.getElementById('amz-metric-cards').innerHTML =
+        '<div class="grid grid-cols-3 gap-3 md:gap-4">' +
+        Array(3).fill('<div class="bg-white p-4 md:p-5 rounded-xl shadow animate-pulse">' +
+            '<div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div>' +
+            '<div class="h-7 bg-orange-100 rounded w-3/4 mb-2"></div>' +
+            '<div class="h-3 bg-gray-100 rounded w-1/3"></div></div>').join('') +
+        '</div>';
+
+    // Fetch del partial HTML
+    fetch('/api/metrics/amazon-daily-sales?' + p)
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        })
+        .then(function(html) {
+            container.innerHTML = html;
+            // Extraer totales del DOM inyectado para las tarjetas
+            extractAndRenderMetrics(container);
+        })
+        .catch(function(e) {
+            container.innerHTML =
+                '<p class="text-center text-orange-400 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+}
+
+// Extrae los totales del partial ya inyectado en el DOM
+function extractAndRenderMetrics(container) {
+    // Buscar el elemento con data-totals (lo ponemos en el partial)
+    var el = container.querySelector('[data-totals]');
+    if (el) {
+        try {
+            var totals = JSON.parse(el.getAttribute('data-totals'));
+            renderMetricCards(totals);
+            return;
+        } catch(e) {}
+    }
+    // Fallback: leer desde el tfoot visible de la tabla
+    var tfoot = container.querySelector('tfoot tr');
+    if (tfoot) {
+        var cells = tfoot.querySelectorAll('td');
+        if (cells.length >= 4) {
+            // Parsear revenue del texto (quitar $ y comas)
+            var revenueText = cells[3].textContent.replace(/[$,]/g, '').trim();
+            var ordersText  = cells[1].textContent.trim();
+            var unitsText   = cells[2].textContent.trim();
+            var totals = {
+                orders:          parseInt(ordersText)   || 0,
+                units:           parseInt(unitsText)    || 0,
+                revenue:         parseFloat(revenueText) || 0,
+                total_days:      0,
+                days_with_sales: 0,
+            };
+            // Extraer días con ventas del último td
+            var lastCell = cells[cells.length - 1].textContent.trim();
+            var m = lastCell.match(/(\d+)/);
+            if (m) totals.days_with_sales = parseInt(m[1]);
+            renderMetricCards(totals);
+        }
+    }
+}
+
+// ─── Event listeners ──────────────────────────────────────────────────────────
+document.querySelectorAll('.range-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        setRange(parseInt(this.getAttribute('data-days')));
+        highlightRangeBtn(this);
+        loadAmazonData();
+    });
+});
+
+document.getElementById('btn-amz-filtrar').addEventListener('click', function() {
+    var df = document.getElementById('amz_date_from').value;
+    var dt = document.getElementById('amz_date_to').value;
+    if (df && dt) document.getElementById('period-label').textContent = df + ' – ' + dt;
+    highlightRangeBtn(null);
+    loadAmazonData();
+});
+
+document.getElementById('btn-amz-limpiar').addEventListener('click', function() {
+    setRange(30);
+    highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
+    loadAmazonData();
+});
+
+// ─── Carga inicial ─────────────────────────────────────────────────────────────
+setRange(30);
+highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
+loadAmazonData();
+</script>
+{% endif %}
+{% endblock %}

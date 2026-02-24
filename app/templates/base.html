@@ -112,6 +112,7 @@
                             {% for amz in amazon_accounts %}
                             <form action="/auth/switch-amazon" method="POST">
                                 <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
+                                <input type="hidden" name="next" value="/amazon">
                                 <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
                                     {% if amz.seller_id == active_amazon_id %}
                                     <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
@@ -236,6 +237,7 @@
                     {% for amz in amazon_accounts %}
                     <form action="/auth/switch-amazon" method="POST">
                         <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
+                        <input type="hidden" name="next" value="/amazon">
                         <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
                             {% if amz.seller_id == active_amazon_id %}bg-orange-400 font-bold text-white{% else %}bg-orange-100 hover:bg-orange-200 text-gray-700{% endif %}">
                             {% if amz.seller_id == active_amazon_id %}<span class="shrink-0">✓</span>{% endif %}
