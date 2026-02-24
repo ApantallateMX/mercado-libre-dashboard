@@ -314,17 +314,68 @@ async def switch_account(request: Request):
     return RedirectResponse("/dashboard", status_code=303)
 
 
+@app.post("/auth/switch-amazon")
+async def switch_amazon_account(request: Request):
+    """
+    Cambia la cuenta Amazon activa seteando la cookie active_amazon_id.
+
+    Funciona igual que switch-account pero para cuentas Amazon.
+    Cookie separada para no interferir con la cuenta MeLi activa.
+    """
+    form = await request.form()
+    seller_id = form.get("seller_id", "")
+    if seller_id:
+        account = await token_store.get_amazon_account(seller_id)
+        if account:
+            referer = request.headers.get("referer", "/dashboard")
+            response = RedirectResponse(referer, status_code=303)
+            response.set_cookie(
+                "active_amazon_id", seller_id,
+                max_age=2592000, httponly=True, samesite="lax"
+            )
+            return response
+    return RedirectResponse("/dashboard", status_code=303)
+
 
 async def _accounts_ctx(request: Request) -> dict:
-    """Contexto común de cuentas para templates de página."""
+    """
+    Contexto común de cuentas para todos los templates de página.
+
+    Devuelve un dict con:
+      accounts:          Lista de cuentas MeLi (user_id, nickname)
+      active_user_id:    user_id de la cuenta MeLi activa (cookie)
+      amazon_accounts:   Lista de cuentas Amazon (seller_id, nickname, marketplace_name)
+      active_amazon_id:  seller_id de la cuenta Amazon activa (cookie)
+
+    Las cuentas MeLi y Amazon se manejan con cookies separadas:
+      - active_account_id   → MeLi user_id
+      - active_amazon_id    → Amazon seller_id
+
+    Así el cambio de cuenta Amazon NO afecta la cuenta MeLi activa
+    y toda la funcionalidad MeLi existente queda intacta.
+    """
+    # ── Cuentas Mercado Libre ──────────────────────────────────────────
     accounts = await token_store.get_all_tokens()
     active_uid = request.cookies.get("active_account_id")
-    # Si la cookie apunta a una cuenta inexistente, usar la primera disponible
     if active_uid and not any(a["user_id"] == active_uid for a in accounts):
         active_uid = None
     if not active_uid and accounts:
         active_uid = accounts[0]["user_id"]
-    return {"accounts": accounts, "active_user_id": active_uid}
+
+    # ── Cuentas Amazon ────────────────────────────────────────────────
+    amazon_accounts = await token_store.get_all_amazon_accounts()
+    active_amazon_id = request.cookies.get("active_amazon_id")
+    if active_amazon_id and not any(a["seller_id"] == active_amazon_id for a in amazon_accounts):
+        active_amazon_id = None
+    if not active_amazon_id and amazon_accounts:
+        active_amazon_id = amazon_accounts[0]["seller_id"]
+
+    return {
+        "accounts": accounts,
+        "active_user_id": active_uid,
+        "amazon_accounts": amazon_accounts,
+        "active_amazon_id": active_amazon_id,
+    }
 
 
 async def _enrich_with_sale_prices(client, products: list, id_key: str = "id", price_key: str = "price"):
