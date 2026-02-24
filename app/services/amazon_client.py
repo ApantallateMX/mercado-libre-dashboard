@@ -657,18 +657,18 @@ async def _seed_amazon_accounts():
         logger.debug("[Amazon] No hay credenciales Amazon en .env — skip seed")
         return
 
-    existing = await token_store.get_amazon_account(AMAZON_SELLER_ID)
-
-    # Solo hacer upsert si hay datos nuevos (no sobreescribir refresh_token real con vacío)
-    if not existing or (AMAZON_REFRESH_TOKEN and not existing.get("refresh_token")):
-        await token_store.save_amazon_account(
-            seller_id=AMAZON_SELLER_ID,
-            nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
-            client_id=AMAZON_CLIENT_ID,
-            client_secret=AMAZON_CLIENT_SECRET,
-            refresh_token=AMAZON_REFRESH_TOKEN,
-            marketplace_id=AMAZON_MARKETPLACE_ID,
-            marketplace_name=AMAZON_MARKETPLACE_NAME,
-            app_solution_id=AMAZON_APP_SOLUTION_ID,
-        )
-        logger.info(f"[Amazon] Cuenta sembrada: {AMAZON_SELLER_ID} ({AMAZON_NICKNAME})")
+    # Siempre hacer upsert para mantener client_id/client_secret frescos desde .env.
+    # El SQL de save_amazon_account preserva el refresh_token existente si el nuevo
+    # valor está vacío (CASE WHEN excluded.refresh_token != '' ...), así que es seguro
+    # llamarlo siempre sin riesgo de borrar un token obtenido via OAuth.
+    await token_store.save_amazon_account(
+        seller_id=AMAZON_SELLER_ID,
+        nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
+        client_id=AMAZON_CLIENT_ID,
+        client_secret=AMAZON_CLIENT_SECRET,
+        refresh_token=AMAZON_REFRESH_TOKEN,
+        marketplace_id=AMAZON_MARKETPLACE_ID,
+        marketplace_name=AMAZON_MARKETPLACE_NAME,
+        app_solution_id=AMAZON_APP_SOLUTION_ID,
+    )
+    logger.info(f"[Amazon] Cuenta sembrada/actualizada: {AMAZON_SELLER_ID} ({AMAZON_NICKNAME})")
