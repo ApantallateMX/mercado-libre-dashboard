@@ -9,6 +9,7 @@ from app.services.amazon_client import get_amazon_client
 from app.services import token_store
 from app import order_net_revenue
 import time as _time
+import asyncio
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -570,7 +571,13 @@ async def get_amazon_dashboard_data(
     try:
         orders = await _get_cached_amazon_orders(client, date_from, date_to)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        empty_chart, _ = _build_amazon_chart_data([], date_from, date_to)
+        return {
+            "metrics": {"total_orders": 0, "shipped_orders": 0, "total_revenue": 0.0,
+                        "avg_per_order": 0.0, "total_units": 0},
+            "chart": {"data": empty_chart, "group_by": "day"},
+            "error": str(exc)[:300],
+        }
 
     valid_statuses = {"Shipped", "Delivered", "Unshipped"}
     valid_orders = [o for o in orders if o.get("OrderStatus") in valid_statuses]
@@ -648,7 +655,13 @@ async def get_amazon_daily_sales_data(
     try:
         orders = await _get_cached_amazon_orders(client, date_from, date_to)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        return {
+            "daily_data": [],
+            "goal": goal,
+            "totals": {"orders": 0, "units": 0, "revenue": 0.0, "days_met": 0,
+                       "avg_pct": 0.0, "total_days": 0, "days_with_sales": 0},
+            "error": str(exc)[:300],
+        }
 
     start = datetime.strptime(date_from, "%Y-%m-%d")
     end = datetime.strptime(date_to, "%Y-%m-%d")
@@ -734,9 +747,22 @@ async def get_amazon_recent_orders(request: Request):
             f'<p class="text-center text-red-400 py-6 text-sm">Error: {str(exc)[:120]}</p>'
         )
 
-    valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped")]
+    valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending")]
     valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
     recent = valid[:5]
+
+    # Enriquecer con items (ASIN, SKU, Title, Qty, Price) — en paralelo
+    async def _fetch_items(order: dict) -> dict:
+        try:
+            items = await client.get_order_items(order.get("AmazonOrderId", ""))
+            order = dict(order)
+            order["_items"] = items
+        except Exception:
+            order = dict(order)
+            order["_items"] = []
+        return order
+
+    recent = list(await asyncio.gather(*[_fetch_items(o) for o in recent]))
 
     return _templates.TemplateResponse(
         "partials/amazon_recent_orders.html",

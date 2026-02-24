@@ -507,15 +507,32 @@ function loadAmazonDashboard() {
         Array(6).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('')+'</div>';
 
     fetch('/api/metrics/amazon-dashboard-data?' + p)
-        .then(function(r){return r.json();})
-        .then(function(resp){ renderAmazonMetrics(resp.metrics); renderAmazonChart(resp.chart); })
+        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+        .then(function(resp){
+            if (resp.error && !resp.metrics.total_orders) {
+                document.getElementById('amz-metric-cards').innerHTML =
+                    '<p class="text-amber-600 py-4 text-center text-sm col-span-4">⚠️ API Amazon no disponible: '+resp.error.substring(0,120)+'</p>';
+            } else {
+                if (resp.metrics) renderAmazonMetrics(resp.metrics);
+                if (resp.chart)   renderAmazonChart(resp.chart);
+            }
+        })
         .catch(function(e){
-            document.getElementById('amz-metric-cards').innerHTML = '<p class="text-red-500 py-4 text-center text-sm col-span-4">Error: '+e.message+'</p>';
+            document.getElementById('amz-metric-cards').innerHTML =
+                '<p class="text-red-500 py-4 text-center text-sm col-span-4">Error: '+e.message+'</p>';
         });
 
     fetch('/api/metrics/amazon-daily-sales-data?' + p)
         .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
-        .then(function(data){ renderAmazonDailyTable(data); })
+        .then(function(data){
+            if (data.error && (!data.daily_data || !data.daily_data.length)) {
+                document.getElementById('amz-daily-sales-table').innerHTML =
+                    '<p class="text-center text-amber-600 py-4 text-sm px-4">⚠️ API Amazon no disponible temporalmente. Datos serán visibles cuando el servicio responda.</p>';
+                updateAmazonTodayBar(0,0,0);
+            } else {
+                renderAmazonDailyTable(data);
+            }
+        })
         .catch(function(e){
             document.getElementById('amz-daily-sales-table').innerHTML = '<p class="text-center text-red-400 py-4 text-sm">Error: '+e.message+'</p>';
             updateAmazonTodayBar(0,0,0);
