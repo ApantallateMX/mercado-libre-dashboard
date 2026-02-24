@@ -340,15 +340,16 @@ function getDateParams() {
 // ─── TAB VENTAS ───────────────────────────────────────────────────────────────
 
 function renderAmazonMetrics(m) {
+    var pending = m.total_orders - m.shipped_orders;
     var cards = [
         { label: 'Órdenes del Período', value: m.total_orders,
-          icon: '📦', color: '#F97316', hint: m.shipped_orders + ' enviadas / entregadas' },
-        { label: 'Unidades Vendidas',   value: m.total_units,
+          icon: '📦', color: '#F97316', hint: m.shipped_orders + ' enviadas · ' + pending + ' pendientes' },
+        { label: 'Unidades Ordenadas',  value: m.total_units,
           icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? (m.total_units/m.total_orders).toFixed(1)+' uds por orden' : '—' },
-        { label: 'Revenue Total',       value: '$' + fmtMoney(m.total_revenue),
-          icon: '💰', color: '#C2410C', hint: m.shipped_orders > 0 ? '$'+fmtMoney(m.avg_per_order)+' por orden' : '—' },
+        { label: 'Ventas Brutas (OPS)', value: '$' + fmtMoney(m.total_revenue),
+          icon: '💰', color: '#C2410C', hint: m.total_orders > 0 ? '$'+fmtMoney(m.avg_per_order)+' por orden' : '—' },
         { label: 'Promedio por Orden',  value: '$' + fmtMoney(m.avg_per_order),
-          icon: '📈', color: '#9A3412', hint: m.shipped_orders + ' órdenes procesadas' }
+          icon: '📈', color: '#9A3412', hint: m.shipped_orders + ' enviadas / ' + pending + ' en proceso' }
     ];
     var html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">';
     cards.forEach(function(c) {

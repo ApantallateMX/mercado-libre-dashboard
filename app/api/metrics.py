@@ -598,8 +598,13 @@ async def get_amazon_dashboard_data(
             "error": str(exc)[:300],
         }
 
-    valid_statuses = {"Shipped", "Delivered", "Unshipped"}
-    valid_orders = [o for o in orders if o.get("OrderStatus") in valid_statuses]
+    # Excluir solo Cancelled — igual que Amazon Seller Central que muestra todos los demás
+    CANCELLED = {"Canceled", "Cancelled"}
+    valid_orders = [o for o in orders if o.get("OrderStatus") not in CANCELLED]
+
+    # Órdenes "shipped" = ya procesadas (Shipped + Delivered + PartiallyShipped)
+    shipped_statuses = {"Shipped", "Delivered", "PartiallyShipped"}
+    shipped_orders = [o for o in valid_orders if o.get("OrderStatus") in shipped_statuses]
 
     total_revenue = 0.0
     total_units = 0
@@ -615,8 +620,8 @@ async def get_amazon_dashboard_data(
     avg_per_order = (total_revenue / len(valid_orders)) if valid_orders else 0.0
 
     metrics = {
-        "total_orders": len(orders),
-        "shipped_orders": len(valid_orders),
+        "total_orders": len(valid_orders),
+        "shipped_orders": len(shipped_orders),
         "total_revenue": round(total_revenue, 2),
         "avg_per_order": round(avg_per_order, 2),
         "total_units": total_units,
@@ -702,7 +707,8 @@ async def get_amazon_daily_sales_data(
         if date_key not in buckets:
             continue
         status = order.get("OrderStatus", "")
-        if status not in ("Shipped", "Delivered", "Unshipped"):
+        # Excluir solo canceladas — igual que Amazon Seller Central
+        if status in ("Canceled", "Cancelled"):
             continue
         buckets[date_key]["orders"] += 1
         try:

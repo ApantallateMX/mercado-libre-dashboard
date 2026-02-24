@@ -270,11 +270,15 @@ class AmazonClient:
 
         # SP-API exige parámetros repetidos para listas, no CSV
         # Ejemplo correcto: OrderStatuses=Shipped&OrderStatuses=Unshipped
+        # Incluimos Pending para que los conteos coincidan con Amazon Seller Central.
+        # "Cancelled" se excluye — Amazon tampoco los cuenta en OPS.
         # InvoiceUnconfirmed solo aplica en Brasil — excluido para MX/US/CA
         params: list = [
             ("MarketplaceIds", mid) for mid in marketplace_ids
         ] + [
             ("CreatedAfter", created_after),
+            ("OrderStatuses", "Pending"),           # pedido hecho, pago en proceso
+            ("OrderStatuses", "PendingAvailability"),  # disponibilidad pendiente (pre-order)
             ("OrderStatuses", "Shipped"),
             ("OrderStatuses", "Unshipped"),
             ("OrderStatuses", "PartiallyShipped"),
