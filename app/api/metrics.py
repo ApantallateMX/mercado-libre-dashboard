@@ -1,11 +1,23 @@
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pathlib import Path
 from app.services.meli_client import get_meli_client
+from app.services.amazon_client import get_amazon_client
 from app.services import token_store
 from app import order_net_revenue
+import time as _time
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+
+# Templates para partials de Amazon
+_templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
+
+# Cache para Amazon daily sales — clave: "{seller_id}:{YYYY-MM-DD}"
+_amazon_daily_cache: dict[str, tuple[float, dict]] = {}
+_AMAZON_DAILY_TTL = 180  # 3 minutos (rate limits de Amazon son estrictos)
 
 
 @router.get("/goal")
@@ -297,3 +309,152 @@ def _build_chart_data(all_orders: list, date_from: str, date_to: str):
         ]
 
     return chart_data, group_by
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON — Ventas diarias del vendedor activo
+# Usa la SP-API Orders v0 para obtener órdenes por rango de fechas.
+# Retorna HTML parcial (partial) listo para inyectarse con HTMX en el dashboard.
+# ─────────────────────────────────────────────────────────────────────────────
+@router.get("/amazon-daily-sales", response_class=HTMLResponse)
+async def get_amazon_daily_sales(
+    request: Request,
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Ventas diarias de Amazon agrupadas por día — devuelve HTML parcial para HTMX."""
+
+    # ── 1. Obtener cliente Amazon activo ──────────────────────────────────────
+    client = await get_amazon_client()
+    if not client:
+        # Sin cuenta Amazon configurada → partial vacío con mensaje
+        return _templates.TemplateResponse(
+            "partials/amazon_daily_card.html",
+            {
+                "request": request,
+                "not_connected": True,
+                "daily_data": [],
+                "totals": {},
+                "date_from": date_from,
+                "date_to": date_to,
+                "nickname": "",
+                "marketplace": "",
+            },
+        )
+
+    # ── 2. Rango de fechas por defecto: últimos 30 días ───────────────────────
+    now = datetime.utcnow()
+    if not date_from:
+        date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now.strftime("%Y-%m-%d")
+
+    # ── 3. Revisar caché (clave: seller_id + rango) ───────────────────────────
+    cache_key = f"{client.seller_id}:{date_from}:{date_to}"
+    if cache_key in _amazon_daily_cache:
+        ts, cached = _amazon_daily_cache[cache_key]
+        if _time.time() - ts < _AMAZON_DAILY_TTL:
+            cached["request"] = request  # request no es serializable — se reconstruye
+            return _templates.TemplateResponse("partials/amazon_daily_card.html", cached)
+
+    # ── 4. Obtener órdenes via SP-API ─────────────────────────────────────────
+    try:
+        # fetch_orders_range obtiene TODAS las órdenes del rango (paginando internamente)
+        orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+    except Exception as exc:
+        return _templates.TemplateResponse(
+            "partials/amazon_daily_card.html",
+            {
+                "request": request,
+                "error": str(exc),
+                "daily_data": [],
+                "totals": {},
+                "date_from": date_from,
+                "date_to": date_to,
+                "nickname": client.nickname,
+                "marketplace": client.marketplace_name,
+            },
+        )
+
+    # ── 5. Agrupar órdenes por día ────────────────────────────────────────────
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end   = datetime.strptime(date_to,   "%Y-%m-%d")
+
+    # Inicializar buckets vacíos para cada día del rango
+    buckets: dict[str, dict] = {}
+    cur = start
+    while cur <= end:
+        buckets[cur.strftime("%Y-%m-%d")] = {"units": 0, "revenue": 0.0, "orders": 0}
+        cur += timedelta(days=1)
+
+    # Distribuir cada orden en su bucket correspondiente
+    for order in orders:
+        # Amazon usa PurchaseDate en ISO-8601 con zona horaria
+        raw_date = order.get("PurchaseDate", "")
+        if not raw_date:
+            continue
+        try:
+            order_dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            continue
+
+        date_key = order_dt.strftime("%Y-%m-%d")
+        if date_key not in buckets:
+            continue
+
+        # Solo órdenes pagadas / enviadas (no pendientes ni canceladas)
+        status = order.get("OrderStatus", "")
+        if status not in ("Shipped", "Delivered", "Unshipped"):
+            continue
+
+        buckets[date_key]["orders"] += 1
+
+        # Monto: OrderTotal.Amount (string) en la moneda del marketplace
+        total_raw = order.get("OrderTotal", {})
+        try:
+            amount = float(total_raw.get("Amount", 0) or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        buckets[date_key]["revenue"] += amount
+
+        # Unidades: NumberOfItemsShipped + NumberOfItemsUnshipped
+        shipped   = int(order.get("NumberOfItemsShipped", 0) or 0)
+        unshipped = int(order.get("NumberOfItemsUnshipped", 0) or 0)
+        buckets[date_key]["units"] += shipped + unshipped
+
+    # ── 6. Construir lista ordenada (más reciente primero) ────────────────────
+    daily_data = []
+    for date_key in sorted(buckets.keys(), reverse=True):
+        d = buckets[date_key]
+        daily_data.append({
+            "date":    date_key,
+            "orders":  d["orders"],
+            "units":   d["units"],
+            "revenue": round(d["revenue"], 2),
+        })
+
+    # ── 7. Totales del período ────────────────────────────────────────────────
+    totals = {
+        "orders":  sum(d["orders"]  for d in daily_data),
+        "units":   sum(d["units"]   for d in daily_data),
+        "revenue": round(sum(d["revenue"] for d in daily_data), 2),
+        "total_days": len(daily_data),
+        "days_with_sales": sum(1 for d in daily_data if d["orders"] > 0),
+    }
+
+    # ── 8. Guardar en caché y renderizar partial ──────────────────────────────
+    ctx = {
+        "request":      request,
+        "daily_data":   daily_data,
+        "totals":       totals,
+        "date_from":    date_from,
+        "date_to":      date_to,
+        "nickname":     client.nickname,
+        "marketplace":  client.marketplace_name,
+        "not_connected": False,
+        "error":        None,
+    }
+    # Guardar sin `request` (no serializable)
+    _amazon_daily_cache[cache_key] = (_time.time(), {k: v for k, v in ctx.items() if k != "request"})
+
+    return _templates.TemplateResponse("partials/amazon_daily_card.html", ctx)

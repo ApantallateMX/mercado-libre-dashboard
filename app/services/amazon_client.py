@@ -89,6 +89,7 @@ class AmazonClient:
         refresh_token: str,
         marketplace_id: str = "A1AM78C64UM0Y8",
         nickname: str = "",
+        marketplace_name: str = "MX",
     ):
         # Identificador del vendedor (Merchant Token de Seller Central)
         self.seller_id = seller_id
@@ -105,6 +106,9 @@ class AmazonClient:
 
         # Nombre visible de la cuenta (para el UI)
         self.nickname = nickname or seller_id
+
+        # Nombre del marketplace ("MX", "US", "CA") para mostrar en UI
+        self.marketplace_name = marketplace_name or "MX"
 
         # Cache del access_token en memoria — se renueva automáticamente
         self._access_token: Optional[str] = None
@@ -528,6 +532,37 @@ class AmazonClient:
             total += amount
         return total
 
+    async def fetch_orders_range(
+        self,
+        date_from: str,
+        date_to: str,
+    ) -> list:
+        """
+        Obtiene TODAS las órdenes de un rango de fechas (paginación incluida).
+
+        Equivalente a fetch_all_orders() de meli_client.py pero para Amazon.
+
+        Args:
+            date_from: "YYYY-MM-DD" — inicio del rango (inclusive)
+            date_to:   "YYYY-MM-DD" — fin del rango (inclusive, hasta las 23:59:59)
+
+        Returns:
+            Lista completa de órdenes del período.
+
+        Proceso:
+            1. Convierte YYYY-MM-DD a ISO 8601 que exige SP-API
+            2. Llama a get_orders con paginación interna
+            3. Incluye todos los estados (Shipped, Unshipped, Delivered, etc.)
+        """
+        # Convertir a ISO 8601 con zona UTC (SP-API lo requiere)
+        created_after  = f"{date_from}T00:00:00Z"
+        created_before = f"{date_to}T23:59:59Z"
+
+        return await self.get_orders(
+            created_after=created_after,
+            created_before=created_before,
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FACTORY — equivalente a get_meli_client() de meli_client.py
@@ -575,6 +610,7 @@ async def get_amazon_client(seller_id: str = None) -> Optional[AmazonClient]:
         refresh_token=account["refresh_token"],
         marketplace_id=account.get("marketplace_id", "A1AM78C64UM0Y8"),
         nickname=account.get("nickname", ""),
+        marketplace_name=account.get("marketplace_name", "MX"),
     )
 
 

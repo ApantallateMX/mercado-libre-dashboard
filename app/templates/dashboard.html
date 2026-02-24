@@ -155,7 +155,7 @@
 </div>
 
 <!-- ═══ ÚLTIMAS VENTAS ═══ -->
-<div class="bg-white rounded-xl shadow mb-2">
+<div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 class="text-base font-bold text-gray-800">Últimas Ventas</h2>
         <a href="/orders" class="text-xs font-medium text-blue-500 hover:text-blue-700 transition">Ver todas →</a>
@@ -164,6 +164,31 @@
         <div class="animate-pulse space-y-3">
             {% for i in range(5) %}
             <div class="h-12 bg-gray-100 rounded-lg"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- ═══ AMAZON — VENTAS DIARIAS ═══ -->
+<!-- Sección separada: datos de Amazon con HTMX (partial server-rendered) -->
+<div class="bg-white rounded-xl shadow mb-2 overflow-hidden border-l-4 border-orange-400" id="amazon-sales-section">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+            <!-- Badge identificador de plataforma -->
+            <span class="text-xs font-bold px-2 py-0.5 rounded bg-orange-500 text-white">AMZ</span>
+            <h2 class="text-base font-bold text-gray-800">Amazon — Ventas del Periodo</h2>
+        </div>
+        <button onclick="loadAmazonSales()" title="Refrescar"
+                class="text-xs text-orange-500 hover:text-orange-700 border border-orange-200 hover:border-orange-400 px-2.5 py-1 rounded-lg transition">
+            ↺ Refrescar
+        </button>
+    </div>
+    <!-- Contenedor que recibe el HTML del partial vía fetch -->
+    <div id="amazon-daily-container" class="p-4 md:p-6">
+        <!-- Skeleton inicial -->
+        <div class="animate-pulse space-y-2">
+            {% for i in range(5) %}
+            <div class="h-8 bg-orange-50 rounded"></div>
             {% endfor %}
         </div>
     </div>
@@ -515,6 +540,9 @@ function loadDashboard() {
             document.getElementById('recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>';
             btn.disabled = false; btn.classList.remove('opacity-50');
         });
+
+    // Amazon — se carga con el mismo rango de fechas
+    loadAmazonSales();
 }
 
 // ─── Meta diaria — guardar en DB ─────────────────────────────────────────────
@@ -559,8 +587,37 @@ document.getElementById('btn-dash-limpiar').addEventListener('click', function()
     loadDashboard();
 });
 
+// ─── Amazon daily sales ───────────────────────────────────────────────────────
+// Carga el partial de Amazon (HTML server-rendered) y lo inyecta en el contenedor.
+// Se llama junto con loadDashboard() para que el rango de fechas sea el mismo.
+function loadAmazonSales() {
+    var p = getDateParams();
+    var container = document.getElementById('amazon-daily-container');
+
+    // Mostrar skeleton mientras carga
+    container.innerHTML =
+        '<div class="animate-pulse space-y-2">' +
+        Array(5).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('') +
+        '</div>';
+
+    // Fetch del partial HTML (el endpoint devuelve HTML directamente)
+    fetch('/api/metrics/amazon-daily-sales?' + p)
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+        })
+        .then(function(html) {
+            container.innerHTML = html;
+        })
+        .catch(function(e) {
+            container.innerHTML =
+                '<p class="text-center text-orange-400 py-4 text-sm">Error cargando ventas Amazon: ' + e.message + '</p>';
+        });
+}
+
 // ─── Carga inicial ────────────────────────────────────────────────────────────
 highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
 loadDashboard();
+loadAmazonSales();
 </script>
 {% endblock %}
