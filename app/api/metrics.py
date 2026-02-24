@@ -467,19 +467,38 @@ async def get_amazon_daily_sales(
 
 # Caché de órdenes crudas — compartida entre todos los endpoints Amazon
 _amazon_orders_cache: dict[str, tuple[float, list]] = {}
+_amazon_orders_locks: dict[str, asyncio.Lock] = {}
 _AMAZON_ORDERS_TTL = 300  # 5 minutos
 
 
 async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> list:
-    """Obtiene y cachea la lista cruda de órdenes Amazon para un rango de fechas."""
+    """Obtiene y cachea la lista cruda de órdenes Amazon para un rango de fechas.
+
+    Usa double-check lock per cache_key para evitar que llamadas simultáneas
+    (dashboard-data + daily-sales-data + recent-orders) lancen múltiples
+    requests a SP-API y provoquen 429 QuotaExceeded.
+    """
     cache_key = f"raw:{client.seller_id}:{date_from}:{date_to}"
+
+    # Fast path — sin lock si ya está en caché
     if cache_key in _amazon_orders_cache:
         ts, orders = _amazon_orders_cache[cache_key]
         if _time.time() - ts < _AMAZON_ORDERS_TTL:
             return orders
-    orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
-    _amazon_orders_cache[cache_key] = (_time.time(), orders)
-    return orders
+
+    # Crear lock solo si no existe (seguro en asyncio single-thread)
+    if cache_key not in _amazon_orders_locks:
+        _amazon_orders_locks[cache_key] = asyncio.Lock()
+
+    async with _amazon_orders_locks[cache_key]:
+        # Verificar de nuevo dentro del lock — otra coroutine pudo haber llenado el caché
+        if cache_key in _amazon_orders_cache:
+            ts, orders = _amazon_orders_cache[cache_key]
+            if _time.time() - ts < _AMAZON_ORDERS_TTL:
+                return orders
+        orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+        _amazon_orders_cache[cache_key] = (_time.time(), orders)
+        return orders
 
 
 def _build_amazon_chart_data(orders: list, date_from: str, date_to: str):
@@ -737,7 +756,9 @@ async def get_amazon_recent_orders(request: Request):
         )
 
     now = datetime.utcnow()
-    date_from = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    # IMPORTANTE: usar el mismo rango que amazon-dashboard-data (29 días)
+    # para que compartan el mismo cache key y evitar 429 QuotaExceeded
+    date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
     date_to = now.strftime("%Y-%m-%d")
 
     try:

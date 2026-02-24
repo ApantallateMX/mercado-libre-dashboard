@@ -541,10 +541,14 @@ function loadAmazonDashboard() {
 
     document.getElementById('amz-recent-orders').innerHTML =
         '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
-    fetch('/api/metrics/amazon-recent-orders')
-        .then(function(r){return r.text();})
-        .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
-        .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
+    // Delay de 1.5s para que el caché se llene con la llamada de dashboard-data
+    // y así evitar un 3er request simultáneo a SP-API (429 QuotaExceeded)
+    setTimeout(function() {
+        fetch('/api/metrics/amazon-recent-orders')
+            .then(function(r){return r.text();})
+            .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
+            .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
+    }, 1500);
 }
 
 // ─── TAB PRODUCTOS ────────────────────────────────────────────────────────────
