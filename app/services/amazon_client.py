@@ -241,13 +241,19 @@ class AmazonClient:
         if marketplace_ids is None:
             marketplace_ids = [self.marketplace_id]
 
-        params = {
-            "MarketplaceIds": ",".join(marketplace_ids),
-            "CreatedAfter": created_after,
-            "OrderStatuses": "Shipped,Unshipped,PartiallyShipped,InvoiceUnconfirmed",
-        }
+        # SP-API exige parámetros repetidos para listas, no CSV
+        # Ejemplo correcto: OrderStatuses=Shipped&OrderStatuses=Unshipped
+        # InvoiceUnconfirmed solo aplica en Brasil — excluido para MX/US/CA
+        params: list = [
+            ("MarketplaceIds", mid) for mid in marketplace_ids
+        ] + [
+            ("CreatedAfter", created_after),
+            ("OrderStatuses", "Shipped"),
+            ("OrderStatuses", "Unshipped"),
+            ("OrderStatuses", "PartiallyShipped"),
+        ]
         if created_before:
-            params["CreatedBefore"] = created_before
+            params.append(("CreatedBefore", created_before))
 
         async with _ORDERS_SEMAPHORE:
             result = await self._request("GET", "/orders/v0/orders", params=params)
@@ -261,10 +267,10 @@ class AmazonClient:
                 next_result = await self._request(
                     "GET",
                     "/orders/v0/orders",
-                    params={
-                        "NextToken": next_token,
-                        "MarketplaceIds": ",".join(marketplace_ids),
-                    },
+                    params=[
+                        ("NextToken", next_token),
+                        *[("MarketplaceIds", mid) for mid in marketplace_ids],
+                    ],
                 )
             orders.extend(next_result.get("payload", {}).get("Orders", []))
             next_token = next_result.get("payload", {}).get("NextToken")
@@ -555,8 +561,17 @@ class AmazonClient:
             3. Incluye todos los estados (Shipped, Unshipped, Delivered, etc.)
         """
         # Convertir a ISO 8601 con zona UTC (SP-API lo requiere)
-        created_after  = f"{date_from}T00:00:00Z"
-        created_before = f"{date_to}T23:59:59Z"
+        created_after = f"{date_from}T00:00:00Z"
+
+        # Amazon exige que CreatedBefore sea al menos 2 min antes de "ahora".
+        # Si date_to es hoy, usamos ahora - 5 min para no caer en error 400.
+        # Si date_to es una fecha pasada, usamos las 23:59:59 de ese día.
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        if date_to >= today_str:
+            # Fecha futura o hoy: retroceder 5 minutos desde ahora
+            created_before = (datetime.utcnow() - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            created_before = f"{date_to}T23:59:59Z"
 
         return await self.get_orders(
             created_after=created_after,
@@ -591,9 +606,15 @@ async def get_amazon_client(seller_id: str = None) -> Optional[AmazonClient]:
     if seller_id:
         account = await token_store.get_amazon_account(seller_id)
     else:
-        # Usar el primer account disponible (el default)
+        # Usar el primer account disponible.
+        # IMPORTANTE: get_all_amazon_accounts() no incluye refresh_token por seguridad,
+        # por eso usamos get_all_amazon_accounts() solo para obtener el seller_id
+        # y luego get_amazon_account() para traer las credenciales completas.
         accounts = await token_store.get_all_amazon_accounts()
-        account = accounts[0] if accounts else None
+        if accounts:
+            account = await token_store.get_amazon_account(accounts[0]["seller_id"])
+        else:
+            account = None
 
     if not account:
         logger.warning("[Amazon] No hay cuentas Amazon configuradas en DB")
