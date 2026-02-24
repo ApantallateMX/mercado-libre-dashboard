@@ -6396,6 +6396,16 @@ async def stock_concentration_log_api(
     return {"entries": entries}
 
 
+@app.get("/api/stock/concentration/processed-skus")
+async def stock_concentration_processed_skus_api(
+    days: int = Query(30, ge=1, le=365),
+):
+    """SKUs que ya fueron concentrados exitosamente en los últimos N días.
+    Usado por el frontend para ocultar productos ya procesados del bulk."""
+    skus = await token_store.get_concentrated_skus(days=days)
+    return {"skus": skus, "days": days, "count": len(skus)}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

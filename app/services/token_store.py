@@ -237,6 +237,20 @@ async def last_concentration_for_sku(base_sku: str, hours: int = 24) -> Optional
         return dict(row) if row else None
 
 
+async def get_concentrated_skus(days: int = 30) -> list:
+    """Retorna lista de SKUs concentrados exitosamente en los últimos N días."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute("""
+            SELECT DISTINCT base_sku
+            FROM stock_concentration_log
+            WHERE dry_run = 0 AND status = 'ok'
+              AND executed_at >= datetime('now', ?)
+            ORDER BY base_sku
+        """, (f"-{days} days",))
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+
 async def is_token_expired(user_id: str) -> bool:
     """Verifica si el token ha expirado."""
     tokens = await get_tokens(user_id)

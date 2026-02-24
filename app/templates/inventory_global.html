@@ -78,6 +78,9 @@
         <button onclick="filterTable('opportunity')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="opportunity">Oportunidad</button>
         <button onclick="filterTable('zero')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="zero">Sin Stock</button>
         <button onclick="filterTable('ok')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="ok">OK</button>
+        <button onclick="filterTable('processed')" class="filter-tab px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200" data-filter="processed">
+            ✓ Ya Procesados <span id="tab-processed-count" class="ml-1 bg-emerald-500 text-white rounded-full px-1.5 py-0.5 text-[10px]">0</span>
+        </button>
         <div class="ml-auto flex items-center gap-2">
             <input type="text" id="search-input" placeholder="Buscar SKU / producto..."
                    oninput="searchTable(this.value)"
@@ -175,13 +178,15 @@ var _currentFilter = 'all';
 var _pendingConc = null;
 var _accountNicknames = {};
 var _pollInterval = null;
+var _processedSkus = new Set(); // SKUs ya concentrados (persistente via DB)
 
 // Status badge config
 var _statusConfig = {
-    ok:          { label: 'OK',          cls: 'bg-green-100 text-green-700' },
-    critical:    { label: 'Crítico',     cls: 'bg-red-100 text-red-700' },
-    opportunity: { label: 'Oportunidad', cls: 'bg-purple-100 text-purple-700' },
-    zero:        { label: 'Sin Stock',   cls: 'bg-gray-100 text-gray-500' },
+    ok:          { label: 'OK',           cls: 'bg-green-100 text-green-700' },
+    critical:    { label: 'Crítico',      cls: 'bg-red-100 text-red-700' },
+    opportunity: { label: 'Oportunidad',  cls: 'bg-purple-100 text-purple-700' },
+    zero:        { label: 'Sin Stock',    cls: 'bg-gray-100 text-gray-500' },
+    processed:   { label: 'Ya Procesado', cls: 'bg-emerald-100 text-emerald-700' },
 };
 
 function getStatus(row, threshold) {
@@ -237,7 +242,7 @@ function _pollStatus() {
                     var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
                     _scanData = state.result.rows || [];
                     _accountNicknames = state.result.account_nicknames || {};
-                    renderResults(threshold);
+                    _loadProcessedSkus(function() { renderResults(threshold); });
                 } else {
                     document.getElementById('scan-progress').classList.add('hidden');
                 }
@@ -268,6 +273,23 @@ function resetScanBtn() {
     document.getElementById('scan-btn').innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Escanear Inventario';
 }
 
+// Carga SKUs ya concentrados desde la DB y marca _scanData
+function _loadProcessedSkus(callback) {
+    fetch('/api/stock/concentration/processed-skus?days=30', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        _processedSkus = new Set((data.skus || []).map(function(s) { return s.toLowerCase(); }));
+        _scanData.forEach(function(r) {
+            r._concentrated = _processedSkus.has((r.sku || '').toLowerCase());
+        });
+        if (callback) callback();
+    })
+    .catch(function() {
+        // Si falla el endpoint, continuar sin marcar procesados
+        if (callback) callback();
+    });
+}
+
 window.addEventListener('DOMContentLoaded', function() {
     // Verificar si hay un scan en curso o ya completado al cargar la página
     fetch('/api/inventory/global-scan-status', {headers: {'ngrok-skip-browser-warning': 'true'}})
@@ -283,7 +305,7 @@ window.addEventListener('DOMContentLoaded', function() {
             var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
             _scanData = state.result.rows || [];
             _accountNicknames = state.result.account_nicknames || {};
-            renderResults(threshold);
+            _loadProcessedSkus(function() { renderResults(threshold); });
         }
     })
     .catch(function() { /* silencioso — el usuario puede iniciar manualmente */ });
@@ -300,15 +322,17 @@ function renderResults(threshold) {
     var rows = _scanData;
     var total = rows.length;
     var withStock = rows.filter(function(r) { return (r.bm_avail || 0) > 0; }).length;
-    var critical = rows.filter(function(r) { return getStatus(r, threshold) === 'critical'; }).length;
-    var zero = rows.filter(function(r) { return getStatus(r, threshold) === 'zero'; }).length;
-    var opportunity = rows.filter(function(r) { return getStatus(r, threshold) === 'opportunity'; }).length;
+    var critical = rows.filter(function(r) { return !r._concentrated && getStatus(r, threshold) === 'critical'; }).length;
+    var zero = rows.filter(function(r) { return !r._concentrated && getStatus(r, threshold) === 'zero'; }).length;
+    var opportunity = rows.filter(function(r) { return !r._concentrated && getStatus(r, threshold) === 'opportunity'; }).length;
+    var processed = rows.filter(function(r) { return r._concentrated; }).length;
 
     document.getElementById('kpi-total').textContent = total;
     document.getElementById('kpi-with-stock').textContent = withStock;
     document.getElementById('kpi-critical').textContent = critical;
     document.getElementById('kpi-zero').textContent = zero;
     document.getElementById('kpi-opportunity').textContent = opportunity;
+    document.getElementById('tab-processed-count').textContent = processed;
     document.getElementById('kpi-grid').classList.remove('hidden');
     document.getElementById('filter-tabs').classList.remove('hidden');
     document.getElementById('results-container').classList.remove('hidden');
@@ -333,6 +357,8 @@ function filterTable(filter, threshold) {
     });
 
     var filtered = _scanData.filter(function(r) {
+        if (filter === 'processed') return r._concentrated === true;
+        if (r._concentrated) return false; // ocultar procesados de todos los otros filtros
         if (filter === 'all') return true;
         return getStatus(r, threshold) === filter;
     });
@@ -344,7 +370,12 @@ function searchTable(q) {
     var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
     var lq = q.toLowerCase();
     var filtered = _scanData.filter(function(r) {
-        if (_currentFilter !== 'all' && getStatus(r, threshold) !== _currentFilter) return false;
+        if (_currentFilter === 'processed') {
+            if (!r._concentrated) return false;
+        } else {
+            if (r._concentrated) return false;
+            if (_currentFilter !== 'all' && getStatus(r, threshold) !== _currentFilter) return false;
+        }
         return !lq || (r.sku || '').toLowerCase().includes(lq) || (r.title || '').toLowerCase().includes(lq) || (r.brand || '').toLowerCase().includes(lq);
     });
     renderTable(filtered, threshold);
@@ -369,7 +400,7 @@ function renderTable(rows, threshold) {
 
     var html = '';
     rows.forEach(function(row) {
-        var status = getStatus(row, threshold);
+        var status = row._concentrated ? 'processed' : getStatus(row, threshold);
         var sc = _statusConfig[status] || _statusConfig.ok;
         var bmAvail = row.bm_avail || 0;
         var bmReserved = row.bm_reserved || 0;
@@ -673,33 +704,47 @@ function _removeSKUFromList(sku) {
         row.style.transition = 'opacity 0.4s';
         setTimeout(function() { row.style.display = 'none'; }, 500);
     });
-    _scanData = (_scanData || []).filter(function(r) {
-        return (r.sku || '').toLowerCase() !== sku.toLowerCase();
+    // Marcar como concentrado en memoria (para "Ya Procesados" en la misma sesión)
+    var skuLow = sku.toLowerCase();
+    _processedSkus.add(skuLow);
+    (_scanData || []).forEach(function(r) {
+        if ((r.sku || '').toLowerCase() === skuLow) r._concentrated = true;
     });
+    // Actualizar badge de procesados
+    var processedCount = (_scanData || []).filter(function(r) { return r._concentrated; }).length;
+    var badge = document.getElementById('tab-processed-count');
+    if (badge) badge.textContent = processedCount;
     // Actualizar contador del footer
     var visible = document.querySelectorAll('#inventory-tbody tr:not([style*="display: none"])').length;
     var footer = document.getElementById('table-footer');
-    if (footer) footer.textContent = visible + ' de ' + _scanData.length + ' SKUs';
+    if (footer) footer.textContent = visible + ' SKUs';
 }
 
 // ─── Bulk Concentration ──────────────────────────────────────────────────────
 
 function startBulkConcentration() {
-    // Candidatos: SKUs visibles con estado crítico u oportunidad
+    // Candidatos: SKUs con estado crítico u oportunidad, excluyendo ya procesados
     var threshold = parseInt(document.getElementById('threshold-input').value) || 10;
-    var candidates = (_scanData || []).filter(function(r) {
+    var allCandidates = (_scanData || []).filter(function(r) {
         var st = getStatus(r, threshold);
         return (st === 'critical' || st === 'opportunity') && r.sku;
     });
+    var alreadyDone = allCandidates.filter(function(r) { return r._concentrated; });
+    var candidates = allCandidates.filter(function(r) { return !r._concentrated; });
 
-    if (!candidates.length) {
+    if (!candidates.length && !alreadyDone.length) {
         alert('No hay SKUs candidatos visibles para concentrar.');
         return;
     }
+    if (!candidates.length) {
+        alert('Todos los SKUs candidatos (' + alreadyDone.length + ') ya fueron concentrados recientemente.\nRevisa la pestaña "Ya Procesados" para verlos.');
+        return;
+    }
 
-    if (!confirm('Se procesarán ' + candidates.length + ' SKUs.\n'
-        + 'Solo se ejecutarán los que tengan ganador claro (no manual).\n'
-        + '¿Continuar?')) return;
+    var skipMsg = alreadyDone.length > 0 ? '\n⏭ ' + alreadyDone.length + ' ya procesados anteriormente (se omiten).' : '';
+    if (!confirm('Se procesarán ' + candidates.length + ' SKUs nuevos.\n'
+        + 'Solo se ejecutarán los que tengan ganador claro (no manual).'
+        + skipMsg + '\n¿Continuar?')) return;
 
     // Inicializar modal de bulk
     document.getElementById('bulk-modal').classList.remove('hidden');
@@ -749,7 +794,9 @@ function _runBulk(candidates, idx, stats) {
             + stats.skipped + ' omitidos · '
             + stats.errors + ' errores de ' + candidates.length + ' SKUs';
         document.getElementById('bulk-subtitle').textContent = 'Completado';
-        renderTable();
+        // Re-renderizar con filtro actual (los procesados ahora están en "Ya Procesados")
+        var th = parseInt(document.getElementById('threshold-input').value) || 10;
+        renderResults(th);
         return;
     }
 
