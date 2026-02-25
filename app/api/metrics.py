@@ -701,14 +701,25 @@ async def get_amazon_dashboard_data(
     if not date_to:
         date_to = now.strftime("%Y-%m-%d")
 
+    async def _safe_active_listings():
+        try:
+            from app.api.amazon_products import _get_listings_cached as _glc
+            ls = await _glc(client)
+            return sum(1 for l in ls if (l.get("status") or "").lower() == "active")
+        except Exception:
+            return None
+
     try:
-        # Sales API — totalSales = OPS (Ordered Product Sales = lo que muestra SC)
-        metrics_data = await _get_cached_order_metrics(client, date_from, date_to)
+        # Sales API + listings count en paralelo
+        metrics_data, active_listings = await asyncio.gather(
+            _get_cached_order_metrics(client, date_from, date_to),
+            _safe_active_listings(),
+        )
     except Exception as exc:
         empty_chart, _ = _build_amazon_chart_from_metrics([], date_from, date_to)
         return {
             "metrics": {"total_orders": 0, "total_units": 0, "total_revenue": 0.0,
-                        "avg_per_order": 0.0},
+                        "avg_per_order": 0.0, "active_listings": None},
             "chart": {"data": empty_chart, "group_by": "day"},
             "error": str(exc)[:300],
         }
@@ -723,10 +734,11 @@ async def get_amazon_dashboard_data(
     avg_per_order = (total_revenue / total_orders) if total_orders > 0 else 0.0
 
     metrics = {
-        "total_orders":  total_orders,
-        "total_units":   total_units,
-        "total_revenue": round(total_revenue, 2),
-        "avg_per_order": round(avg_per_order, 2),
+        "total_orders":   total_orders,
+        "total_units":    total_units,
+        "total_revenue":  round(total_revenue, 2),
+        "avg_per_order":  round(avg_per_order, 2),
+        "active_listings": active_listings,
     }
 
     chart_data, group_by = _build_amazon_chart_from_metrics(metrics_data, date_from, date_to)

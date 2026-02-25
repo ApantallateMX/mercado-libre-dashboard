@@ -27,6 +27,51 @@
      Dashboard Amazon — cuenta activa
      ══════════════════════════════════════════════════════════════════════ -->
 
+<!-- ═══ ACCOUNT IDENTITY BANNER ═══ -->
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4"
+     id="amz-account-banner" style="border-left-color:#FF9900">
+    <div class="px-4 md:px-6 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <!-- Izquierda: avatar + nombre -->
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0"
+                 style="background:#232F3E">
+                {% if amazon_account %}{{ (amazon_account.nickname or 'AM')[:2]|upper }}{% else %}AM{% endif %}
+            </div>
+            <div>
+                <h1 class="font-bold text-gray-800 leading-tight text-base">
+                    {% if amazon_account %}{{ amazon_account.nickname }}{% else %}Amazon{% endif %}
+                </h1>
+                <p class="text-xs text-gray-400">
+                    {% if amazon_account %}{{ amazon_account.marketplace_name or 'Amazon MX' }}{% else %}Amazon MX{% endif %}
+                    · <span id="amz-period-label">Últimos 30 días</span>
+                </p>
+            </div>
+        </div>
+        <!-- Derecha: stats de hoy (solo desktop) -->
+        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
+            <div class="pr-5">
+                <p class="text-xs text-gray-400">Órdenes hoy</p>
+                <p class="font-bold text-gray-800 text-lg" id="amz-qs-orders">—</p>
+            </div>
+            <div class="px-5">
+                <p class="text-xs text-gray-400">Unidades hoy</p>
+                <p class="font-bold text-gray-800 text-lg" id="amz-qs-units">—</p>
+            </div>
+            <div class="px-5">
+                <p class="text-xs text-gray-400">Revenue hoy</p>
+                <p class="font-bold text-lg" style="color:#FF9900" id="amz-qs-revenue">—</p>
+            </div>
+            <div class="pl-5">
+                <p class="text-xs text-gray-400 mb-1.5">Meta del día <span id="amz-qs-pct" class="font-bold"></span></p>
+                <div class="w-32 bg-gray-200 rounded-full h-2.5">
+                    <div id="amz-qs-bar" class="h-2.5 rounded-full transition-all duration-700"
+                         style="width:0%;background:#FF9900"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ══════════════════════════════════════════════════════════════════════════
      TAB: VENTAS
      ══════════════════════════════════════════════════════════════════════ -->
@@ -268,6 +313,7 @@ function getDateParams() {
 
 function renderAmazonMetrics(m) {
     var udsXOrden = m.total_orders > 0 ? (m.total_units / m.total_orders).toFixed(1) : '—';
+    var listingsVal = (m.active_listings != null) ? m.active_listings : '—';
     var cards = [
         { label: 'Órdenes del Período', value: m.total_orders,
           icon: '📦', color: '#F97316', hint: udsXOrden + ' uds/orden en promedio' },
@@ -275,8 +321,8 @@ function renderAmazonMetrics(m) {
           icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? udsXOrden + ' uds por orden' : '—' },
         { label: 'Ventas del Período',  value: '$' + fmtMoney(m.total_revenue),
           icon: '💰', color: '#C2410C', hint: m.total_orders > 0 ? '$' + fmtMoney(m.avg_per_order) + ' por orden' : '—' },
-        { label: 'Promedio por Orden',  value: '$' + fmtMoney(m.avg_per_order),
-          icon: '📈', color: '#9A3412', hint: 'Ordered Product Sales (OPS)' }
+        { label: 'Listings Activos',    value: listingsVal,
+          icon: '🏷️', color: '#9A3412', hint: 'Productos activos en Amazon MX' }
     ];
     var html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">';
     cards.forEach(function(c) {
