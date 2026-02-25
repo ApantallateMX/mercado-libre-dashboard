@@ -1,0 +1,155 @@
+{# ─── amazon_orders_table.html ───────────────────────────────────────────────
+   Partial devuelto por GET /api/amazon/orders.
+   Contiene: banner de 4 stats + tabla de órdenes con lazy expand de items.
+──────────────────────────────────────────────────────────────────────────── #}
+
+<!-- ── STATS BANNER ───────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Órdenes</p>
+        <p class="text-2xl font-bold text-gray-800">{{ stats.total_orders }}</p>
+        <p class="text-xs text-gray-400 mt-1">{{ date_from }} → {{ date_to }}</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Unidades</p>
+        <p class="text-2xl font-bold text-gray-800">{{ stats.total_units }}</p>
+        <p class="text-xs text-gray-400 mt-1">sin canceladas</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Revenue Total</p>
+        <p class="text-2xl font-bold text-green-700">
+            ${{ "{:,.0f}".format(stats.total_revenue) }}
+        </p>
+        <p class="text-xs text-gray-400 mt-1">MXN · sin canceladas</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-red-400">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Canceladas</p>
+        <p class="text-2xl font-bold text-red-600">{{ stats.total_canceled }}</p>
+        <p class="text-xs text-gray-400 mt-1">en el período</p>
+    </div>
+
+</div>
+
+<!-- ── TABLA DE ÓRDENES ──────────────────────────────────────────────────── -->
+{% if not orders %}
+<div class="bg-white rounded-xl shadow p-10 text-center text-gray-400">
+    <p class="text-lg">Sin órdenes en el período seleccionado</p>
+    <p class="text-sm mt-1">Prueba con un rango de fechas más amplio</p>
+</div>
+
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm" id="amz-orders-table">
+            <thead>
+                <tr class="bg-[#232F3E] text-gray-200 text-xs uppercase tracking-wide">
+                    <th class="px-4 py-3 text-left">Fecha (CST)</th>
+                    <th class="px-4 py-3 text-left">ID Orden</th>
+                    <th class="px-4 py-3 text-center">Canal</th>
+                    <th class="px-4 py-3 text-right">Unidades</th>
+                    <th class="px-4 py-3 text-right">Total</th>
+                    <th class="px-4 py-3 text-center">Estado</th>
+                    <th class="px-4 py-3 text-center">Detalle</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100" id="amz-orders-tbody">
+                {% for order in orders %}
+                <!-- Fila principal -->
+                <tr class="hover:bg-orange-50 transition" id="order-row-{{ order.order_id }}">
+                    <td class="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{{ order.date }}</td>
+                    <td class="px-4 py-3 font-mono text-xs text-gray-700">{{ order.order_id }}</td>
+                    <td class="px-4 py-3 text-center">
+                        <span class="inline-block text-xs font-semibold px-2 py-0.5 rounded-full {{ order.canal_css }}">
+                            {{ order.canal }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-right font-semibold text-gray-700">{{ order.units }}</td>
+                    <td class="px-4 py-3 text-right font-bold text-green-700">
+                        ${{ "{:,.2f}".format(order.amount) }}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full {{ order.status_css }}">
+                            {{ order.status }}
+                        </span>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <button
+                            onclick="toggleOrderItems('{{ order.order_id }}')"
+                            id="btn-{{ order.order_id }}"
+                            class="text-xs font-medium text-[#146EB4] hover:text-[#FF9900] transition px-2 py-1 rounded border border-gray-200 hover:border-[#FF9900]">
+                            Ver ▼
+                        </button>
+                    </td>
+                </tr>
+                <!-- Fila expandida (items lazy) — placeholder vacío -->
+                <tr id="expand-{{ order.order_id }}" class="hidden">
+                    <td colspan="7"></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pie de tabla -->
+    <div class="px-4 py-3 bg-gray-50 border-t text-xs text-gray-400 flex justify-between items-center">
+        <span>{{ orders | length }} orden{% if orders | length != 1 %}es{% endif %} · período {{ date_from }} → {{ date_to }}</span>
+        <span class="text-[#FF9900] font-semibold">Amazon SP-API</span>
+    </div>
+</div>
+{% endif %}
+
+<!-- ── JS: Toggle lazy load de items ─────────────────────────────────────── -->
+<script>
+(function(){
+    // Estado de los botones expandidos
+    const _expanded = {};
+
+    window.toggleOrderItems = async function(orderId) {
+        const expandRow = document.getElementById('expand-' + orderId);
+        const btn       = document.getElementById('btn-'    + orderId);
+        if (!expandRow || !btn) return;
+
+        // Si ya está abierto, cerrarlo
+        if (_expanded[orderId]) {
+            expandRow.classList.add('hidden');
+            btn.textContent = 'Ver ▼';
+            _expanded[orderId] = false;
+            return;
+        }
+
+        // Marcar como cargando
+        btn.textContent = '⏳';
+        btn.disabled = true;
+
+        try {
+            const resp = await fetch('/api/amazon/orders/' + orderId + '/items');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const html = await resp.text();
+
+            // Reemplazar el contenido del placeholder
+            expandRow.outerHTML = html;
+
+            btn.textContent = 'Cerrar ▲';
+            btn.disabled = false;
+            _expanded[orderId] = true;
+
+            // Re-vincular botón (puede haber cambiado el DOM)
+            const newBtn = document.getElementById('btn-' + orderId);
+            if (newBtn) newBtn.disabled = false;
+
+            // Scroll suave a la fila expandida
+            const newRow = document.getElementById('items-row-' + orderId);
+            if (newRow) newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+        } catch(e) {
+            btn.textContent = 'Error';
+            btn.disabled = false;
+            console.error('[Amazon Orders] Error cargando items:', e);
+        }
+    };
+})();
+</script>

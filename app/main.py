@@ -20,6 +20,7 @@ from app.api.health import router as health_router
 from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
 from app.api.amazon_products import router as amazon_products_router
+from app.api.amazon_orders import router as amazon_orders_router
 from app.services import token_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
@@ -297,6 +298,7 @@ app.include_router(health_router)
 app.include_router(sku_inventory_router)
 app.include_router(health_ai_router)
 app.include_router(amazon_products_router)
+app.include_router(amazon_orders_router)
 
 
 # ---------- Account switcher ----------
@@ -6661,6 +6663,24 @@ async def amazon_products_page(request: Request):
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = "products"
     return templates.TemplateResponse("amazon_products.html", {"request": request, "user": user, **ctx})
+
+
+@app.get("/amazon/orders", response_class=HTMLResponse)
+async def amazon_orders_page(request: Request):
+    """
+    Historial de Órdenes Amazon — tabla con fecha, canal FBA/FBM, estado
+    y detalle lazy de items por orden.
+    """
+    user = await get_current_user()
+    ctx = await _accounts_ctx(request)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+    ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amazon"
+    ctx["active_amazon_tab"] = "orders"
+    return templates.TemplateResponse("amazon_orders.html", {"request": request, "user": user, **ctx})
 
 
 if __name__ == "__main__":

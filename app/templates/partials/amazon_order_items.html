@@ -1,0 +1,80 @@
+{# ─── amazon_order_items.html ────────────────────────────────────────────────
+   Partial cargado LAZY al hacer click en "Ver ▼" de una fila de la tabla de
+   órdenes Amazon.  Se inserta en la fila expandida via HTMX.
+──────────────────────────────────────────────────────────────────────────── #}
+
+{% if not items %}
+<tr id="items-row-{{ order_id }}">
+    <td colspan="7" class="px-4 py-3 text-center text-gray-400 text-sm italic bg-orange-50">
+        Sin items disponibles para esta orden.
+    </td>
+</tr>
+{% else %}
+<tr id="items-row-{{ order_id }}" class="bg-orange-50">
+    <td colspan="7" class="px-0 py-0">
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <!-- cabecera de items -->
+                <thead>
+                    <tr class="bg-[#232F3E] text-gray-300 uppercase tracking-wide">
+                        <th class="px-4 py-2 text-left">Producto</th>
+                        <th class="px-4 py-2 text-left">SKU</th>
+                        <th class="px-4 py-2 text-left">ASIN</th>
+                        <th class="px-4 py-2 text-right">Precio Unit.</th>
+                        <th class="px-4 py-2 text-right">Qty</th>
+                        <th class="px-4 py-2 text-right">Total</th>
+                        <th class="px-4 py-2 text-right">Envío</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-orange-100">
+                    {% for item in items %}
+                    <tr class="hover:bg-orange-100 transition">
+                        <td class="px-4 py-2 text-gray-700 max-w-xs truncate" title="{{ item.title }}">
+                            {{ item.title or '—' }}
+                        </td>
+                        <td class="px-4 py-2 font-mono text-gray-600">{{ item.sku }}</td>
+                        <td class="px-4 py-2 font-mono">
+                            <a href="https://www.amazon.com.mx/dp/{{ item.asin }}"
+                               target="_blank"
+                               class="text-[#146EB4] hover:underline">{{ item.asin }}</a>
+                        </td>
+                        <td class="px-4 py-2 text-right text-gray-700">
+                            ${{ "%.2f"|format(item.unit_price) }}
+                        </td>
+                        <td class="px-4 py-2 text-right font-semibold text-gray-700">
+                            {{ item.qty }}
+                        </td>
+                        <td class="px-4 py-2 text-right font-bold text-green-700">
+                            ${{ "%.2f"|format(item.total) }}
+                        </td>
+                        <td class="px-4 py-2 text-right text-gray-500">
+                            {% if item.shipping > 0 %}
+                                ${{ "%.2f"|format(item.shipping) }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <!-- pie: total de items -->
+                {% set grand_total = items | sum(attribute='total') %}
+                <tfoot>
+                    <tr class="border-t border-orange-200 bg-orange-50">
+                        <td colspan="4" class="px-4 py-2 text-right text-xs text-gray-500 font-medium">
+                            Total orden:
+                        </td>
+                        <td class="px-4 py-2 text-right font-bold text-gray-700">
+                            {{ items | sum(attribute='qty') }} uds
+                        </td>
+                        <td class="px-4 py-2 text-right font-bold text-green-700">
+                            ${{ "%.2f"|format(grand_total) }}
+                        </td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </td>
+</tr>
+{% endif %}
