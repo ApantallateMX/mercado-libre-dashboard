@@ -15,7 +15,7 @@ import time as _time
 import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
@@ -55,6 +55,18 @@ _STATUS_DEFAULT = ("Desconocido", "bg-gray-100 text-gray-500")
 
 _CANCELED_STATUSES = {"Canceled", "Cancelled"}
 
+# Orden de prioridad para el sort: no-pendientes primero
+_STATUS_PRIORITY: dict[str, int] = {
+    "Shipped":            1,
+    "Unshipped":          2,
+    "PartiallyShipped":   3,
+    "InvoiceUnconfirmed": 4,
+    "Unfulfillable":      5,
+    "Pending":            6,
+    "Canceled":           7,
+    "Cancelled":          7,
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -90,17 +102,22 @@ def _normalize_order(order: dict) -> dict:
     unshipped = int(order.get("NumberOfItemsUnshipped") or 0)
     units     = shipped + unshipped
 
+    # Órdenes Pending no tienen Total aún (Amazon no lo expone hasta confirmar)
+    amount_display = f"${amount:,.2f}" if (amount > 0 and status_raw != "Pending") else "—"
+
     return {
-        "order_id":   order.get("AmazonOrderId", ""),
-        "date":       _purchase_date_cst(order.get("PurchaseDate", "")),
-        "canal":      canal,
-        "canal_css":  canal_css,
-        "units":      units,
-        "amount":     amount,
-        "currency":   currency,
-        "status":     label,
-        "status_css": badge,
-        "status_raw": status_raw,
+        "order_id":        order.get("AmazonOrderId", ""),
+        "date":            _purchase_date_cst(order.get("PurchaseDate", "")),
+        "canal":           canal,
+        "canal_css":       canal_css,
+        "units":           units,
+        "amount":          amount,
+        "amount_display":  amount_display,
+        "currency":        currency,
+        "status":          label,
+        "status_css":      badge,
+        "status_raw":      status_raw,
+        "status_priority": _STATUS_PRIORITY.get(status_raw, 9),
     }
 
 
@@ -157,7 +174,10 @@ async def get_amazon_orders(
             # Deduplicar por AmazonOrderId
             merged = {o["AmazonOrderId"]: o for o in (normal + pending)}
             orders = [_normalize_order(o) for o in merged.values()]
+            # Sort estable en 2 pasos: primero fecha desc, luego prioridad asc
+            # Resultado: dentro de cada grupo de estado, las más recientes aparecen primero
             orders.sort(key=lambda x: x["date"], reverse=True)
+            orders.sort(key=lambda x: x["status_priority"])
         except Exception as exc:
             logger.error("[Amazon Orders] Error fetching orders: %s", exc)
             orders = []
@@ -271,3 +291,62 @@ async def get_order_items_partial(
             "order_ctx": order_ctx,
         },
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 3: Preview de producto (para poblar columna Producto en la tabla)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/orders/{order_id}/preview")
+async def get_order_preview(request: Request, order_id: str):
+    """
+    Devuelve JSON con el primer item de la orden para mostrar en la fila de la tabla.
+    Usa el mismo caché de items que el endpoint principal.
+    Retorna: {title, sku, asin, items_count}
+    """
+    active_amazon_id = request.cookies.get("active_amazon_id")
+    client = await get_amazon_client(active_amazon_id)
+    if not client:
+        return JSONResponse({"error": "no client"}, status_code=401)
+
+    cached = _items_cache.get(order_id)
+    if cached and (_time.time() - cached[0]) < _ITEMS_TTL:
+        items = cached[1]
+    else:
+        try:
+            raw_items = await client.get_order_items(order_id)
+            items = []
+            for item in raw_items:
+                ip    = item.get("ItemPrice")         or {}
+                sp    = item.get("ShippingPrice")     or {}
+                tax   = item.get("ItemTax")            or {}
+                promo = item.get("PromotionDiscount") or {}
+                qty   = int(item.get("QuantityOrdered") or 0)
+                unit_price = _safe_float(ip, "Amount")
+                items.append({
+                    "title":      (item.get("Title") or ""),
+                    "sku":        item.get("SellerSKU") or "—",
+                    "asin":       item.get("ASIN")      or "—",
+                    "unit_price": unit_price,
+                    "qty":        qty,
+                    "total":      round(unit_price * qty, 2),
+                    "shipping":   _safe_float(sp,    "Amount"),
+                    "tax":        _safe_float(tax,   "Amount"),
+                    "discount":   _safe_float(promo, "Amount"),
+                    "currency":   ip.get("CurrencyCode", "MXN"),
+                })
+            _items_cache[order_id] = (_time.time(), items)
+        except Exception as exc:
+            logger.warning("[Amazon Preview] Error para %s: %s", order_id, exc)
+            items = []
+
+    if not items:
+        return JSONResponse({"title": "—", "sku": "—", "asin": "—", "items_count": 0})
+
+    first = items[0]
+    return JSONResponse({
+        "title":       first["title"],
+        "sku":         first["sku"],
+        "asin":        first["asin"],
+        "items_count": len(items),
+    })
