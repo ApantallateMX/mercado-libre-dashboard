@@ -24,7 +24,7 @@
 {% if active_platform == "amazon" %}
 {# ════════════════════════════════════════════════════════════════════════════
    AMAZON NAV — fondo oscuro #232F3E, acentos naranja #FF9900
-   Tabs: 📊 Ventas | 💚 Salud | 📦 Productos
+   Tabs: 📊 Dashboard | 💚 Salud | 📦 Productos
    ════════════════════════════════════════════════════════════════════════ #}
 <nav style="background:#232F3E" class="shadow-lg">
     <div class="max-w-7xl mx-auto px-4">
@@ -48,7 +48,7 @@
                 <a href="/amazon"
                    class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
                           {% if active_amazon_tab == 'ventas' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    📊 Ventas
+                    📊 Dashboard
                 </a>
                 <a href="/amazon?tab=salud"
                    class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
@@ -159,7 +159,7 @@
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
                       {% if active_amazon_tab == 'ventas' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
                 <span class="text-2xl">📊</span>
-                <span class="text-xs {% if active_amazon_tab == 'ventas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Ventas</span>
+                <span class="text-xs {% if active_amazon_tab == 'ventas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Dashboard</span>
             </a>
             <a href="/amazon?tab=salud"
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
