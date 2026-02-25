@@ -6620,7 +6620,7 @@ async def stock_concentration_processed_skus_api(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/amazon", response_class=HTMLResponse)
-async def amazon_dashboard(request: Request):
+async def amazon_dashboard(request: Request, tab: str = Query(default="ventas")):
     """
     Dashboard Amazon — muestra ventas diarias, métricas y contexto de la
     cuenta Amazon activa (seleccionada con active_amazon_id cookie).
@@ -6638,9 +6638,10 @@ async def amazon_dashboard(request: Request):
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
 
+    active_tab = tab if tab in ("ventas", "salud") else "ventas"
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
-    ctx["active_amazon_tab"] = "dashboard"
+    ctx["active_amazon_tab"] = active_tab
     return templates.TemplateResponse("amazon_dashboard.html", {"request": request, "user": user, **ctx})
 
 

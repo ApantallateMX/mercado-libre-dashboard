@@ -27,22 +27,10 @@
      Dashboard Amazon — cuenta activa
      ══════════════════════════════════════════════════════════════════════ -->
 
-<!-- ═══ TABS DE NAVEGACIÓN ═══ -->
-<div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
-    <div class="flex border-b border-gray-100 overflow-x-auto">
-        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-semibold border-b-2 border-orange-500 text-orange-600 whitespace-nowrap shrink-0" data-tab="ventas">
-            <span>📊</span> Ventas
-        </button>
-        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-orange-500 whitespace-nowrap shrink-0 transition" data-tab="salud">
-            <span>💚</span> Salud
-        </button>
-    </div>
-</div>
-
 <!-- ══════════════════════════════════════════════════════════════════════════
      TAB: VENTAS
      ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-ventas">
+<div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
 
 <!-- ─── Filtro de fechas ───────────────────────────────────────────────── -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
@@ -176,7 +164,7 @@
 <!-- ══════════════════════════════════════════════════════════════════════════
      TAB: SALUD
      ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-salud" class="hidden">
+<div id="amz-tab-salud" {% if active_amazon_tab != 'salud' %}class="hidden"{% endif %}>
     <div id="amz-health-content">
         <div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">
             {% for i in range(4) %}
@@ -198,8 +186,8 @@
 
 var amzChartInstance = null;
 var amzDailyGoal = 50000;
-var amzActiveTab = 'ventas';
-var amzTabLoaded = { ventas: true, salud: false };
+var amzActiveTab = '{{ active_amazon_tab }}';
+var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -242,9 +230,7 @@ function switchAmzTab(tabName) {
     }
 }
 
-document.querySelectorAll('.amz-tab-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() { switchAmzTab(this.getAttribute('data-tab')); });
-});
+// Tabs ahora en el nav top — navegación por URL (/amazon o /amazon?tab=salud)
 
 // ─── Range helpers ────────────────────────────────────────────────────────────
 function setRange(days) {
@@ -364,14 +350,16 @@ function updateAmazonTodayBar(todayRevenue, todayOrders, todayUnits) {
     var rem = Math.max(amzDailyGoal - todayRevenue, 0);
     document.getElementById('amz-today-remaining-label').textContent = rem > 0 ? 'Faltan $'+fmtMoney(rem) : '🎯 ¡Meta alcanzada!';
 
-    document.getElementById('amz-qs-orders').textContent  = (todayOrders||0) + ' órd.';
-    document.getElementById('amz-qs-units').textContent   = (todayUnits||0)  + ' uds';
-    document.getElementById('amz-qs-revenue').textContent = '$' + fmtMoney(todayRevenue);
-    var qsPct = document.getElementById('amz-qs-pct');
-    qsPct.textContent = pct.toFixed(1) + '%';
-    qsPct.style.color = pct >= 100 ? '#10B981' : (pct >= 80 ? '#D97706' : '#EF4444');
-    document.getElementById('amz-qs-bar').style.width = cappedPct + '%';
-    document.getElementById('amz-qs-bar').style.background = barColor;
+    var qsOrders  = document.getElementById('amz-qs-orders');
+    var qsUnits   = document.getElementById('amz-qs-units');
+    var qsRevenue = document.getElementById('amz-qs-revenue');
+    var qsPct     = document.getElementById('amz-qs-pct');
+    var qsBar     = document.getElementById('amz-qs-bar');
+    if (qsOrders)  qsOrders.textContent  = (todayOrders||0) + ' órd.';
+    if (qsUnits)   qsUnits.textContent   = (todayUnits||0)  + ' uds';
+    if (qsRevenue) qsRevenue.textContent = '$' + fmtMoney(todayRevenue);
+    if (qsPct) { qsPct.textContent = pct.toFixed(1) + '%'; qsPct.style.color = pct >= 100 ? '#10B981' : (pct >= 80 ? '#D97706' : '#EF4444'); }
+    if (qsBar)  { qsBar.style.width = cappedPct + '%'; qsBar.style.background = barColor; }
 }
 
 function renderAmazonDailyTable(data) {
@@ -619,7 +607,12 @@ document.getElementById('btn-amz-limpiar').addEventListener('click', function() 
 // ─── Carga inicial ─────────────────────────────────────────────────────────────
 setRange(30);
 highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
-loadAmazonDashboard();
+if (amzActiveTab === 'salud') {
+    loadAmzSaludTab();
+    amzTabLoaded.salud = true;
+} else {
+    loadAmazonDashboard();
+}
 </script>
 {% endif %}
 {% endblock %}
