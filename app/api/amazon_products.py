@@ -1113,7 +1113,7 @@ async def amazon_products_stock_alerts(request: Request):
         )
         sku_sales = await _get_sku_sales_cached(client)
 
-        # Índice de listings por SKU para títulos y ASIN
+        # Índice de listings por SKU — título, ASIN y status
         listings_idx = {}
         for item in listings:
             sku = item.get("sku", "")
@@ -1122,6 +1122,7 @@ async def amazon_products_stock_alerts(request: Request):
             listings_idx[sku] = {
                 "title": summary_0.get("itemName", sku)[:65],
                 "asin": summary_0.get("asin") or "",
+                "status": _listing_status(summaries),
             }
 
         sin_stock = []
@@ -1143,7 +1144,7 @@ async def amazon_products_stock_alerts(request: Request):
             units_30d = sales["units"]
             vel_dia = units_30d / 30.0
 
-            listing = listings_idx.get(sku, {"title": name, "asin": asin})
+            listing = listings_idx.get(sku, {"title": name, "asin": asin, "status": "ACTIVE"})
             title = listing["title"] or name
             listing_asin = listing["asin"] or asin
             sc_url = (
@@ -1158,23 +1159,26 @@ async def amazon_products_stock_alerts(request: Request):
                 "fulfillable": fulfillable,
                 "inbound": inbound,
                 "units_30d": units_30d,
-                "vel_dia": round(vel_dia, 2),
+                "vel_dia": round(vel_dia, 2) if vel_dia > 0 else None,
                 "sc_url": sc_url,
             }
 
-            if fulfillable == 0 and units_30d > 0:
+            # ── Sin Stock: fulfillable = 0 (sin condición de ventas)
+            if fulfillable == 0:
                 sin_stock.append(base)
 
-            if 0 < fulfillable < 10 and units_30d > 0:
+            # ── Stock Bajo: 1–10 uds en FBA (sin condición de ventas)
+            elif 0 < fulfillable <= 10:
                 dias_hasta_0 = round(fulfillable / vel_dia, 1) if vel_dia > 0 else None
                 entry = {**base, "dias_hasta_0": dias_hasta_0}
                 entry["recomendacion"] = (
                     f"Enviar pronto — ~{round(vel_dia * 30)} uds/mes"
-                    if vel_dia > 0 else "Sin vel. de ventas registrada"
+                    if vel_dia > 0 else "Reabastece FBA — activa ventas para calcular velocidad"
                 )
                 stock_bajo.append(entry)
 
-            if vel_dia > 0 and fulfillable > 0:
+            # ── Restock Urgente: >10 uds pero se agotan en <14 días según velocidad
+            elif vel_dia > 0 and fulfillable > 10:
                 dias_supply = fulfillable / vel_dia
                 if dias_supply < 14:
                     sugeridas = max(0, round(vel_dia * 60) - fulfillable - inbound)
@@ -1184,7 +1188,8 @@ async def amazon_products_stock_alerts(request: Request):
                         "sugeridas": sugeridas,
                     })
 
-        sin_stock.sort(key=lambda x: x["units_30d"], reverse=True)
+        # Ordenar: sin stock por título, stock_bajo por días hasta 0, restock por días supply
+        sin_stock.sort(key=lambda x: x["title"])
         stock_bajo.sort(key=lambda x: (x.get("dias_hasta_0") or 9999))
         restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
 

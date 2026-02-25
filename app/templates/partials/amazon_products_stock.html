@@ -12,9 +12,12 @@
 {% if total_urgentes == 0 %}
 <!-- Todo OK -->
 <div class="bg-white rounded-xl shadow p-10 text-center">
-    <div class="text-4xl mb-3">✅</div>
+    <div class="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+        <span class="text-3xl">✅</span>
+    </div>
     <h3 class="text-lg font-bold text-gray-700 mb-1">Sin alertas de stock</h3>
-    <p class="text-gray-400 text-sm">Tu inventario FBA está en buen estado.</p>
+    <p class="text-gray-400 text-sm">Todo tu inventario FBA tiene stock suficiente.</p>
+    <p class="text-gray-300 text-xs mt-2">Se revisan SKUs con 0 uds, 1–10 uds, o &lt;14 días de supply</p>
 </div>
 
 {% else %}
@@ -54,10 +57,18 @@
                         </div>
                     </td>
                     <td class="py-3 px-3 text-right">
+                        {% if item.units_30d > 0 %}
                         <span class="text-sm font-bold text-red-600">{{ item.units_30d }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">Sin datos</span>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
+                        {% if item.vel_dia %}
                         <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
                         {% if item.inbound > 0 %}
@@ -116,7 +127,11 @@
                         <span class="text-sm font-bold text-orange-600">{{ item.fulfillable }}</span>
                     </td>
                     <td class="py-3 px-3 text-right">
+                        {% if item.vel_dia %}
                         <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
                         {% if item.dias_hasta_0 is not none %}
@@ -183,7 +198,11 @@
                         <span class="text-sm font-bold text-gray-700">{{ item.fulfillable }}</span>
                     </td>
                     <td class="py-3 px-3 text-right">
+                        {% if item.vel_dia %}
                         <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 rounded-full text-xs font-bold
