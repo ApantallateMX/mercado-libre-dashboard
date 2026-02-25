@@ -6395,17 +6395,25 @@ async def get_multi_account_amazon_dashboard(
     today_str = now.strftime("%Y-%m-%d")
     week_start_str = (now - timedelta(days=6)).strftime("%Y-%m-%d")
 
+    # Rango fijo de 29 días — IGUAL al default del Amazon dashboard
+    # Así el multi-dashboard comparte el mismo cache key y NO hace llamadas extra a SP-API
+    cache_date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+    cache_date_to   = now.strftime("%Y-%m-%d")
+
     async def _fetch_amz_data(account: dict) -> dict:
-        seller_id = account["seller_id"]
-        nickname  = account.get("nickname") or seller_id
+        # Import local para compartir el caché con metrics.py (mismo objeto en memoria)
+        from app.api.metrics import _get_cached_amazon_orders as _cached_orders
+        seller_id   = account["seller_id"]
+        nickname    = account.get("nickname") or seller_id
         marketplace = account.get("marketplace_name", "MX")
         try:
             client = await _get_amz_client(seller_id=seller_id)
             if not client:
                 raise ValueError("No client para seller_id=" + seller_id)
 
-            orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
-            valid  = [o for o in orders if o.get("OrderStatus") in {"Shipped", "Delivered", "Unshipped"}]
+            # Usa caché compartido — si el Amazon dashboard ya cargó, esto no hace ninguna
+            # llamada a SP-API. Si no, el lock evita llamadas simultáneas.
+            orders = await _cached_orders(client, cache_date_from, cache_date_to)
 
             def _parse_dt(o):
                 try:
@@ -6427,11 +6435,13 @@ async def get_multi_account_amazon_dashboard(
                     units += int(o.get("NumberOfItemsUnshipped", 0) or 0)
                 return {"orders": len(order_list), "units": units, "revenue": round(rev, 2)}
 
-            today_orders = [o for o in valid if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= today_str]
-            week_orders  = [o for o in valid if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= week_start_str]
+            today_orders = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= today_str]
+            week_orders  = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= week_start_str]
+            month_start  = now.replace(day=1).strftime("%Y-%m-%d")
+            month_orders = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= month_start]
 
             daily_revenues: dict[str, float] = {}
-            for o in valid:
+            for o in orders:
                 dt = _parse_dt(o)
                 if dt:
                     dk = dt.strftime("%Y-%m-%d")
@@ -6450,7 +6460,7 @@ async def get_multi_account_amazon_dashboard(
                 "color":          "#F97316",
                 "today":          _agg(today_orders),
                 "week":           _agg(week_orders),
-                "month":          _agg(valid),
+                "month":          _agg(month_orders),
                 "active_items":   0,
                 "daily_revenues": {k: round(v, 2) for k, v in daily_revenues.items()},
                 "error":          None,
@@ -6470,7 +6480,10 @@ async def get_multi_account_amazon_dashboard(
                 "error":          str(exc),
             }
 
-    amazon_data = list(await asyncio.gather(*[_fetch_amz_data(a) for a in amazon_accounts_list]))
+    # Sequential — no parallel. Con 1 cuenta ahorra llamadas; con N cuentas evita 429
+    amazon_data = []
+    for _acct in amazon_accounts_list:
+        amazon_data.append(await _fetch_amz_data(_acct))
 
     def _sum_p(period: str) -> dict:
         return {
