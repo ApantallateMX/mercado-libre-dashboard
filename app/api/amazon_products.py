@@ -845,13 +845,21 @@ async def _get_sku_sales_cached(client) -> dict:
             except Exception as e:
                 logger.debug(f"[Amazon SKU Sales] Error en orden {order_id}: {e}")
 
-        # Procesar en lotes para no saturar la API
+        # Procesar en lotes — máximo 12 segundos para no bloquear la UI
         batch_size = 5
+        _loop_start = _time.time()
         for i in range(0, len(valid_orders), batch_size):
+            # Cortocircuito si tardamos más de 12 segundos
+            if _time.time() - _loop_start > 12.0:
+                logger.warning(
+                    f"[Amazon SKU Sales] Timeout parcial tras 12s "
+                    f"({i}/{len(valid_orders)} órdenes procesadas)"
+                )
+                break
             batch = valid_orders[i:i + batch_size]
             await asyncio.gather(*[_fetch_items(o) for o in batch])
             if i + batch_size < len(valid_orders):
-                await asyncio.sleep(1.0)  # Respetar rate limit ~0.5 req/s
+                await asyncio.sleep(0.5)  # Rate limit SP-API
 
         _sku_sales_cache[key] = (_time.time(), sku_data)
         return sku_data
@@ -878,11 +886,11 @@ async def amazon_products_resumen(request: Request):
         date_from_30d = (now - timedelta(days=29)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
-        listings, fba_summaries, sku_sales = await asyncio.gather(
+        listings, fba_summaries = await asyncio.gather(
             _get_listings_cached(client),
             _get_fba_cached(client),
-            _get_sku_sales_cached(client),
         )
+        sku_sales = await _get_sku_sales_cached(client)
 
         # Revenue y unidades del Sales API (OPS exacto — igual a Seller Central)
         try:
@@ -986,11 +994,11 @@ async def amazon_products_inventario(
         return _render_no_account(request, "amazon_products_inventario.html")
 
     try:
-        listings, fba_summaries, sku_sales = await asyncio.gather(
+        listings, fba_summaries = await asyncio.gather(
             _get_listings_cached(client),
             _get_fba_cached(client),
-            _get_sku_sales_cached(client),
         )
+        sku_sales = await _get_sku_sales_cached(client)
         fba_index = _build_fba_index(fba_summaries)
 
         enriched = []
@@ -1099,11 +1107,11 @@ async def amazon_products_stock_alerts(request: Request):
         return _render_no_account(request, "amazon_products_stock.html")
 
     try:
-        fba_summaries, listings, sku_sales = await asyncio.gather(
+        fba_summaries, listings = await asyncio.gather(
             _get_fba_cached(client),
             _get_listings_cached(client),
-            _get_sku_sales_cached(client),
         )
+        sku_sales = await _get_sku_sales_cached(client)
 
         # Índice de listings por SKU para títulos y ASIN
         listings_idx = {}
