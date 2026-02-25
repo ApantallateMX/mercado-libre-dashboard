@@ -310,8 +310,8 @@ async def switch_account(request: Request):
         tokens = await token_store.get_tokens(uid)
         if tokens:
             referer = request.headers.get("referer", "/dashboard")
-            # Si venimos desde /amazon, ir al dashboard MeLi (no volver a Amazon)
-            if referer.endswith("/amazon") or "/amazon?" in referer:
+            # Si venimos desde cualquier página Amazon, ir al dashboard MeLi
+            if "/amazon" in referer:
                 referer = "/dashboard"
             response = RedirectResponse(referer, status_code=303)
             response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
