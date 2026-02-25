@@ -61,6 +61,9 @@ MARKETPLACE_IDS = {
 # Rate limit seguro para Orders API (Amazon permite ~0.5 req/s)
 _ORDERS_SEMAPHORE = asyncio.Semaphore(2)
 
+# Rate limit para Sales API — conservador para evitar 429
+_SALES_SEMAPHORE = asyncio.Semaphore(1)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLASE PRINCIPAL
@@ -731,6 +734,56 @@ class AmazonClient:
         except Exception as e:
             logger.warning(f"[Amazon] Error obteniendo offers para SKU {sku}: {e}")
             return None
+
+    async def get_order_metrics(
+        self,
+        date_from: str,
+        date_to_exclusive: str,
+        granularity: str = "Total",
+        tz: str = "US/Pacific",
+    ) -> list:
+        """
+        Obtiene métricas de ventas usando el Sales API v1 (/sales/v1/orderMetrics).
+
+        Retorna totalSales (OPS — igual a Seller Central), unitCount y orderCount
+        por intervalo. Mucho más preciso que sumar OrderTotal de Orders API porque:
+          - OrderTotal NO está disponible para órdenes Pending
+          - OrderTotal incluye shipping/taxes, no es Ordered Product Sales (OPS)
+          - totalSales = exactamente lo que muestra Amazon Seller Central
+
+        Args:
+            date_from:         "YYYY-MM-DD" — inicio del rango (PST, inclusive)
+            date_to_exclusive: "YYYY-MM-DD" — fin del rango (PST, EXCLUSIVO)
+            granularity:       "Total" | "Day" | "Week" | "Month"
+            tz:                Zona horaria para granularity != Total.
+                               Usar "US/Pacific" para coincidir con Amazon SC.
+
+        Returns:
+            Lista de dicts con campos:
+              - interval:         "2026-02-24T00:00:00-08:00--2026-02-25T00:00:00-08:00"
+              - orderCount:       número de órdenes
+              - unitCount:        unidades vendidas
+              - averageUnitPrice: {currencyCode, amount}
+              - totalSales:       {currencyCode, amount}  ← OPS, igual a SC
+
+        Rate limit: 0.5 req/s, burst 15 — mucho más generoso que Orders API.
+        """
+        # Formato de intervalo: {inicio}--{fin} con doble guión (separador ISO 8601)
+        # PST = UTC-8 (febrero, sin horario de verano en USA)
+        interval = f"{date_from}T00:00:00-08:00--{date_to_exclusive}T00:00:00-08:00"
+
+        params: list = [
+            ("marketplaceIds", self.marketplace_id),
+            ("interval", interval),
+            ("granularity", granularity),
+        ]
+        if granularity != "Total":
+            params.append(("granularityTimeZone", tz))
+
+        async with _SALES_SEMAPHORE:
+            result = await self._request("GET", "/sales/v1/orderMetrics", params=params)
+
+        return result.get("payload", [])
 
     async def fetch_orders_range(
         self,

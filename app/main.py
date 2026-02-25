@@ -6392,8 +6392,12 @@ async def get_multi_account_amazon_dashboard(
         return cached[1]
 
     amazon_accounts_list = await token_store.get_all_amazon_accounts()
-    today_str = now.strftime("%Y-%m-%d")
-    week_start_str = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+    # Fix timezone: México CST = UTC-6 (febrero sin horario de verano).
+    # Usar fecha local MX para que "hoy" sea correcto después de las 6 PM CST.
+    # Sin esto, después de medianoche UTC (6 PM CST), today_str = mañana → 0 órdenes.
+    now_mx = now - timedelta(hours=6)
+    today_str = now_mx.strftime("%Y-%m-%d")
+    week_start_str = (now_mx - timedelta(days=6)).strftime("%Y-%m-%d")
 
     # Rango fijo de 29 días — IGUAL al default del Amazon dashboard
     # Así el multi-dashboard comparte el mismo cache key y NO hace llamadas extra a SP-API

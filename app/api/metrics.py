@@ -470,6 +470,11 @@ _amazon_orders_cache: dict[str, tuple[float, list]] = {}
 _amazon_orders_locks: dict[str, asyncio.Lock] = {}
 _AMAZON_ORDERS_TTL = 300  # 5 minutos
 
+# Caché para Sales API — métricas diarias (totalSales OPS, unitCount, orderCount)
+_amazon_metrics_cache: dict[str, tuple[float, list]] = {}
+_amazon_metrics_locks: dict[str, asyncio.Lock] = {}
+_AMAZON_METRICS_TTL = 300  # 5 minutos
+
 
 async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> list:
     """Obtiene y cachea la lista cruda de órdenes Amazon para un rango de fechas.
@@ -518,6 +523,96 @@ async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> lis
 
         _amazon_orders_cache[cache_key] = (_time.time(), all_orders)
         return all_orders
+
+
+async def _get_cached_order_metrics(client, date_from: str, date_to: str) -> list:
+    """Obtiene y cachea métricas del Sales API con granularidad=Day.
+
+    date_from / date_to son INCLUSIVE (se agrega 1 día a date_to internamente
+    porque Sales API usa intervalos exclusivos en el extremo derecho).
+
+    Retorna lista de dicts con: interval, orderCount, unitCount, totalSales.
+    El campo totalSales.amount = Ordered Product Sales (OPS) = lo que muestra
+    Amazon Seller Central. Mucho más preciso que sumar OrderTotal de Orders API.
+    """
+    cache_key = f"metrics:{client.seller_id}:{date_from}:{date_to}"
+
+    # Fast path — sin lock si ya está en caché
+    if cache_key in _amazon_metrics_cache:
+        ts, data = _amazon_metrics_cache[cache_key]
+        if _time.time() - ts < _AMAZON_METRICS_TTL:
+            return data
+
+    if cache_key not in _amazon_metrics_locks:
+        _amazon_metrics_locks[cache_key] = asyncio.Lock()
+
+    async with _amazon_metrics_locks[cache_key]:
+        if cache_key in _amazon_metrics_cache:
+            ts, data = _amazon_metrics_cache[cache_key]
+            if _time.time() - ts < _AMAZON_METRICS_TTL:
+                return data
+
+        # date_to es inclusivo → Sales API espera extremo derecho exclusivo
+        date_to_exclusive = (
+            datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
+        data = await client.get_order_metrics(
+            date_from=date_from,
+            date_to_exclusive=date_to_exclusive,
+            granularity="Day",
+        )
+        _amazon_metrics_cache[cache_key] = (_time.time(), data)
+        return data
+
+
+def _build_amazon_chart_from_metrics(metrics_data: list, date_from: str, date_to: str):
+    """Construye datos de chart desde respuesta del Sales API (granularity=Day).
+
+    Cada item en metrics_data tiene un campo `interval` como:
+      "2026-02-24T00:00:00-08:00--2026-02-25T00:00:00-08:00"
+    Los primeros 10 caracteres son la fecha PST del día.
+    """
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end = datetime.strptime(date_to, "%Y-%m-%d")
+    delta_days = (end - start).days
+
+    group_by = "day" if delta_days <= 31 else "month"
+
+    buckets: dict = {}
+    if group_by == "day":
+        for i in range(delta_days + 1):
+            d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+            buckets[d] = {"orders": 0, "revenue": 0.0}
+    else:
+        current = start.replace(day=1)
+        while current <= end:
+            buckets[current.strftime("%Y-%m")] = {"orders": 0, "revenue": 0.0}
+            if current.month == 12:
+                current = current.replace(year=current.year + 1, month=1)
+            else:
+                current = current.replace(month=current.month + 1)
+
+    for item in metrics_data:
+        interval = item.get("interval", "")
+        if not interval:
+            continue
+        date_str = interval[:10]  # "2026-02-24"
+        key = date_str if group_by == "day" else date_str[:7]
+        if key in buckets:
+            buckets[key]["orders"] += int(item.get("orderCount", 0) or 0)
+            try:
+                buckets[key]["revenue"] += float(
+                    (item.get("totalSales") or {}).get("amount", 0) or 0
+                )
+            except (TypeError, ValueError):
+                pass
+
+    chart_data = [
+        {"date": d, "orders": v["orders"], "revenue": round(v["revenue"], 2)}
+        for d, v in sorted(buckets.items())
+    ]
+    return chart_data, group_by
 
 
 def _build_amazon_chart_data(orders: list, date_from: str, date_to: str):
@@ -595,7 +690,7 @@ async def get_amazon_dashboard_data(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
 ):
-    """Métricas + chart de Amazon en una sola llamada."""
+    """Métricas + chart de Amazon — usa Sales API para revenue exacto (OPS = Seller Central)."""
     client = await get_amazon_client()
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")
@@ -607,48 +702,34 @@ async def get_amazon_dashboard_data(
         date_to = now.strftime("%Y-%m-%d")
 
     try:
-        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+        # Sales API — totalSales = OPS (Ordered Product Sales = lo que muestra SC)
+        metrics_data = await _get_cached_order_metrics(client, date_from, date_to)
     except Exception as exc:
-        empty_chart, _ = _build_amazon_chart_data([], date_from, date_to)
+        empty_chart, _ = _build_amazon_chart_from_metrics([], date_from, date_to)
         return {
-            "metrics": {"total_orders": 0, "shipped_orders": 0, "total_revenue": 0.0,
-                        "avg_per_order": 0.0, "total_units": 0},
+            "metrics": {"total_orders": 0, "total_units": 0, "total_revenue": 0.0,
+                        "avg_per_order": 0.0},
             "chart": {"data": empty_chart, "group_by": "day"},
             "error": str(exc)[:300],
         }
 
-    # Contar todas las órdenes activas (Shipped + Unshipped + PartiallyShipped)
-    # SP-API no devuelve Cancelled ni Pending en el mismo query
-    valid_orders = orders  # Todos los retornados son activos (no Cancelled)
-
-    # "Enviadas" = ya procesadas (Shipped + PartiallyShipped)
-    shipped_statuses = {"Shipped", "Delivered", "PartiallyShipped"}
-    shipped_orders = [o for o in valid_orders if o.get("OrderStatus") in shipped_statuses]
-    unshipped_orders = [o for o in valid_orders if o.get("OrderStatus") == "Unshipped"]
-
-    total_revenue = 0.0
-    total_units = 0
-    for order in valid_orders:
-        try:
-            amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
-        except (TypeError, ValueError):
-            amount = 0.0
-        total_revenue += amount
-        total_units += int(order.get("NumberOfItemsShipped", 0) or 0)
-        total_units += int(order.get("NumberOfItemsUnshipped", 0) or 0)
-
-    avg_per_order = (total_revenue / len(valid_orders)) if valid_orders else 0.0
+    # Agregar totales desde datos por día del Sales API
+    total_orders = sum(int(d.get("orderCount", 0) or 0) for d in metrics_data)
+    total_units  = sum(int(d.get("unitCount",  0) or 0) for d in metrics_data)
+    total_revenue = sum(
+        float((d.get("totalSales") or {}).get("amount", 0) or 0)
+        for d in metrics_data
+    )
+    avg_per_order = (total_revenue / total_orders) if total_orders > 0 else 0.0
 
     metrics = {
-        "total_orders": len(valid_orders),
-        "shipped_orders": len(shipped_orders),
-        "unshipped_orders": len(unshipped_orders),
+        "total_orders":  total_orders,
+        "total_units":   total_units,
         "total_revenue": round(total_revenue, 2),
         "avg_per_order": round(avg_per_order, 2),
-        "total_units": total_units,
     }
 
-    chart_data, group_by = _build_amazon_chart_data(valid_orders, date_from, date_to)
+    chart_data, group_by = _build_amazon_chart_from_metrics(metrics_data, date_from, date_to)
 
     return {
         "metrics": metrics,
@@ -684,7 +765,7 @@ async def get_amazon_daily_sales_data(
     date_to: str = Query("", description="YYYY-MM-DD"),
     goal: float = Query(0, description="Meta diaria (0 = leer de DB)"),
 ):
-    """Ventas diarias de Amazon como JSON con % de meta — para el dashboard rediseñado."""
+    """Ventas diarias de Amazon — usa Sales API para revenue exacto (OPS = Seller Central)."""
     client = await get_amazon_client()
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
@@ -698,7 +779,8 @@ async def get_amazon_daily_sales_data(
         goal = await token_store.get_daily_goal(f"amz_{client.seller_id}")
 
     try:
-        orders = await _get_cached_amazon_orders(client, date_from, date_to)
+        # Sales API con granularidad=Day — un item por día con orderCount, unitCount, totalSales
+        metrics_data = await _get_cached_order_metrics(client, date_from, date_to)
     except Exception as exc:
         return {
             "daily_data": [],
@@ -708,6 +790,7 @@ async def get_amazon_daily_sales_data(
             "error": str(exc)[:300],
         }
 
+    # Crear buckets vacíos para cada día del rango
     start = datetime.strptime(date_from, "%Y-%m-%d")
     end = datetime.strptime(date_to, "%Y-%m-%d")
     buckets: dict[str, dict] = {}
@@ -716,26 +799,22 @@ async def get_amazon_daily_sales_data(
         buckets[cur.strftime("%Y-%m-%d")] = {"orders": 0, "units": 0, "revenue": 0.0}
         cur += timedelta(days=1)
 
-    for order in orders:
-        raw_date = order.get("PurchaseDate", "")
-        if not raw_date:
+    # Mapear datos del Sales API a buckets por fecha
+    for item in metrics_data:
+        interval = item.get("interval", "")
+        if not interval:
             continue
+        date_str = interval[:10]  # "2026-02-24" desde "2026-02-24T00:00:00-08:00--..."
+        if date_str not in buckets:
+            continue
+        buckets[date_str]["orders"] += int(item.get("orderCount", 0) or 0)
+        buckets[date_str]["units"]  += int(item.get("unitCount",  0) or 0)
         try:
-            order_dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
-            continue
-        date_key = order_dt.strftime("%Y-%m-%d")
-        if date_key not in buckets:
-            continue
-        # SP-API ya excluye Cancelled del query; contar todas las retornadas
-        buckets[date_key]["orders"] += 1
-        try:
-            amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
+            buckets[date_str]["revenue"] += float(
+                (item.get("totalSales") or {}).get("amount", 0) or 0
+            )
         except (TypeError, ValueError):
-            amount = 0.0
-        buckets[date_key]["revenue"] += amount
-        buckets[date_key]["units"] += int(order.get("NumberOfItemsShipped", 0) or 0)
-        buckets[date_key]["units"] += int(order.get("NumberOfItemsUnshipped", 0) or 0)
+            pass
 
     daily_data = []
     for date_key in sorted(buckets.keys(), reverse=True):
@@ -749,8 +828,8 @@ async def get_amazon_daily_sales_data(
             "pct_of_goal": round(pct, 1),
         })
 
-    total_orders = sum(d["orders"] for d in daily_data)
-    total_units = sum(d["units"] for d in daily_data)
+    total_orders  = sum(d["orders"]  for d in daily_data)
+    total_units   = sum(d["units"]   for d in daily_data)
     total_revenue = round(sum(d["revenue"] for d in daily_data), 2)
     days_met = sum(1 for d in daily_data if d["pct_of_goal"] >= 100)
     avg_pct = round(sum(d["pct_of_goal"] for d in daily_data) / len(daily_data), 1) if daily_data else 0
@@ -759,12 +838,12 @@ async def get_amazon_daily_sales_data(
         "daily_data": daily_data,
         "goal": goal,
         "totals": {
-            "orders": total_orders,
-            "units": total_units,
-            "revenue": total_revenue,
-            "days_met": days_met,
-            "avg_pct": avg_pct,
-            "total_days": len(daily_data),
+            "orders":          total_orders,
+            "units":           total_units,
+            "revenue":         total_revenue,
+            "days_met":        days_met,
+            "avg_pct":         avg_pct,
+            "total_days":      len(daily_data),
             "days_with_sales": sum(1 for d in daily_data if d["orders"] > 0),
         },
     }
