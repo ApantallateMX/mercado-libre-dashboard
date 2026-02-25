@@ -598,13 +598,14 @@ async def get_amazon_dashboard_data(
             "error": str(exc)[:300],
         }
 
-    # Excluir solo Cancelled — igual que Amazon Seller Central que muestra todos los demás
-    CANCELLED = {"Canceled", "Cancelled"}
-    valid_orders = [o for o in orders if o.get("OrderStatus") not in CANCELLED]
+    # Contar todas las órdenes activas (Shipped + Unshipped + PartiallyShipped)
+    # SP-API no devuelve Cancelled ni Pending en el mismo query
+    valid_orders = orders  # Todos los retornados son activos (no Cancelled)
 
-    # Órdenes "shipped" = ya procesadas (Shipped + Delivered + PartiallyShipped)
+    # "Enviadas" = ya procesadas (Shipped + PartiallyShipped)
     shipped_statuses = {"Shipped", "Delivered", "PartiallyShipped"}
     shipped_orders = [o for o in valid_orders if o.get("OrderStatus") in shipped_statuses]
+    unshipped_orders = [o for o in valid_orders if o.get("OrderStatus") == "Unshipped"]
 
     total_revenue = 0.0
     total_units = 0
@@ -622,6 +623,7 @@ async def get_amazon_dashboard_data(
     metrics = {
         "total_orders": len(valid_orders),
         "shipped_orders": len(shipped_orders),
+        "unshipped_orders": len(unshipped_orders),
         "total_revenue": round(total_revenue, 2),
         "avg_per_order": round(avg_per_order, 2),
         "total_units": total_units,
@@ -706,10 +708,7 @@ async def get_amazon_daily_sales_data(
         date_key = order_dt.strftime("%Y-%m-%d")
         if date_key not in buckets:
             continue
-        status = order.get("OrderStatus", "")
-        # Excluir solo canceladas — igual que Amazon Seller Central
-        if status in ("Canceled", "Cancelled"):
-            continue
+        # SP-API ya excluye Cancelled del query; contar todas las retornadas
         buckets[date_key]["orders"] += 1
         try:
             amount = float(order.get("OrderTotal", {}).get("Amount", 0) or 0)
