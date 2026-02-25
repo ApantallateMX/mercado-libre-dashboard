@@ -1,0 +1,214 @@
+{% if no_account or error %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-orange-500 font-semibold">{{ error or 'Sin cuenta Amazon conectada' }}</p>
+    {% if no_account %}
+    <a href="/auth/amazon/connect" class="mt-3 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm">Conectar Amazon</a>
+    {% endif %}
+</div>
+{% else %}
+
+<!-- ─── SUBTABS ────────────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-4 overflow-hidden">
+    <div class="flex border-b border-gray-100 overflow-x-auto">
+        {% set filters = [
+            ("all",  "Todos"),
+            ("fba",  "FBA"),
+            ("top",  "Top Sellers"),
+            ("low",  "Low Sellers"),
+        ] %}
+        {% for val, label in filters %}
+        <a href="/api/amazon/products/inventario?filter={{ val }}&sort={{ sort }}"
+           hx-get="/api/amazon/products/inventario?filter={{ val }}&sort={{ sort }}"
+           hx-target="#amz-prod-tab-content"
+           class="flex-none px-4 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap transition
+               {% if filter == val %}border-[#FF9900] text-[#FF9900] bg-orange-50
+               {% else %}border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300{% endif %}">
+            {{ label }}
+            {% if val == "all" %}<span class="ml-1 text-gray-400">({{ total }})</span>{% endif %}
+        </a>
+        {% endfor %}
+
+        <!-- Sort selector -->
+        <div class="ml-auto flex items-center gap-1 px-3 py-1.5">
+            <span class="text-xs text-gray-400 hidden md:inline">Ordenar:</span>
+            {% set sorts = [("units","Unidades"),("stock","Stock FBA"),("revenue","Revenue"),("price","Precio")] %}
+            {% for val, label in sorts %}
+            <a href="/api/amazon/products/inventario?filter={{ filter }}&sort={{ val }}"
+               hx-get="/api/amazon/products/inventario?filter={{ filter }}&sort={{ val }}"
+               hx-target="#amz-prod-tab-content"
+               class="px-2 py-0.5 rounded text-xs transition
+                   {% if sort == val %}bg-[#FF9900] text-white font-medium{% else %}text-gray-400 hover:text-gray-700{% endif %}">
+                {{ label }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- ─── TABLA ─────────────────────────────────────────────────────────────── -->
+{% if listings %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead style="background: #232F3E;">
+                <tr class="text-left text-gray-300 text-xs">
+                    <th class="py-2.5 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2.5 px-3 font-medium text-right">Precio</th>
+                    <th class="py-2.5 px-3 font-medium text-right">FBA Disp.</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden md:table-cell">Reservado</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden md:table-cell">Entrante</th>
+                    <th class="py-2.5 px-3 font-medium text-right">Ventas 30d</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden lg:table-cell">Revenue 30d</th>
+                    <th class="py-2.5 px-3 font-medium text-right hidden lg:table-cell">Vel./día</th>
+                    <th class="py-2.5 px-3 font-medium text-center">Días Supply</th>
+                    <th class="py-2.5 px-3 font-medium text-center hidden md:table-cell">Estado</th>
+                    <th class="py-2.5 px-3 font-medium text-center hidden md:table-cell">Acción</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-50">
+                {% for item in listings %}
+                <tr class="hover:bg-orange-50/20 transition">
+                    <!-- Producto -->
+                    <td class="py-3 px-4">
+                        <div class="min-w-0">
+                            <p class="text-sm font-medium text-gray-800 truncate max-w-[220px] md:max-w-[300px]">
+                                {{ item.title }}
+                            </p>
+                            <div class="flex items-center gap-2 mt-0.5">
+                                <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                                {% if item.asin %}
+                                <p class="text-xs text-orange-500">{{ item.asin }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+
+                    <!-- Precio -->
+                    <td class="py-3 px-3 text-right">
+                        {% if item.price > 0 %}
+                        <button onclick="window.updateAmzPrice('{{ item.sku }}', {{ item.price }})"
+                                class="text-sm font-semibold text-gray-700 hover:text-[#FF9900] transition cursor-pointer">
+                            ${{ "{:,.0f}".format(item.price) }}
+                        </button>
+                        {% else %}
+                        <span class="text-gray-300 text-sm">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- FBA Disponible -->
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold
+                            {% if item.fba_stock == 0 %}text-red-600
+                            {% elif item.fba_stock < 10 %}text-yellow-600
+                            {% else %}text-green-600{% endif %}">
+                            {{ item.fba_stock }}
+                        </span>
+                    </td>
+
+                    <!-- Reservado (md+) -->
+                    <td class="py-3 px-3 text-right hidden md:table-cell">
+                        <span class="text-xs text-gray-400">{{ item.reserved }}</span>
+                    </td>
+
+                    <!-- Entrante (md+) -->
+                    <td class="py-3 px-3 text-right hidden md:table-cell">
+                        <span class="text-xs {% if item.inbound > 0 %}text-blue-500 font-medium{% else %}text-gray-300{% endif %}">
+                            {{ item.inbound }}
+                        </span>
+                    </td>
+
+                    <!-- Ventas 30d -->
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold
+                            {% if item.units_30d >= 5 %}text-[#FF9900]
+                            {% elif item.units_30d > 0 %}text-gray-600
+                            {% else %}text-gray-300{% endif %}">
+                            {{ item.units_30d }}
+                        </span>
+                        {% if item.units_30d >= 5 %}
+                        <span class="block text-xs text-orange-400">Top</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Revenue 30d (lg+) -->
+                    <td class="py-3 px-3 text-right hidden lg:table-cell">
+                        {% if item.revenue_30d > 0 %}
+                        <span class="text-xs font-medium text-gray-700">
+                            ${{ "{:,.0f}".format(item.revenue_30d) }}
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Velocidad/día (lg+) -->
+                    <td class="py-3 px-3 text-right hidden lg:table-cell">
+                        {% if item.vel_dia > 0 %}
+                        <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Días Supply -->
+                    <td class="py-3 px-3 text-center">
+                        {% if item.dias_supply is not none %}
+                        <span class="px-2 py-0.5 rounded-full text-xs font-bold
+                            {% if item.supply_color == 'red' %}bg-red-100 text-red-700
+                            {% elif item.supply_color == 'yellow' %}bg-yellow-100 text-yellow-700
+                            {% else %}bg-green-100 text-green-700{% endif %}">
+                            {{ item.dias_supply }}d
+                        </span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Estado (md+) -->
+                    <td class="py-3 px-3 text-center hidden md:table-cell">
+                        {% if item.status == 'ACTIVE' %}
+                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-800">Activo</span>
+                        {% elif item.status == 'DISCOVERABLE' %}
+                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">Visible</span>
+                        {% else %}
+                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600">Inactivo</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Acción (md+) -->
+                    <td class="py-3 px-3 text-center hidden md:table-cell">
+                        <div class="flex items-center justify-center gap-1">
+                            {% if item.amazon_url %}
+                            <a href="{{ item.amazon_url }}" target="_blank"
+                               class="text-xs text-orange-400 hover:text-orange-600 transition">AMZ</a>
+                            {% endif %}
+                            {% if item.price > 0 %}
+                            <button onclick="window.updateAmzPrice('{{ item.sku }}', {{ item.price }})"
+                                    class="text-xs text-[#146EB4] hover:text-blue-800 transition ml-1">
+                                $
+                            </button>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="px-4 py-3 border-t border-gray-50 flex items-center justify-between">
+        <p class="text-xs text-gray-400">{{ total }} listings</p>
+        <p class="text-xs text-gray-400">Ordenado por {{ sort }}</p>
+    </div>
+</div>
+
+{% else %}
+<div class="bg-white rounded-xl shadow p-10 text-center">
+    <p class="text-2xl mb-2">📦</p>
+    <p class="text-gray-500 font-medium">Sin listings en este filtro</p>
+    <p class="text-gray-400 text-sm mt-1">Prueba con "Todos"</p>
+</div>
+{% endif %}
+
+{% endif %}

@@ -1,0 +1,182 @@
+{% if no_account or error %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-orange-500 font-semibold">{{ error or 'Sin cuenta Amazon conectada' }}</p>
+    {% if no_account %}
+    <a href="/auth/amazon/connect" class="mt-3 bg-orange-500 text-white px-4 py-2 rounded-lg text-sm">Conectar Amazon</a>
+    {% endif %}
+</div>
+{% else %}
+
+{% set total = suprimidos|length + inactivos|length + con_issues|length %}
+
+{% if total == 0 %}
+<div class="bg-white rounded-xl shadow p-10 text-center">
+    <div class="text-4xl mb-3">✅</div>
+    <h3 class="text-lg font-bold text-gray-700 mb-1">Todos los listings están activos</h3>
+    <p class="text-gray-400 text-sm">No hay listings inactivos, suprimidos o con issues.</p>
+</div>
+
+{% else %}
+
+<!-- ─── SUPRIMIDOS ─────────────────────────────────────────────────────────── -->
+{% if suprimidos %}
+<div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-500">
+    <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🚫</span>
+            <div>
+                <h3 class="text-sm font-bold text-red-800">Suprimidos por Amazon</h3>
+                <p class="text-xs text-red-600">Listados con issues — no se muestran a compradores</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ suprimidos|length }}</span>
+    </div>
+    <div class="divide-y divide-red-50">
+        {% for item in suprimidos %}
+        <div class="px-4 py-3 hover:bg-red-50/30 transition">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 truncate">{{ item.title }}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                        {% if item.asin %}<p class="text-xs text-orange-400">ASIN: {{ item.asin }}</p>{% endif %}
+                    </div>
+                    {% if item.issues %}
+                    <div class="mt-2 space-y-1">
+                        {% for issue in item.issues %}
+                        <div class="flex items-start gap-1.5">
+                            <span class="text-xs px-1.5 py-0.5 rounded font-medium shrink-0
+                                {% if issue.severity == 'ERROR' %}bg-red-100 text-red-700
+                                {% elif issue.severity == 'WARNING' %}bg-yellow-100 text-yellow-700
+                                {% else %}bg-gray-100 text-gray-600{% endif %}">
+                                {{ issue.severity }}
+                            </span>
+                            <p class="text-xs text-gray-600">{{ issue.message }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="shrink-0">
+                    <a href="{{ item.sc_url }}" target="_blank"
+                       class="inline-block px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                        Corregir →
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- ─── INACTIVOS ──────────────────────────────────────────────────────────── -->
+{% if inactivos %}
+<div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-gray-300">
+    <div class="px-4 py-3 bg-gray-50 flex items-center justify-between border-b border-gray-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">⬜</span>
+            <div>
+                <h3 class="text-sm font-bold text-gray-700">Inactivos</h3>
+                <p class="text-xs text-gray-500">Pausados manualmente o sin stock — no generan ventas</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inactivos|length }}</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50/50">
+                <tr class="text-xs text-gray-500 text-left border-b border-gray-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium hidden md:table-cell">ASIN</th>
+                    <th class="py-2 px-3 font-medium hidden md:table-cell">Última actualización</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-50">
+                {% for item in inactivos %}
+                <tr class="hover:bg-gray-50/50 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-700 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
+                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                    </td>
+                    <td class="py-3 px-3 hidden md:table-cell">
+                        {% if item.asin %}
+                        <a href="https://www.amazon.com.mx/dp/{{ item.asin }}" target="_blank"
+                           class="text-xs text-orange-400 hover:text-orange-600">{{ item.asin }}</a>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-3 hidden md:table-cell">
+                        <span class="text-xs text-gray-400">{{ item.last_updated or '—' }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-gray-400 hover:bg-gray-500 text-white text-xs font-medium rounded-lg transition">
+                            Ver →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ─── ACTIVOS CON ISSUES ─────────────────────────────────────────────────── -->
+{% if con_issues %}
+<div class="bg-white rounded-xl shadow overflow-hidden border-l-4 border-orange-400">
+    <div class="px-4 py-3 bg-orange-50 flex items-center justify-between border-b border-orange-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">⚠️</span>
+            <div>
+                <h3 class="text-sm font-bold text-orange-800">Activos con Issues</h3>
+                <p class="text-xs text-orange-600">Se están vendiendo pero Amazon reporta advertencias</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-orange-400 text-white text-xs font-bold rounded-full">{{ con_issues|length }}</span>
+    </div>
+    <div class="divide-y divide-orange-50">
+        {% for item in con_issues %}
+        <div class="px-4 py-3 hover:bg-orange-50/30 transition">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-800 truncate">{{ item.title }}</p>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                        {% if item.asin %}<p class="text-xs text-orange-400">ASIN: {{ item.asin }}</p>{% endif %}
+                    </div>
+                    {% if item.issues %}
+                    <div class="mt-2 space-y-1">
+                        {% for issue in item.issues %}
+                        <div class="flex items-start gap-1.5">
+                            <span class="text-xs px-1.5 py-0.5 rounded font-medium shrink-0
+                                {% if issue.severity == 'ERROR' %}bg-red-100 text-red-700
+                                {% elif issue.severity == 'WARNING' %}bg-yellow-100 text-yellow-700
+                                {% else %}bg-gray-100 text-gray-600{% endif %}">
+                                {{ issue.severity or 'INFO' }}
+                            </span>
+                            <p class="text-xs text-gray-600">{{ issue.message }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="shrink-0">
+                    <a href="{{ item.sc_url }}" target="_blank"
+                       class="inline-block px-3 py-1.5 bg-orange-400 hover:bg-orange-500 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                        Revisar →
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
+
+{% endif %}

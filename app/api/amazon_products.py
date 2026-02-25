@@ -33,6 +33,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from app.services.amazon_client import get_amazon_client
+from app.api.metrics import _get_cached_order_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,13 @@ _templates = Jinja2Templates(
 _listings_cache:   dict[str, tuple[float, list]] = {}  # {seller_id: (ts, items)}
 _fba_cache:        dict[str, tuple[float, list]] = {}  # {seller_id: (ts, summaries)}
 _buybox_cache:     dict[str, tuple[float, dict]] = {}  # {seller_id:sku: (ts, data)}
+_sku_sales_cache:  dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: {units,revenue}})}
+_sku_sales_locks:  dict[str, asyncio.Lock] = {}
 
 _LISTINGS_TTL = 300   # 5 minutos
 _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
+_SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -778,6 +782,488 @@ def _parse_buybox_result(candidate: dict, api_data: Optional[dict]) -> dict:
         result["suggestion"] = "Competencia en Buy Box detectada"
 
     return result
+
+
+async def _get_sku_sales_cached(client) -> dict:
+    """
+    Retorna {sku: {"units": int, "revenue": float}} para los últimos 30 días.
+
+    Usa Orders API (30d) + Order Items API por cada orden.
+    Cacheado 30 min (operación costosa: 1 req por orden).
+    """
+    now = _time.time()
+    key = client.seller_id
+
+    if key in _sku_sales_cache:
+        ts, data = _sku_sales_cache[key]
+        if now - ts < _SKU_SALES_TTL:
+            return data
+
+    if key not in _sku_sales_locks:
+        _sku_sales_locks[key] = asyncio.Lock()
+
+    async with _sku_sales_locks[key]:
+        # Double-check dentro del lock
+        if key in _sku_sales_cache:
+            ts, data = _sku_sales_cache[key]
+            if now - ts < _SKU_SALES_TTL:
+                return data
+
+        created_after = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            orders = await client.get_orders(created_after)
+        except Exception as e:
+            logger.warning(f"[Amazon SKU Sales] Error obteniendo órdenes: {e}")
+            _sku_sales_cache[key] = (_time.time(), {})
+            return {}
+
+        valid_orders = [
+            o for o in orders
+            if o.get("OrderStatus") not in ("Cancelled", "Pending")
+        ]
+
+        sku_data: dict = {}
+
+        async def _fetch_items(order):
+            order_id = order.get("AmazonOrderId", "")
+            if not order_id:
+                return
+            try:
+                items = await client.get_order_items(order_id)
+                for item in items:
+                    sku = item.get("SellerSKU", "").strip()
+                    qty = int(item.get("QuantityOrdered", 0))
+                    try:
+                        price = float((item.get("ItemPrice") or {}).get("Amount", 0) or 0)
+                    except (TypeError, ValueError):
+                        price = 0.0
+                    if sku and qty > 0:
+                        if sku not in sku_data:
+                            sku_data[sku] = {"units": 0, "revenue": 0.0}
+                        sku_data[sku]["units"] += qty
+                        sku_data[sku]["revenue"] += price
+            except Exception as e:
+                logger.debug(f"[Amazon SKU Sales] Error en orden {order_id}: {e}")
+
+        # Procesar en lotes para no saturar la API
+        batch_size = 5
+        for i in range(0, len(valid_orders), batch_size):
+            batch = valid_orders[i:i + batch_size]
+            await asyncio.gather(*[_fetch_items(o) for o in batch])
+            if i + batch_size < len(valid_orders):
+                await asyncio.sleep(1.0)  # Respetar rate limit ~0.5 req/s
+
+        _sku_sales_cache[key] = (_time.time(), sku_data)
+        return sku_data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NUEVOS TABS (Centro de Productos v2) — Espejo de MeLi
+# Los endpoints antiguos (summary, catalog, inventory, buybox) se conservan
+# porque amazon_dashboard.html los sigue usando.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/resumen", response_class=HTMLResponse)
+async def amazon_products_resumen(request: Request):
+    """
+    Resumen del catálogo Amazon v2 — con revenue 30d (Sales API), top 5 por unidades
+    y acciones rápidas hacia las demás secciones.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return _render_no_account(request, "amazon_products_resumen.html")
+
+    try:
+        now = datetime.utcnow()
+        date_from_30d = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+        date_to = now.strftime("%Y-%m-%d")
+
+        listings, fba_summaries, sku_sales = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+            _get_sku_sales_cached(client),
+        )
+
+        # Revenue y unidades del Sales API (OPS exacto — igual a Seller Central)
+        try:
+            metrics_data = await _get_cached_order_metrics(client, date_from_30d, date_to)
+            revenue_30d = sum(
+                float((m.get("totalSales") or {}).get("amount", 0) or 0)
+                for m in metrics_data
+            )
+            units_30d_api = sum(int(m.get("unitCount", 0) or 0) for m in metrics_data)
+        except Exception as e:
+            logger.warning(f"[Amazon Resumen] Error en Sales API: {e}")
+            revenue_30d = 0.0
+            units_30d_api = sum(v["units"] for v in sku_sales.values())
+
+        fba_index = _build_fba_index(fba_summaries)
+
+        active_count = inactive_count = suppressed_count = 0
+        for item in listings:
+            status = _listing_status(item.get("summaries", []))
+            if status == "ACTIVE":
+                active_count += 1
+            elif status in ("INACTIVE", "DISCOVERABLE"):
+                inactive_count += 1
+            else:
+                suppressed_count += 1
+
+        units_30d = units_30d_api or sum(v["units"] for v in sku_sales.values())
+        unique_skus_sold = len(sku_sales)
+        avg_ticket = revenue_30d / units_30d if units_30d > 0 else 0
+
+        # Top 5 por unidades (30d) — enriquecidos con título del listing
+        listings_by_sku = {item.get("sku", ""): item for item in listings}
+        top_5_raw = sorted(sku_sales.items(), key=lambda x: x[1]["units"], reverse=True)[:5]
+        top_5 = []
+        for sku, data in top_5_raw:
+            item = listings_by_sku.get(sku, {})
+            summaries = item.get("summaries", [{}])
+            summary_0 = summaries[0] if summaries else {}
+            fba_d = fba_index.get(sku, {})
+            asin = fba_d.get("asin") or summary_0.get("asin") or ""
+            top_5.append({
+                "sku": sku,
+                "title": summary_0.get("itemName", sku)[:65],
+                "units": data["units"],
+                "revenue": round(data["revenue"], 2),
+                "asin": asin,
+                "amazon_url": f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
+            })
+
+        # Acciones rápidas — contadores de urgencia
+        no_stock_count = sum(
+            1 for s in fba_summaries
+            if int((s.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0) == 0
+            and sku_sales.get(s.get("sellerSku", ""), {}).get("units", 0) > 0
+        )
+        low_stock_count = sum(
+            1 for s in fba_summaries
+            if 0 < int((s.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0) < 10
+            and sku_sales.get(s.get("sellerSku", ""), {}).get("units", 0) > 0
+        )
+        sin_publicar_count = inactive_count + suppressed_count
+
+        ctx = {
+            "request": request,
+            "nickname": client.nickname,
+            "marketplace": client.marketplace_name,
+            "revenue_30d": round(revenue_30d, 2),
+            "units_30d": units_30d,
+            "active_count": active_count,
+            "inactive_count": inactive_count,
+            "suppressed_count": suppressed_count,
+            "total_listings": len(listings),
+            "unique_skus_sold": unique_skus_sold,
+            "avg_ticket": round(avg_ticket, 2),
+            "top_5": top_5,
+            "no_stock_count": no_stock_count,
+            "low_stock_count": low_stock_count,
+            "sin_publicar_count": sin_publicar_count,
+            "date_from": date_from_30d,
+            "date_to": date_to,
+        }
+        return _templates.TemplateResponse("partials/amazon_products_resumen.html", ctx)
+
+    except Exception as e:
+        logger.exception("[Amazon Products] Error en resumen v2")
+        return _render_error(request, "amazon_products_resumen.html", str(e))
+
+
+@router.get("/products/inventario", response_class=HTMLResponse)
+async def amazon_products_inventario(
+    request: Request,
+    sort: str = Query("units", description="units|stock|revenue|price"),
+    filter: str = Query("all", description="all|fba|top|low"),
+):
+    """
+    Inventario completo con ventas 30d y días de supply por SKU.
+    Subtabs: Todos / FBA / Top Sellers / Low Sellers
+    """
+    client = await get_amazon_client()
+    if not client:
+        return _render_no_account(request, "amazon_products_inventario.html")
+
+    try:
+        listings, fba_summaries, sku_sales = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+            _get_sku_sales_cached(client),
+        )
+        fba_index = _build_fba_index(fba_summaries)
+
+        enriched = []
+        for item in listings:
+            sku = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            offers = item.get("offers", [])
+
+            status = _listing_status(summaries)
+            price = _parse_price(offers)
+            summary_0 = summaries[0] if summaries else {}
+            fba_d = fba_index.get(sku, {})
+            asin = fba_d.get("asin") or summary_0.get("asin") or ""
+            fba_details = fba_d.get("inventoryDetails", {})
+            fba_stock = int(fba_details.get("fulfillableQuantity") or 0)
+            reserved = int((fba_details.get("reservedQuantity") or {}).get("pendingCustomerOrderQuantity") or 0)
+            inbound = (
+                int(fba_details.get("inboundWorkingQuantity") or 0)
+                + int(fba_details.get("inboundShippedQuantity") or 0)
+            )
+
+            sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
+            units_30d = sales["units"]
+            revenue_30d = sales["revenue"]
+            vel_dia = units_30d / 30.0
+            dias_supply = round(fba_stock / vel_dia, 1) if vel_dia > 0 else None
+
+            # Color de días supply
+            if dias_supply is None:
+                supply_color = "gray"
+            elif dias_supply < 14:
+                supply_color = "red"
+            elif dias_supply < 30:
+                supply_color = "yellow"
+            else:
+                supply_color = "green"
+
+            enriched.append({
+                "sku": sku,
+                "asin": asin,
+                "title": summary_0.get("itemName", sku)[:65],
+                "price": price,
+                "status": status,
+                "fba_stock": fba_stock,
+                "reserved": reserved,
+                "inbound": inbound,
+                "units_30d": units_30d,
+                "revenue_30d": round(revenue_30d, 2),
+                "vel_dia": round(vel_dia, 2),
+                "dias_supply": dias_supply,
+                "supply_color": supply_color,
+                "is_fba": bool(fba_d),
+                "is_top": units_30d >= 5,
+                "is_low": 0 < units_30d < 2,
+                "amazon_url": f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
+                "sc_url": (
+                    f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
+                    if asin else "https://sellercentral.amazon.com.mx/inventory"
+                ),
+            })
+
+        # Filtro
+        if filter == "fba":
+            enriched = [e for e in enriched if e["is_fba"]]
+        elif filter == "top":
+            enriched = [e for e in enriched if e["is_top"]]
+        elif filter == "low":
+            enriched = [e for e in enriched if e["is_low"]]
+
+        # Ordenar
+        if sort == "stock":
+            enriched.sort(key=lambda x: x["fba_stock"], reverse=True)
+        elif sort == "revenue":
+            enriched.sort(key=lambda x: x["revenue_30d"], reverse=True)
+        elif sort == "price":
+            enriched.sort(key=lambda x: x["price"], reverse=True)
+        else:  # units (default)
+            enriched.sort(key=lambda x: x["units_30d"], reverse=True)
+
+        ctx = {
+            "request": request,
+            "listings": enriched,
+            "total": len(enriched),
+            "sort": sort,
+            "filter": filter,
+            "nickname": client.nickname,
+            "marketplace": client.marketplace_name,
+        }
+        return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
+
+    except Exception as e:
+        logger.exception("[Amazon Products] Error en inventario v2")
+        return _render_error(request, "amazon_products_inventario.html", str(e))
+
+
+@router.get("/products/stock", response_class=HTMLResponse)
+async def amazon_products_stock_alerts(request: Request):
+    """
+    Alertas de stock clasificadas por urgencia:
+    - Sin Stock: fulfillable=0 con ventas activas (ventas perdidas)
+    - Stock Bajo: fulfillable<10 con ventas activas (riesgo inminente)
+    - Restock Urgente: dias_supply<14 (basado en velocidad de ventas)
+    """
+    client = await get_amazon_client()
+    if not client:
+        return _render_no_account(request, "amazon_products_stock.html")
+
+    try:
+        fba_summaries, listings, sku_sales = await asyncio.gather(
+            _get_fba_cached(client),
+            _get_listings_cached(client),
+            _get_sku_sales_cached(client),
+        )
+
+        # Índice de listings por SKU para títulos y ASIN
+        listings_idx = {}
+        for item in listings:
+            sku = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            summary_0 = summaries[0] if summaries else {}
+            listings_idx[sku] = {
+                "title": summary_0.get("itemName", sku)[:65],
+                "asin": summary_0.get("asin") or "",
+            }
+
+        sin_stock = []
+        stock_bajo = []
+        restock_urgente = []
+
+        for s in fba_summaries:
+            sku = s.get("sellerSku", "")
+            asin = s.get("asin", "")
+            name = s.get("productName", sku)[:65]
+            details = s.get("inventoryDetails", {})
+            fulfillable = int(details.get("fulfillableQuantity") or 0)
+            inbound = (
+                int(details.get("inboundWorkingQuantity") or 0)
+                + int(details.get("inboundShippedQuantity") or 0)
+            )
+
+            sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
+            units_30d = sales["units"]
+            vel_dia = units_30d / 30.0
+
+            listing = listings_idx.get(sku, {"title": name, "asin": asin})
+            title = listing["title"] or name
+            listing_asin = listing["asin"] or asin
+            sc_url = (
+                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={listing_asin}"
+                if listing_asin else "https://sellercentral.amazon.com.mx/inventory"
+            )
+
+            base = {
+                "sku": sku,
+                "asin": listing_asin,
+                "title": title,
+                "fulfillable": fulfillable,
+                "inbound": inbound,
+                "units_30d": units_30d,
+                "vel_dia": round(vel_dia, 2),
+                "sc_url": sc_url,
+            }
+
+            if fulfillable == 0 and units_30d > 0:
+                sin_stock.append(base)
+
+            if 0 < fulfillable < 10 and units_30d > 0:
+                dias_hasta_0 = round(fulfillable / vel_dia, 1) if vel_dia > 0 else None
+                entry = {**base, "dias_hasta_0": dias_hasta_0}
+                entry["recomendacion"] = (
+                    f"Enviar pronto — ~{round(vel_dia * 30)} uds/mes"
+                    if vel_dia > 0 else "Sin vel. de ventas registrada"
+                )
+                stock_bajo.append(entry)
+
+            if vel_dia > 0 and fulfillable > 0:
+                dias_supply = fulfillable / vel_dia
+                if dias_supply < 14:
+                    sugeridas = max(0, round(vel_dia * 60) - fulfillable - inbound)
+                    restock_urgente.append({
+                        **base,
+                        "dias_supply": round(dias_supply, 1),
+                        "sugeridas": sugeridas,
+                    })
+
+        sin_stock.sort(key=lambda x: x["units_30d"], reverse=True)
+        stock_bajo.sort(key=lambda x: (x.get("dias_hasta_0") or 9999))
+        restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
+
+        ctx = {
+            "request": request,
+            "sin_stock": sin_stock,
+            "stock_bajo": stock_bajo,
+            "restock_urgente": restock_urgente,
+            "nickname": client.nickname,
+            "marketplace": client.marketplace_name,
+        }
+        return _templates.TemplateResponse("partials/amazon_products_stock.html", ctx)
+
+    except Exception as e:
+        logger.exception("[Amazon Products] Error en stock-alerts")
+        return _render_error(request, "amazon_products_stock.html", str(e))
+
+
+@router.get("/products/sin-publicar", response_class=HTMLResponse)
+async def amazon_products_sin_publicar(request: Request):
+    """
+    Listings no activos: Suprimidos (INACTIVE+issues), Inactivos (INACTIVE sin issues),
+    y activos con issues que necesitan atención.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return _render_no_account(request, "amazon_products_sin_publicar.html")
+
+    try:
+        listings = await _get_listings_cached(client)
+
+        suprimidos = []
+        inactivos = []
+        con_issues = []
+
+        for item in listings:
+            sku = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            issues = item.get("issues", [])
+            status = _listing_status(summaries)
+            summary_0 = summaries[0] if summaries else {}
+            asin = summary_0.get("asin") or ""
+            title = summary_0.get("itemName", sku)[:65]
+            last_updated = ""
+            raw_date = summary_0.get("lastUpdatedDate") or ""
+            if raw_date:
+                last_updated = raw_date[:10]
+
+            sc_url = (
+                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
+                if asin else "https://sellercentral.amazon.com.mx/inventory"
+            )
+            issue_list = [
+                {"severity": i.get("severity", "ERROR"), "message": i.get("message", "Issue desconocido")}
+                for i in issues[:3]
+            ]
+            item_data = {
+                "sku": sku,
+                "asin": asin,
+                "title": title,
+                "status": status,
+                "last_updated": last_updated,
+                "issues": issue_list,
+                "sc_url": sc_url,
+            }
+
+            if status == "ACTIVE":
+                if issues:
+                    con_issues.append(item_data)
+            elif issues:
+                suprimidos.append(item_data)
+            else:
+                inactivos.append(item_data)
+
+        ctx = {
+            "request": request,
+            "suprimidos": suprimidos,
+            "inactivos": inactivos,
+            "con_issues": con_issues,
+            "nickname": client.nickname,
+            "marketplace": client.marketplace_name,
+        }
+        return _templates.TemplateResponse("partials/amazon_products_sin_publicar.html", ctx)
+
+    except Exception as e:
+        logger.exception("[Amazon Products] Error en sin-publicar")
+        return _render_error(request, "amazon_products_sin_publicar.html", str(e))
 
 
 def _render_no_account(request: Request, template: str) -> HTMLResponse:
