@@ -1,125 +1,160 @@
 {# ─── amazon_order_items.html ────────────────────────────────────────────────
-   Partial cargado LAZY al hacer click en "Ver ▼".
-   Devuelve el CONTENIDO que se inyecta dentro del <td colspan="7"> del expand row.
-   (No envuelve un <tr> propio — el <tr> ya existe en el DOM)
+   Expand de 3 columnas estilo MeLi:
+     Columna 1: PRODUCTOS (título, SKU, ASIN, qty, precio)
+     Columna 2: DESGLOSE DE COBROS (precios, tax, envío, descuento, total)
+     Columna 3: INFORMACIÓN DE ORDEN (ID, canal, estado, fecha, unidades)
 ──────────────────────────────────────────────────────────────────────────── #}
 
 {% if not items %}
-<div class="px-6 py-4 text-center text-gray-400 text-sm italic bg-orange-50">
+<div class="px-6 py-4 text-center text-gray-400 text-sm italic bg-orange-50/40">
     Sin items disponibles para esta orden.
 </div>
 
 {% else %}
-<div class="bg-[#FFF8EF] border-t border-orange-200">
 
-    {# ── Cabecera ────────────────────────────────────────────────── #}
-    <div class="px-4 py-2 bg-[#232F3E] text-xs text-gray-300 uppercase tracking-wide font-semibold">
-        Detalle de productos — {{ items | length }} ítem{% if items | length != 1 %}s{% endif %}
-    </div>
+{# ── Calcular totales para el desglose ─────────────────────────────────── #}
+{% set total_subtotal = items | sum(attribute='total') %}
+{% set total_tax      = items | sum(attribute='tax') %}
+{% set total_ship     = items | sum(attribute='shipping') %}
+{% set total_discount = items | sum(attribute='discount') %}
 
-    {# ── Tabla de items ──────────────────────────────────────────── #}
-    <div class="overflow-x-auto">
-        <table class="w-full text-sm border-collapse">
-            <thead>
-                <tr class="bg-orange-50 text-xs text-gray-500 uppercase tracking-wide border-b border-orange-100">
-                    <th class="px-4 py-2 text-left font-medium w-2/5">Producto</th>
-                    <th class="px-4 py-2 text-left font-medium">SKU</th>
-                    <th class="px-4 py-2 text-left font-medium">ASIN</th>
-                    <th class="px-4 py-2 text-right font-medium">Precio Unit.</th>
-                    <th class="px-4 py-2 text-right font-medium">Qty</th>
-                    <th class="px-4 py-2 text-right font-medium">Subtotal</th>
-                    {% if items | sum(attribute='shipping') > 0 %}
-                    <th class="px-4 py-2 text-right font-medium">Envío</th>
-                    {% endif %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in items %}
-                <tr class="border-b border-orange-100 hover:bg-orange-100 transition">
-                    {# Título truncado con tooltip #}
-                    <td class="px-4 py-3">
-                        <p class="text-gray-800 font-medium text-sm leading-tight line-clamp-2"
-                           title="{{ item.title }}">
-                            {{ item.title or '—' }}
-                        </p>
-                    </td>
+<div class="border-t border-orange-200 bg-orange-50/30">
+    <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-orange-100">
 
-                    {# SKU resaltado #}
-                    <td class="px-4 py-3">
-                        <span class="font-mono text-xs font-semibold text-[#146EB4] bg-blue-50 px-1.5 py-0.5 rounded">
-                            {{ item.sku }}
-                        </span>
-                    </td>
+        {# ═══════════════════════════════════════════════════════════════════
+           COLUMNA 1 — PRODUCTOS
+           ═══════════════════════════════════════════════════════════════ #}
+        <div class="p-4">
+            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Productos</p>
 
-                    {# ASIN con link a Amazon MX #}
-                    <td class="px-4 py-3">
+            {% for item in items %}
+            <div class="{% if not loop.first %}mt-4 pt-4 border-t border-orange-100{% endif %}">
+
+                {# Título #}
+                <p class="text-sm font-semibold text-gray-800 leading-snug mb-2">
+                    {{ item.title or '—' }}
+                </p>
+
+                {# Grid de datos del item #}
+                <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+                    <span class="text-gray-400">SKU:</span>
+                    <span class="font-mono font-bold text-[#146EB4]">{{ item.sku }}</span>
+
+                    <span class="text-gray-400">ASIN:</span>
+                    <span>
                         {% if item.asin != '—' %}
                         <a href="https://www.amazon.com.mx/dp/{{ item.asin }}"
                            target="_blank"
-                           class="font-mono text-xs text-[#FF9900] hover:underline font-semibold">
-                            {{ item.asin }}
-                        </a>
-                        {% else %}
-                        <span class="text-gray-400 text-xs">—</span>
-                        {% endif %}
-                    </td>
+                           class="font-mono text-[#FF9900] hover:underline font-semibold">{{ item.asin }}</a>
+                        {% else %}—{% endif %}
+                    </span>
 
-                    {# Precio unitario #}
-                    <td class="px-4 py-3 text-right text-gray-700 font-medium">
-                        ${{ "%.2f"|format(item.unit_price) }}
-                    </td>
+                    <span class="text-gray-400">Cantidad:</span>
+                    <span class="font-semibold text-gray-700">{{ item.qty }}</span>
 
-                    {# Cantidad con badge #}
-                    <td class="px-4 py-3 text-right">
-                        <span class="inline-block bg-gray-100 text-gray-700 font-bold text-xs px-2 py-0.5 rounded-full min-w-[24px] text-center">
-                            {{ item.qty }}
-                        </span>
-                    </td>
+                    <span class="text-gray-400">Precio unit:</span>
+                    <span class="font-medium text-gray-700">${{ "%.2f"|format(item.unit_price) }}</span>
 
-                    {# Subtotal #}
-                    <td class="px-4 py-3 text-right font-bold text-green-700">
-                        ${{ "%.2f"|format(item.total) }}
-                    </td>
+                    <span class="text-gray-400">Subtotal:</span>
+                    <span class="font-bold text-gray-800">${{ "%.2f"|format(item.total) }}</span>
+                </div>
+            </div>
+            {% endfor %}
 
-                    {# Envío (solo si hay) #}
-                    {% if items | sum(attribute='shipping') > 0 %}
-                    <td class="px-4 py-3 text-right text-gray-500 text-xs">
-                        {% if item.shipping > 0 %}
-                            +${{ "%.2f"|format(item.shipping) }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </td>
+        </div>
+
+        {# ═══════════════════════════════════════════════════════════════════
+           COLUMNA 2 — DESGLOSE DE COBROS
+           ═══════════════════════════════════════════════════════════════ #}
+        <div class="p-4">
+            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Desglose de cobros</p>
+
+            <div class="space-y-2">
+
+                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
+                    <span class="text-sm text-gray-600">Precio del producto</span>
+                    <span class="font-semibold text-gray-800">${{ "%.2f"|format(total_subtotal) }}</span>
+                </div>
+
+                {% if total_tax > 0 %}
+                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
+                    <span class="text-sm text-gray-600">Impuestos</span>
+                    <span class="font-medium text-purple-600">-${{ "%.2f"|format(total_tax) }}</span>
+                </div>
+                {% endif %}
+
+                {% if total_ship > 0 %}
+                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
+                    <span class="text-sm text-gray-600">Envío (comprador)</span>
+                    <span class="font-medium text-blue-600">+${{ "%.2f"|format(total_ship) }}</span>
+                </div>
+                {% endif %}
+
+                {% if total_discount > 0 %}
+                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
+                    <span class="text-sm text-gray-600">Descuentos</span>
+                    <span class="font-medium text-red-500">-${{ "%.2f"|format(total_discount) }}</span>
+                </div>
+                {% endif %}
+
+                {# Total de la orden (desde el header de la orden, más preciso) #}
+                <div class="flex justify-between items-center py-2 mt-1 bg-green-50 rounded-lg px-2 border border-green-200">
+                    <span class="text-sm font-bold text-gray-700">Total</span>
+                    <span class="text-lg font-bold text-green-700">
+                        ${{ "%.2f"|format(desglose.order_total if desglose.order_total > 0 else total_subtotal) }}
+                    </span>
+                </div>
+
+                <p class="text-xs text-gray-400 mt-1">
+                    {{ desglose.currency }} · Amazon SP-API
+                </p>
+            </div>
+        </div>
+
+        {# ═══════════════════════════════════════════════════════════════════
+           COLUMNA 3 — INFORMACIÓN DE ORDEN
+           ═══════════════════════════════════════════════════════════════ #}
+        <div class="p-4">
+            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Información de Orden</p>
+
+            <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+
+                <span class="text-gray-400">No. Orden:</span>
+                <span class="font-mono font-semibold text-gray-700 break-all">{{ order_ctx.order_id }}</span>
+
+                <span class="text-gray-400">Canal:</span>
+                <span>
+                    {% if order_ctx.canal == 'FBA' %}
+                    <span class="bg-orange-100 text-orange-700 font-bold px-1.5 py-0.5 rounded text-xs">FBA</span>
+                    {% else %}
+                    <span class="bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded text-xs">FBM</span>
                     {% endif %}
-                </tr>
-                {% endfor %}
-            </tbody>
+                </span>
 
-            {# Pie: totales #}
-            {% set grand_qty   = items | sum(attribute='qty') %}
-            {% set grand_total = items | sum(attribute='total') %}
-            {% set grand_ship  = items | sum(attribute='shipping') %}
-            <tfoot>
-                <tr class="bg-orange-50 border-t-2 border-orange-200">
-                    <td colspan="3" class="px-4 py-2 text-xs text-gray-500 font-medium">
-                        {{ items | length }} producto{% if items | length != 1 %}s{% endif %}
-                    </td>
-                    <td class="px-4 py-2"></td>
-                    <td class="px-4 py-2 text-right font-bold text-gray-700 text-sm">
-                        {{ grand_qty }} uds
-                    </td>
-                    <td class="px-4 py-2 text-right font-bold text-green-700 text-sm">
-                        ${{ "%.2f"|format(grand_total) }}
-                    </td>
-                    {% if grand_ship > 0 %}
-                    <td class="px-4 py-2 text-right text-gray-500 text-xs font-medium">
-                        +${{ "%.2f"|format(grand_ship) }}
-                    </td>
-                    {% endif %}
-                </tr>
-            </tfoot>
-        </table>
+                <span class="text-gray-400">Estado:</span>
+                <span class="font-semibold text-gray-700">{{ order_ctx.status }}</span>
+
+                <span class="text-gray-400">Fecha:</span>
+                <span class="text-gray-600">{{ order_ctx.date }}</span>
+
+                <span class="text-gray-400">Unidades:</span>
+                <span class="font-semibold text-gray-700">{{ order_ctx.units }}</span>
+
+                <span class="text-gray-400">Productos:</span>
+                <span class="font-semibold text-gray-700">{{ items | length }}</span>
+
+            </div>
+
+            {# Link a Seller Central #}
+            <div class="mt-4 pt-3 border-t border-orange-100">
+                <a href="https://sellercentral.amazon.com.mx/orders-v3/order/{{ order_ctx.order_id }}"
+                   target="_blank"
+                   class="inline-flex items-center gap-1 text-xs text-[#FF9900] hover:underline font-medium">
+                    Ver en Seller Central →
+                </a>
+            </div>
+        </div>
+
     </div>
-
 </div>
 {% endif %}

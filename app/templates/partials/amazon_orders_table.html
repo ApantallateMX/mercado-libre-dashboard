@@ -80,8 +80,14 @@
                         <button
                             onclick="toggleOrderItems('{{ order.order_id }}')"
                             id="btn-{{ order.order_id }}"
+                            data-amount="{{ order.amount }}"
+                            data-status="{{ order.status }}"
+                            data-canal="{{ order.canal }}"
+                            data-date="{{ order.date }}"
+                            data-units="{{ order.units }}"
+                            data-currency="{{ order.currency }}"
                             class="text-xs font-medium text-[#146EB4] hover:text-[#FF9900] transition px-2 py-1 rounded border border-gray-200 hover:border-[#FF9900]">
-                            Ver ▼
+                            ▼
                         </button>
                     </td>
                 </tr>
@@ -115,20 +121,29 @@
             const isHidden = expandRow.classList.contains('hidden');
             if (isHidden) {
                 expandRow.classList.remove('hidden');
-                btn.textContent = 'Cerrar ▲';
+                btn.textContent = '▲';
             } else {
                 expandRow.classList.add('hidden');
-                btn.textContent = 'Ver ▼';
+                btn.textContent = '▼';
             }
             return;
         }
 
         // ── Primera carga: fetch items y poblar el <td> ─────────────────────
-        btn.innerHTML = '<span class="animate-spin inline-block">⏳</span>';
+        btn.innerHTML = '⏳';
         btn.disabled = true;
 
         try {
-            const resp = await fetch('/api/amazon/orders/' + orderId + '/items');
+            // Pasar datos de la orden como query params al endpoint de items
+            const params = new URLSearchParams({
+                amount:   btn.dataset.amount   || '0',
+                status:   btn.dataset.status   || '',
+                canal:    btn.dataset.canal    || '',
+                date:     btn.dataset.date     || '',
+                units:    btn.dataset.units    || '0',
+                currency: btn.dataset.currency || 'MXN',
+            });
+            const resp = await fetch('/api/amazon/orders/' + orderId + '/items?' + params.toString());
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const html = await resp.text();
 
@@ -139,14 +154,14 @@
             // Marcar como cargado y mostrar
             expandRow.dataset.loaded = 'true';
             expandRow.classList.remove('hidden');
-            btn.textContent = 'Cerrar ▲';
+            btn.textContent = '▲';
             btn.disabled = false;
 
             // Scroll suave
             expandRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         } catch(e) {
-            btn.textContent = 'Error ✕';
+            btn.textContent = '✕ Error';
             btn.disabled = false;
             console.error('[Amazon Orders] Error cargando items de', orderId, ':', e);
         }

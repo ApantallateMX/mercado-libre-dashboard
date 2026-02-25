@@ -181,10 +181,28 @@ async def get_amazon_orders(
 # ENDPOINT 2: Items de una orden (lazy — click en botón "Ver")
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _safe_float(obj: dict, key: str) -> float:
+    """Lee Amount de un sub-dict SP-API de forma segura."""
+    try:
+        return float((obj or {}).get("Amount") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 @router.get("/orders/{order_id}/items", response_class=HTMLResponse)
-async def get_order_items_partial(request: Request, order_id: str):
+async def get_order_items_partial(
+    request:   Request,
+    order_id:  str,
+    # Datos de la orden pasados desde el JS (data-* del botón)
+    amount:    float = Query(0.0,  description="OrderTotal.Amount"),
+    status:    str   = Query("",   description="Estado en español"),
+    canal:     str   = Query("",   description="FBA o FBM"),
+    date:      str   = Query("",   description="Fecha CST formateada"),
+    units:     int   = Query(0,    description="Unidades totales"),
+    currency:  str   = Query("MXN"),
+):
     """
-    Devuelve tabla HTML con los line-items de la orden indicada.
+    Devuelve HTML de 3 columnas (Productos | Desglose | Info Orden).
     Se inserta en la fila expandida al hacer click en "Ver ▼".
     """
     active_amazon_id = request.cookies.get("active_amazon_id")
@@ -201,25 +219,22 @@ async def get_order_items_partial(request: Request, order_id: str):
             raw_items = await client.get_order_items(order_id)
             items = []
             for item in raw_items:
-                ip   = item.get("ItemPrice")     or {}
-                sp   = item.get("ShippingPrice") or {}
-                try:
-                    unit_price = float(ip.get("Amount") or 0)
-                except (TypeError, ValueError):
-                    unit_price = 0.0
-                try:
-                    ship_price = float(sp.get("Amount") or 0)
-                except (TypeError, ValueError):
-                    ship_price = 0.0
+                ip  = item.get("ItemPrice")         or {}
+                sp  = item.get("ShippingPrice")     or {}
+                tax = item.get("ItemTax")            or {}
+                promo = item.get("PromotionDiscount") or {}
                 qty = int(item.get("QuantityOrdered") or 0)
+                unit_price = _safe_float(ip, "Amount")
                 items.append({
-                    "title":      (item.get("Title") or "")[:80],
+                    "title":      (item.get("Title") or ""),
                     "sku":        item.get("SellerSKU") or "—",
                     "asin":       item.get("ASIN")      or "—",
                     "unit_price": unit_price,
                     "qty":        qty,
                     "total":      round(unit_price * qty, 2),
-                    "shipping":   ship_price,
+                    "shipping":   _safe_float(sp,    "Amount"),
+                    "tax":        _safe_float(tax,   "Amount"),
+                    "discount":   _safe_float(promo, "Amount"),
                     "currency":   ip.get("CurrencyCode", "MXN"),
                 })
             _items_cache[order_id] = (_time.time(), items)
@@ -227,7 +242,32 @@ async def get_order_items_partial(request: Request, order_id: str):
             logger.error("[Amazon Orders] Error fetching items for %s: %s", order_id, exc)
             items = []
 
+    # Totales calculados de los items (para DESGLOSE)
+    desglose = {
+        "subtotal":   round(sum(i["total"]    for i in items), 2),
+        "tax":        round(sum(i["tax"]      for i in items), 2),
+        "shipping":   round(sum(i["shipping"] for i in items), 2),
+        "discount":   round(sum(i["discount"] for i in items), 2),
+        "order_total": round(amount, 2),
+        "currency":   currency,
+    }
+
+    order_ctx = {
+        "order_id": order_id,
+        "amount":   amount,
+        "status":   status,
+        "canal":    canal,
+        "date":     date,
+        "units":    units,
+        "currency": currency,
+    }
+
     return _templates.TemplateResponse(
         "partials/amazon_order_items.html",
-        {"request": request, "items": items, "order_id": order_id},
+        {
+            "request":   request,
+            "items":     items,
+            "desglose":  desglose,
+            "order_ctx": order_ctx,
+        },
     )
