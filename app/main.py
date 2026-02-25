@@ -6638,6 +6638,8 @@ async def amazon_dashboard(request: Request):
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
 
     ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amazon"
+    ctx["active_amazon_tab"] = "dashboard"
     return templates.TemplateResponse("amazon_dashboard.html", {"request": request, **ctx})
 
 
@@ -6653,6 +6655,8 @@ async def amazon_products_page(request: Request):
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
     ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amazon"
+    ctx["active_amazon_tab"] = "products"
     return templates.TemplateResponse("amazon_products.html", {"request": request, **ctx})
 
 

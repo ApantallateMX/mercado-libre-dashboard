@@ -27,60 +27,11 @@
      Dashboard Amazon — cuenta activa
      ══════════════════════════════════════════════════════════════════════ -->
 
-<!-- ═══ BANNER DE CUENTA ═══ -->
-<div class="bg-white rounded-xl shadow mb-5 overflow-hidden border-l-4 border-orange-400" id="amz-account-banner">
-    <div class="px-4 md:px-6 py-3 flex flex-col md:flex-row md:items-center justify-between gap-3">
-        <!-- Izquierda: avatar + nombre -->
-        <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0 bg-orange-500" id="amz-account-avatar">
-                {% if amazon_account %}{{ (amazon_account.nickname or 'AMZ')[:2]|upper }}{% else %}AM{% endif %}
-            </div>
-            <div>
-                <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
-                    <h1 class="font-bold text-gray-800 leading-tight text-base">
-                        {{ amazon_account.nickname if amazon_account else 'Amazon Seller' }}
-                    </h1>
-                </div>
-                <p class="text-xs text-gray-400">
-                    {% if amazon_account %}{{ amazon_account.marketplace_name }} &middot; {{ amazon_account.seller_id }}{% endif %}
-                    &middot; <span id="amz-period-label">Últimos 30 días</span>
-                    &middot; <a href="/dashboard" class="text-orange-500 hover:underline font-medium">← Vista General</a>
-                </p>
-            </div>
-        </div>
-        <!-- Derecha: stats de hoy (solo en tab Ventas) -->
-        <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100" id="amz-banner-stats">
-            <div class="pr-5">
-                <p class="text-xs text-gray-400">Órdenes hoy</p>
-                <p class="font-bold text-gray-800 text-lg" id="amz-qs-orders">—</p>
-            </div>
-            <div class="px-5">
-                <p class="text-xs text-gray-400">Unidades hoy</p>
-                <p class="font-bold text-gray-800 text-lg" id="amz-qs-units">—</p>
-            </div>
-            <div class="px-5">
-                <p class="text-xs text-gray-400">Revenue hoy</p>
-                <p class="font-bold text-orange-600 text-lg" id="amz-qs-revenue">—</p>
-            </div>
-            <div class="pl-5">
-                <p class="text-xs text-gray-400 mb-1.5">Meta del día <span id="amz-qs-pct" class="font-bold"></span></p>
-                <div class="w-32 bg-gray-200 rounded-full h-2.5">
-                    <div id="amz-qs-bar" class="h-2.5 rounded-full transition-all duration-700" style="width:0%;background:#F97316"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- ═══ TABS DE NAVEGACIÓN ═══ -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
     <div class="flex border-b border-gray-100 overflow-x-auto">
         <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-semibold border-b-2 border-orange-500 text-orange-600 whitespace-nowrap shrink-0" data-tab="ventas">
             <span>📊</span> Ventas
-        </button>
-        <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-orange-500 whitespace-nowrap shrink-0 transition" data-tab="productos">
-            <span>📦</span> Productos
         </button>
         <button class="amz-tab-btn flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-orange-500 whitespace-nowrap shrink-0 transition" data-tab="salud">
             <span>💚</span> Salud
@@ -209,7 +160,7 @@
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 class="text-base font-bold text-gray-800">Últimas Órdenes Amazon</h2>
-        <button onclick="switchAmzTab('productos')" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver catálogo →</button>
+        <a href="/amazon/products" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver productos →</a>
     </div>
     <div id="amz-recent-orders" class="p-4 md:p-6">
         <div class="animate-pulse space-y-3">
@@ -221,19 +172,6 @@
 </div>
 
 </div><!-- /amz-tab-ventas -->
-
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: PRODUCTOS
-     ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-productos" class="hidden">
-    <div id="amz-products-content">
-        <div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">
-            {% for i in range(6) %}
-            <div class="h-12 bg-orange-50 rounded"></div>
-            {% endfor %}
-        </div>
-    </div>
-</div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════
      TAB: SALUD
@@ -261,7 +199,7 @@
 var amzChartInstance = null;
 var amzDailyGoal = 50000;
 var amzActiveTab = 'ventas';
-var amzTabLoaded = { ventas: true, productos: false, salud: false };
+var amzTabLoaded = { ventas: true, salud: false };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -284,8 +222,9 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['ventas', 'productos', 'salud'].forEach(function(t) {
-        document.getElementById('amz-tab-' + t).classList.toggle('hidden', t !== tabName);
+    ['ventas', 'salud'].forEach(function(t) {
+        var el = document.getElementById('amz-tab-' + t);
+        if (el) el.classList.toggle('hidden', t !== tabName);
     });
     document.querySelectorAll('.amz-tab-btn').forEach(function(btn) {
         var active = btn.getAttribute('data-tab') === tabName;
@@ -296,14 +235,10 @@ function switchAmzTab(tabName) {
         btn.classList.toggle('text-gray-500',    !active);
         btn.classList.toggle('font-medium',      !active);
     });
-    // Ocultar banner stats cuando no es Ventas
-    var bannerStats = document.getElementById('amz-banner-stats');
-    if (bannerStats) bannerStats.classList.toggle('hidden', tabName !== 'ventas');
 
     amzActiveTab = tabName;
     if (!amzTabLoaded[tabName]) {
-        if (tabName === 'productos') loadAmzProductosTab();
-        else if (tabName === 'salud')    loadAmzSaludTab();
+        if (tabName === 'salud') loadAmzSaludTab();
     }
 }
 
@@ -318,7 +253,8 @@ function setRange(days) {
     document.getElementById('amz_date_from').value = toDateStr(start);
     document.getElementById('amz_date_to').value   = toDateStr(end);
     var labels = {7:'Últimos 7 días', 15:'Últimos 15 días', 30:'Últimos 30 días', 90:'Últimos 3 meses'};
-    document.getElementById('amz-period-label').textContent = labels[days] || 'Periodo personalizado';
+    var periodEl = document.getElementById('amz-period-label');
+    if (periodEl) periodEl.textContent = labels[days] || 'Periodo personalizado';
 }
 
 function highlightRangeBtn(btn) {
@@ -557,16 +493,6 @@ function loadAmazonDashboard() {
     }, 1500);
 }
 
-// ─── TAB PRODUCTOS ────────────────────────────────────────────────────────────
-function loadAmzProductosTab() {
-    var cont = document.getElementById('amz-products-content');
-    cont.innerHTML = '<div class="animate-pulse space-y-3 p-4 bg-white rounded-xl shadow">'+Array(6).fill('<div class="h-12 bg-orange-50 rounded"></div>').join('')+'</div>';
-    fetch('/api/amazon/products/summary')
-        .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
-        .then(function(html){ cont.innerHTML = html; amzTabLoaded.productos = true; })
-        .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 text-sm bg-white rounded-xl shadow p-6">Error cargando productos: '+e.message+'</p>'; });
-}
-
 // ─── TAB SALUD ────────────────────────────────────────────────────────────────
 function loadAmzSaludTab() {
     var cont = document.getElementById('amz-health-content');
@@ -678,7 +604,8 @@ document.querySelectorAll('.amz-range-btn').forEach(function(btn) {
 document.getElementById('btn-amz-filtrar').addEventListener('click', function() {
     var df = document.getElementById('amz_date_from').value;
     var dt = document.getElementById('amz_date_to').value;
-    if (df && dt) document.getElementById('amz-period-label').textContent = df + ' – ' + dt;
+    var periodEl2 = document.getElementById('amz-period-label');
+    if (df && dt && periodEl2) periodEl2.textContent = df + ' – ' + dt;
     highlightRangeBtn(null);
     loadAmazonDashboard();
 });
