@@ -105,24 +105,26 @@
 <!-- ── JS: Toggle lazy load de items ─────────────────────────────────────── -->
 <script>
 (function(){
-    // Estado de los botones expandidos
-    const _expanded = {};
-
     window.toggleOrderItems = async function(orderId) {
         const expandRow = document.getElementById('expand-' + orderId);
         const btn       = document.getElementById('btn-'    + orderId);
         if (!expandRow || !btn) return;
 
-        // Si ya está abierto, cerrarlo
-        if (_expanded[orderId]) {
-            expandRow.classList.add('hidden');
-            btn.textContent = 'Ver ▼';
-            _expanded[orderId] = false;
+        // ── Si ya está cargado: toggle visible/oculto ───────────────────────
+        if (expandRow.dataset.loaded === 'true') {
+            const isHidden = expandRow.classList.contains('hidden');
+            if (isHidden) {
+                expandRow.classList.remove('hidden');
+                btn.textContent = 'Cerrar ▲';
+            } else {
+                expandRow.classList.add('hidden');
+                btn.textContent = 'Ver ▼';
+            }
             return;
         }
 
-        // Marcar como cargando
-        btn.textContent = '⏳';
+        // ── Primera carga: fetch items y poblar el <td> ─────────────────────
+        btn.innerHTML = '<span class="animate-spin inline-block">⏳</span>';
         btn.disabled = true;
 
         try {
@@ -130,25 +132,23 @@
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const html = await resp.text();
 
-            // Reemplazar el contenido del placeholder
-            expandRow.outerHTML = html;
+            // Inyectar contenido en el <td> existente (NO reemplazar el <tr>)
+            const td = expandRow.querySelector('td');
+            if (td) td.innerHTML = html;
 
+            // Marcar como cargado y mostrar
+            expandRow.dataset.loaded = 'true';
+            expandRow.classList.remove('hidden');
             btn.textContent = 'Cerrar ▲';
             btn.disabled = false;
-            _expanded[orderId] = true;
 
-            // Re-vincular botón (puede haber cambiado el DOM)
-            const newBtn = document.getElementById('btn-' + orderId);
-            if (newBtn) newBtn.disabled = false;
-
-            // Scroll suave a la fila expandida
-            const newRow = document.getElementById('items-row-' + orderId);
-            if (newRow) newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            // Scroll suave
+            expandRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         } catch(e) {
-            btn.textContent = 'Error';
+            btn.textContent = 'Error ✕';
             btn.disabled = false;
-            console.error('[Amazon Orders] Error cargando items:', e);
+            console.error('[Amazon Orders] Error cargando items de', orderId, ':', e);
         }
     };
 })();
