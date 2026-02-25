@@ -247,14 +247,18 @@ class AmazonClient:
         created_after: str,
         created_before: str = None,
         marketplace_ids: list = None,
+        order_statuses: list = None,
     ) -> list:
         """
         Obtiene órdenes del marketplace.
 
         Args:
-            created_after:  Fecha ISO 8601 (ej. "2026-01-01T00:00:00Z")
-            created_before: Fecha ISO 8601 opcional (default: ahora)
+            created_after:   Fecha ISO 8601 (ej. "2026-01-01T00:00:00Z")
+            created_before:  Fecha ISO 8601 opcional (default: ahora)
             marketplace_ids: Lista de IDs de marketplace (default: el de la instancia)
+            order_statuses:  Lista de estados a filtrar (default: Shipped+Unshipped+PartiallyShipped)
+                             NOTA: NO mezclar Pending con otros — SP-API quirk devuelve solo Pending.
+                             Usar fetch_orders_range(statuses=["Pending"]) por separado.
 
         Returns:
             Lista de órdenes con campos: AmazonOrderId, OrderStatus,
@@ -262,26 +266,18 @@ class AmazonClient:
 
         Notas:
             - Paginación automática via NextToken
-            - Solo incluye órdenes en estado Shipped/Unshipped/PartiallyShipped
-            - Pending y Cancelled se excluyen del conteo de ventas
         """
         if marketplace_ids is None:
             marketplace_ids = [self.marketplace_id]
+        if order_statuses is None:
+            order_statuses = ["Shipped", "Unshipped", "PartiallyShipped"]
 
         # SP-API exige parámetros repetidos para listas, no CSV
-        # Ejemplo correcto: OrderStatuses=Shipped&OrderStatuses=Unshipped
-        # NOTA: NO incluir Pending — SP-API tiene un quirk documentado donde
-        # al mezclar Pending con otros estados solo devuelve las Pending,
-        # ignorando Shipped/Unshipped. Se usan dos queries separadas si se necesitan.
-        # InvoiceUnconfirmed solo aplica en Brasil — excluido para MX/US/CA
-        params: list = [
-            ("MarketplaceIds", mid) for mid in marketplace_ids
-        ] + [
-            ("CreatedAfter", created_after),
-            ("OrderStatuses", "Shipped"),
-            ("OrderStatuses", "Unshipped"),
-            ("OrderStatuses", "PartiallyShipped"),
-        ]
+        params: list = (
+            [("MarketplaceIds", mid) for mid in marketplace_ids]
+            + [("CreatedAfter", created_after)]
+            + [("OrderStatuses", s) for s in order_statuses]
+        )
         if created_before:
             params.append(("CreatedBefore", created_before))
 
@@ -740,33 +736,23 @@ class AmazonClient:
         self,
         date_from: str,
         date_to: str,
+        statuses: list = None,
     ) -> list:
         """
         Obtiene TODAS las órdenes de un rango de fechas (paginación incluida).
 
-        Equivalente a fetch_all_orders() de meli_client.py pero para Amazon.
-
         Args:
             date_from: "YYYY-MM-DD" — inicio del rango (inclusive)
             date_to:   "YYYY-MM-DD" — fin del rango (inclusive, hasta las 23:59:59)
-
-        Returns:
-            Lista completa de órdenes del período.
-
-        Proceso:
-            1. Convierte YYYY-MM-DD a ISO 8601 que exige SP-API
-            2. Llama a get_orders con paginación interna
-            3. Incluye todos los estados (Shipped, Unshipped, Delivered, etc.)
+            statuses:  Lista de OrderStatuses a filtrar. Default: Shipped+Unshipped+PartiallyShipped.
+                       Para Pending usar statuses=["Pending"] en llamada separada (SP-API quirk).
         """
         # Convertir a ISO 8601 con zona UTC (SP-API lo requiere)
         created_after = f"{date_from}T00:00:00Z"
 
         # Amazon exige que CreatedBefore sea al menos 2 min antes de "ahora".
-        # Si date_to es hoy, usamos ahora - 5 min para no caer en error 400.
-        # Si date_to es una fecha pasada, usamos las 23:59:59 de ese día.
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         if date_to >= today_str:
-            # Fecha futura o hoy: retroceder 5 minutos desde ahora
             created_before = (datetime.utcnow() - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
             created_before = f"{date_to}T23:59:59Z"
@@ -774,6 +760,7 @@ class AmazonClient:
         return await self.get_orders(
             created_after=created_after,
             created_before=created_before,
+            order_statuses=statuses,  # None = default Shipped+Unshipped+PartiallyShipped
         )
 
 

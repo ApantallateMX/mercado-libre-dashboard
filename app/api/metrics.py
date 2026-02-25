@@ -496,9 +496,28 @@ async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> lis
             ts, orders = _amazon_orders_cache[cache_key]
             if _time.time() - ts < _AMAZON_ORDERS_TTL:
                 return orders
-        orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
-        _amazon_orders_cache[cache_key] = (_time.time(), orders)
-        return orders
+
+        # ── Call 1: Shipped + Unshipped + PartiallyShipped ────────────────
+        orders_active = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+
+        # ── Call 2: Pending por separado ──────────────────────────────────
+        # SP-API quirk: mezclar Pending+Shipped en mismo query devuelve SOLO Pending.
+        # Por eso se hace una segunda llamada separada y se mergean los resultados.
+        # Esto permite que "Hoy" refleje todas las órdenes nuevas (aún en Pending).
+        try:
+            orders_pending = await client.fetch_orders_range(
+                date_from=date_from, date_to=date_to, statuses=["Pending"]
+            )
+            # Deduplicar por AmazonOrderId (algunos pueden aparecer en ambas listas)
+            active_ids = {o.get("AmazonOrderId") for o in orders_active}
+            new_pending = [o for o in orders_pending if o.get("AmazonOrderId") not in active_ids]
+            all_orders = orders_active + new_pending
+        except Exception:
+            # Si el fetch de Pending falla (429, etc.) usar solo los activos
+            all_orders = orders_active
+
+        _amazon_orders_cache[cache_key] = (_time.time(), all_orders)
+        return all_orders
 
 
 def _build_amazon_chart_data(orders: list, date_from: str, date_to: str):
