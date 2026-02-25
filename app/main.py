@@ -6629,6 +6629,7 @@ async def amazon_dashboard(request: Request):
     con botón para conectar.
     El PIN se valida automáticamente via PinMiddleware.
     """
+    user = await get_current_user()
     ctx = await _accounts_ctx(request)
 
     # Obtener info de la cuenta Amazon activa (para el banner)
@@ -6640,7 +6641,7 @@ async def amazon_dashboard(request: Request):
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = "dashboard"
-    return templates.TemplateResponse("amazon_dashboard.html", {"request": request, **ctx})
+    return templates.TemplateResponse("amazon_dashboard.html", {"request": request, "user": user, **ctx})
 
 
 @app.get("/amazon/products", response_class=HTMLResponse)
@@ -6649,6 +6650,7 @@ async def amazon_products_page(request: Request):
     Centro de Productos Amazon — catálogo, FBA inventory, Buy Box y sugerencias.
     Usa tabs con carga lazy via JS fetch a los endpoints /api/amazon/products/*.
     """
+    user = await get_current_user()
     ctx = await _accounts_ctx(request)
     active_amazon_id = ctx.get("active_amazon_id")
     amazon_account = None
@@ -6657,7 +6659,7 @@ async def amazon_products_page(request: Request):
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = "products"
-    return templates.TemplateResponse("amazon_products.html", {"request": request, **ctx})
+    return templates.TemplateResponse("amazon_products.html", {"request": request, "user": user, **ctx})
 
 
 if __name__ == "__main__":

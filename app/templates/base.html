@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Dashboard{% endblock %} - {% if active_platform == "amazon" %}Amazon Seller{% else %}Mercado Libre{% endif %}</title>
+    <title>{% block title %}Dashboard{% endblock %} - {% if active_platform == "amazon" %}Amazon{% else %}Mercado Libre{% endif %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -19,209 +19,47 @@
 </head>
 <body class="bg-gray-100 min-h-screen">
     {% if user %}
-
-    {% if active_platform == "amazon" %}
     <!-- ══════════════════════════════════════════════════════════════════════
-         NAV AMAZON — dark mode #232F3E con tabs Dashboard / Productos
-         Mismo dropdown de cuentas multi-plataforma (MeLi + AMZ)
-         ══════════════════════════════════════════════════════════════════ -->
-    <nav style="background:#232F3E;" class="shadow-lg">
-        <div class="max-w-7xl mx-auto px-4">
-            <div class="flex justify-between h-14 md:h-16 items-center">
-                <!-- Logo + hamburger -->
-                <div class="flex items-center gap-3">
-                    <button onclick="document.getElementById('mobile-menu').classList.toggle('hidden')" class="md:hidden p-2.5 -ml-2 rounded-lg hover:bg-[#37475A] active:bg-[#37475A]" aria-label="Menu">
-                        <svg class="w-6 h-6 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-                        </svg>
-                    </button>
-                    <a href="/amazon" class="flex items-center gap-2">
-                        <span class="text-sm font-bold bg-[#FF9900] text-white px-2 py-0.5 rounded">AMZ</span>
-                    </a>
-                </div>
-                <!-- Desktop nav tabs -->
-                <div class="hidden md:flex items-center h-full">
-                    <a href="/amazon" class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
-                        {% if active_amazon_tab == 'dashboard' %}border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-[#FF9900]{% endif %}">
-                        📊 Dashboard
-                    </a>
-                    <a href="/amazon/products" class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
-                        {% if active_amazon_tab == 'products' %}border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-[#FF9900]{% endif %}">
-                        📦 Productos
-                    </a>
-                </div>
-                <!-- ══ Selector de cuentas multi-plataforma (desktop) ══ -->
-                <div class="flex items-center gap-2">
-                    <div class="relative" id="account-menu-wrap">
-                        <!-- Botón principal — muestra cuenta Amazon activa -->
-                        <button type="button"
-                            onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
-                            class="flex items-center gap-1.5 text-gray-200 text-sm hover:text-white cursor-pointer select-none bg-[#37475A] hover:bg-[#2e3c4d] px-3 py-1.5 rounded-lg transition">
-                            <span class="text-xs font-bold text-[#FF9900]">AMZ</span>
-                            {% if amazon_account %}
-                            <span class="max-w-[110px] truncate font-medium">{{ amazon_account.nickname or amazon_account.seller_id }}</span>
-                            {% else %}
-                            <span class="max-w-[110px] truncate font-medium">{{ user.nickname }}</span>
-                            {% endif %}
-                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                            </svg>
-                        </button>
-
-                        <!-- Dropdown con ambas plataformas (IGUAL que en MeLi nav) -->
-                        <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-50 min-w-[240px] py-2">
-
-                            <!-- ─── SECCIÓN MERCADO LIBRE ─────────────────── -->
-                            <div class="px-4 py-1.5 flex items-center gap-2">
-                                <span class="text-xs font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
-                                <p class="text-xs text-gray-400 font-semibold uppercase tracking-wide">Mercado Libre</p>
-                            </div>
-                            {% for account in accounts %}
-                            <form action="/auth/switch-account" method="POST">
-                                <input type="hidden" name="user_id" value="{{ account.user_id }}">
-                                <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-yellow-50 transition-colors">
-                                    {% if account.user_id == active_user_id %}
-                                    <span class="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center text-xs font-bold text-gray-800 shrink-0">✓</span>
-                                    {% else %}
-                                    <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
-                                    {% endif %}
-                                    <span class="{% if account.user_id == active_user_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
-                                        {{ account.nickname or account.user_id }}
-                                    </span>
-                                </button>
-                            </form>
-                            {% endfor %}
-
-                            <!-- ─── SECCIÓN AMAZON ────────────────────────── -->
-                            {% if amazon_accounts %}
-                            <hr class="my-1.5 border-gray-100">
-                            <div class="px-4 py-1.5 flex items-center gap-2">
-                                <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
-                                <p class="text-xs text-gray-400 font-semibold uppercase tracking-wide">Amazon</p>
-                            </div>
-                            {% for amz in amazon_accounts %}
-                            <form action="/auth/switch-amazon" method="POST">
-                                <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                                <input type="hidden" name="next" value="/amazon">
-                                <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
-                                    {% if amz.seller_id == active_amazon_id %}
-                                    <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
-                                    {% else %}
-                                    <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
-                                    {% endif %}
-                                    <div class="flex flex-col min-w-0">
-                                        <span class="{% if amz.seller_id == active_amazon_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
-                                            {{ amz.nickname or amz.seller_id }}
-                                        </span>
-                                        <span class="text-xs text-gray-400">{{ amz.marketplace_name }} · {{ amz.seller_id }}</span>
-                                    </div>
-                                </button>
-                            </form>
-                            {% endfor %}
-                            {% endif %}
-
-                            <!-- ─── AGREGAR CUENTAS ───────────────────────── -->
-                            <hr class="my-1.5 border-gray-100">
-                            <a href="/auth/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-yellow-600 hover:bg-yellow-50 transition-colors">
-                                <span class="w-5 h-5 rounded-full bg-yellow-100 flex items-center justify-center text-xs font-bold text-yellow-600 shrink-0">+</span>
-                                Agregar cuenta MeLi
-                            </a>
-                            <a href="/auth/amazon/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 transition-colors">
-                                <span class="w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center text-xs font-bold text-orange-600 shrink-0">+</span>
-                                Agregar cuenta Amazon
-                            </a>
-                        </div>
-                    </div>
-
-                    <form action="/auth/logout" method="POST" class="inline">
-                        <button type="submit" class="bg-[#37475A] text-gray-200 px-3 py-1.5 text-sm rounded-lg hover:bg-[#2e3c4d] transition">
-                            Salir
-                        </button>
-                    </form>
-                </div>
-                <script>
-                document.addEventListener('click', function(e) {
-                    var wrap = document.getElementById('account-menu-wrap');
-                    var dd = document.getElementById('account-dropdown');
-                    if (wrap && dd && !wrap.contains(e.target)) dd.classList.add('hidden');
-                });
-                </script>
-            </div>
-        </div>
-        <!-- Mobile menu Amazon -->
-        <div id="mobile-menu" class="hidden md:hidden border-t border-gray-700" style="background:#2e3c4d;">
-            <div class="grid grid-cols-2 gap-2 px-3 py-3">
-                <a href="/amazon" class="flex flex-col items-center gap-1 min-h-[48px] py-3 px-2 rounded-lg transition
-                    {% if active_amazon_tab == 'dashboard' %}bg-[#37475A] font-semibold{% else %}hover:bg-[#37475A]{% endif %}">
-                    <svg class="w-6 h-6 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
-                    <span class="text-sm text-gray-200">Dashboard</span>
-                </a>
-                <a href="/amazon/products" class="flex flex-col items-center gap-1 min-h-[48px] py-3 px-2 rounded-lg transition
-                    {% if active_amazon_tab == 'products' %}bg-[#37475A] font-semibold{% else %}hover:bg-[#37475A]{% endif %}">
-                    <svg class="w-6 h-6 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-                    <span class="text-sm text-gray-200">Productos</span>
-                </a>
-            </div>
-            <!-- ══ Selector de cuentas en móvil (Amazon) ══ -->
-            <div class="px-3 pb-3 border-t border-gray-700 pt-3">
-                <!-- Sección Mercado Libre -->
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="text-xs font-bold bg-yellow-500 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
-                    <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Mercado Libre</p>
-                </div>
-                <div class="grid grid-cols-2 gap-2 mb-3">
-                    {% for account in accounts %}
-                    <form action="/auth/switch-account" method="POST">
-                        <input type="hidden" name="user_id" value="{{ account.user_id }}">
-                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                            {% if account.user_id == active_user_id %}bg-yellow-500 font-bold text-gray-800{% else %}bg-[#37475A] hover:bg-[#4a5e70] text-gray-200{% endif %}">
-                            {% if account.user_id == active_user_id %}<span class="shrink-0">✓</span>{% endif %}
-                            <span class="truncate">{{ account.nickname or account.user_id }}</span>
-                        </button>
-                    </form>
-                    {% endfor %}
-                </div>
-                <!-- Sección Amazon -->
-                {% if amazon_accounts %}
-                <div class="flex items-center gap-2 mb-2">
-                    <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
-                    <p class="text-xs font-semibold text-gray-300 uppercase tracking-wide">Amazon</p>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    {% for amz in amazon_accounts %}
-                    <form action="/auth/switch-amazon" method="POST">
-                        <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                        <input type="hidden" name="next" value="/amazon">
-                        <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                            {% if amz.seller_id == active_amazon_id %}bg-orange-400 font-bold text-white{% else %}bg-[#37475A] hover:bg-[#4a5e70] text-gray-200{% endif %}">
-                            {% if amz.seller_id == active_amazon_id %}<span class="shrink-0">✓</span>{% endif %}
-                            <span class="truncate">{{ amz.nickname or amz.seller_id }}</span>
-                        </button>
-                    </form>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </div>
-        </div>
-    </nav>
-
-    {% else %}
-    <!-- ══════════════════════════════════════════════════════════════════════
-         NAV MELI — amarillo, sin cambios
+         NAV PRINCIPAL — amarillo para MeLi y Amazon (mismo look)
+         Tabs del centro cambian según la plataforma activa
          ══════════════════════════════════════════════════════════════════ -->
     <nav class="bg-yellow-400 shadow-lg">
         <div class="max-w-7xl mx-auto px-4">
             <div class="flex justify-between h-14 md:h-16 items-center">
-                <!-- Logo + hamburger -->
+
+                <!-- ── Logo + hamburger ──────────────────────────────────── -->
                 <div class="flex items-center gap-3">
                     <button onclick="document.getElementById('mobile-menu').classList.toggle('hidden')" class="md:hidden p-2.5 -ml-2 rounded-lg hover:bg-yellow-500 active:bg-yellow-600" aria-label="Menu">
                         <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
                         </svg>
                     </button>
+                    {% if active_platform == "amazon" %}
+                    <a href="/amazon" class="flex items-center gap-1.5 font-bold text-lg md:text-xl text-gray-800">
+                        MeLi <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
+                    </a>
+                    {% else %}
                     <a href="/dashboard" class="font-bold text-lg md:text-xl text-gray-800">MeLi</a>
+                    {% endif %}
                 </div>
-                <!-- Desktop nav links -->
+
+                <!-- ── Tabs / Links del centro ───────────────────────────── -->
+                {% if active_platform == "amazon" %}
+                <!-- Amazon: 2 tabs -->
+                <div class="hidden md:flex items-center h-full">
+                    <a href="/amazon"
+                       class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
+                              {% if active_amazon_tab == 'dashboard' %}border-gray-800 text-gray-900 font-bold{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-400{% endif %}">
+                        📊 Dashboard
+                    </a>
+                    <a href="/amazon/products"
+                       class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
+                              {% if active_amazon_tab == 'products' %}border-gray-800 text-gray-900 font-bold{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-400{% endif %}">
+                        📦 Productos
+                    </a>
+                </div>
+                {% else %}
+                <!-- MeLi: links existentes sin cambios -->
                 <div class="hidden md:flex items-center space-x-5 text-sm">
                     <a href="/multi-dashboard" class="text-gray-700 hover:text-gray-900 {% if active == 'multi_dashboard' %}font-semibold{% endif %} flex items-center gap-1">
                         <span class="text-yellow-600">⊕</span> Vista General
@@ -242,36 +80,49 @@
                         <span id="health-badge" class="hidden absolute -top-1 -right-3 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold"></span>
                     </a>
                 </div>
-                <!-- ══ Selector de cuentas multi-plataforma (desktop) ══
-                     Muestra dos secciones separadas:
-                     1. MERCADO LIBRE — cuentas MeLi con badge amarillo
-                     2. AMAZON       — cuentas Amazon con badge naranja
-                     Cada plataforma tiene su propia cookie activa:
-                     - active_account_id  → MeLi
-                     - active_amazon_id   → Amazon
-                -->
+                {% endif %}
+
+                <!-- ── Selector de cuentas multi-plataforma (desktop) ─────
+                     IDÉNTICO para MeLi y Amazon — mismo dropdown funcional
+                ──────────────────────────────────────────────────────────── -->
                 <div class="flex items-center gap-2">
                     <div class="relative" id="account-menu-wrap">
-                        <!-- Botón principal — muestra cuenta MeLi activa -->
+
+                        {% if active_platform == "amazon" %}
+                        <!-- Botón Amazon: muestra la cuenta AMZ activa -->
+                        <button type="button"
+                            onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
+                            class="flex items-center gap-1.5 text-gray-700 text-sm hover:text-gray-900 cursor-pointer select-none bg-orange-200 hover:bg-orange-100 px-3 py-1.5 rounded-lg transition">
+                            <span class="text-xs font-bold bg-orange-500 text-white px-1 rounded">AMZ</span>
+                            {% if amazon_account %}
+                            <span class="max-w-[110px] truncate font-medium">{{ amazon_account.nickname or amazon_account.seller_id }}</span>
+                            {% else %}
+                            <span class="max-w-[110px] truncate font-medium">{{ user.nickname }}</span>
+                            {% endif %}
+                            <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        {% else %}
+                        <!-- Botón MeLi: muestra la cuenta ML activa -->
                         <button type="button"
                             onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
                             class="flex items-center gap-1.5 text-gray-700 text-sm hover:text-gray-900 cursor-pointer select-none bg-yellow-300 hover:bg-yellow-200 px-3 py-1.5 rounded-lg transition">
-                            <!-- Badge de plataforma MeLi -->
                             <span class="text-xs font-bold text-yellow-700">ML</span>
                             <span class="max-w-[110px] truncate font-medium">{{ user.nickname }}</span>
                             {% if amazon_accounts %}
-                            <!-- Indicador de que también hay cuentas Amazon conectadas -->
                             <span class="text-xs font-bold bg-orange-500 text-white px-1 rounded">AMZ</span>
                             {% endif %}
                             <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                             </svg>
                         </button>
+                        {% endif %}
 
-                        <!-- Dropdown con ambas plataformas -->
+                        <!-- Dropdown — IDÉNTICO para ambas plataformas -->
                         <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-50 min-w-[240px] py-2">
 
-                            <!-- ─── SECCIÓN MERCADO LIBRE ─────────────────── -->
+                            <!-- ─── SECCIÓN MERCADO LIBRE ─────────────── -->
                             <div class="px-4 py-1.5 flex items-center gap-2">
                                 <span class="text-xs font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
                                 <p class="text-xs text-gray-400 font-semibold uppercase tracking-wide">Mercado Libre</p>
@@ -292,7 +143,7 @@
                             </form>
                             {% endfor %}
 
-                            <!-- ─── SECCIÓN AMAZON ────────────────────────── -->
+                            <!-- ─── SECCIÓN AMAZON ────────────────────── -->
                             {% if amazon_accounts %}
                             <hr class="my-1.5 border-gray-100">
                             <div class="px-4 py-1.5 flex items-center gap-2">
@@ -320,7 +171,7 @@
                             {% endfor %}
                             {% endif %}
 
-                            <!-- ─── AGREGAR CUENTAS ───────────────────────── -->
+                            <!-- ─── AGREGAR CUENTAS ──────────────────── -->
                             <hr class="my-1.5 border-gray-100">
                             <a href="/auth/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-yellow-600 hover:bg-yellow-50 transition-colors">
                                 <span class="w-5 h-5 rounded-full bg-yellow-100 flex items-center justify-center text-xs font-bold text-yellow-600 shrink-0">+</span>
@@ -339,17 +190,27 @@
                         </button>
                     </form>
                 </div>
-                <script>
-                document.addEventListener('click', function(e) {
-                    var wrap = document.getElementById('account-menu-wrap');
-                    var dd = document.getElementById('account-dropdown');
-                    if (wrap && dd && !wrap.contains(e.target)) dd.classList.add('hidden');
-                });
-                </script>
-            </div>
-        </div>
-        <!-- Mobile menu MeLi -->
+
+            </div><!-- /flex justify-between -->
+        </div><!-- /max-w-7xl -->
+
+        <!-- ── Mobile menu ──────────────────────────────────────────────── -->
         <div id="mobile-menu" class="hidden md:hidden border-t border-yellow-500 bg-yellow-400">
+
+            {% if active_platform == "amazon" %}
+            <!-- Amazon mobile: 2 tabs -->
+            <div class="grid grid-cols-2 gap-2 px-3 py-3">
+                <a href="/amazon" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active_amazon_tab == 'dashboard' %}bg-yellow-500 font-semibold{% endif %}">
+                    <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0h4"/></svg>
+                    <span class="text-sm text-gray-800">Dashboard</span>
+                </a>
+                <a href="/amazon/products" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active_amazon_tab == 'products' %}bg-yellow-500 font-semibold{% endif %}">
+                    <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
+                    <span class="text-sm text-gray-800">Productos</span>
+                </a>
+            </div>
+            {% else %}
+            <!-- MeLi mobile: grid de 11 links -->
             <div class="grid grid-cols-3 gap-1 px-3 py-3">
                 <a href="/multi-dashboard" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'multi_dashboard' %}bg-yellow-500 font-semibold{% endif %}">
                     <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -396,9 +257,10 @@
                     <span class="text-sm text-gray-800">Salud</span>
                 </a>
             </div>
-            <!-- ══ Selector de cuentas en móvil — multi-plataforma ══ -->
-            <div class="px-3 pb-3 border-t border-yellow-500 pt-3">
+            {% endif %}
 
+            <!-- ── Selector de cuentas en móvil — multi-plataforma ──────── -->
+            <div class="px-3 pb-3 border-t border-yellow-500 pt-3">
                 <!-- Sección Mercado Libre -->
                 <div class="flex items-center gap-2 mb-2">
                     <span class="text-xs font-bold bg-yellow-500 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
@@ -416,7 +278,6 @@
                     </form>
                     {% endfor %}
                 </div>
-
                 <!-- Sección Amazon (solo si hay cuentas conectadas) -->
                 {% if amazon_accounts %}
                 <div class="flex items-center gap-2 mb-2">
@@ -438,10 +299,20 @@
                 </div>
                 {% endif %}
             </div>
-        </div>
+
+        </div><!-- /mobile-menu -->
 
     </nav>
-    {% endif %}
+
+    <!-- Close dropdown on outside click -->
+    <script>
+    document.addEventListener('click', function(e) {
+        var wrap = document.getElementById('account-menu-wrap');
+        var dd = document.getElementById('account-dropdown');
+        if (wrap && dd && !wrap.contains(e.target)) dd.classList.add('hidden');
+    });
+    </script>
+
     <!-- Notification Toast Container -->
     <div id="notif-container" class="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm z-50 flex flex-col gap-2"></div>
     {% endif %}
