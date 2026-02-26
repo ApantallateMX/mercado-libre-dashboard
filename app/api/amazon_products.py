@@ -84,28 +84,51 @@ def _parse_price(offers: list) -> float:
     return 0.0
 
 
-def _parse_deal_info(offers: list) -> dict:
+def _parse_deal_info(offers: list, attributes: dict = None) -> dict:
     """
     Detecta si hay una sale/deal activa en el listing.
-    Compara listingPrice (precio regular) vs amount (precio actual de venta).
-    Si listingPrice > amount (más del 1%), hay un deal activo.
+
+    Estrategia (en orden de prioridad):
+    1. attributes.purchasable_offer[0].discounted_price vs our_price
+       (es el campo más confiable cuando hay un sale activo en Seller Central)
+    2. offers.price.landedPrice vs listingPrice
+       (landedPrice refleja el precio real con promociones)
+    3. offers.price.amount vs listingPrice
+       (fallback genérico)
     """
+    # ── 1. Attributes: purchasable_offer.discounted_price ─────────────────────
+    if attributes:
+        po_list = attributes.get("purchasable_offer", [])
+        if isinstance(po_list, list) and po_list:
+            po = po_list[0]
+            try:
+                our_sched = (po.get("our_price") or [{}])[0].get("schedule") or [{}]
+                our_price = float((our_sched[0] if our_sched else {}).get("value_with_tax") or 0)
+                disc_sched = (po.get("discounted_price") or [{}])[0].get("schedule") or [{}]
+                disc_price = float((disc_sched[0] if disc_sched else {}).get("value_with_tax") or 0)
+                if our_price > 0 and disc_price > 0 and our_price > disc_price * 1.01:
+                    pct = round((1 - disc_price / our_price) * 100)
+                    return {"is_deal": True, "deal_price": disc_price, "list_price": our_price, "deal_pct": pct}
+            except (TypeError, ValueError, IndexError):
+                pass
+
+    # ── 2. Offers: landedPrice vs listingPrice ────────────────────────────────
     for offer in (offers or []):
         if offer.get("offerType") == "B2C":
             price = offer.get("price", {})
             try:
-                current = float(price.get("amount") or 0)
-                list_amt = float((price.get("listingPrice") or {}).get("amount") or 0)
-                if current > 0 and list_amt > 0 and list_amt > current * 1.01:
-                    pct = round((1 - current / list_amt) * 100)
-                    return {
-                        "is_deal": True,
-                        "deal_price": current,
-                        "list_price": list_amt,
-                        "deal_pct": pct,
-                    }
+                list_price = float((price.get("listingPrice") or {}).get("amount") or 0)
+                landed = float((price.get("landedPrice") or {}).get("amount") or 0)
+                amount = float(price.get("amount") or 0)
+                if list_price > 0 and landed > 0 and list_price > landed * 1.01:
+                    pct = round((1 - landed / list_price) * 100)
+                    return {"is_deal": True, "deal_price": landed, "list_price": list_price, "deal_pct": pct}
+                if amount > 0 and list_price > 0 and list_price > amount * 1.01:
+                    pct = round((1 - amount / list_price) * 100)
+                    return {"is_deal": True, "deal_price": amount, "list_price": list_price, "deal_pct": pct}
             except (TypeError, ValueError):
                 pass
+
     return {"is_deal": False, "deal_price": 0.0, "list_price": 0.0, "deal_pct": 0}
 
 
@@ -1321,7 +1344,8 @@ async def amazon_products_inventario(
 
             status = _listing_status(summaries)
             price = _parse_price(offers)
-            deal = _parse_deal_info(offers)
+            attributes = item.get("attributes") or {}
+            deal = _parse_deal_info(offers, attributes)
             summary_0 = summaries[0] if summaries else {}
             fba_d = fba_index.get(sku, {})
             asin = fba_d.get("asin") or summary_0.get("asin") or ""

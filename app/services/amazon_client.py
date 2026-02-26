@@ -634,7 +634,7 @@ class AmazonClient:
         Rate limit: 5 req/s — seguro llamar con pageSize=20 y sleep 0.2s entre páginas.
         """
         if included_data is None:
-            included_data = ["summaries", "offers", "fulfillmentAvailability", "issues"]
+            included_data = ["summaries", "attributes", "offers", "fulfillmentAvailability", "issues"]
 
         all_items = []
         page_token = None
