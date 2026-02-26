@@ -925,71 +925,108 @@ async def _enrich_bm_amz(items: list) -> None:
     """
     Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
 
-    Reglas:
-    - SKUs con -ICB / -ICC: se omiten (condición especial, no aplica inventario regular).
-    - Resto: condiciones GRA,GRB,GRC,NEW únicamente.
-    - Usa caché _bm_amz_cache (TTL 15 min). Solo fetchea SKUs no cacheados.
+    - Condiciones siempre: GRA,GRB,GRC,NEW (aplica para todos los SKUs Amazon).
+    - Deduplica por SKU base: SNFN000941-NEW-02 y SNFN000941-FLX01 → 1 sola llamada BM.
+    - Caché 15 min por Amazon SKU.
+    - Logging completo para diagnóstico en Railway.
     """
-    now = _time.time()
-    to_fetch: list[str] = []
+    if not items:
+        return
 
+    _BM_COND = "GRA,GRB,GRC,NEW"
+    now = _time.time()
+
+    # 1. Mapear Amazon SKU → lista de items (varios items pueden tener el mismo SKU)
+    sku_to_items: dict[str, list] = {}
     for item in items:
         sku = item.get("sku", "")
         if not sku:
             item.update(_BM_EMPTY)
             continue
+        sku_to_items.setdefault(sku, []).append(item)
+
+    # 2. Revisar caché; agrupar los no cacheados por base_sku (deduplicar llamadas BM)
+    base_to_amz_skus: dict[str, list[str]] = {}
+    for sku, item_list in sku_to_items.items():
         cached = _bm_amz_cache.get(sku.upper())
         if cached and (now - cached[0]) < _BM_AMZ_TTL:
-            item.update(cached[1])
+            for item in item_list:
+                item.update(cached[1])
         else:
-            to_fetch.append(sku)
-            item.update(_BM_EMPTY)
+            base = _amz_base_sku(sku)
+            if not base:
+                for item in item_list:
+                    item.update(_BM_EMPTY)
+                continue
+            base_to_amz_skus.setdefault(base, []).append(sku)
+            for item in item_list:
+                item.update(_BM_EMPTY)   # placeholder hasta que llegue BM
 
-    if not to_fetch:
+    if not base_to_amz_skus:
         return
 
-    _BM_CONDITIONS = "GRA,GRB,GRC,NEW"  # siempre sin ICB/ICC para listings regulares
+    logger.info(f"[BM-AMZ] Consultando {len(base_to_amz_skus)} SKUs base: {list(base_to_amz_skus)}")
     sem = asyncio.Semaphore(15)
 
-    async def _fetch_one(sku: str, http: "httpx.AsyncClient") -> None:
-        base = _amz_base_sku(sku)
+    async def _fetch_base(base: str, amz_skus: list[str], http: httpx.AsyncClient) -> None:
         wh_payload = {
             "COMPANYID": 1, "SKU": base, "WarehouseID": None,
             "LocationID": _BM_LOC_IDS, "BINID": None,
-            "Condition": _BM_CONDITIONS, "SUPPLIERS": None, "ForInventory": 0,
+            "Condition": _BM_COND, "SUPPLIERS": None, "ForInventory": 0,
         }
         av_payload = {
             "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
             "LOCATIONID": _BM_LOC_IDS, "BINID": None,
-            "PRODUCTSKU": base, "CONDITION": _BM_CONDITIONS,
+            "PRODUCTSKU": base, "CONDITION": _BM_COND,
             "SUPPLIERS": None, "LCN": None, "SEARCH": base,
         }
-        wh_rows, av_rows = [], []
+        wh_rows: list = []
+        av_rows: list = []
         async with sem:
             try:
                 r_wh, r_av = await asyncio.gather(
-                    http.post(_BM_WH_URL, json=wh_payload, timeout=15.0),
+                    http.post(_BM_WH_URL,    json=wh_payload, timeout=15.0),
                     http.post(_BM_AVAIL_URL, json=av_payload, timeout=15.0),
                     return_exceptions=True,
                 )
-                if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
-                    wh_rows = r_wh.json()
-                if not isinstance(r_av, Exception) and r_av.status_code == 200:
-                    av_rows = r_av.json()
-            except Exception:
-                pass
+                if not isinstance(r_wh, Exception):
+                    if r_wh.status_code == 200:
+                        wh_rows = r_wh.json()
+                    else:
+                        logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
+                else:
+                    logger.warning(f"[BM-AMZ] WH excepcion para base={base}: {r_wh}")
+                if not isinstance(r_av, Exception):
+                    if r_av.status_code == 200:
+                        av_rows = r_av.json()
+                    else:
+                        logger.warning(f"[BM-AMZ] AV HTTP {r_av.status_code} para base={base}")
+                else:
+                    logger.warning(f"[BM-AMZ] AV excepcion para base={base}: {r_av}")
+            except Exception as exc:
+                logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
+
         mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
         avail    = sum(row.get("Available", 0) or 0 for row in av_rows)
-        reserved = sum(row.get("Required", 0)  or 0 for row in av_rows)
+        reserved = sum(row.get("Required",  0) or 0 for row in av_rows)
         inv = {"bm_mty": mty, "bm_cdmx": cdmx, "bm_tj": tj,
                "bm_avail": avail, "bm_reserved": reserved}
-        _bm_amz_cache[sku.upper()] = (_time.time(), inv)
-        for item in items:
-            if item.get("sku", "").upper() == sku.upper():
+        logger.info(
+            f"[BM-AMZ] {base} => mty={mty} cdmx={cdmx} tj={tj} "
+            f"avail={avail} res={reserved}  (SKUs: {amz_skus})"
+        )
+        # Cachear y aplicar resultado a TODOS los Amazon SKUs que comparten este base
+        ts_now = _time.time()
+        for amz_sku in amz_skus:
+            _bm_amz_cache[amz_sku.upper()] = (ts_now, inv)
+            for item in sku_to_items.get(amz_sku, []):
                 item.update(inv)
 
     async with httpx.AsyncClient(timeout=30.0) as http:
-        await asyncio.gather(*[_fetch_one(s, http) for s in to_fetch], return_exceptions=True)
+        await asyncio.gather(
+            *[_fetch_base(base, skus, http) for base, skus in base_to_amz_skus.items()],
+            return_exceptions=True,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
