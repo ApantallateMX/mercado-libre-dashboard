@@ -84,10 +84,18 @@
                         </span>
                     </td>
 
-                    {# TOTAL (amount_display tiene "—" para Pending) #}
-                    <td class="px-3 py-2.5 text-right font-bold
-                               {% if order.amount > 0 %}text-green-700{% else %}text-gray-400{% endif %}">
-                        {{ order.amount_display }}
+                    {# TOTAL — muestra valor si disponible; indica "~" cuando Pending #}
+                    <td id="amt-{{ order.order_id }}"
+                        data-pending="{{ 'true' if order.is_pending else 'false' }}"
+                        class="px-3 py-2.5 text-right font-bold
+                               {% if order.amount > 0 and not order.is_pending %}text-green-700
+                               {% elif order.amount > 0 and order.is_pending %}text-amber-600
+                               {% else %}text-gray-400{% endif %}">
+                        {% if order.is_pending and order.amount > 0 %}
+                            <span title="Precio estimado — pendiente de pago">~{{ order.amount_display }}</span>
+                        {% else %}
+                            {{ order.amount_display }}
+                        {% endif %}
                     </td>
 
                     {# ESTADO #}

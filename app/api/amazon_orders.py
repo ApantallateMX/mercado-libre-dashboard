@@ -102,8 +102,9 @@ def _normalize_order(order: dict) -> dict:
     unshipped = int(order.get("NumberOfItemsUnshipped") or 0)
     units     = shipped + unshipped
 
-    # Órdenes Pending no tienen Total aún (Amazon no lo expone hasta confirmar)
-    amount_display = f"${amount:,.2f}" if (amount > 0 and status_raw != "Pending") else "—"
+    # Mostrar el total si Amazon lo provee; Pending puede tener OrderTotal disponible
+    is_pending     = status_raw == "Pending"
+    amount_display = f"${amount:,.2f}" if amount > 0 else "—"
 
     return {
         "order_id":        order.get("AmazonOrderId", ""),
@@ -113,6 +114,7 @@ def _normalize_order(order: dict) -> dict:
         "units":           units,
         "amount":          amount,
         "amount_display":  amount_display,
+        "is_pending":      is_pending,
         "currency":        currency,
         "status":          label,
         "status_css":      badge,
@@ -341,12 +343,14 @@ async def get_order_preview(request: Request, order_id: str):
             items = []
 
     if not items:
-        return JSONResponse({"title": "—", "sku": "—", "asin": "—", "items_count": 0})
+        return JSONResponse({"title": "—", "sku": "—", "asin": "—", "items_count": 0, "items_total": 0.0})
 
     first = items[0]
+    items_total = round(sum(i["total"] for i in items), 2)
     return JSONResponse({
         "title":       first["title"],
         "sku":         first["sku"],
         "asin":        first["asin"],
         "items_count": len(items),
+        "items_total": items_total,   # total calculado de items (útil para Pending sin OrderTotal)
     })

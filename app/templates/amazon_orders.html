@@ -212,6 +212,7 @@
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             const d = await resp.json();
 
+            // Producto
             if (d.title && d.title !== '—') {
                 const extra = d.items_count > 1
                     ? ` <span class="text-gray-400">(+${d.items_count - 1} más)</span>` : '';
@@ -222,9 +223,21 @@
                 prodCell.innerHTML = '<span class="text-gray-400 text-xs">—</span>';
             }
 
+            // SKU
             skuCell.innerHTML = d.sku !== '—'
                 ? `<span class="font-mono text-xs font-semibold text-[#146EB4]">${d.sku}</span>`
                 : '<span class="text-gray-400 text-xs">—</span>';
+
+            // Precio: si la orden es Pending y el total en tabla es "—", rellenar con items_total
+            const amtCell = document.getElementById('amt-' + orderId);
+            if (amtCell && amtCell.dataset.pending === 'true' && amtCell.textContent.trim() === '—') {
+                if (d.items_total && d.items_total > 0) {
+                    const fmt = '$' + d.items_total.toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                    amtCell.classList.remove('text-gray-400');
+                    amtCell.classList.add('text-amber-600');
+                    amtCell.innerHTML = `<span title="Precio estimado de items — pendiente de pago">~${fmt}</span>`;
+                }
+            }
 
         } catch (e) {
             prodCell.innerHTML = '<span class="text-gray-400 text-xs">—</span>';
