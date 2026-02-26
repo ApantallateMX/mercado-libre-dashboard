@@ -1786,8 +1786,12 @@ async def amazon_products_seller_flex(
         # Enriquecer con BinManager (reutiliza la función del tab inventario)
         await _enrich_bm_amz(flx_items)
 
-        # Ordenar: primero los con bm_avail > 0, luego por fba_stock desc
-        flx_items.sort(key=lambda x: (-x["bm_avail"], -x["fba_stock"]))
+        # Ordenar: primero ACTIVE, luego por bm_avail desc
+        # (fba_stock siempre 0 para Onsite — no accesible via SP-API)
+        flx_items.sort(key=lambda x: (
+            0 if x["status"] == "ACTIVE" else 1,
+            -x["bm_avail"],
+        ))
 
         ctx = {
             "request": request,

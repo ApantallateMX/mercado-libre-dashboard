@@ -52,17 +52,17 @@
 </div>
 
 <!-- ─── STATS ──────────────────────────────────────────────────────────────── -->
-{% set disponibles = items | selectattr('fba_stock', 'gt', 0) | list | length %}
-{% set agotados    = items | selectattr('fba_stock', 'eq', 0) | list | length %}
+{% set disponibles  = items | selectattr('status', 'equalto', 'ACTIVE') | list | length %}
+{% set agotados     = items | rejectattr('status', 'equalto', 'ACTIVE') | list | length %}
 {% set con_stock_bm = items | selectattr('bm_avail', 'gt', 0) | list | length %}
 <div class="grid grid-cols-3 gap-3 mb-4">
     <div class="bg-white rounded-xl shadow p-3 text-center">
         <p class="text-2xl font-black text-green-600">{{ disponibles }}</p>
-        <p class="text-xs text-gray-400 mt-0.5">Disponibles en Amazon</p>
+        <p class="text-xs text-gray-400 mt-0.5">Activos en Amazon Onsite</p>
     </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
         <p class="text-2xl font-black text-red-500">{{ agotados }}</p>
-        <p class="text-xs text-gray-400 mt-0.5">Agotados en Amazon</p>
+        <p class="text-xs text-gray-400 mt-0.5">Agotados / Inactivos</p>
     </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
         <p class="text-2xl font-black text-[#FF9900]">{{ con_stock_bm }}</p>
@@ -82,8 +82,9 @@
                                class="rounded accent-[#FF9900]">
                     </th>
                     <th class="py-2.5 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2.5 px-3 font-medium text-center">Estado Onsite</th>
-                    <th class="py-2.5 px-3 font-medium text-right">Stock Amazon</th>
+                    <th class="py-2.5 px-3 font-medium text-center">Estado Listing</th>
+                    <th class="py-2.5 px-3 font-medium text-center"
+                        title="Stock de Amazon Onsite no es accesible via API">Stock Onsite</th>
                     <th class="py-2.5 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right">MTY</th>
                     <th class="py-2.5 px-3 font-medium text-right">CDMX</th>
@@ -114,31 +115,23 @@
                         </div>
                     </td>
 
-                    <!-- Estado Onsite -->
+                    <!-- Estado Onsite (basado en listing status del SP-API) -->
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">
-                        {% if item.fba_stock > 0 %}
-                        <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Disponible</span>
+                        {% if item.status == 'ACTIVE' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Activo</span>
+                        {% elif item.status == 'DISCOVERABLE' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">Visible</span>
                         {% else %}
-                        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-600 font-medium">Agotado</span>
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-600 font-medium">Inactivo</span>
                         {% endif %}
                     </td>
 
-                    <!-- Stock en Amazon -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
-                        <div class="flex flex-col items-end gap-0.5">
-                            <span class="text-sm font-bold
-                                {% if item.fba_stock == 0 %}text-red-600
-                                {% elif item.fba_stock < 5 %}text-yellow-600
-                                {% else %}text-green-600{% endif %}">
-                                {{ item.fba_stock }}
-                            </span>
-                            {% if item.inbound > 0 %}
-                            <span class="text-[10px] text-blue-500">+{{ item.inbound }} en camino</span>
-                            {% endif %}
-                            {% if item.unfulfill > 0 %}
-                            <span class="text-[10px] text-red-400">{{ item.unfulfill }} dañado</span>
-                            {% endif %}
-                        </div>
+                    <!-- Stock en Amazon Onsite (no disponible via SP-API para Seller Flex) -->
+                    <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                        <span class="text-gray-300 text-xs"
+                              title="El stock de Amazon Onsite (Seller Flex) no es accesible via SP-API. Ver en onsite.amazon.com">
+                            —
+                        </span>
                     </td>
 
                     <!-- BM Disponible -->
