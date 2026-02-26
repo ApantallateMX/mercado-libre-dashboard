@@ -901,10 +901,6 @@ def _amz_base_sku(sku: str) -> str:
     return s
 
 
-def _is_ic_sku(sku: str) -> bool:
-    """True si el SKU es de condición ICB o ICC — no aplican inventario BM regular."""
-    up = sku.upper()
-    return "-ICB" in up or "-ICC" in up
 
 
 def _parse_wh_rows_amz(rows: list) -> tuple:
@@ -939,8 +935,7 @@ async def _enrich_bm_amz(items: list) -> None:
 
     for item in items:
         sku = item.get("sku", "")
-        if not sku or _is_ic_sku(sku):
-            # ICB/ICC: dejar en 0 (no aplican BM regular)
+        if not sku:
             item.update(_BM_EMPTY)
             continue
         cached = _bm_amz_cache.get(sku.upper())
