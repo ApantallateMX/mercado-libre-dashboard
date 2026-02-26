@@ -880,24 +880,32 @@ async def _get_sku_sales_cached(client) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _amz_base_sku(sku: str) -> str:
-    """Limpia el SKU de Amazon para consultar BinManager (quita sufijos de condición)."""
+    """
+    Extrae el SKU base de Amazon para consultar BinManager.
+
+    Patrón: los SKUs de Amazon tienen la forma BASE-SUFIJO donde BASE son los
+    primeros 10 caracteres (ej: SNFN000941-FLX01 → SNFN000941).
+    Se corta en el PRIMER guion para obtener el SKU base de BinManager.
+
+    También limpia sufijos MeLi-style (/, +, paréntesis) por compatibilidad.
+    """
     if not sku:
         return ""
+    # Tomar primera parte antes de " / " o " + " (packs multi-SKU)
     s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
+    # Quitar sufijos de cantidad entre paréntesis: (2), (18), etc.
     s = _re.sub(r'\(\d+\)', '', s).strip()
     s = _re.sub(r'[()]', '', s).strip()
-    up = s.upper()
-    for sfx in _AMZ_BM_SUFFIXES:
-        if up.endswith(sfx):
-            s = s[:-len(sfx)]
-            break
+    # Cortar en el PRIMER guion: SNFN000941-FLX01 → SNFN000941
+    if '-' in s:
+        s = s.split('-', 1)[0]
     return s
 
 
 def _amz_bm_conditions(sku: str) -> str:
     """Condiciones BinManager según el sufijo del SKU de Amazon."""
     up = sku.upper()
-    if up.endswith("-ICB") or up.endswith("-ICC"):
+    if "-ICB" in up or "-ICC" in up:
         return "GRA,GRB,GRC,ICB,ICC,NEW"
     return "GRA,GRB,GRC,NEW"
 
