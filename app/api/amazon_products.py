@@ -1682,6 +1682,174 @@ async def amazon_products_sin_publicar(request: Request):
         return _render_error(request, "amazon_products_sin_publicar.html", str(e))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SELLER FLEX — inventario en bodega propia + generador CSV para carga en lote
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/seller-flex", response_class=HTMLResponse)
+async def amazon_products_seller_flex(
+    request: Request,
+    q: str = Query("", description="Búsqueda por SKU o título"),
+):
+    """
+    Muestra todos los listings con sufijo -FLX (Seller Flex / Amazon Onsite).
+    Cruza con FBA inventory para ver stock actual y con BinManager para
+    saber cuánto hay disponible en bodega para recibir.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return _render_no_account(request, "amazon_products_seller_flex.html")
+
+    try:
+        listings, fba_summaries = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+        )
+
+        fba_index = _build_fba_index(fba_summaries)
+
+        # Filtrar solo SKUs -FLX
+        flx_items = []
+        for item in listings:
+            sku = item.get("sku", "")
+            if "-FLX" not in sku.upper():
+                continue
+
+            summaries = item.get("summaries", [{}])
+            summary_0 = summaries[0] if summaries else {}
+            offers    = item.get("offers", [])
+
+            asin  = (fba_index.get(sku, {}).get("asin")
+                     or summary_0.get("asin") or "")
+            title = summary_0.get("itemName", sku)
+            price = _parse_price(offers)
+            status = _listing_status(summaries)
+
+            fba_d       = fba_index.get(sku, {})
+            fba_details = fba_d.get("inventoryDetails", {})
+            fba_stock   = int(fba_details.get("fulfillableQuantity") or 0)
+            unfulfill   = int((fba_details.get("unfulfillableQuantity") or {})
+                              .get("totalUnfulfillableQuantity") or 0)
+            inbound = (
+                int(fba_details.get("inboundWorkingQuantity") or 0)
+                + int(fba_details.get("inboundShippedQuantity") or 0)
+            )
+
+            flx_items.append({
+                "sku":        sku,
+                "asin":       asin,
+                "title":      title[:70],
+                "title_full": title,
+                "price":      price,
+                "status":     status,
+                "fba_stock":  fba_stock,
+                "unfulfill":  unfulfill,
+                "inbound":    inbound,
+                # BinManager — rellenado abajo
+                "bm_avail":    0,
+                "bm_mty":      0,
+                "bm_cdmx":     0,
+                "sc_url": (
+                    f"https://sellercentral.amazon.com.mx/inventory"
+                    f"?searchField=ASIN&searchValue={asin}"
+                    if asin else "https://sellercentral.amazon.com.mx/inventory"
+                ),
+            })
+
+        # Filtro de búsqueda
+        if q:
+            ql = q.lower()
+            flx_items = [
+                i for i in flx_items
+                if ql in i["sku"].lower() or ql in i["title"].lower()
+            ]
+
+        # Enriquecer con BinManager (reutiliza la función del tab inventario)
+        await _enrich_bm_amz(flx_items)
+
+        # Ordenar: primero los con bm_avail > 0, luego por fba_stock desc
+        flx_items.sort(key=lambda x: (-x["bm_avail"], -x["fba_stock"]))
+
+        ctx = {
+            "request": request,
+            "items":   flx_items,
+            "total":   len(flx_items),
+            "q":       q,
+        }
+        return _templates.TemplateResponse(
+            "partials/amazon_products_seller_flex.html", ctx
+        )
+
+    except Exception as e:
+        logger.exception("[Amazon Products] Error en Seller Flex")
+        return _render_error(request, "amazon_products_seller_flex.html", str(e))
+
+
+@router.post("/products/seller-flex/csv")
+async def generate_seller_flex_csv(request: Request):
+    """
+    Genera el CSV de carga en lote para onsite.amazon.com → Recibir → Carga en lote.
+
+    Body JSON:
+    {
+      "bin":   "A101",          # BIN por defecto (se puede sobrescribir por item)
+      "items": [
+        {"sku": "SNMC000484-FLX", "quantity": 10, "bin": "A101",
+         "disposition": "GOOD",  "exp_date": "", "mfg_date": ""}
+      ]
+    }
+
+    Retorna el CSV como descarga directa.
+    """
+    import io
+    import csv
+    from fastapi.responses import StreamingResponse
+
+    body = await request.json()
+    default_bin = (body.get("bin") or "").strip()
+    items = body.get("items", [])
+
+    if not items:
+        raise HTTPException(status_code=400, detail="Sin items para generar CSV")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Cabecera exacta que exige el portal
+    writer.writerow([
+        "BIN",
+        "Merchant SKU",
+        "Quantity",
+        "Disposition (GOOD/BAD)",
+        "Expiration Date (DD/MM/YYYY)",
+        "Manufacturing Date (DD/MM/YYYY)",
+    ])
+
+    for item in items:
+        sku      = str(item.get("sku", "")).strip()
+        quantity = int(item.get("quantity") or 0)
+        bin_loc  = str(item.get("bin") or default_bin or "").strip()
+        disp     = str(item.get("disposition") or "GOOD").upper()
+        exp_date = str(item.get("exp_date") or "").strip()
+        mfg_date = str(item.get("mfg_date") or "").strip()
+
+        if not sku or quantity <= 0:
+            continue
+
+        writer.writerow([bin_loc, sku, quantity, disp, exp_date, mfg_date])
+
+    output.seek(0)
+    csv_content = output.getvalue()
+
+    return StreamingResponse(
+        iter([csv_content]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="seller_flex_recibir.csv"'
+        },
+    )
+
+
 def _render_no_account(request: Request, template: str) -> HTMLResponse:
     """Template de error cuando no hay cuenta Amazon configurada."""
     return _templates.TemplateResponse(

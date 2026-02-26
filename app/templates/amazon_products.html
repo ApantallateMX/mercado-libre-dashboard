@@ -46,6 +46,12 @@
             🚫 Sin Publicar
         </button>
 
+        <button data-tab="seller-flex" data-url="/api/amazon/products/seller-flex"
+                class="amz-prod-tab flex-1 md:flex-none px-5 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap transition
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🏭 Seller Flex
+        </button>
+
     </div>
 </div>
 
@@ -440,6 +446,135 @@ document.addEventListener('keydown', function(e) {
         if (modal && !modal.classList.contains('hidden')) window.closeAmzEdit();
     }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SELLER FLEX — funciones para el tab 🏭
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _sfxLoad(q) {
+    var url = '/api/amazon/products/seller-flex' + (q ? '?q=' + encodeURIComponent(q) : '');
+    var container = document.getElementById('amz-prod-tab-content');
+    container.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+        '<svg class="animate-spin h-7 w-7 mx-auto mb-3 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        'Cargando Seller Flex…</div>';
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold">Error cargando Seller Flex</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+}
+
+window._sfxSearch = function() {
+    var q = (document.getElementById('sfx-search') || {}).value || '';
+    _sfxLoad(q.trim());
+};
+
+window._sfxRefresh = function() {
+    var q = (document.getElementById('sfx-search') || {}).value || '';
+    _sfxLoad(q.trim());
+};
+
+window._sfxCheckAll = function(masterCb) {
+    document.querySelectorAll('.sfx-row-check').forEach(function(cb) {
+        cb.checked = masterCb.checked;
+    });
+    _sfxUpdateCount();
+};
+
+function _sfxUpdateCount() {
+    var count = document.querySelectorAll('.sfx-row-check:checked').length;
+    var el = document.getElementById('sfx-selected-count');
+    if (el) el.textContent = count + ' seleccionado' + (count !== 1 ? 's' : '');
+}
+
+// Delegación de evento para los checkboxes de filas (renderizados dinámicamente)
+document.getElementById('amz-prod-tab-content').addEventListener('change', function(e) {
+    if (e.target && e.target.classList.contains('sfx-row-check')) {
+        _sfxUpdateCount();
+    }
+});
+
+window._sfxGenerateCSV = function() {
+    var defaultBin = (document.getElementById('sfx-bin-global') || {}).value || '';
+    var checked = document.querySelectorAll('.sfx-row-check:checked');
+    var rows = [];
+
+    if (checked.length === 0) {
+        // Sin selección: tomar todas las filas con cantidad > 0
+        document.querySelectorAll('.sfx-qty').forEach(function(inp) {
+            var qty = parseInt(inp.value) || 0;
+            if (qty > 0) {
+                var sku = inp.getAttribute('data-sku') || '';
+                var binInp  = document.querySelector('.sfx-bin[data-sku="' + sku + '"]');
+                var dispInp = document.querySelector('.sfx-disp[data-sku="' + sku + '"]');
+                rows.push({
+                    sku:         sku,
+                    quantity:    qty,
+                    bin:         (binInp  ? binInp.value.trim()  : '') || defaultBin,
+                    disposition: dispInp  ? dispInp.value        : 'GOOD',
+                });
+            }
+        });
+    } else {
+        // Solo las filas seleccionadas con cantidad > 0
+        checked.forEach(function(cb) {
+            var sku = cb.getAttribute('data-sku') || '';
+            var qtyInp  = document.querySelector('.sfx-qty[data-sku="' + sku + '"]');
+            var binInp  = document.querySelector('.sfx-bin[data-sku="' + sku + '"]');
+            var dispInp = document.querySelector('.sfx-disp[data-sku="' + sku + '"]');
+            var qty = parseInt((qtyInp || {}).value || '0') || 0;
+            if (qty > 0) {
+                rows.push({
+                    sku:         sku,
+                    quantity:    qty,
+                    bin:         (binInp  ? binInp.value.trim()  : '') || defaultBin,
+                    disposition: dispInp  ? dispInp.value        : 'GOOD',
+                });
+            }
+        });
+    }
+
+    if (rows.length === 0) {
+        alert('No hay ítems con cantidad > 0 para generar el CSV.\n\nIngresa la cantidad a recibir en cada fila.');
+        return;
+    }
+
+    fetch('/api/amazon/products/seller-flex/csv', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ bin: defaultBin, items: rows }),
+    })
+    .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+    })
+    .then(function(blob) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'seller_flex_recibir.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Mostrar banner de éxito en el partial
+        var banner = document.getElementById('sfx-csv-banner');
+        var msg    = document.getElementById('sfx-csv-msg');
+        if (banner && msg) {
+            msg.textContent = rows.length + ' SKU' + (rows.length !== 1 ? 's' : '') +
+                              ' generados. Descarga iniciada.';
+            banner.classList.remove('hidden');
+            // Auto-ocultar después de 8 s
+            setTimeout(function() { banner.classList.add('hidden'); }, 8000);
+        }
+    })
+    .catch(function(e) { alert('Error generando CSV: ' + e.message); });
+};
 
 // ── Función global para actualizar precio inline ──────────────────────────
 window.updateAmzPrice = function(sku, currentPrice) {
