@@ -1313,20 +1313,26 @@ async def amazon_products_resumen(request: Request):
 @router.get("/products/inventario", response_class=HTMLResponse)
 async def amazon_products_inventario(
     request: Request,
-    sort:     str = Query("units", description="units|stock|revenue|price"),
-    filter:   str = Query("all",   description="all|fba|top|low|nostock"),
-    q:        str = Query("",      description="Búsqueda por SKU, ASIN o título"),
-    page:     int = Query(1,       description="Página actual"),
-    per_page: int = Query(20,      description="Items por página"),
+    sort:     str  = Query("units", description="units|stock|revenue|price"),
+    filter:   str  = Query("all",   description="all|fba|top|low|nostock"),
+    q:        str  = Query("",      description="Búsqueda por SKU, ASIN o título"),
+    page:     int  = Query(1,       description="Página actual"),
+    per_page: int  = Query(20,      description="Items por página"),
+    force:    bool = Query(False,   description="True = ignorar caché y forzar fetch fresco"),
 ):
     """
     Inventario completo con ventas 30d, días supply y stock BinManager por SKU.
     Filtros: Todos / FBA / Top Ventas / Baja Venta / Sin Stock
     Paginación: 20/pág (server-side). BM enriquece solo la página actual.
+    force=True limpia el caché de listings y FBA antes de cargar.
     """
     client = await get_amazon_client()
     if not client:
         return _render_no_account(request, "amazon_products_inventario.html")
+
+    if force:
+        _listings_cache.pop(client.seller_id, None)
+        _fba_cache.pop(client.seller_id, None)
 
     try:
         listings, fba_summaries = await asyncio.gather(

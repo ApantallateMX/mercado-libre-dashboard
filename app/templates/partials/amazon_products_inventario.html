@@ -61,9 +61,10 @@
         <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio</option>
     </select>
 
-    <!-- Refresh -->
-    <button onclick="window._refreshInv()"
-            class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white" title="Recargar">
+    <!-- Refresh forzado (limpia caché del servidor) -->
+    <button onclick="window._forceRefreshInv()"
+            class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
+            title="Recargar datos frescos de Amazon">
         ↻
     </button>
 </div>

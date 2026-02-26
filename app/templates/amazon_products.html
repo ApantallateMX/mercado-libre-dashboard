@@ -257,6 +257,13 @@ window._refreshInv = function() {
     window._loadInvTab(_invUrl({ page: st.page }));
 };
 
+// ↻ Forzado: limpia caché del servidor antes de recargar
+window._forceRefreshInv = function() {
+    var st = _invState();
+    var url = _invUrl({ page: st.page }) + '&force=1';
+    window._loadInvTab(url);
+};
+
 // ── Column toggles (persistidos en localStorage) ──────────────────────────
 var _invColState = {};
 
