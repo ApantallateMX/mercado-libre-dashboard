@@ -668,7 +668,13 @@ class AmazonClient:
 
             await asyncio.sleep(0.2)  # Rate limit: 5 req/s
 
-        return all_items
+        # Deduplicar por SKU (Amazon puede repetir items entre páginas)
+        seen: dict = {}
+        for item in all_items:
+            sku = item.get("sku", "")
+            if sku and sku not in seen:
+                seen[sku] = item
+        return list(seen.values()) if seen else all_items
 
     async def get_fba_inventory_all(self) -> list:
         """

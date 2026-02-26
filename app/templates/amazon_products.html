@@ -395,8 +395,23 @@ window.saveAmzEdit = async function() {
         var data = await res.json();
 
         if (data.ok || (data.results && Object.keys(data.results).length > 0)) {
-            window.closeAmzEdit();
-            setTimeout(function() { window._refreshInv && window._refreshInv(); }, 1000);
+            // Mostrar éxito en el modal — sin recargar tabla
+            var errEl = document.getElementById('amz-edit-error');
+            errEl.textContent = '✓ Cambios guardados. Amazon puede tardar ~5 min en reflejarlo.';
+            errEl.className = 'px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700';
+            errEl.classList.remove('hidden');
+            btn.textContent = '✓ Guardado';
+            btn.disabled = true;
+            // Actualizar precio en el campo si se cambió
+            if (body.price) {
+                document.getElementById('amz-edit-price').value = body.price;
+            }
+            // Cerrar automáticamente después de 2.5 s
+            setTimeout(function() {
+                window.closeAmzEdit();
+                // Restaurar estilo del error para próximos usos
+                errEl.className = 'hidden px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700';
+            }, 2500);
         } else {
             var errMsg = (data.errors || ['Error desconocido']).join(' | ');
             document.getElementById('amz-edit-error').textContent = errMsg;
