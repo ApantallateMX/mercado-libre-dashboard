@@ -151,6 +151,102 @@
         loadOrders();
     };
 
+    // ── Toggle expand de items ────────────────────────────────────────────────
+    // NOTA: definido aquí (no en el partial) porque innerHTML no ejecuta scripts
+    window.toggleOrderItems = async function (orderId) {
+        const expandRow = document.getElementById('expand-' + orderId);
+        const btn       = document.getElementById('btn-'    + orderId);
+        if (!expandRow || !btn) return;
+
+        if (expandRow.dataset.loaded === 'true') {
+            const hidden = expandRow.classList.contains('hidden');
+            expandRow.classList.toggle('hidden', !hidden);
+            btn.textContent = hidden ? '▲' : '▼';
+            return;
+        }
+
+        btn.textContent = '⏳';
+        btn.disabled    = true;
+
+        try {
+            const params = new URLSearchParams({
+                amount:   btn.dataset.amount   || '0',
+                status:   btn.dataset.status   || '',
+                canal:    btn.dataset.canal    || '',
+                date:     btn.dataset.date     || '',
+                units:    btn.dataset.units    || '0',
+                currency: btn.dataset.currency || 'MXN',
+            });
+            const resp = await fetch('/api/amazon/orders/' + orderId + '/items?' + params);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const html = await resp.text();
+
+            const td = expandRow.querySelector('td');
+            if (td) td.innerHTML = html;
+
+            expandRow.dataset.loaded = 'true';
+            expandRow.classList.remove('hidden');
+            btn.textContent = '▲';
+            btn.disabled    = false;
+            expandRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (e) {
+            btn.textContent = '✕';
+            btn.disabled    = false;
+            console.error('[Amazon] items error:', e);
+        }
+    };
+
+    // ── Lazy load Producto + SKU ──────────────────────────────────────────────
+    let _preview_loaded = new Set();
+
+    async function _fetchPreview(orderId) {
+        if (_preview_loaded.has(orderId)) return;
+        _preview_loaded.add(orderId);
+
+        const prodCell = document.getElementById('prod-' + orderId);
+        const skuCell  = document.getElementById('sku-'  + orderId);
+        if (!prodCell || !skuCell) return;
+
+        try {
+            const resp = await fetch('/api/amazon/orders/' + orderId + '/preview');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const d = await resp.json();
+
+            if (d.title && d.title !== '—') {
+                const extra = d.items_count > 1
+                    ? ` <span class="text-gray-400">(+${d.items_count - 1} más)</span>` : '';
+                prodCell.innerHTML =
+                    `<span class="text-gray-800 text-xs leading-snug block truncate max-w-[200px]"
+                           title="${d.title}">${d.title}</span>${extra}`;
+            } else {
+                prodCell.innerHTML = '<span class="text-gray-400 text-xs">—</span>';
+            }
+
+            skuCell.innerHTML = d.sku !== '—'
+                ? `<span class="font-mono text-xs font-semibold text-[#146EB4]">${d.sku}</span>`
+                : '<span class="text-gray-400 text-xs">—</span>';
+
+        } catch (e) {
+            prodCell.innerHTML = '<span class="text-gray-400 text-xs">—</span>';
+        }
+    }
+
+    async function _enrichVisibleRows() {
+        // Solo las primeras 15 filas — Amazon burst capacity = 30 req
+        const rows = Array.from(document.querySelectorAll('tr[id^="order-row-"]')).slice(0, 15);
+        const BATCH = 3;
+        const DELAY = 800;  // ms entre lotes
+
+        for (let i = 0; i < rows.length; i += BATCH) {
+            const batch = rows.slice(i, i + BATCH);
+            const ids   = batch.map(r => r.id.replace('order-row-', ''));
+            await Promise.all(ids.map(_fetchPreview));
+            if (i + BATCH < rows.length) {
+                await new Promise(r => setTimeout(r, DELAY));
+            }
+        }
+    }
+
     // ── loadOrders ────────────────────────────────────────────────────────────
     window.loadOrders = async function (forceRefresh) {
         if (!fromEl || !toEl) return;
@@ -161,6 +257,9 @@
         const skeleton  = document.getElementById('amz-orders-skeleton');
         const content   = document.getElementById('amz-orders-content');
         if (!skeleton || !content) return;
+
+        // Resetear caché de previews al cargar nuevo rango
+        _preview_loaded = new Set();
 
         // Mostrar skeleton
         skeleton.classList.remove('hidden');
@@ -178,6 +277,9 @@
             content.classList.remove('hidden');
             skeleton.classList.add('hidden');
             if (statusEl) statusEl.textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+
+            // Enriquecer filas con producto/SKU (el script del partial no se ejecuta via innerHTML)
+            _enrichVisibleRows();
         } catch (e) {
             skeleton.classList.add('hidden');
             content.innerHTML = '<p class="text-red-500 p-6 text-center">Error al cargar órdenes: ' + e.message + '</p>';
