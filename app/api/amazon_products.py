@@ -1689,7 +1689,8 @@ async def amazon_products_sin_publicar(request: Request):
 @router.get("/products/seller-flex", response_class=HTMLResponse)
 async def amazon_products_seller_flex(
     request: Request,
-    q: str = Query("", description="Búsqueda por SKU o título"),
+    q:     str  = Query("", description="Búsqueda por SKU o título"),
+    force: bool = Query(False, description="Limpia caché antes de cargar"),
 ):
     """
     Muestra todos los listings con sufijo -FLX (Seller Flex / Amazon Onsite).
@@ -1699,6 +1700,10 @@ async def amazon_products_seller_flex(
     client = await get_amazon_client()
     if not client:
         return _render_no_account(request, "amazon_products_seller_flex.html")
+
+    if force:
+        _listings_cache.pop(client.seller_id, None)
+        _fba_cache.pop(client.seller_id, None)
 
     try:
         listings, fba_summaries = await asyncio.gather(
@@ -1725,11 +1730,25 @@ async def amazon_products_seller_flex(
             price = _parse_price(offers)
             status = _listing_status(summaries)
 
-            fba_d       = fba_index.get(sku, {})
+            # Stock en Amazon para Seller Flex (Onsite):
+            # El FBA Inventory API (/fba/inventory/v1/summaries) NO cubre items
+            # en bodega propia del vendedor — solo almacenes de Amazon.
+            # Para Seller Flex usamos fulfillmentAvailability del Listings Items API,
+            # que sí refleja el stock registrado en onsite.amazon.com.
+            # Tomamos el máximo de todas las entradas (todos los FLX son Amazon-fulfilled).
+            fba_stock = 0
+            for fa in item.get("fulfillmentAvailability", []):
+                qty = int(fa.get("quantity") or 0)
+                if qty > fba_stock:
+                    fba_stock = qty
+            # Fallback: FBA index (por si algún item FLX sí está en centro Amazon)
+            fba_d     = fba_index.get(sku, {})
             fba_details = fba_d.get("inventoryDetails", {})
-            fba_stock   = int(fba_details.get("fulfillableQuantity") or 0)
-            unfulfill   = int((fba_details.get("unfulfillableQuantity") or {})
-                              .get("totalUnfulfillableQuantity") or 0)
+            if fba_stock == 0:
+                fba_stock = int(fba_details.get("fulfillableQuantity") or 0)
+
+            unfulfill = int((fba_details.get("unfulfillableQuantity") or {})
+                            .get("totalUnfulfillableQuantity") or 0)
             inbound = (
                 int(fba_details.get("inboundWorkingQuantity") or 0)
                 + int(fba_details.get("inboundShippedQuantity") or 0)

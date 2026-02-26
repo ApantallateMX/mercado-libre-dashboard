@@ -477,8 +477,20 @@ window._sfxSearch = function() {
 };
 
 window._sfxRefresh = function() {
+    // Forzar limpieza de caché en el servidor
     var q = (document.getElementById('sfx-search') || {}).value || '';
-    _sfxLoad(q.trim());
+    var url = '/api/amazon/products/seller-flex?force=1' + (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '');
+    var container = document.getElementById('amz-prod-tab-content');
+    container.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+        'Actualizando desde Amazon…</div>';
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center"><p class="text-red-500">' + e.message + '</p></div>';
+        });
 };
 
 window._sfxCheckAll = function(masterCb) {
