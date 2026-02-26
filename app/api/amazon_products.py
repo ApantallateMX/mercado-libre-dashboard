@@ -84,6 +84,31 @@ def _parse_price(offers: list) -> float:
     return 0.0
 
 
+def _parse_deal_info(offers: list) -> dict:
+    """
+    Detecta si hay una sale/deal activa en el listing.
+    Compara listingPrice (precio regular) vs amount (precio actual de venta).
+    Si listingPrice > amount (más del 1%), hay un deal activo.
+    """
+    for offer in (offers or []):
+        if offer.get("offerType") == "B2C":
+            price = offer.get("price", {})
+            try:
+                current = float(price.get("amount") or 0)
+                list_amt = float((price.get("listingPrice") or {}).get("amount") or 0)
+                if current > 0 and list_amt > 0 and list_amt > current * 1.01:
+                    pct = round((1 - current / list_amt) * 100)
+                    return {
+                        "is_deal": True,
+                        "deal_price": current,
+                        "list_price": list_amt,
+                        "deal_pct": pct,
+                    }
+            except (TypeError, ValueError):
+                pass
+    return {"is_deal": False, "deal_price": 0.0, "list_price": 0.0, "deal_pct": 0}
+
+
 def _parse_fba_stock(fulfillment_avail: list) -> int:
     """Extrae el stock MFN/FBA del fulfillmentAvailability de un listing."""
     for fa in (fulfillment_avail or []):
@@ -701,6 +726,125 @@ async def update_amazon_price(sku: str, request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DETALLES DE LISTING (para modal de edición)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/{sku}/details")
+async def amazon_product_details(sku: str, request: Request):
+    """
+    Retorna los campos editables de un listing para el modal de edición.
+    Incluye: título, precio, stock FBM, ASIN, productType y fulfillment_type.
+    """
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
+
+    listing = await client.get_listing(sku)
+    if not listing:
+        raise HTTPException(status_code=404, detail="SKU no encontrado")
+
+    summaries = listing.get("summaries", [{}])
+    summary_0 = summaries[0] if summaries else {}
+    attributes = listing.get("attributes", {})
+    fa = listing.get("fulfillmentAvailability", [])
+
+    # Título desde attributes → item_name, o fallback a summaries
+    title = ""
+    item_name_attr = attributes.get("item_name", [])
+    if isinstance(item_name_attr, list) and item_name_attr:
+        title = item_name_attr[0].get("value", "")
+    if not title:
+        title = summary_0.get("itemName", "")
+
+    # Precio desde attributes → purchasable_offer
+    price = 0.0
+    po_list = attributes.get("purchasable_offer", [])
+    if isinstance(po_list, list) and po_list:
+        our_price = po_list[0].get("our_price", [])
+        if isinstance(our_price, list) and our_price:
+            schedule = our_price[0].get("schedule", [])
+            if isinstance(schedule, list) and schedule:
+                price = float(schedule[0].get("value_with_tax") or 0)
+
+    # Stock y tipo de fulfillment
+    qty = 0
+    fulfillment_type = "FBA"
+    for f in fa:
+        channel = (f.get("fulfillmentChannelCode") or "").upper()
+        if channel == "DEFAULT":
+            qty = int(f.get("quantity") or 0)
+            fulfillment_type = "FBM"
+
+    asin = summary_0.get("asin", "")
+
+    return {
+        "sku": sku,
+        "asin": asin,
+        "title": title,
+        "price": price,
+        "qty": qty,
+        "fulfillment_type": fulfillment_type,
+        "product_type": listing.get("productType", ""),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EDICIÓN DE LISTING (precio + título + stock FBM)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.patch("/products/{sku}")
+async def update_amazon_listing(sku: str, request: Request):
+    """
+    Actualiza uno o más campos de un listing Amazon via Listings Items API PATCH.
+    Body JSON: {"price": float, "title": str, "qty": int}  — todos opcionales.
+    """
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
+
+    body = await request.json()
+    price = body.get("price")
+    title = body.get("title")
+    qty   = body.get("qty")
+
+    if price is None and title is None and qty is None:
+        raise HTTPException(status_code=400, detail="Sin campos para actualizar")
+
+    results = {}
+    errors = []
+
+    if price is not None:
+        try:
+            await client.update_listing_price(sku, float(price))
+            results["price"] = "ok"
+        except Exception as e:
+            errors.append(f"Precio: {e}")
+
+    if title is not None and str(title).strip():
+        try:
+            await client.update_listing_title(sku, str(title).strip())
+            results["title"] = "ok"
+        except Exception as e:
+            errors.append(f"Título: {e}")
+
+    if qty is not None:
+        try:
+            await client.update_listing_quantity(sku, int(qty))
+            results["qty"] = "ok"
+        except Exception as e:
+            errors.append(f"Cantidad: {e}")
+
+    # Invalidar caché
+    _listings_cache.pop(client.seller_id, None)
+    _buybox_cache.pop(f"{client.seller_id}:{sku}", None)
+
+    if errors and not results:
+        raise HTTPException(status_code=500, detail=" | ".join(errors))
+
+    return {"ok": not errors, "results": results, "errors": errors}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # HELPERS INTERNOS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1177,6 +1321,7 @@ async def amazon_products_inventario(
 
             status = _listing_status(summaries)
             price = _parse_price(offers)
+            deal = _parse_deal_info(offers)
             summary_0 = summaries[0] if summaries else {}
             fba_d = fba_index.get(sku, {})
             asin = fba_d.get("asin") or summary_0.get("asin") or ""
@@ -1243,6 +1388,11 @@ async def amazon_products_inventario(
                 "is_fba":           bool(fba_d) or fba_stock_fba > 0,
                 "is_top":           units_30d >= 5,
                 "is_low":           0 < units_30d < 2,
+                # Deal/Sale activo
+                "is_deal":          deal["is_deal"],
+                "deal_price":       deal["deal_price"],
+                "list_price":       deal["list_price"],
+                "deal_pct":         deal["deal_pct"],
                 "amazon_url":   f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
                 "sc_url": (
                     f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"

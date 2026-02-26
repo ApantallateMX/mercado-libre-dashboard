@@ -494,6 +494,47 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def update_listing_title(self, sku: str, title: str) -> dict:
+        """
+        Actualiza el título (item_name) de un listing via Listings Items API PATCH.
+
+        Args:
+            sku:   SellerSKU exacto
+            title: Nuevo título del producto (máx. 200 caracteres)
+
+        Returns:
+            Respuesta de la API con status del update
+        """
+        listing = await self.get_listing(sku)
+        if not listing:
+            raise ValueError(f"SKU '{sku}' no encontrado en marketplace {self.marketplace_id}")
+
+        product_type = listing.get("productType", "PRODUCT")
+
+        body = {
+            "productType": product_type,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": "/attributes/item_name",
+                    "value": [
+                        {
+                            "value": title[:200],
+                            "marketplace_id": self.marketplace_id,
+                            "language_tag": "es_MX",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        return await self._request(
+            "PATCH",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={"marketplaceIds": self.marketplace_id},
+            json_body=body,
+        )
+
     # ─────────────────────────────────────────────────────────────────────
     # INVENTARIO FBA
     # ─────────────────────────────────────────────────────────────────────
