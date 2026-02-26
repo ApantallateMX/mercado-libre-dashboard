@@ -1181,18 +1181,39 @@ async def amazon_products_inventario(
             fba_d = fba_index.get(sku, {})
             asin = fba_d.get("asin") or summary_0.get("asin") or ""
             fba_details = fba_d.get("inventoryDetails", {})
-            fba_stock = int(fba_details.get("fulfillableQuantity") or 0)
-            fba_reserved = int((fba_details.get("reservedQuantity") or {}).get("pendingCustomerOrderQuantity") or 0)
+
+            # Stock FBA (Fulfilled by Amazon) — de la FBA Inventory API
+            fba_stock_fba = int(fba_details.get("fulfillableQuantity") or 0)
+            fba_reserved  = int((fba_details.get("reservedQuantity") or {}).get("pendingCustomerOrderQuantity") or 0)
             inbound = (
                 int(fba_details.get("inboundWorkingQuantity") or 0)
                 + int(fba_details.get("inboundShippedQuantity") or 0)
             )
 
+            # Stock MFN/FBM (Merchant Fulfilled) — de fulfillmentAvailability del listing
+            listing_fa = item.get("fulfillmentAvailability", [])
+            mfn_stock = 0
+            fulfillment_type = "FBA"
+            for fa_entry in listing_fa:
+                channel = (fa_entry.get("fulfillmentChannelCode") or "").upper()
+                qty     = int(fa_entry.get("quantity") or 0)
+                if channel == "DEFAULT":
+                    mfn_stock = qty
+                    fulfillment_type = "FBM"
+
+            # Stock visible: FBA si > 0, si no MFN
+            if fba_stock_fba > 0:
+                disp_stock       = fba_stock_fba
+                fulfillment_type = "FBA"
+            else:
+                disp_stock = mfn_stock
+                # fulfillment_type ya fue seteado arriba (FBM o FBA por defecto)
+
             sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d   = sales["units"]
             revenue_30d = sales["revenue"]
             vel_dia     = units_30d / 30.0
-            dias_supply = round(fba_stock / vel_dia, 1) if vel_dia > 0 else None
+            dias_supply = round(disp_stock / vel_dia, 1) if vel_dia > 0 else None
 
             if dias_supply is None:
                 supply_color = "gray"
@@ -1204,22 +1225,24 @@ async def amazon_products_inventario(
                 supply_color = "green"
 
             enriched.append({
-                "sku":          sku,
-                "asin":         asin,
-                "title":        summary_0.get("itemName", sku)[:65],
-                "price":        price,
-                "status":       status,
-                "fba_stock":    fba_stock,
-                "fba_reserved": fba_reserved,
-                "inbound":      inbound,
-                "units_30d":    units_30d,
-                "revenue_30d":  round(revenue_30d, 2),
-                "vel_dia":      round(vel_dia, 2),
-                "dias_supply":  dias_supply,
-                "supply_color": supply_color,
-                "is_fba":       bool(fba_d),
-                "is_top":       units_30d >= 5,
-                "is_low":       0 < units_30d < 2,
+                "sku":              sku,
+                "asin":             asin,
+                "title":            summary_0.get("itemName", sku)[:65],
+                "price":            price,
+                "status":           status,
+                "fba_stock":        disp_stock,       # FBA o FBM según el listing
+                "fba_stock_fba":    fba_stock_fba,    # solo FBA puro (para filtro "fba")
+                "fulfillment_type": fulfillment_type, # "FBA" | "FBM"
+                "fba_reserved":     fba_reserved,
+                "inbound":          inbound,
+                "units_30d":        units_30d,
+                "revenue_30d":      round(revenue_30d, 2),
+                "vel_dia":          round(vel_dia, 2),
+                "dias_supply":      dias_supply,
+                "supply_color":     supply_color,
+                "is_fba":           bool(fba_d) or fba_stock_fba > 0,
+                "is_top":           units_30d >= 5,
+                "is_low":           0 < units_30d < 2,
                 "amazon_url":   f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
                 "sc_url": (
                     f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
@@ -1245,7 +1268,7 @@ async def amazon_products_inventario(
 
         # ── Ordenar ────────────────────────────────────────────────────────
         if sort == "stock":
-            enriched.sort(key=lambda x: x["fba_stock"], reverse=True)
+            enriched.sort(key=lambda x: (x["fba_stock"], x["fba_stock_fba"]), reverse=True)
         elif sort == "revenue":
             enriched.sort(key=lambda x: x["revenue_30d"], reverse=True)
         elif sort == "price":

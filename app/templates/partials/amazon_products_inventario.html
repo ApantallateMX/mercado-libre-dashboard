@@ -120,7 +120,7 @@
                     <th class="py-2.5 px-3 font-medium text-center w-8">#</th>
                     <th class="py-2.5 px-4 font-medium">Producto</th>
                     <th class="py-2.5 px-3 font-medium text-right">Precio</th>
-                    <th class="py-2.5 px-3 font-medium text-right">FBA Disp.</th>
+                    <th class="py-2.5 px-3 font-medium text-right">Disp. (FBA/FBM)</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-wh">MTY</th>
@@ -168,14 +168,21 @@
                         {% endif %}
                     </td>
 
-                    <!-- FBA Disponible -->
+                    <!-- Disponible FBA/FBM -->
                     <td class="py-2.5 px-3 text-right whitespace-nowrap">
-                        <span class="text-sm font-bold
-                            {% if item.fba_stock == 0 %}text-red-600
-                            {% elif item.fba_stock < 10 %}text-yellow-600
-                            {% else %}text-green-600{% endif %}">
-                            {{ item.fba_stock }}
-                        </span>
+                        <div class="flex flex-col items-end gap-0.5">
+                            <span class="text-sm font-bold
+                                {% if item.fba_stock == 0 %}text-red-600
+                                {% elif item.fba_stock < 10 %}text-yellow-600
+                                {% else %}text-green-600{% endif %}">
+                                {{ item.fba_stock }}
+                            </span>
+                            <span class="text-[10px] font-medium px-1 rounded
+                                {% if item.fulfillment_type == 'FBA' %}bg-orange-100 text-orange-600
+                                {% else %}bg-blue-100 text-blue-600{% endif %}">
+                                {{ item.fulfillment_type }}
+                            </span>
+                        </div>
                     </td>
 
                     <!-- BM Disponible -->
