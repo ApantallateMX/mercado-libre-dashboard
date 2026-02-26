@@ -265,26 +265,96 @@
 </div>
 {% endif %}
 
-{% if paging %}
-<div class="px-4 md:px-6 py-4 bg-gray-50 flex justify-between items-center border-t border-gray-200">
-    <span class="text-sm text-gray-600">
-        {{ offset + 1 }}-{{ offset + orders|length }} de {{ paging.total }}
+{% if paging and paging.total > 0 %}
+{% set total_pages = ((paging.total - 1) // limit + 1) %}
+{% set current_page = (offset // limit) + 1 %}
+{% set base_url = "/partials/orders-table?sort=" ~ sort ~ "&limit=" ~ limit %}
+
+<div class="px-4 md:px-6 py-3 bg-white border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+
+    <span class="text-xs text-gray-400">
+        Mostrando <strong class="text-gray-600">{{ offset + 1 }}–{{ offset + orders|length }}</strong>
+        de <strong class="text-gray-600">{{ paging.total }}</strong> órdenes
     </span>
-    <div class="flex gap-2">
-        {% if offset > 0 %}
-        <button hx-get="/partials/orders-table?offset={{ offset - limit }}&limit={{ limit }}"
+
+    <div class="flex items-center gap-1 flex-wrap">
+
+        {# ← Ant #}
+        {% if current_page > 1 %}
+        <button hx-get="{{ base_url }}&offset={{ (current_page - 2) * limit }}"
                 hx-target="#orders-table"
-                class="px-4 py-2.5 min-h-[44px] border rounded text-sm hover:bg-gray-100">
-            Anterior
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                       text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
+            ‹ Ant
+        </button>
+        {% else %}
+        <button disabled
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                       text-gray-300 cursor-not-allowed">
+            ‹ Ant
         </button>
         {% endif %}
-        {% if offset + limit < paging.total %}
-        <button hx-get="/partials/orders-table?offset={{ offset + limit }}&limit={{ limit }}"
+
+        {# Números de página con ellipsis #}
+        {% set ns = namespace(last=0) %}
+        {% for p in range(1, total_pages + 1) %}
+            {% set near = p >= current_page - 2 and p <= current_page + 2 %}
+            {% set edge = p == 1 or p == total_pages %}
+            {% if near or edge %}
+                {% if ns.last > 0 and p - ns.last > 1 %}
+                <span class="px-1 text-gray-300 select-none text-xs">…</span>
+                {% endif %}
+                {% if p == current_page %}
+                <button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border
+                               bg-yellow-400 text-gray-800 border-yellow-400 cursor-default">
+                    {{ p }}
+                </button>
+                {% else %}
+                <button hx-get="{{ base_url }}&offset={{ (p - 1) * limit }}"
+                        hx-target="#orders-table"
+                        class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200
+                               text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
+                    {{ p }}
+                </button>
+                {% endif %}
+                {% set ns.last = p %}
+            {% endif %}
+        {% endfor %}
+
+        {# Sig → #}
+        {% if current_page < total_pages %}
+        <button hx-get="{{ base_url }}&offset={{ current_page * limit }}"
                 hx-target="#orders-table"
-                class="px-4 py-2.5 min-h-[44px] border rounded text-sm hover:bg-gray-100">
-            Siguiente
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                       text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
+            Sig ›
+        </button>
+        {% else %}
+        <button disabled
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                       text-gray-300 cursor-not-allowed">
+            Sig ›
         </button>
         {% endif %}
+
+        {# Ver todos / ← Paginar — toggle entre 20/pág y 50/pág #}
+        {% if limit >= 50 %}
+        <button hx-get="/partials/orders-table?sort={{ sort }}&limit=20&offset=0"
+                hx-target="#orders-table"
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-yellow-300 bg-yellow-50
+                       text-yellow-700 hover:bg-white transition ml-1">
+            ← Paginar
+        </button>
+        {% else %}
+        <button hx-get="/partials/orders-table?sort={{ sort }}&limit=50&offset=0"
+                hx-target="#orders-table"
+                title="Muestra hasta 50 órdenes a la vez"
+                class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 ml-1
+                       text-gray-500 hover:border-yellow-400 hover:text-yellow-700 transition">
+            Ver todos
+        </button>
+        {% endif %}
+
     </div>
 </div>
 {% endif %}

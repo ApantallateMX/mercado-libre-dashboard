@@ -84,6 +84,99 @@
             });
     }
 
+    // ── Paginación SKU (client-side) ──────────────────────────────────────────
+    var _SKU_PER_PAGE = 20;
+    var _skuPage      = 1;
+    var _skuViewAll   = false;
+
+    function _getAllSkuRows() {
+        return Array.from(document.querySelectorAll('#sku-tbody tr.sku-data-row'));
+    }
+
+    function _applySkuPage(page) {
+        var rows = _getAllSkuRows();
+        if (!rows.length) return;
+
+        var total      = rows.length;
+        var totalPages = Math.ceil(total / _SKU_PER_PAGE);
+        _skuPage = Math.max(1, Math.min(page, totalPages));
+
+        if (_skuViewAll) {
+            rows.forEach(function(r) { r.classList.remove('hidden'); });
+        } else {
+            var start = (_skuPage - 1) * _SKU_PER_PAGE;
+            var end   = start + _SKU_PER_PAGE;
+            rows.forEach(function(r, i) {
+                r.classList.toggle('hidden', i < start || i >= end);
+            });
+        }
+        _renderSkuPagination(total, _skuPage, totalPages);
+    }
+
+    function _renderSkuPagination(total, page, totalPages) {
+        var container = document.getElementById('sku-pagination');
+        if (!container) return;
+
+        if (total <= _SKU_PER_PAGE && !_skuViewAll) {
+            container.innerHTML = '';
+            return;
+        }
+
+        var start = _skuViewAll ? 1 : (page - 1) * _SKU_PER_PAGE + 1;
+        var end   = _skuViewAll ? total : Math.min(page * _SKU_PER_PAGE, total);
+
+        // Botones de página con ellipsis
+        var pageBtns = '';
+        if (!_skuViewAll) {
+            var last = 0;
+            for (var p = 1; p <= totalPages; p++) {
+                var near = p >= page - 2 && p <= page + 2;
+                var edge = p === 1 || p === totalPages;
+                if (!near && !edge) continue;
+                if (last > 0 && p - last > 1) pageBtns += '<span class="px-1 text-gray-300 select-none text-xs">…</span>';
+                last = p;
+                if (p === page) {
+                    pageBtns += '<button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border bg-yellow-400 text-gray-800 border-yellow-400 cursor-default">' + p + '</button>';
+                } else {
+                    pageBtns += '<button onclick="window._paginateSkus(' + p + ')" class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">' + p + '</button>';
+                }
+            }
+        }
+
+        container.innerHTML =
+            '<div class="px-4 py-3 border-t border-gray-100 bg-white flex flex-wrap items-center justify-between gap-3">' +
+            '<span class="text-xs text-gray-400">Mostrando <strong class="text-gray-600">' + start + '–' + end + '</strong> de <strong class="text-gray-600">' + total + '</strong> SKUs</span>' +
+            '<div class="flex items-center gap-1 flex-wrap">' +
+            (!_skuViewAll ?
+                '<button onclick="window._paginateSkus(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') +
+                ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+                pageBtns +
+                '<button onclick="window._paginateSkus(' + (page + 1) + ')" ' + (page >= totalPages ? 'disabled' : '') +
+                ' class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-700 disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>'
+            : '') +
+            '<button onclick="window._paginateSkus(0, true)" class="h-8 px-3 rounded-lg text-xs font-semibold border transition ml-1 ' +
+            (_skuViewAll ? 'border-yellow-300 bg-yellow-50 text-yellow-700 hover:bg-white' : 'border-gray-200 text-gray-500 hover:border-yellow-400 hover:text-yellow-700') + '">' +
+            (_skuViewAll ? '← Paginar' : 'Ver todos') + '</button>' +
+            '</div></div>';
+    }
+
+    window._paginateSkus = function(page, toggle) {
+        if (toggle !== undefined) {
+            _skuViewAll = !_skuViewAll;
+            _skuPage = 1;
+            _applySkuPage(1);
+        } else {
+            _applySkuPage(page);
+        }
+    };
+
+    function _initSkuPagination() {
+        _skuPage    = 1;
+        _skuViewAll = false;
+        _applySkuPage(1);
+    }
+    // ── Fin paginación SKU ────────────────────────────────────────────────────
+
     function loadSkuTable(url) {
         var target = document.getElementById('sku-sales-table');
         target.innerHTML = '<div class="p-8 text-center text-gray-500"><svg class="animate-spin h-8 w-8 mx-auto mb-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando ordenes, esto puede tardar unos segundos...</div>';
@@ -96,6 +189,7 @@
                 document.getElementById('btn-filtrar').disabled = false;
                 document.getElementById('btn-filtrar').classList.remove('opacity-50');
                 loadInventoryForSkus();
+                _initSkuPagination();
             });
     }
 

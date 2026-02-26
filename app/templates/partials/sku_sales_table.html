@@ -9,10 +9,10 @@
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">CDMX</th>
         </tr>
     </thead>
-    <tbody class="divide-y divide-gray-200">
+    <tbody class="divide-y divide-gray-200" id="sku-tbody">
         {% for sku_data in sku_sales %}
         {% set show_inv = sku_data.sku != 'SIN SKU' %}
-        <tr class="hover:bg-gray-50 border-b border-gray-200" {% if show_inv %}data-sku="{{ sku_data.sku }}"{% endif %}>
+        <tr class="sku-data-row hover:bg-gray-50 border-b border-gray-200" {% if show_inv %}data-sku="{{ sku_data.sku }}"{% endif %}>
             <td class="px-4 py-3 whitespace-nowrap text-sm font-mono font-medium text-gray-800">
                 {{ sku_data.sku }}
             </td>
@@ -49,6 +49,9 @@
 </table>
 
 {% if sku_sales %}
+<!-- Paginación SKU (renderizada por JS en sku_sales.html) -->
+<div id="sku-pagination"></div>
+
 <div class="px-6 py-4 bg-gray-50 flex justify-between items-center border-t-2 border-gray-300">
     <span class="text-sm font-medium text-gray-700">
         Total: {{ sku_sales|length }} SKUs

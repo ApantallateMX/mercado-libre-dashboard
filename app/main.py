@@ -1233,6 +1233,7 @@ async def orders_table_partial(
             "paging": orders_data.get("paging", {}),
             "offset": offset,
             "limit": limit,
+            "sort": sort,
             "seller_name": user.get("nickname", "-")
         })
     finally:
