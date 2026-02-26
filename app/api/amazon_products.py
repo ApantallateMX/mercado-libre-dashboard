@@ -66,7 +66,6 @@ _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/Invent
 _BM_LOC_IDS   = "47,62,68"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
-_AMZ_BM_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -902,12 +901,10 @@ def _amz_base_sku(sku: str) -> str:
     return s
 
 
-def _amz_bm_conditions(sku: str) -> str:
-    """Condiciones BinManager según el sufijo del SKU de Amazon."""
+def _is_ic_sku(sku: str) -> bool:
+    """True si el SKU es de condición ICB o ICC — no aplican inventario BM regular."""
     up = sku.upper()
-    if "-ICB" in up or "-ICC" in up:
-        return "GRA,GRB,GRC,ICB,ICC,NEW"
-    return "GRA,GRB,GRC,NEW"
+    return "-ICB" in up or "-ICC" in up
 
 
 def _parse_wh_rows_amz(rows: list) -> tuple:
@@ -931,14 +928,19 @@ _BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved"
 async def _enrich_bm_amz(items: list) -> None:
     """
     Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
-    Usa caché _bm_amz_cache (TTL 15 min). Solo fetchea SKUs no cacheados.
+
+    Reglas:
+    - SKUs con -ICB / -ICC: se omiten (condición especial, no aplica inventario regular).
+    - Resto: condiciones GRA,GRB,GRC,NEW únicamente.
+    - Usa caché _bm_amz_cache (TTL 15 min). Solo fetchea SKUs no cacheados.
     """
     now = _time.time()
     to_fetch: list[str] = []
 
     for item in items:
         sku = item.get("sku", "")
-        if not sku:
+        if not sku or _is_ic_sku(sku):
+            # ICB/ICC: dejar en 0 (no aplican BM regular)
             item.update(_BM_EMPTY)
             continue
         cached = _bm_amz_cache.get(sku.upper())
@@ -951,20 +953,20 @@ async def _enrich_bm_amz(items: list) -> None:
     if not to_fetch:
         return
 
+    _BM_CONDITIONS = "GRA,GRB,GRC,NEW"  # siempre sin ICB/ICC para listings regulares
     sem = asyncio.Semaphore(15)
 
     async def _fetch_one(sku: str, http: "httpx.AsyncClient") -> None:
         base = _amz_base_sku(sku)
-        cond = _amz_bm_conditions(sku)
         wh_payload = {
             "COMPANYID": 1, "SKU": base, "WarehouseID": None,
             "LocationID": _BM_LOC_IDS, "BINID": None,
-            "Condition": cond, "SUPPLIERS": None, "ForInventory": 0,
+            "Condition": _BM_CONDITIONS, "SUPPLIERS": None, "ForInventory": 0,
         }
         av_payload = {
             "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
             "LOCATIONID": _BM_LOC_IDS, "BINID": None,
-            "PRODUCTSKU": base, "CONDITION": cond,
+            "PRODUCTSKU": base, "CONDITION": _BM_CONDITIONS,
             "SUPPLIERS": None, "LCN": None, "SEARCH": base,
         }
         wh_rows, av_rows = [], []
