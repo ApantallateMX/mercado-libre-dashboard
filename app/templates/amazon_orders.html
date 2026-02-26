@@ -196,6 +196,133 @@
         }
     };
 
+    // ── Paginación ────────────────────────────────────────────────────────────
+    const _PER_PAGE = 20;
+    let _curPage    = 1;
+    let _viewAll    = false;
+
+    function _getAllOrderRows() {
+        return Array.from(document.querySelectorAll('#amz-orders-tbody tr[id^="order-row-"]'));
+    }
+
+    function _applyPage(page) {
+        const rows = _getAllOrderRows();
+        if (!rows.length) return;
+
+        const total      = rows.length;
+        const totalPages = Math.ceil(total / _PER_PAGE);
+        _curPage = Math.max(1, Math.min(page, totalPages));
+
+        if (_viewAll) {
+            rows.forEach(r => r.classList.remove('hidden'));
+        } else {
+            const start = (_curPage - 1) * _PER_PAGE;
+            const end   = start + _PER_PAGE;
+            rows.forEach((r, i) => {
+                const visible = i >= start && i < end;
+                r.classList.toggle('hidden', !visible);
+                // Si la fila se oculta, ocultar también su expand row
+                if (!visible) {
+                    const orderId   = r.id.replace('order-row-', '');
+                    const expandRow = document.getElementById('expand-' + orderId);
+                    if (expandRow) expandRow.classList.add('hidden');
+                }
+            });
+        }
+
+        _renderPagination(total, _curPage, totalPages);
+        _enrichVisibleRows();
+    }
+
+    function _renderPagination(total, page, totalPages) {
+        const container = document.getElementById('orders-pagination');
+        if (!container) return;
+
+        // Sin paginación si caben todas en una página
+        if (total <= _PER_PAGE && !_viewAll) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const start = _viewAll ? 1 : (page - 1) * _PER_PAGE + 1;
+        const end   = _viewAll ? total : Math.min(page * _PER_PAGE, total);
+
+        // Botones de página con ellipsis
+        let pageBtns = '';
+        if (!_viewAll) {
+            let lastRendered = 0;
+            for (let p = 1; p <= totalPages; p++) {
+                const near = p >= page - 2 && p <= page + 2;
+                const edge = p === 1 || p === totalPages;
+                if (!near && !edge) continue;
+
+                if (lastRendered && p - lastRendered > 1) {
+                    pageBtns += `<span class="px-1 text-gray-300 select-none">…</span>`;
+                }
+                lastRendered = p;
+
+                const active = p === page;
+                pageBtns += `
+                <button onclick="window._paginateOrders(${p})"
+                        class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border transition
+                               ${active
+                                   ? 'bg-[#FF9900] text-white border-[#FF9900] cursor-default'
+                                   : 'border-gray-200 text-gray-600 hover:border-[#FF9900] hover:text-orange-700'}">
+                    ${p}
+                </button>`;
+            }
+        }
+
+        container.innerHTML = `
+        <div class="px-4 py-3 border-t border-gray-100 bg-white flex flex-wrap items-center justify-between gap-3">
+            <span class="text-xs text-gray-400">
+                Mostrando <strong class="text-gray-600">${start}–${end}</strong> de
+                <strong class="text-gray-600">${total}</strong> órdenes
+            </span>
+            <div class="flex items-center gap-1 flex-wrap">
+                ${!_viewAll ? `
+                <button onclick="window._paginateOrders(${page - 1})"
+                        ${page <= 1 ? 'disabled' : ''}
+                        class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                               text-gray-600 hover:border-[#FF9900] hover:text-orange-700
+                               disabled:opacity-30 disabled:cursor-not-allowed transition">
+                    ‹ Ant
+                </button>
+                ${pageBtns}
+                <button onclick="window._paginateOrders(${page + 1})"
+                        ${page >= totalPages ? 'disabled' : ''}
+                        class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
+                               text-gray-600 hover:border-[#FF9900] hover:text-orange-700
+                               disabled:opacity-30 disabled:cursor-not-allowed transition">
+                    Sig ›
+                </button>` : ''}
+                <button onclick="window._paginateOrders(0, true)"
+                        class="h-8 px-3 rounded-lg text-xs font-semibold border transition ml-1
+                               ${_viewAll
+                                   ? 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-white'
+                                   : 'border-gray-200 text-gray-500 hover:border-[#FF9900] hover:text-orange-700'}">
+                    ${_viewAll ? '← Paginar' : 'Ver todos'}
+                </button>
+            </div>
+        </div>`;
+    }
+
+    window._paginateOrders = function(page, toggleViewAll) {
+        if (toggleViewAll !== undefined) {
+            _viewAll = !_viewAll;
+            _curPage = 1;
+            _applyPage(1);
+        } else {
+            _applyPage(page);
+        }
+    };
+
+    function _initPagination() {
+        _curPage = 1;
+        _viewAll = false;
+        _applyPage(1);
+    }
+
     // ── Lazy load Producto + SKU ──────────────────────────────────────────────
     let _preview_loaded = new Set();
 
@@ -245,10 +372,12 @@
     }
 
     async function _enrichVisibleRows() {
-        // Solo las primeras 15 filas — Amazon burst capacity = 30 req
-        const rows = Array.from(document.querySelectorAll('tr[id^="order-row-"]')).slice(0, 15);
+        // Solo filas VISIBLES (no hidden) — máx 15 por llamada (Amazon burst = 30 req)
+        const rows = _getAllOrderRows()
+            .filter(r => !r.classList.contains('hidden'))
+            .slice(0, 15);
         const BATCH = 3;
-        const DELAY = 800;  // ms entre lotes
+        const DELAY = 800;
 
         for (let i = 0; i < rows.length; i += BATCH) {
             const batch = rows.slice(i, i + BATCH);
@@ -291,8 +420,8 @@
             skeleton.classList.add('hidden');
             if (statusEl) statusEl.textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
 
-            // Enriquecer filas con producto/SKU (el script del partial no se ejecuta via innerHTML)
-            _enrichVisibleRows();
+            // Iniciar paginación (muestra pág 1, oculta el resto, enriquece filas visibles)
+            _initPagination();
         } catch (e) {
             skeleton.classList.add('hidden');
             content.innerHTML = '<p class="text-red-500 p-6 text-center">Error al cargar órdenes: ' + e.message + '</p>';

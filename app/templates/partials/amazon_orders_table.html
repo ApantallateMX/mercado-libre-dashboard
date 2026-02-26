@@ -132,9 +132,12 @@
         </table>
     </div>
 
+    <!-- Paginación (renderizada por JS en amazon_orders.html) -->
+    <div id="orders-pagination"></div>
+
     <!-- Pie de tabla -->
     <div class="px-4 py-3 bg-gray-50 border-t text-xs text-gray-400 flex justify-between items-center">
-        <span>
+        <span id="orders-footer-count">
             {{ orders | length }} órden{% if orders | length != 1 %}es{% endif %} ·
             período {{ date_from }} → {{ date_to }}
         </span>
