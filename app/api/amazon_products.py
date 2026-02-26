@@ -24,9 +24,11 @@ CACHÉ:
 
 import asyncio
 import logging
+import re as _re
 import time as _time
 from datetime import datetime, timedelta
 from typing import Optional
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -57,6 +59,14 @@ _LISTINGS_TTL = 300   # 5 minutos
 _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
 _SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
+
+# ─── BinManager (para tab Inventario) ────────────────────────────────────────
+_BM_WH_URL    = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+_BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
+_BM_LOC_IDS   = "47,62,68"
+_bm_amz_cache: dict[str, tuple[float, dict]] = {}
+_BM_AMZ_TTL   = 900   # 15 min
+_AMZ_BM_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -866,6 +876,118 @@ async def _get_sku_sales_cached(client) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BINMANAGER HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _amz_base_sku(sku: str) -> str:
+    """Limpia el SKU de Amazon para consultar BinManager (quita sufijos de condición)."""
+    if not sku:
+        return ""
+    s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
+    s = _re.sub(r'\(\d+\)', '', s).strip()
+    s = _re.sub(r'[()]', '', s).strip()
+    up = s.upper()
+    for sfx in _AMZ_BM_SUFFIXES:
+        if up.endswith(sfx):
+            s = s[:-len(sfx)]
+            break
+    return s
+
+
+def _amz_bm_conditions(sku: str) -> str:
+    """Condiciones BinManager según el sufijo del SKU de Amazon."""
+    up = sku.upper()
+    if up.endswith("-ICB") or up.endswith("-ICC"):
+        return "GRA,GRB,GRC,ICB,ICC,NEW"
+    return "GRA,GRB,GRC,NEW"
+
+
+def _parse_wh_rows_amz(rows: list) -> tuple:
+    """Parsea filas del Warehouse endpoint. Retorna (mty, cdmx, tj)."""
+    mty = cdmx = tj = 0
+    for row in (rows or []):
+        qty = row.get("QtyTotal", 0) or 0
+        wname = (row.get("WarehouseName") or "").lower()
+        if "monterrey" in wname or "maxx" in wname:
+            mty += qty
+        elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
+            cdmx += qty
+        else:
+            tj += qty
+    return mty, cdmx, tj
+
+
+_BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved": 0}
+
+
+async def _enrich_bm_amz(items: list) -> None:
+    """
+    Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
+    Usa caché _bm_amz_cache (TTL 15 min). Solo fetchea SKUs no cacheados.
+    """
+    now = _time.time()
+    to_fetch: list[str] = []
+
+    for item in items:
+        sku = item.get("sku", "")
+        if not sku:
+            item.update(_BM_EMPTY)
+            continue
+        cached = _bm_amz_cache.get(sku.upper())
+        if cached and (now - cached[0]) < _BM_AMZ_TTL:
+            item.update(cached[1])
+        else:
+            to_fetch.append(sku)
+            item.update(_BM_EMPTY)
+
+    if not to_fetch:
+        return
+
+    sem = asyncio.Semaphore(15)
+
+    async def _fetch_one(sku: str, http: "httpx.AsyncClient") -> None:
+        base = _amz_base_sku(sku)
+        cond = _amz_bm_conditions(sku)
+        wh_payload = {
+            "COMPANYID": 1, "SKU": base, "WarehouseID": None,
+            "LocationID": _BM_LOC_IDS, "BINID": None,
+            "Condition": cond, "SUPPLIERS": None, "ForInventory": 0,
+        }
+        av_payload = {
+            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+            "LOCATIONID": _BM_LOC_IDS, "BINID": None,
+            "PRODUCTSKU": base, "CONDITION": cond,
+            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
+        }
+        wh_rows, av_rows = [], []
+        async with sem:
+            try:
+                r_wh, r_av = await asyncio.gather(
+                    http.post(_BM_WH_URL, json=wh_payload, timeout=15.0),
+                    http.post(_BM_AVAIL_URL, json=av_payload, timeout=15.0),
+                    return_exceptions=True,
+                )
+                if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
+                    wh_rows = r_wh.json()
+                if not isinstance(r_av, Exception) and r_av.status_code == 200:
+                    av_rows = r_av.json()
+            except Exception:
+                pass
+        mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
+        avail    = sum(row.get("Available", 0) or 0 for row in av_rows)
+        reserved = sum(row.get("Required", 0)  or 0 for row in av_rows)
+        inv = {"bm_mty": mty, "bm_cdmx": cdmx, "bm_tj": tj,
+               "bm_avail": avail, "bm_reserved": reserved}
+        _bm_amz_cache[sku.upper()] = (_time.time(), inv)
+        for item in items:
+            if item.get("sku", "").upper() == sku.upper():
+                item.update(inv)
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        await asyncio.gather(*[_fetch_one(s, http) for s in to_fetch], return_exceptions=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # NUEVOS TABS (Centro de Productos v2) — Espejo de MeLi
 # Los endpoints antiguos (summary, catalog, inventory, buybox) se conservan
 # porque amazon_dashboard.html los sigue usando.
@@ -982,12 +1104,16 @@ async def amazon_products_resumen(request: Request):
 @router.get("/products/inventario", response_class=HTMLResponse)
 async def amazon_products_inventario(
     request: Request,
-    sort: str = Query("units", description="units|stock|revenue|price"),
-    filter: str = Query("all", description="all|fba|top|low"),
+    sort:     str = Query("units", description="units|stock|revenue|price"),
+    filter:   str = Query("all",   description="all|fba|top|low|nostock"),
+    q:        str = Query("",      description="Búsqueda por SKU, ASIN o título"),
+    page:     int = Query(1,       description="Página actual"),
+    per_page: int = Query(20,      description="Items por página"),
 ):
     """
-    Inventario completo con ventas 30d y días de supply por SKU.
-    Subtabs: Todos / FBA / Top Sellers / Low Sellers
+    Inventario completo con ventas 30d, días supply y stock BinManager por SKU.
+    Filtros: Todos / FBA / Top Ventas / Baja Venta / Sin Stock
+    Paginación: 20/pág (server-side). BM enriquece solo la página actual.
     """
     client = await get_amazon_client()
     if not client:
@@ -1014,19 +1140,18 @@ async def amazon_products_inventario(
             asin = fba_d.get("asin") or summary_0.get("asin") or ""
             fba_details = fba_d.get("inventoryDetails", {})
             fba_stock = int(fba_details.get("fulfillableQuantity") or 0)
-            reserved = int((fba_details.get("reservedQuantity") or {}).get("pendingCustomerOrderQuantity") or 0)
+            fba_reserved = int((fba_details.get("reservedQuantity") or {}).get("pendingCustomerOrderQuantity") or 0)
             inbound = (
                 int(fba_details.get("inboundWorkingQuantity") or 0)
                 + int(fba_details.get("inboundShippedQuantity") or 0)
             )
 
             sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
-            units_30d = sales["units"]
+            units_30d   = sales["units"]
             revenue_30d = sales["revenue"]
-            vel_dia = units_30d / 30.0
+            vel_dia     = units_30d / 30.0
             dias_supply = round(fba_stock / vel_dia, 1) if vel_dia > 0 else None
 
-            # Color de días supply
             if dias_supply is None:
                 supply_color = "gray"
             elif dias_supply < 14:
@@ -1037,38 +1162,46 @@ async def amazon_products_inventario(
                 supply_color = "green"
 
             enriched.append({
-                "sku": sku,
-                "asin": asin,
-                "title": summary_0.get("itemName", sku)[:65],
-                "price": price,
-                "status": status,
-                "fba_stock": fba_stock,
-                "reserved": reserved,
-                "inbound": inbound,
-                "units_30d": units_30d,
-                "revenue_30d": round(revenue_30d, 2),
-                "vel_dia": round(vel_dia, 2),
-                "dias_supply": dias_supply,
+                "sku":          sku,
+                "asin":         asin,
+                "title":        summary_0.get("itemName", sku)[:65],
+                "price":        price,
+                "status":       status,
+                "fba_stock":    fba_stock,
+                "fba_reserved": fba_reserved,
+                "inbound":      inbound,
+                "units_30d":    units_30d,
+                "revenue_30d":  round(revenue_30d, 2),
+                "vel_dia":      round(vel_dia, 2),
+                "dias_supply":  dias_supply,
                 "supply_color": supply_color,
-                "is_fba": bool(fba_d),
-                "is_top": units_30d >= 5,
-                "is_low": 0 < units_30d < 2,
-                "amazon_url": f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
+                "is_fba":       bool(fba_d),
+                "is_top":       units_30d >= 5,
+                "is_low":       0 < units_30d < 2,
+                "amazon_url":   f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
                 "sc_url": (
                     f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
                     if asin else "https://sellercentral.amazon.com.mx/inventory"
                 ),
+                # BM — se rellena por _enrich_bm_amz para la página actual
+                "bm_avail":    0,
+                "bm_reserved": 0,
+                "bm_mty":      0,
+                "bm_cdmx":     0,
+                "bm_tj":       0,
             })
 
-        # Filtro
+        # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
             enriched = [e for e in enriched if e["is_fba"]]
         elif filter == "top":
             enriched = [e for e in enriched if e["is_top"]]
         elif filter == "low":
             enriched = [e for e in enriched if e["is_low"]]
+        elif filter == "nostock":
+            enriched = [e for e in enriched if e["fba_stock"] == 0]
 
-        # Ordenar
+        # ── Ordenar ────────────────────────────────────────────────────────
         if sort == "stock":
             enriched.sort(key=lambda x: x["fba_stock"], reverse=True)
         elif sort == "revenue":
@@ -1078,13 +1211,38 @@ async def amazon_products_inventario(
         else:  # units (default)
             enriched.sort(key=lambda x: x["units_30d"], reverse=True)
 
+        # ── Búsqueda ───────────────────────────────────────────────────────
+        if q:
+            q_low = q.strip().lower()
+            enriched = [
+                e for e in enriched
+                if q_low in e["sku"].lower()
+                or q_low in e["title"].lower()
+                or q_low in e["asin"].lower()
+            ]
+
+        # ── Paginación ─────────────────────────────────────────────────────
+        total      = len(enriched)
+        per_page   = max(10, min(100, per_page))
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page       = max(1, min(page, total_pages))
+        start      = (page - 1) * per_page
+        page_items = enriched[start: start + per_page]
+
+        # ── BM: solo para la página actual ────────────────────────────────
+        await _enrich_bm_amz(page_items)
+
         ctx = {
-            "request": request,
-            "listings": enriched,
-            "total": len(enriched),
-            "sort": sort,
-            "filter": filter,
-            "nickname": client.nickname,
+            "request":     request,
+            "listings":    page_items,
+            "total":       total,
+            "total_pages": total_pages,
+            "page":        page,
+            "per_page":    per_page,
+            "sort":        sort,
+            "filter":      filter,
+            "q":           q,
+            "nickname":    client.nickname,
             "marketplace": client.marketplace_name,
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)

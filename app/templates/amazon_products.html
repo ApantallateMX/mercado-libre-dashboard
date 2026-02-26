@@ -108,6 +108,9 @@ function loadAmzProdTab(tabName, url, btn) {
         })
         .then(function(html) {
             container.innerHTML = html;
+            if (tabName === 'inventario') {
+                window._applyInvColState();
+            }
         })
         .catch(function(e) {
             container.innerHTML =
@@ -115,6 +118,105 @@ function loadAmzProdTab(tabName, url, btn) {
                 '<p class="text-red-500 font-semibold mb-1">Error cargando sección</p>' +
                 '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
         });
+}
+
+// ── Tab Inventario: carga con URL específica (filtros, búsqueda, paginación) ──
+window._loadInvTab = function(url) {
+    var container = document.getElementById('amz-prod-tab-content');
+    // Skeleton tabla
+    container.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+        '<svg class="animate-spin h-7 w-7 mx-auto mb-3 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        'Cargando inventario…</div>';
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) {
+            container.innerHTML = html;
+            window._applyInvColState();
+        })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold mb-1">Error</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+};
+
+// ── Helpers para leer el estado actual del inventario ─────────────────────
+function _invState() {
+    var s = document.getElementById('amz-inv-state');
+    return {
+        filter:   s ? s.getAttribute('data-filter')   : 'all',
+        sort:     s ? s.getAttribute('data-sort')      : 'units',
+        q:        s ? s.getAttribute('data-q')         : '',
+        page:     s ? parseInt(s.getAttribute('data-page'))     : 1,
+        perPage:  s ? parseInt(s.getAttribute('data-per-page')) : 20,
+    };
+}
+
+function _invUrl(overrides) {
+    var st = _invState();
+    var f  = overrides.filter   !== undefined ? overrides.filter   : st.filter;
+    var so = overrides.sort     !== undefined ? overrides.sort     : st.sort;
+    var q  = overrides.q        !== undefined ? overrides.q        : st.q;
+    var p  = overrides.page     !== undefined ? overrides.page     : 1;
+    var pp = overrides.perPage  !== undefined ? overrides.perPage  : st.perPage;
+    return '/api/amazon/products/inventario?filter=' + f +
+           '&sort=' + so +
+           '&q=' + encodeURIComponent(q) +
+           '&page=' + p +
+           '&per_page=' + pp;
+}
+
+window._filterInv = function(filterVal) {
+    window._loadInvTab(_invUrl({ filter: filterVal }));
+};
+
+window._sortInv = function(sortVal) {
+    window._loadInvTab(_invUrl({ sort: sortVal }));
+};
+
+window._submitInvSearch = function() {
+    var inp = document.getElementById('inv-search');
+    if (!inp) return;
+    window._loadInvTab(_invUrl({ q: inp.value.trim(), page: 1 }));
+};
+
+window._refreshInv = function() {
+    var st = _invState();
+    window._loadInvTab(_invUrl({ page: st.page }));
+};
+
+// ── Column toggles (persistidos en localStorage) ──────────────────────────
+var _invColState = {};
+
+window._toggleInvCol = function(checkbox) {
+    var col = checkbox.getAttribute('data-col');
+    _invColState[col] = checkbox.checked;
+    try { localStorage.setItem('amz_inv_cols', JSON.stringify(_invColState)); } catch(e) {}
+    _applyColVis(col, checkbox.checked);
+};
+
+window._applyInvColState = function() {
+    try {
+        var saved = JSON.parse(localStorage.getItem('amz_inv_cols') || '{}');
+        _invColState = saved;
+    } catch(e) { _invColState = {}; }
+    document.querySelectorAll('.amz-col-toggle').forEach(function(cb) {
+        var col = cb.getAttribute('data-col');
+        if (col in _invColState) {
+            cb.checked = _invColState[col];
+        }
+        _applyColVis(col, cb.checked);
+    });
+};
+
+function _applyColVis(col, visible) {
+    document.querySelectorAll('.' + col).forEach(function(cell) {
+        cell.style.display = visible ? '' : 'none';
+    });
 }
 
 // Clic en tabs
