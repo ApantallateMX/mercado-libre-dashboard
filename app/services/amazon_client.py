@@ -724,6 +724,116 @@ class AmazonClient:
 
         return all_summaries
 
+    # ─────────────────────────────────────────────────────────────────────
+    # REPORTS API — para obtener inventario Onsite (Seller Flex)
+    # El FBA Inventory API solo cubre almacenes físicos de Amazon.
+    # El Reports API genera un reporte "FBA Managed Inventory" que sí
+    # incluye el stock de Amazon Onsite (inventario en bodega del vendedor).
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def create_inventory_report(self) -> str:
+        """
+        Crea el reporte GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA.
+        Incluye afn-fulfillable-quantity para todos los SKUs FBA/Onsite.
+        Retorna el reportId.
+        Rate limit: 0.0222 req/s (1 por 45 seg) — solo llamar en cache-miss.
+        """
+        body = {
+            "reportType": "GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA",
+            "marketplaceIds": [self.marketplace_id],
+        }
+        result = await self._request("POST", "/reports/2021-06-30/reports", json=body)
+        return result.get("reportId", "")
+
+    async def get_report_status(self, report_id: str) -> dict:
+        """
+        Consulta el estado de un reporte.
+        processingStatus: IN_QUEUE | IN_PROGRESS | DONE | FATAL | CANCELLED
+        Cuando DONE incluye reportDocumentId.
+        """
+        return await self._request("GET", f"/reports/2021-06-30/reports/{report_id}")
+
+    async def get_report_document_url(self, document_id: str) -> dict:
+        """
+        Obtiene la URL de descarga (pre-signed S3) del documento del reporte.
+        Retorna dict con: url, compressionAlgorithm (opcional, "GZIP" si comprimido).
+        """
+        return await self._request("GET", f"/reports/2021-06-30/documents/{document_id}")
+
+    async def download_report_document(self, url: str, compressed: bool) -> str:
+        """
+        Descarga el contenido del reporte desde la URL pre-signed de S3.
+        IMPORTANTE: No usar headers de auth SP-API — la URL ya tiene auth embebida.
+        """
+        import gzip as _gzip
+        async with httpx.AsyncClient(follow_redirects=True, timeout=120) as http:
+            resp = await http.get(url)
+            resp.raise_for_status()
+            if compressed:
+                return _gzip.decompress(resp.content).decode("utf-8", errors="replace")
+            return resp.text
+
+    async def get_onsite_inventory_report(self, max_wait_secs: int = 120) -> dict:
+        """
+        Genera y descarga el reporte FBA MYI completo.
+        Retorna {seller_sku: afn_fulfillable_quantity} para todos los SKUs.
+
+        El reporte GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA incluye:
+        - Inventario FBA regular (en almacenes Amazon)
+        - Inventario Amazon Onsite / Seller Flex (en bodega del vendedor)
+        - Campo clave: afn-fulfillable-quantity
+
+        Tiempo típico de generación: 30-90 segundos.
+        """
+        import csv, io as _io
+
+        logger.info("[Amazon Reports] Creando reporte FBA MYI Inventory…")
+        report_id = await self.create_inventory_report()
+        if not report_id:
+            raise ValueError("Amazon no devolvió reportId")
+
+        # Pollinar hasta que esté listo
+        wait_interval = 10  # segundos entre polls
+        attempts = max(1, max_wait_secs // wait_interval)
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(f"[Amazon Reports] {report_id} → {proc_status} (intento {attempt+1}/{attempts})")
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+
+                # Parsear TSV → {sku: afn_fulfillable_quantity}
+                result = {}
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                for row in reader:
+                    sku = (row.get("sku") or row.get("merchant-sku") or "").strip()
+                    qty_raw = row.get("afn-fulfillable-quantity", "0") or "0"
+                    try:
+                        qty = int(float(qty_raw.strip()))
+                    except (ValueError, TypeError):
+                        qty = 0
+                    if sku:
+                        result[sku] = qty
+
+                logger.info(f"[Amazon Reports] Reporte listo: {len(result)} SKUs con stock Onsite/FBA")
+                return result
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
+
+        # Timeout
+        logger.warning(f"[Amazon Reports] Timeout esperando reporte {report_id} ({max_wait_secs}s)")
+        return {}
+
     async def get_catalog_item(self, asin: str) -> Optional[dict]:
         """
         Obtiene datos del catálogo Amazon para un ASIN específico.

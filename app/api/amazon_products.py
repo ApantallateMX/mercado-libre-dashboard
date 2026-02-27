@@ -60,6 +60,11 @@ _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
 _SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
 
+# ─── Onsite Stock (Amazon Reports API) ────────────────────────────────────────
+_onsite_stock_cache:  dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: qty})}
+_onsite_stock_locks:  dict[str, asyncio.Lock] = {}
+_ONSITE_STOCK_TTL = 1800  # 30 minutos (generación de reporte es costosa)
+
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
 _BM_WH_URL    = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
@@ -193,6 +198,38 @@ async def _get_fba_cached(client) -> list:
     data = await client.get_fba_inventory_all()
     _fba_cache[key] = (now, data)
     return data
+
+
+async def _get_onsite_stock_cached(client) -> dict:
+    """
+    Obtiene el stock de Amazon Onsite (Seller Flex) desde el Reports API.
+    El reporte GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA incluye afn-fulfillable-quantity
+    para todos los SKUs FBA, incluyendo los de Seller Flex en bodega propia.
+
+    Caché de 30 min — generar el reporte tarda 30-90 seg.
+    Retorna {sku: afn_fulfillable_quantity}.
+    """
+    now = _time.time()
+    key = client.seller_id
+    if key in _onsite_stock_cache:
+        ts, data = _onsite_stock_cache[key]
+        if now - ts < _ONSITE_STOCK_TTL:
+            return data
+    if key not in _onsite_stock_locks:
+        _onsite_stock_locks[key] = asyncio.Lock()
+    async with _onsite_stock_locks[key]:
+        # Double-check bajo el lock
+        if key in _onsite_stock_cache:
+            ts, data = _onsite_stock_cache[key]
+            if now - ts < _ONSITE_STOCK_TTL:
+                return data
+        try:
+            data = await client.get_onsite_inventory_report()
+        except Exception as e:
+            logger.warning(f"[Onsite Stock] Error obteniendo reporte: {e}")
+            data = {}
+        _onsite_stock_cache[key] = (_time.time(), data)
+        return data
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1786,18 +1823,43 @@ async def amazon_products_seller_flex(
         # Enriquecer con BinManager (reutiliza la función del tab inventario)
         await _enrich_bm_amz(flx_items)
 
-        # Ordenar: primero ACTIVE, luego por bm_avail desc
-        # (fba_stock siempre 0 para Onsite — no accesible via SP-API)
+        # ── Stock Onsite desde Reports API (caché 30 min) ──────────────────
+        # No bloquear si el caché está frío — devolver datos sin stock Onsite
+        # y dejar que el usuario use el botón 📥 para generar el reporte.
+        onsite_key = client.seller_id
+        onsite_data: dict = {}
+        if onsite_key in _onsite_stock_cache:
+            ts_o, onsite_data = _onsite_stock_cache[onsite_key]
+            if _time.time() - ts_o >= _ONSITE_STOCK_TTL:
+                onsite_data = {}  # Expirado — mostrar sin dato hasta próxima sync
+
+        # Inyectar stock Onsite en cada item
+        for item in flx_items:
+            sku = item["sku"]
+            if sku in onsite_data:
+                item["fba_stock"] = onsite_data[sku]
+
+        report_available = bool(onsite_data)
+        report_ts = ""
+        if onsite_key in _onsite_stock_cache and onsite_data:
+            ts_o, _ = _onsite_stock_cache[onsite_key]
+            from datetime import datetime as _dt
+            report_ts = _dt.fromtimestamp(ts_o).strftime("%d/%m %H:%M")
+
+        # Ordenar: primero ACTIVE (o con stock Onsite > 0), luego por bm_avail desc
         flx_items.sort(key=lambda x: (
-            0 if x["status"] == "ACTIVE" else 1,
+            0 if (x["status"] == "ACTIVE" or x["fba_stock"] > 0) else 1,
+            -x["fba_stock"],
             -x["bm_avail"],
         ))
 
         ctx = {
-            "request": request,
-            "items":   flx_items,
-            "total":   len(flx_items),
-            "q":       q,
+            "request":          request,
+            "items":            flx_items,
+            "total":            len(flx_items),
+            "q":                q,
+            "report_available": report_available,
+            "report_ts":        report_ts,
         }
         return _templates.TemplateResponse(
             "partials/amazon_products_seller_flex.html", ctx
@@ -1806,6 +1868,36 @@ async def amazon_products_seller_flex(
     except Exception as e:
         logger.exception("[Amazon Products] Error en Seller Flex")
         return _render_error(request, "amazon_products_seller_flex.html", str(e))
+
+
+@router.post("/products/seller-flex/refresh-stock")
+async def refresh_seller_flex_stock(request: Request):
+    """
+    Genera el reporte FBA MYI Inventory para obtener el stock real de Amazon Onsite.
+    Tarda 30-90 segundos — llamar con fetch desde el front-end sin bloquear la UI.
+
+    Retorna: {ok: bool, skus_found: int, report_ts: str, error: str (si falla)}
+    """
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon conectada")
+
+    # Invalidar caché para forzar nueva generación
+    _onsite_stock_cache.pop(client.seller_id, None)
+
+    try:
+        data = await client.get_onsite_inventory_report(max_wait_secs=150)
+        _onsite_stock_cache[client.seller_id] = (_time.time(), data)
+        from datetime import datetime as _dt
+        report_ts = _dt.now().strftime("%d/%m %H:%M")
+        return {
+            "ok":          True,
+            "skus_found":  len(data),
+            "report_ts":   report_ts,
+        }
+    except Exception as e:
+        logger.error(f"[Seller Flex] Error generando reporte Onsite: {e}")
+        return {"ok": False, "error": str(e), "skus_found": 0, "report_ts": ""}
 
 
 @router.post("/products/seller-flex/csv")

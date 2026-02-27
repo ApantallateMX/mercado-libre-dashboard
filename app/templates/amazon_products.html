@@ -476,22 +476,78 @@ window._sfxSearch = function() {
     _sfxLoad(q.trim());
 };
 
-window._sfxRefresh = function() {
-    // Forzar limpieza de caché en el servidor
+window._sfxRefresh = function(includeReport) {
     var q = (document.getElementById('sfx-search') || {}).value || '';
-    var url = '/api/amazon/products/seller-flex?force=1' + (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '');
+    if (includeReport) {
+        // Recarga con reporte Onsite (~60 seg): genera el Reports API en el servidor
+        _sfxStartReportRefresh(q.trim());
+    } else {
+        // Recarga rápida: solo limpia caché de listings + BM (~3 seg)
+        var url = '/api/amazon/products/seller-flex?force=1' + (q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '');
+        var container = document.getElementById('amz-prod-tab-content');
+        container.innerHTML =
+            '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+            'Actualizando desde Amazon…</div>';
+        fetch(url)
+            .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then(function(html) { container.innerHTML = html; })
+            .catch(function(e) {
+                container.innerHTML =
+                    '<div class="bg-white rounded-xl p-8 text-center"><p class="text-red-500">' + e.message + '</p></div>';
+            });
+    }
+};
+
+function _sfxStartReportRefresh(q) {
+    // Genera el reporte FBA MYI Inventory via Amazon Reports API (~30-90 seg)
     var container = document.getElementById('amz-prod-tab-content');
     container.innerHTML =
-        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
-        'Actualizando desde Amazon…</div>';
-    fetch(url)
+        '<div class="bg-white rounded-xl shadow p-12 text-center">' +
+        '<svg class="animate-spin h-10 w-10 mx-auto mb-5 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        '<p class="text-gray-700 font-semibold text-sm mb-1">Generando reporte de inventario Amazon Onsite…</p>' +
+        '<p id="sfx-report-status" class="text-gray-400 text-xs mb-3">Enviando solicitud al Reports API de Amazon…</p>' +
+        '<p class="text-gray-300 text-xs">Esto tarda entre 30 y 90 segundos.</p>' +
+        '<div class="mt-4 mx-auto w-64 h-1 bg-gray-100 rounded-full overflow-hidden">' +
+        '<div id="sfx-report-bar" class="h-full bg-[#FF9900] rounded-full transition-all duration-1000" style="width:5%"></div>' +
+        '</div></div>';
+
+    // Animar la barra de progreso de forma fake (estimado: 60 seg)
+    var barEl = document.getElementById('sfx-report-bar');
+    var pct = 5;
+    var barTimer = setInterval(function() {
+        pct = Math.min(pct + 1.5, 90);
+        if (barEl) barEl.style.width = pct + '%';
+    }, 1000);
+
+    fetch('/api/amazon/products/seller-flex/refresh-stock', { method: 'POST' })
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(data) {
+            clearInterval(barTimer);
+            if (!data.ok) throw new Error(data.error || 'Error desconocido');
+            var statusEl = document.getElementById('sfx-report-status');
+            if (statusEl) statusEl.textContent = '✓ ' + data.skus_found + ' SKUs encontrados. Cargando tabla…';
+            if (barEl) barEl.style.width = '100%';
+            // Recargar el partial con los datos frescos
+            var url = '/api/amazon/products/seller-flex' + (q ? '?q=' + encodeURIComponent(q) : '');
+            return fetch(url);
+        })
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
         .then(function(html) { container.innerHTML = html; })
         .catch(function(e) {
+            clearInterval(barTimer);
             container.innerHTML =
-                '<div class="bg-white rounded-xl p-8 text-center"><p class="text-red-500">' + e.message + '</p></div>';
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold mb-2">Error al generar reporte</p>' +
+                '<p class="text-gray-400 text-xs mb-4">' + e.message + '</p>' +
+                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg text-gray-600 hover:bg-gray-200">↻ Recarga rápida (sin reporte)</button>' +
+                '</div>';
         });
-};
+}
 
 window._sfxCheckAll = function(masterCb) {
     document.querySelectorAll('.sfx-row-check').forEach(function(cb) {
