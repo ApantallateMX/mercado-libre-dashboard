@@ -498,53 +498,90 @@ window._sfxRefresh = function(includeReport) {
     }
 };
 
-function _sfxStartReportRefresh(q) {
-    // Genera el reporte FBA MYI Inventory via Amazon Reports API (~30-90 seg)
-    var container = document.getElementById('amz-prod-tab-content');
-    container.innerHTML =
-        '<div class="bg-white rounded-xl shadow p-12 text-center">' +
-        '<svg class="animate-spin h-10 w-10 mx-auto mb-5 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
-        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
-        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
-        '<p class="text-gray-700 font-semibold text-sm mb-1">Generando reporte de inventario Amazon Onsite…</p>' +
-        '<p id="sfx-report-status" class="text-gray-400 text-xs mb-3">Enviando solicitud al Reports API de Amazon…</p>' +
-        '<p class="text-gray-300 text-xs">Esto tarda entre 30 y 90 segundos.</p>' +
-        '<div class="mt-4 mx-auto w-64 h-1 bg-gray-100 rounded-full overflow-hidden">' +
-        '<div id="sfx-report-bar" class="h-full bg-[#FF9900] rounded-full transition-all duration-1000" style="width:5%"></div>' +
-        '</div></div>';
+var _sfxPollTimer = null;
 
-    // Animar la barra de progreso de forma fake (estimado: 60 seg)
-    var barEl = document.getElementById('sfx-report-bar');
+function _sfxStartReportRefresh(q) {
+    // Inicia el sync en BACKGROUND (start-sync retorna inmediato)
+    // Luego hace polling a sync-status cada 5 seg hasta que termina
+    var container = document.getElementById('amz-prod-tab-content');
+
+    function _showSyncUI(msg) {
+        container.innerHTML =
+            '<div class="bg-white rounded-xl shadow p-12 text-center">' +
+            '<svg class="animate-spin h-10 w-10 mx-auto mb-5 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+            '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+            '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+            '<p class="text-gray-700 font-semibold text-sm mb-1">Generando reporte de inventario Amazon Onsite…</p>' +
+            '<p id="sfx-sync-msg" class="text-gray-400 text-xs mb-3">' + msg + '</p>' +
+            '<p class="text-gray-300 text-xs">Amazon genera el reporte en 30-90 seg. La página se actualizará automáticamente.</p>' +
+            '<div class="mt-5 mx-auto w-72 h-1.5 bg-gray-100 rounded-full overflow-hidden">' +
+            '<div id="sfx-sync-bar" class="h-full bg-[#FF9900] rounded-full" style="width:5%;transition:width 2s linear"></div>' +
+            '</div></div>';
+    }
+
+    _showSyncUI('Iniciando solicitud al Reports API de Amazon…');
+
+    // Animar barra de progreso (estimado ~60 seg → llega a 90%)
     var pct = 5;
+    if (_sfxPollTimer) clearInterval(_sfxPollTimer);
     var barTimer = setInterval(function() {
-        pct = Math.min(pct + 1.5, 90);
-        if (barEl) barEl.style.width = pct + '%';
+        pct = Math.min(pct + 1.4, 90);
+        var b = document.getElementById('sfx-sync-bar');
+        if (b) b.style.width = pct + '%';
     }, 1000);
 
-    fetch('/api/amazon/products/seller-flex/refresh-stock', { method: 'POST' })
-        .then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        })
+    // PASO 1: iniciar el sync en background (retorna inmediatamente)
+    fetch('/api/amazon/products/seller-flex/start-sync', { method: 'POST' })
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(data) {
-            clearInterval(barTimer);
-            if (!data.ok) throw new Error(data.error || 'Error desconocido');
-            var statusEl = document.getElementById('sfx-report-status');
-            if (statusEl) statusEl.textContent = '✓ ' + data.skus_found + ' SKUs encontrados. Cargando tabla…';
-            if (barEl) barEl.style.width = '100%';
-            // Recargar el partial con los datos frescos
-            var url = '/api/amazon/products/seller-flex' + (q ? '?q=' + encodeURIComponent(q) : '');
-            return fetch(url);
+            var msgEl = document.getElementById('sfx-sync-msg');
+            if (msgEl) msgEl.textContent = 'Reporte solicitado a Amazon. Esperando respuesta…';
+
+            // PASO 2: hacer polling hasta que el servidor termine
+            function _poll() {
+                fetch('/api/amazon/products/seller-flex/sync-status')
+                    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+                    .then(function(st) {
+                        var msgEl2 = document.getElementById('sfx-sync-msg');
+                        if (st.status === 'done') {
+                            clearInterval(barTimer);
+                            var b = document.getElementById('sfx-sync-bar');
+                            if (b) b.style.width = '100%';
+                            if (msgEl2) msgEl2.textContent = '✓ ' + st.skus_found + ' SKUs encontrados. Cargando tabla…';
+                            // PASO 3: recargar el partial con datos frescos
+                            var url = '/api/amazon/products/seller-flex' + (q ? '?q=' + encodeURIComponent(q) : '');
+                            fetch(url)
+                                .then(function(r2) { return r2.text(); })
+                                .then(function(html) { container.innerHTML = html; });
+                        } else if (st.status === 'error') {
+                            clearInterval(barTimer);
+                            container.innerHTML =
+                                '<div class="bg-white rounded-xl p-8 text-center">' +
+                                '<p class="text-red-500 font-semibold mb-2">Error al generar reporte Onsite</p>' +
+                                '<p class="text-gray-400 text-xs mb-4">Intenta de nuevo o usa ↻ para recarga rápida.</p>' +
+                                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg">↻ Recarga rápida</button>' +
+                                '</div>';
+                        } else {
+                            // Aún syncing — volver a preguntar en 5 seg
+                            if (msgEl2) msgEl2.textContent = 'Procesando reporte… Amazon puede tardar hasta 90 seg.';
+                            _sfxPollTimer = setTimeout(_poll, 5000);
+                        }
+                    })
+                    .catch(function(e) {
+                        clearInterval(barTimer);
+                        container.innerHTML = '<div class="bg-white rounded-xl p-8 text-center"><p class="text-red-500">Error: ' + e.message + '</p></div>';
+                    });
+            }
+            // Primera consulta a los 5 seg
+            _sfxPollTimer = setTimeout(_poll, 5000);
         })
-        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-        .then(function(html) { container.innerHTML = html; })
         .catch(function(e) {
             clearInterval(barTimer);
             container.innerHTML =
                 '<div class="bg-white rounded-xl p-8 text-center">' +
-                '<p class="text-red-500 font-semibold mb-2">Error al generar reporte</p>' +
+                '<p class="text-red-500 font-semibold mb-2">Error iniciando reporte</p>' +
                 '<p class="text-gray-400 text-xs mb-4">' + e.message + '</p>' +
-                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg text-gray-600 hover:bg-gray-200">↻ Recarga rápida (sin reporte)</button>' +
+                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg">↻ Recarga rápida</button>' +
                 '</div>';
         });
 }

@@ -65,6 +65,10 @@ _onsite_stock_cache:  dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sk
 _onsite_stock_locks:  dict[str, asyncio.Lock] = {}
 _ONSITE_STOCK_TTL = 1800  # 30 minutos (generación de reporte es costosa)
 
+# Estado del sync en background (no bloquear el request principal)
+_onsite_sync_state: dict[str, str] = {}  # {seller_id: "idle"/"syncing"/"done"/"error"}
+_onsite_sync_count: dict[str, int] = {}  # {seller_id: skus_found}
+
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
 _BM_WH_URL    = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
@@ -1870,34 +1874,75 @@ async def amazon_products_seller_flex(
         return _render_error(request, "amazon_products_seller_flex.html", str(e))
 
 
-@router.post("/products/seller-flex/refresh-stock")
-async def refresh_seller_flex_stock(request: Request):
+@router.post("/products/seller-flex/start-sync")
+async def start_seller_flex_sync(request: Request):
     """
-    Genera el reporte FBA MYI Inventory para obtener el stock real de Amazon Onsite.
-    Tarda 30-90 segundos — llamar con fetch desde el front-end sin bloquear la UI.
+    Inicia la generación del reporte FBA MYI en BACKGROUND y retorna INMEDIATAMENTE.
+    El reporte tarda 30-90 seg — no bloquear la conexión HTTP (Railway corta a 60 seg).
 
-    Retorna: {ok: bool, skus_found: int, report_ts: str, error: str (si falla)}
+    Retorna: {started: bool, status: str}
+    El front-end debe hacer polling a /sync-status cada 5 seg.
     """
     client = await get_amazon_client()
     if not client:
         raise HTTPException(status_code=401, detail="Sin cuenta Amazon conectada")
 
-    # Invalidar caché para forzar nueva generación
-    _onsite_stock_cache.pop(client.seller_id, None)
+    seller_id = client.seller_id
 
-    try:
-        data = await client.get_onsite_inventory_report(max_wait_secs=150)
-        _onsite_stock_cache[client.seller_id] = (_time.time(), data)
+    # Si ya hay un sync corriendo, no lanzar otro
+    if _onsite_sync_state.get(seller_id) == "syncing":
+        return {"started": False, "status": "syncing", "msg": "Sincronización ya en curso"}
+
+    # Marcar como syncing
+    _onsite_sync_state[seller_id] = "syncing"
+    _onsite_sync_count[seller_id] = 0
+    _onsite_stock_cache.pop(seller_id, None)
+
+    async def _do_sync():
+        """Tarea en background — genera y cachea el reporte."""
+        try:
+            logger.info(f"[Onsite Sync] Iniciando reporte para seller {seller_id}")
+            data = await client.get_onsite_inventory_report(max_wait_secs=180)
+            _onsite_stock_cache[seller_id] = (_time.time(), data)
+            _onsite_sync_count[seller_id] = len(data)
+            _onsite_sync_state[seller_id] = "done"
+            logger.info(f"[Onsite Sync] Reporte listo: {len(data)} SKUs")
+        except Exception as e:
+            logger.error(f"[Onsite Sync] Error: {e}")
+            _onsite_sync_state[seller_id] = "error"
+
+    asyncio.create_task(_do_sync())
+    return {"started": True, "status": "syncing"}
+
+
+@router.get("/products/seller-flex/sync-status")
+async def get_seller_flex_sync_status(request: Request):
+    """
+    Retorna el estado actual del sync en background.
+    El front-end llama este endpoint cada 5 seg mientras status == "syncing".
+
+    Retorna: {status: "idle"/"syncing"/"done"/"error", skus_found: int, report_ts: str}
+    """
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401)
+
+    seller_id = client.seller_id
+    status = _onsite_sync_state.get(seller_id, "idle")
+    skus_found = _onsite_sync_count.get(seller_id, 0)
+
+    report_ts = ""
+    if seller_id in _onsite_stock_cache:
+        ts_o, cached_data = _onsite_stock_cache[seller_id]
+        skus_found = skus_found or len(cached_data)
         from datetime import datetime as _dt
-        report_ts = _dt.now().strftime("%d/%m %H:%M")
-        return {
-            "ok":          True,
-            "skus_found":  len(data),
-            "report_ts":   report_ts,
-        }
-    except Exception as e:
-        logger.error(f"[Seller Flex] Error generando reporte Onsite: {e}")
-        return {"ok": False, "error": str(e), "skus_found": 0, "report_ts": ""}
+        report_ts = _dt.fromtimestamp(ts_o).strftime("%d/%m %H:%M")
+
+    return {
+        "status":     status,
+        "skus_found": skus_found,
+        "report_ts":  report_ts,
+    }
 
 
 @router.post("/products/seller-flex/csv")
