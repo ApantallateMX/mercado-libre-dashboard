@@ -558,8 +558,10 @@ function _sfxStartReportRefresh(q) {
                             container.innerHTML =
                                 '<div class="bg-white rounded-xl p-8 text-center">' +
                                 '<p class="text-red-500 font-semibold mb-2">Error al generar reporte Onsite</p>' +
-                                '<p class="text-gray-400 text-xs mb-4">Intenta de nuevo o usa ↻ para recarga rápida.</p>' +
-                                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg">↻ Recarga rápida</button>' +
+                                '<p class="text-gray-400 text-xs mb-1 font-mono">' + (st.error_msg || 'Error desconocido') + '</p>' +
+                                '<p class="text-gray-300 text-xs mb-4">Revisa los logs de Railway para más detalles.</p>' +
+                                '<button onclick="window._sfxRefresh(false)" class="px-4 py-2 text-xs bg-gray-100 rounded-lg mr-2">↻ Recarga rápida</button>' +
+                                '<button onclick="window._sfxRefresh(true)" class="px-4 py-2 text-xs bg-[#FF9900] text-white rounded-lg">📥 Reintentar reporte</button>' +
                                 '</div>';
                         } else {
                             // Aún syncing — volver a preguntar en 5 seg

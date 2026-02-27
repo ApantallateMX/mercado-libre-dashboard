@@ -1906,9 +1906,10 @@ async def start_seller_flex_sync(request: Request):
             _onsite_stock_cache[seller_id] = (_time.time(), data)
             _onsite_sync_count[seller_id] = len(data)
             _onsite_sync_state[seller_id] = "done"
-            logger.info(f"[Onsite Sync] Reporte listo: {len(data)} SKUs")
+            logger.info(f"[Onsite Sync] Reporte listo: {len(data)} SKUs con stock")
         except Exception as e:
-            logger.error(f"[Onsite Sync] Error: {e}")
+            logger.error(f"[Onsite Sync] ERROR: {type(e).__name__}: {e}", exc_info=True)
+            _onsite_sync_state[seller_id] = f"error:{type(e).__name__}: {str(e)[:200]}"
             _onsite_sync_state[seller_id] = "error"
 
     asyncio.create_task(_do_sync())
@@ -1928,7 +1929,16 @@ async def get_seller_flex_sync_status(request: Request):
         raise HTTPException(status_code=401)
 
     seller_id = client.seller_id
-    status = _onsite_sync_state.get(seller_id, "idle")
+    raw_status = _onsite_sync_state.get(seller_id, "idle")
+
+    # Extraer estado limpio y mensaje de error si aplica
+    if raw_status.startswith("error:"):
+        status = "error"
+        error_msg = raw_status[6:]
+    else:
+        status = raw_status
+        error_msg = ""
+
     skus_found = _onsite_sync_count.get(seller_id, 0)
 
     report_ts = ""
@@ -1942,6 +1952,7 @@ async def get_seller_flex_sync_status(request: Request):
         "status":     status,
         "skus_found": skus_found,
         "report_ts":  report_ts,
+        "error_msg":  error_msg,
     }
 
 

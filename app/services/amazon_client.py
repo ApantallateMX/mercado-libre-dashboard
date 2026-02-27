@@ -742,7 +742,7 @@ class AmazonClient:
             "reportType": "GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA",
             "marketplaceIds": [self.marketplace_id],
         }
-        result = await self._request("POST", "/reports/2021-06-30/reports", json=body)
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
         return result.get("reportId", "")
 
     async def get_report_status(self, report_id: str) -> dict:
