@@ -7,6 +7,15 @@
 </div>
 {% else %}
 
+<!-- Wrapper con auto-refresh HTMX cuando ventas están cargando -->
+<div id="resumen-content"
+     {% if sku_sales_loading %}
+     hx-get="/api/amazon/products/resumen"
+     hx-trigger="every 6s"
+     hx-target="#resumen-content"
+     hx-swap="outerHTML"
+     {% endif %}>
+
 <!-- ─── 4 KPI CARDS ────────────────────────────────────────────────────────── -->
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5">
 
@@ -32,9 +41,13 @@
             <span class="text-xl">📦</span>
         </div>
         <p class="text-2xl md:text-3xl font-extrabold text-[#146EB4]">{{ "{:,}".format(units_30d) }}</p>
+        {% if sku_sales_loading %}
+        <p class="text-xs mt-1 text-orange-400 animate-pulse">calculando SKUs…</p>
+        {% else %}
         <p class="text-xs mt-1 text-gray-400">{{ unique_skus_sold }} SKUs únicos</p>
         {% if avg_ticket > 0 %}
         <p class="text-xs mt-0.5 text-gray-400">Ticket prom: ${{ "{:,.0f}".format(avg_ticket) }}</p>
+        {% endif %}
         {% endif %}
     </div>
 
@@ -60,8 +73,13 @@
             <span class="text-xs text-gray-400 font-medium uppercase tracking-wide">SKUs Vendidos</span>
             <span class="text-xl">🏷️</span>
         </div>
+        {% if sku_sales_loading %}
+        <p class="text-2xl md:text-3xl font-extrabold text-purple-300 animate-pulse">···</p>
+        <p class="text-xs mt-1 text-orange-400 animate-pulse">cargando ventas…</p>
+        {% else %}
         <p class="text-2xl md:text-3xl font-extrabold text-purple-700">{{ unique_skus_sold }}</p>
         <p class="text-xs mt-1 text-gray-400">únicos en 30 días</p>
+        {% endif %}
         <p class="text-xs mt-0.5 text-gray-400">{{ date_from }} → {{ date_to }}</p>
     </div>
 
@@ -105,6 +123,11 @@
                 </div>
             </div>
             {% endfor %}
+            {% elif sku_sales_loading %}
+            <div class="px-4 py-8 text-center">
+                <p class="text-orange-400 text-sm animate-pulse">↻ Calculando ventas 30d…</p>
+                <p class="text-gray-400 text-xs mt-1">Se actualizará automáticamente</p>
+            </div>
             {% else %}
             <div class="px-4 py-8 text-center text-gray-400 text-sm">
                 Sin datos de ventas en 30 días
@@ -206,4 +229,5 @@
 
 </div>
 
+</div><!-- /resumen-content -->
 {% endif %}

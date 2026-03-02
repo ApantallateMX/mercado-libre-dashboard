@@ -1453,6 +1453,7 @@ async def amazon_products_resumen(request: Request):
             "sin_publicar_count": sin_publicar_count,
             "date_from": date_from_30d,
             "date_to": date_to,
+            "sku_sales_loading": _sku_loading_resumen,  # True = BG refresh activo
         }
         return _templates.TemplateResponse("partials/amazon_products_resumen.html", ctx)
 
