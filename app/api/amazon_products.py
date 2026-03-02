@@ -1406,44 +1406,44 @@ async def amazon_products_inventario(
                 + int(fba_details.get("inboundShippedQuantity") or 0)
             )
 
-            # Stock MFN/FBM (Merchant Fulfilled) — de fulfillmentAvailability del listing
+            # ── Stock por canal de fulfillment ─────────────────────────────
             listing_fa = item.get("fulfillmentAvailability", [])
-            mfn_stock = 0
-            fulfillment_type = "FBA"
+            stock_fba  = fba_stock_fba   # de la FBA Inventory API
+            stock_fbm  = 0               # canal DEFAULT (merchant fulfilled)
+            stock_flx  = 0               # Seller Flex / Amazon Onsite
+
             for fa_entry in listing_fa:
                 channel = (fa_entry.get("fulfillmentChannelCode") or "").upper()
                 qty     = int(fa_entry.get("quantity") or 0)
                 if channel == "DEFAULT":
-                    mfn_stock = qty
-                    fulfillment_type = "FBM"
+                    stock_fbm = qty
 
-            # Stock visible: FBA si > 0, si no MFN
-            if fba_stock_fba > 0:
-                disp_stock       = fba_stock_fba
-                fulfillment_type = "FBA"
-            else:
-                disp_stock = mfn_stock
-                # fulfillment_type ya fue seteado arriba (FBM o FBA por defecto)
-
-            # Seller Flex (-FLX): stock en bodega propia — no está en FBA ni en canal DEFAULT.
-            # Buscar en el caché del Reports API (fuente más precisa) o en cualquier canal FA.
-            if "-FLX" in sku.upper() and disp_stock == 0:
-                # 1. Caché del Reports API (actualizado por el loop periódico / auto-sync)
+            # Seller Flex: buscar stock en caché Reports API o en cualquier canal FA
+            if "-FLX" in sku.upper():
                 _cached = _onsite_stock_cache.get(client.seller_id)
                 if _cached:
                     _ts_o, _onsite_map = _cached
                     if _time.time() - _ts_o < _ONSITE_STOCK_TTL:
-                        _qty = _onsite_map.get(sku, 0)
-                        if _qty > 0:
-                            disp_stock       = _qty
-                            fulfillment_type = "Onsite"
-                # 2. Fallback: máximo de cualquier canal de fulfillmentAvailability
-                if disp_stock == 0:
+                        stock_flx = _onsite_map.get(sku, 0)
+                if stock_flx == 0:
                     for _fa in listing_fa:
                         _qty = int(_fa.get("quantity") or 0)
-                        if _qty > disp_stock:
-                            disp_stock       = _qty
-                            fulfillment_type = "Onsite"
+                        if _qty > stock_flx:
+                            stock_flx = _qty
+
+            # Stock principal para días supply: FBA > FLX > FBM
+            if stock_fba > 0:
+                disp_stock       = stock_fba
+                fulfillment_type = "FBA"
+            elif stock_flx > 0:
+                disp_stock       = stock_flx
+                fulfillment_type = "FLX"
+            elif stock_fbm > 0:
+                disp_stock       = stock_fbm
+                fulfillment_type = "FBM"
+            else:
+                disp_stock = 0
+                fulfillment_type = "FLX" if "-FLX" in sku.upper() else ("FBA" if bool(fba_d) else "FBM")
 
             sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d   = sales["units"]
@@ -1466,9 +1466,12 @@ async def amazon_products_inventario(
                 "title":            summary_0.get("itemName", sku)[:65],
                 "price":            price,
                 "status":           status,
-                "fba_stock":        disp_stock,       # FBA o FBM según el listing
-                "fba_stock_fba":    fba_stock_fba,    # solo FBA puro (para filtro "fba")
-                "fulfillment_type": fulfillment_type, # "FBA" | "FBM"
+                "fba_stock":        disp_stock,       # stock principal (para días supply)
+                "fba_stock_fba":    stock_fba,        # solo FBA puro (para filtro "fba")
+                "fulfillment_type": fulfillment_type, # "FBA" | "FBM" | "FLX"
+                "stock_fba":        stock_fba,        # Amazon FBA warehouse
+                "stock_fbm":        stock_fbm,        # Merchant Fulfilled (bodega propia FBM)
+                "stock_flx":        stock_flx,        # Seller Flex / Amazon Onsite
                 "fba_reserved":     fba_reserved,
                 "inbound":          inbound,
                 "units_30d":        units_30d,
@@ -1499,13 +1502,17 @@ async def amazon_products_inventario(
 
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
-            enriched = [e for e in enriched if e["is_fba"]]
+            enriched = [e for e in enriched if e["stock_fba"] > 0 or e["is_fba"]]
+        elif filter == "fbm":
+            enriched = [e for e in enriched if e["stock_fbm"] > 0]
+        elif filter == "flx":
+            enriched = [e for e in enriched if "-FLX" in e["sku"].upper()]
         elif filter == "top":
             enriched = [e for e in enriched if e["is_top"]]
         elif filter == "low":
             enriched = [e for e in enriched if e["is_low"]]
         elif filter == "nostock":
-            enriched = [e for e in enriched if e["fba_stock"] == 0]
+            enriched = [e for e in enriched if e["stock_fba"] == 0 and e["stock_fbm"] == 0 and e["stock_flx"] == 0]
 
         # ── Ordenar ────────────────────────────────────────────────────────
         if sort == "stock":

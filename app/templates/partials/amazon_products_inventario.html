@@ -25,6 +25,8 @@
         ("top",     "Top Ventas",  ""),
         ("low",     "Baja Venta",  ""),
         ("fba",     "FBA",         ""),
+        ("fbm",     "FBM",         ""),
+        ("flx",     "FLX",         ""),
         ("nostock", "Sin Stock",   ""),
     ] %}
     {% for val, label, count in chips %}
@@ -131,7 +133,15 @@
                     <th class="py-2.5 px-4 font-medium">Producto</th>
                     <th class="py-2.5 px-3 font-medium text-right">Precio</th>
                     <th class="py-2.5 px-3 font-medium text-center amz-col-deal">Deal</th>
-                    <th class="py-2.5 px-3 font-medium text-right">Disp. (FBA/FBM)</th>
+                    <th class="py-2.5 px-2 font-medium text-right" title="Stock en almacenes Amazon FBA">
+                        <span class="text-orange-300">FBA</span>
+                    </th>
+                    <th class="py-2.5 px-2 font-medium text-right" title="Stock Merchant Fulfilled (FBM — bodega propia)">
+                        <span class="text-blue-300">FBM</span>
+                    </th>
+                    <th class="py-2.5 px-2 font-medium text-right" title="Stock Amazon Onsite / Seller Flex (FLX)">
+                        <span class="text-purple-300">FLX</span>
+                    </th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-wh">MTY</th>
@@ -194,22 +204,39 @@
                         {% endif %}
                     </td>
 
-                    <!-- Disponible FBA/FBM/Onsite -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
-                        <div class="flex flex-col items-end gap-0.5">
-                            <span class="text-sm font-bold
-                                {% if item.fba_stock == 0 %}text-red-600
-                                {% elif item.fba_stock < 10 %}text-yellow-600
-                                {% else %}text-green-600{% endif %}">
-                                {{ item.fba_stock }}
-                            </span>
-                            <span class="text-[10px] font-medium px-1 rounded
-                                {% if item.fulfillment_type == 'FBA' %}bg-orange-100 text-orange-600
-                                {% elif item.fulfillment_type == 'FBM' %}bg-blue-100 text-blue-600
-                                {% else %}bg-gray-100 text-gray-500{% endif %}">
-                                {{ item.fulfillment_type }}
-                            </span>
-                        </div>
+                    <!-- Stock FBA (Amazon warehouses) -->
+                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                        {% if item.stock_fba > 0 %}
+                        <span class="text-sm font-bold {% if item.stock_fba < 10 %}text-yellow-600{% else %}text-orange-600{% endif %}">
+                            {{ item.stock_fba }}
+                        </span>
+                        {% else %}
+                        <span class="text-gray-200 text-xs font-medium">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Stock FBM (Merchant Fulfilled) -->
+                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                        {% if item.stock_fbm > 0 %}
+                        <span class="text-sm font-bold {% if item.stock_fbm < 10 %}text-yellow-600{% else %}text-blue-600{% endif %}">
+                            {{ item.stock_fbm }}
+                        </span>
+                        {% else %}
+                        <span class="text-gray-200 text-xs font-medium">—</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Stock FLX (Seller Flex / Amazon Onsite) -->
+                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                        {% if item.stock_flx > 0 %}
+                        <span class="text-sm font-bold {% if item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}">
+                            {{ item.stock_flx }}
+                        </span>
+                        {% elif '-FLX' in item.sku|upper %}
+                        <span class="text-red-500 text-sm font-bold">0</span>
+                        {% else %}
+                        <span class="text-gray-200 text-xs font-medium">—</span>
+                        {% endif %}
                     </td>
 
                     <!-- BM Disponible -->
