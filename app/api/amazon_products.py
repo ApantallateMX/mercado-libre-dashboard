@@ -52,8 +52,8 @@ _templates = Jinja2Templates(
 _listings_cache:   dict[str, tuple[float, list]] = {}  # {seller_id: (ts, items)}
 _fba_cache:        dict[str, tuple[float, list]] = {}  # {seller_id: (ts, summaries)}
 _buybox_cache:     dict[str, tuple[float, dict]] = {}  # {seller_id:sku: (ts, data)}
-_sku_sales_cache:  dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: {units,revenue}})}
-_sku_sales_locks:  dict[str, asyncio.Lock] = {}
+_sku_sales_cache:      dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: {units,revenue}})}
+_sku_sales_refreshing: set = set()  # seller_ids con refresh BG activo
 
 _LISTINGS_TTL = 300   # 5 minutos
 _FBA_TTL      = 300   # 5 minutos
@@ -1104,43 +1104,26 @@ def _parse_buybox_result(candidate: dict, api_data: Optional[dict]) -> dict:
     return result
 
 
-async def _get_sku_sales_cached(client) -> dict:
+async def _refresh_sku_sales_bg(client) -> None:
     """
-    Retorna {sku: {"units": int, "revenue": float}} para los últimos 30 días.
-
-    Usa Orders API (30d) + Order Items API por cada orden.
-    Cacheado 30 min (operación costosa: 1 req por orden).
+    Tarea BG: descarga ventas 30d (Orders + Items) y actualiza caché.
+    Nunca bloquea requests — se lanza con asyncio.create_task().
+    Sin timeout — puede procesar todas las órdenes sin prisa.
     """
-    now = _time.time()
     key = client.seller_id
-
-    if key in _sku_sales_cache:
-        ts, data = _sku_sales_cache[key]
-        if now - ts < _SKU_SALES_TTL:
-            return data
-
-    if key not in _sku_sales_locks:
-        _sku_sales_locks[key] = asyncio.Lock()
-
-    async with _sku_sales_locks[key]:
-        # Double-check dentro del lock
-        if key in _sku_sales_cache:
-            ts, data = _sku_sales_cache[key]
-            if now - ts < _SKU_SALES_TTL:
-                return data
-
+    try:
         created_after = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             orders = await client.get_orders(created_after)
         except Exception as e:
-            logger.warning(f"[Amazon SKU Sales] Error obteniendo órdenes: {e}")
-            _sku_sales_cache[key] = (_time.time(), {})
-            return {}
+            logger.warning(f"[SKU-Sales-BG] Error obteniendo órdenes: {e}")
+            return
 
         valid_orders = [
             o for o in orders
             if o.get("OrderStatus") not in ("Cancelled", "Pending")
         ]
+        logger.info(f"[SKU-Sales-BG] {len(valid_orders)} órdenes a procesar para ventas 30d")
 
         sku_data: dict = {}
 
@@ -1163,26 +1146,50 @@ async def _get_sku_sales_cached(client) -> dict:
                         sku_data[sku]["units"] += qty
                         sku_data[sku]["revenue"] += price
             except Exception as e:
-                logger.debug(f"[Amazon SKU Sales] Error en orden {order_id}: {e}")
+                logger.debug(f"[SKU-Sales-BG] Error en orden {order_id}: {e}")
 
-        # Procesar en lotes — máximo 12 segundos para no bloquear la UI
         batch_size = 5
-        _loop_start = _time.time()
         for i in range(0, len(valid_orders), batch_size):
-            # Cortocircuito si tardamos más de 12 segundos
-            if _time.time() - _loop_start > 12.0:
-                logger.warning(
-                    f"[Amazon SKU Sales] Timeout parcial tras 12s "
-                    f"({i}/{len(valid_orders)} órdenes procesadas)"
-                )
-                break
             batch = valid_orders[i:i + batch_size]
             await asyncio.gather(*[_fetch_items(o) for o in batch])
             if i + batch_size < len(valid_orders):
-                await asyncio.sleep(0.5)  # Rate limit SP-API
+                await asyncio.sleep(0.5)
 
+        logger.info(f"[SKU-Sales-BG] Listo — {len(sku_data)} SKUs con ventas en 30d")
         _sku_sales_cache[key] = (_time.time(), sku_data)
-        return sku_data
+    finally:
+        _sku_sales_refreshing.discard(key)
+
+
+def _get_sku_sales_cached(client) -> tuple[dict, bool]:
+    """
+    Stale-while-revalidate — NUNCA bloquea el request.
+
+    Retorna (sku_data, loading):
+    • Cache fresco  → (datos, False)
+    • Cache stale   → (datos stale, True)  + lanza refresh BG
+    • Sin cache     → ({}, True)           + lanza refresh BG
+
+    El BG task actualiza _sku_sales_cache cuando termina.
+    """
+    now = _time.time()
+    key = client.seller_id
+    cached = _sku_sales_cache.get(key)
+    if cached:
+        ts, data = cached
+        if (now - ts) >= _SKU_SALES_TTL and key not in _sku_sales_refreshing:
+            _sku_sales_refreshing.add(key)
+            asyncio.create_task(_refresh_sku_sales_bg(client))
+            logger.info(f"[SKU-Sales] Cache stale ({int(now - ts)}s) — refresh BG iniciado")
+        loading = key in _sku_sales_refreshing
+        return data, loading  # siempre retorna inmediatamente
+
+    # Sin cache — lanzar BG y retornar vacío
+    if key not in _sku_sales_refreshing:
+        _sku_sales_refreshing.add(key)
+        asyncio.create_task(_refresh_sku_sales_bg(client))
+        logger.info("[SKU-Sales] Primera carga — refresh BG iniciado")
+    return {}, True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1365,7 +1372,7 @@ async def amazon_products_resumen(request: Request):
             _get_listings_cached(client),
             _get_fba_cached(client),
         )
-        sku_sales = await _get_sku_sales_cached(client)
+        sku_sales, _sku_loading_resumen = _get_sku_sales_cached(client)  # sync, nunca bloquea
 
         # Revenue y unidades del Sales API (OPS exacto — igual a Seller Central)
         try:
@@ -1484,7 +1491,7 @@ async def amazon_products_inventario(
             _get_listings_cached(client),
             _get_fba_cached(client),
         )
-        sku_sales = await _get_sku_sales_cached(client)
+        sku_sales, sku_sales_loading = _get_sku_sales_cached(client)  # sync, nunca bloquea
         fba_index = _build_fba_index(fba_summaries)
 
         # FLX real-time: stale-while-revalidate — retorna caché inmediatamente (o {}) + BG refresh
@@ -1678,8 +1685,9 @@ async def amazon_products_inventario(
             "q":                q,
             "nickname":         client.nickname,
             "marketplace":      client.marketplace_name,
-            "last_updated_ts":  cache_ts,
-            "flx_loading":      flx_loading,  # True = BG refresh de FLX activo
+            "last_updated_ts":   cache_ts,
+            "flx_loading":       flx_loading,        # True = BG refresh de FLX activo
+            "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
@@ -1705,7 +1713,7 @@ async def amazon_products_stock_alerts(request: Request):
             _get_fba_cached(client),
             _get_listings_cached(client),
         )
-        sku_sales = await _get_sku_sales_cached(client)
+        sku_sales, _sku_loading_stock = _get_sku_sales_cached(client)  # sync, nunca bloquea
 
         # Índice de listings por SKU — título, ASIN y status
         listings_idx = {}

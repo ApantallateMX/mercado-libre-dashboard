@@ -75,6 +75,14 @@
     </div>
 </div>
 
+{% if sku_sales_loading %}
+<!-- Banner: ventas cargando en background -->
+<div class="mb-3 flex items-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-3 py-2 rounded-lg text-xs">
+    <span class="animate-spin inline-block text-base leading-none">↻</span>
+    <span>Calculando ventas 30d en background… Los filtros <strong>Top Ventas</strong> y <strong>Baja Venta</strong> se actualizarán automáticamente.</span>
+</div>
+{% endif %}
+
 <!-- ─── COLUMN TOGGLES + CONTADOR ─────────────────────────────────────────── -->
 <div class="flex flex-wrap gap-x-4 gap-y-1 mb-3 items-center text-xs text-gray-400">
     <span class="font-medium text-gray-500">Columnas:</span>
@@ -417,6 +425,17 @@
 
 {% else %}
 <div class="bg-white rounded-xl shadow p-10 text-center">
+    {% if sku_sales_loading and filter in ("top", "low", "all") and not q %}
+    <!-- Ventas aún cargando en background — no es un resultado vacío real -->
+    <p class="text-3xl mb-3">⏳</p>
+    <p class="text-gray-500 font-semibold animate-pulse">Calculando ventas 30d…</p>
+    <p class="text-gray-400 text-sm mt-1">Los datos de ventas se cargan en background.<br>
+       Regresa en unos segundos y actualiza la página.</p>
+    <button onclick="window._loadInvTab(window.location.pathname + '/inventario?' + new URLSearchParams({filter:'{{ filter }}', sort:'{{ sort }}', page:'{{ page }}', per_page:'{{ per_page }}'}).toString())"
+            class="mt-4 px-4 py-2 text-xs bg-[#FF9900] text-white rounded-lg hover:bg-orange-600 transition">
+        Actualizar ahora
+    </button>
+    {% else %}
     <p class="text-3xl mb-3">📦</p>
     <p class="text-gray-500 font-semibold">Sin productos en este filtro</p>
     {% if q %}
@@ -427,6 +446,7 @@
     </button>
     {% else %}
     <p class="text-gray-400 text-sm mt-1">Prueba con "Todos"</p>
+    {% endif %}
     {% endif %}
 </div>
 {% endif %}
