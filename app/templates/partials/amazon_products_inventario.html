@@ -228,16 +228,16 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock FLX (Seller Flex) — muestra BM disponible porque SP-API no expone Onsite -->
+                    <!-- Stock FLX (Seller Flex) — fulfillableQuantity de FBA API (tiempo real) -->
                     <td class="py-2.5 px-2 text-right whitespace-nowrap">
                         {% if '-FLX' in item.sku|upper %}
-                            {% if item.bm_avail > 0 %}
-                            <span class="text-sm font-bold {% if item.bm_avail < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
-                                  title="Stock bodega BM disponible para Seller Flex (Amazon Onsite no disponible via API)">
-                                {{ item.bm_avail }}
+                            {% if item.stock_flx > 0 %}
+                            <span class="text-sm font-bold {% if item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
+                                  title="Stock Amazon Onsite: {{ item.stock_flx }} disp{% if item.flx_reserved %} + {{ item.flx_reserved }} reservado{% endif %} (FBA API — tiempo real)">
+                                {{ item.stock_flx }}
                             </span>
                             {% else %}
-                            <span class="text-red-500 text-sm font-bold" title="Sin stock en bodega BM">0</span>
+                            <span class="text-red-500 text-sm font-bold" title="Sin stock en Amazon Onsite">0</span>
                             {% endif %}
                         {% else %}
                         <span class="text-gray-200 text-xs font-medium">—</span>

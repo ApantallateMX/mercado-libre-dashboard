@@ -104,6 +104,11 @@ _BM_LOC_IDS   = "47,62,68"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
 
+# ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
+# El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
+_flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
+_FLX_STOCK_TTL = 300  # 5 min — datos en tiempo real
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
@@ -230,6 +235,52 @@ async def _get_fba_cached(client) -> list:
     data = await client.get_fba_inventory_all()
     _fba_cache[key] = (now, data)
     return data
+
+
+async def _get_flx_stock_cached(client, flx_skus: list) -> dict:
+    """
+    Consulta FBA Inventory API para SKUs -FLX específicos (no aparecen en scan general).
+    Retorna {sku: {'fulfillable': N, 'reserved': N, 'total': N}}.
+    Cache 5 min — tiempo real: coincide exactamente con Seller Central.
+    Lotes de 50 SKUs por request.
+    """
+    now = _time.time()
+    key = client.seller_id
+    cached = _flx_stock_cache.get(key)
+    if cached and (now - cached[0]) < _FLX_STOCK_TTL:
+        return cached[1]
+
+    result: dict = {}
+    unique_skus = list(dict.fromkeys(s for s in flx_skus if s))  # dedup preservando orden
+    for i in range(0, len(unique_skus), 50):
+        batch = unique_skus[i:i + 50]
+        params = [
+            ("granularityType", "Marketplace"),
+            ("granularityId",   client.marketplace_id),
+            ("marketplaceIds",  client.marketplace_id),
+            ("details",         "true"),
+        ]
+        for sku in batch:
+            params.append(("sellerSkus", sku))
+        try:
+            data = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+            for s in (data.get("payload", {}).get("inventorySummaries") or []):
+                sku  = s.get("sellerSku", "")
+                det  = s.get("inventoryDetails", {}) or {}
+                res  = det.get("reservedQuantity", {}) or {}
+                result[sku] = {
+                    "fulfillable": int(det.get("fulfillableQuantity") or 0),
+                    "reserved":    int(res.get("totalReservedQuantity") or 0),
+                    "total":       int(s.get("totalQuantity") or 0),
+                }
+        except Exception as exc:
+            logger.warning(f"[FLX-FBA] Error lote {i}: {exc}")
+        if i + 50 < len(unique_skus):
+            await asyncio.sleep(0.3)
+
+    logger.info(f"[FLX-FBA] {len(result)}/{len(unique_skus)} FLX SKUs con datos de FBA API")
+    _flx_stock_cache[key] = (now, result)
+    return result
 
 
 async def _get_onsite_stock_cached(client) -> dict:
@@ -1402,6 +1453,7 @@ async def amazon_products_inventario(
     if force:
         _listings_cache.pop(client.seller_id, None)
         _fba_cache.pop(client.seller_id, None)
+        _flx_stock_cache.pop(client.seller_id, None)
 
     try:
         listings, fba_summaries = await asyncio.gather(
@@ -1410,6 +1462,11 @@ async def amazon_products_inventario(
         )
         sku_sales = await _get_sku_sales_cached(client)
         fba_index = _build_fba_index(fba_summaries)
+
+        # FLX real-time: FBA API con query por SKU específico (scan general no los devuelve)
+        flx_skus = [item.get("sku", "") for item in listings
+                    if "-FLX" in (item.get("sku", "") or "").upper()]
+        flx_stock_index = await _get_flx_stock_cached(client, flx_skus)
 
         enriched = []
         for item in listings:
@@ -1446,10 +1503,14 @@ async def amazon_products_inventario(
                 if channel == "DEFAULT":
                     stock_fbm = qty
 
-            # Seller Flex: stock SOLO disponible via Reports API (FBA API no los incluye)
+            # Seller Flex: stock real de FBA API (query por SKU específico)
+            # fulfillableQuantity coincide exactamente con Seller Central.
             flx_reserved = 0
             if "-FLX" in sku.upper():
-                stock_flx, flx_reserved = _flx_cache_read(client.seller_id, sku)
+                flx_data     = flx_stock_index.get(sku, {})
+                stock_flx    = flx_data.get("fulfillable", 0)
+                flx_reserved = flx_data.get("reserved", 0)
+                stock_fba    = 0   # FLX no aparece en columna FBA
 
             # Stock principal para días supply: FBA > FLX > FBM
             if stock_fba > 0:
@@ -1521,21 +1582,11 @@ async def amazon_products_inventario(
                 "flx_reserved": flx_reserved,
             })
 
-        # ── Pre-enrich FLX items con BM real (antes de filtrar/ordenar) ────
-        # SP-API no expone Amazon Onsite stock. BM es la fuente para FLX.
-        # Sin este paso: dias_supply=None, sort=0, nostock incorrecto para FLX.
+        # ── Pre-enrich FLX con BM (solo para columnas BM Disp/Res/MTY/CDMX/TJ) ─
+        # stock_flx ya viene correcto de FBA API — solo necesitamos datos BM de bodega.
         flx_pre = [e for e in enriched if "-FLX" in e["sku"].upper()]
         if flx_pre:
             await _enrich_bm_amz(flx_pre)
-            for e in flx_pre:
-                bm = e["bm_avail"]
-                if bm > 0:
-                    e["fba_stock"] = bm          # para sort "stock"
-                    vel = e["vel_dia"]
-                    if vel > 0:
-                        ds = round(bm / vel, 1)
-                        e["dias_supply"] = ds
-                        e["supply_color"] = "red" if ds < 14 else ("yellow" if ds < 30 else "green")
 
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
@@ -1543,18 +1594,17 @@ async def amazon_products_inventario(
         elif filter == "fbm":
             enriched = [e for e in enriched if e["stock_fbm"] > 0]
         elif filter == "flx":
-            # FLX: todos los items Seller Flex (stock real viene de BM después de enriquecer)
             enriched = [e for e in enriched if "-FLX" in e["sku"].upper()]
         elif filter == "top":
             enriched = [e for e in enriched if e["is_top"]]
         elif filter == "low":
             enriched = [e for e in enriched if e["is_low"]]
         elif filter == "nostock":
-            # Para FLX items, nostock = sin FBA + sin FBM + sin BM
+            # FLX sin stock = sin stock en Amazon Onsite (stock_flx=0)
             enriched = [
                 e for e in enriched
                 if e["stock_fba"] == 0 and e["stock_fbm"] == 0
-                and (e["bm_avail"] == 0 if "-FLX" in e["sku"].upper() else True)
+                and (e["stock_flx"] == 0 if "-FLX" in e["sku"].upper() else True)
             ]
 
         # ── Ordenar ────────────────────────────────────────────────────────
@@ -1819,14 +1869,15 @@ async def amazon_products_seller_flex(
     if force:
         _listings_cache.pop(client.seller_id, None)
         _fba_cache.pop(client.seller_id, None)
+        _flx_stock_cache.pop(client.seller_id, None)
 
     try:
-        listings, fba_summaries = await asyncio.gather(
-            _get_listings_cached(client),
-            _get_fba_cached(client),
-        )
+        listings = await _get_listings_cached(client)
 
-        fba_index = _build_fba_index(fba_summaries)
+        # FLX stock real-time desde FBA API (query por SKU específico)
+        all_flx_skus = [item.get("sku", "") for item in listings
+                        if "-FLX" in (item.get("sku", "") or "").upper()]
+        flx_stock_index = await _get_flx_stock_cached(client, all_flx_skus)
 
         # Filtrar solo SKUs -FLX
         flx_items = []
@@ -1839,47 +1890,27 @@ async def amazon_products_seller_flex(
             summary_0 = summaries[0] if summaries else {}
             offers    = item.get("offers", [])
 
-            asin  = (fba_index.get(sku, {}).get("asin")
-                     or summary_0.get("asin") or "")
-            title = summary_0.get("itemName", sku)
-            price = _parse_price(offers)
+            asin   = summary_0.get("asin") or ""
+            title  = summary_0.get("itemName", sku)
+            price  = _parse_price(offers)
             status = _listing_status(summaries)
 
-            # Stock en Amazon para Seller Flex (Onsite):
-            # El FBA Inventory API (/fba/inventory/v1/summaries) NO cubre items
-            # en bodega propia del vendedor — solo almacenes de Amazon.
-            # Para Seller Flex usamos fulfillmentAvailability del Listings Items API,
-            # que sí refleja el stock registrado en onsite.amazon.com.
-            # Tomamos el máximo de todas las entradas (todos los FLX son Amazon-fulfilled).
-            fba_stock = 0
-            for fa in item.get("fulfillmentAvailability", []):
-                qty = int(fa.get("quantity") or 0)
-                if qty > fba_stock:
-                    fba_stock = qty
-            # Fallback: FBA index (por si algún item FLX sí está en centro Amazon)
-            fba_d     = fba_index.get(sku, {})
-            fba_details = fba_d.get("inventoryDetails", {})
-            if fba_stock == 0:
-                fba_stock = int(fba_details.get("fulfillableQuantity") or 0)
-
-            unfulfill = int((fba_details.get("unfulfillableQuantity") or {})
-                            .get("totalUnfulfillableQuantity") or 0)
-            inbound = (
-                int(fba_details.get("inboundWorkingQuantity") or 0)
-                + int(fba_details.get("inboundShippedQuantity") or 0)
-            )
+            # Stock real desde FBA API — coincide exactamente con Seller Central
+            flx_data  = flx_stock_index.get(sku, {})
+            fba_stock = flx_data.get("fulfillable", 0)
+            flx_res   = flx_data.get("reserved", 0)
 
             flx_items.append({
-                "sku":        sku,
-                "asin":       asin,
-                "title":      title[:70],
-                "title_full": title,
-                "price":      price,
-                "status":     status,
-                "fba_stock":  fba_stock,
-                "flx_reserved": 0,
-                "unfulfill":  unfulfill,
-                "inbound":    inbound,
+                "sku":          sku,
+                "asin":         asin,
+                "title":        title[:70],
+                "title_full":   title,
+                "price":        price,
+                "status":       status,
+                "fba_stock":    fba_stock,
+                "flx_reserved": flx_res,
+                "unfulfill":    0,
+                "inbound":      0,
                 # BinManager — rellenado abajo
                 "bm_avail":    0,
                 "bm_mty":      0,
