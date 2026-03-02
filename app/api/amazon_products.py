@@ -1521,6 +1521,22 @@ async def amazon_products_inventario(
                 "flx_reserved": flx_reserved,
             })
 
+        # ── Pre-enrich FLX items con BM real (antes de filtrar/ordenar) ────
+        # SP-API no expone Amazon Onsite stock. BM es la fuente para FLX.
+        # Sin este paso: dias_supply=None, sort=0, nostock incorrecto para FLX.
+        flx_pre = [e for e in enriched if "-FLX" in e["sku"].upper()]
+        if flx_pre:
+            await _enrich_bm_amz(flx_pre)
+            for e in flx_pre:
+                bm = e["bm_avail"]
+                if bm > 0:
+                    e["fba_stock"] = bm          # para sort "stock"
+                    vel = e["vel_dia"]
+                    if vel > 0:
+                        ds = round(bm / vel, 1)
+                        e["dias_supply"] = ds
+                        e["supply_color"] = "red" if ds < 14 else ("yellow" if ds < 30 else "green")
+
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
             enriched = [e for e in enriched if e["stock_fba"] > 0 or e["is_fba"]]
