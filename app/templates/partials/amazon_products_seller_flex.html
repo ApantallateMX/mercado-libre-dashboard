@@ -7,6 +7,11 @@
 </div>
 {% else %}
 
+{% if auto_syncing %}
+<!-- Trigger invisible: el JS detecta este elemento y arranca el polling automático -->
+<div id="sfx-auto-sync-trigger" class="hidden"></div>
+{% endif %}
+
 <!-- ─── HEADER + BUSCADOR ──────────────────────────────────────────────────── -->
 <div class="flex flex-wrap items-center gap-3 mb-4">
 
@@ -59,15 +64,23 @@
 
 <!-- ─── BANNER DE ESTADO DEL REPORTE ────────────────────────────────────────── -->
 {% if not report_available %}
-<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+    {% if auto_syncing %}
+    <svg class="animate-spin w-3.5 h-3.5 flex-shrink-0 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+    </svg>
+    <span>Obteniendo stock Onsite de Amazon automáticamente… La página se actualizará sola (~60 seg).</span>
+    {% else %}
     <span>📊</span>
-    <span>Stock Onsite no cargado aún. Presiona <strong>📥</strong> para generar el reporte (~60 seg) y ver las cantidades reales en Amazon Onsite.</span>
+    <span>Stock Onsite no disponible. Presiona <strong>📥</strong> para generar el reporte (~60 seg).</span>
+    {% endif %}
 </div>
 {% else %}
 <div class="mb-3 flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700">
     <span>✓</span>
-    <span>Stock Onsite cargado desde Reports API. Última actualización: <strong>{{ report_ts }}</strong></span>
-    <span class="ml-auto text-green-600 cursor-pointer hover:underline" onclick="window._sfxRefresh(true)" title="Actualizar reporte">Actualizar ↻</span>
+    <span>Stock Onsite actualizado: <strong>{{ report_ts }}</strong></span>
+    <span class="ml-auto text-green-600 cursor-pointer hover:underline" onclick="window._sfxRefresh(true)" title="Forzar actualización del reporte">Actualizar ↻</span>
 </div>
 {% endif %}
 

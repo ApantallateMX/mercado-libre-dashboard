@@ -13,7 +13,8 @@
      data-sort="{{ sort }}"
      data-q="{{ q | e }}"
      data-page="{{ page }}"
-     data-per-page="{{ per_page }}">
+     data-per-page="{{ per_page }}"
+     data-ts="{{ last_updated_ts }}">
 </div>
 
 <!-- ─── FILTER CHIPS ──────────────────────────────────────────────────────── -->
@@ -61,12 +62,15 @@
         <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio</option>
     </select>
 
-    <!-- Refresh forzado (limpia caché del servidor) -->
-    <button onclick="window._forceRefreshInv()"
-            class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
-            title="Recargar datos frescos de Amazon">
-        ↻
-    </button>
+    <!-- Badge de frescura + Refresh forzado -->
+    <div class="flex items-center gap-1">
+        <span id="inv-freshness" class="text-xs text-gray-400 px-1"></span>
+        <button onclick="window._forceRefreshInv()"
+                class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
+                title="Recargar datos frescos de Amazon">
+            ↻
+        </button>
+    </div>
 </div>
 
 <!-- ─── COLUMN TOGGLES + CONTADOR ─────────────────────────────────────────── -->

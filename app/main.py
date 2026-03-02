@@ -217,6 +217,9 @@ async def lifespan(app: FastAPI):
     # Sembrar cuentas Amazon desde .env.production (igual que MeLi)
     from app.services.amazon_client import _seed_amazon_accounts
     await _seed_amazon_accounts()
+    # Sync periódico de Onsite (cada 25 min en background)
+    from app.api.amazon_products import start_onsite_background_sync
+    start_onsite_background_sync()
     yield
 
 

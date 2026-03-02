@@ -1518,18 +1518,22 @@ async def amazon_products_inventario(
         # ── BM: solo para la página actual ────────────────────────────────
         await _enrich_bm_amz(page_items)
 
+        # Timestamp del caché de listings (para badge de frescura en la UI)
+        cache_ts = int(_listings_cache.get(client.seller_id, (_time.time(), None))[0])
+
         ctx = {
-            "request":     request,
-            "listings":    page_items,
-            "total":       total,
-            "total_pages": total_pages,
-            "page":        page,
-            "per_page":    per_page,
-            "sort":        sort,
-            "filter":      filter,
-            "q":           q,
-            "nickname":    client.nickname,
-            "marketplace": client.marketplace_name,
+            "request":          request,
+            "listings":         page_items,
+            "total":            total,
+            "total_pages":      total_pages,
+            "page":             page,
+            "per_page":         per_page,
+            "sort":             sort,
+            "filter":           filter,
+            "q":                q,
+            "nickname":         client.nickname,
+            "marketplace":      client.marketplace_name,
+            "last_updated_ts":  cache_ts,
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
@@ -1828,14 +1832,22 @@ async def amazon_products_seller_flex(
         await _enrich_bm_amz(flx_items)
 
         # ── Stock Onsite desde Reports API (caché 30 min) ──────────────────
-        # No bloquear si el caché está frío — devolver datos sin stock Onsite
-        # y dejar que el usuario use el botón 📥 para generar el reporte.
+        # Si el caché está frío o expirado, arrancar el sync automáticamente
+        # en background y notificar al template para que el JS haga polling.
         onsite_key = client.seller_id
         onsite_data: dict = {}
         if onsite_key in _onsite_stock_cache:
             ts_o, onsite_data = _onsite_stock_cache[onsite_key]
             if _time.time() - ts_o >= _ONSITE_STOCK_TTL:
-                onsite_data = {}  # Expirado — mostrar sin dato hasta próxima sync
+                onsite_data = {}  # Expirado
+
+        # AUTO-SYNC: si no hay datos vigentes y no hay sync corriendo → arrancar solo
+        auto_syncing = _onsite_sync_state.get(onsite_key) == "syncing"
+        if not onsite_data and not auto_syncing:
+            _onsite_sync_state[onsite_key] = "syncing"
+            _onsite_sync_count[onsite_key] = 0
+            asyncio.create_task(_run_onsite_sync(client))
+            auto_syncing = True
 
         # Inyectar stock Onsite en cada item
         for item in flx_items:
@@ -1864,6 +1876,7 @@ async def amazon_products_seller_flex(
             "q":                q,
             "report_available": report_available,
             "report_ts":        report_ts,
+            "auto_syncing":     auto_syncing,
         }
         return _templates.TemplateResponse(
             "partials/amazon_products_seller_flex.html", ctx
@@ -1872,6 +1885,21 @@ async def amazon_products_seller_flex(
     except Exception as e:
         logger.exception("[Amazon Products] Error en Seller Flex")
         return _render_error(request, "amazon_products_seller_flex.html", str(e))
+
+
+async def _run_onsite_sync(client) -> None:
+    """Genera el reporte FBA MYI y actualiza caché + estado. Usable desde cualquier contexto."""
+    seller_id = client.seller_id
+    try:
+        logger.info(f"[Onsite Sync] Iniciando reporte para seller {seller_id}")
+        data = await client.get_onsite_inventory_report(max_wait_secs=180)
+        _onsite_stock_cache[seller_id] = (_time.time(), data)
+        _onsite_sync_count[seller_id] = len(data)
+        _onsite_sync_state[seller_id] = "done"
+        logger.info(f"[Onsite Sync] Reporte listo: {len(data)} SKUs con stock")
+    except Exception as e:
+        logger.error(f"[Onsite Sync] ERROR: {type(e).__name__}: {e}", exc_info=True)
+        _onsite_sync_state[seller_id] = "error"
 
 
 @router.post("/products/seller-flex/start-sync")
@@ -1893,26 +1921,11 @@ async def start_seller_flex_sync(request: Request):
     if _onsite_sync_state.get(seller_id) == "syncing":
         return {"started": False, "status": "syncing", "msg": "Sincronización ya en curso"}
 
-    # Marcar como syncing
+    # Marcar como syncing y lanzar tarea en background
     _onsite_sync_state[seller_id] = "syncing"
     _onsite_sync_count[seller_id] = 0
     _onsite_stock_cache.pop(seller_id, None)
-
-    async def _do_sync():
-        """Tarea en background — genera y cachea el reporte."""
-        try:
-            logger.info(f"[Onsite Sync] Iniciando reporte para seller {seller_id}")
-            data = await client.get_onsite_inventory_report(max_wait_secs=180)
-            _onsite_stock_cache[seller_id] = (_time.time(), data)
-            _onsite_sync_count[seller_id] = len(data)
-            _onsite_sync_state[seller_id] = "done"
-            logger.info(f"[Onsite Sync] Reporte listo: {len(data)} SKUs con stock")
-        except Exception as e:
-            logger.error(f"[Onsite Sync] ERROR: {type(e).__name__}: {e}", exc_info=True)
-            _onsite_sync_state[seller_id] = f"error:{type(e).__name__}: {str(e)[:200]}"
-            _onsite_sync_state[seller_id] = "error"
-
-    asyncio.create_task(_do_sync())
+    asyncio.create_task(_run_onsite_sync(client))
     return {"started": True, "status": "syncing"}
 
 
@@ -2019,6 +2032,40 @@ async def generate_seller_flex_csv(request: Request):
             "Content-Disposition": 'attachment; filename="seller_flex_recibir.csv"'
         },
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BACKGROUND PERIODIC SYNC — mantiene el caché Onsite siempre fresco
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _onsite_periodic_sync_loop() -> None:
+    """
+    Loop infinito que renueva el caché de Onsite cada 25 minutos en background.
+    Se inicia desde el lifespan de FastAPI al arrancar el servidor.
+    Espera 90 seg al inicio para que la DB y los tokens estén listos.
+    """
+    await asyncio.sleep(90)
+    while True:
+        try:
+            client = await get_amazon_client()
+            if client:
+                seller_id = client.seller_id
+                cached = _onsite_stock_cache.get(seller_id)
+                age = _time.time() - cached[0] if cached else float("inf")
+                # Solo sincronizar si el caché está por vencer (< 120 seg de margen) o vacío
+                if _onsite_sync_state.get(seller_id) != "syncing" and age > _ONSITE_STOCK_TTL - 120:
+                    logger.info(f"[Onsite AutoSync] Caché con {age:.0f}s de antigüedad — iniciando sync periódico")
+                    _onsite_sync_state[seller_id] = "syncing"
+                    _onsite_sync_count[seller_id] = 0
+                    await _run_onsite_sync(client)
+        except Exception as e:
+            logger.error(f"[Onsite AutoSync] Error en loop periódico: {e}")
+        await asyncio.sleep(25 * 60)  # Siguiente intento en 25 min
+
+
+def start_onsite_background_sync() -> None:
+    """Registra el loop de sync periódico. Llamar desde lifespan de FastAPI."""
+    asyncio.create_task(_onsite_periodic_sync_loop())
 
 
 def _render_no_account(request: Request, template: str) -> HTMLResponse:
