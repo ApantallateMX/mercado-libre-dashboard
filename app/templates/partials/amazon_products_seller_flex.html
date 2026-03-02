@@ -7,10 +7,6 @@
 </div>
 {% else %}
 
-{% if auto_syncing %}
-<!-- Trigger invisible: el JS detecta este elemento y arranca el polling automático -->
-<div id="sfx-auto-sync-trigger" class="hidden"></div>
-{% endif %}
 
 <!-- ─── HEADER + BUSCADOR ──────────────────────────────────────────────────── -->
 <div class="flex flex-wrap items-center gap-3 mb-4">
@@ -51,38 +47,23 @@
         ⬇ Generar CSV
     </button>
 
-    <!-- Botones Refresh: rápido (↻) y con reporte Onsite (📥) -->
-    <div class="flex items-center">
-        <button onclick="window._sfxRefresh(false)"
-                class="px-2 py-1.5 text-xs border border-gray-200 rounded-l-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
-                title="Recarga rápida (listings + BM)">↻</button>
-        <button onclick="window._sfxRefresh(true)"
-                class="px-2 py-1.5 text-xs border border-gray-200 border-l-0 rounded-r-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
-                title="Cargar stock Onsite desde Reports API (~60 seg)">📥</button>
-    </div>
+    <!-- Botón Refresh -->
+    <button onclick="window._sfxRefresh(false)"
+            class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
+            title="Recargar listings + stock BM">↻</button>
 </div>
 
-<!-- ─── BANNER DE ESTADO DEL REPORTE ────────────────────────────────────────── -->
-{% if not report_available %}
-<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
-    {% if auto_syncing %}
-    <svg class="animate-spin w-3.5 h-3.5 flex-shrink-0 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-    </svg>
-    <span>Obteniendo stock Onsite de Amazon automáticamente… La página se actualizará sola (~60 seg).</span>
-    {% else %}
-    <span>📊</span>
-    <span>Stock Onsite no disponible. Presiona <strong>📥</strong> para generar el reporte (~60 seg).</span>
-    {% endif %}
+<!-- ─── BANNER INFO SP-API ─────────────────────────────────────────────────── -->
+<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+    <span class="flex-shrink-0">ℹ️</span>
+    <span>
+        El inventario <strong>Amazon Onsite</strong> no está disponible vía SP-API para cuentas Seller Flex.
+        La columna <strong>Stock Onsite</strong> muestra el stock BM disponible en bodega.
+        Para ver el stock comprometido en Amazon Onsite, consulta
+        <a href="https://sellercentral.amazon.com.mx/inventory?ref=xx_invmgmt_dnav_xx" target="_blank"
+           class="underline font-semibold hover:text-amber-900">Seller Central ↗</a>
+    </span>
 </div>
-{% else %}
-<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700">
-    <span>✓</span>
-    <span>Stock Onsite actualizado: <strong>{{ report_ts }}</strong></span>
-    <span class="ml-auto text-green-600 cursor-pointer hover:underline" onclick="window._sfxRefresh(true)" title="Forzar actualización del reporte">Actualizar ↻</span>
-</div>
-{% endif %}
 
 <!-- ─── STATS ──────────────────────────────────────────────────────────────── -->
 {% set disponibles     = items | selectattr('status', 'equalto', 'ACTIVE') | list | length %}
@@ -104,13 +85,9 @@
         <p class="text-xs text-gray-400 mt-0.5">Con stock en bodega (BM)</p>
     </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
-        {% if report_available %}
-        <p class="text-2xl font-black text-purple-600">{{ total_onsite.v }}</p>
-        <p class="text-xs text-gray-400 mt-0.5">Uds en Amazon Onsite</p>
-        {% else %}
-        <p class="text-2xl font-black text-gray-300">—</p>
-        <p class="text-xs text-gray-400 mt-0.5">Uds Onsite (sin cargar)</p>
-        {% endif %}
+        {% set total_bm = namespace(v=0) %}{% for i in items %}{% set total_bm.v = total_bm.v + i.bm_avail %}{% endfor %}
+        <p class="text-2xl font-black text-purple-600">{{ total_bm.v }}</p>
+        <p class="text-xs text-gray-400 mt-0.5">Uds disponibles (BM)</p>
     </div>
 </div>
 
@@ -128,7 +105,10 @@
                     <th class="py-2.5 px-4 font-medium">Producto / SKU</th>
                     <th class="py-2.5 px-3 font-medium text-center">Estado Listing</th>
                     <th class="py-2.5 px-3 font-medium text-center"
-                        title="Stock de Amazon Onsite no es accesible via API">Stock Onsite</th>
+                        title="Amazon Onsite no disponible vía SP-API. Se muestra BM disponible en bodega.">
+                        Stock BM
+                        <span class="block text-[9px] text-gray-400 font-normal normal-case tracking-normal leading-none">(Onsite N/D API)</span>
+                    </th>
                     <th class="py-2.5 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right">MTY</th>
                     <th class="py-2.5 px-3 font-medium text-right">CDMX</th>
@@ -170,24 +150,14 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock en Amazon Onsite (Reports API cuando está disponible) -->
+                    <!-- Stock BM disponible (Amazon Onsite no disponible vía SP-API) -->
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">
-                        {% if report_available %}
-                            {% if item.fba_stock > 10 %}
-                            <div class="flex flex-col items-center leading-none gap-0.5">
-                                <span class="text-sm font-bold text-green-700">{{ item.fba_stock }}</span>
-                                {% if item.flx_reserved > 0 %}<span class="text-[10px] text-gray-400" title="Reservados en Amazon Onsite">res {{ item.flx_reserved }}</span>{% endif %}
-                            </div>
-                            {% elif item.fba_stock > 0 %}
-                            <div class="flex flex-col items-center leading-none gap-0.5">
-                                <span class="text-sm font-bold text-yellow-600">{{ item.fba_stock }}</span>
-                                {% if item.flx_reserved > 0 %}<span class="text-[10px] text-gray-400" title="Reservados en Amazon Onsite">res {{ item.flx_reserved }}</span>{% endif %}
-                            </div>
-                            {% else %}
-                            <span class="text-sm font-bold text-red-500">0</span>
-                            {% endif %}
+                        {% if item.bm_avail > 10 %}
+                        <span class="text-sm font-bold text-green-700">{{ item.bm_avail }}</span>
+                        {% elif item.bm_avail > 0 %}
+                        <span class="text-sm font-bold text-yellow-600">{{ item.bm_avail }}</span>
                         {% else %}
-                        <span class="text-gray-300 text-xs" title="Presiona 📥 para cargar el reporte">—</span>
+                        <span class="text-sm font-bold text-red-500">0</span>
                         {% endif %}
                     </td>
 

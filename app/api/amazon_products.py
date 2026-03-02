@@ -1527,13 +1527,19 @@ async def amazon_products_inventario(
         elif filter == "fbm":
             enriched = [e for e in enriched if e["stock_fbm"] > 0]
         elif filter == "flx":
+            # FLX: todos los items Seller Flex (stock real viene de BM después de enriquecer)
             enriched = [e for e in enriched if "-FLX" in e["sku"].upper()]
         elif filter == "top":
             enriched = [e for e in enriched if e["is_top"]]
         elif filter == "low":
             enriched = [e for e in enriched if e["is_low"]]
         elif filter == "nostock":
-            enriched = [e for e in enriched if e["stock_fba"] == 0 and e["stock_fbm"] == 0 and e["stock_flx"] == 0]
+            # Para FLX items, nostock = sin FBA + sin FBM + sin BM
+            enriched = [
+                e for e in enriched
+                if e["stock_fba"] == 0 and e["stock_fbm"] == 0
+                and (e["bm_avail"] == 0 if "-FLX" in e["sku"].upper() else True)
+            ]
 
         # ── Ordenar ────────────────────────────────────────────────────────
         if sort == "stock":
@@ -1569,11 +1575,6 @@ async def amazon_products_inventario(
         # Timestamp del caché de listings (para badge de frescura en la UI)
         cache_ts = int(_listings_cache.get(client.seller_id, (_time.time(), None))[0])
 
-        # Estado del caché FLX (para mostrar spinner en columna FLX)
-        flx_loading     = _onsite_sync_state.get(client.seller_id) == "syncing"
-        flx_cache_entry = _onsite_stock_cache.get(client.seller_id)
-        flx_cache_age_s = int(_time.time() - flx_cache_entry[0]) if flx_cache_entry else None
-
         ctx = {
             "request":          request,
             "listings":         page_items,
@@ -1587,8 +1588,6 @@ async def amazon_products_inventario(
             "nickname":         client.nickname,
             "marketplace":      client.marketplace_name,
             "last_updated_ts":  cache_ts,
-            "flx_loading":      flx_loading,
-            "flx_cache_age_s":  flx_cache_age_s,
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
@@ -1892,52 +1891,22 @@ async def amazon_products_seller_flex(
         # en background y notificar al template para que el JS haga polling.
         onsite_key = client.seller_id
         onsite_data: dict = {}
-        if onsite_key in _onsite_stock_cache:
-            ts_o, onsite_data = _onsite_stock_cache[onsite_key]
-            if _time.time() - ts_o >= _ONSITE_STOCK_TTL:
-                onsite_data = {}  # Expirado
+        # NOTA: Amazon Onsite stock NO disponible vía SP-API para cuentas Seller Flex.
+        # GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA → FATAL (no aplica para Seller Flex puro)
+        # fulfillmentAvailability[AMAZON_NA].quantity → campo ausente en la respuesta
+        # Se usa BM stock como proxy del inventario disponible en bodega del vendedor.
 
-        # AUTO-SYNC: si no hay datos vigentes y no hay sync corriendo → arrancar solo
-        auto_syncing = _onsite_sync_state.get(onsite_key) == "syncing"
-        if not onsite_data and not auto_syncing:
-            _onsite_sync_state[onsite_key] = "syncing"
-            _onsite_sync_count[onsite_key] = 0
-            asyncio.create_task(_run_onsite_sync(client))
-            auto_syncing = True
-
-        # Inyectar stock Onsite en cada item
-        for item in flx_items:
-            sku = item["sku"]
-            if sku in onsite_data:
-                entry = onsite_data[sku]
-                if isinstance(entry, dict):
-                    item["fba_stock"]    = entry.get("avail", 0)
-                    item["flx_reserved"] = entry.get("reserved", 0)
-                else:
-                    item["fba_stock"] = int(entry)  # formato antiguo
-
-        report_available = bool(onsite_data)
-        report_ts = ""
-        if onsite_key in _onsite_stock_cache and onsite_data:
-            ts_o, _ = _onsite_stock_cache[onsite_key]
-            from datetime import datetime as _dt
-            report_ts = _dt.fromtimestamp(ts_o).strftime("%d/%m %H:%M")
-
-        # Ordenar: primero ACTIVE (o con stock Onsite > 0), luego por bm_avail desc
+        # Ordenar: primero ACTIVE con BM, luego por bm_avail desc
         flx_items.sort(key=lambda x: (
-            0 if (x["status"] == "ACTIVE" or x["fba_stock"] > 0) else 1,
-            -x["fba_stock"],
+            0 if (x["status"] == "ACTIVE" and x["bm_avail"] > 0) else (1 if x["status"] == "ACTIVE" else 2),
             -x["bm_avail"],
         ))
 
         ctx = {
-            "request":          request,
-            "items":            flx_items,
-            "total":            len(flx_items),
-            "q":                q,
-            "report_available": report_available,
-            "report_ts":        report_ts,
-            "auto_syncing":     auto_syncing,
+            "request": request,
+            "items":   flx_items,
+            "total":   len(flx_items),
+            "q":       q,
         }
         return _templates.TemplateResponse(
             "partials/amazon_products_seller_flex.html", ctx
@@ -1961,6 +1930,99 @@ async def _run_onsite_sync(client) -> None:
     except Exception as e:
         logger.error(f"[Onsite Sync] ERROR: {type(e).__name__}: {e}", exc_info=True)
         _onsite_sync_state[seller_id] = "error"
+
+
+@router.get("/products/seller-flex/raw-listing")
+async def inspect_raw_listing(request: Request, sku: str = Query("", description="SKU a inspeccionar")):
+    """
+    Debug: Obtiene el listing raw de Amazon para un SKU específico vía getListingsItem.
+    Útil para ver qué devuelve fulfillmentAvailability para items Seller Flex.
+    Ejemplo: /api/amazon/products/seller-flex/raw-listing?sku=SNEE000054-FLX01
+    """
+    client = await get_amazon_client()
+    if not client:
+        return {"error": "Sin cuenta Amazon"}
+
+    if not sku:
+        # Mostrar muestra de FLX items del caché de listings
+        cached = _listings_cache.get(client.seller_id)
+        if not cached:
+            return {"error": "Sin caché de listings. Visita el tab Inventario primero."}
+        _, listings = cached
+        flx_sample = [
+            {
+                "sku": item.get("sku"),
+                "fulfillmentAvailability": item.get("fulfillmentAvailability", []),
+                "summaries_status": [s.get("status") for s in item.get("summaries", [])],
+            }
+            for item in listings
+            if "-FLX" in (item.get("sku") or "").upper()
+        ][:10]
+        return {"flx_sample_from_listings_cache": flx_sample, "total_flx": len([i for i in listings if "-FLX" in (i.get("sku") or "").upper()])}
+
+    # Fetch individual listing
+    try:
+        params = [
+            ("marketplaceIds", client.marketplace_id),
+            ("includedData", "summaries,attributes,offers,fulfillmentAvailability,issues"),
+        ]
+        result = await client._request(
+            "GET",
+            f"/listings/2021-08-01/items/{client.seller_id}/{sku}",
+            params=params,
+        )
+        attrs = result.get("attributes") or {}
+        return {
+            "sku": sku,
+            "fulfillmentAvailability": result.get("fulfillmentAvailability", []),
+            "attr_fulfillment_availability": attrs.get("fulfillment_availability", "NOT_FOUND"),
+            "attr_purchasable_offer": attrs.get("purchasable_offer", "NOT_FOUND"),
+            "summaries_status": (result.get("summaries") or [{}])[0].get("status", []),
+            "attributes_keys": list(attrs.keys()),
+            "raw_keys": list(result.keys()),
+        }
+    except Exception as e:
+        return {"error": str(e), "sku": sku}
+
+
+@router.get("/products/seller-flex/cache-inspect")
+async def inspect_onsite_cache(request: Request):
+    """
+    Debug: Inspecciona el caché de stock Onsite (Seller Flex).
+    Útil para diagnosticar si el reporte FBA MYI devuelve datos de SKUs -FLX.
+    Retorna JSON con estado del caché, muestra de SKUs y SKUs FLX específicamente.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return {"error": "Sin cuenta Amazon configurada"}
+
+    seller_id = client.seller_id
+    cached = _onsite_stock_cache.get(seller_id)
+
+    if not cached:
+        return {
+            "cache_status": "empty",
+            "sync_state":   _onsite_sync_state.get(seller_id, "idle"),
+            "total_skus":   0,
+            "flx_skus":     {},
+            "sample_skus":  {},
+        }
+
+    ts, data = cached
+    age_s = int(_time.time() - ts)
+    flx_data  = {k: v for k, v in data.items() if "-FLX" in k.upper()}
+    sample    = dict(list(data.items())[:20])
+
+    return {
+        "cache_status":   "valid" if age_s < _ONSITE_STOCK_TTL else "expired",
+        "cache_age_s":    age_s,
+        "cache_ts":       ts,
+        "sync_state":     _onsite_sync_state.get(seller_id, "idle"),
+        "total_skus":     len(data),
+        "flx_skus_count": len(flx_data),
+        "flx_skus":       flx_data,
+        "sample_skus":    sample,
+    }
 
 
 @router.post("/products/seller-flex/start-sync")
@@ -2101,40 +2163,21 @@ async def generate_seller_flex_csv(request: Request):
 
 async def _onsite_periodic_sync_loop() -> None:
     """
-    Loop infinito que renueva el caché de Onsite cada 25 minutos en background.
-    Se inicia desde el lifespan de FastAPI al arrancar el servidor.
-    Espera 5 seg al inicio para que la DB y los tokens estén listos, luego
-    hace sync inmediato si el caché está vacío.
-    En caso de error reintenta en 60 seg; en éxito duerme 25 min.
+    Loop de sync periódico — actualmente DESACTIVADO.
+
+    NOTA: GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA devuelve FATAL para cuentas
+    que usan exclusivamente Seller Flex (Amazon Onsite MX) sin FBA tradicional.
+    El SP-API no expone el inventario de Amazon Onsite a través de ningún
+    endpoint o reporte público disponible.
+
+    El inventario FLX se muestra usando el stock BM (BinManager) como proxy,
+    que es la fuente de verdad del inventario en bodega del vendedor.
+
+    Si en el futuro Amazon expone este dato via SP-API, reactivar este loop.
     """
-    await asyncio.sleep(5)  # Dar tiempo a la DB/tokens de inicializar
-    while True:
-        success = False
-        try:
-            client = await get_amazon_client()
-            if client:
-                seller_id = client.seller_id
-                cached = _onsite_stock_cache.get(seller_id)
-                age = _time.time() - cached[0] if cached else float("inf")
-                # Solo sincronizar si el caché está por vencer (< 120 seg de margen) o vacío
-                if _onsite_sync_state.get(seller_id) != "syncing" and age > _ONSITE_STOCK_TTL - 120:
-                    logger.info(f"[Onsite AutoSync] Caché con {age:.0f}s de antigüedad — iniciando sync periódico")
-                    _onsite_sync_state[seller_id] = "syncing"
-                    _onsite_sync_count[seller_id] = 0
-                    await _run_onsite_sync(client)
-                    success = _onsite_sync_state.get(seller_id) == "done"
-                else:
-                    success = True  # caché vigente, nada que hacer
-            else:
-                success = True  # sin cuenta configurada, esperar normalmente
-        except Exception as e:
-            logger.error(f"[Onsite AutoSync] Error en loop periódico: {e}")
-        # Dormir menos tiempo si hubo error para reintentar pronto
-        if success:
-            await asyncio.sleep(25 * 60)  # éxito → 25 min
-        else:
-            logger.info("[Onsite AutoSync] Reintentando en 60 seg por error/fallo")
-            await asyncio.sleep(60)  # error → reintentar en 60 seg
+    logger.info("[Onsite AutoSync] Loop DESACTIVADO — GET_FBA_MYI_UNSUPPRESSED devuelve FATAL "
+                "para cuentas Seller Flex sin FBA. Usando datos BM como proxy.")
+    # No hacer nada — el loop se inicia pero inmediatamente termina
 
 
 def start_onsite_background_sync() -> None:

@@ -814,10 +814,24 @@ class AmazonClient:
                 # Parsear TSV → {sku: {"avail": qty, "reserved": res}}
                 result = {}
                 reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                fieldnames = reader.fieldnames or []
+                logger.info(f"[Amazon Reports] Columnas del TSV: {fieldnames}")
+
                 for row in reader:
-                    sku = (row.get("sku") or row.get("merchant-sku") or "").strip()
-                    qty_raw = row.get("afn-fulfillable-quantity", "0") or "0"
-                    res_raw = row.get("afn-reserved-quantity", "0") or "0"
+                    # Intentar varios nombres de columna SKU (varía por marketplace)
+                    sku = (
+                        row.get("sku")
+                        or row.get("seller-sku")
+                        or row.get("merchant-sku")
+                        or ""
+                    ).strip()
+                    # afn-fulfillable-quantity = disponible para cumplir órdenes
+                    qty_raw = (
+                        row.get("afn-fulfillable-quantity")
+                        or row.get("afn-warehouse-quantity")
+                        or "0"
+                    ) or "0"
+                    res_raw = (row.get("afn-reserved-quantity") or "0") or "0"
                     try:
                         qty = int(float(qty_raw.strip()))
                         res = int(float(res_raw.strip()))
@@ -827,7 +841,18 @@ class AmazonClient:
                     if sku:
                         result[sku] = {"avail": qty, "reserved": res}
 
-                logger.info(f"[Amazon Reports] Reporte listo: {len(result)} SKUs — FBA MYI (avail+reserved)")
+                flx_count = sum(1 for k in result if "-FLX" in k.upper())
+                logger.info(
+                    f"[Amazon Reports] Reporte listo: {len(result)} SKUs totales, "
+                    f"{flx_count} FLX — FBA MYI (avail+reserved)"
+                )
+                # Log muestra de SKUs FLX para diagnóstico
+                sample_flx = {k: v for k, v in result.items() if "-FLX" in k.upper()}
+                if sample_flx:
+                    logger.info(f"[Amazon Reports] Muestra FLX: {dict(list(sample_flx.items())[:5])}")
+                else:
+                    logger.warning("[Amazon Reports] NO se encontraron SKUs -FLX en el reporte. "
+                                   "Verificar si Seller Flex está incluido en GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA")
                 return result
 
             elif proc_status in ("FATAL", "CANCELLED"):

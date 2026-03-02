@@ -14,8 +14,7 @@
      data-q="{{ q | e }}"
      data-page="{{ page }}"
      data-per-page="{{ per_page }}"
-     data-ts="{{ last_updated_ts }}"
-     data-flx-loading="{{ 'true' if flx_loading else 'false' }}">
+     data-ts="{{ last_updated_ts }}">
 </div>
 
 <!-- ─── FILTER CHIPS ──────────────────────────────────────────────────────── -->
@@ -140,14 +139,10 @@
                     <th class="py-2.5 px-2 font-medium text-right" title="Stock Merchant Fulfilled (FBM — bodega propia)">
                         <span class="text-blue-300">FBM</span>
                     </th>
-                    <th class="py-2.5 px-2 font-medium text-right" title="Stock Amazon Onsite / Seller Flex (FLX)">
+                    <th class="py-2.5 px-2 font-medium text-right"
+                        title="Stock Seller Flex. Amazon Onsite no disponible via SP-API — se muestra stock bodega BM disponible.">
                         <span class="text-purple-300">FLX</span>
-                        {% if flx_loading %}
-                        <svg class="inline animate-spin w-2.5 h-2.5 ml-0.5 text-purple-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
-                        {% endif %}
+                        <span class="text-[9px] text-purple-500 leading-none block -mt-0.5 text-right">BM</span>
                     </th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
@@ -233,22 +228,16 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock FLX (Seller Flex / Amazon Onsite) -->
+                    <!-- Stock FLX (Seller Flex) — muestra BM disponible porque SP-API no expone Onsite -->
                     <td class="py-2.5 px-2 text-right whitespace-nowrap">
                         {% if '-FLX' in item.sku|upper %}
-                            {% if item.stock_flx > 0 %}
-                            <div class="flex flex-col items-end leading-none gap-0.5">
-                                <span class="text-sm font-bold {% if item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}">
-                                    {{ item.stock_flx }}
-                                </span>
-                                {% if item.flx_reserved > 0 %}
-                                <span class="text-[10px] text-purple-400" title="Reservados en Amazon Onsite">res {{ item.flx_reserved }}</span>
-                                {% endif %}
-                            </div>
-                            {% elif flx_loading %}
-                            <span class="text-purple-300 text-xs" title="Cargando stock Onsite…">⏳</span>
+                            {% if item.bm_avail > 0 %}
+                            <span class="text-sm font-bold {% if item.bm_avail < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
+                                  title="Stock bodega BM disponible para Seller Flex (Amazon Onsite no disponible via API)">
+                                {{ item.bm_avail }}
+                            </span>
                             {% else %}
-                            <span class="text-red-500 text-sm font-bold">0</span>
+                            <span class="text-red-500 text-sm font-bold" title="Sin stock en bodega BM">0</span>
                             {% endif %}
                         {% else %}
                         <span class="text-gray-200 text-xs font-medium">—</span>
