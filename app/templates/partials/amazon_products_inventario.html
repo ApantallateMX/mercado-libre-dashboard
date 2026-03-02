@@ -140,9 +140,13 @@
                         <span class="text-blue-300">FBM</span>
                     </th>
                     <th class="py-2.5 px-2 font-medium text-right"
-                        title="Stock Seller Flex. Amazon Onsite no disponible via SP-API — se muestra stock bodega BM disponible.">
+                        title="Stock Seller Flex — FBA Inventory API (tiempo real). {% if flx_loading %}Actualizando en background…{% endif %}">
                         <span class="text-purple-300">FLX</span>
-                        <span class="text-[9px] text-purple-500 leading-none block -mt-0.5 text-right">BM</span>
+                        {% if flx_loading %}
+                        <span class="text-[9px] text-purple-400 leading-none block -mt-0.5 text-right animate-pulse">↻</span>
+                        {% else %}
+                        <span class="text-[9px] text-purple-500 leading-none block -mt-0.5 text-right">●</span>
+                        {% endif %}
                     </th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
@@ -236,6 +240,9 @@
                                   title="Stock Amazon Onsite: {{ item.stock_flx }} disp{% if item.flx_reserved %} + {{ item.flx_reserved }} reservado{% endif %} (FBA API — tiempo real)">
                                 {{ item.stock_flx }}
                             </span>
+                            {% elif flx_loading %}
+                            <span class="text-purple-400 text-xs animate-pulse"
+                                  title="Actualizando stock FLX desde Amazon…">···</span>
                             {% else %}
                             <span class="text-red-500 text-sm font-bold" title="Sin stock en Amazon Onsite">0</span>
                             {% endif %}

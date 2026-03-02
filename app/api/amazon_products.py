@@ -107,7 +107,8 @@ _BM_AMZ_TTL   = 900   # 15 min
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
 _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
-_FLX_STOCK_TTL = 300  # 5 min — datos en tiempo real
+_FLX_STOCK_TTL     = 300  # 5 min — datos en tiempo real
+_flx_stock_refreshing: set = set()  # seller_ids con refresh BG activo (evita doble tarea)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,50 +238,73 @@ async def _get_fba_cached(client) -> list:
     return data
 
 
-async def _get_flx_stock_cached(client, flx_skus: list) -> dict:
+async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
     """
-    Consulta FBA Inventory API para SKUs -FLX específicos (no aparecen en scan general).
-    Retorna {sku: {'fulfillable': N, 'reserved': N, 'total': N}}.
-    Cache 5 min — tiempo real: coincide exactamente con Seller Central.
-    Lotes de 50 SKUs por request.
+    Tarea BG: descarga FLX stock de FBA API y actualiza caché.
+    Nunca bloquea requests — se lanza con asyncio.create_task().
+    """
+    key = client.seller_id
+    try:
+        result: dict = {}
+        unique_skus = list(dict.fromkeys(s for s in flx_skus if s))
+        for i in range(0, len(unique_skus), 50):
+            batch = unique_skus[i:i + 50]
+            params = [
+                ("granularityType", "Marketplace"),
+                ("granularityId",   client.marketplace_id),
+                ("marketplaceIds",  client.marketplace_id),
+                ("details",         "true"),
+            ]
+            for sku in batch:
+                params.append(("sellerSkus", sku))
+            try:
+                data = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+                for s in (data.get("payload", {}).get("inventorySummaries") or []):
+                    sku  = s.get("sellerSku", "")
+                    det  = s.get("inventoryDetails", {}) or {}
+                    res  = det.get("reservedQuantity", {}) or {}
+                    result[sku] = {
+                        "fulfillable": int(det.get("fulfillableQuantity") or 0),
+                        "reserved":    int(res.get("totalReservedQuantity") or 0),
+                        "total":       int(s.get("totalQuantity") or 0),
+                    }
+            except Exception as exc:
+                logger.warning(f"[FLX-BG] Error lote {i}: {exc}")
+            if i + 50 < len(unique_skus):
+                await asyncio.sleep(0.3)
+        logger.info(f"[FLX-BG] {len(result)}/{len(unique_skus)} FLX SKUs actualizados en background")
+        _flx_stock_cache[key] = (_time.time(), result)
+    finally:
+        _flx_stock_refreshing.discard(key)
+
+
+def _get_flx_stock_cached(client, flx_skus: list) -> dict:
+    """
+    Stale-while-revalidate — NUNCA bloquea el request.
+
+    • Cache fresco  → retorna datos inmediatamente.
+    • Cache stale   → retorna datos stale + lanza refresh BG.
+    • Sin cache     → retorna {} + lanza refresh BG (FLX muestra ··· en primera carga).
+
+    El BG task (_refresh_flx_stock_bg) actualiza _flx_stock_cache cuando termina.
     """
     now = _time.time()
     key = client.seller_id
     cached = _flx_stock_cache.get(key)
-    if cached and (now - cached[0]) < _FLX_STOCK_TTL:
-        return cached[1]
+    if cached:
+        ts, data = cached
+        if (now - ts) >= _FLX_STOCK_TTL and key not in _flx_stock_refreshing:
+            _flx_stock_refreshing.add(key)
+            asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
+            logger.info(f"[FLX] Cache stale ({int(now - ts)}s) — refresh BG iniciado")
+        return data  # siempre retorna inmediatamente (fresco o stale)
 
-    result: dict = {}
-    unique_skus = list(dict.fromkeys(s for s in flx_skus if s))  # dedup preservando orden
-    for i in range(0, len(unique_skus), 50):
-        batch = unique_skus[i:i + 50]
-        params = [
-            ("granularityType", "Marketplace"),
-            ("granularityId",   client.marketplace_id),
-            ("marketplaceIds",  client.marketplace_id),
-            ("details",         "true"),
-        ]
-        for sku in batch:
-            params.append(("sellerSkus", sku))
-        try:
-            data = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
-            for s in (data.get("payload", {}).get("inventorySummaries") or []):
-                sku  = s.get("sellerSku", "")
-                det  = s.get("inventoryDetails", {}) or {}
-                res  = det.get("reservedQuantity", {}) or {}
-                result[sku] = {
-                    "fulfillable": int(det.get("fulfillableQuantity") or 0),
-                    "reserved":    int(res.get("totalReservedQuantity") or 0),
-                    "total":       int(s.get("totalQuantity") or 0),
-                }
-        except Exception as exc:
-            logger.warning(f"[FLX-FBA] Error lote {i}: {exc}")
-        if i + 50 < len(unique_skus):
-            await asyncio.sleep(0.3)
-
-    logger.info(f"[FLX-FBA] {len(result)}/{len(unique_skus)} FLX SKUs con datos de FBA API")
-    _flx_stock_cache[key] = (now, result)
-    return result
+    # Primera carga: sin caché todavía
+    if key not in _flx_stock_refreshing:
+        _flx_stock_refreshing.add(key)
+        asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
+        logger.info(f"[FLX] Primera carga — refresh BG iniciado ({len(flx_skus)} FLX SKUs)")
+    return {}
 
 
 async def _get_onsite_stock_cached(client) -> dict:
@@ -1463,10 +1487,11 @@ async def amazon_products_inventario(
         sku_sales = await _get_sku_sales_cached(client)
         fba_index = _build_fba_index(fba_summaries)
 
-        # FLX real-time: FBA API con query por SKU específico (scan general no los devuelve)
+        # FLX real-time: stale-while-revalidate — retorna caché inmediatamente (o {}) + BG refresh
         flx_skus = [item.get("sku", "") for item in listings
                     if "-FLX" in (item.get("sku", "") or "").upper()]
-        flx_stock_index = await _get_flx_stock_cached(client, flx_skus)
+        flx_stock_index = _get_flx_stock_cached(client, flx_skus)   # sync, nunca bloquea
+        flx_loading     = client.seller_id in _flx_stock_refreshing  # True = BG activo
 
         enriched = []
         for item in listings:
@@ -1654,6 +1679,7 @@ async def amazon_products_inventario(
             "nickname":         client.nickname,
             "marketplace":      client.marketplace_name,
             "last_updated_ts":  cache_ts,
+            "flx_loading":      flx_loading,  # True = BG refresh de FLX activo
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
@@ -1874,10 +1900,10 @@ async def amazon_products_seller_flex(
     try:
         listings = await _get_listings_cached(client)
 
-        # FLX stock real-time desde FBA API (query por SKU específico)
+        # FLX stock real-time — stale-while-revalidate (no bloquea)
         all_flx_skus = [item.get("sku", "") for item in listings
                         if "-FLX" in (item.get("sku", "") or "").upper()]
-        flx_stock_index = await _get_flx_stock_cached(client, all_flx_skus)
+        flx_stock_index = _get_flx_stock_cached(client, all_flx_skus)  # sync, nunca bloquea
 
         # Filtrar solo SKUs -FLX
         flx_items = []
