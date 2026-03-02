@@ -201,6 +201,7 @@ function loadAmzProdTab(tabName, url, btn) {
 
 // ── Tab Inventario: carga con URL específica (filtros, búsqueda, paginación) ──
 window._loadInvTab = function(url) {
+    _invRefreshPending = false;  // resetear guard al hacer carga explícita
     var container = document.getElementById('amz-prod-tab-content');
     // Skeleton tabla
     container.innerHTML =
@@ -280,6 +281,7 @@ window._forceRefreshInv = function() {
 // ── Badge de frescura + Auto-refresh cada 5 min ───────────────────────────
 var _invAutoRefreshTimer = null;
 var _invFreshnessTimer   = null;
+var _invRefreshPending   = false;  // guard: evita peticiones concurrentes
 
 function _invGetTs() {
     var s = document.getElementById('amz-inv-state');
@@ -298,6 +300,11 @@ function _updateFreshnessBadge() {
     el.textContent = label;
 }
 
+function _invIsFlxLoading() {
+    var s = document.getElementById('amz-inv-state');
+    return s && s.getAttribute('data-flx-loading') === 'true';
+}
+
 function _invStartAutoRefresh() {
     if (_invAutoRefreshTimer) clearInterval(_invAutoRefreshTimer);
     if (_invFreshnessTimer)   clearInterval(_invFreshnessTimer);
@@ -308,12 +315,34 @@ function _invStartAutoRefresh() {
         _updateFreshnessBadge();
     }, 30000);
 
-    // Auto-refresh completo cada 5 min (revisar cada minuto)
+    // Auto-refresh: cada 10 seg si FLX cargando (para mostrar stock en cuanto esté listo)
+    // o cada minuto verificando si pasaron 5 min desde la última carga
     _invAutoRefreshTimer = setInterval(function() {
         if (_amzProdActiveTab !== 'inventario') { clearInterval(_invAutoRefreshTimer); return; }
-        var age = Math.floor(Date.now() / 1000 - _invGetTs());
-        if (age >= 300) { window._forceRefreshInv(); }
-    }, 60000);
+        if (_invRefreshPending) return;  // ya hay una petición en curso
+        if (_invIsFlxLoading()) {
+            // FLX en progreso → recargar sin force (solo listings desde caché + FLX fresco)
+            _invRefreshPending = true;
+            var st = _invState();
+            fetch(_invUrl({ page: st.page }))
+                .then(function(r) { return r.text(); })
+                .then(function(html) {
+                    var c = document.getElementById('amz-prod-tab-content');
+                    if (c && _amzProdActiveTab === 'inventario') {
+                        c.innerHTML = html;
+                        window._applyInvColState();
+                        _updateFreshnessBadge();
+                        // Si FLX ya terminó, reiniciar con intervalo normal (5 min)
+                        if (!_invIsFlxLoading()) { _invStartAutoRefresh(); }
+                    }
+                })
+                .catch(function() {})
+                .finally(function() { _invRefreshPending = false; });
+        } else {
+            var age = Math.floor(Date.now() / 1000 - _invGetTs());
+            if (age >= 300) { window._forceRefreshInv(); }
+        }
+    }, 10000);
 }
 
 // Al volver a la página (cambio de pestaña del navegador), revisar si está viejo

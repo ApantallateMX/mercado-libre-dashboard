@@ -174,9 +174,15 @@
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">
                         {% if report_available %}
                             {% if item.fba_stock > 10 %}
-                            <span class="text-sm font-bold text-green-700">{{ item.fba_stock }}</span>
+                            <div class="flex flex-col items-center leading-none gap-0.5">
+                                <span class="text-sm font-bold text-green-700">{{ item.fba_stock }}</span>
+                                {% if item.flx_reserved > 0 %}<span class="text-[10px] text-gray-400" title="Reservados en Amazon Onsite">res {{ item.flx_reserved }}</span>{% endif %}
+                            </div>
                             {% elif item.fba_stock > 0 %}
-                            <span class="text-sm font-bold text-yellow-600">{{ item.fba_stock }}</span>
+                            <div class="flex flex-col items-center leading-none gap-0.5">
+                                <span class="text-sm font-bold text-yellow-600">{{ item.fba_stock }}</span>
+                                {% if item.flx_reserved > 0 %}<span class="text-[10px] text-gray-400" title="Reservados en Amazon Onsite">res {{ item.flx_reserved }}</span>{% endif %}
+                            </div>
                             {% else %}
                             <span class="text-sm font-bold text-red-500">0</span>
                             {% endif %}

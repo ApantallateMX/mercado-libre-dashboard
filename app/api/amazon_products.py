@@ -69,6 +69,34 @@ _ONSITE_STOCK_TTL = 1800  # 30 minutos (generación de reporte es costosa)
 _onsite_sync_state: dict[str, str] = {}  # {seller_id: "idle"/"syncing"/"done"/"error"}
 _onsite_sync_count: dict[str, int] = {}  # {seller_id: skus_found}
 
+# ─── Helpers de lectura de caché Onsite ──────────────────────────────────────
+
+def _flx_cache_read(seller_id: str, sku: str) -> tuple[int, int]:
+    """
+    Lee (avail, reserved) del caché Onsite para un SKU.
+    Retorna (0, 0) si el caché está vacío, expirado o el SKU no está.
+    Soporta formato nuevo {sku: {"avail":x,"reserved":y}} y el antiguo {sku: qty}.
+    """
+    cached = _onsite_stock_cache.get(seller_id)
+    if not cached:
+        return 0, 0
+    ts_o, onsite_map = cached
+    if _time.time() - ts_o >= _ONSITE_STOCK_TTL:
+        return 0, 0
+    entry = onsite_map.get(sku)
+    if entry is None:
+        return 0, 0
+    if isinstance(entry, dict):
+        return int(entry.get("avail", 0)), int(entry.get("reserved", 0))
+    return int(entry), 0  # formato antiguo (int directo)
+
+
+def _flx_cache_valid(seller_id: str) -> bool:
+    """True si el caché Onsite existe y no ha expirado."""
+    cached = _onsite_stock_cache.get(seller_id)
+    return bool(cached) and (_time.time() - cached[0] < _ONSITE_STOCK_TTL)
+
+
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
 _BM_WH_URL    = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
@@ -1418,18 +1446,10 @@ async def amazon_products_inventario(
                 if channel == "DEFAULT":
                     stock_fbm = qty
 
-            # Seller Flex: buscar stock en caché Reports API o en cualquier canal FA
+            # Seller Flex: stock SOLO disponible via Reports API (FBA API no los incluye)
+            flx_reserved = 0
             if "-FLX" in sku.upper():
-                _cached = _onsite_stock_cache.get(client.seller_id)
-                if _cached:
-                    _ts_o, _onsite_map = _cached
-                    if _time.time() - _ts_o < _ONSITE_STOCK_TTL:
-                        stock_flx = _onsite_map.get(sku, 0)
-                if stock_flx == 0:
-                    for _fa in listing_fa:
-                        _qty = int(_fa.get("quantity") or 0)
-                        if _qty > stock_flx:
-                            stock_flx = _qty
+                stock_flx, flx_reserved = _flx_cache_read(client.seller_id, sku)
 
             # Stock principal para días supply: FBA > FLX > FBM
             if stock_fba > 0:
@@ -1498,6 +1518,7 @@ async def amazon_products_inventario(
                 "bm_mty":      0,
                 "bm_cdmx":     0,
                 "bm_tj":       0,
+                "flx_reserved": flx_reserved,
             })
 
         # ── Filtrar ────────────────────────────────────────────────────────
@@ -1548,6 +1569,11 @@ async def amazon_products_inventario(
         # Timestamp del caché de listings (para badge de frescura en la UI)
         cache_ts = int(_listings_cache.get(client.seller_id, (_time.time(), None))[0])
 
+        # Estado del caché FLX (para mostrar spinner en columna FLX)
+        flx_loading     = _onsite_sync_state.get(client.seller_id) == "syncing"
+        flx_cache_entry = _onsite_stock_cache.get(client.seller_id)
+        flx_cache_age_s = int(_time.time() - flx_cache_entry[0]) if flx_cache_entry else None
+
         ctx = {
             "request":          request,
             "listings":         page_items,
@@ -1561,6 +1587,8 @@ async def amazon_products_inventario(
             "nickname":         client.nickname,
             "marketplace":      client.marketplace_name,
             "last_updated_ts":  cache_ts,
+            "flx_loading":      flx_loading,
+            "flx_cache_age_s":  flx_cache_age_s,
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
@@ -1834,6 +1862,7 @@ async def amazon_products_seller_flex(
                 "price":      price,
                 "status":     status,
                 "fba_stock":  fba_stock,
+                "flx_reserved": 0,
                 "unfulfill":  unfulfill,
                 "inbound":    inbound,
                 # BinManager — rellenado abajo
@@ -1880,7 +1909,12 @@ async def amazon_products_seller_flex(
         for item in flx_items:
             sku = item["sku"]
             if sku in onsite_data:
-                item["fba_stock"] = onsite_data[sku]
+                entry = onsite_data[sku]
+                if isinstance(entry, dict):
+                    item["fba_stock"]    = entry.get("avail", 0)
+                    item["flx_reserved"] = entry.get("reserved", 0)
+                else:
+                    item["fba_stock"] = int(entry)  # formato antiguo
 
         report_available = bool(onsite_data)
         report_ts = ""
@@ -2069,10 +2103,13 @@ async def _onsite_periodic_sync_loop() -> None:
     """
     Loop infinito que renueva el caché de Onsite cada 25 minutos en background.
     Se inicia desde el lifespan de FastAPI al arrancar el servidor.
-    Espera 90 seg al inicio para que la DB y los tokens estén listos.
+    Espera 5 seg al inicio para que la DB y los tokens estén listos, luego
+    hace sync inmediato si el caché está vacío.
+    En caso de error reintenta en 60 seg; en éxito duerme 25 min.
     """
-    await asyncio.sleep(90)
+    await asyncio.sleep(5)  # Dar tiempo a la DB/tokens de inicializar
     while True:
+        success = False
         try:
             client = await get_amazon_client()
             if client:
@@ -2085,9 +2122,19 @@ async def _onsite_periodic_sync_loop() -> None:
                     _onsite_sync_state[seller_id] = "syncing"
                     _onsite_sync_count[seller_id] = 0
                     await _run_onsite_sync(client)
+                    success = _onsite_sync_state.get(seller_id) == "done"
+                else:
+                    success = True  # caché vigente, nada que hacer
+            else:
+                success = True  # sin cuenta configurada, esperar normalmente
         except Exception as e:
             logger.error(f"[Onsite AutoSync] Error en loop periódico: {e}")
-        await asyncio.sleep(25 * 60)  # Siguiente intento en 25 min
+        # Dormir menos tiempo si hubo error para reintentar pronto
+        if success:
+            await asyncio.sleep(25 * 60)  # éxito → 25 min
+        else:
+            logger.info("[Onsite AutoSync] Reintentando en 60 seg por error/fallo")
+            await asyncio.sleep(60)  # error → reintentar en 60 seg
 
 
 def start_onsite_background_sync() -> None:

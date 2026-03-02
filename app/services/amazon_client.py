@@ -811,20 +811,23 @@ class AmazonClient:
                 compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
                 content = await self.download_report_document(url, compressed)
 
-                # Parsear TSV → {sku: afn_fulfillable_quantity}
+                # Parsear TSV → {sku: {"avail": qty, "reserved": res}}
                 result = {}
                 reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
                 for row in reader:
                     sku = (row.get("sku") or row.get("merchant-sku") or "").strip()
                     qty_raw = row.get("afn-fulfillable-quantity", "0") or "0"
+                    res_raw = row.get("afn-reserved-quantity", "0") or "0"
                     try:
                         qty = int(float(qty_raw.strip()))
+                        res = int(float(res_raw.strip()))
                     except (ValueError, TypeError):
                         qty = 0
+                        res = 0
                     if sku:
-                        result[sku] = qty
+                        result[sku] = {"avail": qty, "reserved": res}
 
-                logger.info(f"[Amazon Reports] Reporte listo: {len(result)} SKUs con stock Onsite/FBA")
+                logger.info(f"[Amazon Reports] Reporte listo: {len(result)} SKUs — FBA MYI (avail+reserved)")
                 return result
 
             elif proc_status in ("FATAL", "CANCELLED"):
