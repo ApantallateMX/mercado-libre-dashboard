@@ -1425,6 +1425,26 @@ async def amazon_products_inventario(
                 disp_stock = mfn_stock
                 # fulfillment_type ya fue seteado arriba (FBM o FBA por defecto)
 
+            # Seller Flex (-FLX): stock en bodega propia — no está en FBA ni en canal DEFAULT.
+            # Buscar en el caché del Reports API (fuente más precisa) o en cualquier canal FA.
+            if "-FLX" in sku.upper() and disp_stock == 0:
+                # 1. Caché del Reports API (actualizado por el loop periódico / auto-sync)
+                _cached = _onsite_stock_cache.get(client.seller_id)
+                if _cached:
+                    _ts_o, _onsite_map = _cached
+                    if _time.time() - _ts_o < _ONSITE_STOCK_TTL:
+                        _qty = _onsite_map.get(sku, 0)
+                        if _qty > 0:
+                            disp_stock       = _qty
+                            fulfillment_type = "Onsite"
+                # 2. Fallback: máximo de cualquier canal de fulfillmentAvailability
+                if disp_stock == 0:
+                    for _fa in listing_fa:
+                        _qty = int(_fa.get("quantity") or 0)
+                        if _qty > disp_stock:
+                            disp_stock       = _qty
+                            fulfillment_type = "Onsite"
+
             sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d   = sales["units"]
             revenue_30d = sales["revenue"]
