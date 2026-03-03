@@ -24,15 +24,17 @@ CACHÉ:
 
 import asyncio
 import logging
+import math
 import re as _re
 import time as _time
 from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
+from pydantic import BaseModel
 
 from app.services.amazon_client import get_amazon_client
 from app.api.metrics import _get_cached_order_metrics
@@ -1720,6 +1722,24 @@ async def amazon_products_inventario(
         # ── BM: solo para la página actual ────────────────────────────────
         await _enrich_bm_amz(page_items)
 
+        # ── action_needed: calculado con BM fresco post-enrich ─────────────
+        for _e in page_items:
+            _no_amz  = _e["stock_fba"] == 0 and _e["stock_fbm"] == 0 and _e["stock_flx"] == 0
+            _has_bm  = _e["bm_avail"] > 0
+            _add_qty = max(1, math.ceil(_e["bm_avail"] * 0.4)) if _has_bm else 0
+            if _no_amz and _has_bm:
+                _e["action_needed"] = "add_fbm"
+                _e["add_qty"]       = _add_qty
+            elif not _no_amz and not _has_bm:
+                if _e["fulfillment_type"] == "FBM":
+                    _e["action_needed"] = "pause_fbm"
+                else:
+                    _e["action_needed"] = "warn_fba_nobm"
+                _e["add_qty"] = 0
+            else:
+                _e["action_needed"] = None
+                _e["add_qty"]       = 0
+
         # Timestamp del caché de listings (para badge de frescura en la UI)
         cache_ts = int(_listings_cache.get(client.seller_id, (_time.time(), None))[0])
 
@@ -1745,6 +1765,69 @@ async def amazon_products_inventario(
     except Exception as e:
         logger.exception("[Amazon Products] Error en inventario v2")
         return _render_error(request, "amazon_products_inventario.html", str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BG-STATUS — estado de los refreshes en background del tab Inventario
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/inventario/bg-status")
+async def inventario_bg_status(request: Request):
+    """
+    Retorna si los refreshes BG (sku_sales, BM, FLX) están activos.
+    El frontend hace polling cada 5s y recarga la tabla cuando todo termina.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return JSONResponse({"ready": True})
+    sid = client.seller_id
+    sku_sales_active = sid in _sku_sales_refreshing
+    bm_active        = "bm_all" in _bm_all_refreshing
+    flx_active       = sid in _flx_stock_refreshing
+    return JSONResponse({
+        "ready":     not sku_sales_active and not bm_active and not flx_active,
+        "sku_sales": sku_sales_active,
+        "bm":        bm_active,
+        "flx":       flx_active,
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STOCK ACTION — actualiza qty de un listing FBM desde el tab Inventario
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StockActionBody(BaseModel):
+    action:   str        # "add_fbm" | "pause"
+    quantity: int = 0
+
+
+@router.post("/products/{sku}/stock-action")
+async def amazon_stock_action(sku: str, body: StockActionBody, request: Request):
+    """
+    Actualiza el stock FBM de un listing directamente desde el tab Inventario.
+    - action="add_fbm": pone body.quantity unidades como FBM
+    - action="pause":   pone qty=0 (pausa el listing sin eliminarlo)
+    Invalida la caché de listings y FBA para que la próxima carga muestre datos frescos.
+    """
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
+
+    qty = body.quantity if body.action == "add_fbm" else 0
+    try:
+        result = await client.update_listing_quantity(sku, qty)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as exc:
+        logger.exception("[StockAction] Error al actualizar qty de %s", sku)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Invalidar caché para que la próxima carga muestre datos actualizados
+    _listings_cache.pop(client.seller_id, None)
+    _fba_cache.pop(client.seller_id, None)
+
+    logger.info("[StockAction] SKU=%s action=%s qty=%d → ok", sku, body.action, qty)
+    return {"ok": True, "sku": sku, "action": body.action, "quantity": qty}
 
 
 @router.get("/products/stock", response_class=HTMLResponse)

@@ -70,9 +70,16 @@
         <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio ↓</option>
     </select>
 
-    <!-- Badge de frescura + Refresh forzado -->
+    <!-- Badge de frescura + chip BG + Refresh forzado -->
     <div class="flex items-center gap-1">
         <span id="inv-freshness" class="text-xs text-gray-400 px-1"></span>
+        {% if sku_sales_loading or bm_loading or flx_loading %}
+        <span id="inv-bg-chip"
+              class="flex items-center gap-1 text-xs text-gray-400 animate-pulse px-1"
+              title="{% if sku_sales_loading %}Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
+            <span class="inline-block animate-spin">↻</span> actualizando
+        </span>
+        {% endif %}
         <button onclick="window._forceRefreshInv()"
                 class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
                 title="Recargar datos frescos de Amazon">
@@ -80,24 +87,6 @@
         </button>
     </div>
 </div>
-
-{% if sku_sales_loading or bm_loading %}
-<!-- Banner: datos cargando en background -->
-<div class="mb-3 flex flex-wrap gap-2">
-    {% if sku_sales_loading %}
-    <div class="flex items-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-3 py-2 rounded-lg text-xs flex-1 min-w-0">
-        <span class="animate-spin inline-block text-base leading-none shrink-0">↻</span>
-        <span>Calculando ventas 30d… <strong>Top Ventas</strong> y <strong>Baja Venta</strong> se actualizarán.</span>
-    </div>
-    {% endif %}
-    {% if bm_loading %}
-    <div class="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded-lg text-xs flex-1 min-w-0">
-        <span class="animate-spin inline-block text-base leading-none shrink-0">↻</span>
-        <span>Cargando stock BM para todos los SKUs… <strong>Con Stock BM</strong> / <strong>Sin Stock BM</strong> / <strong>BM Stock ↓</strong> se actualizarán.</span>
-    </div>
-    {% endif %}
-</div>
-{% endif %}
 
 <!-- ─── COLUMN TOGGLES + CONTADOR ─────────────────────────────────────────── -->
 <div class="flex flex-wrap gap-x-4 gap-y-1 mb-3 items-center text-xs text-gray-400">
@@ -371,6 +360,19 @@
                             {% endif %}
                             <button onclick="window.openAmzEdit('{{ item.sku | e }}', '{{ item.asin }}', '{{ item.sc_url | e }}')"
                                     class="text-xs text-gray-400 hover:text-[#FF9900] transition" title="Editar listing">✏️</button>
+                            {% if item.action_needed == 'add_fbm' %}
+                            <button onclick="window.openStockAction('{{ item.sku | e }}', 'add_fbm', {{ item.add_qty }}, {{ item.bm_avail }}, '{{ item.fulfillment_type }}')"
+                                    class="text-xs text-green-600 hover:text-green-800 font-bold transition"
+                                    title="Sin stock Amazon — agregar {{ item.add_qty }} uds FBM (40% de {{ item.bm_avail }} BM)">📦+</button>
+                            {% elif item.action_needed == 'pause_fbm' %}
+                            <button onclick="window.openStockAction('{{ item.sku | e }}', 'pause', 0, 0, 'FBM')"
+                                    class="text-xs text-orange-400 hover:text-red-600 transition"
+                                    title="Sin stock BM — pausar listing FBM (qty=0)">⏸</button>
+                            {% elif item.action_needed == 'warn_fba_nobm' %}
+                            <a href="{{ item.sc_url }}" target="_blank"
+                               class="text-xs text-yellow-500 hover:text-yellow-700 transition"
+                               title="FBA sin stock BM — revisar en Seller Central">⚠️</a>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -466,5 +468,175 @@
     {% endif %}
 </div>
 {% endif %}
+
+<!-- ─── MODAL: Confirmar acción de stock ──────────────────────────────────── -->
+<div id="stock-action-modal"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+     onclick="if(event.target===this) window._closeStockModal()">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6">
+        <h3 class="text-base font-bold text-gray-800 mb-1 flex items-center gap-2">
+            📦 <span id="sam-title">Actualizar Stock</span>
+        </h3>
+        <p id="sam-sku" class="text-xs font-mono text-gray-400 mb-4"></p>
+
+        <div class="flex gap-3 mb-4">
+            <div class="flex-1 bg-orange-50 rounded-lg p-2.5 text-center">
+                <p class="text-[10px] text-orange-400 uppercase tracking-wide mb-0.5">FBA</p>
+                <p id="sam-fba" class="text-lg font-bold text-orange-600">0</p>
+            </div>
+            <div class="flex-1 bg-blue-50 rounded-lg p-2.5 text-center">
+                <p class="text-[10px] text-blue-400 uppercase tracking-wide mb-0.5">FBM</p>
+                <p id="sam-fbm" class="text-lg font-bold text-blue-600">0</p>
+            </div>
+            <div class="flex-1 bg-green-50 rounded-lg p-2.5 text-center">
+                <p class="text-[10px] text-green-600 uppercase tracking-wide mb-0.5">BM Disp.</p>
+                <p id="sam-bm" class="text-lg font-bold text-green-700">—</p>
+            </div>
+        </div>
+
+        <p id="sam-desc" class="text-sm text-gray-700 mb-2 font-medium"></p>
+        <p id="sam-warn" class="text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2 hidden mb-3"></p>
+
+        <div id="sam-qty-row" class="hidden mb-4">
+            <label class="block text-xs text-gray-500 mb-1">Cantidad a publicar como FBM</label>
+            <input type="number" id="sam-qty-input" min="1" max="9999"
+                   class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-800 focus:outline-none focus:border-[#FF9900]">
+        </div>
+
+        <div class="flex gap-3 mt-2">
+            <button onclick="window._closeStockModal()"
+                    class="flex-1 px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-600 hover:border-gray-400 transition">
+                Cancelar
+            </button>
+            <button id="sam-confirm-btn" onclick="window._confirmStockAction()"
+                    class="flex-1 px-4 py-2 text-sm bg-[#FF9900] text-white rounded-lg hover:bg-orange-600 font-semibold transition">
+                ✓ Confirmar
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ─── JS: Modal de stock + polling de background ────────────────────────── -->
+<script>
+(function() {
+    // ── Estado interno del modal ──────────────────────────────────────────
+    var _sam = {sku: '', action: '', quantity: 0, bm_avail: 0, fulfillment_type: ''};
+
+    window.openStockAction = function(sku, action, qty, bm_avail, fulfillment_type) {
+        _sam = {sku: sku, action: action, quantity: qty, bm_avail: bm_avail, fulfillment_type: fulfillment_type};
+
+        document.getElementById('sam-sku').textContent = sku;
+        document.getElementById('sam-fba').textContent = 0;
+        document.getElementById('sam-fbm').textContent = 0;
+        document.getElementById('sam-bm').textContent  = bm_avail;
+        document.getElementById('sam-warn').classList.add('hidden');
+
+        var qtyRow   = document.getElementById('sam-qty-row');
+        var qtyInput = document.getElementById('sam-qty-input');
+
+        if (action === 'add_fbm') {
+            document.getElementById('sam-title').textContent = 'Agregar Stock FBM';
+            document.getElementById('sam-desc').textContent  =
+                'Se publicarán ' + qty + ' unidades como FBM (40% de ' + bm_avail + ' disponibles en BM).';
+            qtyRow.classList.remove('hidden');
+            qtyInput.value = qty;
+            if (fulfillment_type === 'FBA' || fulfillment_type === 'FLX') {
+                var w = document.getElementById('sam-warn');
+                w.textContent = '⚠ Este producto es ' + fulfillment_type + '. El stock se publicará como Merchant Fulfilled (bodega propia).';
+                w.classList.remove('hidden');
+            }
+        } else {
+            document.getElementById('sam-title').textContent = 'Pausar Listing FBM';
+            document.getElementById('sam-desc').textContent  =
+                'Se pondrá qty=0 para pausar este listing sin eliminarlo.';
+            qtyRow.classList.add('hidden');
+        }
+
+        document.getElementById('stock-action-modal').classList.remove('hidden');
+    };
+
+    window._closeStockModal = function() {
+        document.getElementById('stock-action-modal').classList.add('hidden');
+    };
+
+    window._confirmStockAction = async function() {
+        var qty = _sam.action === 'add_fbm'
+            ? parseInt(document.getElementById('sam-qty-input').value || '0', 10)
+            : 0;
+        if (_sam.action === 'add_fbm' && qty <= 0) {
+            alert('La cantidad debe ser mayor a 0.');
+            return;
+        }
+
+        var btn = document.getElementById('sam-confirm-btn');
+        btn.disabled    = true;
+        btn.textContent = 'Enviando…';
+
+        try {
+            var resp = await fetch(
+                '/api/amazon/products/' + encodeURIComponent(_sam.sku) + '/stock-action',
+                {
+                    method:  'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body:    JSON.stringify({action: _sam.action, quantity: qty})
+                }
+            );
+            var data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || resp.statusText);
+
+            window._closeStockModal();
+
+            // Toast de éxito
+            var t = document.createElement('div');
+            t.className = 'fixed top-5 right-5 z-[100] bg-green-600 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2';
+            t.innerHTML = '✓ Stock actualizado — <span class="font-mono">' + _sam.sku + '</span>';
+            document.body.appendChild(t);
+            setTimeout(function() { t.remove(); }, 4000);
+
+            // Recargar tabla (caché ya invalidado en backend)
+            var state = document.getElementById('amz-inv-state');
+            if (state && window._loadInvTab) {
+                var p = new URLSearchParams({
+                    filter:   state.dataset.filter   || 'all',
+                    sort:     state.dataset.sort     || 'units',
+                    q:        state.dataset.q        || '',
+                    page:     state.dataset.page     || '1',
+                    per_page: state.dataset.perPage  || '20',
+                });
+                window._loadInvTab('/api/amazon/products/inventario?' + p.toString());
+            }
+        } catch(e) {
+            alert('Error al actualizar stock: ' + e.message);
+        } finally {
+            btn.disabled    = false;
+            btn.textContent = '✓ Confirmar';
+        }
+    };
+
+    // ── Polling: recarga tabla cuando los BG tasks terminen ──────────────
+    var _loading = {{ 'true' if (sku_sales_loading or bm_loading or flx_loading) else 'false' }};
+    if (!_loading) return;
+
+    var _params = new URLSearchParams({
+        filter:   '{{ filter }}',
+        sort:     '{{ sort }}',
+        q:        '{{ q | e }}',
+        page:     '{{ page }}',
+        per_page: '{{ per_page }}'
+    });
+    var _interval = setInterval(async function() {
+        try {
+            var r = await fetch('/api/amazon/products/inventario/bg-status');
+            var d = await r.json();
+            if (d.ready) {
+                clearInterval(_interval);
+                if (window._loadInvTab) {
+                    window._loadInvTab('/api/amazon/products/inventario?' + _params.toString());
+                }
+            }
+        } catch(e) { /* silencioso */ }
+    }, 5000);
+})();
+</script>
 
 {% endif %}
