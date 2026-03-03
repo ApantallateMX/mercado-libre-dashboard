@@ -14,7 +14,8 @@
      data-q="{{ q | e }}"
      data-page="{{ page }}"
      data-per-page="{{ per_page }}"
-     data-ts="{{ last_updated_ts }}">
+     data-ts="{{ last_updated_ts }}"
+     data-bg-loading="{{ 'true' if (sku_sales_loading or bm_loading or flx_loading) else 'false' }}">
 </div>
 
 <!-- ─── FILTER CHIPS ──────────────────────────────────────────────────────── -->
@@ -515,128 +516,5 @@
         </div>
     </div>
 </div>
-
-<!-- ─── JS: Modal de stock + polling de background ────────────────────────── -->
-<script>
-(function() {
-    // ── Estado interno del modal ──────────────────────────────────────────
-    var _sam = {sku: '', action: '', quantity: 0, bm_avail: 0, fulfillment_type: ''};
-
-    window.openStockAction = function(sku, action, qty, bm_avail, fulfillment_type) {
-        _sam = {sku: sku, action: action, quantity: qty, bm_avail: bm_avail, fulfillment_type: fulfillment_type};
-
-        document.getElementById('sam-sku').textContent = sku;
-        document.getElementById('sam-fba').textContent = 0;
-        document.getElementById('sam-fbm').textContent = 0;
-        document.getElementById('sam-bm').textContent  = bm_avail;
-        document.getElementById('sam-warn').classList.add('hidden');
-
-        var qtyRow   = document.getElementById('sam-qty-row');
-        var qtyInput = document.getElementById('sam-qty-input');
-
-        if (action === 'add_fbm') {
-            document.getElementById('sam-title').textContent = 'Agregar Stock FBM';
-            document.getElementById('sam-desc').textContent  =
-                'Se publicarán ' + qty + ' unidades como FBM (40% de ' + bm_avail + ' disponibles en BM).';
-            qtyRow.classList.remove('hidden');
-            qtyInput.value = qty;
-            if (fulfillment_type === 'FBA' || fulfillment_type === 'FLX') {
-                var w = document.getElementById('sam-warn');
-                w.textContent = '⚠ Este producto es ' + fulfillment_type + '. El stock se publicará como Merchant Fulfilled (bodega propia).';
-                w.classList.remove('hidden');
-            }
-        } else {
-            document.getElementById('sam-title').textContent = 'Pausar Listing FBM';
-            document.getElementById('sam-desc').textContent  =
-                'Se pondrá qty=0 para pausar este listing sin eliminarlo.';
-            qtyRow.classList.add('hidden');
-        }
-
-        document.getElementById('stock-action-modal').classList.remove('hidden');
-    };
-
-    window._closeStockModal = function() {
-        document.getElementById('stock-action-modal').classList.add('hidden');
-    };
-
-    window._confirmStockAction = async function() {
-        var qty = _sam.action === 'add_fbm'
-            ? parseInt(document.getElementById('sam-qty-input').value || '0', 10)
-            : 0;
-        if (_sam.action === 'add_fbm' && qty <= 0) {
-            alert('La cantidad debe ser mayor a 0.');
-            return;
-        }
-
-        var btn = document.getElementById('sam-confirm-btn');
-        btn.disabled    = true;
-        btn.textContent = 'Enviando…';
-
-        try {
-            var resp = await fetch(
-                '/api/amazon/products/' + encodeURIComponent(_sam.sku) + '/stock-action',
-                {
-                    method:  'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body:    JSON.stringify({action: _sam.action, quantity: qty})
-                }
-            );
-            var data = await resp.json();
-            if (!resp.ok) throw new Error(data.detail || resp.statusText);
-
-            window._closeStockModal();
-
-            // Toast de éxito
-            var t = document.createElement('div');
-            t.className = 'fixed top-5 right-5 z-[100] bg-green-600 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2';
-            t.innerHTML = '✓ Stock actualizado — <span class="font-mono">' + _sam.sku + '</span>';
-            document.body.appendChild(t);
-            setTimeout(function() { t.remove(); }, 4000);
-
-            // Recargar tabla (caché ya invalidado en backend)
-            var state = document.getElementById('amz-inv-state');
-            if (state && window._loadInvTab) {
-                var p = new URLSearchParams({
-                    filter:   state.dataset.filter   || 'all',
-                    sort:     state.dataset.sort     || 'units',
-                    q:        state.dataset.q        || '',
-                    page:     state.dataset.page     || '1',
-                    per_page: state.dataset.perPage  || '20',
-                });
-                window._loadInvTab('/api/amazon/products/inventario?' + p.toString());
-            }
-        } catch(e) {
-            alert('Error al actualizar stock: ' + e.message);
-        } finally {
-            btn.disabled    = false;
-            btn.textContent = '✓ Confirmar';
-        }
-    };
-
-    // ── Polling: recarga tabla cuando los BG tasks terminen ──────────────
-    var _loading = {{ 'true' if (sku_sales_loading or bm_loading or flx_loading) else 'false' }};
-    if (!_loading) return;
-
-    var _params = new URLSearchParams({
-        filter:   '{{ filter }}',
-        sort:     '{{ sort }}',
-        q:        '{{ q | e }}',
-        page:     '{{ page }}',
-        per_page: '{{ per_page }}'
-    });
-    var _interval = setInterval(async function() {
-        try {
-            var r = await fetch('/api/amazon/products/inventario/bg-status');
-            var d = await r.json();
-            if (d.ready) {
-                clearInterval(_interval);
-                if (window._loadInvTab) {
-                    window._loadInvTab('/api/amazon/products/inventario?' + _params.toString());
-                }
-            }
-        } catch(e) { /* silencioso */ }
-    }, 5000);
-})();
-</script>
 
 {% endif %}
