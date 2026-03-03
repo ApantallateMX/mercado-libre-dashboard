@@ -21,20 +21,25 @@
 <div class="flex flex-wrap gap-2 mb-3 items-center">
 
     {% set chips = [
-        ("all",     "Todos",       total if filter == "all" else ""),
-        ("top",     "Top Ventas",  ""),
-        ("low",     "Baja Venta",  ""),
-        ("fba",     "FBA",         ""),
-        ("fbm",     "FBM",         ""),
-        ("flx",     "FLX",         ""),
-        ("nostock", "Sin Stock",   ""),
+        ("all",     "Todos",         total if filter == "all" else ""),
+        ("top",     "Top Ventas",    ""),
+        ("low",     "Baja Venta",    ""),
+        ("fba",     "FBA",           ""),
+        ("fbm",     "FBM",           ""),
+        ("flx",     "FLX",           ""),
+        ("nostock", "Sin Stock",     ""),
+        ("hasbm",   "Con Stock BM",  ""),
+        ("nobm",    "Sin Stock BM",  ""),
     ] %}
     {% for val, label, count in chips %}
     <button onclick="window._filterInv('{{ val }}')"
             class="px-3 py-1.5 text-xs font-semibold rounded-full border transition
                    {% if filter == val %}bg-[#FF9900] text-white border-[#FF9900]
-                   {% else %}border-gray-200 text-gray-500 hover:border-[#FF9900] hover:text-[#FF9900] bg-white{% endif %}">
+                   {% elif val in ('hasbm','nobm') %}border-green-200 text-green-600 hover:border-green-500 hover:text-green-700 bg-white
+                   {% else %}border-gray-200 text-gray-500 hover:border-[#FF9900] hover:text-[#FF9900] bg-white{% endif %}
+                   {% if filter == val and val in ('hasbm','nobm') %}bg-green-500 border-green-500{% endif %}">
         {{ label }}{% if count %} <span class="opacity-70">({{ count }})</span>{% endif %}
+        {% if bm_loading and val in ('hasbm','nobm') %}<span class="ml-0.5 text-[9px] opacity-60">↻</span>{% endif %}
     </button>
     {% endfor %}
 
@@ -58,10 +63,11 @@
     <!-- Sort -->
     <select id="inv-sort" onchange="window._sortInv(this.value)"
             class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 outline-none bg-white">
-        <option value="units"   {% if sort == "units"   %}selected{% endif %}>Ventas 30d</option>
-        <option value="stock"   {% if sort == "stock"   %}selected{% endif %}>Stock FBA</option>
-        <option value="revenue" {% if sort == "revenue" %}selected{% endif %}>Revenue</option>
-        <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio</option>
+        <option value="units"   {% if sort == "units"   %}selected{% endif %}>Ventas 30d ↓</option>
+        <option value="stock"   {% if sort == "stock"   %}selected{% endif %}>Stock FBA ↓</option>
+        <option value="bm"      {% if sort == "bm"      %}selected{% endif %}>BM Stock ↓</option>
+        <option value="revenue" {% if sort == "revenue" %}selected{% endif %}>Revenue ↓</option>
+        <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio ↓</option>
     </select>
 
     <!-- Badge de frescura + Refresh forzado -->
@@ -75,11 +81,21 @@
     </div>
 </div>
 
-{% if sku_sales_loading %}
-<!-- Banner: ventas cargando en background -->
-<div class="mb-3 flex items-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-3 py-2 rounded-lg text-xs">
-    <span class="animate-spin inline-block text-base leading-none">↻</span>
-    <span>Calculando ventas 30d en background… Los filtros <strong>Top Ventas</strong> y <strong>Baja Venta</strong> se actualizarán automáticamente.</span>
+{% if sku_sales_loading or bm_loading %}
+<!-- Banner: datos cargando en background -->
+<div class="mb-3 flex flex-wrap gap-2">
+    {% if sku_sales_loading %}
+    <div class="flex items-center gap-2 bg-orange-50 border border-orange-200 text-orange-700 px-3 py-2 rounded-lg text-xs flex-1 min-w-0">
+        <span class="animate-spin inline-block text-base leading-none shrink-0">↻</span>
+        <span>Calculando ventas 30d… <strong>Top Ventas</strong> y <strong>Baja Venta</strong> se actualizarán.</span>
+    </div>
+    {% endif %}
+    {% if bm_loading %}
+    <div class="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-3 py-2 rounded-lg text-xs flex-1 min-w-0">
+        <span class="animate-spin inline-block text-base leading-none shrink-0">↻</span>
+        <span>Cargando stock BM para todos los SKUs… <strong>Con Stock BM</strong> / <strong>Sin Stock BM</strong> / <strong>BM Stock ↓</strong> se actualizarán.</span>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 

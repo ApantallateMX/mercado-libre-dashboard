@@ -103,6 +103,8 @@ _BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/Invent
 _BM_LOC_IDS   = "47,62,68"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
+_bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo
+_bm_all_last_refresh: float = 0.0    # timestamp del último BG refresh completo
 
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
@@ -1239,6 +1241,14 @@ def _parse_wh_rows_amz(rows: list) -> tuple:
 _BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved": 0}
 
 
+def _bm_from_cache(sku: str) -> dict:
+    """Lee BM data del caché sin hacer API calls. Retorna _BM_EMPTY si no está cacheado."""
+    cached = _bm_amz_cache.get(sku.upper())
+    if cached and (_time.time() - cached[0]) < _BM_AMZ_TTL:
+        return cached[1]
+    return _BM_EMPTY
+
+
 async def _enrich_bm_amz(items: list) -> None:
     """
     Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
@@ -1345,6 +1355,36 @@ async def _enrich_bm_amz(items: list) -> None:
             *[_fetch_base(base, skus, http) for base, skus in base_to_amz_skus.items()],
             return_exceptions=True,
         )
+
+
+async def _refresh_bm_all_bg(listings: list) -> None:
+    """
+    Tarea BG: pre-calienta caché BM para todos los listings.
+    Permite filtrar/ordenar por BM stock en toda la tabla (no solo la página actual).
+    """
+    global _bm_all_last_refresh
+    try:
+        # Items dummy (solo "sku") para triggerar el caché sin tocar datos reales
+        items_for_bm = [{"sku": item.get("sku", "")} for item in listings if item.get("sku")]
+        total = len(items_for_bm)
+        for i in range(0, total, 50):
+            chunk = items_for_bm[i:i + 50]
+            await _enrich_bm_amz(chunk)
+            if i + 50 < total:
+                await asyncio.sleep(1.0)  # pace suave para no saturar BM API en BG
+        logger.info(f"[BM-ALL-BG] Pre-fetch completo: {total} SKUs en caché BM")
+        _bm_all_last_refresh = _time.time()
+    finally:
+        _bm_all_refreshing.discard("bm_all")
+
+
+def _trigger_bm_prefetch(listings: list) -> None:
+    """Lanza BG pre-fetch de BM si el caché global está frío o stale."""
+    now = _time.time()
+    if "bm_all" not in _bm_all_refreshing and (now - _bm_all_last_refresh) > _BM_AMZ_TTL:
+        _bm_all_refreshing.add("bm_all")
+        asyncio.create_task(_refresh_bm_all_bg(listings))
+        logger.info(f"[BM-ALL] Pre-fetch BG iniciado ({len(listings)} listings)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1501,6 +1541,10 @@ async def amazon_products_inventario(
         flx_stock_index = _get_flx_stock_cached(client, flx_skus)   # sync, nunca bloquea
         flx_loading     = client.seller_id in _flx_stock_refreshing  # True = BG activo
 
+        # BM pre-fetch BG: calienta caché BM para todos los SKUs (permite filtrar/ordenar por BM)
+        _trigger_bm_prefetch(listings)
+        bm_loading = "bm_all" in _bm_all_refreshing
+
         enriched = []
         for item in listings:
             sku = item.get("sku", "")
@@ -1606,12 +1650,9 @@ async def amazon_products_inventario(
                     f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
                     if asin else "https://sellercentral.amazon.com.mx/inventory"
                 ),
-                # BM — se rellena por _enrich_bm_amz para la página actual
-                "bm_avail":    0,
-                "bm_reserved": 0,
-                "bm_mty":      0,
-                "bm_cdmx":     0,
-                "bm_tj":       0,
+                # BM — lee del caché si disponible (permite filtrar/ordenar por BM en toda la tabla)
+                # _enrich_bm_amz sobreescribirá con datos frescos para la página actual
+                **_bm_from_cache(sku),
                 "flx_reserved": flx_reserved,
             })
 
@@ -1639,6 +1680,12 @@ async def amazon_products_inventario(
                 if e["stock_fba"] == 0 and e["stock_fbm"] == 0
                 and (e["stock_flx"] == 0 if "-FLX" in e["sku"].upper() else True)
             ]
+        elif filter == "hasbm":
+            # Con Stock BM: BM disponible > 0 (hay inventario en bodega)
+            enriched = [e for e in enriched if e["bm_avail"] > 0]
+        elif filter == "nobm":
+            # Sin Stock BM: BM disponible = 0 (bodega vacía — necesita reposición)
+            enriched = [e for e in enriched if e["bm_avail"] == 0]
 
         # ── Ordenar ────────────────────────────────────────────────────────
         if sort == "stock":
@@ -1647,6 +1694,8 @@ async def amazon_products_inventario(
             enriched.sort(key=lambda x: x["revenue_30d"], reverse=True)
         elif sort == "price":
             enriched.sort(key=lambda x: x["price"], reverse=True)
+        elif sort == "bm":
+            enriched.sort(key=lambda x: x["bm_avail"], reverse=True)
         else:  # units (default)
             enriched.sort(key=lambda x: x["units_30d"], reverse=True)
 
@@ -1689,6 +1738,7 @@ async def amazon_products_inventario(
             "last_updated_ts":   cache_ts,
             "flx_loading":       flx_loading,        # True = BG refresh de FLX activo
             "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
+            "bm_loading":        bm_loading,         # True = BG pre-fetch BM activo
         }
         return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
 
