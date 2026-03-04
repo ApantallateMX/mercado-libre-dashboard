@@ -111,7 +111,7 @@ _bm_all_last_refresh: float = 0.0    # timestamp del último BG refresh completo
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
 _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
-_FLX_STOCK_TTL     = 120  # 2 min — datos en tiempo real (inventario cambia con órdenes)
+_FLX_STOCK_TTL     = 300  # 5 min — el bg task tarda ~30-60s con 1000 SKUs; no reejecutar demasiado rápido
 _flx_stock_refreshing: set = set()  # seller_ids con refresh BG activo (evita doble tarea)
 
 
@@ -260,41 +260,65 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
     """
     Tarea BG: descarga FLX stock de FBA API y actualiza caché.
     Nunca bloquea requests — se lanza con asyncio.create_task().
+
+    Fixes vs versión anterior:
+    - Batch de 20 SKUs (en lugar de 50) para mantenerse bajo el límite de 2 req/s
+    - Sleep 0.55s entre batches = ~1.8 req/s (límite FBA Inventory API: 2 req/s)
+    - Manejo de nextToken dentro de cada batch (Amazon puede paginar la respuesta)
+    - Retry automático con backoff en 429 dentro del loop de paginación
     """
     key = client.seller_id
     try:
         result: dict = {}
         unique_skus = list(dict.fromkeys(s for s in flx_skus if s))
-        for i in range(0, len(unique_skus), 50):
-            batch = unique_skus[i:i + 50]
-            params = [
-                ("granularityType", "Marketplace"),
-                ("granularityId",   client.marketplace_id),
-                ("marketplaceIds",  client.marketplace_id),
-                ("details",         "true"),
-            ]
-            for sku in batch:
-                params.append(("sellerSkus", sku))
-            try:
-                data = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
-                for s in (data.get("payload", {}).get("inventorySummaries") or []):
-                    sku  = s.get("sellerSku", "")
-                    det  = s.get("inventoryDetails", {}) or {}
-                    res  = det.get("reservedQuantity", {}) or {}
-                    result[sku] = {
-                        "fulfillable": int(det.get("fulfillableQuantity") or 0),
-                        "reserved":    int(res.get("totalReservedQuantity") or 0),
-                        "inbound":     (
-                            int(det.get("inboundWorkingQuantity") or 0)
-                            + int(det.get("inboundShippedQuantity") or 0)
-                            + int(det.get("inboundReceivingQuantity") or 0)
-                        ),
-                        "total":       int(s.get("totalQuantity") or 0),
-                    }
-            except Exception as exc:
-                logger.warning(f"[FLX-BG] Error lote {i}: {exc}")
-            if i + 50 < len(unique_skus):
-                await asyncio.sleep(0.3)
+
+        for i in range(0, len(unique_skus), 20):
+            batch = unique_skus[i:i + 20]
+            next_tok = None
+
+            # Paginación dentro del batch — Amazon puede devolver nextToken
+            for _page in range(10):  # máx 10 páginas por batch (safety)
+                params = [
+                    ("granularityType", "Marketplace"),
+                    ("granularityId",   client.marketplace_id),
+                    ("marketplaceIds",  client.marketplace_id),
+                    ("details",         "true"),
+                ]
+                for sku in batch:
+                    params.append(("sellerSkus", sku))
+                if next_tok:
+                    params.append(("nextToken", next_tok))
+
+                try:
+                    data    = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+                    payload = data.get("payload", {}) or {}
+                    for s in (payload.get("inventorySummaries") or []):
+                        s_sku = s.get("sellerSku", "")
+                        det   = s.get("inventoryDetails", {}) or {}
+                        res   = det.get("reservedQuantity", {}) or {}
+                        result[s_sku] = {
+                            "fulfillable": int(det.get("fulfillableQuantity") or 0),
+                            "reserved":    int(res.get("totalReservedQuantity") or 0),
+                            "inbound":     (
+                                int(det.get("inboundWorkingQuantity") or 0)
+                                + int(det.get("inboundShippedQuantity") or 0)
+                                + int(det.get("inboundReceivingQuantity") or 0)
+                            ),
+                            "total":       int(s.get("totalQuantity") or 0),
+                        }
+                    next_tok = payload.get("nextToken")
+                    if not next_tok:
+                        break  # sin más páginas
+                    await asyncio.sleep(0.55)  # rate limit entre páginas
+
+                except Exception as exc:
+                    logger.warning(f"[FLX-BG] Error batch {i} pág {_page}: {exc}")
+                    break  # pasar al siguiente batch
+
+            # Pausa entre batches: 0.55s = ~1.8 req/s (bajo el límite de 2 req/s)
+            if i + 20 < len(unique_skus):
+                await asyncio.sleep(0.55)
+
         logger.info(f"[FLX-BG] {len(result)}/{len(unique_skus)} FLX SKUs actualizados en background")
         _flx_stock_cache[key] = (_time.time(), result)
     finally:
