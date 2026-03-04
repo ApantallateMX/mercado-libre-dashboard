@@ -11,6 +11,7 @@
 <div id="amz-inv-state"
      data-filter="{{ filter }}"
      data-sort="{{ sort }}"
+     data-sort-dir="{{ sort_dir }}"
      data-q="{{ q | e }}"
      data-page="{{ page }}"
      data-per-page="{{ per_page }}"
@@ -64,12 +65,16 @@
     <!-- Sort -->
     <select id="inv-sort" onchange="window._sortInv(this.value)"
             class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 outline-none bg-white">
-        <option value="units"   {% if sort == "units"   %}selected{% endif %}>Ventas 30d ↓</option>
-        <option value="flx"     {% if sort == "flx"     %}selected{% endif %}>FLX Stock ↓</option>
-        <option value="stock"   {% if sort == "stock"   %}selected{% endif %}>Stock FBA ↓</option>
-        <option value="bm"      {% if sort == "bm"      %}selected{% endif %}>BM Stock ↓</option>
-        <option value="revenue" {% if sort == "revenue" %}selected{% endif %}>Revenue ↓</option>
-        <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio ↓</option>
+        <option value="units"   {% if sort == "units"   %}selected{% endif %}>Ventas 30d</option>
+        <option value="flx"     {% if sort == "flx"     %}selected{% endif %}>FLX Stock</option>
+        <option value="stock"   {% if sort == "stock"   %}selected{% endif %}>FBA Stock</option>
+        <option value="fbm"     {% if sort == "fbm"     %}selected{% endif %}>FBM Stock</option>
+        <option value="bm"      {% if sort == "bm"      %}selected{% endif %}>BM Disp.</option>
+        <option value="mty"     {% if sort == "mty"     %}selected{% endif %}>MTY Stock</option>
+        <option value="cdmx"    {% if sort == "cdmx"    %}selected{% endif %}>CDMX Stock</option>
+        <option value="revenue" {% if sort == "revenue" %}selected{% endif %}>Revenue 30d</option>
+        <option value="price"   {% if sort == "price"   %}selected{% endif %}>Precio</option>
+        <option value="supply"  {% if sort == "supply"  %}selected{% endif %}>Días Supply</option>
     </select>
 
     <!-- Badge de frescura + chip BG + Refresh forzado -->
@@ -142,35 +147,63 @@
 <div class="bg-white rounded-xl shadow overflow-hidden">
     <div class="overflow-x-auto">
         <table class="w-full text-sm" id="amz-inv-table">
+            {# ─── Macro para encabezado sorteable ─────────────────────────── #}
+            {%- macro sort_th(col, label, align="right", extra_class="", title="") -%}
+            {%- set is_active = (sort == col) -%}
+            {%- set arrow = ("▲" if sort_dir == "asc" else "▼") if is_active else "" -%}
+            <th onclick="window._sortInvCol('{{ col }}')"
+                class="py-2.5 px-3 font-medium text-{{ align }} {{ extra_class }} cursor-pointer select-none
+                       hover:text-[#FF9900] transition whitespace-nowrap"
+                title="{{ title or ('Ordenar por ' + label) }}">
+                <span class="{{ 'text-[#FF9900]' if is_active else '' }}">{{ label }}</span>
+                {% if is_active %}<span class="ml-0.5 text-[10px]">{{ arrow }}</span>{% endif %}
+            </th>
+            {%- endmacro -%}
+
             <thead style="background: #232F3E;">
                 <tr class="text-left text-gray-300 text-xs uppercase tracking-wide">
                     <th class="py-2.5 px-3 font-medium text-center w-8">#</th>
                     <th class="py-2.5 px-4 font-medium">Producto</th>
-                    <th class="py-2.5 px-3 font-medium text-right">Precio</th>
+                    {{ sort_th("price", "Precio", align="right") }}
                     <th class="py-2.5 px-3 font-medium text-center amz-col-deal">Deal</th>
-                    <th class="py-2.5 px-2 font-medium text-right" title="Stock en almacenes Amazon FBA">
-                        <span class="text-orange-300">FBA</span>
+                    {# FBA #}
+                    {%- set fba_active = (sort == "stock") -%}
+                    <th onclick="window._sortInvCol('stock')"
+                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        title="Stock FBA — almacenes Amazon">
+                        <span class="{{ 'text-[#FF9900]' if fba_active else 'text-orange-300' }}">FBA</span>
+                        {% if fba_active %}<span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
                     </th>
-                    <th class="py-2.5 px-2 font-medium text-right" title="Stock Merchant Fulfilled (FBM — bodega propia)">
-                        <span class="text-blue-300">FBM</span>
+                    {# FBM #}
+                    {%- set fbm_active = (sort == "fbm") -%}
+                    <th onclick="window._sortInvCol('fbm')"
+                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        title="Stock FBM — bodega propia">
+                        <span class="{{ 'text-[#FF9900]' if fbm_active else 'text-blue-300' }}">FBM</span>
+                        {% if fbm_active %}<span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
                     </th>
-                    <th class="py-2.5 px-2 font-medium text-right"
-                        title="Stock Seller Flex — FBA Inventory API (tiempo real). {% if flx_loading %}Actualizando en background…{% endif %}">
-                        <span class="text-purple-300">FLX</span>
-                        {% if flx_loading %}
+                    {# FLX #}
+                    {%- set flx_active = (sort == "flx") -%}
+                    <th onclick="window._sortInvCol('flx')"
+                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        title="Stock Seller Flex — FBA Inventory API (tiempo real). {% if flx_loading %}Actualizando…{% endif %}">
+                        <span class="{{ 'text-[#FF9900]' if flx_active else 'text-purple-300' }}">FLX</span>
+                        {% if flx_active %}
+                        <span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>
+                        {% elif flx_loading %}
                         <span class="text-[9px] text-purple-400 leading-none block -mt-0.5 text-right animate-pulse">↻</span>
                         {% else %}
                         <span class="text-[9px] text-purple-500 leading-none block -mt-0.5 text-right">●</span>
                         {% endif %}
                     </th>
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Disp.</th>
+                    {{ sort_th("bm",   "BM Disp.", align="right", extra_class="amz-col-bm") }}
                     <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-wh">MTY</th>
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-wh">CDMX</th>
+                    {{ sort_th("mty",  "MTY",  align="right", extra_class="amz-col-wh") }}
+                    {{ sort_th("cdmx", "CDMX", align="right", extra_class="amz-col-wh") }}
                     <th class="py-2.5 px-3 font-medium text-right amz-col-wh">TJ</th>
-                    <th class="py-2.5 px-3 font-medium text-right">Ventas 30d</th>
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-rev">Revenue 30d</th>
-                    <th class="py-2.5 px-3 font-medium text-center amz-col-supply">Días Supply</th>
+                    {{ sort_th("units",   "Ventas 30d",  align="right") }}
+                    {{ sort_th("revenue", "Revenue 30d", align="right", extra_class="amz-col-rev") }}
+                    {{ sort_th("supply",  "Días Supply", align="center", extra_class="amz-col-supply") }}
                     <th class="py-2.5 px-3 font-medium text-center amz-col-status">Estado</th>
                     <th class="py-2.5 px-3 font-medium text-center">Acción</th>
                 </tr>
@@ -408,7 +441,7 @@
         <div class="flex items-center gap-1 flex-wrap">
 
             <!-- Anterior -->
-            <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&q={{ q | e }}&page={{ page - 1 }}&per_page={{ per_page }}')"
+            <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&sort_dir={{ sort_dir }}&q={{ q | e }}&page={{ page - 1 }}&per_page={{ per_page }}')"
                     {% if page <= 1 %}disabled{% endif %}
                     class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-[#FF9900] hover:text-[#FF9900] disabled:opacity-30 disabled:cursor-not-allowed transition">
                 ‹ Ant
@@ -426,7 +459,7 @@
                     {% if p == page %}
                     <button class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border bg-[#FF9900] text-white border-[#FF9900] cursor-default">{{ p }}</button>
                     {% else %}
-                    <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&q={{ q | e }}&page={{ p }}&per_page={{ per_page }}')"
+                    <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&sort_dir={{ sort_dir }}&q={{ q | e }}&page={{ p }}&per_page={{ per_page }}')"
                             class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-[#FF9900] hover:text-[#FF9900] transition">{{ p }}</button>
                     {% endif %}
                     {% set ns.last = p %}
@@ -434,14 +467,14 @@
             {% endfor %}
 
             <!-- Siguiente -->
-            <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&q={{ q | e }}&page={{ page + 1 }}&per_page={{ per_page }}')"
+            <button onclick="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&sort_dir={{ sort_dir }}&q={{ q | e }}&page={{ page + 1 }}&per_page={{ per_page }}')"
                     {% if page >= total_pages %}disabled{% endif %}
                     class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-[#FF9900] hover:text-[#FF9900] disabled:opacity-30 disabled:cursor-not-allowed transition">
                 Sig ›
             </button>
 
             <!-- Items por página -->
-            <select onchange="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&q={{ q | e }}&page=1&per_page=' + this.value)"
+            <select onchange="window._loadInvTab('/api/amazon/products/inventario?filter={{ filter }}&sort={{ sort }}&sort_dir={{ sort_dir }}&q={{ q | e }}&page=1&per_page=' + this.value)"
                     class="h-8 px-2 rounded-lg text-xs border border-gray-200 text-gray-500 outline-none bg-white ml-1">
                 {% for n in [10, 20, 50] %}
                 <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}/pág</option>

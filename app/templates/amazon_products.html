@@ -231,23 +231,26 @@ window._loadInvTab = function(url) {
 function _invState() {
     var s = document.getElementById('amz-inv-state');
     return {
-        filter:   s ? s.getAttribute('data-filter')   : 'all',
-        sort:     s ? s.getAttribute('data-sort')      : 'units',
-        q:        s ? s.getAttribute('data-q')         : '',
-        page:     s ? parseInt(s.getAttribute('data-page'))     : 1,
-        perPage:  s ? parseInt(s.getAttribute('data-per-page')) : 20,
+        filter:  s ? s.getAttribute('data-filter')            : 'all',
+        sort:    s ? s.getAttribute('data-sort')               : 'units',
+        sortDir: s ? (s.getAttribute('data-sort-dir') || 'desc') : 'desc',
+        q:       s ? s.getAttribute('data-q')                  : '',
+        page:    s ? parseInt(s.getAttribute('data-page'))      : 1,
+        perPage: s ? parseInt(s.getAttribute('data-per-page'))  : 20,
     };
 }
 
 function _invUrl(overrides) {
-    var st = _invState();
-    var f  = overrides.filter   !== undefined ? overrides.filter   : st.filter;
-    var so = overrides.sort     !== undefined ? overrides.sort     : st.sort;
-    var q  = overrides.q        !== undefined ? overrides.q        : st.q;
-    var p  = overrides.page     !== undefined ? overrides.page     : 1;
-    var pp = overrides.perPage  !== undefined ? overrides.perPage  : st.perPage;
+    var st  = _invState();
+    var f   = overrides.filter   !== undefined ? overrides.filter   : st.filter;
+    var so  = overrides.sort     !== undefined ? overrides.sort     : st.sort;
+    var sd  = overrides.sortDir  !== undefined ? overrides.sortDir  : st.sortDir;
+    var q   = overrides.q        !== undefined ? overrides.q        : st.q;
+    var p   = overrides.page     !== undefined ? overrides.page     : 1;
+    var pp  = overrides.perPage  !== undefined ? overrides.perPage  : st.perPage;
     return '/api/amazon/products/inventario?filter=' + f +
            '&sort=' + so +
+           '&sort_dir=' + sd +
            '&q=' + encodeURIComponent(q) +
            '&page=' + p +
            '&per_page=' + pp;
@@ -257,8 +260,16 @@ window._filterInv = function(filterVal) {
     window._loadInvTab(_invUrl({ filter: filterVal }));
 };
 
+// Dropdown de sort — siempre inicia en desc al cambiar columna
 window._sortInv = function(sortVal) {
-    window._loadInvTab(_invUrl({ sort: sortVal }));
+    window._loadInvTab(_invUrl({ sort: sortVal, sortDir: 'desc', page: 1 }));
+};
+
+// Click en encabezado de columna — toggle asc/desc si es la columna activa
+window._sortInvCol = function(colName) {
+    var st  = _invState();
+    var dir = (st.sort === colName && st.sortDir === 'desc') ? 'asc' : 'desc';
+    window._loadInvTab(_invUrl({ sort: colName, sortDir: dir, page: 1 }));
 };
 
 window._submitInvSearch = function() {

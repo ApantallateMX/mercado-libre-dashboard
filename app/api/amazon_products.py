@@ -1512,7 +1512,8 @@ async def amazon_products_resumen(request: Request):
 @router.get("/products/inventario", response_class=HTMLResponse)
 async def amazon_products_inventario(
     request: Request,
-    sort:     str  = Query("units", description="units|flx|stock|revenue|price|bm"),
+    sort:     str  = Query("units", description="units|flx|stock|fbm|revenue|price|bm|mty|cdmx|supply"),
+    sort_dir: str  = Query("desc",  description="asc|desc"),
     filter:   str  = Query("all",   description="all|fba|top|low|nostock"),
     q:        str  = Query("",      description="Búsqueda por SKU, ASIN o título"),
     page:     int  = Query(1,       description="Página actual"),
@@ -1698,18 +1699,28 @@ async def amazon_products_inventario(
             enriched = [e for e in enriched if e["bm_avail"] == 0]
 
         # ── Ordenar ────────────────────────────────────────────────────────
+        desc = (sort_dir != "asc")
         if sort == "flx":
-            enriched.sort(key=lambda x: (x["stock_flx"] + x["flx_reserved"]), reverse=True)
+            enriched.sort(key=lambda x: (x["stock_flx"] + x["flx_reserved"]), reverse=desc)
         elif sort == "stock":
-            enriched.sort(key=lambda x: (x["fba_stock"], x["fba_stock_fba"]), reverse=True)
+            enriched.sort(key=lambda x: (x["fba_stock"], x["fba_stock_fba"]), reverse=desc)
+        elif sort == "fbm":
+            enriched.sort(key=lambda x: x["stock_fbm"], reverse=desc)
         elif sort == "revenue":
-            enriched.sort(key=lambda x: x["revenue_30d"], reverse=True)
+            enriched.sort(key=lambda x: x["revenue_30d"], reverse=desc)
         elif sort == "price":
-            enriched.sort(key=lambda x: x["price"], reverse=True)
+            enriched.sort(key=lambda x: x["price"], reverse=desc)
         elif sort == "bm":
-            enriched.sort(key=lambda x: x["bm_avail"], reverse=True)
+            enriched.sort(key=lambda x: x["bm_avail"], reverse=desc)
+        elif sort == "mty":
+            enriched.sort(key=lambda x: x["bm_mty"], reverse=desc)
+        elif sort == "cdmx":
+            enriched.sort(key=lambda x: x["bm_cdmx"], reverse=desc)
+        elif sort == "supply":
+            _none_val = -1 if desc else float("inf")
+            enriched.sort(key=lambda x: x["dias_supply"] if x["dias_supply"] is not None else _none_val, reverse=desc)
         else:  # units (default)
-            enriched.sort(key=lambda x: x["units_30d"], reverse=True)
+            enriched.sort(key=lambda x: x["units_30d"], reverse=desc)
 
         # ── Búsqueda ───────────────────────────────────────────────────────
         if q:
@@ -1761,6 +1772,7 @@ async def amazon_products_inventario(
             "page":             page,
             "per_page":         per_page,
             "sort":             sort,
+            "sort_dir":         sort_dir,
             "filter":           filter,
             "q":                q,
             "nickname":         client.nickname,
