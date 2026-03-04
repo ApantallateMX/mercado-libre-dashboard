@@ -280,9 +280,9 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock FLX (Seller Flex) — fulfillableQuantity + reservedQuantity de FBA API -->
+                    <!-- Stock FLX (Seller Flex / Amazon Onsite) — de FBA API per-SKU -->
                     <td class="py-2.5 px-2 text-right whitespace-nowrap">
-                        {% if '-FLX' in item.sku|upper %}
+                        {% if item.fulfillment_type == 'FLX' %}
                             {% if item.stock_flx > 0 or item.flx_reserved > 0 %}
                             <div class="flex flex-col items-end gap-0">
                                 <span class="text-sm font-bold {% if item.stock_flx == 0 %}text-red-500{% elif item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"

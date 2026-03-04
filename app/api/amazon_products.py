@@ -216,6 +216,20 @@ def _build_fba_index(fba_summaries: list) -> dict:
     return index
 
 
+def _is_amz_onsite(item: dict) -> bool:
+    """
+    True si el item es Seller Flex / Amazon Onsite.
+    Detecta por SKU (-FLX, -FLX1, -FLX4 etc.) O por fulfillmentChannelCode AMAZON_NA.
+    Algunos productos usan Amazon Onsite sin el sufijo -FLX en el SKU.
+    """
+    if "-FLX" in (item.get("sku") or "").upper():
+        return True
+    for fa in (item.get("fulfillmentAvailability") or []):
+        if (fa.get("fulfillmentChannelCode") or "").upper() == "AMAZON_NA":
+            return True
+    return False
+
+
 async def _get_listings_cached(client) -> list:
     """Obtiene listings del caché o los descarga si expiró."""
     now = _time.time()
@@ -1544,8 +1558,8 @@ async def amazon_products_inventario(
         fba_index = _build_fba_index(fba_summaries)
 
         # FLX real-time: stale-while-revalidate — retorna caché inmediatamente (o {}) + BG refresh
-        flx_skus = [item.get("sku", "") for item in listings
-                    if "-FLX" in (item.get("sku", "") or "").upper()]
+        # Incluye: items con -FLX en SKU O con fulfillmentChannelCode AMAZON_NA
+        flx_skus = [item.get("sku", "") for item in listings if _is_amz_onsite(item)]
         flx_stock_index = _get_flx_stock_cached(client, flx_skus)   # sync, nunca bloquea
         flx_loading     = client.seller_id in _flx_stock_refreshing  # True = BG activo
 
@@ -1577,10 +1591,11 @@ async def amazon_products_inventario(
             )
 
             # ── Stock por canal de fulfillment ─────────────────────────────
-            listing_fa = item.get("fulfillmentAvailability", [])
-            stock_fba  = fba_stock_fba   # de la FBA Inventory API
-            stock_fbm  = 0               # canal DEFAULT (merchant fulfilled)
-            stock_flx  = 0               # Seller Flex / Amazon Onsite
+            listing_fa   = item.get("fulfillmentAvailability", [])
+            is_flx_item  = _is_amz_onsite(item)   # -FLX SKU ó AMAZON_NA channel
+            stock_fba    = fba_stock_fba           # de la FBA Inventory API general
+            stock_fbm    = 0                       # canal DEFAULT (merchant fulfilled)
+            stock_flx    = 0                       # Seller Flex / Amazon Onsite
 
             for fa_entry in listing_fa:
                 channel = (fa_entry.get("fulfillmentChannelCode") or "").upper()
@@ -1588,16 +1603,21 @@ async def amazon_products_inventario(
                 if channel == "DEFAULT":
                     stock_fbm = qty
 
-            # Seller Flex: stock real de FBA API (query por SKU específico)
-            # fulfillableQuantity coincide exactamente con Seller Central.
+            # Seller Flex / Amazon Onsite: stock real de FBA API (query por SKU específico).
+            # Aplica a items con -FLX en SKU Y a items con fulfillmentChannelCode AMAZON_NA
+            # (algunos productos usan Amazon Onsite sin sufijo -FLX en el nombre del SKU).
             flx_reserved = 0
             flx_inbound  = 0
-            if "-FLX" in sku.upper():
+            if is_flx_item:
                 flx_data     = flx_stock_index.get(sku, {})
                 stock_flx    = flx_data.get("fulfillable", 0)
                 flx_reserved = flx_data.get("reserved", 0)
                 flx_inbound  = flx_data.get("inbound", 0)
-                stock_fba    = 0   # FLX no aparece en columna FBA
+                # Fallback: si el per-SKU FBA API no devolvió datos pero el scan
+                # general sí tiene el SKU (algunos items aparecen en ambos APIs)
+                if stock_flx == 0 and not flx_data and fba_stock_fba > 0:
+                    stock_flx = fba_stock_fba
+                stock_fba = 0  # Onsite → columna FLX, no FBA
 
             # Stock principal para días supply: FBA > FLX > FBM
             if stock_fba > 0:
@@ -1611,7 +1631,7 @@ async def amazon_products_inventario(
                 fulfillment_type = "FBM"
             else:
                 disp_stock = 0
-                fulfillment_type = "FLX" if "-FLX" in sku.upper() else ("FBA" if bool(fba_d) else "FBM")
+                fulfillment_type = "FLX" if is_flx_item else ("FBA" if bool(fba_d) else "FBM")
 
             sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d   = sales["units"]
@@ -1679,7 +1699,8 @@ async def amazon_products_inventario(
         elif filter == "fbm":
             enriched = [e for e in enriched if e["stock_fbm"] > 0]
         elif filter == "flx":
-            enriched = [e for e in enriched if "-FLX" in e["sku"].upper()]
+            # Incluye -FLX en SKU Y items con fulfillment_type FLX (AMAZON_NA)
+            enriched = [e for e in enriched if e["fulfillment_type"] == "FLX"]
         elif filter == "top":
             enriched = [e for e in enriched if e["is_top"]]
         elif filter == "low":
@@ -2065,15 +2086,15 @@ async def amazon_products_seller_flex(
         listings = await _get_listings_cached(client)
 
         # FLX stock real-time — stale-while-revalidate (no bloquea)
-        all_flx_skus = [item.get("sku", "") for item in listings
-                        if "-FLX" in (item.get("sku", "") or "").upper()]
+        # Incluye: -FLX en SKU Y items con fulfillmentChannelCode AMAZON_NA
+        all_flx_skus = [item.get("sku", "") for item in listings if _is_amz_onsite(item)]
         flx_stock_index = _get_flx_stock_cached(client, all_flx_skus)  # sync, nunca bloquea
 
-        # Filtrar solo SKUs -FLX
+        # Filtrar solo items Seller Flex / Amazon Onsite
         flx_items = []
         for item in listings:
             sku = item.get("sku", "")
-            if "-FLX" not in sku.upper():
+            if not _is_amz_onsite(item):
                 continue
 
             summaries = item.get("summaries", [{}])
