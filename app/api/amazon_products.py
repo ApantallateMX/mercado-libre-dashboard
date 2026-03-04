@@ -1860,6 +1860,77 @@ async def inventario_bg_status(request: Request):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FLX DEBUG — consulta directa a FBA API para uno o varios SKUs
+# GET /api/amazon/products/flx-debug?skus=SKU1,SKU2
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/flx-debug")
+async def flx_debug(request: Request, skus: str = Query("", description="Comma-separated seller SKUs")):
+    """
+    Diagnóstico: consulta la FBA Inventory API directamente para los SKUs dados.
+    Muestra la respuesta raw + lo que hay en caché.
+    Solo para debug — no usa caché, siempre llama a Amazon.
+    """
+    client = await get_amazon_client()
+    if not client:
+        return JSONResponse({"error": "Sin cuenta Amazon"}, status_code=401)
+
+    sku_list = [s.strip() for s in skus.split(",") if s.strip()]
+    if not sku_list:
+        return JSONResponse({"error": "Parámetro 'skus' requerido. Ej: ?skus=SNTV006829-FLX4,SNTV006138-FLX4"})
+
+    # Lo que hay en caché ahora
+    cached = _flx_stock_cache.get(client.seller_id)
+    cache_age = None
+    cache_hits = {}
+    if cached:
+        ts, data = cached
+        cache_age = int(_time.time() - ts)
+        cache_hits = {sku: data.get(sku) for sku in sku_list}
+
+    # Consulta directa a la FBA API (sin caché)
+    params = [
+        ("granularityType", "Marketplace"),
+        ("granularityId",   client.marketplace_id),
+        ("marketplaceIds",  client.marketplace_id),
+        ("details",         "true"),
+    ]
+    for sku in sku_list:
+        params.append(("sellerSkus", sku))
+
+    try:
+        raw = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+        summaries = raw.get("payload", {}).get("inventorySummaries", [])
+        next_tok   = raw.get("payload", {}).get("nextToken")
+        parsed = []
+        for s in summaries:
+            det = s.get("inventoryDetails", {}) or {}
+            res = det.get("reservedQuantity", {}) or {}
+            parsed.append({
+                "sellerSku":   s.get("sellerSku"),
+                "asin":        s.get("asin"),
+                "fulfillable": det.get("fulfillableQuantity"),
+                "reserved":    res.get("totalReservedQuantity"),
+                "inbound_working":    det.get("inboundWorkingQuantity"),
+                "inbound_shipped":    det.get("inboundShippedQuantity"),
+                "inbound_receiving":  det.get("inboundReceivingQuantity"),
+                "total":       s.get("totalQuantity"),
+                "condition":   s.get("condition"),
+                "fulfillmentChannel": s.get("fulfillmentChannelCode") or s.get("inventoryType"),
+            })
+        return JSONResponse({
+            "queried_skus":   sku_list,
+            "api_returned":   parsed,
+            "nextToken":      next_tok,
+            "cache_age_sec":  cache_age,
+            "cache_hits":     cache_hits,
+            "note": "api_returned vacío = Amazon no tiene este SKU en FBA inventory (o 0 stock y no devuelve el item)"
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "queried_skus": sku_list}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # STOCK ACTION — actualiza qty de un listing FBM desde el tab Inventario
 # ─────────────────────────────────────────────────────────────────────────────
 
