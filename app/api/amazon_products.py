@@ -1512,7 +1512,7 @@ async def amazon_products_resumen(request: Request):
 @router.get("/products/inventario", response_class=HTMLResponse)
 async def amazon_products_inventario(
     request: Request,
-    sort:     str  = Query("units", description="units|stock|revenue|price"),
+    sort:     str  = Query("units", description="units|flx|stock|revenue|price|bm"),
     filter:   str  = Query("all",   description="all|fba|top|low|nostock"),
     q:        str  = Query("",      description="Búsqueda por SKU, ASIN o título"),
     page:     int  = Query(1,       description="Página actual"),
@@ -1698,7 +1698,9 @@ async def amazon_products_inventario(
             enriched = [e for e in enriched if e["bm_avail"] == 0]
 
         # ── Ordenar ────────────────────────────────────────────────────────
-        if sort == "stock":
+        if sort == "flx":
+            enriched.sort(key=lambda x: (x["stock_flx"] + x["flx_reserved"]), reverse=True)
+        elif sort == "stock":
             enriched.sort(key=lambda x: (x["fba_stock"], x["fba_stock_fba"]), reverse=True)
         elif sort == "revenue":
             enriched.sort(key=lambda x: x["revenue_30d"], reverse=True)

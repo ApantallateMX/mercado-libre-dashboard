@@ -301,6 +301,27 @@ function _updateFreshnessBadge() {
     el.textContent = label;
 }
 
+// Refresh silencioso: actualiza datos SIN mostrar spinner (no interrumpe al usuario)
+function _invSilentRefresh() {
+    if (_invRefreshPending) return;
+    _invRefreshPending = true;
+    var scrollY = window.scrollY;
+    fetch(_invUrl({}))
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) {
+            var container = document.getElementById('amz-prod-tab-content');
+            if (!container) return;
+            container.innerHTML = html;
+            window._applyInvColState();
+            _updateFreshnessBadge();
+            _invStartAutoRefresh();
+            _invBgPoll();
+            window.scrollTo(0, scrollY);
+        })
+        .catch(function() { /* ignorar errores silenciosos */ })
+        .finally(function() { _invRefreshPending = false; });
+}
+
 function _invStartAutoRefresh() {
     if (_invAutoRefreshTimer) clearInterval(_invAutoRefreshTimer);
     if (_invFreshnessTimer)   clearInterval(_invFreshnessTimer);
@@ -311,22 +332,22 @@ function _invStartAutoRefresh() {
         _updateFreshnessBadge();
     }, 30000);
 
-    // Auto-refresh completo cada 5 min (revisar cada minuto)
+    // Auto-refresh silencioso cada 5 min (sin spinner)
     _invAutoRefreshTimer = setInterval(function() {
         if (_amzProdActiveTab !== 'inventario') { clearInterval(_invAutoRefreshTimer); return; }
         if (_invRefreshPending) return;
         var age = Math.floor(Date.now() / 1000 - _invGetTs());
-        if (age >= 300) { window._forceRefreshInv(); }
+        if (age >= 300) { _invSilentRefresh(); }
     }, 60000);
 }
 
-// Al volver a la página (cambio de pestaña del navegador), revisar si está viejo
+// Al volver a la página (cambio de pestaña), revisar si está viejo — refresh silencioso
 document.addEventListener('visibilitychange', function() {
     if (document.hidden || _amzProdActiveTab !== 'inventario') return;
-    if (Math.floor(Date.now() / 1000 - _invGetTs()) >= 300) { window._forceRefreshInv(); }
+    if (Math.floor(Date.now() / 1000 - _invGetTs()) >= 300) { _invSilentRefresh(); }
 });
 
-// ── BG Polling: espera que los tasks de background terminen y recarga tabla ─
+// ── BG Polling: espera que los tasks de background terminen — refresh silencioso ─
 var _invBgPollInterval = null;
 
 function _invBgPoll() {
@@ -341,9 +362,7 @@ function _invBgPoll() {
             if (d.ready) {
                 clearInterval(_invBgPollInterval);
                 _invBgPollInterval = null;
-                if (window._loadInvTab) {
-                    window._loadInvTab(_invUrl({}));
-                }
+                _invSilentRefresh();  // sin spinner, sin interrumpir al usuario
             }
         } catch(e) { /* silencioso */ }
     }, 5000);

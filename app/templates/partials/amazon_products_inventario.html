@@ -65,6 +65,7 @@
     <select id="inv-sort" onchange="window._sortInv(this.value)"
             class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-600 outline-none bg-white">
         <option value="units"   {% if sort == "units"   %}selected{% endif %}>Ventas 30d ↓</option>
+        <option value="flx"     {% if sort == "flx"     %}selected{% endif %}>FLX Stock ↓</option>
         <option value="stock"   {% if sort == "stock"   %}selected{% endif %}>Stock FBA ↓</option>
         <option value="bm"      {% if sort == "bm"      %}selected{% endif %}>BM Stock ↓</option>
         <option value="revenue" {% if sort == "revenue" %}selected{% endif %}>Revenue ↓</option>
