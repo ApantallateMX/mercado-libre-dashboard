@@ -111,7 +111,7 @@ _bm_all_last_refresh: float = 0.0    # timestamp del último BG refresh completo
 # ─── FLX Stock real-time (FBA Inventory API — query por SKU específico) ──────
 # El scan general de FBA no devuelve items Seller Flex; la query por sellerSkus sí.
 _flx_stock_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: data})}
-_FLX_STOCK_TTL     = 300  # 5 min — datos en tiempo real
+_FLX_STOCK_TTL     = 120  # 2 min — datos en tiempo real (inventario cambia con órdenes)
 _flx_stock_refreshing: set = set()  # seller_ids con refresh BG activo (evita doble tarea)
 
 
@@ -270,6 +270,11 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
                     result[sku] = {
                         "fulfillable": int(det.get("fulfillableQuantity") or 0),
                         "reserved":    int(res.get("totalReservedQuantity") or 0),
+                        "inbound":     (
+                            int(det.get("inboundWorkingQuantity") or 0)
+                            + int(det.get("inboundShippedQuantity") or 0)
+                            + int(det.get("inboundReceivingQuantity") or 0)
+                        ),
                         "total":       int(s.get("totalQuantity") or 0),
                     }
             except Exception as exc:
@@ -1585,10 +1590,12 @@ async def amazon_products_inventario(
             # Seller Flex: stock real de FBA API (query por SKU específico)
             # fulfillableQuantity coincide exactamente con Seller Central.
             flx_reserved = 0
+            flx_inbound  = 0
             if "-FLX" in sku.upper():
                 flx_data     = flx_stock_index.get(sku, {})
                 stock_flx    = flx_data.get("fulfillable", 0)
                 flx_reserved = flx_data.get("reserved", 0)
+                flx_inbound  = flx_data.get("inbound", 0)
                 stock_fba    = 0   # FLX no aparece en columna FBA
 
             # Stock principal para días supply: FBA > FLX > FBM
@@ -1656,6 +1663,7 @@ async def amazon_products_inventario(
                 # _enrich_bm_amz sobreescribirá con datos frescos para la página actual
                 **_bm_from_cache(sku),
                 "flx_reserved": flx_reserved,
+                "flx_inbound":  flx_inbound,
             })
 
         # ── Pre-enrich FLX con BM (solo para columnas BM Disp/Res/MTY/CDMX/TJ) ─
@@ -2067,6 +2075,7 @@ async def amazon_products_seller_flex(
             flx_data  = flx_stock_index.get(sku, {})
             fba_stock = flx_data.get("fulfillable", 0)
             flx_res   = flx_data.get("reserved", 0)
+            flx_inbd  = flx_data.get("inbound", 0)
 
             flx_items.append({
                 "sku":          sku,
@@ -2078,7 +2087,7 @@ async def amazon_products_seller_flex(
                 "fba_stock":    fba_stock,
                 "flx_reserved": flx_res,
                 "unfulfill":    0,
-                "inbound":      0,
+                "inbound":      flx_inbd,
                 # BinManager — rellenado abajo
                 "bm_avail":    0,
                 "bm_mty":      0,
@@ -2101,27 +2110,21 @@ async def amazon_products_seller_flex(
         # Enriquecer con BinManager (reutiliza la función del tab inventario)
         await _enrich_bm_amz(flx_items)
 
-        # ── Stock Onsite desde Reports API (caché 30 min) ──────────────────
-        # Si el caché está frío o expirado, arrancar el sync automáticamente
-        # en background y notificar al template para que el JS haga polling.
-        onsite_key = client.seller_id
-        onsite_data: dict = {}
-        # NOTA: Amazon Onsite stock NO disponible vía SP-API para cuentas Seller Flex.
-        # GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA → FATAL (no aplica para Seller Flex puro)
-        # fulfillmentAvailability[AMAZON_NA].quantity → campo ausente en la respuesta
-        # Se usa BM stock como proxy del inventario disponible en bodega del vendedor.
+        # FLX loading state — para mostrar "···" en template si BG activo
+        flx_loading = client.seller_id in _flx_stock_refreshing
 
-        # Ordenar: primero ACTIVE con BM, luego por bm_avail desc
+        # Ordenar: primero los que tienen stock Amazon, luego por bm_avail desc
         flx_items.sort(key=lambda x: (
-            0 if (x["status"] == "ACTIVE" and x["bm_avail"] > 0) else (1 if x["status"] == "ACTIVE" else 2),
-            -x["bm_avail"],
+            0 if (x["status"] == "ACTIVE" and (x["fba_stock"] > 0 or x["bm_avail"] > 0)) else (1 if x["status"] == "ACTIVE" else 2),
+            -(x["fba_stock"] + x["flx_reserved"]),
         ))
 
         ctx = {
-            "request": request,
-            "items":   flx_items,
-            "total":   len(flx_items),
-            "q":       q,
+            "request":     request,
+            "items":       flx_items,
+            "total":       len(flx_items),
+            "q":           q,
+            "flx_loading": flx_loading,
         }
         return _templates.TemplateResponse(
             "partials/amazon_products_seller_flex.html", ctx

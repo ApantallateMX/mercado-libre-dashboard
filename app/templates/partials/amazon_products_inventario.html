@@ -246,14 +246,28 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock FLX (Seller Flex) — fulfillableQuantity de FBA API (tiempo real) -->
+                    <!-- Stock FLX (Seller Flex) — fulfillableQuantity + reservedQuantity de FBA API -->
                     <td class="py-2.5 px-2 text-right whitespace-nowrap">
                         {% if '-FLX' in item.sku|upper %}
-                            {% if item.stock_flx > 0 %}
-                            <span class="text-sm font-bold {% if item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
-                                  title="Stock Amazon Onsite: {{ item.stock_flx }} disp{% if item.flx_reserved %} + {{ item.flx_reserved }} reservado{% endif %} (FBA API — tiempo real)">
-                                {{ item.stock_flx }}
-                            </span>
+                            {% if item.stock_flx > 0 or item.flx_reserved > 0 %}
+                            <div class="flex flex-col items-end gap-0">
+                                <span class="text-sm font-bold {% if item.stock_flx == 0 %}text-red-500{% elif item.stock_flx < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
+                                      title="Disponible en Amazon Onsite (FBA API tiempo real)">
+                                    {{ item.stock_flx }}
+                                </span>
+                                {% if item.flx_reserved > 0 %}
+                                <span class="text-[10px] font-semibold text-orange-500 leading-none"
+                                      title="{{ item.flx_reserved }} unidades reservadas en órdenes pendientes">
+                                    +{{ item.flx_reserved }} res
+                                </span>
+                                {% endif %}
+                                {% if item.flx_inbound > 0 %}
+                                <span class="text-[10px] font-medium text-blue-400 leading-none"
+                                      title="{{ item.flx_inbound }} unidades en camino a bodega">
+                                    +{{ item.flx_inbound }} in
+                                </span>
+                                {% endif %}
+                            </div>
                             {% elif flx_loading %}
                             <span class="text-purple-400 text-xs animate-pulse"
                                   title="Actualizando stock FLX desde Amazon…">···</span>

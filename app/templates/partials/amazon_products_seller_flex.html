@@ -47,21 +47,27 @@
         ⬇ Generar CSV
     </button>
 
+    <!-- Indicador de carga FLX -->
+    {% if flx_loading %}
+    <span class="flex items-center gap-1 text-xs text-purple-500 animate-pulse px-1"
+          title="Actualizando stock Amazon en background…">
+        <span class="inline-block animate-spin">↻</span> actualizando stock
+    </span>
+    {% endif %}
+
     <!-- Botón Refresh -->
     <button onclick="window._sfxRefresh(false)"
             class="px-2 py-1.5 text-xs border border-gray-200 rounded-lg text-gray-400 hover:text-[#FF9900] hover:border-[#FF9900] transition bg-white"
-            title="Recargar listings + stock BM">↻</button>
+            title="Recargar listings + stock Amazon (FBA API)">↻</button>
 </div>
 
 <!-- ─── BANNER INFO SP-API ─────────────────────────────────────────────────── -->
-<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
-    <span class="flex-shrink-0">ℹ️</span>
+<div class="mb-3 flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+    <span class="flex-shrink-0">📦</span>
     <span>
-        El inventario <strong>Amazon Onsite</strong> no está disponible vía SP-API para cuentas Seller Flex.
-        La columna <strong>Stock Onsite</strong> muestra el stock BM disponible en bodega.
-        Para ver el stock comprometido en Amazon Onsite, consulta
-        <a href="https://sellercentral.amazon.com.mx/inventory?ref=xx_invmgmt_dnav_xx" target="_blank"
-           class="underline font-semibold hover:text-amber-900">Seller Central ↗</a>
+        <strong>Stock Amazon</strong> = unidades disponibles en Amazon Onsite vía FBA API (tiempo real, cada 2 min).
+        <strong>Reservado</strong> = órdenes pendientes de envío.
+        <strong>Stock BM</strong> = inventario en tu bodega disponible para reabastecer.
     </span>
 </div>
 
@@ -70,15 +76,22 @@
 {% set agotados        = items | rejectattr('status', 'equalto', 'ACTIVE') | list | length %}
 {% set con_stock_bm    = items | selectattr('bm_avail', 'gt', 0) | list | length %}
 {% set total_onsite    = namespace(v=0) %}
-{% for i in items %}{% set total_onsite.v = total_onsite.v + i.fba_stock %}{% endfor %}
+{% set total_reserved  = namespace(v=0) %}
+{% for i in items %}
+    {% set total_onsite.v = total_onsite.v + i.fba_stock %}
+    {% set total_reserved.v = total_reserved.v + i.flx_reserved %}
+{% endfor %}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="bg-white rounded-xl shadow p-3 text-center">
+        <p class="text-2xl font-black text-purple-600">{{ total_onsite.v }}</p>
+        <p class="text-xs text-gray-400 mt-0.5">Uds disponibles Amazon</p>
+        {% if total_reserved.v > 0 %}
+        <p class="text-xs text-orange-500 font-semibold mt-0.5">+{{ total_reserved.v }} reservadas</p>
+        {% endif %}
+    </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
         <p class="text-2xl font-black text-green-600">{{ disponibles }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Activos en Amazon Onsite</p>
-    </div>
-    <div class="bg-white rounded-xl shadow p-3 text-center">
-        <p class="text-2xl font-black text-red-500">{{ agotados }}</p>
-        <p class="text-xs text-gray-400 mt-0.5">Agotados / Inactivos</p>
     </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
         <p class="text-2xl font-black text-[#FF9900]">{{ con_stock_bm }}</p>
@@ -86,7 +99,7 @@
     </div>
     <div class="bg-white rounded-xl shadow p-3 text-center">
         {% set total_bm = namespace(v=0) %}{% for i in items %}{% set total_bm.v = total_bm.v + i.bm_avail %}{% endfor %}
-        <p class="text-2xl font-black text-purple-600">{{ total_bm.v }}</p>
+        <p class="text-2xl font-black text-green-700">{{ total_bm.v }}</p>
         <p class="text-xs text-gray-400 mt-0.5">Uds disponibles (BM)</p>
     </div>
 </div>
@@ -105,9 +118,9 @@
                     <th class="py-2.5 px-4 font-medium">Producto / SKU</th>
                     <th class="py-2.5 px-3 font-medium text-center">Estado Listing</th>
                     <th class="py-2.5 px-3 font-medium text-center"
-                        title="Amazon Onsite no disponible vía SP-API. Se muestra BM disponible en bodega.">
-                        Stock BM
-                        <span class="block text-[9px] text-gray-400 font-normal normal-case tracking-normal leading-none">(Onsite N/D API)</span>
+                        title="Stock disponible en Amazon Onsite (FBA API, tiempo real). Incluye reservado en sub-renglón.">
+                        <span class="text-purple-300">Stock Amazon</span>
+                        <span class="block text-[9px] text-gray-400 font-normal normal-case tracking-normal leading-none">(FBA API real)</span>
                     </th>
                     <th class="py-2.5 px-3 font-medium text-right">BM Disp.</th>
                     <th class="py-2.5 px-3 font-medium text-right">MTY</th>
@@ -150,14 +163,29 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock BM disponible (Amazon Onsite no disponible vía SP-API) -->
+                    <!-- Stock Amazon Onsite (FBA API tiempo real) + Reservado -->
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">
-                        {% if item.bm_avail > 10 %}
-                        <span class="text-sm font-bold text-green-700">{{ item.bm_avail }}</span>
-                        {% elif item.bm_avail > 0 %}
-                        <span class="text-sm font-bold text-yellow-600">{{ item.bm_avail }}</span>
+                        {% if item.fba_stock > 0 or item.flx_reserved > 0 %}
+                        <div class="flex flex-col items-center gap-0">
+                            <span class="text-sm font-bold {% if item.fba_stock == 0 %}text-red-500{% elif item.fba_stock < 10 %}text-yellow-600{% else %}text-purple-600{% endif %}"
+                                  title="Disponible en Amazon Onsite (FBA API)">
+                                {{ item.fba_stock }}
+                            </span>
+                            {% if item.flx_reserved > 0 %}
+                            <span class="text-[10px] font-semibold text-orange-500 leading-none"
+                                  title="{{ item.flx_reserved }} unidades reservadas en órdenes">
+                                +{{ item.flx_reserved }} res
+                            </span>
+                            {% endif %}
+                            {% if item.inbound > 0 %}
+                            <span class="text-[10px] font-medium text-blue-400 leading-none"
+                                  title="{{ item.inbound }} unidades en camino">
+                                +{{ item.inbound }} in
+                            </span>
+                            {% endif %}
+                        </div>
                         {% else %}
-                        <span class="text-sm font-bold text-red-500">0</span>
+                        <span class="text-sm font-bold text-red-400" title="Sin stock en Amazon Onsite">—</span>
                         {% endif %}
                     </td>
 
