@@ -146,7 +146,7 @@
 {% if listings %}
 <div class="bg-white rounded-xl shadow overflow-hidden">
     <div class="overflow-x-auto">
-        <table class="w-full text-sm" id="amz-inv-table">
+        <table class="text-sm min-w-[1200px] w-full" id="amz-inv-table">
             {# ─── Macro para encabezado sorteable ─────────────────────────── #}
             {%- macro sort_th(col, label, align="right", extra_class="", title="") -%}
             {%- set is_active = (sort == col) -%}
@@ -162,8 +162,8 @@
 
             <thead style="background: #232F3E;">
                 <tr class="text-left text-gray-300 text-xs uppercase tracking-wide">
-                    <th class="py-2.5 px-3 font-medium text-center w-8">#</th>
-                    <th class="py-2.5 px-4 font-medium">Producto</th>
+                    <th class="py-2.5 px-2 font-medium text-center w-8">#</th>
+                    <th class="py-2.5 px-3 font-medium">Producto</th>
                     {{ sort_th("price", "Precio", align="right") }}
                     <th class="py-2.5 px-3 font-medium text-center amz-col-deal">Deal</th>
                     {# FBA #}
@@ -197,15 +197,15 @@
                         {% endif %}
                     </th>
                     {{ sort_th("bm",   "BM Disp.", align="right", extra_class="amz-col-bm") }}
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-bm">BM Res.</th>
+                    <th class="py-2.5 px-2 font-medium text-right amz-col-bm">BM Res.</th>
                     {{ sort_th("mty",  "MTY",  align="right", extra_class="amz-col-wh") }}
                     {{ sort_th("cdmx", "CDMX", align="right", extra_class="amz-col-wh") }}
-                    <th class="py-2.5 px-3 font-medium text-right amz-col-wh">TJ</th>
+                    <th class="py-2.5 px-2 font-medium text-right amz-col-wh">TJ</th>
                     {{ sort_th("units",   "Ventas 30d",  align="right") }}
                     {{ sort_th("revenue", "Revenue 30d", align="right", extra_class="amz-col-rev") }}
                     {{ sort_th("supply",  "Días Supply", align="center", extra_class="amz-col-supply") }}
-                    <th class="py-2.5 px-3 font-medium text-center amz-col-status">Estado</th>
-                    <th class="py-2.5 px-3 font-medium text-center">Acción</th>
+                    <th class="py-2.5 px-2 font-medium text-center amz-col-status">Estado</th>
+                    <th class="py-2.5 px-2 font-medium text-center">Acción</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-50">
@@ -214,10 +214,10 @@
                 <tr class="hover:bg-orange-50/30 transition">
 
                     <!-- # -->
-                    <td class="py-2.5 px-3 text-center text-xs text-gray-400">{{ row_num }}</td>
+                    <td class="py-2.5 px-2 text-center text-xs text-gray-400">{{ row_num }}</td>
 
                     <!-- Producto / SKU / ASIN -->
-                    <td class="py-2.5 px-4">
+                    <td class="py-2.5 px-3">
                         <div class="min-w-0">
                             <p class="text-xs font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]" title="{{ item.title }}">
                                 {{ item.title }}
@@ -314,7 +314,7 @@
                     </td>
 
                     <!-- BM Disponible -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-bm">
+                    <td class="py-2 px-2 text-right whitespace-nowrap amz-col-bm">
                         <span class="text-xs font-medium
                             {% if item.bm_avail > 0 %}text-green-700{% else %}text-red-500{% endif %}">
                             {{ item.bm_avail }}
@@ -322,7 +322,7 @@
                     </td>
 
                     <!-- BM Reservado -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-bm">
+                    <td class="py-2 px-2 text-right whitespace-nowrap amz-col-bm">
                         <span class="text-xs
                             {% if item.bm_reserved > 0 %}text-amber-600 font-medium{% else %}text-gray-300{% endif %}">
                             {{ item.bm_reserved }}
@@ -330,7 +330,7 @@
                     </td>
 
                     <!-- MTY -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-wh">
+                    <td class="py-2 px-2 text-right whitespace-nowrap amz-col-wh">
                         <span class="text-xs font-medium
                             {% if item.bm_mty > 0 %}text-green-700{% else %}text-gray-300{% endif %}">
                             {{ item.bm_mty }}
@@ -338,7 +338,7 @@
                     </td>
 
                     <!-- CDMX -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-wh">
+                    <td class="py-2 px-2 text-right whitespace-nowrap amz-col-wh">
                         <span class="text-xs font-medium
                             {% if item.bm_cdmx > 0 %}text-green-700{% else %}text-gray-300{% endif %}">
                             {{ item.bm_cdmx }}
@@ -346,7 +346,7 @@
                     </td>
 
                     <!-- TJ -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-wh">
+                    <td class="py-2 px-2 text-right whitespace-nowrap amz-col-wh">
                         <span class="text-xs text-gray-400">{{ item.bm_tj }}</span>
                     </td>
 
@@ -386,7 +386,7 @@
                     </td>
 
                     <!-- Estado -->
-                    <td class="py-2.5 px-3 text-center whitespace-nowrap amz-col-status">
+                    <td class="py-2 px-2 text-center whitespace-nowrap amz-col-status">
                         {% if item.status == 'ACTIVE' %}
                         <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Activo</span>
                         {% elif item.status == 'DISCOVERABLE' %}
@@ -397,7 +397,7 @@
                     </td>
 
                     <!-- Acciones -->
-                    <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                    <td class="py-2 px-2 text-center whitespace-nowrap">
                         <div class="flex items-center justify-center gap-2">
                             {% if item.amazon_url %}
                             <a href="{{ item.amazon_url }}" target="_blank"
