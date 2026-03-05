@@ -1596,6 +1596,18 @@ async def amazon_products_inventario(
         flx_stock_index = _get_flx_stock_cached(client, flx_skus)   # sync, nunca bloquea
         flx_loading     = client.seller_id in _flx_stock_refreshing  # True = BG activo
 
+        # Edge case: listings nuevos que aún no están en el caché FLX vigente.
+        # Si el caché existe pero no tiene un SKU FLX (listing creado después del último refresh),
+        # forzar un nuevo refresh inmediato para capturar el SKU nuevo.
+        if flx_stock_index and not flx_loading:
+            new_flx = [s for s in flx_skus if s and s not in flx_stock_index]
+            if new_flx:
+                _key = client.seller_id
+                _flx_stock_refreshing.add(_key)
+                asyncio.create_task(_refresh_flx_stock_bg(client, flx_skus))
+                flx_loading = True
+                logger.info(f"[FLX] {len(new_flx)} SKUs nuevos detectados (no en caché) → refresh forzado")
+
         # BM pre-fetch BG: calienta caché BM para todos los SKUs (permite filtrar/ordenar por BM)
         _trigger_bm_prefetch(listings)
         bm_loading = "bm_all" in _bm_all_refreshing
