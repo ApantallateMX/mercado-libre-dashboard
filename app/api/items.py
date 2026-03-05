@@ -471,7 +471,15 @@ async def update_shipping(item_id: str, data: ShippingUpdate):
     except MeliApiError as e:
         body = e.body
         if isinstance(body, dict):
-            detail = body.get("message") or body.get("error") or body.get("cause", [{}])[0].get("message", str(body))
+            causes = body.get("cause", [])
+            cause_code = causes[0].get("code", "") if causes else ""
+            cause_msg = causes[0].get("message", "") if causes else ""
+            if cause_code == "item.shipping.logistic_type.not_modifiable" or "not_modifiable" in cause_msg:
+                raise HTTPException(
+                    status_code=422,
+                    detail="logistic_type.not_modifiable: MeLi no permite cambiar la logistica de items FULL via API. Gestionalo desde Seller Central."
+                )
+            detail = body.get("message") or body.get("error") or cause_msg or str(body)
         else:
             detail = str(body)
         raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")

@@ -96,7 +96,7 @@
             <a href="{{ p.permalink }}" target="_blank" class="flex-1 text-center py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg active:bg-blue-100">Ver</a>
             {% endif %}
             <button onclick="openEditModal('{{ p.id }}')" class="flex-1 text-center py-1.5 text-xs font-medium text-gray-700 bg-gray-100 rounded-lg active:bg-gray-200">Editar</button>
-            <button onclick="changeToMerchant('{{ p.id }}')" class="flex-1 text-center py-1.5 text-xs font-medium text-cyan-700 bg-cyan-50 rounded-lg active:bg-cyan-100">Quitar FULL</button>
+            <button onclick="openFullModal('{{ p.id }}', {{ p.available_quantity or 0 }}, {{ p.get('_bm_avail', 0) or 0 }}, '{{ p.permalink or '' }}')" class="flex-1 text-center py-1.5 text-xs font-medium text-cyan-700 bg-cyan-50 rounded-lg active:bg-cyan-100">{% if (p.available_quantity or 0) == 0 %}Cambiar a Merchant{% else %}Gestionar FULL{% endif %}</button>
         </div>
     </div>
     {% endfor %}
@@ -223,9 +223,9 @@
                         {% endif %}
                         <button onclick="openEditModal('{{ p.id }}')"
                                 class="text-[10px] text-gray-400 hover:text-gray-600">Editar</button>
-                        <button onclick="changeToMerchant('{{ p.id }}')"
-                                class="text-[10px] text-cyan-600 hover:text-cyan-800 hover:underline">
-                            Quitar FULL
+                        <button onclick="openFullModal('{{ p.id }}', {{ p.available_quantity or 0 }}, {{ p.get('_bm_avail', 0) or 0 }}, '{{ p.permalink or '' }}')"
+                                class="text-[10px] {% if (p.available_quantity or 0) == 0 %}text-green-600 font-bold{% else %}text-cyan-600{% endif %} hover:underline">
+                            {% if (p.available_quantity or 0) == 0 %}Cambiar a Merchant{% else %}Gestionar FULL{% endif %}
                         </button>
                     </div>
                 </td>

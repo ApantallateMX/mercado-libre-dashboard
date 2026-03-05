@@ -680,9 +680,9 @@
                                 class="text-[10px] text-purple-600 hover:text-purple-800 hover:underline">Deal</button>
                         {% endif %}
                         {% if p.is_full %}
-                        <button onclick="changeToMerchant('{{ p.id }}')"
-                                class="text-[10px] text-cyan-600 hover:text-cyan-800 hover:underline">
-                            Quitar FULL
+                        <button onclick="openFullModal('{{ p.id }}', {{ p.available_quantity or 0 }}, {{ p.get('_bm_avail', 0) or 0 }}, '{{ p.permalink or '' }}')"
+                                class="text-[10px] {% if (p.available_quantity or 0) == 0 %}text-green-600 hover:text-green-800 font-bold{% else %}text-cyan-600 hover:text-cyan-800{% endif %} hover:underline">
+                            {% if (p.available_quantity or 0) == 0 %}Cambiar a Merchant{% else %}Gestionar FULL{% endif %}
                         </button>
                         {% endif %}
                     </div>
