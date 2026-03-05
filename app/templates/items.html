@@ -78,45 +78,63 @@
         </div>
 
         <!-- Stats -->
-        <div class="grid grid-cols-2 gap-3 mb-4">
+        <div class="grid grid-cols-3 gap-2 mb-4">
             <div class="bg-cyan-50 rounded-lg p-3 text-center">
-                <div class="text-xs text-cyan-600 font-medium">Stock FULL (MeLi)</div>
+                <div class="text-xs text-cyan-600 font-medium">Stock FULL</div>
                 <div class="text-2xl font-bold text-cyan-700" id="fm-full-stock">0</div>
             </div>
             <div class="bg-green-50 rounded-lg p-3 text-center">
                 <div class="text-xs text-green-600 font-medium">BM Disponible</div>
                 <div class="text-2xl font-bold text-green-700" id="fm-bm-avail">0</div>
             </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+                <div class="text-xs text-gray-500 font-medium">Modo actual</div>
+                <div class="text-sm font-bold text-gray-700 mt-1" id="fm-mode">-</div>
+            </div>
         </div>
 
-        <!-- Aviso stock activo -->
-        <div id="fm-warn" class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 text-sm text-amber-800">
-            <strong>Limitacion de MeLi API:</strong> No es posible cambiar la logistica via API mientras el item tenga stock en los centros de fulfillment de MeLi.<br>
-            <span class="text-amber-700 text-xs mt-1 block">Para cambiar la logistica debes retirarlo desde Seller Central o esperar a que el stock FULL llegue a 0.</span>
-        </div>
-
-        <!-- Mensaje stock 0 -->
-        <div id="fm-no-stock-msg" class="hidden bg-green-50 border border-green-200 rounded-lg p-3 mb-4 text-sm text-green-800">
-            El stock FULL es 0. Puedes intentar cambiar la logistica ahora.
-        </div>
-
-        <!-- Acciones -->
-        <div class="space-y-2">
-            <button id="fm-try-btn" onclick="fmTryChange()"
-                    class="w-full py-2.5 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed">
-                Intentar cambiar logistica (Merchant)
-            </button>
-            <a id="fm-sc-link" href="#" target="_blank"
-               class="block w-full py-2.5 text-sm font-medium text-center text-yellow-700 bg-yellow-50 hover:bg-yellow-100 border border-yellow-200 rounded-lg">
-                Gestionar en Seller Central →
+        <!-- Panel FULL activo -->
+        <div id="fm-panel-full" class="hidden">
+            <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-sm text-amber-800">
+                <strong>Para quitar FULL:</strong> MeLi requiere hacerlo desde Seller Central.<br>
+                <span class="text-amber-700 text-xs mt-1 block">Ve a: Seller Central → Inventario → Control de stock → item → Dejar de ofrecer Full.</span>
+            </div>
+            <a id="fm-sc-full-link" href="https://www.mercadolibre.com.mx/ventas/full/productos" target="_blank"
+               class="block w-full py-2.5 text-sm font-medium text-center text-white bg-cyan-600 hover:bg-cyan-700 rounded-lg mb-2">
+                Ir a Control de stock FULL →
             </a>
-            <button onclick="closeFmModal()"
-                    class="w-full py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg">
-                Cerrar
-            </button>
         </div>
 
-        <p class="text-xs text-gray-400 mt-3 text-center">Para activar FULL en un producto: crea un envio entrante desde Seller Central → Inventario → Enviar a fulfillment</p>
+        <!-- Panel Merchant / cross_docking -->
+        <div id="fm-panel-merchant" class="hidden">
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-sm text-blue-800">
+                El item ya no esta en modo FULL. Puedes sincronizar el stock de BinManager directamente.
+            </div>
+            <!-- Sync BM stock -->
+            <div class="bg-gray-50 rounded-lg p-3 mb-3">
+                <div class="text-xs text-gray-600 mb-2 font-medium">Sincronizar stock BM al listing:</div>
+                <div class="flex gap-2">
+                    <input type="number" id="fm-sync-qty" min="0" max="9999" placeholder="Cantidad"
+                           class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-400">
+                    <button onclick="fmUseBM()" class="px-3 py-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100">
+                        Usar BM
+                    </button>
+                </div>
+            </div>
+            <button id="fm-sync-btn" onclick="fmSyncStock()"
+                    class="w-full py-2.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed mb-2">
+                Aplicar stock al listing
+            </button>
+            <a href="https://www.mercadolibre.com.mx/ventas/full/productos" target="_blank"
+               class="block w-full py-2.5 text-sm font-medium text-center text-cyan-700 bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 rounded-lg mb-2">
+                Volver a ofrecer FULL (Seller Central) →
+            </a>
+        </div>
+
+        <button onclick="closeFmModal()"
+                class="w-full py-2 text-sm font-medium text-gray-500 hover:text-gray-700">
+            Cerrar
+        </button>
     </div>
 </div>
 {% endblock %}
@@ -231,53 +249,52 @@
     };
 
     // ── FULL Management Modal ──
-    window.openFullModal = function(itemId, fullStock, bmAvail, permalink) {
+    window._fm = {itemId: null, isFullMode: false, bmAvail: 0};
+
+    window.openFullModal = function(itemId, isFull, fullStock, bmAvail, permalink) {
         var m = document.getElementById('full-mgmt-modal');
         if (!m) return;
+        _fm = {itemId: itemId, isFullMode: !!isFull, bmAvail: parseInt(bmAvail) || 0};
         document.getElementById('fm-item-id').textContent = itemId;
         document.getElementById('fm-full-stock').textContent = fullStock || 0;
         document.getElementById('fm-bm-avail').textContent = bmAvail || 0;
-        var scLink = document.getElementById('fm-sc-link');
-        var scUrl = 'https://www.mercadolibre.com.mx/ventas/listado?search=' + itemId;
-        if (permalink) scUrl = permalink;
-        scLink.href = scUrl;
-        // Mostrar aviso si tiene stock FULL
-        var warn = document.getElementById('fm-warn');
-        var noStockMsg = document.getElementById('fm-no-stock-msg');
-        if (parseInt(fullStock) > 0) {
-            warn.classList.remove('hidden');
-            noStockMsg.classList.add('hidden');
-        } else {
-            warn.classList.add('hidden');
-            noStockMsg.classList.remove('hidden');
-            _fullModalItemId = itemId;
+        document.getElementById('fm-mode').textContent = isFull ? 'FULL' : 'Merchant';
+
+        // Mostrar panel correcto segun modo
+        document.getElementById('fm-panel-full').classList.toggle('hidden', !isFull);
+        document.getElementById('fm-panel-merchant').classList.toggle('hidden', !!isFull);
+
+        // Pre-llenar cantidad con BM
+        if (!isFull) {
+            document.getElementById('fm-sync-qty').value = bmAvail || '';
         }
-        _fullModalItemId = itemId;
         m.classList.remove('hidden');
     };
-    window._fullModalItemId = null;
 
     window.closeFmModal = function() {
         var m = document.getElementById('full-mgmt-modal');
         if (m) m.classList.add('hidden');
-        _fullModalItemId = null;
+        _fm = {itemId: null, isFullMode: false, bmAvail: 0};
     };
 
-    window.fmTryChange = function() {
-        var itemId = _fullModalItemId;
-        if (!itemId) return;
-        var btn = document.getElementById('fm-try-btn');
-        btn.disabled = true;
-        btn.textContent = 'Cambiando...';
-        fetch('/api/items/' + itemId + '/shipping', {
+    window.fmUseBM = function() {
+        document.getElementById('fm-sync-qty').value = _fm.bmAvail;
+    };
+
+    window.fmSyncStock = function() {
+        var qty = parseInt(document.getElementById('fm-sync-qty').value);
+        if (isNaN(qty) || qty < 0) { showToast('Ingresa una cantidad valida', 'warn'); return; }
+        var btn = document.getElementById('fm-sync-btn');
+        btn.disabled = true; btn.textContent = 'Actualizando...';
+        fetch('/api/items/' + _fm.itemId + '/stock', {
             method: 'PUT',
             headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-            body: JSON.stringify({logistic_type: 'xd_drop_off', free_shipping: true})
+            body: JSON.stringify({quantity: qty})
         })
         .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
         .then(function(res) {
             if (res.ok) {
-                showToast('Logistica cambiada exitosamente. Recargando...', 'success');
+                showToast('Stock actualizado a ' + qty + ' uds. Recargando...', 'success');
                 closeFmModal();
                 setTimeout(function() {
                     var activeBtn = document.querySelector('.tab-btn.bg-yellow-50');
@@ -285,25 +302,19 @@
                 }, 1500);
             } else {
                 var detail = res.data.detail || JSON.stringify(res.data);
-                if (detail.indexOf('not_modifiable') !== -1) {
-                    showToast('MeLi no permite cambiar la logistica via API mientras haya stock FULL. Gestionalo desde Seller Central.', 'error');
-                } else {
-                    showToast('Error MeLi: ' + detail, 'error');
-                }
-                btn.disabled = false;
-                btn.textContent = 'Intentar cambiar';
+                showToast('Error: ' + detail, 'error');
+                btn.disabled = false; btn.textContent = 'Aplicar stock al listing';
             }
         })
         .catch(function(e) {
             showToast('Error: ' + e.message, 'error');
-            btn.disabled = false;
-            btn.textContent = 'Intentar cambiar';
+            btn.disabled = false; btn.textContent = 'Aplicar stock al listing';
         });
     };
 
-    // Mantener compatibilidad: changeToMerchant abre el modal
+    // Compatibilidad: changeToMerchant abre el modal (legacy)
     window.changeToMerchant = function(itemId, fullStock, bmAvail, permalink) {
-        openFullModal(itemId, fullStock || 0, bmAvail || 0, permalink || '');
+        openFullModal(itemId, true, fullStock || 0, bmAvail || 0, permalink || '');
     };
 
     // ── Inline stock sync for all product tabs ──
