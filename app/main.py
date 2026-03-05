@@ -1994,6 +1994,7 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
             "category_id": body.get("category_id", ""),
             "status": body.get("status", "active"),
             "is_full": shipping.get("logistic_type", "") == "fulfillment",
+            "catalog_listing": bool(body.get("catalog_listing")),
         }
         if sales_map:
             s = sales_map.get(iid, {"units": 0, "revenue": 0, "fees": 0})

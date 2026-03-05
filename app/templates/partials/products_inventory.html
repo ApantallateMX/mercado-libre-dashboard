@@ -58,7 +58,17 @@
                 </div>
             </div>
             <div class="flex gap-1.5 flex-wrap">
-                {% if a.get('is_full') %}
+                {% if a.get('catalog_listing') %}
+                <div class="flex-1 flex flex-col gap-1">
+                    <span class="flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-600 rounded-lg text-[10px] font-semibold">
+                        Catálogo MeLi — stock gestionado por depósito
+                    </span>
+                    <a href="https://articulo.mercadolibre.com.mx/{{ a.id | replace('MLM', 'MLM-') }}" target="_blank"
+                       class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
+                        Ver en MeLi ↗
+                    </a>
+                </div>
+                {% elif a.get('is_full') %}
                 <div class="flex-1 flex flex-col gap-1">
                     <span class="flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-[10px] font-semibold">
                         ⚠️ FULL — cambia logística en Seller Center primero
@@ -148,7 +158,17 @@
                         {% else %}-{% endif %}
                     </td>
                     <td class="py-1.5 px-2 text-center">
-                        {% if a.get('is_full') %}
+                        {% if a.get('catalog_listing') %}
+                        <div class="flex flex-col items-center gap-1">
+                            <span class="px-2 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-semibold whitespace-nowrap">
+                                Catálogo MeLi
+                            </span>
+                            <a href="https://articulo.mercadolibre.com.mx/{{ a.id | replace('MLM', 'MLM-') }}" target="_blank"
+                               class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium transition whitespace-nowrap text-center">
+                                Ver en MeLi ↗
+                            </a>
+                        </div>
+                        {% elif a.get('is_full') %}
                         <div class="flex flex-col items-center gap-1">
                             <span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">
                                 ⚠️ Es FULL
@@ -421,7 +441,7 @@
             <button onclick="openDealAction('{{ p.id }}', {{ p.price }}, '{{ p.sku or '' }}', '{{ p.title|replace("'", "\\'") }}', 0, '{{ p.thumbnail or '' }}')"
                     class="flex-1 text-center py-2 text-sm font-medium text-purple-700 bg-purple-50 rounded-lg active:bg-purple-100 min-h-[40px]">Deal</button>
             {% endif %}
-            {% if not p.get('is_full') %}
+            {% if not p.get('is_full') and not p.get('catalog_listing') %}
             {% set bm_avail_mob = p.get('_bm_avail', 0) or 0 %}
             {% if bm_avail_mob > 0 and bm_avail_mob != p.available_quantity %}
             <button onclick="quickSyncBM(this, '{{ p.id }}', {{ bm_avail_mob }})" class="flex-1 text-center py-2 text-sm font-medium text-purple-700 bg-purple-50 rounded-lg active:bg-purple-100 min-h-[40px]">Sync ({{ bm_avail_mob }})</button>
@@ -470,6 +490,7 @@
                 data-price="{{ p.price }}"
                 data-margin="{{ p.get('_margen_pct', -999) or -999 }}"
                 data-is-full="{{ '1' if p.is_full else '0' }}"
+                data-catalog="{{ '1' if p.get('catalog_listing') else '0' }}"
                 data-photos="{{ p.pictures_count }}"
                 data-revenue="{{ p.get('revenue', 0) }}"
                 data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
@@ -679,7 +700,9 @@
                         <button onclick="openDealAction('{{ p.id }}', {{ p.price }}, '{{ p.sku or '' }}', '{{ p.title|replace("'", "\\'") }}', 0, '{{ p.thumbnail or '' }}')"
                                 class="text-[10px] text-purple-600 hover:text-purple-800 hover:underline">Deal</button>
                         {% endif %}
-                        {% if p.is_full %}
+                        {% if p.get('catalog_listing') %}
+                        <span class="text-[10px] text-gray-400 italic">Catálogo MeLi</span>
+                        {% elif p.is_full %}
                         <button onclick="openFullModal('{{ p.id }}', true, {{ p.available_quantity or 0 }}, {{ p.get('_bm_avail', 0) or 0 }}, '{{ p.permalink or '' }}')"
                                 class="text-[10px] text-cyan-600 hover:text-cyan-800 hover:underline">
                             Gestionar FULL
@@ -1078,19 +1101,19 @@ window.syncFullItem = function(itemId, bmQty, btn) {
 window.bulkSyncAlerts = function() {
     var alertData = [
         {% for a in stock_alerts %}
-        {id: '{{ a.id }}', qty: {{ a.get('_bm_avail', 0) or 0 }}, is_full: {{ 'true' if a.get('is_full') else 'false' }} }{{ ',' if not loop.last else '' }}
+        {id: '{{ a.id }}', qty: {{ a.get('_bm_avail', 0) or 0 }}, is_full: {{ 'true' if a.get('is_full') else 'false' }}, catalog: {{ 'true' if a.get('catalog_listing') else 'false' }} }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
-    // Filtrar FULL — no se pueden sincronizar en bulk
-    var fullItems = alertData.filter(function(x) { return x.is_full; });
-    var syncableItems = alertData.filter(function(x) { return !x.is_full; });
-    if (fullItems.length > 0 && syncableItems.length === 0) {
-        alert('Todos los productos en alerta son FULL.\nDebe cambiarlos a envío propio individualmente antes de sincronizar el stock.');
+    // Filtrar FULL y Catálogo — no se pueden sincronizar en bulk
+    var skipItems = alertData.filter(function(x) { return x.is_full || x.catalog; });
+    var syncableItems = alertData.filter(function(x) { return !x.is_full && !x.catalog; });
+    if (skipItems.length > 0 && syncableItems.length === 0) {
+        alert('Todos los productos en alerta son FULL o Catálogo MeLi.\nNo se pueden sincronizar manualmente.');
         return;
     }
-    if (fullItems.length > 0) {
+    if (skipItems.length > 0) {
         var msg = document.getElementById('bulk-sync-msg');
-        if (msg) { msg.textContent = fullItems.length + ' producto(s) FULL se omitirán (requieren cambio manual a envío propio)'; msg.className = 'text-xs mt-1 block text-center text-orange-600'; }
+        if (msg) { msg.textContent = skipItems.length + ' producto(s) FULL/Catálogo se omitirán'; msg.className = 'text-xs mt-1 block text-center text-orange-600'; }
     }
     alertData = syncableItems;
     var btn = document.getElementById('bulk-sync-btn');
