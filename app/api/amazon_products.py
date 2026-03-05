@@ -1707,15 +1707,38 @@ async def amazon_products_inventario(
                 # BM — lee del caché si disponible (permite filtrar/ordenar por BM en toda la tabla)
                 # _enrich_bm_amz sobreescribirá con datos frescos para la página actual
                 **_bm_from_cache(sku),
-                "flx_reserved": flx_reserved,
-                "flx_inbound":  flx_inbound,
+                "flx_reserved":  flx_reserved,
+                "flx_inbound":   flx_inbound,
+                # True = FBA API devolvió datos para este SKU (fulfillable/reserved/etc.)
+                # False = FBA API no reconoce este SKU → puede ser Seller Flex puro en bodega propia
+                "_flx_from_api": bool(flx_data) if is_flx_item else False,
             })
 
         # ── Pre-enrich FLX con BM (solo para columnas BM Disp/Res/MTY/CDMX/TJ) ─
-        # stock_flx ya viene correcto de FBA API — solo necesitamos datos BM de bodega.
-        flx_pre = [e for e in enriched if "-FLX" in e["sku"].upper()]
+        # Incluye: -FLX en SKU Y items con fulfillment_type FLX (AMAZON_NA sin sufijo -FLX)
+        flx_pre = [e for e in enriched if e.get("fulfillment_type") == "FLX"]
         if flx_pre:
             await _enrich_bm_amz(flx_pre)
+
+        # ── Fallback FLX: si FBA API no tiene este SKU pero BM sí tiene stock ──
+        # Seller Flex puro = el inventario está en bodega propia (BM), no en Amazon.
+        # Amazon no lo expone en FBA Inventory API → usar bm_avail como proxy del stock.
+        for e in enriched:
+            if (e.get("fulfillment_type") == "FLX"
+                    and not e.get("_flx_from_api", False)
+                    and e.get("bm_avail", 0) > 0
+                    and e["stock_flx"] == 0):
+                bm = e["bm_avail"]
+                e["stock_flx"] = bm
+                e["fba_stock"]  = bm
+                vel = e["vel_dia"]
+                ds  = round(bm / vel, 1) if vel > 0 else None
+                e["dias_supply"]  = ds
+                e["supply_color"] = (
+                    "red"    if ds is not None and ds < 14 else
+                    "yellow" if ds is not None and ds < 30 else
+                    "green"  if ds is not None else "gray"
+                )
 
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
