@@ -304,11 +304,18 @@ class MeliClient:
         return await self.get(f"/items/{item_id}")
 
     async def get_items_details(self, item_ids: list) -> list:
-        """Obtiene detalles de multiples items."""
+        """Obtiene detalles de multiples items.
+        include_attributes=all es necesario para que las variaciones incluyan
+        sus atributos (ej: SELLER_SKU), que sin este param llegan como array vacío.
+        """
         if not item_ids:
             return []
         ids = ",".join(item_ids[:20])  # Max 20 items por request
-        return await self.get("/items", params={"ids": ids, "attributes": "id,title,price,original_price,available_quantity,sold_quantity,shipping,thumbnail,permalink,pictures,video_id,category_id,seller_custom_field,attributes,variations,status"})
+        return await self.get("/items", params={
+            "ids": ids,
+            "attributes": "id,title,price,original_price,available_quantity,sold_quantity,shipping,thumbnail,permalink,pictures,video_id,category_id,seller_custom_field,attributes,variations,status,catalog_listing,warnings",
+            "include_attributes": "all",
+        })
 
     async def get_item_sale_price(self, item_id: str) -> dict | None:
         """Obtiene precio de venta real (con promocion si existe).
