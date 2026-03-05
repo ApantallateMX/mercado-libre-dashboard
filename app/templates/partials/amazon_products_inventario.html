@@ -145,67 +145,67 @@
 <!-- ─── TABLA ─────────────────────────────────────────────────────────────── -->
 {% if listings %}
 <div class="bg-white rounded-xl shadow overflow-hidden">
-    <div class="overflow-x-auto">
-        <table class="text-sm min-w-[1200px] w-full" id="amz-inv-table">
+    <div>
+        <table class="w-full text-xs" id="amz-inv-table">
             {# ─── Macro para encabezado sorteable ─────────────────────────── #}
             {%- macro sort_th(col, label, align="right", extra_class="", title="") -%}
             {%- set is_active = (sort == col) -%}
             {%- set arrow = ("▲" if sort_dir == "asc" else "▼") if is_active else "" -%}
             <th onclick="window._sortInvCol('{{ col }}')"
-                class="py-2.5 px-3 font-medium text-{{ align }} {{ extra_class }} cursor-pointer select-none
+                class="py-2 px-1.5 font-medium text-{{ align }} {{ extra_class }} cursor-pointer select-none
                        hover:text-[#FF9900] transition whitespace-nowrap"
                 title="{{ title or ('Ordenar por ' + label) }}">
                 <span class="{{ 'text-[#FF9900]' if is_active else '' }}">{{ label }}</span>
-                {% if is_active %}<span class="ml-0.5 text-[10px]">{{ arrow }}</span>{% endif %}
+                {% if is_active %}<span class="ml-0.5 text-[9px]">{{ arrow }}</span>{% endif %}
             </th>
             {%- endmacro -%}
 
             <thead style="background: #232F3E;">
-                <tr class="text-left text-gray-300 text-xs uppercase tracking-wide">
-                    <th class="py-2.5 px-2 font-medium text-center w-8">#</th>
-                    <th class="py-2.5 px-3 font-medium">Producto</th>
+                <tr class="text-left text-gray-300 text-[11px] uppercase tracking-wide">
+                    <th class="py-2 px-1.5 font-medium text-center w-6">#</th>
+                    <th class="py-2 px-2 font-medium">Producto</th>
                     {{ sort_th("price", "Precio", align="right") }}
-                    <th class="py-2.5 px-3 font-medium text-center amz-col-deal">Deal</th>
+                    <th class="py-2 px-1.5 font-medium text-center amz-col-deal">Deal</th>
                     {# FBA #}
                     {%- set fba_active = (sort == "stock") -%}
                     <th onclick="window._sortInvCol('stock')"
-                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        class="py-2 px-1.5 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition whitespace-nowrap"
                         title="Stock FBA — almacenes Amazon">
                         <span class="{{ 'text-[#FF9900]' if fba_active else 'text-orange-300' }}">FBA</span>
-                        {% if fba_active %}<span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
+                        {% if fba_active %}<span class="ml-0.5 text-[9px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
                     </th>
                     {# FBM #}
                     {%- set fbm_active = (sort == "fbm") -%}
                     <th onclick="window._sortInvCol('fbm')"
-                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        class="py-2 px-1.5 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition whitespace-nowrap"
                         title="Stock FBM — bodega propia">
                         <span class="{{ 'text-[#FF9900]' if fbm_active else 'text-blue-300' }}">FBM</span>
-                        {% if fbm_active %}<span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
+                        {% if fbm_active %}<span class="ml-0.5 text-[9px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
                     </th>
                     {# FLX #}
                     {%- set flx_active = (sort == "flx") -%}
                     <th onclick="window._sortInvCol('flx')"
-                        class="py-2.5 px-2 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition"
+                        class="py-2 px-1.5 font-medium text-right cursor-pointer select-none hover:text-[#FF9900] transition whitespace-nowrap"
                         title="Stock Seller Flex — FBA Inventory API (tiempo real). {% if flx_loading %}Actualizando…{% endif %}">
                         <span class="{{ 'text-[#FF9900]' if flx_active else 'text-purple-300' }}">FLX</span>
                         {% if flx_active %}
-                        <span class="ml-0.5 text-[10px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>
+                        <span class="ml-0.5 text-[9px]">{{ "▲" if sort_dir == "asc" else "▼" }}</span>
                         {% elif flx_loading %}
                         <span class="text-[9px] text-purple-400 leading-none block -mt-0.5 text-right animate-pulse">↻</span>
                         {% else %}
                         <span class="text-[9px] text-purple-500 leading-none block -mt-0.5 text-right">●</span>
                         {% endif %}
                     </th>
-                    {{ sort_th("bm",   "BM Disp.", align="right", extra_class="amz-col-bm") }}
-                    <th class="py-2.5 px-2 font-medium text-right amz-col-bm">BM Res.</th>
+                    {{ sort_th("bm",   "BM Disp", align="right", extra_class="amz-col-bm") }}
+                    <th class="py-2 px-1.5 font-medium text-right amz-col-bm whitespace-nowrap">BM Res</th>
                     {{ sort_th("mty",  "MTY",  align="right", extra_class="amz-col-wh") }}
                     {{ sort_th("cdmx", "CDMX", align="right", extra_class="amz-col-wh") }}
-                    <th class="py-2.5 px-2 font-medium text-right amz-col-wh">TJ</th>
-                    {{ sort_th("units",   "Ventas 30d",  align="right") }}
-                    {{ sort_th("revenue", "Revenue 30d", align="right", extra_class="amz-col-rev") }}
-                    {{ sort_th("supply",  "Días Supply", align="center", extra_class="amz-col-supply") }}
-                    <th class="py-2.5 px-2 font-medium text-center amz-col-status">Estado</th>
-                    <th class="py-2.5 px-2 font-medium text-center">Acción</th>
+                    <th class="py-2 px-1.5 font-medium text-right amz-col-wh">TJ</th>
+                    {{ sort_th("units",   "Vtas 30d", align="right") }}
+                    {{ sort_th("revenue", "Revenue",  align="right", extra_class="amz-col-rev") }}
+                    {{ sort_th("supply",  "Supply",   align="center", extra_class="amz-col-supply") }}
+                    <th class="py-2 px-1.5 font-medium text-center amz-col-status">Estado</th>
+                    <th class="py-2 px-1.5 font-medium text-center">Acc</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-gray-50">
@@ -214,37 +214,37 @@
                 <tr class="hover:bg-orange-50/30 transition">
 
                     <!-- # -->
-                    <td class="py-2.5 px-2 text-center text-xs text-gray-400">{{ row_num }}</td>
+                    <td class="py-2 px-1.5 text-center text-[11px] text-gray-400">{{ row_num }}</td>
 
                     <!-- Producto / SKU / ASIN -->
-                    <td class="py-2.5 px-3">
+                    <td class="py-2 px-2">
                         <div class="min-w-0">
-                            <p class="text-xs font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]" title="{{ item.title }}">
+                            <p class="font-medium text-gray-800 truncate max-w-[180px] xl:max-w-[220px]" title="{{ item.title }}">
                                 {{ item.title }}
                             </p>
-                            <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                                <span class="text-xs font-mono text-gray-400">{{ item.sku }}</span>
+                            <div class="flex items-center gap-1 mt-0.5">
+                                <span class="font-mono text-gray-400 text-[10px]">{{ item.sku }}</span>
                                 {% if item.asin %}
-                                <span class="text-xs text-[#FF9900] font-medium">{{ item.asin }}</span>
+                                <span class="text-[#FF9900] font-medium text-[10px]">{{ item.asin }}</span>
                                 {% endif %}
                             </div>
                         </div>
                     </td>
 
                     <!-- Precio -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap">
                         {% if item.price > 0 %}
                         <button onclick="window.updateAmzPrice('{{ item.sku }}', {{ item.price }})"
-                                class="text-xs font-semibold text-gray-700 hover:text-[#FF9900] transition cursor-pointer">
+                                class="font-semibold text-gray-700 hover:text-[#FF9900] transition cursor-pointer">
                             ${{ "{:,.0f}".format(item.price) }}
                         </button>
                         {% else %}
-                        <span class="text-gray-300 text-xs">—</span>
+                        <span class="text-gray-300">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Deal / Sale activo (junto a precio) -->
-                    <td class="py-2.5 px-3 text-center whitespace-nowrap amz-col-deal">
+                    <!-- Deal / Sale activo -->
+                    <td class="py-2 px-1.5 text-center whitespace-nowrap amz-col-deal">
                         {% if item.is_deal %}
                         <span class="inline-flex flex-col items-center cursor-default group relative"
                               title="-{{ item.deal_pct }}% desc. (reg. ${{ '{:,.0f}'.format(item.list_price) }})">
@@ -258,30 +258,26 @@
                         {% endif %}
                     </td>
 
-                    <!-- Stock FBA (Amazon warehouses) -->
-                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                    <!-- Stock FBA -->
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap">
                         {% if item.stock_fba > 0 %}
-                        <span class="text-sm font-bold {% if item.stock_fba < 10 %}text-yellow-600{% else %}text-orange-600{% endif %}">
-                            {{ item.stock_fba }}
-                        </span>
+                        <span class="font-bold {% if item.stock_fba < 10 %}text-yellow-600{% else %}text-orange-600{% endif %}">{{ item.stock_fba }}</span>
                         {% else %}
-                        <span class="text-gray-200 text-xs font-medium">—</span>
+                        <span class="text-gray-200">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Stock FBM (Merchant Fulfilled) -->
-                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                    <!-- Stock FBM -->
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap">
                         {% if item.stock_fbm > 0 %}
-                        <span class="text-sm font-bold {% if item.stock_fbm < 10 %}text-yellow-600{% else %}text-blue-600{% endif %}">
-                            {{ item.stock_fbm }}
-                        </span>
+                        <span class="font-bold {% if item.stock_fbm < 10 %}text-yellow-600{% else %}text-blue-600{% endif %}">{{ item.stock_fbm }}</span>
                         {% else %}
-                        <span class="text-gray-200 text-xs font-medium">—</span>
+                        <span class="text-gray-200">—</span>
                         {% endif %}
                     </td>
 
-                    <!-- Stock FLX (Seller Flex / Amazon Onsite) — de FBA API per-SKU -->
-                    <td class="py-2.5 px-2 text-right whitespace-nowrap">
+                    <!-- Stock FLX -->
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap">
                         {% if item.fulfillment_type == 'FLX' %}
                             {% if item.stock_flx > 0 or item.flx_reserved > 0 %}
                             <div class="flex flex-col items-end gap-0">
@@ -351,8 +347,8 @@
                     </td>
 
                     <!-- Ventas 30d -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap">
-                        <span class="text-sm font-bold
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap">
+                        <span class="font-bold
                             {% if item.units_30d >= 5 %}text-[#FF9900]
                             {% elif item.units_30d > 0 %}text-gray-600
                             {% else %}text-gray-300{% endif %}">
@@ -361,43 +357,41 @@
                     </td>
 
                     <!-- Revenue 30d -->
-                    <td class="py-2.5 px-3 text-right whitespace-nowrap amz-col-rev">
+                    <td class="py-2 px-1.5 text-right whitespace-nowrap amz-col-rev">
                         {% if item.revenue_30d > 0 %}
-                        <span class="text-xs font-medium text-gray-700">
-                            ${{ "{:,.0f}".format(item.revenue_30d) }}
-                        </span>
+                        <span class="font-medium text-gray-700">${{ "{:,.0f}".format(item.revenue_30d) }}</span>
                         {% else %}
-                        <span class="text-xs text-gray-300">—</span>
+                        <span class="text-gray-300">—</span>
                         {% endif %}
                     </td>
 
                     <!-- Días Supply -->
-                    <td class="py-2.5 px-3 text-center whitespace-nowrap amz-col-supply">
+                    <td class="py-2 px-1.5 text-center whitespace-nowrap amz-col-supply">
                         {% if item.dias_supply is not none %}
-                        <span class="px-1.5 py-0.5 rounded-full text-xs font-bold
+                        <span class="px-1 py-0.5 rounded-full font-bold
                             {% if item.supply_color == 'red' %}bg-red-100 text-red-700
                             {% elif item.supply_color == 'yellow' %}bg-yellow-100 text-yellow-700
                             {% else %}bg-green-100 text-green-700{% endif %}">
                             {{ item.dias_supply }}d
                         </span>
                         {% else %}
-                        <span class="text-xs text-gray-300">—</span>
+                        <span class="text-gray-300">—</span>
                         {% endif %}
                     </td>
 
                     <!-- Estado -->
-                    <td class="py-2 px-2 text-center whitespace-nowrap amz-col-status">
+                    <td class="py-2 px-1.5 text-center whitespace-nowrap amz-col-status">
                         {% if item.status == 'ACTIVE' %}
-                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Activo</span>
+                        <span class="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Activo</span>
                         {% elif item.status == 'DISCOVERABLE' %}
-                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">Visible</span>
+                        <span class="px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">Visible</span>
                         {% else %}
-                        <span class="px-1.5 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Inactivo</span>
+                        <span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Inactivo</span>
                         {% endif %}
                     </td>
 
                     <!-- Acciones -->
-                    <td class="py-2 px-2 text-center whitespace-nowrap">
+                    <td class="py-2 px-1.5 text-center whitespace-nowrap">
                         <div class="flex items-center justify-center gap-2">
                             {% if item.amazon_url %}
                             <a href="{{ item.amazon_url }}" target="_blank"
