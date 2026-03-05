@@ -12,3 +12,7 @@ Proyecto Mercado LIbre/
 test*.html
 test*.py
 .claude/
+
+# Archivo maestro de credenciales — NUNCA subir a git
+mercado-libre-dashboard.md
+memory/

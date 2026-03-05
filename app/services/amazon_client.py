@@ -452,6 +452,56 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def update_listing_fulfillment(
+        self,
+        sku: str,
+        action: str,          # "pause" | "set_merchant" | "set_qty" | "reactivate_fba"
+        quantity: int = 0,
+    ) -> dict:
+        """
+        Gestiona el fulfillment y stock de cualquier listing (FBA, FBM, FLX).
+
+        Acciones:
+          pause          → DEFAULT, qty=0  — pausa ventas (FBA/FLX/FBM → FBM con 0)
+          set_merchant   → DEFAULT, qty=N  — convierte a FBM con ese stock
+          set_qty        → DEFAULT, qty=N  — actualiza qty (solo FBM existente)
+          reactivate_fba → AMAZON_NA       — devuelve a FBA (Amazon maneja stock)
+
+        Nota SP-API:
+          - fulfillment_channel_code "DEFAULT"   = MFN/FBM (vendedor envía)
+          - fulfillment_channel_code "AMAZON_NA" = FBA/AFN (Amazon envía, sin qty)
+          - Para FBA el campo quantity se ignora; el stock lo controla Amazon
+        """
+        listing = await self.get_listing(sku)
+        if not listing:
+            raise ValueError(f"SKU '{sku}' no encontrado en {self.marketplace_id}")
+
+        product_type = listing.get("productType", "PRODUCT")
+
+        if action == "reactivate_fba":
+            fav = [{"fulfillment_channel_code": "AMAZON_NA"}]
+        else:
+            qty = quantity if action in ("set_merchant", "set_qty") else 0
+            fav = [{"fulfillment_channel_code": "DEFAULT", "quantity": qty}]
+
+        body = {
+            "productType": product_type,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": "/attributes/fulfillment_availability",
+                    "value": fav,
+                }
+            ],
+        }
+
+        return await self._request(
+            "PATCH",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={"marketplaceIds": self.marketplace_id},
+            json_body=body,
+        )
+
     async def update_listing_price(self, sku: str, price: float, currency: str = "MXN") -> dict:
         """
         Actualiza el precio de un listing.

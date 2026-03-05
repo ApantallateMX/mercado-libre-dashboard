@@ -2264,31 +2264,77 @@ class StockActionBody(BaseModel):
 
 @router.post("/products/{sku}/stock-action")
 async def amazon_stock_action(sku: str, body: StockActionBody, request: Request):
-    """
-    Actualiza el stock FBM de un listing directamente desde el tab Inventario.
-    - action="add_fbm": pone body.quantity unidades como FBM
-    - action="pause":   pone qty=0 (pausa el listing sin eliminarlo)
-    Invalida la caché de listings y FBA para que la próxima carga muestre datos frescos.
-    """
+    """Legacy — mantiene compatibilidad con botones existentes."""
     client = await get_amazon_client()
     if not client:
         raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
-
     qty = body.quantity if body.action == "add_fbm" else 0
     try:
         result = await client.update_listing_quantity(sku, qty)
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as exc:
-        logger.exception("[StockAction] Error al actualizar qty de %s", sku)
         raise HTTPException(status_code=500, detail=str(exc))
-
-    # Invalidar caché para que la próxima carga muestre datos actualizados
     _listings_cache.pop(client.seller_id, None)
     _fba_cache.pop(client.seller_id, None)
-
-    logger.info("[StockAction] SKU=%s action=%s qty=%d → ok", sku, body.action, qty)
     return {"ok": True, "sku": sku, "action": body.action, "quantity": qty}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FULFILLMENT ACTION — gestión universal FBA / FBM / FLX
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VALID_FA = {"pause", "set_merchant", "set_qty", "reactivate_fba"}
+
+
+class FulfillmentActionBody(BaseModel):
+    action:   str       # pause | set_merchant | set_qty | reactivate_fba
+    quantity: int = 0
+
+
+@router.post("/products/{sku}/fulfillment-action")
+async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, request: Request):
+    """
+    Gestión universal de fulfillment para cualquier tipo de listing (FBA / FBM / FLX).
+
+    Acciones:
+      pause          → FBM qty=0. Pausa ventas sin eliminar listing ni perder ranking.
+      set_merchant   → Convierte a FBM con quantity indicada (útil FBA/FLX → FBM).
+      set_qty        → Actualiza qty en un listing ya FBM.
+      reactivate_fba → Devuelve a FBA (AMAZON_NA). Amazon retoma control del stock.
+
+    SP-API: PATCH /listings/2021-08-01/items/{sellerId}/{sku}
+    """
+    if body.action not in _VALID_FA:
+        raise HTTPException(status_code=400, detail=f"Acción inválida. Válidas: {_VALID_FA}")
+    if body.action in ("set_merchant", "set_qty") and body.quantity < 0:
+        raise HTTPException(status_code=400, detail="quantity debe ser >= 0")
+
+    client = await get_amazon_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
+
+    try:
+        await client.update_listing_fulfillment(sku, body.action, body.quantity)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as exc:
+        logger.exception("[FulfillmentAction] SKU=%s action=%s", sku, body.action)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    # Invalidar caches
+    _listings_cache.pop(client.seller_id, None)
+    _fba_cache.pop(client.seller_id, None)
+    _flx_stock_cache.pop(sku, None)
+
+    labels = {
+        "pause":          "Pausado (qty=0)",
+        "set_merchant":   f"→ Merchant ({body.quantity} uds)",
+        "set_qty":        f"Stock → {body.quantity} uds",
+        "reactivate_fba": "Reactivado en FBA",
+    }
+    logger.info("[FulfillmentAction] SKU=%s → %s", sku, labels[body.action])
+    return {"ok": True, "sku": sku, "action": body.action, "label": labels[body.action], "quantity": body.quantity}
 
 
 @router.get("/products/stock", response_class=HTMLResponse)

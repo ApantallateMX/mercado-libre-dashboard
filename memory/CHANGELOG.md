@@ -1,5 +1,51 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-03-05 — Feat: Fulfillment Management Universal Amazon + Agentes IA
+
+### Fulfillment Management
+- Boton ⚡ universal en TODAS las filas del tab Inventario Amazon (no solo filas con issue)
+- Reemplaza botones condicionales `{% if action_needed %}` — ahora disponible siempre
+- Modal `fm-modal` con 4 acciones: Pausar, Cambiar a Merchant, Actualizar qty FBM, Reactivar FBA
+- Alerta visual: boton rojo+pulso cuando BM disponible=0 y Amazon stock>0
+- "Usar BM" autocompleta cantidad desde `_bm_avail` del producto
+- Recarga automatica del tab despues de 1.5s al ejecutar accion exitosa
+
+### Backend nuevo
+- `app/services/amazon_client.py`: `update_listing_fulfillment(sku, action, quantity)`
+  - `pause` / `set_merchant` / `set_qty` → DEFAULT channel
+  - `reactivate_fba` → AMAZON_NA channel
+  - productType obtenido dinamicamente del listing actual
+- `app/api/amazon_products.py`: `POST /api/amazon/products/{sku}/fulfillment-action`
+  - `FulfillmentActionBody(action, quantity)` + `_VALID_FA` validation
+  - Invalida `_listings_cache`, `_fba_cache`, `_flx_stock_cache` post-accion
+
+### Agentes IA creados
+- `Agentes/amazon-specialist.md` — Seccion 8: Fulfillment Management completa
+- `Agentes/binmanager-specialist.md` — BM endpoints, LocationIDs, Available vs Reserved
+- `Agentes/financial-analyst.md` — Revenue MeLi/Amazon, margenes, P&L
+- `Agentes/mercadolibre-strategist.md` — existente (sera actualizado con scraper)
+
+### Scrapers y update scripts creados
+- `scraper_amazon_help.py` — Playwright, SC MX help (~40 secciones) + SP-API docs (~70 paginas)
+- `scraper_meli_docs.py` — httpx+BS4, ~130 URLs de developers.mercadolibre.cl
+- `scraper_binmanager.py` — Playwright + auto-login BM, intercepta API interna
+- `update_agent_with_knowledge.py` — inyecta 160K chars en amazon-specialist
+- `update_meli_agent.py` — inyecta 120K chars en mercadolibre-strategist
+- `update_bm_agent.py` — inyecta 100K chars en binmanager-specialist
+
+### Archivo maestro
+- `mercado-libre-dashboard.md` — creado con TODOS los logins, credenciales, endpoints, estado
+- `.gitignore` — agregado `mercado-libre-dashboard.md` y `memory/` (proteccion credenciales)
+
+### Archivos modificados
+- `app/templates/partials/amazon_products_inventario.html` — tabla w-full text-xs, modal fulfillment
+- `app/services/amazon_client.py` — update_listing_fulfillment()
+- `app/api/amazon_products.py` — /fulfillment-action endpoint
+- `Agentes/amazon-specialist.md` — seccion 8 fulfillment management
+- `mercado-libre-dashboard.md` — secciones 11/12/13 actualizadas
+
+---
+
 ## 2026-02-20 — Fix: 4 cuentas MeLi persistidas en .env.production
 
 ### Cuentas registradas (permanentes)
