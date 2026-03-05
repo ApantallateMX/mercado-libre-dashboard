@@ -4,6 +4,19 @@ from typing import Optional, List
 import httpx
 import asyncio
 from app.services.meli_client import get_meli_client, MeliApiError
+import app.main as _main_module
+
+
+def _invalidate_user_products_cache(user_id: str):
+    """Invalida las entradas de cache de productos para un usuario especifico."""
+    prefix = f"{user_id}:"
+    keys_to_del = [k for k in _main_module._products_cache if k.startswith(prefix)]
+    for k in keys_to_del:
+        del _main_module._products_cache[k]
+    # Tambien limpiar sale_price_cache ya que precios cambian
+    sp_keys = [k for k in _main_module._sale_price_cache if k.startswith(prefix)]
+    for k in sp_keys:
+        del _main_module._sale_price_cache[k]
 
 BM_WAREHOUSE_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
@@ -379,6 +392,7 @@ async def update_price(item_id: str, data: PriceUpdate):
 
     try:
         result = await client.update_item_price(item_id, data.price)
+        _invalidate_user_products_cache(str(client.user_id))
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -395,6 +409,7 @@ async def update_stock(item_id: str, data: StockUpdate):
 
     try:
         result = await client.update_item_stock(item_id, data.quantity)
+        _invalidate_user_products_cache(str(client.user_id))
         return result
     except MeliApiError as e:
         body = e.body
@@ -447,6 +462,7 @@ async def update_status(item_id: str, data: StatusUpdate):
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.update_item_status(item_id, data.status)
+        _invalidate_user_products_cache(str(client.user_id))
         return result
     finally:
         await client.close()
@@ -467,6 +483,7 @@ async def update_shipping(item_id: str, data: ShippingUpdate):
         if data.logistic_type is not None:
             shipping["logistic_type"] = data.logistic_type
         result = await client.update_item_shipping(item_id, shipping)
+        _invalidate_user_products_cache(str(client.user_id))
         return result
     except MeliApiError as e:
         body = e.body

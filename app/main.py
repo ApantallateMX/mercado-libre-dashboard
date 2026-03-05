@@ -5668,6 +5668,10 @@ async def update_item_stock_api(item_id: str, request: Request):
         body = await request.json()
         quantity = int(body.get("quantity", 0))
         result = await client.update_item_stock(item_id, quantity)
+        # Invalidar cache para que el inventario muestre datos frescos
+        uid = str(client.user_id)
+        for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
+            del _products_cache[k]
         return {"ok": True, "quantity": quantity}
     except ValueError as e:
         # Item tiene variaciones — rechazar con mensaje claro
@@ -5848,9 +5852,12 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 for r in var_results:
                     if r["variation_id"] in updated_ids:
                         r["updated"] = True
-                # Invalidar cache de stock issues para reflejar cambio
+                # Invalidar cache de stock issues y productos para reflejar cambio
                 _synced_alert_items.add(item_id)
                 _stock_issues_cache.clear()
+                uid = str(client.user_id)
+                for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
+                    del _products_cache[k]
             except Exception as ex:
                 for r in var_results:
                     if not r["error"]:
