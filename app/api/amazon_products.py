@@ -1970,6 +1970,224 @@ async def flx_debug(request: Request, skus: str = Query("", description="Comma-s
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ASIN INSPECT — diagnóstico completo de todas las fuentes para un ASIN
+# GET /api/amazon/products/asin-inspect?asin=B0GR27VX4S
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/products/asin-inspect")
+async def asin_inspect(request: Request, asin: str = Query(..., description="ASIN de Amazon")):
+    """
+    Consulta TODAS las fuentes de datos disponibles en SP-API para un ASIN dado.
+    Fuentes consultadas:
+      1. Cache de listings     — SKU, estado, fulfillmentAvailability, issues
+      2. Listings API (directo) — datos completos del listing vía SP-API
+      3. FBA Inventory API per-SKU — fulfillable, reserved, inbound (Seller Flex + FBA)
+      4. FBA general scan cache — si aparece en el escaneo general
+      5. FLX stock cache        — lo que el dashboard tiene almacenado
+      6. Catalog API            — título, categoría, BSR, imágenes
+      7. Listing Offers API     — buybox, precio competencia
+      8. Ventas 30d (cache)     — unidades y revenue del período
+    """
+    client = await get_amazon_client()
+    if not client:
+        return JSONResponse({"error": "Sin cuenta Amazon"}, status_code=401)
+
+    asin = asin.strip().upper()
+    result = {"asin": asin, "sources": {}}
+
+    # ── 1. Cache de listings (búsqueda por ASIN) ──────────────────────────────
+    listings_cache_data = _listings_cache.get(client.seller_id)
+    found_skus = []
+    listing_from_cache = None
+    if listings_cache_data:
+        ts, all_listings = listings_cache_data
+        for item in all_listings:
+            summaries = item.get("summaries") or []
+            item_asin = next((s.get("asin") for s in summaries if s.get("asin")), None)
+            if item_asin == asin:
+                found_skus.append(item.get("sku", ""))
+                listing_from_cache = item
+        result["sources"]["listings_cache"] = {
+            "age_sec":   int(_time.time() - ts),
+            "found_skus": found_skus,
+            "raw":        listing_from_cache,
+        }
+    else:
+        result["sources"]["listings_cache"] = {"status": "VACÍO — no hay caché de listings todavía"}
+
+    # SKU principal para las consultas siguientes
+    sku = found_skus[0] if found_skus else None
+    result["sku_detectado"] = sku
+
+    # ── 2. Listings API directo (SP-API) ──────────────────────────────────────
+    if sku:
+        try:
+            listing_direct = await client.get_listing(sku)
+            result["sources"]["listings_api_direct"] = listing_direct
+        except Exception as e:
+            result["sources"]["listings_api_direct"] = {"error": str(e)}
+    else:
+        result["sources"]["listings_api_direct"] = {"status": "OMITIDO — no se encontró SKU en caché"}
+
+    # ── 3. FBA Inventory API por SKU (directo, sin caché) ─────────────────────
+    if sku:
+        try:
+            params = [
+                ("granularityType", "Marketplace"),
+                ("granularityId",   client.marketplace_id),
+                ("marketplaceIds",  client.marketplace_id),
+                ("details",         "true"),
+                ("sellerSkus",      sku),
+            ]
+            fba_raw = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+            fba_summaries = (fba_raw.get("payload", {}) or {}).get("inventorySummaries", []) or []
+            fba_parsed = []
+            for s in fba_summaries:
+                det = s.get("inventoryDetails", {}) or {}
+                res = det.get("reservedQuantity",  {}) or {}
+                fba_parsed.append({
+                    "sellerSku":          s.get("sellerSku"),
+                    "asin":               s.get("asin"),
+                    "condition":          s.get("condition"),
+                    "fulfillmentChannel": s.get("fulfillmentChannelCode") or s.get("inventoryType"),
+                    "totalQuantity":      s.get("totalQuantity"),
+                    "fulfillable":        det.get("fulfillableQuantity"),
+                    "reserved_total":     res.get("totalReservedQuantity"),
+                    "reserved_fc":        res.get("fcProcessingQuantity"),
+                    "reserved_customer":  res.get("pendingCustomerOrderQuantity"),
+                    "inbound_working":    det.get("inboundWorkingQuantity"),
+                    "inbound_shipped":    det.get("inboundShippedQuantity"),
+                    "inbound_receiving":  det.get("inboundReceivingQuantity"),
+                    "unfulfillable":      det.get("unfulfillableQuantity"),
+                    "researching":        det.get("researchingQuantity"),
+                })
+            result["sources"]["fba_inventory_per_sku"] = {
+                "found": bool(fba_parsed),
+                "items": fba_parsed,
+                "nextToken": (fba_raw.get("payload", {}) or {}).get("nextToken"),
+            }
+        except Exception as e:
+            result["sources"]["fba_inventory_per_sku"] = {"error": str(e)}
+    else:
+        result["sources"]["fba_inventory_per_sku"] = {"status": "OMITIDO — no se encontró SKU"}
+
+    # ── 4. FBA general scan cache (escaneo sin filtro de SKU) ─────────────────
+    fba_cache_data = _fba_cache.get(client.seller_id)
+    if fba_cache_data:
+        ts, fba_all = fba_cache_data
+        in_general_scan = [s for s in fba_all if s.get("asin") == asin or s.get("sellerSku") == sku]
+        result["sources"]["fba_general_scan_cache"] = {
+            "age_sec":       int(_time.time() - ts),
+            "found":         bool(in_general_scan),
+            "items":         in_general_scan,
+        }
+    else:
+        result["sources"]["fba_general_scan_cache"] = {"status": "VACÍO — no hay caché FBA general"}
+
+    # ── 5. FLX stock cache (per-SKU, fondo de pantalla) ───────────────────────
+    flx_cache_data = _flx_stock_cache.get(client.seller_id)
+    if flx_cache_data and sku:
+        ts, flx_data = flx_cache_data
+        flx_hit = flx_data.get(sku)
+        result["sources"]["flx_stock_cache"] = {
+            "age_sec": int(_time.time() - ts),
+            "found":   bool(flx_hit),
+            "data":    flx_hit,
+        }
+    else:
+        result["sources"]["flx_stock_cache"] = {"status": "VACÍO o SKU no encontrado en caché FLX"}
+
+    # ── 6. Catalog API ────────────────────────────────────────────────────────
+    try:
+        catalog = await client.get_catalog_item(asin)
+        if catalog:
+            summaries_cat = catalog.get("summaries", [])
+            sales_ranks   = catalog.get("salesRanks",  [])
+            images_cat    = catalog.get("images",       [])
+            cat_summary = summaries_cat[0] if summaries_cat else {}
+            result["sources"]["catalog_api"] = {
+                "itemName":    cat_summary.get("itemName"),
+                "brand":       cat_summary.get("brand"),
+                "manufacturer":cat_summary.get("manufacturer"),
+                "modelNumber": cat_summary.get("modelNumber"),
+                "color":       cat_summary.get("color"),
+                "itemClassificationSalesRank": cat_summary.get("itemClassificationSalesRank"),
+                "salesRanks":  sales_ranks[:3],
+                "images_count":len(images_cat[0].get("images", []) if images_cat else []),
+                "raw_summaries": summaries_cat[:1],
+            }
+        else:
+            result["sources"]["catalog_api"] = {"status": "Sin datos — ASIN no en catálogo MX"}
+    except Exception as e:
+        result["sources"]["catalog_api"] = {"error": str(e)}
+
+    # ── 7. Listing Offers API (buybox) ────────────────────────────────────────
+    if sku:
+        try:
+            offers = await client.get_listing_offers(sku)
+            if offers:
+                payload_off = offers.get("payload", {}) or {}
+                summary_off = payload_off.get("Summary", {}) or {}
+                offers_list = payload_off.get("Offers", []) or []
+                result["sources"]["listing_offers"] = {
+                    "totalOfferCount":  summary_off.get("TotalOfferCount"),
+                    "buyBoxPrices":     summary_off.get("BuyBoxPrices"),
+                    "buyBoxEligibleOffers": summary_off.get("BuyBoxEligibleOffers"),
+                    "lowestPrices":     summary_off.get("LowestPrices"),
+                    "myOffer": next(
+                        (o for o in offers_list if o.get("IsBuyBoxWinner") or o.get("MyOffer")),
+                        None
+                    ),
+                    "isBuyBoxWinner": any(o.get("IsBuyBoxWinner") for o in offers_list),
+                }
+            else:
+                result["sources"]["listing_offers"] = {"status": "Sin datos"}
+        except Exception as e:
+            result["sources"]["listing_offers"] = {"error": str(e)}
+    else:
+        result["sources"]["listing_offers"] = {"status": "OMITIDO — no se encontró SKU"}
+
+    # ── 8. Ventas 30d (cache local) ───────────────────────────────────────────
+    sku_sales_cache_data = _sku_sales_cache.get(client.seller_id)
+    if sku_sales_cache_data and sku:
+        ts, sales_data = sku_sales_cache_data
+        sales_hit = sales_data.get(sku)
+        result["sources"]["sku_sales_30d_cache"] = {
+            "age_sec": int(_time.time() - ts),
+            "found":   bool(sales_hit),
+            "data":    sales_hit,
+        }
+    else:
+        result["sources"]["sku_sales_30d_cache"] = {"status": "VACÍO o SKU no encontrado"}
+
+    # ── Resumen ejecutivo ─────────────────────────────────────────────────────
+    fba_items    = result["sources"].get("fba_inventory_per_sku", {}).get("items", [])
+    fulfillable  = sum(i.get("fulfillable") or 0 for i in fba_items)
+    reserved_tot = sum(i.get("reserved_total") or 0 for i in fba_items)
+    inbound_tot  = sum((i.get("inbound_working") or 0) + (i.get("inbound_shipped") or 0) + (i.get("inbound_receiving") or 0) for i in fba_items)
+    listing_status = None
+    if listing_from_cache:
+        sums = listing_from_cache.get("summaries") or []
+        listing_status = next((s.get("status") for s in sums), None)
+    fa_list = listing_from_cache.get("fulfillmentAvailability", []) if listing_from_cache else []
+    fa_channels = {fa.get("fulfillmentChannelCode"): fa.get("quantity") for fa in fa_list} if fa_list else {}
+
+    result["resumen"] = {
+        "sku":             sku,
+        "listing_status":  listing_status,
+        "fulfillmentChannels": fa_channels,
+        "fba_api_found":   bool(fba_items),
+        "fba_fulfillable": fulfillable,
+        "fba_reserved":    reserved_tot,
+        "fba_inbound":     inbound_tot,
+        "in_general_scan": result["sources"].get("fba_general_scan_cache", {}).get("found", False),
+        "flx_cache_data":  result["sources"].get("flx_stock_cache", {}).get("data"),
+    }
+
+    return JSONResponse(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # STOCK ACTION — actualiza qty de un listing FBM desde el tab Inventario
 # ─────────────────────────────────────────────────────────────────────────────
 
