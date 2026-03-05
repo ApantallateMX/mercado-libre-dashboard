@@ -414,6 +414,9 @@ async def update_stock(item_id: str, data: StockUpdate):
     except MeliApiError as e:
         body = e.body
         if isinstance(body, dict):
+            # me1_required: error especial — cross_docking sin ME1 habilitado
+            if body.get("error") == "me1_required":
+                raise HTTPException(status_code=422, detail=body.get("message", "ME1 requerido"))
             detail = body.get("message") or body.get("error") or str(body)
         else:
             detail = str(body)

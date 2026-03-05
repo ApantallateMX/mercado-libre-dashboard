@@ -302,8 +302,20 @@
                 }, 1500);
             } else {
                 var detail = res.data.detail || JSON.stringify(res.data);
-                showToast('Error: ' + detail, 'error');
                 btn.disabled = false; btn.textContent = 'Aplicar stock al listing';
+                // Error ME1: item en cross_docking sin modo ME1 — MeLi revierte el stock
+                if (detail && (detail.indexOf('me1_required') !== -1 || detail.indexOf('ME1') !== -1 || detail.indexOf('cross_docking') !== -1)) {
+                    var warn = document.getElementById('fm-me1-warning');
+                    if (!warn) {
+                        warn = document.createElement('div');
+                        warn.id = 'fm-me1-warning';
+                        warn.className = 'mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-800';
+                        btn.parentNode.insertBefore(warn, btn.nextSibling);
+                    }
+                    warn.innerHTML = '<strong>Envio no configurado (ME1)</strong><br>Este item fue removido de FULL y quedo en cross_docking, pero la cuenta no tiene ME1 activo. MeLi revierte el stock automaticamente.<br><br><a href="https://www.mercadolibre.com.mx/ventas/full/productos" target="_blank" style="text-decoration:underline;font-weight:600;">Configura el envio en Seller Central</a>';
+                } else {
+                    showToast('Error: ' + detail, 'error');
+                }
             }
         })
         .catch(function(e) {

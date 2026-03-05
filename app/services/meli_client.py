@@ -832,20 +832,38 @@ class MeliClient:
             "cannot_update", "cannot update",
         )
         try:
-            return await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
+            result = await self.put(f"/items/{item_id}", json={"available_quantity": quantity})
         except MeliApiError as e:
             err_msg = str(e).lower()
             body_str = str(e.body).lower() if e.body else ""
             combined = err_msg + " " + body_str
             if not any(kw in combined for kw in _VAR_ERROR_KEYWORDS):
                 raise
-        # Item tiene variaciones → obtener y actualizar cada variacion con la misma cantidad
-        item_data = await self.get(f"/items/{item_id}")
-        variations = item_data.get("variations", [])
-        if not variations:
-            raise ValueError(f"Stock de {item_id} no es modificable y no tiene variaciones conocidas")
-        var_updates = [{"id": v["id"], "available_quantity": quantity} for v in variations]
-        return await self.update_variation_stocks_directly(item_id, var_updates)
+            # Item tiene variaciones → obtener y actualizar cada variacion con la misma cantidad
+            item_data = await self.get(f"/items/{item_id}")
+            variations = item_data.get("variations", [])
+            if not variations:
+                raise ValueError(f"Stock de {item_id} no es modificable y no tiene variaciones conocidas")
+            var_updates = [{"id": v["id"], "available_quantity": quantity} for v in variations]
+            return await self.update_variation_stocks_directly(item_id, var_updates)
+
+        # Detectar warning lost_me1_by_user: MeLi acepta el PUT pero revierte el stock en ~3s
+        warnings = result.get("warnings") or []
+        if any("lost_me1_by_user" in str(w) for w in warnings):
+            raise MeliApiError(
+                status_code=422,
+                endpoint=f"/items/{item_id}",
+                body={
+                    "error": "me1_required",
+                    "message": (
+                        "Este item fue removido de FULL y quedó en modo cross_docking, "
+                        "pero la cuenta no tiene habilitado ME1 (Mercado Envíos). "
+                        "MeLi revierte el stock automáticamente. "
+                        "Ve a Seller Central → Envíos → configura el modo de envío antes de agregar stock."
+                    )
+                }
+            )
+        return result
 
     async def update_variation_stocks_directly(self, item_id: str, var_updates: list) -> dict:
         """Actualiza stock de variaciones especificas SIN redistribuir las demas.
