@@ -261,17 +261,19 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
     Tarea BG: descarga FLX stock de FBA API y actualiza caché.
     Nunca bloquea requests — se lanza con asyncio.create_task().
 
-    Fixes vs versión anterior:
-    - Batch de 20 SKUs (en lugar de 50) para mantenerse bajo el límite de 2 req/s
-    - Sleep 0.55s entre batches = ~1.8 req/s (límite FBA Inventory API: 2 req/s)
-    - Manejo de nextToken dentro de cada batch (Amazon puede paginar la respuesta)
-    - Retry automático con backoff en 429 dentro del loop de paginación
+    IMPORTANTE — Quirk Amazon Onsite (Seller Flex):
+    La FBA Inventory API en modo batch NO devuelve items Onsite de forma confiable,
+    aunque sí los devuelve en queries individuales por sellerSku.
+    Por eso usamos dos fases:
+      Fase 1: batch de 20 SKUs (captura FBA puro y algunos Onsite)
+      Fase 2: retry individual para SKUs no retornados por el batch
     """
     key = client.seller_id
     try:
         result: dict = {}
         unique_skus = list(dict.fromkeys(s for s in flx_skus if s))
 
+        # ── Fase 1: Batch queries ─────────────────────────────────────────────
         for i in range(0, len(unique_skus), 20):
             batch = unique_skus[i:i + 20]
             next_tok = None
@@ -319,16 +321,62 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
             if i + 20 < len(unique_skus):
                 await asyncio.sleep(0.55)
 
-        found_skus   = set(result.keys())
-        missing_skus = [s for s in unique_skus if s not in found_skus]
-        zero_skus    = [s for s, v in result.items() if v["fulfillable"] == 0 and v["total"] == 0]
-        logger.info(
-            f"[FLX-BG] {len(result)}/{len(unique_skus)} SKUs recibidos de Amazon FBA API. "
-            f"Sin respuesta: {len(missing_skus)} SKUs. "
-            f"Con fulfillable=0 y total=0: {len(zero_skus)} SKUs."
-        )
+        # ── Fase 2: Retry individual para SKUs omitidos por el batch ─────────
+        # Amazon Onsite (Seller Flex) no aparece de forma confiable en queries batch.
+        # Los retentamos uno por uno para capturar su inventory real.
+        missing_skus = [s for s in unique_skus if s not in result]
         if missing_skus:
-            logger.warning(f"[FLX-BG] SKUs no encontrados en FBA API: {missing_skus[:20]}")
+            logger.info(
+                f"[FLX-BG] Fase 2: {len(missing_skus)} SKUs omitidos por batch → retry individual"
+            )
+            for sku in missing_skus:
+                try:
+                    params = [
+                        ("granularityType", "Marketplace"),
+                        ("granularityId",   client.marketplace_id),
+                        ("marketplaceIds",  client.marketplace_id),
+                        ("details",         "true"),
+                        ("sellerSkus",      sku),
+                    ]
+                    data    = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
+                    payload = data.get("payload", {}) or {}
+                    summaries = payload.get("inventorySummaries") or []
+                    if summaries:
+                        for s in summaries:
+                            s_sku = s.get("sellerSku", "")
+                            if s_sku:
+                                det = s.get("inventoryDetails", {}) or {}
+                                res = det.get("reservedQuantity", {}) or {}
+                                result[s_sku] = {
+                                    "fulfillable": int(det.get("fulfillableQuantity") or 0),
+                                    "reserved":    int(res.get("totalReservedQuantity") or 0),
+                                    "inbound":     (
+                                        int(det.get("inboundWorkingQuantity") or 0)
+                                        + int(det.get("inboundShippedQuantity") or 0)
+                                        + int(det.get("inboundReceivingQuantity") or 0)
+                                    ),
+                                    "total":       int(s.get("totalQuantity") or 0),
+                                }
+                    else:
+                        # API confirma 0 para este SKU — guardamos para no re-consultar
+                        result[sku] = {"fulfillable": 0, "reserved": 0, "inbound": 0, "total": 0}
+                    await asyncio.sleep(0.6)  # rate limit: ~1.6 req/s
+
+                except Exception as exc:
+                    logger.warning(f"[FLX-BG] Error retry individual {sku}: {exc}")
+
+        # ── Resumen final ─────────────────────────────────────────────────────
+        still_missing = [s for s in unique_skus if s not in result]
+        with_stock    = [s for s, v in result.items() if v.get("fulfillable", 0) > 0]
+        zero_skus     = [s for s, v in result.items() if v["fulfillable"] == 0 and v["total"] == 0]
+        logger.info(
+            f"[FLX-BG] Completado: {len(result)}/{len(unique_skus)} SKUs en caché. "
+            f"Con stock: {len(with_stock)}. "
+            f"fulfillable=0: {len(zero_skus)}. "
+            f"Sin datos: {len(still_missing)}."
+        )
+        if with_stock:
+            logger.info(f"[FLX-BG] SKUs con stock Onsite: {with_stock}")
         _flx_stock_cache[key] = (_time.time(), result)
     finally:
         _flx_stock_refreshing.discard(key)
