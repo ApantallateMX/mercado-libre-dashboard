@@ -1995,25 +1995,31 @@ async def asin_inspect(request: Request, asin: str = Query(..., description="ASI
     asin = asin.strip().upper()
     result = {"asin": asin, "sources": {}}
 
-    # ── 1. Cache de listings (búsqueda por ASIN) ──────────────────────────────
-    listings_cache_data = _listings_cache.get(client.seller_id)
+    # ── 1. Listings SP-API — carga real si caché vacío ───────────────────────
+    # _get_listings_cached() descarga listings si el caché está frío.
+    # Es bloqueante pero es un endpoint de diagnóstico — se puede esperar.
+    all_listings = await _get_listings_cached(client)
     found_skus = []
     listing_from_cache = None
-    if listings_cache_data:
-        ts, all_listings = listings_cache_data
-        for item in all_listings:
-            summaries = item.get("summaries") or []
-            item_asin = next((s.get("asin") for s in summaries if s.get("asin")), None)
-            if item_asin == asin:
-                found_skus.append(item.get("sku", ""))
-                listing_from_cache = item
-        result["sources"]["listings_cache"] = {
-            "age_sec":   int(_time.time() - ts),
-            "found_skus": found_skus,
-            "raw":        listing_from_cache,
-        }
-    else:
-        result["sources"]["listings_cache"] = {"status": "VACÍO — no hay caché de listings todavía"}
+    for item in all_listings:
+        summaries = item.get("summaries") or []
+        item_asin  = next((s.get("asin") for s in summaries if s.get("asin")), None)
+        if item_asin == asin:
+            found_skus.append(item.get("sku", ""))
+            listing_from_cache = item
+
+    listings_cache_data = _listings_cache.get(client.seller_id)
+    cache_age = int(_time.time() - listings_cache_data[0]) if listings_cache_data else 0
+    result["sources"]["listings_sp_api"] = {
+        "total_listings": len(all_listings),
+        "cache_age_sec":  cache_age,
+        "found_skus":     found_skus,
+        "listing_raw":    listing_from_cache,
+        "nota": (
+            "ASIN encontrado en listings del seller" if found_skus
+            else "ASIN NO encontrado entre los listings activos de este seller — puede no estar publicado"
+        ),
+    }
 
     # SKU principal para las consultas siguientes
     sku = found_skus[0] if found_skus else None
