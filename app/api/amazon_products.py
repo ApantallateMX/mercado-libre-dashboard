@@ -319,7 +319,16 @@ async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
             if i + 20 < len(unique_skus):
                 await asyncio.sleep(0.55)
 
-        logger.info(f"[FLX-BG] {len(result)}/{len(unique_skus)} FLX SKUs actualizados en background")
+        found_skus   = set(result.keys())
+        missing_skus = [s for s in unique_skus if s not in found_skus]
+        zero_skus    = [s for s, v in result.items() if v["fulfillable"] == 0 and v["total"] == 0]
+        logger.info(
+            f"[FLX-BG] {len(result)}/{len(unique_skus)} SKUs recibidos de Amazon FBA API. "
+            f"Sin respuesta: {len(missing_skus)} SKUs. "
+            f"Con fulfillable=0 y total=0: {len(zero_skus)} SKUs."
+        )
+        if missing_skus:
+            logger.warning(f"[FLX-BG] SKUs no encontrados en FBA API: {missing_skus[:20]}")
         _flx_stock_cache[key] = (_time.time(), result)
     finally:
         _flx_stock_refreshing.discard(key)
@@ -1709,36 +1718,16 @@ async def amazon_products_inventario(
                 **_bm_from_cache(sku),
                 "flx_reserved":  flx_reserved,
                 "flx_inbound":   flx_inbound,
-                # True = FBA API devolvió datos para este SKU (fulfillable/reserved/etc.)
-                # False = FBA API no reconoce este SKU → puede ser Seller Flex puro en bodega propia
-                "_flx_from_api": bool(flx_data) if is_flx_item else False,
             })
 
         # ── Pre-enrich FLX con BM (solo para columnas BM Disp/Res/MTY/CDMX/TJ) ─
-        # Incluye: -FLX en SKU Y items con fulfillment_type FLX (AMAZON_NA sin sufijo -FLX)
+        # BM es inventario físico total en bodega — informativo ÚNICAMENTE.
+        # NUNCA usar BM como sustituto del stock FLX/Onsite (son fuentes diferentes).
+        # FLX = asignado al programa Amazon Onsite (dato de Amazon FBA API)
+        # BM  = total bodega propia (dato de BinManager, puede incluir stock no asignado a Amazon)
         flx_pre = [e for e in enriched if e.get("fulfillment_type") == "FLX"]
         if flx_pre:
             await _enrich_bm_amz(flx_pre)
-
-        # ── Fallback FLX: si FBA API no tiene este SKU pero BM sí tiene stock ──
-        # Seller Flex puro = el inventario está en bodega propia (BM), no en Amazon.
-        # Amazon no lo expone en FBA Inventory API → usar bm_avail como proxy del stock.
-        for e in enriched:
-            if (e.get("fulfillment_type") == "FLX"
-                    and not e.get("_flx_from_api", False)
-                    and e.get("bm_avail", 0) > 0
-                    and e["stock_flx"] == 0):
-                bm = e["bm_avail"]
-                e["stock_flx"] = bm
-                e["fba_stock"]  = bm
-                vel = e["vel_dia"]
-                ds  = round(bm / vel, 1) if vel > 0 else None
-                e["dias_supply"]  = ds
-                e["supply_color"] = (
-                    "red"    if ds is not None and ds < 14 else
-                    "yellow" if ds is not None and ds < 30 else
-                    "green"  if ds is not None else "gray"
-                )
 
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
@@ -1923,31 +1912,58 @@ async def flx_debug(request: Request, skus: str = Query("", description="Comma-s
 
     try:
         raw = await client._request("GET", "/fba/inventory/v1/summaries", params=params)
-        summaries = raw.get("payload", {}).get("inventorySummaries", [])
+        summaries = raw.get("payload", {}).get("inventorySummaries", []) or []
         next_tok   = raw.get("payload", {}).get("nextToken")
-        parsed = []
+
+        parsed = {}
         for s in summaries:
             det = s.get("inventoryDetails", {}) or {}
             res = det.get("reservedQuantity", {}) or {}
-            parsed.append({
-                "sellerSku":   s.get("sellerSku"),
-                "asin":        s.get("asin"),
-                "fulfillable": det.get("fulfillableQuantity"),
-                "reserved":    res.get("totalReservedQuantity"),
+            sku = s.get("sellerSku", "")
+            parsed[sku] = {
+                "asin":               s.get("asin"),
+                "fulfillable":        det.get("fulfillableQuantity"),
+                "reserved_total":     res.get("totalReservedQuantity"),
+                "reserved_fc":        res.get("fcProcessingQuantity"),
+                "reserved_customer":  res.get("pendingCustomerOrderQuantity"),
                 "inbound_working":    det.get("inboundWorkingQuantity"),
                 "inbound_shipped":    det.get("inboundShippedQuantity"),
                 "inbound_receiving":  det.get("inboundReceivingQuantity"),
-                "total":       s.get("totalQuantity"),
-                "condition":   s.get("condition"),
+                "total":              s.get("totalQuantity"),
+                "condition":          s.get("condition"),
                 "fulfillmentChannel": s.get("fulfillmentChannelCode") or s.get("inventoryType"),
-            })
+            }
+
+        # Diagnóstico claro por SKU consultado
+        diagnosis = {}
+        for sku in sku_list:
+            if sku in parsed:
+                d = parsed[sku]
+                fulfillable = d["fulfillable"] or 0
+                reserved    = d["reserved_total"] or 0
+                inbound     = (d["inbound_working"] or 0) + (d["inbound_shipped"] or 0) + (d["inbound_receiving"] or 0)
+                if fulfillable > 0:
+                    status = f"✅ ENCONTRADO — fulfillable={fulfillable}, reservado={reserved}, inbound={inbound}"
+                elif reserved > 0 or inbound > 0:
+                    status = f"⚠️ ENCONTRADO pero fulfillable=0 — reservado={reserved}, inbound={inbound}"
+                else:
+                    status = "❌ ENCONTRADO en Amazon pero todas las cantidades = 0"
+            else:
+                status = "🚫 NO ENCONTRADO — Amazon FBA/Onsite API no reconoce este SKU"
+            diagnosis[sku] = status
+
         return JSONResponse({
-            "queried_skus":   sku_list,
-            "api_returned":   parsed,
-            "nextToken":      next_tok,
+            "diagnosis":      diagnosis,
+            "api_raw":        parsed,
+            "has_next_page":  bool(next_tok),
             "cache_age_sec":  cache_age,
             "cache_hits":     cache_hits,
-            "note": "api_returned vacío = Amazon no tiene este SKU en FBA inventory (o 0 stock y no devuelve el item)"
+            "explanation": {
+                "fulfillable":  "Unidades disponibles para enviar ahora (lo que muestra el dashboard en columna FLX)",
+                "reserved":     "Unidades con orden activa pero aún no enviadas",
+                "inbound":      "Unidades que Amazon está recibiendo/procesando",
+                "NO_ENCONTRADO": "Amazon FBA/Onsite API no tiene registro de este SKU — puede ser un SKU puramente Seller Flex no sincronizado, o el SKU en Seller Central difiere del SKU en el listing",
+            }
         })
     except Exception as exc:
         return JSONResponse({"error": str(exc), "queried_skus": sku_list}, status_code=500)
