@@ -253,24 +253,24 @@
             </div>
 
             <!-- ── Links MeLi ────────────────────────────────────────────── -->
-            <div class="hidden md:flex items-center space-x-5 text-sm">
-                <a href="/multi-dashboard" class="text-gray-700 hover:text-gray-900 {% if active == 'multi_dashboard' %}font-semibold{% endif %} flex items-center gap-1">
-                    <span class="text-yellow-600">⊕</span> Vista General
+            <div class="hidden md:flex items-center gap-1 text-xs font-medium">
+                <a href="/multi-dashboard" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'multi_dashboard' %}font-semibold bg-yellow-500{% endif %} flex items-center gap-0.5 whitespace-nowrap">
+                    <span class="text-yellow-600">⊕</span> Gral
                 </a>
-                <a href="/inventory-global" class="text-gray-700 hover:text-gray-900 {% if active == 'inventory_global' %}font-semibold{% endif %} flex items-center gap-1">
-                    <span class="text-indigo-500">▦</span> Inv. Global
+                <a href="/inventory-global" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'inventory_global' %}font-semibold bg-yellow-500{% endif %} flex items-center gap-0.5 whitespace-nowrap">
+                    <span class="text-indigo-500">▦</span> Inv.Global
                 </a>
-                <a href="/dashboard" class="text-gray-700 hover:text-gray-900 {% if active == 'dashboard' %}font-semibold{% endif %}">Dashboard</a>
-                <a href="/orders" class="text-gray-700 hover:text-gray-900 {% if active == 'orders' %}font-semibold{% endif %}">Ventas</a>
-                <a href="/items" class="text-gray-700 hover:text-gray-900 {% if active == 'items' %}font-semibold{% endif %}">Productos</a>
-                <a href="/items-health" class="text-gray-700 hover:text-gray-900 {% if active == 'items_health' %}font-semibold{% endif %}">Optimizar</a>
-                <a href="/sku-sales" class="text-gray-700 hover:text-gray-900 {% if active == 'sku_sales' %}font-semibold{% endif %}">SKU Ventas</a>
-                <a href="/sku-compare" class="text-gray-700 hover:text-gray-900 {% if active == 'sku_compare' %}font-semibold{% endif %}">Comparativa</a>
-                <a href="/sku-inventory" class="text-gray-700 hover:text-gray-900 {% if active == 'sku_inventory' %}font-semibold{% endif %}">Lanzar</a>
-                <a href="/ads" class="text-gray-700 hover:text-gray-900 {% if active == 'ads' %}font-semibold{% endif %}">Ads</a>
-                <a href="/health" class="text-gray-700 hover:text-gray-900 relative {% if active == 'health' %}font-semibold{% endif %}">
+                <a href="/dashboard" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'dashboard' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Dashboard</a>
+                <a href="/orders" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'orders' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Ventas</a>
+                <a href="/items" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'items' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Productos</a>
+                <a href="/items-health" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'items_health' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Optimizar</a>
+                <a href="/sku-sales" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'sku_sales' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">SKU Ventas</a>
+                <a href="/sku-compare" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'sku_compare' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Comparativa</a>
+                <a href="/sku-inventory" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'sku_inventory' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Lanzar</a>
+                <a href="/ads" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'ads' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Ads</a>
+                <a href="/health" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition relative {% if active == 'health' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
                     Salud
-                    <span id="health-badge" class="hidden absolute -top-1 -right-3 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold"></span>
+                    <span id="health-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
             </div>
 
