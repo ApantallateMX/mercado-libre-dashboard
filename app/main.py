@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import APP_PIN, MELI_USER_ID, MELI_REFRESH_TOKEN
+from app.config import MELI_USER_ID, MELI_REFRESH_TOKEN
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -21,7 +21,9 @@ from app.api.sku_inventory import router as sku_inventory_router
 from app.api.health_ai import router as health_ai_router
 from app.api.amazon_products import router as amazon_products_router
 from app.api.amazon_orders import router as amazon_orders_router
+from app.api.users import router as users_router
 from app.services import token_store
+from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
 
@@ -213,6 +215,7 @@ async def lifespan(app: FastAPI):
     3. _seed_amazon_accounts() → Siembra cuentas Amazon desde .env.production
     """
     await token_store.init_db()
+    await user_store.init_user_db()
     await _seed_tokens()
     # Sembrar cuentas Amazon desde .env.production (igual que MeLi)
     from app.services.amazon_client import _seed_amazon_accounts
@@ -230,19 +233,25 @@ BASE_PATH = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_PATH / "templates")
 
-# ---------- PIN access middleware ----------
-_PIN_EXEMPT = ("/pin", "/pin/verify", "/static", "/favicon.ico", "/auth/")
+# ---------- Auth middleware ----------
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/")
 
 
-class PinMiddleware(BaseHTTPMiddleware):
+class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if any(path.startswith(ex) for ex in _PIN_EXEMPT):
+        if any(path.startswith(ex) for ex in _AUTH_EXEMPT):
             return await call_next(request)
-        if request.cookies.get("pin_ok") != "1":
+        token = request.cookies.get("dash_session")
+        du = await user_store.get_session(token) if token else None
+        if not du:
             from urllib.parse import quote
             next_url = quote(str(request.url.path), safe="")
-            return RedirectResponse(f"/pin?next={next_url}", status_code=302)
+            return RedirectResponse(f"/login?next={next_url}", status_code=302)
+        # Si debe cambiar contraseña, redirigir a set-password (excepto si ya está allí)
+        if du.get("must_change_pw") and path != "/set-password":
+            return RedirectResponse("/set-password", status_code=302)
+        request.state.dashboard_user = du
         return await call_next(request)
 
 
@@ -261,35 +270,126 @@ class AccountMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-app.add_middleware(PinMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(AccountMiddleware)
 
 
-# ---------- PIN routes ----------
-@app.get("/pin", response_class=HTMLResponse)
-async def pin_page(request: Request, error: str = "", next: str = "/dashboard"):
-    return templates.TemplateResponse("pin.html", {
+# ---------- Auth routes (login/logout/set-password) ----------
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, error: str = "", next: str = "/dashboard", username: str = ""):
+    # Si ya tiene sesión válida, redirigir
+    token = request.cookies.get("dash_session")
+    if token:
+        du = await user_store.get_session(token)
+        if du and not du.get("must_change_pw"):
+            return RedirectResponse(next, status_code=302)
+    return templates.TemplateResponse("login_dash.html", {
         "request": request,
         "error": error,
         "next": next,
+        "username": username,
     })
 
 
-@app.post("/pin/verify")
-async def pin_verify(request: Request):
+@app.post("/login/verify")
+async def login_verify(request: Request):
     form = await request.form()
-    pin = form.get("pin", "")
+    username = form.get("username", "").strip().lower()
+    password = form.get("password", "")
     next_url = form.get("next", "/dashboard")
-    if pin == APP_PIN:
-        response = RedirectResponse(next_url, status_code=302)
-        response.set_cookie("pin_ok", "1", max_age=2592000, httponly=True, samesite="lax")
-        # Pre-warm caches en background para que tabs carguen rapido
-        global _prewarm_task
-        if _prewarm_task is None or _prewarm_task.done():
-            _prewarm_task = asyncio.create_task(_prewarm_caches())
-        return response
     from urllib.parse import quote
-    return RedirectResponse(f"/pin?error=1&next={quote(next_url, safe='')}", status_code=302)
+
+    user = await user_store.get_user_by_username(username)
+    if not user:
+        return RedirectResponse(
+            f"/login?error=Usuario+o+contrasena+incorrectos&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
+            status_code=302
+        )
+    # Usuario nuevo sin contraseña: crear sesión temporal para set-password
+    if not user.get("password_hash") or user.get("must_change_pw"):
+        # Verificar si tiene hash — si no tiene nunca ha seteado pw
+        if not user.get("password_hash"):
+            token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
+            response = RedirectResponse("/set-password", status_code=302)
+            response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax")
+            return response
+        # Tiene hash pero must_change_pw=1: validar pw actual primero
+        if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
+            return RedirectResponse(
+                f"/login?error=Contrasena+incorrecta&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
+                status_code=302
+            )
+        token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
+        response = RedirectResponse("/set-password", status_code=302)
+        response.set_cookie("dash_session", token, max_age=3600, httponly=True, samesite="lax")
+        return response
+
+    if not user_store.verify_password(password, user["password_hash"], user["password_salt"]):
+        return RedirectResponse(
+            f"/login?error=Usuario+o+contrasena+incorrectos&next={quote(next_url, safe='')}&username={quote(username, safe='')}",
+            status_code=302
+        )
+    token = await user_store.create_session(user["id"], ip=request.client.host if request.client else "")
+    await user_store.update_last_login(user["id"])
+    await user_store.log_action(
+        username=user["username"],
+        action="login",
+        ip=request.client.host if request.client else "",
+        user_id=user["id"],
+    )
+    response = RedirectResponse(next_url, status_code=302)
+    response.set_cookie("dash_session", token, max_age=2592000, httponly=True, samesite="lax")
+    # Pre-warm caches
+    global _prewarm_task
+    if _prewarm_task is None or _prewarm_task.done():
+        _prewarm_task = asyncio.create_task(_prewarm_caches())
+    return response
+
+
+@app.get("/set-password", response_class=HTMLResponse)
+async def set_password_page(request: Request, error: str = ""):
+    token = request.cookies.get("dash_session")
+    if not token:
+        return RedirectResponse("/login", status_code=302)
+    du = await user_store.get_session(token)
+    if not du:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("set_password.html", {
+        "request": request,
+        "username": du["username"],
+        "error": error,
+    })
+
+
+@app.post("/set-password")
+async def set_password_submit(request: Request):
+    token = request.cookies.get("dash_session")
+    if not token:
+        return RedirectResponse("/login", status_code=302)
+    du = await user_store.get_session(token)
+    if not du:
+        return RedirectResponse("/login", status_code=302)
+    form = await request.form()
+    password = form.get("password", "")
+    password2 = form.get("password2", "")
+    from urllib.parse import quote
+    if len(password) < 8:
+        return RedirectResponse(f"/set-password?error={quote('Minimo 8 caracteres')}", status_code=302)
+    if password != password2:
+        return RedirectResponse(f"/set-password?error={quote('Las contrasenas no coinciden')}", status_code=302)
+    await user_store.set_password(du["id"], password)
+    await user_store.update_last_login(du["id"])
+    await user_store.log_action(
+        username=du["username"],
+        action="login",
+        ip=request.client.host if request.client else "",
+        user_id=du["id"],
+    )
+    # Pre-warm caches
+    global _prewarm_task
+    if _prewarm_task is None or _prewarm_task.done():
+        _prewarm_task = asyncio.create_task(_prewarm_caches())
+    return RedirectResponse("/dashboard", status_code=302)
 
 
 # Routers
@@ -302,9 +402,28 @@ app.include_router(sku_inventory_router)
 app.include_router(health_ai_router)
 app.include_router(amazon_products_router)
 app.include_router(amazon_orders_router)
+app.include_router(users_router)
 
 
 # ---------- Account switcher ----------
+
+@app.post("/auth/logout")
+async def logout(request: Request):
+    token = request.cookies.get("dash_session")
+    if token:
+        du = await user_store.get_session(token)
+        if du:
+            await user_store.log_action(
+                username=du["username"],
+                action="logout",
+                ip=request.client.host if request.client else "",
+                user_id=du["id"],
+            )
+        await user_store.delete_session(token)
+    response = RedirectResponse("/login", status_code=302)
+    response.delete_cookie("dash_session")
+    return response
+
 
 @app.post("/auth/switch-account")
 async def switch_account(request: Request):
@@ -386,6 +505,7 @@ async def _accounts_ctx(request: Request) -> dict:
         "active_user_id": active_uid,
         "amazon_accounts": amazon_accounts,
         "active_amazon_id": active_amazon_id,
+        "dashboard_user": getattr(request.state, "dashboard_user", None),
     }
 
 
@@ -689,12 +809,34 @@ async def root():
     return RedirectResponse(url="/dashboard")
 
 
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+@app.get("/usuarios", response_class=HTMLResponse)
+async def usuarios_page(request: Request):
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") != "admin":
+        return RedirectResponse("/dashboard", status_code=302)
+    ctx = await _accounts_ctx(request)
     user = await get_current_user()
-    if user:
-        return RedirectResponse(url="/dashboard")
-    return templates.TemplateResponse("login.html", {"request": request, "user": None})
+    return templates.TemplateResponse("usuarios.html", {
+        "request": request,
+        "user": user,
+        "active": "usuarios",
+        **ctx,
+    })
+
+
+@app.get("/auditoria", response_class=HTMLResponse)
+async def auditoria_page(request: Request):
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") != "admin":
+        return RedirectResponse("/dashboard", status_code=302)
+    ctx = await _accounts_ctx(request)
+    user = await get_current_user()
+    return templates.TemplateResponse("auditoria.html", {
+        "request": request,
+        "user": user,
+        "active": "auditoria",
+        **ctx,
+    })
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

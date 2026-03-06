@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Auditoria{% endblock %}
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Registro de Actividad</h1>
+      <p class="text-sm text-gray-500 mt-0.5">Historial de cambios realizados en el dashboard</p>
+    </div>
+    <a href="/usuarios" class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium self-start">
+      Volver a Usuarios
+    </a>
+  </div>
+
+  <!-- Filtros -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="flex flex-col gap-1 min-w-[150px]">
+        <label class="text-xs text-gray-500 font-medium">Usuario</label>
+        <input type="text" id="filter-username" placeholder="Todos"
+               class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+      </div>
+      <div class="flex flex-col gap-1 min-w-[160px]">
+        <label class="text-xs text-gray-500 font-medium">Accion</label>
+        <select id="filter-action"
+                class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+          <option value="">Todas</option>
+          <option value="login">Login</option>
+          <option value="logout">Logout</option>
+          <option value="price_change">Cambio precio</option>
+          <option value="stock_change">Cambio stock</option>
+          <option value="status_change">Cambio estado</option>
+          <option value="close_item">Cerrar publicacion</option>
+          <option value="sync_activate">Sync + Activar</option>
+          <option value="create_user">Crear usuario</option>
+          <option value="update_user">Editar usuario</option>
+          <option value="reset_password">Reset contrasena</option>
+        </select>
+      </div>
+      <div class="flex flex-col gap-1 min-w-[160px]">
+        <label class="text-xs text-gray-500 font-medium">Desde</label>
+        <input type="date" id="filter-date"
+               class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+      </div>
+      <button onclick="loadAudit()" class="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition font-medium">
+        Filtrar
+      </button>
+      <button onclick="clearFilters()" class="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition">
+        Limpiar
+      </button>
+    </div>
+  </div>
+
+  <!-- Tabla de auditoria -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead>
+          <tr class="bg-gray-50 border-b border-gray-100">
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Fecha/Hora</th>
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Usuario</th>
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Accion</th>
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalle</th>
+            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">IP</th>
+          </tr>
+        </thead>
+        <tbody id="audit-tbody">
+          <tr>
+            <td colspan="6" class="px-4 py-8 text-center">
+              <div class="flex items-center justify-center gap-2 text-gray-400">
+                <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Cargando...
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Paginacion -->
+    <div class="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
+      <p class="text-xs text-gray-400" id="audit-count"></p>
+      <div class="flex gap-2">
+        <button onclick="prevPage()" id="btn-prev"
+                class="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40">
+          Anterior
+        </button>
+        <button onclick="nextPage()" id="btn-next"
+                class="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40">
+          Siguiente
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+var _offset = 0;
+var _limit = 100;
+var _hasMore = false;
+
+async function loadAudit(){
+  var username = document.getElementById('filter-username').value.trim();
+  var action = document.getElementById('filter-action').value;
+  var date = document.getElementById('filter-date').value;
+  var params = new URLSearchParams({limit:_limit, offset:_offset});
+  if(username) params.set('username',username);
+  if(action) params.set('action',action);
+  if(date) params.set('date_from',date);
+
+  var tbody = document.getElementById('audit-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">Cargando...</td></tr>';
+
+  try{
+    var resp = await fetch('/api/users/audit/log?'+params.toString());
+    var html = await resp.text();
+    tbody.innerHTML = html;
+
+    // Contar filas
+    var rows = tbody.querySelectorAll('tr');
+    _hasMore = rows.length >= _limit;
+    document.getElementById('audit-count').textContent = rows.length + ' registros';
+    document.getElementById('btn-prev').disabled = _offset === 0;
+    document.getElementById('btn-next').disabled = !_hasMore;
+  }catch(e){
+    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-red-400">Error al cargar</td></tr>';
+  }
+}
+
+function prevPage(){
+  if(_offset === 0) return;
+  _offset = Math.max(0, _offset - _limit);
+  loadAudit();
+}
+function nextPage(){
+  if(!_hasMore) return;
+  _offset += _limit;
+  loadAudit();
+}
+function clearFilters(){
+  document.getElementById('filter-username').value='';
+  document.getElementById('filter-action').value='';
+  document.getElementById('filter-date').value='';
+  _offset=0;
+  loadAudit();
+}
+
+// Cargar al iniciar
+loadAudit();
+</script>
+{% endblock %}

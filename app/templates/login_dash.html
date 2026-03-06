@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Acceso al Dashboard</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;
+    min-height:100dvh;padding:1rem}
+  .card{background:#1e293b;border-radius:1rem;padding:2.5rem 2rem;width:100%;max-width:360px;
+    text-align:center;box-shadow:0 25px 50px -12px rgba(0,0,0,.5)}
+  .logo{font-size:2.5rem;margin-bottom:.75rem}
+  h1{font-size:1.25rem;font-weight:600;margin-bottom:.25rem}
+  .sub{font-size:.85rem;color:#94a3b8;margin-bottom:1.75rem}
+  .field{margin-bottom:1rem;text-align:left}
+  label{display:block;font-size:.8rem;color:#94a3b8;margin-bottom:.4rem;font-weight:500}
+  input[type=text],input[type=password]{
+    width:100%;padding:.7rem 1rem;
+    border:2px solid #334155;border-radius:.65rem;
+    background:#0f172a;color:#f1f5f9;font-size:.95rem;outline:none;
+    transition:border-color .15s}
+  input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.2)}
+  .btn{width:100%;padding:.8rem;background:#3b82f6;color:#fff;border:none;
+    border-radius:.65rem;font-size:.95rem;font-weight:600;cursor:pointer;
+    transition:background .15s;margin-top:.5rem}
+  .btn:hover{background:#2563eb}
+  .btn:disabled{background:#475569;cursor:not-allowed}
+  .error{color:#f87171;font-size:.85rem;margin-bottom:.75rem;min-height:1.25rem;
+    background:#450a0a;padding:.5rem .75rem;border-radius:.5rem;display:none}
+  .error.show{display:block}
+  .spinner{display:none;margin:.75rem auto 0}
+  .spinner.show{display:block}
+  .spinner svg{width:1.75rem;height:1.75rem;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">&#128274;</div>
+  <h1>Bienvenido</h1>
+  <p class="sub">Ingresa tus credenciales para continuar</p>
+
+  <div class="error {% if error %}show{% endif %}" id="err-msg">
+    {% if error %}{{ error }}{% endif %}
+  </div>
+
+  <form id="loginForm" method="post" action="/login/verify">
+    <input type="hidden" name="next" value="{{ next }}">
+    <div class="field">
+      <label for="username">Usuario</label>
+      <input type="text" id="username" name="username" autocomplete="username"
+             placeholder="nombre de usuario" autofocus value="{{ username or '' }}">
+    </div>
+    <div class="field">
+      <label for="password">Contrasena</label>
+      <input type="password" id="password" name="password" autocomplete="current-password"
+             placeholder="••••••••">
+    </div>
+    <button type="submit" class="btn" id="submitBtn">Entrar</button>
+  </form>
+
+  <div class="spinner" id="spinner">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5">
+      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" stroke-linecap="round"/>
+    </svg>
+  </div>
+</div>
+<script>
+document.getElementById('loginForm').addEventListener('submit', function(){
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('spinner').classList.add('show');
+});
+</script>
+</body>
+</html>
