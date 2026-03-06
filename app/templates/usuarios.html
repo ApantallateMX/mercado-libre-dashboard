@@ -123,7 +123,7 @@
       </div>
       <div id="create-msg" class="hidden text-sm rounded-lg px-3 py-2"></div>
       <div class="bg-blue-50 rounded-lg px-3 py-2 text-xs text-blue-700">
-        El usuario recibira un enlace de primer acceso para crear su contrasena.
+        El usuario debe ir a <strong>{{ request.url.scheme }}://{{ request.url.netloc }}/login</strong> e ingresar su nombre de usuario — el sistema le pedira crear su contrasena en el primer acceso.
       </div>
     </div>
     <div class="px-6 pb-5 flex gap-2 justify-end">
