@@ -1967,18 +1967,15 @@ def _build_product_list(bodies: list, sales_map: dict = None) -> list[dict]:
         sku = _get_item_sku(body)
         shipping = body.get("shipping", {})
 
-        # Para items con variaciones, usar el stock de la variacion especifica del SKU,
-        # no el total del item (que suma todas las variaciones).
-        # Ejemplo: SHIL000286 (Dorado=0), SHIL000287 (Negro=10), SHIL000288 (Plateado=34)
-        # item.available_quantity=44 (suma), pero SHIL000286 tiene 0.
+        # Para items con variaciones, mostrar la suma de stock de TODAS las variaciones
+        # en la fila del parent. Cada variacion tiene su stock independiente en MeLi.
+        # El parent.available_quantity puede ser 0 aunque una variacion tenga stock
+        # (comportamiento FULL donde cada variacion es independiente).
         raw_vars = body.get("variations", [])
         avail_qty = body.get("available_quantity", 0)
-        if raw_vars and sku:
-            for v in raw_vars:
-                v_sku = _get_var_sku(v)
-                if v_sku and v_sku.upper() == sku.upper():
-                    avail_qty = v.get("available_quantity", 0)
-                    break
+        if raw_vars and len(raw_vars) > 1:
+            # Sumar stock de todas las variaciones — refleja la realidad del listing
+            avail_qty = sum(v.get("available_quantity", 0) for v in raw_vars)
 
         p = {
             "id": iid,
