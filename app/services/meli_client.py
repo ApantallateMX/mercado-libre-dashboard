@@ -829,13 +829,20 @@ class MeliClient:
 
     async def update_item_stock(self, item_id: str, quantity: int) -> dict:
         """Actualiza el stock de un item.
-        Si el item tiene variaciones, MeLi devuelve un error de 'not modifiable' o
-        'available_quantity' al actualizar el item raiz. En ese caso, actualizamos
-        todas las variaciones individualmente con la misma cantidad.
+        Si el item tiene variaciones, MeLi devuelve un error de 'available_quantity' o
+        'variation' al actualizar el item raiz. En ese caso, actualizamos cada variacion.
+        Si el item es FULL (logistic_type=fulfillment), se eleva error claro sin intentar variaciones.
         """
+        # Keywords que indican que el item es FULL y no se puede modificar via API
+        _FULL_KEYWORDS = (
+            "logistic_type.not_modifiable",
+            "item.shipping.logistic_type",
+            "fulfillment",
+        )
+        # Keywords que indican que hay variaciones y hay que actualizar cada una
         _VAR_ERROR_KEYWORDS = (
-            "not modifiable", "not_modifiable",
-            "available_quantity", "variation",
+            "available_quantity",
+            "variation",
             "cannot_update", "cannot update",
         )
         try:
@@ -844,6 +851,21 @@ class MeliClient:
             err_msg = str(e).lower()
             body_str = str(e.body).lower() if e.body else ""
             combined = err_msg + " " + body_str
+            # FULL items: error especifico — no intentar variaciones
+            if any(kw in combined for kw in _FULL_KEYWORDS):
+                raise MeliApiError(
+                    status_code=400,
+                    endpoint=f"/items/{item_id}",
+                    body={
+                        "error": "full_item",
+                        "message": (
+                            "logistic_type.not_modifiable: Este item usa logística FULL. "
+                            "No se puede actualizar el stock via API. "
+                            "Para agregar stock, envíalo al depósito de MeLi. "
+                            "Para cambiar a envío propio, ve a Seller Central → editar publicación."
+                        )
+                    }
+                )
             if not any(kw in combined for kw in _VAR_ERROR_KEYWORDS):
                 raise
             # Item tiene variaciones → obtener y actualizar cada variacion con la misma cantidad

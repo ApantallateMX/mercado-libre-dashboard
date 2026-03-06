@@ -417,6 +417,9 @@ async def update_stock(item_id: str, data: StockUpdate):
             # me1_required: error especial — cross_docking sin ME1 habilitado
             if body.get("error") == "me1_required":
                 raise HTTPException(status_code=422, detail=body.get("message", "ME1 requerido"))
+            # full_item: item FULL — no se puede actualizar stock via API
+            if body.get("error") == "full_item":
+                raise HTTPException(status_code=400, detail=body.get("message", "logistic_type.not_modifiable"))
             detail = body.get("message") or body.get("error") or str(body)
         else:
             detail = str(body)
