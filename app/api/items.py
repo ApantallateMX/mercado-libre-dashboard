@@ -369,6 +369,28 @@ async def get_inventory(web_sku: str):
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 
 
+@router.delete("/{item_id}")
+async def close_item(item_id: str):
+    """Cierra (finaliza) una publicacion de MeLi poniendo status=closed.
+    MeLi no permite eliminar items via API; 'closed' es el estado final disponible.
+    """
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        result = await client.update_item(item_id, {"status": "closed"})
+        _invalidate_user_products_cache(str(client.user_id))
+        return {"ok": True, "item_id": item_id, "status": "closed", "result": result}
+    except MeliApiError as e:
+        body = e.body
+        detail = body.get("message") or body.get("error") or str(body) if isinstance(body, dict) else str(body)
+        raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        await client.close()
+
+
 @router.get("/{item_id}")
 async def get_item(item_id: str):
     """Obtiene el detalle de un item especifico."""

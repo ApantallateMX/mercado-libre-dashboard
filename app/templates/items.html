@@ -329,6 +329,67 @@
         openFullModal(itemId, true, fullStock || 0, bmAvail || 0, permalink || '');
     };
 
+    // Cerrar publicacion (status=closed en MeLi)
+    window.closeItem = function(itemId) {
+        if (!confirm('¿Cerrar la publicacion ' + itemId + ' en MeLi?\n\nEl listado quedara inactivo. Podras reactivarlo despues.')) return;
+        var msg = document.getElementById('msg-' + itemId);
+        if (msg) { msg.textContent = 'Cerrando...'; msg.className = 'text-xs mt-1 block text-gray-400'; }
+        fetch('/api/items/' + itemId, {
+            method: 'DELETE',
+            headers: {'ngrok-skip-browser-warning': 'true'}
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                var card = document.getElementById('msg-' + itemId) && document.getElementById('msg-' + itemId).closest('.bg-white');
+                if (card) {
+                    card.style.opacity = '0.4';
+                    card.style.transition = 'opacity 0.5s';
+                }
+                if (msg) { msg.textContent = 'Publicacion cerrada en MeLi'; msg.className = 'text-xs mt-1 block text-green-600'; }
+                setTimeout(function() {
+                    // Recargar el grid para reflejar el nuevo estado
+                    var grid = document.getElementById('items-grid');
+                    if (grid && window.htmx) htmx.trigger(grid, 'load');
+                }, 1500);
+            } else {
+                var err = (res.data && (res.data.detail || res.data.message)) || 'Error al cerrar';
+                if (msg) { msg.textContent = 'Error: ' + err; msg.className = 'text-xs mt-1 block text-red-500'; }
+            }
+        })
+        .catch(function(e) {
+            if (msg) { msg.textContent = 'Error de red'; msg.className = 'text-xs mt-1 block text-red-500'; }
+        });
+    };
+
+    // Reactivar publicacion (status=paused — MeLi no permite ir directo a active)
+    window.reactivateItem = function(itemId) {
+        if (!confirm('¿Reactivar la publicacion ' + itemId + '?\n\nSe pondra en estado Pausado para que puedas ajustar stock y precio antes de activar.')) return;
+        var msg = document.getElementById('msg-' + itemId);
+        if (msg) { msg.textContent = 'Reactivando...'; msg.className = 'text-xs mt-1 block text-gray-400 text-center'; }
+        fetch('/api/items/' + itemId + '/status', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({status: 'paused'})
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                if (msg) { msg.textContent = 'Reactivada como Pausada en MeLi'; msg.className = 'text-xs mt-1 block text-green-600 text-center'; }
+                setTimeout(function() {
+                    var grid = document.getElementById('items-grid');
+                    if (grid && window.htmx) htmx.trigger(grid, 'load');
+                }, 1500);
+            } else {
+                var err = (res.data && (res.data.detail || res.data.message)) || 'Error';
+                if (msg) { msg.textContent = 'Error: ' + err; msg.className = 'text-xs mt-1 block text-red-500 text-center'; }
+            }
+        })
+        .catch(function() {
+            if (msg) { msg.textContent = 'Error de red'; msg.className = 'text-xs mt-1 block text-red-500 text-center'; }
+        });
+    };
+
     // ── Inline stock sync for all product tabs ──
 
     // Call API to update stock, with inline feedback

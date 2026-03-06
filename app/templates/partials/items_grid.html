@@ -90,8 +90,20 @@
             </div>
             {% endif %}
 
-            <!-- Edicion rapida -->
+            <!-- Edicion rapida / Acciones -->
             <div class="space-y-2 border-t pt-2">
+                {% if st == 'closed' %}
+                <!-- Publicacion cerrada: no se edita, se ofrece reactivar o info -->
+                <div class="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded px-2 py-2 text-xs text-gray-500">
+                    <svg class="w-4 h-4 flex-shrink-0 mt-0.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                    <span>Publicacion finalizada — no aparece en MeLi</span>
+                </div>
+                <button onclick="reactivateItem('{{ iid }}')"
+                        class="w-full bg-green-500 text-white text-sm py-2 rounded hover:bg-green-600 transition font-medium">
+                    Reactivar publicacion
+                </button>
+                <span id="msg-{{ iid }}" class="text-xs mt-1 block text-center"></span>
+                {% else %}
                 <!-- Precio -->
                 <div class="flex gap-1.5">
                     <input type="number" step="0.01" value="{{ body.price }}"
@@ -145,6 +157,12 @@
                 {% endif %}
                 <span id="msg-{{ iid }}" class="text-xs mt-1 block"></span>
                 <span id="stock-display-{{ iid }}" class="hidden">{{ body.available_quantity }}</span>
+                <!-- Cerrar publicacion -->
+                <button onclick="closeItem('{{ iid }}')"
+                        class="w-full text-xs text-red-400 hover:text-red-600 hover:bg-red-50 rounded py-1 transition border border-red-100 hover:border-red-300">
+                    Cerrar publicacion
+                </button>
+                {% endif %}
             </div>
         </div>
     </div>
