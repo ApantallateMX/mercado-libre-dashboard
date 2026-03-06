@@ -411,43 +411,71 @@ function bulkSyncRestock() {
 
 // --- Activate: sync stock BM disponible + activate if paused ---
 function activateItem(itemId, bmTotal, status, btn) {
-    var safeQty = Math.max(1, bmTotal);  // bmTotal aquí ya es _bm_avail
+    var safeQty = Math.max(1, bmTotal);  // bmTotal aqui ya es _bm_avail
     btn.disabled = true;
     btn.textContent = '...';
     var msgEl = document.getElementById('act-msg-' + itemId) || document.getElementById('act-msg-d-' + itemId);
+    var me1Warn = false;
     fetch('/api/items/' + itemId + '/stock', {
         method: 'PUT',
         headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
         body: JSON.stringify({quantity: safeQty})
     })
     .then(function(r) {
-        if (!r.ok) return r.text().then(function(t) {
-            try { var d = JSON.parse(t); throw new Error(d.detail || 'Error stock'); }
-            catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
+        if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+            throw new Error(d.detail || d.message || ('Error ' + r.status));
         });
-        if (status === 'paused') {
-            return fetch('/api/items/' + itemId + '/status', {
-                method: 'PUT',
-                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-                body: JSON.stringify({status: 'active'})
-            }).then(function(r2) {
-                if (!r2.ok && msgEl) { msgEl.textContent = 'Stock OK, activar fallo'; msgEl.className = 'text-[10px] ml-1 text-yellow-600'; }
-                return 'done';
-            });
-        }
-        return 'done';
+        return r.json().then(function(d) {
+            if (d && d.warning === 'me1') {
+                me1Warn = true;
+                if (msgEl) { msgEl.textContent = 'Verifica en MeLi (ME1)'; msgEl.className = 'text-[10px] ml-1 text-orange-500'; }
+            }
+            if (status === 'paused') {
+                return fetch('/api/items/' + itemId + '/status', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                    body: JSON.stringify({status: 'active'})
+                }).then(function(r2) {
+                    if (!r2.ok) {
+                        return r2.json().catch(function() { return {}; }).then(function(d2) {
+                            if (msgEl) {
+                                var emsg = d2.detail || d2.message || ('Activar fallo ' + r2.status);
+                                msgEl.textContent = 'Stock OK — ' + emsg;
+                                msgEl.className = 'text-[10px] ml-1 text-yellow-600';
+                            }
+                            return 'done';
+                        });
+                    }
+                    return 'done';
+                });
+            }
+            return 'done';
+        });
     })
     .then(function() {
-        btn.textContent = 'OK (' + safeQty + ')';
-        btn.className = btn.className.replace('bg-green-600', 'bg-gray-400').replace('hover:bg-green-700', '');
-        if (msgEl) { msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : ''); msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold'; }
+        if (me1Warn) {
+            btn.textContent = 'OK (verif.)';
+            btn.className = btn.className.replace('bg-green-600', 'bg-orange-500').replace('hover:bg-green-700', 'hover:bg-orange-600');
+        } else {
+            btn.textContent = 'OK (' + safeQty + ')';
+            btn.className = btn.className.replace('bg-green-600', 'bg-gray-400').replace('hover:bg-green-700', '');
+        }
+        if (msgEl && !me1Warn) {
+            msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : '');
+            msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold';
+        }
         var row = document.getElementById('act-m-' + itemId) || document.getElementById('act-d-' + itemId);
         if (row) row.classList.add('opacity-50');
     })
     .catch(function(e) {
-        btn.textContent = 'Error';
+        btn.textContent = 'Reint.';
         btn.disabled = false;
+        btn.className = btn.className.replace('bg-green-600', 'bg-red-500').replace('hover:bg-green-700', 'hover:bg-red-600');
         if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
+        setTimeout(function() {
+            btn.textContent = 'Sync + Activar';
+            btn.className = btn.className.replace('bg-red-500', 'bg-green-600').replace('hover:bg-red-600', 'hover:bg-green-700');
+        }, 8000);
     });
 }
 

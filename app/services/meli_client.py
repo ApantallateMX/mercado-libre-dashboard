@@ -876,22 +876,12 @@ class MeliClient:
             var_updates = [{"id": v["id"], "available_quantity": quantity} for v in variations]
             return await self.update_variation_stocks_directly(item_id, var_updates)
 
-        # Detectar warning lost_me1_by_user: MeLi acepta el PUT pero revierte el stock en ~3s
+        # Detectar warning lost_me1_by_user: MeLi acepta el PUT pero puede revertir el stock.
+        # NO lanzamos error fatal — el stock SI se actualiza en MeLi.
+        # Devolvemos el resultado con un flag de advertencia para que el frontend lo muestre como warning.
         warnings = result.get("warnings") or []
         if any("lost_me1_by_user" in str(w) for w in warnings):
-            raise MeliApiError(
-                status_code=422,
-                endpoint=f"/items/{item_id}",
-                body={
-                    "error": "me1_required",
-                    "message": (
-                        "Este item fue removido de FULL y quedó en modo cross_docking, "
-                        "pero la cuenta no tiene habilitado ME1 (Mercado Envíos). "
-                        "MeLi revierte el stock automáticamente. "
-                        "Ve a Seller Central → Envíos → configura el modo de envío antes de agregar stock."
-                    )
-                }
-            )
+            result["_me1_warning"] = True
         return result
 
     async def update_variation_stocks_directly(self, item_id: str, var_updates: list) -> dict:

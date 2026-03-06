@@ -432,13 +432,22 @@ async def update_stock(item_id: str, data: StockUpdate):
     try:
         result = await client.update_item_stock(item_id, data.quantity)
         _invalidate_user_products_cache(str(client.user_id))
+        # me1_warning: MeLi acepto el PUT pero puede revertir — devolver 200 con flag warning
+        if isinstance(result, dict) and result.get("_me1_warning"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=200, content={
+                "ok": True,
+                "warning": "me1",
+                "message": (
+                    "Stock actualizado en MeLi. ADVERTENCIA: este item usa cross_docking y "
+                    "MeLi puede revertir el stock si ME1 (Mercado Envios) no esta habilitado. "
+                    "Verifica en Seller Central que el cambio persiste."
+                )
+            })
         return result
     except MeliApiError as e:
         body = e.body
         if isinstance(body, dict):
-            # me1_required: error especial — cross_docking sin ME1 habilitado
-            if body.get("error") == "me1_required":
-                raise HTTPException(status_code=422, detail=body.get("message", "ME1 requerido"))
             # full_item: item FULL — no se puede actualizar stock via API
             if body.get("error") == "full_item":
                 raise HTTPException(status_code=400, detail=body.get("message", "logistic_type.not_modifiable"))
@@ -492,6 +501,15 @@ async def update_status(item_id: str, data: StatusUpdate):
         result = await client.update_item_status(item_id, data.status)
         _invalidate_user_products_cache(str(client.user_id))
         return result
+    except MeliApiError as e:
+        body = e.body
+        if isinstance(body, dict):
+            detail = body.get("message") or body.get("error") or str(body)
+        else:
+            detail = str(body)
+        raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         await client.close()
 
