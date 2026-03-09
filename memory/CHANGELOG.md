@@ -1,5 +1,63 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-03-09 — feat: infraestructura core de sistema de agentes IA
+
+### Archivos creados
+- `app/services/agents/__init__.py` — módulo vacío
+- `app/services/agents/base.py` — `AgentResult` dataclass + `BaseAgent` ABC con tool-use loop completo
+- `app/services/memory_manager.py` — `MemoryManager` con tablas `agent_memory`, `agent_conversations`, `agent_alerts`; singleton `memory_manager`
+- `app/services/scheduler_service.py` — `SchedulerService` wrapper de APScheduler + tabla `agent_jobs`; singleton `scheduler_service`; graceful no-op si APScheduler no está instalado
+
+### Detalles técnicos
+- `BaseAgent.run()` implementa el loop tool-use de Claude (máx 10 iteraciones)
+- Llama a Anthropic API via httpx directo (sin SDK), modelo `claude-sonnet-4-6`
+- `MemoryManager`: upsert semántico para kv, historial por `session_id`, alertas con niveles info/warning/critical
+- `SchedulerService`: soporta triggers `cron` e `interval`; `record_run()` para actualizar last_run/last_result
+
+## 2026-03-05 (4) — Fix: separar detección FULL vs variaciones en update_item_stock (150a14e)
+
+### Diagnóstico MLM4688917228
+- Item actualmente tiene `logistic_type: cross_docking` (NO FULL), PUT retorna 200 sin errores
+- El "Es FULL" anterior ocurrió porque el item WAS FULL en el momento del test del usuario
+- Bug confirmado: `_VAR_ERROR_KEYWORDS` incluía "not_modifiable" → items FULL entraban al path de variaciones
+
+### Fix: meli_client.py `update_item_stock`
+- Separado `_FULL_KEYWORDS` ("logistic_type.not_modifiable", "fulfillment") → eleva `full_item` error claro
+- `_VAR_ERROR_KEYWORDS` ahora solo tiene keywords de variaciones genuinas (quitado "not_modifiable")
+- FULL items ya NO intentan actualizar variaciones inútilmente
+
+### Fix: items.py `update_stock` endpoint
+- Nuevo handler para `error: "full_item"` → HTTP 400 con mensaje claro de FULL
+- JS detecta "not_modifiable" o "fulfillment" en el mensaje → muestra "Es FULL" correctamente
+
+## 2026-03-05 (3) — Docs: Agentes actualizados con lecciones de la sesión
+
+### mercadolibre-strategist.md — Nueva sección 9: Comportamiento técnico API MeLi
+- catalog_listing:true → NO sync manual (stock por depósito MeLi)
+- cross_docking + lost_me1_by_user → MeLi revierte stock en ~3s sin ME1 activo
+- sub_status: out_of_stock = auto-pausa, NO igual a pausa manual
+- SKU en variaciones requiere include_attributes=all en batch fetch
+- Listings sincronizados con otro → solo un listing activo recibe depósito
+- logistic_type: fulfillment no modificable via API
+- Tabla 4 cuentas activas (APANTALLATEMX, AUTOBOT, BLOWTECHNOLOGIES, LUTEMAMEXICO)
+
+### binmanager-specialist.md — Nueva sección: Restricciones sync con MeLi
+- Tabla tipo listing vs posibilidad de sync desde BM
+- Protocolo lost_me1_by_user: acepta PUT pero revierte en 3s
+- Variaciones: consultar siempre por SKU específico de la variación
+
+## 2026-03-05 (2) — Fix: ME1 warning detection en sync stock MeLi
+
+### Bug Fix — Sync Stock cross_docking items
+- `meli_client.update_item_stock`: detecta warning `lost_me1_by_user` en response de MeLi
+  Items removidos de FULL quedan en cross_docking; sin ME1 activo, MeLi revierte el stock en ~3s
+  Ahora lanza MeliApiError(422, "me1_required") en lugar de retornar ok silencioso
+- `items.py /stock`: maneja `me1_required` con HTTP 422 y mensaje descriptivo
+- `items.html fmSyncStock`: detecta error ME1 → muestra aviso inline en modal con link a SC
+  (no toast generico — mensaje persistente con contexto completo)
+- MLM3848757056: verificado que tiene `sub_status: out_of_stock` (auto-pausa por sin stock,
+  NO pausa manual) — estado correcto, no requiere restauracion
+
 ## 2026-03-05 — Feat: Fulfillment Management Universal Amazon + Agentes IA
 
 ### Fulfillment Management
