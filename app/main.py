@@ -22,6 +22,7 @@ from app.api.health_ai import router as health_ai_router
 from app.api.amazon_products import router as amazon_products_router
 from app.api.amazon_orders import router as amazon_orders_router
 from app.api.users import router as users_router
+from app.api.system_health import router as system_health_router
 from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
@@ -225,6 +226,9 @@ async def lifespan(app: FastAPI):
     start_onsite_background_sync()
     # Sync periódico de stock MeLi vs BM (cada 4 horas) — alertas de sobreventa
     start_stock_sync()
+    # Health checker automático (cada 30 min) — verifica que todo el sistema funcione
+    from app.api.system_health import start_health_check_loop
+    start_health_check_loop()
     yield
 
 
@@ -412,6 +416,7 @@ app.include_router(health_ai_router)
 app.include_router(amazon_products_router)
 app.include_router(amazon_orders_router)
 app.include_router(users_router)
+app.include_router(system_health_router)
 
 
 # ---------- Account switcher ----------

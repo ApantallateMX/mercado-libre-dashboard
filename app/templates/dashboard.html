@@ -169,6 +169,14 @@
     </div>
 </div>
 
+<!-- ═══ ESTADO DEL SISTEMA ═══ -->
+<div id="system-health-widget" class="mt-5"
+     hx-get="/api/system-health/widget"
+     hx-trigger="load delay:3s"
+     hx-swap="innerHTML">
+    <!-- Carga automática 3s después del dashboard para no bloquear lo crítico -->
+</div>
+
 {% endblock %}
 
 {% block scripts %}
