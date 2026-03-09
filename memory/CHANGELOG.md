@@ -1,5 +1,28 @@
 # Changelog - Mercado Libre Dashboard
 
+## 2026-03-09 — feat: Week 3 — scheduler sync stock + alertas proactivas de sobreventa (ccdbc1a)
+
+### Cambios implementados
+- **token_store.py**: tablas `sync_alerts` + `sync_status` + 4 helpers (save/get_sync_alerts, save/get_sync_status)
+- **main.py**:
+  - `_run_stock_sync_for_user(user_id)`: compara todos los items activos MeLi con BM disponible; detecta `meli_stock > 0 AND bm_avail = 0`
+  - `_stock_sync_loop()`: ejecuta cada 4 horas para todas las cuentas registradas (arranque tras 60s)
+  - `start_stock_sync()`: iniciado en `lifespan()` junto a Onsite sync
+  - `GET /api/sync/alerts` → HTML banner con items en riesgo + botón "Sync ahora"
+  - `POST /api/sync/trigger` → disparo manual del sync para cuenta actual
+  - `GET /api/sync/status` → estado JSON del último sync
+  - `GET /api/sync/alerts-count` → conteo para badges
+- **items.html**:
+  - Contenedor `#sync-alerts-container` con HTMX auto-load al abrir Centro de Productos
+  - Badge rojo en tab "Stock" con conteo de items en riesgo de sobreventa
+
+### Comportamiento
+- Si hay items activos con BM disponible = 0 → banner rojo visible al abrir /items
+- "Sync ahora" dispara sync inmediato, recarga el banner tras 8s
+- Badge rojo en tab Stock muestra el conteo (máx "9+")
+
+---
+
 ## 2026-03-09 — feat: infraestructura core de sistema de agentes IA
 
 ### Archivos creados
