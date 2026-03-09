@@ -29,12 +29,27 @@
 
 {% elif error %}
 <!-- ── Estado: error al obtener datos ─────────────────────────────────── -->
-<div class="flex flex-col items-center justify-center py-12 text-center">
-    <p class="text-sm text-red-500 font-medium">Error al cargar ventas Amazon</p>
-    <p class="text-xs text-gray-400 mt-1 max-w-sm">{{ error }}</p>
+{% set is_auth_error = ('403' in error or '401' in error or 'LWA' in error or 'expired' in error or 'Unauthorized' in error) %}
+<div class="flex flex-col items-center justify-center py-10 text-center px-4">
+    {% if is_auth_error %}
+    <svg class="w-10 h-10 text-red-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 15v2m0-6v2m0 6h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <p class="text-sm font-semibold text-red-600 mb-1">Token Amazon expirado</p>
+    <p class="text-xs text-gray-400 mb-4 max-w-sm">{{ error[:200] }}</p>
+    <a href="/auth/amazon/connect"
+       class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-6 py-2.5 rounded-lg text-sm transition">
+        Reconectar Amazon ahora →
+    </a>
+    <p class="text-[10px] text-gray-400 mt-2">Te pedirá autorizar en Amazon Seller Central (1 clic)</p>
+    {% else %}
+    <p class="text-sm text-amber-600 font-medium mb-1">⚠️ Error al cargar ventas Amazon</p>
+    <p class="text-xs text-gray-400 mt-1 max-w-sm">{{ error[:150] }}</p>
     <button onclick="loadAmazonSales()" class="mt-3 text-xs text-orange-600 hover:underline">
         Reintentar
     </button>
+    {% endif %}
 </div>
 
 {% else %}
