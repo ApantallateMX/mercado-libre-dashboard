@@ -256,17 +256,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 class AccountMiddleware(BaseHTTPMiddleware):
-    """Setea el ContextVar de cuenta activa basado en la cookie active_account_id."""
+    """Setea el ContextVar de cuenta activa basado en la cookie active_account_id.
+    Solo admin y editor pueden cambiar a cualquier cuenta.
+    Otros roles usan siempre la cuenta por defecto."""
     async def dispatch(self, request: Request, call_next):
         cookie_uid = request.cookies.get("active_account_id")
         if cookie_uid:
-            tokens = await token_store.get_tokens(cookie_uid)
-            if tokens:
-                token = _meli_user_id_ctx.set(cookie_uid)
-                try:
-                    return await call_next(request)
-                finally:
-                    _meli_user_id_ctx.reset(token)
+            # AccountMiddleware corre antes de AuthMiddleware → leer sesión directamente
+            session_token = request.cookies.get("dash_session")
+            du = await user_store.get_session(session_token) if session_token else None
+            role = du.get("role", "viewer") if du else "viewer"
+            if role in ("admin", "editor"):
+                tokens = await token_store.get_tokens(cookie_uid)
+                if tokens:
+                    token = _meli_user_id_ctx.set(cookie_uid)
+                    try:
+                        return await call_next(request)
+                    finally:
+                        _meli_user_id_ctx.reset(token)
         return await call_next(request)
 
 

@@ -1,3 +1,23 @@
+<!-- Banner: Precio por debajo del costo BM -->
+{% set below_cost = products | selectattr('_margen_pct', 'defined') | selectattr('_margen_pct', 'ne', none) | selectattr('_margen_pct', 'lt', 0) | list %}
+{% if below_cost %}
+<div class="mb-3 bg-orange-50 border border-orange-300 rounded-lg px-4 py-3 flex items-start gap-3">
+    <span class="text-orange-500 text-xl flex-shrink-0">⚠️</span>
+    <div class="flex-1 min-w-0">
+        <p class="text-orange-800 font-bold text-sm">{{ below_cost|length }} producto{{ 's' if below_cost|length > 1 }} vendiéndose a pérdida</p>
+        <p class="text-orange-600 text-xs mt-0.5">El precio de venta es menor que costo BM + comisiones. Revisa precio o pausa el listing.</p>
+        <div class="flex flex-wrap gap-2 mt-2">
+            {% for p in below_cost[:5] %}
+            <span class="bg-orange-100 text-orange-700 text-[10px] font-semibold px-2 py-0.5 rounded truncate max-w-[180px]"
+                  title="{{ p.title }}">
+                {{ p.title[:28] }}… {{ "%.1f"|format(p._margen_pct) }}%
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Banner: Alertas de Stock Perdido -->
 {% if stock_alerts %}
 {% set alert_per_page = 10 %}
@@ -384,10 +404,19 @@
                 </div>
             </div>
             {% endif %}
-            <!-- Ventas -->
+            <!-- Ventas + Días inventario (mobile) -->
             <div>
                 <span class="text-gray-500">Ventas:</span>
                 <span class="font-bold {{ 'text-gray-800' if p.get('units', 0) > 0 else 'text-red-500' }}">{{ p.get('units', 0) }}</span>
+                {% set _mu = p.get('units', 0) %}
+                {% set _ma = p.get('_bm_avail', 0) or 0 %}
+                {% if _mu > 0 and _ma > 0 %}
+                {% set _md = (_ma / (_mu / 30)) | round | int %}
+                <span class="ml-1 text-[10px] font-semibold px-1 py-0.5 rounded
+                    {% if _md <= 7 %}bg-red-100 text-red-700{% elif _md <= 14 %}bg-orange-100 text-orange-700{% elif _md <= 30 %}bg-yellow-100 text-yellow-700{% else %}bg-green-100 text-green-700{% endif %}">
+                    {{ _md }}d
+                </span>
+                {% endif %}
             </div>
             {% if p.get('_margen_pct') is not none %}
             <div>
@@ -449,6 +478,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">TJ</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas {{ alert_days }}d</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="cost">Costo BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="margin">Margen</th>
@@ -595,6 +625,26 @@
                     <span class="font-bold {{ 'text-gray-800' if p.get('units', 0) > 0 else 'text-red-500' }}">
                         {{ p.get('units', 0) }}
                     </span>
+                </td>
+                <!-- Días de inventario -->
+                {% set _u30 = p.get('units', 0) %}
+                {% set _bav = p.get('_bm_avail', 0) or 0 %}
+                {% set _dias = (_bav / (_u30 / 30)) | round | int if _u30 > 0 else none %}
+                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="dias">
+                    {% if _dias is not none %}
+                    <span class="text-xs font-semibold px-1.5 py-0.5 rounded
+                        {% if _dias <= 7 %}bg-red-100 text-red-700
+                        {% elif _dias <= 14 %}bg-orange-100 text-orange-700
+                        {% elif _dias <= 30 %}bg-yellow-100 text-yellow-700
+                        {% else %}bg-green-100 text-green-700{% endif %}"
+                        title="BM disponible: {{ _bav }} uds / {{ _u30 }} ventas 30d">
+                        {{ _dias }}d
+                    </span>
+                    {% elif _bav > 0 %}
+                    <span class="text-xs text-gray-400" title="Sin ventas recientes">∞</span>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
                 </td>
                 <!-- Revenue -->
                 <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">
