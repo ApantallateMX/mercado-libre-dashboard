@@ -29,4 +29,3 @@ test*.py
 
 # Archivo maestro de credenciales — NUNCA subir a git
 mercado-libre-dashboard.md
-memory/
