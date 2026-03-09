@@ -2615,6 +2615,7 @@ async def products_summary_partial(request: Request):
                 "revenue": s["revenue"],
             })
 
+        daily_goal = await token_store.get_daily_goal(client.user_id)
         return templates.TemplateResponse("partials/products_summary.html", {
             "request": request,
             "revenue_30d": revenue_30d,
@@ -2626,6 +2627,7 @@ async def products_summary_partial(request: Request):
             "unique_skus": unique_skus,
             "avg_ticket": avg_ticket,
             "top_products": top_products,
+            "daily_goal": daily_goal,
         })
     finally:
         await client.close()

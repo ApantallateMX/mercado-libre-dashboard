@@ -272,6 +272,21 @@
                     Salud
                     <span id="health-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
+<script>
+(function() {
+    function _refreshHealthBadge() {
+        fetch('/api/health/counts').then(function(r){ return r.json(); }).then(function(d) {
+            var b = document.getElementById('health-badge');
+            if (!b) return;
+            var n = (d.questions || 0) + (d.claims || 0);
+            if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
+            else { b.classList.add('hidden'); }
+        }).catch(function(){});
+    }
+    _refreshHealthBadge();
+    setInterval(_refreshHealthBadge, 60000);
+})();
+</script>
             </div>
 
             <!-- ── Selector de cuentas + Salir (MeLi) ───────────────────── -->

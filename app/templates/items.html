@@ -26,7 +26,7 @@
         </button>
         <button data-tab="unpublished" data-url="/partials/products-not-published"
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
-            Sin Publicar
+            Oportunidades <span id="unpublished-badge" class="hidden ml-1 bg-green-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
         </button>
     </div>
 </div>
@@ -198,6 +198,15 @@
 
     // Expose for external use
     window.switchProductTab = switchTab;
+
+    // Cargar conteo de oportunidades (sin publicar con stock BM)
+    fetch('/api/amazon/products/sin-publicar').then(function(r){ return r.json(); }).then(function(d){
+        var count = Array.isArray(d) ? d.length : (d.total || 0);
+        if (count > 0) {
+            var b = document.getElementById('unpublished-badge');
+            if (b) { b.textContent = count; b.classList.remove('hidden'); }
+        }
+    }).catch(function(){});
 
     // Stock update function (used by items-grid tab)
     window.updateStock = function(itemId) {

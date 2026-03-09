@@ -157,6 +157,8 @@ async def get_dashboard_data(
 
         # Metricas
         paid_orders = [o for o in all_orders if o.get("status") in ["paid", "delivered"]]
+        # Enriquecer con costos de envío para que order_net_revenue descuente shipping + IVA envío
+        await client.enrich_orders_with_shipping(paid_orders)
         metrics = {
             "total_orders": len(all_orders),
             "period_sales": len(paid_orders),

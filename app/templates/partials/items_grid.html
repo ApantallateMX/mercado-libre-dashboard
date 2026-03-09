@@ -63,8 +63,15 @@
                     {% if meta.get('is_full') %}
                     <span class="text-sm font-medium text-cyan-600">FULL: {{ sq }}</span>
                     {% else %}
-                    <span class="text-sm font-medium {{ 'text-green-600' if sq > 5 else 'text-yellow-600' if sq > 0 else 'text-red-600' }}">
-                        Stock: {{ sq }}
+                    <span data-stock-cell data-item-id="{{ iid }}">
+                        <span data-stock-val
+                              class="text-sm font-semibold cursor-pointer hover:underline hover:text-purple-600 {{ 'text-green-600' if sq > 5 else 'text-yellow-600' if sq > 0 else 'text-red-600' }}"
+                              title="Clic para editar stock"
+                              onclick="window.showStockEditor && window.showStockEditor(this, '{{ iid }}', {{ sq }}, {{ meta.get('_bm_avail', 0) or 0 }})">
+                            Stock: {{ sq }}
+                        </span>
+                        <span class="text-[10px] text-gray-400 ml-0.5" title="Clic para editar">✏</span>
+                        <span data-stock-msg class="text-[10px] ml-1 inline"></span>
                     </span>
                     {% endif %}
                     {% if meta.get('sold_qty', 0) > 0 %}

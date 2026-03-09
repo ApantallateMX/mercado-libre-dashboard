@@ -6,14 +6,15 @@
         <p class="text-sm text-gray-500 mb-1">Revenue 30 dias</p>
         <p class="text-2xl font-bold text-gray-800">${{ "{:,.0f}".format(revenue_30d) }}</p>
         {% set daily_avg = revenue_30d / 30 if revenue_30d > 0 else 0 %}
+        {% set goal = daily_goal if daily_goal and daily_goal > 0 else 500000 %}
         <div class="flex items-center gap-2 mt-1">
-            <span class="text-sm {{ 'text-green-600' if daily_avg >= 500000 else 'text-yellow-600' if daily_avg >= 300000 else 'text-red-600' }}">
+            <span class="text-sm {{ 'text-green-600' if daily_avg >= goal else 'text-yellow-600' if daily_avg >= goal * 0.6 else 'text-red-600' }}">
                 ${{ "{:,.0f}".format(daily_avg) }}/dia
             </span>
-            <span class="text-xs text-gray-400">meta: $500k</span>
+            <span class="text-xs text-gray-400">meta: ${{ "{:,.0f}".format(goal) }}</span>
         </div>
         <!-- Progress bar -->
-        {% set pct = (daily_avg / 500000 * 100) if daily_avg > 0 else 0 %}
+        {% set pct = (daily_avg / goal * 100) if daily_avg > 0 else 0 %}
         <div class="mt-2 w-full bg-gray-200 rounded-full h-2">
             <div class="h-2 rounded-full {{ 'bg-green-500' if pct >= 100 else 'bg-yellow-400' if pct >= 60 else 'bg-red-400' }}"
                  style="width: {{ [pct, 100]|min }}%"></div>
