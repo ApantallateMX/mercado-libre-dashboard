@@ -67,6 +67,9 @@ AMAZON_REDIRECT_URI = os.getenv(
 )
 AMAZON_NICKNAME = os.getenv("AMAZON_NICKNAME", "VECKTOR IMPORTS")
 
+# API Key externa — para el planeador de flujo de caja y otros sistemas externos
+CASHFLOW_API_KEY = os.getenv("CASHFLOW_API_KEY", "")
+
 # Anthropic Claude API (for AI features)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 if not ANTHROPIC_API_KEY:

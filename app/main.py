@@ -23,6 +23,7 @@ from app.api.amazon_products import router as amazon_products_router
 from app.api.amazon_orders import router as amazon_orders_router
 from app.api.users import router as users_router
 from app.api.system_health import router as system_health_router
+from app.api.v1.sales import router as sales_v1_router
 from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
@@ -242,7 +243,8 @@ app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_PATH / "templates")
 
 # ---------- Auth middleware ----------
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/")
+# /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -419,6 +421,7 @@ app.include_router(amazon_products_router)
 app.include_router(amazon_orders_router)
 app.include_router(users_router)
 app.include_router(system_health_router)
+app.include_router(sales_v1_router)
 
 
 # ---------- Account switcher ----------
