@@ -1,6 +1,7 @@
 """
 system_health.py — Monitor automático del estado del sistema
 
+
 Verifica cada 30 minutos:
   1. db          — SQLite operacional
   2. meli_tokens — Tokens MeLi válidos por cuenta
@@ -17,11 +18,19 @@ Endpoints:
 """
 
 import asyncio
+import os
 import time
 import httpx
 from datetime import datetime, timedelta
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
+
+
+def _str_token(tok) -> str:
+    """Convierte token a string limpio — evita 'Illegal header value b\'Bearer\''."""
+    if isinstance(tok, bytes):
+        tok = tok.decode("utf-8", errors="ignore")
+    return (tok or "").strip()
 
 router = APIRouter(prefix="/api/system-health", tags=["system-health"])
 
@@ -92,7 +101,7 @@ async def _check_meli_tokens() -> dict:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
             for acc in accounts:
                 uid = acc.get("user_id", "")
-                tok = acc.get("access_token", "")
+                tok = _str_token(acc.get("access_token", ""))
                 nickname = acc.get("nickname", uid)
                 try:
                     r = await http.get(
@@ -106,7 +115,7 @@ async def _check_meli_tokens() -> dict:
                     else:
                         fail_msgs.append(f"{nickname}:{r.status_code}")
                 except Exception as e:
-                    fail_msgs.append(f"{nickname}:ERR")
+                    fail_msgs.append(f"{nickname}:{str(e)[:30]}")
         ms = _elapsed_ms(t0)
         if fail_msgs:
             return _warn(f"{ok_count}/{len(accounts)} OK — {', '.join(fail_msgs)}", ms)
@@ -182,7 +191,7 @@ async def _check_revenue() -> dict:
             return _warn("Sin cuentas para verificar revenue", _elapsed_ms(t0))
         acc = accounts[0]
         uid = acc.get("user_id", "")
-        tok = acc.get("access_token", "")
+        tok = _str_token(acc.get("access_token", ""))
         from app.config import MELI_API_URL
         # Verificar que la API de órdenes responde (últimos 7 días)
         date_from = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00.000Z")
@@ -238,7 +247,9 @@ async def _check_amazon() -> dict:
 async def _check_endpoints() -> dict:
     """Smoke test: verifica que las páginas principales carguen."""
     t0 = time.monotonic()
-    BASE = "http://127.0.0.1:8000"
+    # Railway asigna $PORT dinámicamente; localmente suele ser 8000
+    port = os.getenv("PORT", "8000")
+    BASE = f"http://127.0.0.1:{port}"
     pages = ["/", "/dashboard", "/items"]
     fail = []
     try:
