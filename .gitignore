@@ -11,7 +11,21 @@ Claude Codes/
 Proyecto Mercado LIbre/
 test*.html
 test*.py
-.claude/
+# .claude — ignorar archivos internos pero trackear agentes
+.claude/cache/
+.claude/history.jsonl
+.claude/image-cache/
+.claude/shell-snapshots/
+.claude/stats-cache.json
+.claude/statsig/
+.claude/telemetry/
+.claude/todos/
+.claude/tasks/
+.claude/plans/
+.claude/debug/
+.claude/projects/
+.claude/plugins/
+.claude/backups/
 
 # Archivo maestro de credenciales — NUNCA subir a git
 mercado-libre-dashboard.md
