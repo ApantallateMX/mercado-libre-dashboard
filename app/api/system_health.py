@@ -45,7 +45,7 @@ def _str_token(tok) -> str:
 router = APIRouter(prefix="/api/system-health", tags=["system-health"])
 
 # ─── Estado global en memoria ────────────────────────────────────────────────
-_INTERVAL = 30 * 60   # 30 minutos
+_INTERVAL = 10 * 60   # 10 minutos
 _TIMEOUT  = 10.0      # segundos por check
 
 _state: dict = {
@@ -326,7 +326,7 @@ async def run_all_checks():
 
 
 async def _health_loop():
-    """Loop background: corre checks cada 30 minutos."""
+    """Loop background: corre checks cada 10 minutos."""
     await asyncio.sleep(90)  # Esperar 90s al arranque
     while True:
         await run_all_checks()
@@ -503,6 +503,11 @@ function _healthReload() {{
             var el = document.getElementById('system-health-widget');
             if (el) el.innerHTML = html;
         }}).catch(function(){{}});
+}}
+// Auto-polling cada 5 minutos — sin necesidad de clicks
+if (!window._healthPollStarted) {{
+    window._healthPollStarted = true;
+    setInterval(function(){{ _healthReload(); }}, 5 * 60 * 1000);
 }}
 function triggerHealthCheck(btn) {{
     if (btn) {{ btn.textContent = 'Verificando...'; btn.disabled = true; }}

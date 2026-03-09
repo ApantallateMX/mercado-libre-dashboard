@@ -489,6 +489,81 @@ document.addEventListener('click', function(e) {
 <!-- Notification Toast Container -->
 <div id="notif-container" class="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm z-50 flex flex-col gap-2"></div>
 
+<!-- Banner global de errores del sistema — aparece automáticamente en TODAS las páginas -->
+<div id="global-health-banner" class="hidden fixed bottom-0 left-0 right-0 z-40 shadow-lg" style="background:#1e293b;border-top:2px solid #ef4444">
+    <div class="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2 min-w-0">
+            <svg class="w-4 h-4 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            <span id="global-health-msg" class="text-xs text-red-300 truncate">Error detectado en el sistema</span>
+        </div>
+        <div class="flex items-center gap-2 flex-shrink-0">
+            <button onclick="_globalHealthFix()" id="global-health-fix-btn"
+                    class="text-xs px-3 py-1 rounded font-semibold bg-red-500 text-white hover:bg-red-600 transition hidden">
+            </button>
+            <button onclick="document.getElementById('global-health-banner').classList.add('hidden')"
+                    class="text-gray-400 hover:text-white text-xs px-2">✕</button>
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var _fixAction = null;
+    function _checkGlobalHealth() {
+        fetch('/api/system-health/status').then(function(r){ return r.json(); }).then(function(d) {
+            var banner = document.getElementById('global-health-banner');
+            var msg = document.getElementById('global-health-msg');
+            var fixBtn = document.getElementById('global-health-fix-btn');
+            if (!banner) return;
+            if (d.overall === 'error' || d.overall === 'warning') {
+                // Construir mensaje con los checks fallidos
+                var failed = [];
+                var checks = d.checks || {};
+                var labels = {db:'DB',meli_tokens:'Tokens MeLi',binmanager:'BinManager',
+                              stock_sync:'Sync Stock',revenue:'Orders API',amazon:'Amazon',endpoints:'Páginas'};
+                _fixAction = null;
+                for (var k in checks) {
+                    if (checks[k].status === 'error' || checks[k].status === 'warning') {
+                        failed.push((labels[k] || k) + ': ' + (checks[k].msg || '').substring(0, 60));
+                        // Asignar fix action al primer error encontrado
+                        if (!_fixAction) {
+                            if (k === 'meli_tokens' || k === 'revenue') _fixAction = {label:'Refrescar tokens', fn: function(){ fetch('/api/system-health/fix-tokens',{method:'POST'}); }};
+                            else if (k === 'amazon') _fixAction = {label:'Reconectar Amazon', fn: function(){ window.location.href='/auth/amazon/connect'; }};
+                            else if (k === 'stock_sync') _fixAction = {label:'Sync ahora', fn: function(){ fetch('/api/sync/trigger',{method:'POST'}); }};
+                        }
+                    }
+                }
+                if (msg) msg.textContent = failed.slice(0,2).join(' | ');
+                if (fixBtn) {
+                    if (_fixAction) { fixBtn.textContent = _fixAction.label; fixBtn.classList.remove('hidden'); }
+                    else { fixBtn.classList.add('hidden'); }
+                }
+                if (d.overall === 'error') {
+                    banner.style.borderTopColor = '#ef4444';
+                    banner.style.background = '#1e293b';
+                } else {
+                    banner.style.borderTopColor = '#f59e0b';
+                    banner.style.background = '#292524';
+                }
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+        }).catch(function(){});
+    }
+    function _globalHealthFix() {
+        if (_fixAction) _fixAction.fn();
+        setTimeout(function(){ fetch('/api/system-health/run',{method:'POST'}); }, 1000);
+    }
+    window._globalHealthFix = _globalHealthFix;
+    // Primer check con 8 segundos de delay — dejar que la página cargue
+    setTimeout(_checkGlobalHealth, 8000);
+    // Polling automático cada 5 minutos
+    setInterval(_checkGlobalHealth, 5 * 60 * 1000);
+})();
+</script>
+
 {% endif %}{# end if user #}
 
 <main class="max-w-7xl mx-auto py-3 px-2 md:py-6 md:px-4">

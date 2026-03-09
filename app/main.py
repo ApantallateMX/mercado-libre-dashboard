@@ -226,7 +226,9 @@ async def lifespan(app: FastAPI):
     start_onsite_background_sync()
     # Sync periódico de stock MeLi vs BM (cada 4 horas) — alertas de sobreventa
     start_stock_sync()
-    # Health checker automático (cada 30 min) — verifica que todo el sistema funcione
+    # Auto-refresh de tokens MeLi cada 5 horas — evita expiración silenciosa
+    start_token_refresh()
+    # Health checker automático (cada 10 min) — verifica que todo el sistema funcione
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
     yield
@@ -6969,6 +6971,26 @@ async def _stock_sync_loop():
 def start_stock_sync():
     """Inicia el loop de stock sync en background."""
     asyncio.create_task(_stock_sync_loop())
+
+
+async def _token_refresh_loop():
+    """Auto-renueva tokens MeLi cada 5 horas — evita expiración silenciosa.
+    MeLi tokens duran 6 horas; refrescamos a las 5h para tener margen.
+    """
+    await asyncio.sleep(300)  # 5 min initial delay — dejar que todo arranque primero
+    while True:
+        try:
+            print("[TOKEN_REFRESH] Renovando tokens MeLi automáticamente...")
+            await _seed_tokens()
+            print("[TOKEN_REFRESH] Tokens renovados OK")
+        except Exception as e:
+            print(f"[TOKEN_REFRESH] Error al renovar tokens: {e}")
+        await asyncio.sleep(5 * 3600)  # Cada 5 horas
+
+
+def start_token_refresh():
+    """Inicia el loop de auto-refresh de tokens en background."""
+    asyncio.create_task(_token_refresh_loop())
 
 
 # ─── Endpoints de Sync ───────────────────────────────────────────────────────
