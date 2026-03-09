@@ -99,33 +99,33 @@ async def _check_db() -> dict:
 
 
 async def _check_meli_tokens() -> dict:
+    """Usa get_meli_client() que maneja tokens internamente — evita problemas de encoding."""
     t0 = time.monotonic()
     try:
         from app.services import token_store
-        from app.config import MELI_API_URL
+        from app.services.meli_client import get_meli_client
         accounts = await token_store.get_all_tokens()
         if not accounts:
             return _warn("Sin cuentas MeLi registradas", _elapsed_ms(t0))
         ok_count = 0
         fail_msgs = []
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
-            for acc in accounts:
-                uid = acc.get("user_id", "")
-                tok = _str_token(acc.get("access_token", ""))
-                nickname = acc.get("nickname", uid)
-                try:
-                    r = await http.get(
-                        f"{MELI_API_URL}/users/me",
-                        headers={"Authorization": f"Bearer {tok}"}
-                    )
-                    if r.status_code == 200:
-                        ok_count += 1
-                    elif r.status_code == 401:
-                        fail_msgs.append(f"{nickname}:TOKEN_EXPIRADO")
-                    else:
-                        fail_msgs.append(f"{nickname}:{r.status_code}")
-                except Exception as e:
-                    fail_msgs.append(f"{nickname}:{str(e)[:30]}")
+        for acc in accounts:
+            uid = acc.get("user_id", "")
+            nickname = acc.get("nickname", uid)
+            try:
+                client = await get_meli_client(user_id=uid)
+                # Llamada liviana: solo verifica que el token funciona
+                result = await client.get(f"/users/{uid}", params={"attributes": "id,nickname"})
+                if result.get("id") or result.get("nickname"):
+                    ok_count += 1
+                else:
+                    fail_msgs.append(f"{nickname}:RESP_VACIA")
+            except Exception as e:
+                code = getattr(e, "status_code", None)
+                if code == 401:
+                    fail_msgs.append(f"{nickname}:TOKEN_EXPIRADO")
+                else:
+                    fail_msgs.append(f"{nickname}:{str(e)[:40]}")
         ms = _elapsed_ms(t0)
         if fail_msgs:
             return _warn(f"{ok_count}/{len(accounts)} OK — {', '.join(fail_msgs)}", ms)
@@ -192,36 +192,30 @@ async def _check_stock_sync() -> dict:
 
 
 async def _check_revenue() -> dict:
-    """Verifica que el endpoint de métricas responde y retorna datos no vacíos."""
+    """Verifica que la API de órdenes responde usando get_meli_client()."""
     t0 = time.monotonic()
     try:
         from app.services import token_store
+        from app.services.meli_client import get_meli_client
         accounts = await token_store.get_all_tokens()
         if not accounts:
             return _warn("Sin cuentas para verificar revenue", _elapsed_ms(t0))
-        acc = accounts[0]
-        uid = acc.get("user_id", "")
-        tok = _str_token(acc.get("access_token", ""))
-        from app.config import MELI_API_URL
-        # Verificar que la API de órdenes responde (últimos 7 días)
+        uid = accounts[0].get("user_id", "")
+        client = await get_meli_client(user_id=uid)
         date_from = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00.000Z")
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
-            r = await http.get(
-                f"{MELI_API_URL}/orders/search",
-                headers={"Authorization": f"Bearer {tok}"},
-                params={"seller": uid, "order.date_created.from": date_from,
-                        "order.status": "paid", "limit": 1}
-            )
+        result = await client.get("/orders/search", params={
+            "seller": uid,
+            "order.date_created.from": date_from,
+            "order.status": "paid",
+            "limit": 1,
+        })
         ms = _elapsed_ms(t0)
-        if r.status_code == 200:
-            data = r.json()
-            total = data.get("paging", {}).get("total", 0)
-            return _ok(f"Orders API OK — {total} órdenes en 7d", ms)
-        elif r.status_code == 401:
-            return _err("Token inválido para Orders API", ms)
-        else:
-            return _warn(f"Orders API respondió {r.status_code}", ms)
+        total = result.get("paging", {}).get("total", 0)
+        return _ok(f"Orders API OK — {total} órdenes en 7d", ms)
     except Exception as e:
+        code = getattr(e, "status_code", None)
+        if code == 401:
+            return _err("Token inválido para Orders API", _elapsed_ms(t0))
         return _err(f"Error: {str(e)[:80]}", _elapsed_ms(t0))
 
 
