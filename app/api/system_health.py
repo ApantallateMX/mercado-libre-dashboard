@@ -220,6 +220,7 @@ async def _check_revenue() -> dict:
 
 
 async def _check_amazon() -> dict:
+    """Verifica Amazon haciendo un call REAL a SP-API — no solo crear el cliente."""
     t0 = time.monotonic()
     try:
         from app.services import token_store
@@ -234,18 +235,28 @@ async def _check_amazon() -> dict:
             nick = acc.get("nickname", sid)
             try:
                 client = await get_amazon_client(seller_id=sid)
-                if client:
-                    ok_count += 1
-                else:
+                if not client:
                     fail_msgs.append(f"{nick}:SIN_CLIENT")
+                    continue
+                # Call real liviano — verifica que LWA token funciona de verdad
+                result = await client.get_today_orders()
+                # Si llega aquí sin excepción, el token funciona
+                ok_count += 1
             except Exception as e:
-                fail_msgs.append(f"{nick}:{str(e)[:30]}")
+                err_str = str(e)
+                if "403" in err_str or "Unauthorized" in err_str or "LWA" in err_str:
+                    fail_msgs.append(f"{nick}:TOKEN_INVALIDO(403)")
+                elif "401" in err_str:
+                    fail_msgs.append(f"{nick}:TOKEN_EXPIRADO(401)")
+                else:
+                    fail_msgs.append(f"{nick}:{err_str[:50]}")
         ms = _elapsed_ms(t0)
         if fail_msgs:
-            return _warn(f"{ok_count}/{len(amazon_accounts)} Amazon OK", ms)
+            joined = ", ".join(fail_msgs)
+            return _err(f"{ok_count}/{len(amazon_accounts)} OK — {joined}", ms)
         return _ok(f"{ok_count} cuenta(s) Amazon operacional(es)", ms)
     except Exception as e:
-        return _ok(f"Amazon no configurado ({str(e)[:40]})", _elapsed_ms(t0))
+        return _warn(f"Amazon check error: {str(e)[:60]}", _elapsed_ms(t0))
 
 
 async def _check_endpoints() -> dict:
@@ -405,10 +416,10 @@ async def health_widget():
         "meli_tokens": ("Refrescar tokens MeLi", "fixMeliTokens()"),
         "revenue":     ("Refrescar tokens MeLi", "fixMeliTokens()"),
         "stock_sync":  ("Sync ahora", "fixStockSync()"),
-        "endpoints":   (None, None),  # No hay acción manual
+        "amazon":      ("Reconectar Amazon", "fixAmazon()"),
+        "endpoints":   (None, None),
         "binmanager":  (None, None),
         "db":          (None, None),
-        "amazon":      (None, None),
     }
 
     rows_html = ""
@@ -527,6 +538,15 @@ function fixStockSync() {{
                     .then(function(){{ setTimeout(_healthReload, 7000); }});
             }}, 3000);
         }}).catch(function(){{}});
+}}
+function fixAmazon() {{
+    var msg = document.getElementById('health-action-msg');
+    if (msg) {{
+        msg.textContent = 'Redirigiendo a reconexion Amazon...';
+        msg.classList.remove('hidden');
+    }}
+    // Redirigir a la página de conexión OAuth de Amazon
+    setTimeout(function(){{ window.location.href = '/auth/amazon/connect'; }}, 800);
 }}
 </script>
 """)
