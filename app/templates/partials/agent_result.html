@@ -1,0 +1,80 @@
+{# ─── Partial: agent_result.html ──────────────────────────────────────────
+   Renderizado por POST /agents/run/{agent_name}
+   Contexto esperado:
+     agent_name  : str  — nombre del agente
+     success     : bool — True si OK, False si error
+     message     : str  — mensaje principal del resultado
+     data        : dict|None — datos adicionales (opcional)
+     actions     : list|None — lista de acciones recomendadas (opcional)
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% if success %}
+<!-- Resultado OK -->
+<div class="mt-1 rounded-lg border border-green-700/50 bg-green-900/20 px-3 py-2">
+    <div class="flex items-center gap-1.5 mb-1">
+        <span class="text-green-400 text-xs">✓</span>
+        <p class="text-green-300 text-xs font-semibold truncate">{{ agent_name | title }}</p>
+    </div>
+    <p class="text-gray-300 text-xs leading-snug">{{ message }}</p>
+
+    {% if data %}
+    <!-- Resumen colapsable -->
+    <div class="mt-2">
+        <button type="button"
+                onclick="this.nextElementSibling.classList.toggle('hidden'); this.querySelector('svg').classList.toggle('rotate-180')"
+                class="flex items-center gap-1 text-gray-400 hover:text-gray-200 text-xs transition">
+            <svg class="w-3 h-3 transition-transform duration-150" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+            Ver detalles
+        </button>
+        <div class="hidden mt-1.5 bg-gray-900/50 rounded p-2 space-y-1 max-h-32 overflow-y-auto">
+            {% for key, value in data.items() %}
+            <div class="flex items-start gap-1.5">
+                <span class="text-gray-500 text-xs shrink-0">{{ key }}:</span>
+                <span class="text-gray-300 text-xs break-all">{{ value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if actions %}
+    <!-- Acciones recomendadas -->
+    <div class="mt-2 border-t border-green-700/30 pt-2">
+        <p class="text-gray-400 text-xs mb-1.5 font-medium">Acciones recomendadas:</p>
+        <ul class="space-y-1">
+            {% for action in actions %}
+            <li class="flex items-start gap-1.5">
+                <span class="text-yellow-400 text-xs shrink-0 mt-px">›</span>
+                <span class="text-gray-300 text-xs leading-snug">{{ action }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+</div><!-- /result OK -->
+
+{% else %}
+<!-- Resultado error -->
+<div class="mt-1 rounded-lg border border-red-700/50 bg-red-900/20 px-3 py-2">
+    <div class="flex items-center gap-1.5 mb-1">
+        <span class="text-red-400 text-xs">✕</span>
+        <p class="text-red-300 text-xs font-semibold truncate">{{ agent_name | title }}</p>
+    </div>
+    <p class="text-gray-300 text-xs leading-snug">{{ message }}</p>
+
+    {% if data %}
+    <div class="mt-1.5 bg-gray-900/50 rounded p-2">
+        {% for key, value in data.items() %}
+        <div class="flex items-start gap-1.5">
+            <span class="text-gray-500 text-xs shrink-0">{{ key }}:</span>
+            <span class="text-red-300 text-xs break-all">{{ value }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</div><!-- /result error -->
+{% endif %}

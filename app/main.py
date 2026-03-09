@@ -22,6 +22,7 @@ from app.api.health_ai import router as health_ai_router
 from app.api.amazon_products import router as amazon_products_router
 from app.api.amazon_orders import router as amazon_orders_router
 from app.api.users import router as users_router
+from app.api.agents_router import router as agents_router
 from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
@@ -223,7 +224,30 @@ async def lifespan(app: FastAPI):
     # Sync periódico de Onsite (cada 25 min en background)
     from app.api.amazon_products import start_onsite_background_sync
     start_onsite_background_sync()
+    # Sistema de Agentes IA — inicializar memoria y scheduler
+    from app.services.memory_manager import memory_manager
+    await memory_manager.init_db()
+    from app.services.scheduler_service import scheduler_service
+    await scheduler_service.start()
+    # Jobs automáticos de agentes
+    try:
+        from app.services.agents.orchestrator import orchestrator
+        scheduler_service.add_job(
+            "daily_scan", orchestrator.run_scheduled_scan,
+            "cron", "Orquestador",
+            "Scan diario completo de todos los agentes",
+            hour=8, minute=0
+        )
+        scheduler_service.add_job(
+            "health_check", orchestrator.run_scheduled_scan,
+            "interval", "Monitor",
+            "Check periódico cada 4 horas",
+            hours=4
+        )
+    except Exception as _e:
+        print(f"[agents] Scheduler jobs no registrados: {_e}")
     yield
+    scheduler_service.stop()
 
 
 app = FastAPI(title="Mercado Libre Dashboard", lifespan=lifespan)
@@ -403,6 +427,7 @@ app.include_router(health_ai_router)
 app.include_router(amazon_products_router)
 app.include_router(amazon_orders_router)
 app.include_router(users_router)
+app.include_router(agents_router)
 
 
 # ---------- Account switcher ----------

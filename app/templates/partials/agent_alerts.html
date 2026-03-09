@@ -1,0 +1,89 @@
+{# ─── Partial: agent_alerts.html ──────────────────────────────────────────
+   Renderizado por GET /agents/alerts
+   Contexto esperado: alerts (list), cada alerta con:
+     id, level ("critical"|"warning"|"info"), title, message, created_at (ISO)
+   ─────────────────────────────────────────────────────────────────────── #}
+
+{% if not alerts %}
+<!-- Sin alertas -->
+<div class="flex flex-col items-center justify-center py-8 gap-2 text-center">
+    <span class="text-3xl">✅</span>
+    <p class="text-gray-300 text-sm font-medium">Sin alertas pendientes</p>
+    <p class="text-gray-500 text-xs">Todo parece estar en orden</p>
+</div>
+
+{% else %}
+
+{# Actualizar badge en la página padre #}
+<script>
+(function() {
+    var critical = {{ alerts | selectattr("level", "equalto", "critical") | list | length }};
+    var warning = {{ alerts | selectattr("level", "equalto", "warning") | list | length }};
+    var total = critical + warning;
+    if (typeof window._updateAlertsBadge === 'function') {
+        window._updateAlertsBadge(total);
+    }
+})();
+</script>
+
+<div class="space-y-2">
+{% for alert in alerts[:20] %}
+
+{# ── Colores por nivel ── #}
+{% if alert.level == "critical" %}
+    {% set border_cls = "border-red-500" %}
+    {% set bg_cls = "bg-red-900/20" %}
+    {% set icon = "🔴" %}
+    {% set title_cls = "text-red-300" %}
+    {% set time_cls = "text-red-400/70" %}
+{% elif alert.level == "warning" %}
+    {% set border_cls = "border-yellow-500" %}
+    {% set bg_cls = "bg-yellow-900/20" %}
+    {% set icon = "🟡" %}
+    {% set title_cls = "text-yellow-300" %}
+    {% set time_cls = "text-yellow-400/70" %}
+{% else %}
+    {% set border_cls = "border-blue-500" %}
+    {% set bg_cls = "bg-blue-900/20" %}
+    {% set icon = "🔵" %}
+    {% set title_cls = "text-blue-300" %}
+    {% set time_cls = "text-blue-400/70" %}
+{% endif %}
+
+<div id="alert-{{ alert.id }}"
+     class="flex items-start gap-2.5 p-2.5 rounded-lg border-l-2 {{ border_cls }} {{ bg_cls }} group">
+
+    <!-- Icono -->
+    <span class="text-sm shrink-0 mt-0.5">{{ icon }}</span>
+
+    <!-- Contenido -->
+    <div class="flex-1 min-w-0">
+        <p class="{{ title_cls }} text-xs font-semibold leading-snug">{{ alert.title }}</p>
+        <p class="text-gray-400 text-xs leading-snug mt-0.5 line-clamp-2">{{ alert.message }}</p>
+        <p class="{{ time_cls }} text-xs mt-1">{{ alert.created_at | relative_time if alert.created_at else "" }}</p>
+    </div>
+
+    <!-- Botón cerrar -->
+    <button
+        hx-post="/agents/alerts/{{ alert.id }}/read"
+        hx-target="#alert-{{ alert.id }}"
+        hx-swap="outerHTML swap:0.2s"
+        hx-headers='{"Content-Type": "application/json"}'
+        title="Marcar como leída"
+        class="shrink-0 text-gray-600 hover:text-gray-300 opacity-0 group-hover:opacity-100 transition p-0.5 rounded">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+    </button>
+
+</div>
+{% endfor %}
+</div>
+
+{% if alerts | length > 20 %}
+<p class="text-center text-gray-500 text-xs mt-3">
+    Mostrando 20 de {{ alerts | length }} alertas
+</p>
+{% endif %}
+
+{% endif %}
