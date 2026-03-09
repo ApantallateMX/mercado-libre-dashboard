@@ -27,10 +27,20 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 
 def _str_token(tok) -> str:
-    """Convierte token a string limpio — evita 'Illegal header value b\'Bearer\''."""
+    """Convierte token a string limpio — evita 'Illegal header value b\'Bearer\''.
+    Maneja dos casos:
+      1. tok es bytes reales  →  decodifica a utf-8
+      2. tok es string "b'xxx'"  →  extrae el contenido entre comillas
+    """
     if isinstance(tok, bytes):
         tok = tok.decode("utf-8", errors="ignore")
-    return (tok or "").strip()
+    tok = (tok or "").strip()
+    # Caso 2: string que parece bytes por str(b'...') — ej: "b'eyJ0eXAi...'"
+    if tok.startswith("b'") and tok.endswith("'"):
+        tok = tok[2:-1]
+    elif tok.startswith('b"') and tok.endswith('"'):
+        tok = tok[2:-1]
+    return tok
 
 router = APIRouter(prefix="/api/system-health", tags=["system-health"])
 
@@ -337,6 +347,19 @@ async def trigger_health_check():
     return {"status": "triggered"}
 
 
+@router.post("/fix-tokens")
+async def fix_meli_tokens():
+    """Re-siembra los tokens MeLi desde .env.production — resuelve tokens expirados o corruptos."""
+    try:
+        # Importar _seed_tokens desde main (función de siembra al arranque)
+        from app.main import _seed_tokens
+        asyncio.create_task(_seed_tokens())
+        return {"status": "ok", "message": "Renovando tokens MeLi... verificando en 8 segundos"}
+    except Exception as e:
+        return {"status": "error", "message": f"Error: {str(e)[:100]}"}
+    return {"status": "triggered"}
+
+
 _ICON = {
     "ok":      ('<svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
                 '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>'),
@@ -383,6 +406,17 @@ async def health_widget():
     last = _state.get("last_run") or "Nunca"
     running = _state.get("running", False)
 
+    # Botones de acción para checks con error/warning
+    _FIX_ACTIONS = {
+        "meli_tokens": ("Refrescar tokens MeLi", "fixMeliTokens()"),
+        "revenue":     ("Refrescar tokens MeLi", "fixMeliTokens()"),
+        "stock_sync":  ("Sync ahora", "fixStockSync()"),
+        "endpoints":   (None, None),  # No hay acción manual
+        "binmanager":  (None, None),
+        "db":          (None, None),
+        "amazon":      (None, None),
+    }
+
     rows_html = ""
     for key, label in _LABEL.items():
         check = _state["checks"].get(key, {"status": "unknown", "msg": "", "ms": 0})
@@ -390,17 +424,34 @@ async def health_widget():
         icon = _ICON.get(st, _ICON["unknown"])
         badge_cls = _BADGE_COLOR.get(st, _BADGE_COLOR["unknown"])
         ms_str = f"{check['ms']}ms" if check.get("ms") else ""
+        msg = check.get("msg", "")
+
+        # Botón de acción solo si hay error/warning Y existe una acción
+        action_btn = ""
+        if st in ("error", "warning"):
+            action_label, action_fn = _FIX_ACTIONS.get(key, (None, None))
+            if action_label and action_fn:
+                action_btn = (
+                    f'<button onclick="{action_fn}" '
+                    f'class="text-[10px] px-2 py-0.5 rounded bg-blue-500 text-white '
+                    f'hover:bg-blue-600 font-medium flex-shrink-0 ml-1">'
+                    f'{action_label}</button>'
+                )
+
         rows_html += f"""
         <div class="flex items-start gap-2 py-1.5 border-b border-gray-100 last:border-0">
             <div class="mt-0.5 flex-shrink-0">{icon}</div>
             <div class="flex-1 min-w-0">
                 <span class="text-xs font-medium text-gray-700">{label}</span>
                 <span class="text-[10px] text-gray-400 ml-1">{ms_str}</span>
-                <p class="text-[10px] text-gray-500 truncate">{check.get('msg','')}</p>
+                <p class="text-[10px] text-gray-500 truncate" title="{msg}">{msg[:120]}</p>
             </div>
-            <span class="text-[10px] px-1.5 py-0.5 rounded font-medium {badge_cls} flex-shrink-0">
-                {st.upper()}
-            </span>
+            <div class="flex items-center gap-1 flex-shrink-0">
+                {action_btn}
+                <span class="text-[10px] px-1.5 py-0.5 rounded font-medium {badge_cls}">
+                    {st.upper()}
+                </span>
+            </div>
         </div>"""
 
     overall_label = {
@@ -421,7 +472,7 @@ async def health_widget():
     spinner = ' <span class="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full"></span>' if running else ""
 
     return HTMLResponse(f"""
-<div class="bg-white rounded-xl shadow border-l-4 {border} p-4">
+<div class="bg-white rounded-xl shadow border-l-4 {border} p-4" id="health-widget-inner">
     <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
             <h3 class="text-sm font-semibold text-gray-700">Estado del Sistema</h3>
@@ -429,23 +480,59 @@ async def health_widget():
             {spinner}
         </div>
         <div class="flex items-center gap-2">
-            <span class="text-[10px] text-gray-400">{last}</span>
-            <button onclick="triggerHealthCheck()"
+            <span class="text-[10px] text-gray-400" id="health-last-run">{last}</span>
+            <button onclick="triggerHealthCheck(this)"
                     class="text-[10px] text-blue-500 hover:text-blue-700 underline">
                 Verificar ahora
             </button>
         </div>
     </div>
+    <div id="health-action-msg" class="hidden mb-2 text-xs text-blue-600 font-medium"></div>
     <div>{rows_html}</div>
 </div>
 <script>
-function triggerHealthCheck() {{
-    fetch('/api/system-health/run', {{method:'POST'}}).then(function(){{
-        setTimeout(function(){{
-            htmx.ajax('GET','/api/system-health/widget',
-                {{target:'#system-health-widget',swap:'innerHTML'}});
-        }}, 5000);
-    }});
+function _healthReload() {{
+    fetch('/api/system-health/widget')
+        .then(function(r){{ return r.text(); }})
+        .then(function(html){{
+            var el = document.getElementById('system-health-widget');
+            if (el) el.innerHTML = html;
+        }}).catch(function(){{}});
+}}
+function triggerHealthCheck(btn) {{
+    if (btn) {{ btn.textContent = 'Verificando...'; btn.disabled = true; }}
+    var msg = document.getElementById('health-action-msg');
+    if (msg) {{ msg.textContent = 'Ejecutando checks...'; msg.classList.remove('hidden'); }}
+    fetch('/api/system-health/run', {{method:'POST'}})
+        .then(function(){{
+            setTimeout(function(){{ _healthReload(); }}, 7000);
+        }}).catch(function(){{}});
+}}
+function fixMeliTokens() {{
+    var msg = document.getElementById('health-action-msg');
+    if (msg) {{ msg.textContent = 'Refrescando tokens MeLi...'; msg.classList.remove('hidden'); }}
+    fetch('/api/system-health/fix-tokens', {{method:'POST'}})
+        .then(function(r){{ return r.json(); }})
+        .then(function(d){{
+            if (msg) msg.textContent = d.message || 'Proceso iniciado. Verificando en 8s...';
+            setTimeout(function(){{
+                fetch('/api/system-health/run', {{method:'POST'}})
+                    .then(function(){{ setTimeout(_healthReload, 7000); }});
+            }}, 2000);
+        }}).catch(function(){{}});
+}}
+function fixStockSync() {{
+    var msg = document.getElementById('health-action-msg');
+    if (msg) {{ msg.textContent = 'Iniciando sync de stock...'; msg.classList.remove('hidden'); }}
+    fetch('/api/sync/trigger', {{method:'POST'}})
+        .then(function(r){{ return r.json(); }})
+        .then(function(d){{
+            if (msg) msg.textContent = 'Sync iniciado. Verificando en 10s...';
+            setTimeout(function(){{
+                fetch('/api/system-health/run', {{method:'POST'}})
+                    .then(function(){{ setTimeout(_healthReload, 7000); }});
+            }}, 3000);
+        }}).catch(function(){{}});
 }}
 </script>
 """)
