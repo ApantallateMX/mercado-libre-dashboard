@@ -223,6 +223,8 @@ async def lifespan(app: FastAPI):
     # Sync periódico de Onsite (cada 25 min en background)
     from app.api.amazon_products import start_onsite_background_sync
     start_onsite_background_sync()
+    # Sync periódico de stock MeLi vs BM (cada 4 horas) — alertas de sobreventa
+    start_stock_sync()
     yield
 
 
@@ -6841,6 +6843,235 @@ async def amazon_orders_page(request: Request):
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = "orders"
     return templates.TemplateResponse("amazon_orders.html", {"request": request, "user": user, **ctx})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STOCK SYNC SCHEDULER — Alertas proactivas de sobreventa (Week 3)
+# Cada 4 horas verifica: items activos en MeLi con BM disponible = 0
+# ═══════════════════════════════════════════════════════════════════════════
+
+_STOCK_SYNC_INTERVAL = 4 * 3600   # 4 horas
+_stock_sync_running: dict = {}     # user_id -> bool (lock por cuenta)
+
+
+async def _run_stock_sync_for_user(user_id: str):
+    """Compara stock activo de MeLi con BM disponible para detectar riesgo de sobreventa."""
+    if _stock_sync_running.get(user_id):
+        return
+    _stock_sync_running[user_id] = True
+    try:
+        print(f"[STOCK-SYNC] Iniciando sync para user {user_id}...")
+        client = await get_meli_client(user_id=user_id)
+
+        # 1. Obtener todos los items activos (scroll completo)
+        all_items = []
+        offset = 0
+        limit = 50
+        while True:
+            try:
+                resp = await client.get(f"/users/{user_id}/items/search",
+                                        params={"status": "active", "offset": offset, "limit": limit})
+                ids = resp.get("results", [])
+                if not ids:
+                    break
+                # Fetch detalles
+                details = await client.get_items_details(ids)
+                all_items.extend(details)
+                paging = resp.get("paging", {})
+                total = paging.get("total", 0)
+                offset += limit
+                if offset >= total:
+                    break
+            except Exception as e:
+                print(f"[STOCK-SYNC] Error fetching items page offset={offset}: {e}")
+                break
+
+        print(f"[STOCK-SYNC] {len(all_items)} items activos obtenidos para {user_id}")
+
+        # 2. Construir lista minimal de productos para _get_bm_stock_cached
+        products = []
+        item_map = {}
+        for item in all_items:
+            body = item.get("body", item) if isinstance(item, dict) else item
+            iid = body.get("id", "") if isinstance(body, dict) else getattr(body, "id", "")
+            body_dict = body if isinstance(body, dict) else vars(body)
+            sku = ""
+            # Buscar SKU en seller_custom_field o attributes
+            sku = body_dict.get("seller_custom_field") or ""
+            if not sku:
+                for attr in body_dict.get("attributes", []):
+                    if isinstance(attr, dict) and attr.get("id") == "SELLER_SKU":
+                        sku = attr.get("value_name", "") or ""
+                        break
+            if not sku or not iid:
+                continue
+            qty = body_dict.get("available_quantity", 0) or 0
+            title = body_dict.get("title", "") or ""
+            products.append({"sku": sku, "item_id": iid, "meli_stock": qty, "title": title})
+            item_map[iid] = {"sku": sku, "meli_stock": qty, "title": title}
+
+        # 3. Obtener stock BM para todos los productos
+        bm_map = await _get_bm_stock_cached(products)
+
+        # 4. Detectar sobreventas: MeLi stock > 0 pero BM disponible = 0
+        alerts = []
+        for p in products:
+            sku = p["sku"]
+            base_sku = _clean_sku_for_bm(sku)
+            bm_info = bm_map.get(sku) or bm_map.get(base_sku) or {}
+            bm_avail = bm_info.get("avail_total", 0) if bm_info else 0
+            meli_stock = p["meli_stock"]
+            if meli_stock > 0 and bm_avail == 0:
+                alerts.append({
+                    "item_id": p["item_id"],
+                    "title": p["title"],
+                    "sku": sku,
+                    "meli_stock": meli_stock,
+                    "bm_avail": 0,
+                    "alert_type": "oversell",
+                })
+
+        # 5. Guardar alertas y status
+        await token_store.save_sync_alerts(user_id, alerts)
+        await token_store.save_sync_status(user_id, len(alerts), "ok")
+        print(f"[STOCK-SYNC] Done user {user_id}: {len(alerts)} alertas de sobreventa")
+    except Exception as e:
+        print(f"[STOCK-SYNC] Error en sync para {user_id}: {e}")
+        try:
+            await token_store.save_sync_status(user_id, 0, f"error: {str(e)[:100]}")
+        except Exception:
+            pass
+    finally:
+        _stock_sync_running[user_id] = False
+
+
+async def _stock_sync_loop():
+    """Loop periódico que ejecuta el stock sync para todas las cuentas MeLi."""
+    await asyncio.sleep(60)  # Esperar 1 min al arranque para que los tokens se siembren
+    while True:
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if uid:
+                    await _run_stock_sync_for_user(uid)
+                    await asyncio.sleep(5)  # Separar llamadas entre cuentas
+        except Exception as e:
+            print(f"[STOCK-SYNC-LOOP] Error: {e}")
+        await asyncio.sleep(_STOCK_SYNC_INTERVAL)
+
+
+def start_stock_sync():
+    """Inicia el loop de stock sync en background."""
+    asyncio.create_task(_stock_sync_loop())
+
+
+# ─── Endpoints de Sync ───────────────────────────────────────────────────────
+
+@app.get("/api/sync/alerts", response_class=HTMLResponse)
+async def get_sync_alerts_partial(request: Request):
+    """Retorna HTML con las alertas de sobreventa del usuario actual."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("")
+    user_id = client.user_id
+    alerts = await token_store.get_sync_alerts(user_id)
+    status = await token_store.get_sync_status(user_id)
+    last_run = status.get("last_run", "") if status else ""
+    if not alerts:
+        return HTMLResponse("")
+    # Render inline HTML (sin template separado para simplicidad)
+    rows = ""
+    for a in alerts[:20]:
+        rows += f"""<div class="flex items-center justify-between py-1.5 border-b border-red-100 last:border-0 text-xs gap-2">
+            <div class="min-w-0 flex-1">
+                <span class="font-mono text-red-700 mr-1">{a['item_id']}</span>
+                <span class="text-gray-600 truncate block">{a['title'][:60]}</span>
+            </div>
+            <div class="flex-shrink-0 text-right">
+                <span class="text-gray-500">MeLi: <strong class="text-red-600">{a['meli_stock']}</strong></span>
+                <span class="ml-2 text-gray-400">BM: 0</span>
+            </div>
+            <button onclick="closeItem('{a['item_id']}')"
+                    class="flex-shrink-0 bg-red-500 text-white px-2 py-1 rounded text-[10px] hover:bg-red-600">
+                Pausar
+            </button>
+        </div>"""
+    total = len(alerts)
+    extra = f" (y {total - 20} más)" if total > 20 else ""
+    last_str = f" — sync: {last_run[:16]}" if last_run else ""
+    html = f"""<div class="mb-4 bg-red-50 border border-red-300 rounded-lg px-4 py-3">
+    <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            <span class="font-semibold text-red-700 text-sm">
+                {total} item(s) en riesgo de sobreventa{extra}
+            </span>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-[10px] text-gray-400">{last_str}</span>
+            <button onclick="triggerStockSync()" id="btn-sync-now"
+                    class="text-xs text-red-600 hover:text-red-800 underline">Sync ahora</button>
+        </div>
+    </div>
+    <p class="text-xs text-red-600 mb-2">Items activos en MeLi con stock > 0 pero BM disponible = 0.
+        Riesgo de vender sin stock fisico.</p>
+    <div>{rows}</div>
+</div>
+<script>
+function triggerStockSync() {{
+    var btn = document.getElementById('btn-sync-now');
+    if(btn) {{ btn.textContent = 'Sincronizando...'; btn.style.pointerEvents = 'none'; }}
+    fetch('/api/sync/trigger', {{method:'POST'}}).then(function(r){{return r.json();}}).then(function(d){{
+        setTimeout(function(){{
+            htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
+        }}, 8000);
+    }}).catch(function(){{}});
+}}
+</script>"""
+    return HTMLResponse(html)
+
+
+@app.post("/api/sync/trigger")
+async def trigger_stock_sync():
+    """Dispara el stock sync manualmente para el usuario actual."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    user_id = client.user_id
+    asyncio.create_task(_run_stock_sync_for_user(user_id))
+    return {"status": "triggered", "user_id": user_id}
+
+
+@app.get("/api/sync/status")
+async def get_stock_sync_status():
+    """Retorna el estado del último sync y conteo de alertas."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    user_id = client.user_id
+    status = await token_store.get_sync_status(user_id)
+    alerts = await token_store.get_sync_alerts(user_id)
+    return {
+        "user_id": user_id,
+        "last_run": status.get("last_run") if status else None,
+        "last_result": status.get("last_result") if status else None,
+        "alerts_count": len(alerts),
+        "running": _stock_sync_running.get(user_id, False),
+    }
+
+
+@app.get("/api/sync/alerts-count")
+async def get_sync_alerts_count():
+    """Retorna solo el conteo de alertas (para badges)."""
+    client = await get_meli_client()
+    if not client:
+        return {"count": 0}
+    alerts = await token_store.get_sync_alerts(client.user_id)
+    return {"count": len(alerts)}
 
 
 if __name__ == "__main__":

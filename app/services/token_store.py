@@ -107,6 +107,34 @@ async def init_db():
                 executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: sync_alerts (alertas proactivas de sobreventa)
+        # Registra items con stock activo en MeLi pero BM disponible = 0
+        # Generado por el scheduler automático cada 4 horas
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sync_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                meli_stock INTEGER NOT NULL DEFAULT 0,
+                bm_avail INTEGER NOT NULL DEFAULT 0,
+                alert_type TEXT NOT NULL DEFAULT 'oversell',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, item_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sync_status (
+                user_id TEXT PRIMARY KEY,
+                last_run TIMESTAMP DEFAULT NULL,
+                last_result TEXT DEFAULT '',
+                alerts_count INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -415,3 +443,79 @@ async def get_all_accounts() -> dict:
         "meli": meli_accounts,
         "amazon": amazon_accounts,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SYNC ALERTS — Alertas proactivas de sobreventa
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def save_sync_alerts(user_id: str, alerts: list):
+    """Reemplaza las alertas actuales del user_id con la nueva lista.
+    alerts: lista de dicts con keys: item_id, title, sku, meli_stock, bm_avail, alert_type
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM sync_alerts WHERE user_id = ?", (user_id,))
+        for a in alerts:
+            await db.execute("""
+                INSERT OR REPLACE INTO sync_alerts
+                    (user_id, item_id, title, sku, meli_stock, bm_avail, alert_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                a.get("item_id", ""),
+                a.get("title", "")[:200],
+                a.get("sku", ""),
+                a.get("meli_stock", 0),
+                a.get("bm_avail", 0),
+                a.get("alert_type", "oversell"),
+            ))
+        await db.commit()
+
+
+async def get_sync_alerts(user_id: str) -> list:
+    """Retorna las alertas actuales para user_id."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sync_alerts WHERE user_id = ? ORDER BY meli_stock DESC",
+            (user_id,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_all_sync_alerts() -> list:
+    """Retorna todas las alertas de todos los usuarios."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sync_alerts ORDER BY user_id, meli_stock DESC"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def save_sync_status(user_id: str, alerts_count: int, result: str = "ok"):
+    """Actualiza el estado del último sync para user_id."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO sync_status (user_id, last_run, last_result, alerts_count, updated_at)
+            VALUES (?, datetime('now'), ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_run = excluded.last_run,
+                last_result = excluded.last_result,
+                alerts_count = excluded.alerts_count,
+                updated_at = excluded.updated_at
+        """, (user_id, result, alerts_count))
+        await db.commit()
+
+
+async def get_sync_status(user_id: str) -> Optional[dict]:
+    """Retorna el estado del último sync para user_id."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM sync_status WHERE user_id = ?", (user_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None

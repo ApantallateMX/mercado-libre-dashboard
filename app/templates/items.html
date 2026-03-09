@@ -9,6 +9,13 @@
     <p class="text-sm text-gray-600 hidden md:block">Inteligencia y optimizacion para alcanzar la meta de $500k/dia</p>
 </div>
 
+<!-- Alertas de sobreventa (cargadas async) -->
+<div id="sync-alerts-container"
+     hx-get="/api/sync/alerts"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+</div>
+
 <!-- Tabs (4) -->
 <div class="bg-white rounded-lg shadow mb-4 md:mb-6">
     <div class="flex border-b" id="product-tabs">
@@ -22,7 +29,7 @@
         </button>
         <button data-tab="stock" data-url="/partials/products-stock-issues"
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
-            Stock
+            Stock <span id="oversell-badge" class="hidden ml-1 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
         </button>
         <button data-tab="unpublished" data-url="/partials/products-not-published"
                 class="tab-btn flex-1 md:flex-none px-3 md:px-4 py-3 min-h-[44px] text-xs md:text-sm font-medium border-b-2 whitespace-nowrap border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 active:bg-gray-50">
@@ -205,6 +212,15 @@
         if (count > 0) {
             var b = document.getElementById('unpublished-badge');
             if (b) { b.textContent = count; b.classList.remove('hidden'); }
+        }
+    }).catch(function(){});
+
+    // Cargar conteo de alertas de sobreventa (badge rojo en tab Stock)
+    fetch('/api/sync/alerts-count').then(function(r){ return r.json(); }).then(function(d){
+        var n = d.count || 0;
+        if (n > 0) {
+            var b = document.getElementById('oversell-badge');
+            if (b) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
         }
     }).catch(function(){});
 
