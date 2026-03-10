@@ -1110,13 +1110,11 @@ async def get_amazon_client(seller_id: str = None) -> Optional[AmazonClient]:
 
 async def _seed_amazon_accounts():
     """
-    Siembra cuentas Amazon desde .env.production (prioridad) o variables de entorno.
+    Siembra cuentas Amazon desde variables de entorno de Railway al arrancar el servidor.
 
-    Lee directamente el archivo .env.production para que los tokens frescos
-    comprometidos en git siempre tengan prioridad sobre las env vars de Railway
-    (que pueden quedar obsoletas entre deploys).
+    Lee de app.config (os.getenv) que refleja las env vars de Railway — así cuando
+    el usuario actualiza AMAZON_REFRESH_TOKEN en Railway, el siguiente deploy lo usa.
     """
-    from pathlib import Path as _Path
     from app.config import (
         AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, AMAZON_SELLER_ID,
         AMAZON_REFRESH_TOKEN, AMAZON_MARKETPLACE_ID, AMAZON_MARKETPLACE_NAME,
@@ -1124,41 +1122,18 @@ async def _seed_amazon_accounts():
     )
     from app.services import token_store
 
-    # Leer .env.production directamente (igual que _seed_tokens para MeLi)
-    # para que los tokens frescos del archivo tengan prioridad sobre Railway env vars
-    file_vars: dict = {}
-    env_file = _Path(__file__).resolve().parent.parent.parent / ".env.production"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                file_vars[k.strip()] = v.strip()
-
-    def _get(key: str, default: str) -> str:
-        return file_vars.get(key) or default
-
-    seller_id  = _get("AMAZON_SELLER_ID",       AMAZON_SELLER_ID)
-    client_id  = _get("AMAZON_CLIENT_ID",        AMAZON_CLIENT_ID)
-    client_sec = _get("AMAZON_CLIENT_SECRET",    AMAZON_CLIENT_SECRET)
-    refresh_rt = _get("AMAZON_REFRESH_TOKEN",    AMAZON_REFRESH_TOKEN)
-    mkt_id     = _get("AMAZON_MARKETPLACE_ID",   AMAZON_MARKETPLACE_ID)
-    mkt_name   = _get("AMAZON_MARKETPLACE_NAME", AMAZON_MARKETPLACE_NAME)
-    app_sol_id = _get("AMAZON_APP_SOLUTION_ID",  AMAZON_APP_SOLUTION_ID)
-    nickname   = _get("AMAZON_NICKNAME",         AMAZON_NICKNAME) or "VECKTOR IMPORTS"
-
-    if not seller_id or not client_id:
-        logger.debug("[Amazon] No hay credenciales Amazon — skip seed")
+    if not AMAZON_SELLER_ID or not AMAZON_CLIENT_ID:
+        logger.debug("[Amazon] No hay credenciales Amazon en .env — skip seed")
         return
 
     await token_store.save_amazon_account(
-        seller_id=seller_id,
-        nickname=nickname,
-        client_id=client_id,
-        client_secret=client_sec,
-        refresh_token=refresh_rt,
-        marketplace_id=mkt_id,
-        marketplace_name=mkt_name,
-        app_solution_id=app_sol_id,
+        seller_id=AMAZON_SELLER_ID,
+        nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
+        client_id=AMAZON_CLIENT_ID,
+        client_secret=AMAZON_CLIENT_SECRET,
+        refresh_token=AMAZON_REFRESH_TOKEN,
+        marketplace_id=AMAZON_MARKETPLACE_ID,
+        marketplace_name=AMAZON_MARKETPLACE_NAME,
+        app_solution_id=AMAZON_APP_SOLUTION_ID,
     )
-    logger.info(f"[Amazon] Cuenta sembrada/actualizada: {seller_id} ({nickname})")
+    logger.info(f"[Amazon] Cuenta sembrada/actualizada: {AMAZON_SELLER_ID} ({AMAZON_NICKNAME})")
