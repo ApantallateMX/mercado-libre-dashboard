@@ -356,13 +356,47 @@ async def trigger_health_check():
 async def fix_meli_tokens():
     """Re-siembra los tokens MeLi desde .env.production — resuelve tokens expirados o corruptos."""
     try:
-        # Importar _seed_tokens desde main (función de siembra al arranque)
         from app.main import _seed_tokens
         asyncio.create_task(_seed_tokens())
         return {"status": "ok", "message": "Renovando tokens MeLi... verificando en 8 segundos"}
     except Exception as e:
         return {"status": "error", "message": f"Error: {str(e)[:100]}"}
-    return {"status": "triggered"}
+
+
+@router.post("/fix-amazon")
+async def fix_amazon_token():
+    """Re-siembra la cuenta Amazon desde .env.production y verifica el token contra LWA."""
+    try:
+        from app.services.amazon_client import _seed_amazon_accounts, get_amazon_client
+        from app.services import token_store
+
+        # 1. Leer token del archivo y guardar en DB
+        await _seed_amazon_accounts()
+
+        # 2. Intentar obtener access_token real para confirmar que funciona
+        accounts = await token_store.get_all_amazon_accounts()
+        if not accounts:
+            return {"status": "error", "message": "Sin cuentas Amazon — .env.production puede estar vacío"}
+
+        seller_id = accounts[0].get("seller_id", "")
+        client = await get_amazon_client(seller_id=seller_id)
+        if not client:
+            return {"status": "error", "message": "No se pudo crear cliente Amazon"}
+
+        # Forzar refresh del access_token (invalida caché para que use el token nuevo del DB)
+        client._access_token = None
+        client._token_expires_at = 0
+        await client._get_access_token()
+        token_prefix = (client._access_token or "")[:20]
+        return {
+            "status": "ok",
+            "message": f"Amazon token OK — acceso verificado ({seller_id}) | token: {token_prefix}...",
+        }
+    except Exception as e:
+        err = str(e)
+        if "expired" in err.lower() or "invalid" in err.lower() or "403" in err:
+            return {"status": "error", "message": f"Token inválido en .env.production: {err[:120]}"}
+        return {"status": "error", "message": f"Error: {err[:120]}"}
 
 
 _ICON = {
@@ -546,12 +580,20 @@ function fixStockSync() {{
 }}
 function fixAmazon() {{
     var msg = document.getElementById('health-action-msg');
-    if (msg) {{
-        msg.textContent = 'Redirigiendo a reconexion Amazon...';
-        msg.classList.remove('hidden');
-    }}
-    // Redirigir a la página de conexión OAuth de Amazon
-    setTimeout(function(){{ window.location.href = '/auth/amazon/connect'; }}, 800);
+    if (msg) {{ msg.textContent = 'Reconectando Amazon desde .env.production...'; msg.classList.remove('hidden'); }}
+    fetch('/api/system-health/fix-amazon', {{method:'POST'}})
+        .then(function(r){{ return r.json(); }})
+        .then(function(d){{
+            if (msg) msg.textContent = d.message || 'Proceso completado.';
+            if (d.status === 'ok') {{
+                setTimeout(function(){{
+                    fetch('/api/system-health/run', {{method:'POST'}})
+                        .then(function(){{ setTimeout(_healthReload, 7000); }});
+                }}, 1000);
+            }}
+        }}).catch(function(e){{
+            if (msg) msg.textContent = 'Error al reconectar Amazon: ' + e;
+        }});
 }}
 </script>
 """)

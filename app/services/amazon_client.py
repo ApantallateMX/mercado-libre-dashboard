@@ -1125,12 +1125,14 @@ async def _seed_amazon_accounts():
     # Leer .env.production directamente (igual que _seed_tokens para MeLi)
     file_vars: dict = {}
     env_file = _Path(__file__).resolve().parent.parent.parent / ".env.production"
+    logger.info(f"[Amazon seed] Buscando .env.production en: {env_file} | existe: {env_file.exists()}")
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if "=" in line and not line.startswith("#"):
                 k, _, v = line.partition("=")
                 file_vars[k.strip()] = v.strip()
+        logger.info(f"[Amazon seed] Variables leídas del archivo: {list(file_vars.keys())}")
 
     # Archivo tiene prioridad; fallback a config (Railway env vars)
     def _g(key, default=""):
@@ -1144,6 +1146,9 @@ async def _seed_amazon_accounts():
     mkt_name   = _g("AMAZON_MARKETPLACE_NAME", AMAZON_MARKETPLACE_NAME)
     app_sol_id = _g("AMAZON_APP_SOLUTION_ID",  AMAZON_APP_SOLUTION_ID)
     nickname   = _g("AMAZON_NICKNAME",         AMAZON_NICKNAME) or "VECKTOR IMPORTS"
+
+    rt_preview = (refresh_rt or "")[:30] + "..." if refresh_rt else "VACIO"
+    logger.info(f"[Amazon seed] seller={seller_id} | client_id={client_id[:20] if client_id else 'VACIO'}... | token={rt_preview}")
 
     if not seller_id or not client_id or not refresh_rt:
         logger.warning("[Amazon] Credenciales Amazon incompletas — skip seed")
