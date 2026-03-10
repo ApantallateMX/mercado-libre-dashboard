@@ -16,10 +16,10 @@
         Conecta tu cuenta de Amazon Seller para ver tus ventas, órdenes y métricas
         directamente en este dashboard.
     </p>
-    <a href="/auth/amazon/connect"
+    <button onclick="fixAmazonToken(this)"
        class="bg-orange-500 hover:bg-orange-600 text-white font-semibold px-6 py-3 rounded-xl transition text-sm">
         Conectar cuenta Amazon
-    </a>
+    </button>
 </div>
 
 {% else %}
@@ -254,10 +254,10 @@ function _amzErrorBanner(msg) {
             'd="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>' +
             'Token Amazon expirado — reconexion requerida</div>' +
             '<p class="text-xs text-gray-500 text-center max-w-md">' + msg + '</p>' +
-            '<a href="/auth/amazon/connect" ' +
+            '<button onclick="fixAmazonToken(this)" ' +
             'class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-5 py-2.5 rounded-lg text-sm transition">' +
-            'Reconectar Amazon ahora →</a>' +
-            '<p class="text-[10px] text-gray-400">Se te pedira autorizar la app en Amazon Seller Central</p>' +
+            'Reconectar Amazon ahora →</button>' +
+            '<p class="text-[10px] text-gray-400" id="amazon-fix-msg">Presiona para reconectar usando credenciales guardadas</p>' +
             '</div>';
     }
     return '<div class="col-span-4 text-center py-4">' +
@@ -688,6 +688,26 @@ if (amzActiveTab === 'salud') {
     amzTabLoaded.salud = true;
 } else {
     loadAmazonDashboard();
+}
+
+function fixAmazonToken(btn) {
+    if (btn) { btn.textContent = 'Reconectando...'; btn.disabled = true; }
+    var msgEl = document.getElementById('amazon-fix-msg');
+    if (msgEl) msgEl.textContent = 'Verificando credenciales...';
+    fetch('/api/system-health/fix-amazon', {method:'POST'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.status === 'ok') {
+                if (msgEl) msgEl.textContent = d.message || 'Token OK — recargando...';
+                setTimeout(function(){ window.location.reload(); }, 1500);
+            } else {
+                if (msgEl) msgEl.textContent = 'Error: ' + (d.message || 'desconocido');
+                if (btn) { btn.textContent = 'Reintentar'; btn.disabled = false; }
+            }
+        }).catch(function(e){
+            if (msgEl) msgEl.textContent = 'Error de red: ' + e;
+            if (btn) { btn.textContent = 'Reintentar'; btn.disabled = false; }
+        });
 }
 </script>
 {% endif %}
