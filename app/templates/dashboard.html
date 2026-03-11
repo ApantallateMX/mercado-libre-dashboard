@@ -591,7 +591,8 @@ function loadBalance() {
         .then(function(d) {
             var ml = d.mercadolibre || {};
             if (ml.error) {
-                document.getElementById('meli-balance-val').textContent = 'Error: ' + ml.error;
+                document.getElementById('meli-balance-val').textContent =
+                    ml.error === 'sin_permisos' ? 'Sin permisos MP' : 'No disponible';
                 return;
             }
             var avail = ml.available_balance;

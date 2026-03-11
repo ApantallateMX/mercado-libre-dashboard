@@ -1361,10 +1361,21 @@ class MeliClient:
         Endpoint: GET /users/{user_id}/mercadopago_account/balance
         Retorna: available_balance, unavailable_balance, currency_id
         """
-        try:
-            return await self.get(f"/users/{self.user_id}/mercadopago_account/balance")
-        except Exception as e:
-            return {"error": str(e)}
+        # Intentar primero el endpoint de balance directo
+        for endpoint in [
+            f"/users/{self.user_id}/mercadopago_account/balance",
+            f"/v1/users/{self.user_id}/mercadopago_account/balance",
+        ]:
+            try:
+                data = await self.get(endpoint)
+                if data and ("available_balance" in data or "total" in data):
+                    return data
+            except MeliApiError as e:
+                if e.status_code != 403:
+                    return {"error": str(e)}
+            except Exception as e:
+                return {"error": str(e)}
+        return {"error": "sin_permisos"}
 
     async def validate_item(self, payload: dict) -> dict:
         """Valida un item sin publicarlo (POST /items/validate).
