@@ -70,6 +70,20 @@
     </div>
 </div>
 
+<!-- ═══ SALDO EN MERCADO PAGO ═══ -->
+<div id="balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
+    <div class="flex items-center gap-2">
+        <span class="text-lg">💳</span>
+        <span class="text-sm font-semibold text-gray-700">Saldo Mercado Pago:</span>
+        <span id="meli-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
+    </div>
+    <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-400">No disponible:</span>
+        <span id="meli-balance-unavail" class="text-xs text-gray-500">—</span>
+    </div>
+    <button onclick="loadBalance()" class="ml-auto text-xs text-yellow-600 hover:underline">↺ Actualizar</button>
+</div>
+
 <!-- ═══ MÉTRICAS PRINCIPALES ═══ -->
 <div id="metrics-cards" class="mb-5">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -568,8 +582,34 @@ document.getElementById('btn-dash-limpiar').addEventListener('click', function()
     loadDashboard();
 });
 
+// ─── Balance Mercado Pago ─────────────────────────────────────────────────────
+function loadBalance() {
+    document.getElementById('meli-balance-val').textContent = 'Cargando…';
+    document.getElementById('meli-balance-unavail').textContent = '—';
+    fetch('/api/metrics/account-balance')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var ml = d.mercadolibre || {};
+            if (ml.error) {
+                document.getElementById('meli-balance-val').textContent = 'Error: ' + ml.error;
+                return;
+            }
+            var avail = ml.available_balance;
+            var unavail = ml.unavailable_balance;
+            var currency = ml.currency_id || 'MXN';
+            document.getElementById('meli-balance-val').textContent =
+                avail != null ? '$' + fmtMoney(avail) + ' ' + currency : '—';
+            document.getElementById('meli-balance-unavail').textContent =
+                unavail != null ? '$' + fmtMoney(unavail) + ' ' + currency : '—';
+        })
+        .catch(function(e) {
+            document.getElementById('meli-balance-val').textContent = 'Error al cargar';
+        });
+}
+
 // ─── Carga inicial ────────────────────────────────────────────────────────────
 highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
 loadDashboard();
+loadBalance();
 </script>
 {% endblock %}

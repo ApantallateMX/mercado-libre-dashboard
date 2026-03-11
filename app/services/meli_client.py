@@ -1353,6 +1353,19 @@ class MeliClient:
         except Exception:
             return []
 
+    # === Account Balance ===
+
+    async def get_account_balance(self) -> dict:
+        """Obtiene el balance disponible en la cuenta de Mercado Pago del vendedor.
+
+        Endpoint: GET /users/{user_id}/mercadopago_account/balance
+        Retorna: available_balance, unavailable_balance, currency_id
+        """
+        try:
+            return await self.get(f"/users/{self.user_id}/mercadopago_account/balance")
+        except Exception as e:
+            return {"error": str(e)}
+
     async def validate_item(self, payload: dict) -> dict:
         """Valida un item sin publicarlo (POST /items/validate).
 

@@ -105,6 +105,16 @@
     </div>
 </div>
 
+<!-- ─── Fondos pendientes Amazon ──────────────────────────────────────── -->
+<div id="amz-balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
+    <div class="flex items-center gap-2">
+        <span class="text-lg">💳</span>
+        <span class="text-sm font-semibold text-gray-700">Fondos pendientes Amazon (30d):</span>
+        <span id="amz-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
+    </div>
+    <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
+</div>
+
 <!-- ─── Métricas principales ──────────────────────────────────────────── -->
 <div id="amz-metric-cards" class="mb-5">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -680,6 +690,29 @@ document.getElementById('btn-amz-limpiar').addEventListener('click', function() 
     loadAmazonDashboard();
 });
 
+// ─── Balance Amazon ────────────────────────────────────────────────────────────
+function loadAmzBalance() {
+    var el = document.getElementById('amz-balance-val');
+    if (!el) return;
+    el.textContent = 'Cargando…';
+    fetch('/api/metrics/account-balance')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var amz = d.amazon || {};
+            if (amz.error) {
+                el.textContent = 'No disponible';
+                el.title = amz.error;
+                return;
+            }
+            var pending = amz.pending_amount;
+            var currency = amz.currency || 'MXN';
+            el.textContent = pending != null
+                ? '$' + pending.toLocaleString('es-MX', {minimumFractionDigits:2,maximumFractionDigits:2}) + ' ' + currency
+                : '—';
+        })
+        .catch(function() { el.textContent = 'Error al cargar'; });
+}
+
 // ─── Carga inicial ─────────────────────────────────────────────────────────────
 setRange(30);
 highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
@@ -689,6 +722,7 @@ if (amzActiveTab === 'salud') {
 } else {
     loadAmazonDashboard();
 }
+loadAmzBalance();
 
 function fixAmazonToken(btn) {
     if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }

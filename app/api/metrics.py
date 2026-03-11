@@ -1007,3 +1007,39 @@ async def get_amazon_health_data():
         "nickname": client.nickname,
         "marketplace": client.marketplace_name,
     }
+
+
+@router.get("/account-balance")
+async def get_account_balance():
+    """Obtiene el balance disponible en Mercado Pago y fondos pendientes en Amazon."""
+    meli_task = asyncio.create_task(_get_meli_balance())
+    amazon_task = asyncio.create_task(_get_amazon_balance())
+    meli_result, amazon_result = await asyncio.gather(meli_task, amazon_task, return_exceptions=True)
+
+    if isinstance(meli_result, Exception):
+        meli_result = {"error": str(meli_result)}
+    if isinstance(amazon_result, Exception):
+        amazon_result = {"error": str(amazon_result)}
+
+    return {
+        "mercadolibre": meli_result,
+        "amazon": amazon_result,
+    }
+
+
+async def _get_meli_balance() -> dict:
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No autenticado en Mercado Libre"}
+    try:
+        balance = await client.get_account_balance()
+        return balance
+    finally:
+        await client.close()
+
+
+async def _get_amazon_balance() -> dict:
+    client = await get_amazon_client()
+    if not client:
+        return {"error": "No autenticado en Amazon"}
+    return await client.get_account_balance()

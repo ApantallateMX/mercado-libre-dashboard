@@ -1020,6 +1020,66 @@ class AmazonClient:
 
         return result.get("payload", [])
 
+    # ─────────────────────────────────────────────────────────────────────
+    # FINANZAS — BALANCE DE CUENTA
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def get_account_balance(self) -> dict:
+        """
+        Obtiene los fondos pendientes de disbursement de Amazon.
+
+        Usa la Finances API v0 para obtener eventos financieros recientes
+        y calcular el balance estimado pendiente de pago.
+
+        Returns:
+            Dict con:
+              - pending_amount: monto estimado pendiente (suma de ShipmentEvents)
+              - currency: moneda (MXN, USD, etc.)
+              - error: mensaje si falla (opcional)
+        """
+        try:
+            # Obtener eventos financieros del último período activo (30 días)
+            posted_after = (datetime.utcnow() - timedelta(days=30)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            result = await self._request(
+                "GET",
+                "/finances/v0/financialEvents",
+                params={
+                    "PostedAfter": posted_after,
+                    "MaxResultsPerPage": 100,
+                },
+            )
+            payload = result.get("payload", {}).get("FinancialEvents", {})
+
+            # Sumar ShipmentEvents (ventas) — principal fuente de ingresos
+            total = 0.0
+            currency = "MXN"
+            for event in payload.get("ShipmentEventList", []):
+                for item in event.get("ShipmentItemList", []):
+                    for charge in item.get("ItemChargeList", []):
+                        amt = charge.get("ChargeAmount", {})
+                        amount = float(amt.get("CurrencyAmount", 0) or 0)
+                        total += amount
+                        if amt.get("CurrencyCode"):
+                            currency = amt["CurrencyCode"]
+                    # Restar fees
+                    for fee in item.get("ItemFeeList", []):
+                        amt = fee.get("FeeAmount", {})
+                        total -= abs(float(amt.get("CurrencyAmount", 0) or 0))
+                    # Restar promociones/descuentos del vendedor
+                    for promo in item.get("PromotionList", []):
+                        amt = promo.get("PromotionAmount", {})
+                        total -= abs(float(amt.get("CurrencyAmount", 0) or 0))
+
+            return {
+                "pending_amount": round(total, 2),
+                "currency": currency,
+                "source": "finances_api_30d",
+            }
+        except Exception as e:
+            return {"pending_amount": None, "currency": "MXN", "error": str(e)}
+
     async def fetch_orders_range(
         self,
         date_from: str,
