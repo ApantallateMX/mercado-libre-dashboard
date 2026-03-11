@@ -418,11 +418,13 @@ async def amazon_callback(
     logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id}")
 
     # ── Guardar en DB ────────────────────────────────────────────────────
+    # IMPORTANTE: usar _client_id/_client_secret (leídos de .env.production)
+    # no AMAZON_CLIENT_ID/SECRET (os.getenv que puede tener valores viejos de Railway)
     await token_store.save_amazon_account(
         seller_id=effective_seller_id,
         nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
-        client_id=AMAZON_CLIENT_ID,
-        client_secret=AMAZON_CLIENT_SECRET,
+        client_id=_client_id,
+        client_secret=_client_secret,
         refresh_token=refresh_token,
         marketplace_id=AMAZON_MARKETPLACE_ID,
         marketplace_name=AMAZON_MARKETPLACE_NAME,
