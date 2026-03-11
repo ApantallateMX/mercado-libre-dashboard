@@ -371,17 +371,31 @@ async def amazon_callback(
             detail="No se pudo determinar el Seller ID. Configurar AMAZON_SELLER_ID en .env"
         )
 
+    # ── Leer credenciales desde .env.production (prioridad sobre Railway vars) ──
+    from pathlib import Path as _Path
+    _file_vars: dict = {}
+    _env_file = _Path(__file__).resolve().parent.parent / ".env.production"
+    if _env_file.exists():
+        for _line in _env_file.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if "=" in _line and not _line.startswith("#"):
+                _k, _, _v = _line.partition("=")
+                _file_vars[_k.strip()] = _v.strip()
+
+    _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
+    _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
+    _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
+
     # ── Intercambiar código por tokens ──────────────────────────────────
-    # Amazon LWA token endpoint (igual para todos los marketplaces)
     async with httpx.AsyncClient(timeout=15) as http:
         token_resp = await http.post(
             "https://api.amazon.com/auth/o2/token",
             data={
                 "grant_type": "authorization_code",
                 "code": spapi_oauth_code,
-                "redirect_uri": AMAZON_REDIRECT_URI,
-                "client_id": AMAZON_CLIENT_ID,
-                "client_secret": AMAZON_CLIENT_SECRET,
+                "redirect_uri": _redirect_uri,
+                "client_id": _client_id,
+                "client_secret": _client_secret,
             },
         )
 
