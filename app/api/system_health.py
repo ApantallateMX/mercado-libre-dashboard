@@ -449,6 +449,39 @@ _OVERALL_COLOR = {
 }
 
 
+@router.get("/amazon-debug")
+async def amazon_debug():
+    """Debug: muestra qué credenciales está usando la app."""
+    from pathlib import Path
+    import os
+    env_file = Path(__file__).resolve().parent.parent.parent / ".env.production"
+    file_vars = {}
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                file_vars[k.strip()] = v.strip()
+    from app.services import token_store
+    accounts = await token_store.get_all_amazon_accounts()
+    account = None
+    if accounts:
+        account = await token_store.get_amazon_account(accounts[0]["seller_id"])
+    return {
+        "env_file_exists": env_file.exists(),
+        "env_file_path": str(env_file),
+        "file_client_id_prefix": file_vars.get("AMAZON_CLIENT_ID", "")[:20],
+        "file_client_secret_prefix": file_vars.get("AMAZON_CLIENT_SECRET", "")[:25],
+        "file_refresh_token_prefix": file_vars.get("AMAZON_REFRESH_TOKEN", "")[:25],
+        "os_client_id_prefix": os.getenv("AMAZON_CLIENT_ID", "")[:20],
+        "os_client_secret_prefix": os.getenv("AMAZON_CLIENT_SECRET", "")[:25],
+        "db_accounts_count": len(accounts),
+        "db_client_id_prefix": (account or {}).get("client_id", "")[:20],
+        "db_client_secret_prefix": (account or {}).get("client_secret", "")[:25],
+        "db_refresh_token_prefix": (account or {}).get("refresh_token", "")[:25],
+    }
+
+
 @router.get("/widget", response_class=HTMLResponse)
 async def health_widget():
     """HTML widget para insertar en el dashboard."""
