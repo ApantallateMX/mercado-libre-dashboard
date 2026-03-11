@@ -312,10 +312,11 @@ async def amazon_connect():
 
     state = _build_amazon_state()
 
-    # URL de Seller Central México para autorizar la app
-    # version=beta es requerido para apps en estado Draft (no publicadas)
+    # SP-API región NA — la autorización va por sellercentral.amazon.com (US/NA)
+    # aunque el marketplace sea MX. Usar .com.mx causa error MD9100.
+    # version=beta requerido para apps en estado Draft.
     auth_url = (
-        f"https://sellercentral.amazon.com.mx/apps/authorize/consent"
+        f"https://sellercentral.amazon.com/apps/authorize/consent"
         f"?application_id={AMAZON_APP_SOLUTION_ID}"
         f"&state={state}"
         f"&version=beta"
