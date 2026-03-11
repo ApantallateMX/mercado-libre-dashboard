@@ -365,38 +365,41 @@ async def fix_meli_tokens():
 
 @router.post("/fix-amazon")
 async def fix_amazon_token():
-    """Re-siembra la cuenta Amazon desde .env.production y verifica el token contra LWA."""
+    """Re-siembra y verifica Amazon contra SP-API real. Si la autorización expiró, indica OAuth."""
     try:
         from app.services.amazon_client import _seed_amazon_accounts, get_amazon_client
         from app.services import token_store
 
-        # 1. Leer token del archivo y guardar en DB
         await _seed_amazon_accounts()
 
-        # 2. Intentar obtener access_token real para confirmar que funciona
         accounts = await token_store.get_all_amazon_accounts()
         if not accounts:
-            return {"status": "error", "message": "Sin cuentas Amazon — .env.production puede estar vacío"}
+            return {"status": "reauth", "message": "Sin cuentas Amazon — se requiere autorización"}
 
         seller_id = accounts[0].get("seller_id", "")
         client = await get_amazon_client(seller_id=seller_id)
         if not client:
-            return {"status": "error", "message": "No se pudo crear cliente Amazon"}
+            return {"status": "reauth", "message": "No se pudo crear cliente Amazon"}
 
-        # Forzar refresh del access_token (invalida caché para que use el token nuevo del DB)
-        client._access_token = None
-        client._token_expires_at = 0
-        await client._get_access_token()
-        token_prefix = (client._access_token or "")[:20]
-        return {
-            "status": "ok",
-            "message": f"Amazon token OK — acceso verificado ({seller_id}) | token: {token_prefix}...",
-        }
+        # Verificar con llamada REAL a SP-API (no solo LWA)
+        try:
+            from datetime import datetime, timedelta
+            date_from = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_to = datetime.utcnow().strftime("%Y-%m-%d")
+            await client.get_order_metrics(
+                date_from=date_from,
+                date_to_exclusive=date_to,
+                granularity="Day",
+            )
+            return {"status": "ok", "message": f"Amazon SP-API OK — autorización activa ({seller_id})"}
+        except Exception as sp_err:
+            err = str(sp_err)
+            if "403" in err or "expired" in err.lower() or "Unauthorized" in err:
+                # Autorización SP-API expirada — necesita re-autorizarse via OAuth
+                return {"status": "reauth", "message": "Autorización SP-API expirada — re-autoriza la app"}
+            return {"status": "error", "message": f"SP-API error: {err[:120]}"}
     except Exception as e:
-        err = str(e)
-        if "expired" in err.lower() or "invalid" in err.lower() or "403" in err:
-            return {"status": "error", "message": f"Token inválido en .env.production: {err[:120]}"}
-        return {"status": "error", "message": f"Error: {err[:120]}"}
+        return {"status": "error", "message": f"Error: {str(e)[:120]}"}
 
 
 _ICON = {
@@ -580,19 +583,24 @@ function fixStockSync() {{
 }}
 function fixAmazon() {{
     var msg = document.getElementById('health-action-msg');
-    if (msg) {{ msg.textContent = 'Reconectando Amazon desde .env.production...'; msg.classList.remove('hidden'); }}
+    if (msg) {{ msg.textContent = 'Verificando Amazon...'; msg.classList.remove('hidden'); }}
     fetch('/api/system-health/fix-amazon', {{method:'POST'}})
         .then(function(r){{ return r.json(); }})
         .then(function(d){{
-            if (msg) msg.textContent = d.message || 'Proceso completado.';
             if (d.status === 'ok') {{
+                if (msg) msg.textContent = d.message || 'Amazon OK — recargando...';
                 setTimeout(function(){{
                     fetch('/api/system-health/run', {{method:'POST'}})
                         .then(function(){{ setTimeout(_healthReload, 7000); }});
                 }}, 1000);
+            }} else if (d.status === 'reauth') {{
+                if (msg) msg.textContent = 'Redirigiendo a autorización Amazon...';
+                setTimeout(function(){{ window.location.href = '/auth/amazon/connect'; }}, 800);
+            }} else {{
+                if (msg) msg.textContent = 'Error: ' + (d.message || 'desconocido');
             }}
         }}).catch(function(e){{
-            if (msg) msg.textContent = 'Error al reconectar Amazon: ' + e;
+            if (msg) msg.textContent = 'Error: ' + e;
         }});
 }}
 </script>

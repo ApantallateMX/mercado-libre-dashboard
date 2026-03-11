@@ -691,15 +691,18 @@ if (amzActiveTab === 'salud') {
 }
 
 function fixAmazonToken(btn) {
-    if (btn) { btn.textContent = 'Reconectando...'; btn.disabled = true; }
+    if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }
     var msgEl = document.getElementById('amazon-fix-msg');
-    if (msgEl) msgEl.textContent = 'Verificando credenciales...';
+    if (msgEl) msgEl.textContent = 'Verificando autorización SP-API...';
     fetch('/api/system-health/fix-amazon', {method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(d){
             if (d.status === 'ok') {
-                if (msgEl) msgEl.textContent = d.message || 'Token OK — recargando...';
+                if (msgEl) msgEl.textContent = d.message || 'OK — recargando...';
                 setTimeout(function(){ window.location.reload(); }, 1500);
+            } else if (d.status === 'reauth') {
+                if (msgEl) msgEl.textContent = 'Abriendo autorización Amazon...';
+                setTimeout(function(){ window.location.href = '/auth/amazon/connect'; }, 800);
             } else {
                 if (msgEl) msgEl.textContent = 'Error: ' + (d.message || 'desconocido');
                 if (btn) { btn.textContent = 'Reintentar'; btn.disabled = false; }
