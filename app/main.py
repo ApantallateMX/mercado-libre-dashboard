@@ -183,19 +183,31 @@ def _parse_env_slots(env_vars: dict) -> list:
 
 
 async def _seed_tokens():
-    """Auto-recover MeLi tokens. Re-lee .env.production desde disco para detectar
-    credenciales escritas por auth.py o _do_refresh_token() en el mismo container.
-    Soporta N cuentas dinámicamente (cuenta1, cuenta2, cuenta3, ...)."""
+    """Auto-recover MeLi tokens. Lee Railway env vars primero, luego .env.production
+    como fallback. Soporta N cuentas dinámicamente (cuenta1, cuenta2, cuenta3, ...)."""
+    import os as _os
     from pathlib import Path as _Path
 
-    env_vars = {}
+    # Leer .env.production como fallback (puede no existir en Railway)
+    file_vars = {}
     env_file = _Path(__file__).resolve().parent.parent / ".env.production"
     if env_file.exists():
         for line in env_file.read_text(encoding='utf-8').splitlines():
             line = line.strip()
             if '=' in line and not line.startswith('#'):
                 k, _, v = line.partition('=')
-                env_vars[k.strip()] = v.strip()
+                file_vars[k.strip()] = v.strip()
+
+    # Railway env vars tienen prioridad sobre el archivo
+    env_vars = {**file_vars}
+    for key in ("MELI_USER_ID", "MELI_REFRESH_TOKEN",
+                "MELI_USER_ID_2", "MELI_REFRESH_TOKEN_2",
+                "MELI_USER_ID_3", "MELI_REFRESH_TOKEN_3",
+                "MELI_USER_ID_4", "MELI_REFRESH_TOKEN_4",
+                "MELI_USER_ID_5", "MELI_REFRESH_TOKEN_5"):
+        val = _os.getenv(key)
+        if val:
+            env_vars[key] = val
 
     for uid, rt, label in _parse_env_slots(env_vars):
         existing = await token_store.get_tokens(uid)
@@ -6806,7 +6818,7 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="ventas"))
     if active_amazon_id:
         amazon_account = await token_store.get_amazon_account(active_amazon_id)
 
-    active_tab = tab if tab in ("ventas", "salud") else "ventas"
+    active_tab = tab if tab in ("ventas", "salud", "operaciones", "finanzas") else "ventas"
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = active_tab
@@ -6815,20 +6827,7 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="ventas"))
 
 @app.get("/amazon/products", response_class=HTMLResponse)
 async def amazon_products_page(request: Request):
-    """
-    Centro de Productos Amazon — catálogo, FBA inventory, Buy Box y sugerencias.
-    Usa tabs con carga lazy via JS fetch a los endpoints /api/amazon/products/*.
-    """
-    user = await get_current_user()
-    ctx = await _accounts_ctx(request)
-    active_amazon_id = ctx.get("active_amazon_id")
-    amazon_account = None
-    if active_amazon_id:
-        amazon_account = await token_store.get_amazon_account(active_amazon_id)
-    ctx["amazon_account"] = amazon_account
-    ctx["active_platform"] = "amazon"
-    ctx["active_amazon_tab"] = "products"
-    return templates.TemplateResponse("amazon_products.html", {"request": request, "user": user, **ctx})
+    return RedirectResponse(url="/amazon?tab=operaciones", status_code=302)
 
 
 @app.get("/amazon/orders", response_class=HTMLResponse)
