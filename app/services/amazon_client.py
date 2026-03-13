@@ -1194,9 +1194,10 @@ async def _seed_amazon_accounts():
                 file_vars[k.strip()] = v.strip()
         logger.info(f"[Amazon seed] Variables leídas del archivo: {list(file_vars.keys())}")
 
-    # Archivo tiene prioridad; fallback a config (Railway env vars)
+    # Railway env vars tienen prioridad; fallback a archivo .env.production
     def _g(key, default=""):
-        return file_vars.get(key) or default
+        import os as _os
+        return _os.getenv(key) or file_vars.get(key) or default
 
     seller_id  = _g("AMAZON_SELLER_ID",       AMAZON_SELLER_ID)
     client_id  = _g("AMAZON_CLIENT_ID",        AMAZON_CLIENT_ID)
