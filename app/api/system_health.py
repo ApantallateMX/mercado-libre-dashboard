@@ -446,6 +446,35 @@ _OVERALL_COLOR = {
 }
 
 
+@router.get("/amazon-token-full")
+async def amazon_token_full(pin: str = ""):
+    """Devuelve el refresh_token completo (protegido por PIN). Usar una sola vez para copiar a Railway."""
+    from app.config import APP_PIN
+    if not pin or pin != APP_PIN:
+        return {"error": "PIN requerido. Agregar ?pin=XXXX a la URL"}
+    from pathlib import Path as _P
+    from app.services import token_store
+    accounts = await token_store.get_all_amazon_accounts()
+    account = None
+    if accounts:
+        account = await token_store.get_amazon_account(accounts[0]["seller_id"])
+    env_file = _P(__file__).resolve().parent.parent.parent / ".env.production"
+    file_token = ""
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("AMAZON_REFRESH_TOKEN="):
+                file_token = line.split("=", 1)[1]
+                break
+    db_token = (account or {}).get("refresh_token", "")
+    return {
+        "db_refresh_token": db_token,
+        "file_refresh_token": file_token,
+        "tokens_match": db_token == file_token,
+        "instrucciones": "Copia 'db_refresh_token' y actualiza AMAZON_REFRESH_TOKEN en Railway env vars",
+    }
+
+
 @router.get("/amazon-debug")
 async def amazon_debug():
     """Debug: muestra qué credenciales está usando la app."""
