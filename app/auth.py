@@ -458,6 +458,43 @@ async def amazon_callback(
             except Exception as e:
                 logger.warning(f"[Amazon OAuth] No se pudo actualizar {env_file}: {e}")
 
+    # ── Intentar actualizar Railway env var via API (si está configurado) ──
+    # Railway env vars persisten entre deploys — es la única forma de sobrevivir redeployes.
+    # Requiere RAILWAY_API_TOKEN + RAILWAY_SERVICE_ID configurados como env vars.
+    if refresh_token:
+        import os as _os2
+        _railway_token   = _os2.getenv("RAILWAY_API_TOKEN", "")
+        _railway_svc_id  = _os2.getenv("RAILWAY_SERVICE_ID", "")
+        _railway_env_id  = _os2.getenv("RAILWAY_ENVIRONMENT_ID", "")
+        if _railway_token and _railway_svc_id:
+            try:
+                _mutation = """
+                mutation UpsertVariable($input: VariableUpsertInput!) {
+                    variableUpsert(input: $input)
+                }
+                """
+                _vars = {
+                    "input": {
+                        "serviceId": _railway_svc_id,
+                        "environmentId": _railway_env_id,
+                        "name": "AMAZON_REFRESH_TOKEN",
+                        "value": refresh_token,
+                    }
+                }
+                async with httpx.AsyncClient(timeout=10) as _h:
+                    _r = await _h.post(
+                        "https://backboard.railway.app/graphql/v2",
+                        json={"query": _mutation, "variables": _vars},
+                        headers={"Authorization": f"Bearer {_railway_token}",
+                                 "Content-Type": "application/json"},
+                    )
+                if _r.status_code == 200:
+                    logger.info("[Amazon OAuth] AMAZON_REFRESH_TOKEN actualizado en Railway env vars via API")
+                else:
+                    logger.warning(f"[Amazon OAuth] Railway API respondió {_r.status_code}: {_r.text[:200]}")
+            except Exception as _re_err:
+                logger.warning(f"[Amazon OAuth] No se pudo actualizar Railway env var: {_re_err}")
+
     # ── Redirigir al dashboard Amazon ───────────────────────────────────
     # Seteamos la cookie active_amazon_id para que el dashboard Amazon
     # quede seleccionado automáticamente tras la re-autorización.
