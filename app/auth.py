@@ -548,6 +548,45 @@ async def amazon_manual_token(request: Request):
     })
 
 
+@router.get("/amazon/export-token")
+async def amazon_export_token(pin: str = ""):
+    """
+    Devuelve el refresh_token completo (protegido por PIN).
+    Accesible sin sesión — solo requiere ?pin=APP_PIN.
+    Usar una sola vez para copiar el token a Railway env vars.
+    """
+    from fastapi.responses import JSONResponse
+    from app.config import APP_PIN
+    from pathlib import Path as _P
+
+    if not pin or pin != APP_PIN:
+        return JSONResponse({"error": "PIN requerido. Agregar ?pin=XXXX a la URL"}, status_code=401)
+
+    # Leer token del archivo
+    file_token = ""
+    env_file = _P(__file__).resolve().parent.parent / ".env.production"
+    if env_file.exists():
+        for _line in env_file.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if _line.startswith("AMAZON_REFRESH_TOKEN="):
+                file_token = _line.split("=", 1)[1]
+                break
+
+    # Leer token de DB
+    accounts = await token_store.get_all_amazon_accounts()
+    db_token = ""
+    if accounts:
+        account = await token_store.get_amazon_account(accounts[0]["seller_id"])
+        db_token = (account or {}).get("refresh_token", "")
+
+    return JSONResponse({
+        "db_refresh_token": db_token,
+        "file_refresh_token": file_token,
+        "tokens_match": db_token == file_token,
+        "nota": "Copia 'db_refresh_token' y actualiza AMAZON_REFRESH_TOKEN en Railway env vars",
+    })
+
+
 @router.post("/amazon/disconnect")
 async def amazon_disconnect(request: Request):
     """
