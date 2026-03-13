@@ -466,6 +466,88 @@ async def amazon_callback(
     return response
 
 
+@router.post("/amazon/manual-token")
+async def amazon_manual_token(request: Request):
+    """
+    Guarda un refresh_token de Amazon ingresado manualmente.
+
+    Útil cuando el OAuth automático falla o para self-authorization:
+    Seller Central → Apps y Servicios → Desarrollar apps → Autorizar app → copiar token
+    """
+    from fastapi.responses import JSONResponse
+    import re as _re
+    import os as _os
+    from pathlib import Path as _Path
+
+    form = await request.form()
+    refresh_token = (form.get("refresh_token") or "").strip()
+
+    if not refresh_token:
+        return JSONResponse({"status": "error", "message": "Token vacío"})
+    if not refresh_token.startswith("Atzr|"):
+        return JSONResponse({"status": "error", "message": "Token inválido — debe comenzar con 'Atzr|'"})
+    if len(refresh_token) < 100:
+        return JSONResponse({"status": "error", "message": "Token demasiado corto — copia el token completo"})
+
+    # Leer credenciales actuales del archivo
+    _file_vars: dict = {}
+    _env_file = _Path(__file__).resolve().parent.parent / ".env.production"
+    if _env_file.exists():
+        for _line in _env_file.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if "=" in _line and not _line.startswith("#"):
+                _k, _, _v = _line.partition("=")
+                _file_vars[_k.strip()] = _v.strip()
+
+    _client_id      = _file_vars.get("AMAZON_CLIENT_ID")      or AMAZON_CLIENT_ID
+    _client_secret  = _file_vars.get("AMAZON_CLIENT_SECRET")  or AMAZON_CLIENT_SECRET
+    _marketplace_id = _file_vars.get("AMAZON_MARKETPLACE_ID") or AMAZON_MARKETPLACE_ID
+    _mkt_name       = _file_vars.get("AMAZON_MARKETPLACE_NAME") or AMAZON_MARKETPLACE_NAME
+    _nickname       = _file_vars.get("AMAZON_NICKNAME") or AMAZON_NICKNAME or "VECKTOR IMPORTS"
+    _app_sol        = _file_vars.get("AMAZON_APP_SOLUTION_ID") or AMAZON_APP_SOLUTION_ID
+
+    # Determinar seller_id
+    accounts = await token_store.get_all_amazon_accounts()
+    _seller_id = accounts[0]["seller_id"] if accounts else (_file_vars.get("AMAZON_SELLER_ID") or AMAZON_SELLER_ID)
+    if not _seller_id:
+        return JSONResponse({"status": "error", "message": "No hay AMAZON_SELLER_ID configurado"})
+
+    # Guardar en DB (efecto inmediato)
+    await token_store.save_amazon_account(
+        seller_id=_seller_id,
+        nickname=_nickname,
+        client_id=_client_id,
+        client_secret=_client_secret,
+        refresh_token=refresh_token,
+        marketplace_id=_marketplace_id,
+        marketplace_name=_mkt_name,
+        app_solution_id=_app_sol,
+    )
+
+    # Actualizar .env.production y .env (para la sesión actual y arranques futuros)
+    for _env_path in [str(_env_file), str(_Path(__file__).resolve().parent.parent.parent / ".env")]:
+        if not _os.path.exists(_env_path):
+            continue
+        try:
+            _text = open(_env_path, encoding="utf-8").read()
+            if "AMAZON_REFRESH_TOKEN=" in _text:
+                _text = _re.sub(r"(?m)^AMAZON_REFRESH_TOKEN=.*$",
+                                f"AMAZON_REFRESH_TOKEN={refresh_token}", _text)
+            else:
+                _text += f"\nAMAZON_REFRESH_TOKEN={refresh_token}\n"
+            open(_env_path, "w", encoding="utf-8").write(_text)
+        except Exception as _e:
+            logger.warning(f"[Amazon manual] No se pudo actualizar {_env_path}: {_e}")
+
+    logger.info(f"[Amazon] refresh_token actualizado manualmente para {_seller_id}")
+    return JSONResponse({
+        "status": "ok",
+        "message": f"Token guardado para {_seller_id}. Actualiza también AMAZON_REFRESH_TOKEN en Railway para persistir.",
+        "seller_id": _seller_id,
+        "token_preview": refresh_token[:30] + "...",
+    })
+
+
 @router.post("/amazon/disconnect")
 async def amazon_disconnect(request: Request):
     """

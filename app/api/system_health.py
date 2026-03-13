@@ -370,12 +370,9 @@ async def fix_amazon_token():
         from app.services.amazon_client import _seed_amazon_accounts, get_amazon_client
         from app.services import token_store
 
-        # Intentar primero con lo que hay en DB (puede ser token recién obtenido por OAuth)
-        # Solo resembrar si no hay cuentas en DB
+        # Siempre resembrar desde archivo/.env para asegurar token más fresco en DB
+        await _seed_amazon_accounts()
         accounts = await token_store.get_all_amazon_accounts()
-        if not accounts:
-            await _seed_amazon_accounts()
-            accounts = await token_store.get_all_amazon_accounts()
 
         if not accounts:
             return {"status": "reauth", "message": "Sin cuentas Amazon — se requiere autorización"}

@@ -268,6 +268,16 @@ function _amzErrorBanner(msg) {
             'class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-5 py-2.5 rounded-lg text-sm transition">' +
             'Reconectar Amazon ahora →</button>' +
             '<p class="text-[10px] text-gray-400" id="amazon-fix-msg">Presiona para reconectar usando credenciales guardadas</p>' +
+            '<div class="w-full max-w-lg mt-3 border-t border-gray-100 pt-3">' +
+            '<p class="text-[11px] text-gray-500 font-semibold mb-1">¿El botón no funciona? Pega el token manualmente:</p>' +
+            '<p class="text-[10px] text-gray-400 mb-2">Seller Central MX → Apps y Servicios → Desarrollar apps → Autorizar app → copiar Refresh Token</p>' +
+            '<textarea id="amz-manual-token" rows="3" placeholder="Atzr|IwEBIA..." ' +
+            'class="w-full text-xs border border-gray-200 rounded-lg p-2 font-mono resize-none focus:outline-none focus:border-orange-400"></textarea>' +
+            '<button onclick="saveManualAmazonToken()" ' +
+            'class="mt-2 w-full bg-gray-700 hover:bg-gray-800 text-white font-bold px-4 py-2 rounded-lg text-xs transition">' +
+            'Guardar token manualmente</button>' +
+            '<p class="text-[10px] text-gray-400 mt-1" id="amz-manual-msg"></p>' +
+            '</div>' +
             '</div>';
     }
     return '<div class="col-span-4 text-center py-4">' +
@@ -724,6 +734,34 @@ if (amzActiveTab === 'salud') {
 }
 loadAmzBalance();
 
+function saveManualAmazonToken() {
+    var token = (document.getElementById('amz-manual-token') || {}).value || '';
+    token = token.trim();
+    var msgEl = document.getElementById('amz-manual-msg');
+    if (!token || !token.startsWith('Atzr|')) {
+        if (msgEl) msgEl.textContent = 'El token debe comenzar con "Atzr|"';
+        return;
+    }
+    if (token.length < 100) {
+        if (msgEl) msgEl.textContent = 'Token demasiado corto — copia el token completo';
+        return;
+    }
+    if (msgEl) msgEl.textContent = 'Guardando...';
+    var fd = new FormData();
+    fd.append('refresh_token', token);
+    fetch('/auth/amazon/manual-token', {method: 'POST', body: fd})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.status === 'ok') {
+                if (msgEl) msgEl.textContent = '✓ Token guardado. Recargando...';
+                setTimeout(function(){ window.location.reload(); }, 1500);
+            } else {
+                if (msgEl) msgEl.textContent = 'Error: ' + (d.message || 'desconocido');
+            }
+        }).catch(function(e){
+            if (msgEl) msgEl.textContent = 'Error de red: ' + e;
+        });
+}
 function fixAmazonToken(btn) {
     if (btn) { btn.textContent = 'Verificando...'; btn.disabled = true; }
     var msgEl = document.getElementById('amazon-fix-msg');

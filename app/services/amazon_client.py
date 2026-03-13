@@ -1201,11 +1201,18 @@ async def _seed_amazon_accounts():
     seller_id  = _g("AMAZON_SELLER_ID",       AMAZON_SELLER_ID)
     client_id  = _g("AMAZON_CLIENT_ID",        AMAZON_CLIENT_ID)
     client_sec = _g("AMAZON_CLIENT_SECRET",    AMAZON_CLIENT_SECRET)
-    refresh_rt = _g("AMAZON_REFRESH_TOKEN",    AMAZON_REFRESH_TOKEN)
     mkt_id     = _g("AMAZON_MARKETPLACE_ID",   AMAZON_MARKETPLACE_ID)
     mkt_name   = _g("AMAZON_MARKETPLACE_NAME", AMAZON_MARKETPLACE_NAME)
     app_sol_id = _g("AMAZON_APP_SOLUTION_ID",  AMAZON_APP_SOLUTION_ID)
     nickname   = _g("AMAZON_NICKNAME",         AMAZON_NICKNAME) or "VECKTOR IMPORTS"
+
+    # Para refresh_token: usar el MÁS LARGO entre archivo y Railway env var.
+    # Railway env var puede estar desactualizada pero el archivo puede tener token expirado.
+    # El token más largo es el más completo (evita tokens truncados).
+    _rt_file = file_vars.get("AMAZON_REFRESH_TOKEN", "")
+    _rt_env  = AMAZON_REFRESH_TOKEN  # os.getenv — persiste entre deploys en Railway
+    refresh_rt = max([_rt_file, _rt_env], key=len) or ""
+    logger.info(f"[Amazon seed] refresh_token: archivo={len(_rt_file)}c, env={len(_rt_env)}c → usando={'archivo' if len(_rt_file) >= len(_rt_env) else 'Railway env'} ({len(refresh_rt)}c)")
 
     rt_preview = (refresh_rt or "")[:30] + "..." if refresh_rt else "VACIO"
     logger.info(f"[Amazon seed] seller={seller_id} | client_id={client_id[:20] if client_id else 'VACIO'}... | token={rt_preview}")
