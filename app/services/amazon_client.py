@@ -1206,13 +1206,12 @@ async def _seed_amazon_accounts():
     app_sol_id = _g("AMAZON_APP_SOLUTION_ID",  AMAZON_APP_SOLUTION_ID)
     nickname   = _g("AMAZON_NICKNAME",         AMAZON_NICKNAME) or "VECKTOR IMPORTS"
 
-    # Para refresh_token: usar el MÁS LARGO entre archivo y Railway env var.
-    # Railway env var puede estar desactualizada pero el archivo puede tener token expirado.
-    # El token más largo es el más completo (evita tokens truncados).
-    _rt_file = file_vars.get("AMAZON_REFRESH_TOKEN", "")
-    _rt_env  = AMAZON_REFRESH_TOKEN  # os.getenv — persiste entre deploys en Railway
-    refresh_rt = max([_rt_file, _rt_env], key=len) or ""
-    logger.info(f"[Amazon seed] refresh_token: archivo={len(_rt_file)}c, env={len(_rt_env)}c → usando={'archivo' if len(_rt_file) >= len(_rt_env) else 'Railway env'} ({len(refresh_rt)}c)")
+    # Para refresh_token: limpiar espacios/newlines del env var (puede estar corrupto).
+    # Prioridad: archivo (limpio, del git) sobre env var (puede tener \n embebidos).
+    _rt_file = file_vars.get("AMAZON_REFRESH_TOKEN", "").strip()
+    _rt_env  = (AMAZON_REFRESH_TOKEN or "").strip().replace("\n", "").replace("\r", "").replace(" ", "")
+    # Usar el del archivo si existe y es válido, sino el env var limpio
+    refresh_rt = _rt_file or _rt_env or ""
 
     rt_preview = (refresh_rt or "")[:30] + "..." if refresh_rt else "VACIO"
     logger.info(f"[Amazon seed] seller={seller_id} | client_id={client_id[:20] if client_id else 'VACIO'}... | token={rt_preview}")
@@ -1221,14 +1220,32 @@ async def _seed_amazon_accounts():
         logger.warning("[Amazon] Credenciales Amazon incompletas — skip seed")
         return
 
-    await token_store.save_amazon_account(
-        seller_id=seller_id,
-        nickname=nickname,
-        client_id=client_id,
-        client_secret=client_sec,
-        refresh_token=refresh_rt,
-        marketplace_id=mkt_id,
-        marketplace_name=mkt_name,
-        app_solution_id=app_sol_id,
-    )
-    logger.info(f"[Amazon] Cuenta sembrada/actualizada: {seller_id} ({nickname})")
+    # Si la cuenta ya existe en DB con un refresh_token válido, preservarlo.
+    # Esto evita sobreescribir el token recién obtenido por OAuth en cada startup.
+    existing = await token_store.get_amazon_account(seller_id)
+    if existing and existing.get("refresh_token", "").startswith("Atzr|"):
+        # Cuenta con token válido — actualizar solo credenciales (no el token)
+        await token_store.save_amazon_account(
+            seller_id=seller_id,
+            nickname=nickname,
+            client_id=client_id,
+            client_secret=client_sec,
+            refresh_token="",  # cadena vacía = preservar token existente en DB
+            marketplace_id=mkt_id,
+            marketplace_name=mkt_name,
+            app_solution_id=app_sol_id,
+        )
+        logger.info(f"[Amazon] Cuenta actualizada (token OAuth preservado): {seller_id}")
+    else:
+        # Sin cuenta o sin token — sembrar con token del archivo/env
+        await token_store.save_amazon_account(
+            seller_id=seller_id,
+            nickname=nickname,
+            client_id=client_id,
+            client_secret=client_sec,
+            refresh_token=refresh_rt,
+            marketplace_id=mkt_id,
+            marketplace_name=mkt_name,
+            app_solution_id=app_sol_id,
+        )
+        logger.info(f"[Amazon] Cuenta sembrada: {seller_id} ({nickname})")

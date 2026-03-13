@@ -473,8 +473,11 @@ async def amazon_callback(
                     variableUpsert(input: $input)
                 }
                 """
+                import os as _os3
+                _railway_proj_id = _os3.getenv("RAILWAY_PROJECT_ID", "")
                 _vars = {
                     "input": {
+                        "projectId": _railway_proj_id,
                         "serviceId": _railway_svc_id,
                         "environmentId": _railway_env_id,
                         "name": "AMAZON_REFRESH_TOKEN",
