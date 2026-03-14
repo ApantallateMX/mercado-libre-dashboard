@@ -31,7 +31,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+import json
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 from pydantic import BaseModel
@@ -3089,3 +3090,343 @@ async def get_finances_summary(seller_id: Optional[str] = Query(None)):
     payload = {"groups": groups, "count": len(groups)}
     _finances_cache[sid] = {"ts": time.time(), "data": payload}
     return JSONResponse(payload)
+
+
+# ---------------------------------------------------------------------------
+# NEW ENDPOINTS
+# ---------------------------------------------------------------------------
+
+
+@router.get("/restock-report")
+async def get_restock_report(seller_id: Optional[str] = Query(None)):
+    """
+    Calcula días de cobertura de stock FBA basado en velocidad de ventas.
+    Fórmula: días_cobertura = fba_stock / velocidad_diaria_30d
+    Estado: OK (>30d), WARNING (10-30d), CRITICAL (<10d), OUT (0 stock)
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    listings = await _get_listings_cached(client)
+    fba_list = await _get_fba_cached(client)
+    fba_index = _build_fba_index(fba_list)
+
+    # Get SKU sales from cache
+    sku_sales = {}
+    cached_sales = _sku_sales_cache.get(client.seller_id)
+    if cached_sales and (_time.time() - cached_sales[0]) < _SKU_SALES_TTL:
+        _, sku_sales = cached_sales
+
+    items = []
+    for listing in listings:
+        summaries = listing.get("summaries", [])
+        if _listing_status(summaries) != "ACTIVE":
+            continue
+
+        sku = listing.get("sku", "")
+        title = summaries[0].get("itemName", "") if summaries else ""
+
+        fba_entry = fba_index.get(sku, {})
+        inv_details = fba_entry.get("inventoryDetails", {})
+        fba_units = inv_details.get("fulfillableQuantity", 0) or 0
+        inbound = inv_details.get("inboundReceivingQuantity", 0) or 0
+        reserved = inv_details.get("reservedQuantity", 0) or 0
+
+        sale_data = sku_sales.get(sku, {})
+        units_30d = sale_data.get("units", 0) or 0
+        velocity_daily = round(units_30d / 30, 2)
+
+        if velocity_daily > 0:
+            days_coverage = fba_units / velocity_daily
+        else:
+            days_coverage = None  # will treat as 999 for sorting
+
+        if fba_units == 0:
+            status = "out"
+        elif days_coverage is None:
+            status = "ok"
+        elif days_coverage < 10:
+            status = "critical"
+        elif days_coverage < 30:
+            status = "warning"
+        else:
+            status = "ok"
+
+        restock_qty = max(0, int(30 * velocity_daily) - fba_units - inbound)
+
+        items.append({
+            "sku": sku,
+            "title": title,
+            "fba_stock": fba_units,
+            "inbound": inbound,
+            "reserved": reserved,
+            "units_30d": units_30d,
+            "velocity_daily": velocity_daily,
+            "days_coverage": round(days_coverage, 1) if days_coverage is not None else None,
+            "status": status,
+            "restock_qty": restock_qty,
+        })
+
+    # Sort: None/999 at end, ascending by days_coverage
+    def _sort_key(item):
+        dc = item["days_coverage"]
+        return dc if dc is not None else 999
+
+    items.sort(key=_sort_key)
+
+    summary = {
+        "total_active": len(items),
+        "critical": sum(1 for i in items if i["status"] == "critical"),
+        "warning": sum(1 for i in items if i["status"] == "warning"),
+        "ok": sum(1 for i in items if i["status"] == "ok"),
+        "out_of_stock": sum(1 for i in items if i["status"] == "out"),
+        "has_sales_data": bool(sku_sales),
+    }
+
+    return JSONResponse({"items": items, "summary": summary})
+
+
+@router.get("/listing-quality")
+async def get_listing_quality(seller_id: Optional[str] = Query(None)):
+    """
+    Calcula un score de calidad (0-100) para cada listing.
+    Basado en: issues, estado, datos básicos del listing.
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    listings = await _get_listings_cached(client)
+
+    items = []
+    for listing in listings:
+        summaries = listing.get("summaries", [])
+        sku = listing.get("sku", "")
+        title = summaries[0].get("itemName", "") if summaries else ""
+        issues = listing.get("issues", [])
+        status = _listing_status(summaries)
+
+        score = 100
+        issues_count = len(issues)
+        score -= 15 * min(issues_count, 4)
+        if status in ("INACTIVE", "SUPPRESSED"):
+            score -= 30
+        elif status == "DISCOVERABLE":
+            score -= 10
+        score = max(0, score)
+
+        if score >= 85:
+            grade = "A"
+        elif score >= 70:
+            grade = "B"
+        elif score >= 55:
+            grade = "C"
+        else:
+            grade = "D"
+
+        issue_messages = []
+        for issue in issues[:3]:
+            msg = issue.get("message") or issue.get("code") or str(issue)
+            issue_messages.append(msg)
+
+        items.append({
+            "sku": sku,
+            "title": title,
+            "score": score,
+            "grade": grade,
+            "status": status,
+            "issues_count": issues_count,
+            "issues": issue_messages,
+        })
+
+    items.sort(key=lambda x: x["score"])
+
+    total = len(items)
+    avg_score = round(sum(i["score"] for i in items) / total, 1) if total > 0 else 0.0
+    summary = {
+        "avg_score": avg_score,
+        "grade_A": sum(1 for i in items if i["grade"] == "A"),
+        "grade_B": sum(1 for i in items if i["grade"] == "B"),
+        "grade_C": sum(1 for i in items if i["grade"] == "C"),
+        "grade_D": sum(1 for i in items if i["grade"] == "D"),
+        "total": total,
+    }
+
+    return JSONResponse({"items": items, "summary": summary})
+
+
+@router.get("/top-products")
+async def get_top_products(
+    seller_id: Optional[str] = Query(None),
+    limit: int = Query(10),
+    sort_by: str = Query("revenue"),  # "revenue" or "units"
+):
+    """
+    Retorna los top N productos por revenue o unidades vendidas en 30 días.
+    Usa el caché de SKU sales existente (_sku_sales_cache).
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    listings = await _get_listings_cached(client)
+    title_index = {}
+    for listing in listings:
+        summaries = listing.get("summaries", [])
+        sku = listing.get("sku", "")
+        title = summaries[0].get("itemName", "") if summaries else ""
+        title_index[sku] = title
+
+    fba_list = await _get_fba_cached(client)
+    fba_index = _build_fba_index(fba_list)
+
+    sku_sales = {}
+    has_data = False
+    cached_sales = _sku_sales_cache.get(client.seller_id)
+    if cached_sales and (_time.time() - cached_sales[0]) < _SKU_SALES_TTL:
+        _, sku_sales = cached_sales
+        has_data = bool(sku_sales)
+
+    sort_key = "revenue" if sort_by != "units" else "units"
+    effective_limit = min(limit, 20)
+
+    sorted_skus = sorted(
+        sku_sales.items(),
+        key=lambda x: x[1].get(sort_key, 0),
+        reverse=True,
+    )[:effective_limit]
+
+    total_revenue = sum(v.get("revenue", 0) for v in sku_sales.values())
+    total_units = sum(v.get("units", 0) for v in sku_sales.values())
+
+    items = []
+    for rank, (sku, data) in enumerate(sorted_skus, start=1):
+        fba_entry = fba_index.get(sku, {})
+        inv_details = fba_entry.get("inventoryDetails", {})
+        fba_stock = inv_details.get("fulfillableQuantity", 0) or 0
+
+        rev = data.get("revenue", 0)
+        units = data.get("units", 0)
+
+        if sort_by == "units":
+            share_pct = round((units / total_units * 100), 1) if total_units > 0 else 0.0
+        else:
+            share_pct = round((rev / total_revenue * 100), 1) if total_revenue > 0 else 0.0
+
+        items.append({
+            "rank": rank,
+            "sku": sku,
+            "title": title_index.get(sku, ""),
+            "units_30d": units,
+            "revenue_30d": round(rev, 2),
+            "fba_stock": fba_stock,
+            "share_pct": share_pct,
+        })
+
+    return JSONResponse({
+        "items": items,
+        "total_revenue_30d": round(total_revenue, 2),
+        "total_units_30d": total_units,
+        "has_data": has_data,
+        "period_days": 30,
+    })
+
+
+@router.post("/ai-advisor")
+async def amazon_ai_advisor(
+    payload: dict,
+    seller_id: Optional[str] = Query(None),
+):
+    """
+    Consulta al AI Advisor usando Claude con streaming SSE.
+    Body: {"question": "...", "mode": "general|restock|listings|pricing|strategy"}
+    """
+    import os
+    import base64
+
+    p1 = os.getenv("AI_KEY_P1", "")
+    p2 = os.getenv("AI_KEY_P2", "")
+    api_key = (base64.b64decode(p1 + p2).decode() if (p1 and p2) else os.getenv("ANTHROPIC_API_KEY", ""))
+    if not api_key:
+        return JSONResponse({"error": "API key no configurada"}, status_code=500)
+
+    client = await get_amazon_client(seller_id=seller_id)
+    context_lines = []
+    if client:
+        listings = await _get_listings_cached(client)
+        fba_list = await _get_fba_cached(client)
+        fba_index = _build_fba_index(fba_list)
+        total_active = sum(1 for l in listings if _listing_status(l.get("summaries", [])) == "ACTIVE")
+        total_fba_units = sum(
+            s.get("inventoryDetails", {}).get("fulfillableQuantity", 0) or 0
+            for s in fba_list
+        )
+
+        sku_sales_data = _sku_sales_cache.get(client.seller_id)
+        if sku_sales_data and (_time.time() - sku_sales_data[0]) < _SKU_SALES_TTL:
+            _, sku_map = sku_sales_data
+            total_rev = sum(v.get("revenue", 0) for v in sku_map.values())
+            total_units = sum(v.get("units", 0) for v in sku_map.values())
+            top_skus = sorted(sku_map.items(), key=lambda x: x[1].get("revenue", 0), reverse=True)[:5]
+            context_lines.append(f"- Ventas 30d: {total_units} unidades, ${total_rev:,.2f} MXN revenue")
+            context_lines.append(f"- Top 5 SKUs por revenue: {', '.join(s for s, _ in top_skus)}")
+
+        context_lines.append(f"- Listings activos: {total_active}")
+        context_lines.append(f"- Stock FBA disponible total: {total_fba_units} unidades")
+        context_lines.append(f"- Marketplace: Amazon {getattr(client, 'marketplace_id', None) or 'MX'}")
+
+    mode = payload.get("mode", "general")
+    question = payload.get("question", "").strip()[:1000]
+
+    mode_instructions = {
+        "general": "Eres un experto en Amazon Seller Central MX con 10 años de experiencia. Das consejos prácticos y accionables.",
+        "restock": "Eres un experto en gestión de inventario FBA Amazon MX. Analizas datos de stock y ventas para recomendar reabastecimiento óptimo.",
+        "listings": "Eres un experto en optimización de listings Amazon MX. Analizas calidad de listings y das recomendaciones para mejorar visibilidad y conversión.",
+        "pricing": "Eres un experto en estrategia de precios y Buy Box en Amazon MX. Das recomendaciones basadas en datos de competencia y márgenes.",
+        "strategy": "Eres un consultor estratégico de Amazon MX especializado en crecimiento de ventas. Das planes de acción concretos con KPIs medibles.",
+    }
+    system_prompt = mode_instructions.get(mode, mode_instructions["general"])
+    system_prompt += "\n\nResponde siempre en español. Sé directo y conciso. Usa datos específicos cuando estén disponibles."
+
+    context_str = "\n".join(context_lines) if context_lines else "No hay datos de contexto disponibles."
+    user_message = f"CONTEXTO DE MI TIENDA AMAZON:\n{context_str}\n\nPREGUNTA: {question}"
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=60) as http:
+                async with http.stream(
+                    "POST",
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    json={
+                        "model": "claude-haiku-4-5-20251001",
+                        "max_tokens": 1024,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_message}],
+                        "stream": True,
+                    },
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            chunk = line[6:]
+                            if chunk == "[DONE]":
+                                break
+                            try:
+                                obj = json.loads(chunk)
+                                if obj.get("type") == "content_block_delta":
+                                    text = obj.get("delta", {}).get("text", "")
+                                    if text:
+                                        yield f"data: {json.dumps({'text': text})}\n\n"
+                            except json.JSONDecodeError:
+                                pass
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)[:200]})}\n\n"
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")

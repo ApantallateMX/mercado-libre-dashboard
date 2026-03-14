@@ -96,6 +96,16 @@
                    {% if active_amazon_tab == 'finanzas' %}border-orange-500 text-orange-600 font-semibold{% else %}border-transparent text-gray-500 font-medium hover:text-gray-700{% endif %}">
         💰 Finanzas
     </button>
+    <button data-tab="fba" onclick="switchAmzTab('fba')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   border-transparent text-gray-500 font-medium hover:text-gray-700">
+        📦 FBA & Stock
+    </button>
+    <button data-tab="listings" onclick="switchAmzTab('listings')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   border-transparent text-gray-500 font-medium hover:text-gray-700">
+        🏷️ Listings
+    </button>
 </div>
 
 <!-- ── Panel de alertas críticas ──────────────────────────────────────────── -->
@@ -254,6 +264,24 @@
     </div>
 </div>
 
+<!-- ─── Top 10 Productos ──────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5" id="amz-top-products-section">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+            <h2 class="text-base font-bold text-gray-800">Top 10 Productos (30 días)</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Por revenue · requiere datos de órdenes procesados</p>
+        </div>
+        <button onclick="loadTopProducts()" class="text-xs text-orange-500 hover:underline">↺ Actualizar</button>
+    </div>
+    <div id="amz-top-products-content" class="p-4">
+        <div class="animate-pulse space-y-2">
+            <div class="h-8 bg-orange-50 rounded"></div>
+            <div class="h-8 bg-orange-50 rounded"></div>
+            <div class="h-8 bg-orange-50 rounded"></div>
+        </div>
+    </div>
+</div>
+
 </div><!-- /amz-tab-ventas -->
 
 <!-- ══════════════════════════════════════════════════════════════════════════
@@ -331,6 +359,143 @@
   </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: FBA & STOCK
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-fba" class="hidden">
+
+  <!-- KPIs de FBA -->
+  <div id="amz-fba-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-orange-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-orange-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-green-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-green-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-yellow-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-yellow-100 rounded w-1/2"></div>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-b-4 border-red-400 animate-pulse">
+      <div class="h-3 bg-gray-200 rounded w-2/3 mb-3"></div>
+      <div class="h-7 bg-red-100 rounded w-1/2"></div>
+    </div>
+  </div>
+
+  <!-- Tabla de restock -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">Calculadora de Reabastecimiento FBA</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Velocidad 30d · días de cobertura · qty a pedir</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="amz-fba-filter" onchange="loadFbaTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+          <option value="all">Todos</option>
+          <option value="critical">Crítico (&lt;10d)</option>
+          <option value="warning">Advertencia (10-30d)</option>
+          <option value="out">Sin stock</option>
+        </select>
+        <button onclick="loadFbaTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
+      </div>
+    </div>
+    <div id="amz-fba-table-wrap" class="overflow-x-auto">
+      <div class="text-center py-10 text-gray-400 text-sm">Cargando datos de reabastecimiento...</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: LISTINGS & CALIDAD
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-listings" class="hidden">
+
+  <!-- Score distribution -->
+  <div id="amz-lq-summary" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
+
+  <!-- Tabla de calidad de listings -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">Calidad de Listings</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Score basado en issues, estado y datos del listing</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="amz-lq-filter" onchange="loadListingsTab()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+          <option value="all">Todos</option>
+          <option value="D">Solo grado D (crítico)</option>
+          <option value="C">Grado C y D</option>
+          <option value="issues">Con issues</option>
+        </select>
+        <button onclick="loadListingsTab()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻</button>
+      </div>
+    </div>
+    <div id="amz-lq-table-wrap" class="overflow-x-auto">
+      <div class="text-center py-10 text-gray-400 text-sm">Cargando calidad de listings...</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══ AI ADVISOR DRAWER ═══════════════════════════════════════════════════ -->
+<button id="amz-ai-btn"
+  onclick="toggleAmzAIDrawer()"
+  class="fixed bottom-6 right-6 z-40 flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white font-semibold px-4 py-3 rounded-2xl shadow-xl transition text-sm">
+  <span class="text-base">🤖</span> Asesor IA
+</button>
+
+<div id="amz-ai-drawer"
+  class="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-2xl transform translate-x-full transition-transform duration-300 flex flex-col">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50">
+    <div>
+      <h2 class="font-bold text-gray-800 text-base">🤖 Asesor Amazon IA</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Powered by Claude · datos en tiempo real</p>
+    </div>
+    <button onclick="toggleAmzAIDrawer()" class="text-gray-400 hover:text-gray-700 text-xl font-bold transition">✕</button>
+  </div>
+  <!-- Mode selector -->
+  <div class="px-5 py-3 border-b border-gray-100 flex flex-wrap gap-1.5">
+    <button data-mode="general"   onclick="setAmzAIMode('general')"   class="amz-ai-mode-btn active-mode text-xs font-medium px-3 py-1.5 rounded-full border border-orange-400 bg-orange-50 text-orange-700">General</button>
+    <button data-mode="restock"   onclick="setAmzAIMode('restock')"   class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Restock</button>
+    <button data-mode="listings"  onclick="setAmzAIMode('listings')"  class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Listings</button>
+    <button data-mode="pricing"   onclick="setAmzAIMode('pricing')"   class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Precios</button>
+    <button data-mode="strategy"  onclick="setAmzAIMode('strategy')"  class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Estrategia</button>
+  </div>
+  <!-- Chat messages -->
+  <div id="amz-ai-messages" class="flex-1 overflow-y-auto p-5 space-y-4">
+    <div class="bg-orange-50 rounded-xl p-4 text-sm text-orange-800 border border-orange-100">
+      <p class="font-semibold mb-1">👋 Hola! Soy tu Asesor Amazon IA</p>
+      <p class="text-xs text-orange-600">Tengo acceso a datos de tu tienda en tiempo real. Selecciona un modo y hazme cualquier pregunta sobre tu operación.</p>
+    </div>
+    <!-- Quick prompts -->
+    <div class="space-y-1.5">
+      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Preguntas rápidas:</p>
+      <button onclick="askAmzAI('¿Cuáles son mis productos con más riesgo de quedarse sin stock?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">📦 ¿Qué productos están en riesgo de stock out?</button>
+      <button onclick="askAmzAI('¿Qué listings necesitan optimización urgente?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">🏷️ ¿Qué listings necesitan optimización urgente?</button>
+      <button onclick="askAmzAI('Dame un plan de acción para aumentar ventas esta semana')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">📈 Plan de acción para aumentar ventas esta semana</button>
+      <button onclick="askAmzAI('¿Cómo está la salud general de mi cuenta Amazon?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">💚 Diagnóstico de salud de cuenta</button>
+    </div>
+  </div>
+  <!-- Input -->
+  <div class="px-5 py-4 border-t border-gray-100 bg-gray-50">
+    <div class="flex gap-2">
+      <textarea id="amz-ai-input" rows="2" placeholder="Escribe tu pregunta..."
+        class="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-200"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAmzAI();}"></textarea>
+      <button onclick="sendAmzAI()" id="amz-ai-send"
+        class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-2 rounded-xl transition text-sm self-end">
+        Enviar
+      </button>
+    </div>
+  </div>
+</div>
+<!-- Overlay -->
+<div id="amz-ai-overlay" onclick="toggleAmzAIDrawer()" class="hidden fixed inset-0 bg-black/30 z-40 backdrop-blur-sm"></div>
+
 {% endif %}
 {% endblock %}
 
@@ -387,7 +552,7 @@ function _amzErrorBanner(msg) {
         '<button onclick="loadAmazonData()" class="mt-2 text-xs text-orange-500 underline">Reintentar</button>' +
         '</div>';
 }
-var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas' };
+var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -410,7 +575,7 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['ventas', 'salud', 'operaciones', 'finanzas'].forEach(function(t) {
+    ['ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings'].forEach(function(t) {
         var el = document.getElementById('amz-tab-' + t);
         if (el) el.classList.toggle('hidden', t !== tabName);
     });
@@ -430,6 +595,8 @@ function switchAmzTab(tabName) {
         if (tabName === 'salud') loadAmzSaludTab();
         else if (tabName === 'operaciones') loadAmzOperacionesTab();
         else if (tabName === 'finanzas') loadAmzFinanzasTab();
+        else if (tabName === 'fba') loadFbaTab();
+        else if (tabName === 'listings') loadListingsTab();
     }
 }
 
@@ -1075,6 +1242,8 @@ if (amzActiveTab === 'salud') {
 }
 loadAmzBalance();
 loadAmzAlerts();
+// Pre-carga top products (datos pueden estar en caché)
+setTimeout(loadTopProducts, 2000);
 
 function saveManualAmazonToken() {
     var token = (document.getElementById('amz-manual-token') || {}).value || '';
@@ -1125,6 +1294,297 @@ function fixAmazonToken(btn) {
             if (msgEl) msgEl.textContent = 'Error de red: ' + e;
             if (btn) { btn.textContent = 'Reintentar'; btn.disabled = false; }
         });
+}
+
+// ─── Top Products ──────────────────────────────────────────────────────────
+async function loadTopProducts() {
+  var el = document.getElementById('amz-top-products-content');
+  if (!el) return;
+  el.innerHTML = '<div class="animate-pulse space-y-2">' + Array(5).fill('<div class="h-8 bg-orange-50 rounded"></div>').join('') + '</div>';
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/top-products' + sellerParam);
+    var d = await r.json();
+    if (!d.has_data || !d.items || !d.items.length) {
+      el.innerHTML = '<div class="text-center py-6 text-gray-400 text-sm">Sin datos de ventas por SKU disponibles aún.<br><span class="text-xs">Los datos se procesan en segundo plano (puede tardar 1-2 minutos)</span></div>';
+      return;
+    }
+    var html = '<div class="overflow-x-auto"><table class="w-full text-sm">';
+    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50"><th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">SKU / Título</th><th class="py-2.5 px-4 text-right">Uds 30d</th><th class="py-2.5 px-4 text-right">Revenue</th><th class="py-2.5 px-4 text-right">% Total</th><th class="py-2.5 px-4 text-right">FBA Stock</th></tr></thead><tbody>';
+    d.items.forEach(function(item) {
+      var barColor = item.rank <= 3 ? '#F97316' : (item.rank <= 7 ? '#FB923C' : '#FED7AA');
+      html += '<tr class="border-b border-gray-50 hover:bg-gray-50">';
+      html += '<td class="py-2.5 px-4"><span class="inline-flex w-6 h-6 rounded-full items-center justify-center text-xs font-bold text-white" style="background:' + barColor + '">' + item.rank + '</span></td>';
+      html += '<td class="py-2.5 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[200px]">' + (item.title || '—') + '</div></td>';
+      html += '<td class="py-2.5 px-4 text-right font-semibold text-gray-700">' + item.units_30d + '</td>';
+      html += '<td class="py-2.5 px-4 text-right font-bold text-orange-700">$' + (item.revenue_30d || 0).toLocaleString('es-MX', {minimumFractionDigits:2}) + '</td>';
+      html += '<td class="py-2.5 px-4 text-right"><div class="flex items-center justify-end gap-1"><div class="w-16 bg-gray-200 rounded-full h-1.5"><div class="h-1.5 rounded-full bg-orange-400" style="width:' + Math.min(item.share_pct || 0, 100) + '%"></div></div><span class="text-xs text-gray-500">' + (item.share_pct || 0).toFixed(1) + '%</span></div></td>';
+      html += '<td class="py-2.5 px-4 text-right ' + (item.fba_stock === 0 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + item.fba_stock + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="text-center py-6 text-red-400 text-sm">Error al cargar top productos</div>';
+  }
+}
+
+// ─── FBA & Stock Tab ────────────────────────────────────────────────────────
+var _fbaTabLoaded = false;
+async function loadFbaTab() {
+  _fbaTabLoaded = true;
+  var wrap = document.getElementById('amz-fba-table-wrap');
+  var kpis = document.getElementById('amz-fba-kpis');
+  if (!wrap) return;
+  var filterEl = document.getElementById('amz-fba-filter');
+  var filter = filterEl ? filterEl.value : 'all';
+  wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Calculando cobertura de stock...</div>';
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/restock-report' + sellerParam);
+    var d = await r.json();
+    if (d.error) { wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">' + d.error + '</div>'; return; }
+
+    // Render KPIs
+    var s = d.summary || {};
+    if (kpis) {
+      kpis.innerHTML = [
+        {label:'Total activos', value: s.total_active || 0, icon:'📦', color:'#F97316', sub:'listings activos'},
+        {label:'OK (>30 días)', value: s.ok || 0, icon:'✅', color:'#10B981', sub:'cobertura suficiente'},
+        {label:'Advertencia', value: (s.warning || 0), icon:'⚠️', color:'#D97706', sub:'10-30 días stock'},
+        {label:'Crítico / Sin stock', value: (s.critical || 0) + (s.out_of_stock || 0), icon:'🚨', color:'#EF4444', sub:'necesitan reposición'},
+      ].map(function(c) {
+        return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+          '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
+          '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
+          '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
+      }).join('');
+    }
+
+    // Filter items
+    var items = d.items || [];
+    if (filter === 'critical') items = items.filter(function(i){ return i.status === 'critical'; });
+    else if (filter === 'warning') items = items.filter(function(i){ return i.status === 'warning'; });
+    else if (filter === 'out') items = items.filter(function(i){ return i.status === 'out'; });
+
+    if (!items.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay items para el filtro seleccionado</div>'; return; }
+
+    var html = '<table class="w-full text-sm min-w-[700px]">';
+    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
+    html += '<th class="py-3 px-4 font-semibold">SKU / Producto</th>';
+    html += '<th class="py-3 px-3 text-right font-semibold">FBA Stock</th>';
+    html += '<th class="py-3 px-3 text-right font-semibold">En camino</th>';
+    html += '<th class="py-3 px-3 text-right font-semibold">Uds/día 30d</th>';
+    html += '<th class="py-3 px-3 text-right font-semibold">Días cobertura</th>';
+    html += '<th class="py-3 px-3 text-right font-semibold">Qty a pedir</th>';
+    html += '<th class="py-3 px-3 text-center font-semibold">Estado</th>';
+    html += '</tr></thead><tbody class="divide-y divide-gray-50">';
+
+    items.forEach(function(item) {
+      var statusColor = {ok:'bg-green-100 text-green-700', warning:'bg-yellow-100 text-yellow-700', critical:'bg-red-100 text-red-700', out:'bg-gray-100 text-gray-600'};
+      var statusLabel = {ok:'OK', warning:'⚠️ Advertencia', critical:'🚨 Crítico', out:'📦 Sin stock'};
+      var sc = statusColor[item.status] || 'bg-gray-100 text-gray-500';
+      var sl = statusLabel[item.status] || item.status;
+      var daysText = item.days_coverage == null ? '∞' : (item.days_coverage > 999 ? '>999' : Math.round(item.days_coverage));
+      var rowBg = item.status === 'critical' ? 'bg-red-50/30' : (item.status === 'out' ? 'bg-gray-50' : '');
+      html += '<tr class="' + rowBg + ' hover:bg-orange-50/20">';
+      html += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[220px]">' + (item.title || '—') + '</div></td>';
+      html += '<td class="py-3 px-3 text-right font-bold ' + (item.fba_stock === 0 ? 'text-red-600' : 'text-gray-800') + '">' + item.fba_stock + '</td>';
+      html += '<td class="py-3 px-3 text-right text-indigo-600">' + (item.inbound || 0) + '</td>';
+      html += '<td class="py-3 px-3 text-right text-gray-600">' + (item.velocity_daily > 0 ? item.velocity_daily : '—') + '</td>';
+      html += '<td class="py-3 px-3 text-right font-bold ' + (item.status === 'critical' ? 'text-red-600' : item.status === 'warning' ? 'text-yellow-600' : 'text-gray-700') + '">' + daysText + 'd</td>';
+      html += '<td class="py-3 px-3 text-right"><span class="' + (item.restock_qty > 0 ? 'font-bold text-orange-700' : 'text-gray-400') + '">' + (item.restock_qty > 0 ? item.restock_qty + ' u' : '—') + '</span></td>';
+      html += '<td class="py-3 px-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + sc + '">' + sl + '</span></td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch(e) {
+    wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar restock: ' + e.message + '</div>';
+  }
+}
+
+// ─── Listings Quality Tab ───────────────────────────────────────────────────
+var _listingsTabLoaded = false;
+async function loadListingsTab() {
+  _listingsTabLoaded = true;
+  var wrap = document.getElementById('amz-lq-table-wrap');
+  var summaryEl = document.getElementById('amz-lq-summary');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Analizando calidad de listings...</div>';
+  var filterEl = document.getElementById('amz-lq-filter');
+  var filter = filterEl ? filterEl.value : 'all';
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/listing-quality' + sellerParam);
+    var d = await r.json();
+    if (d.error) { wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">' + d.error + '</div>'; return; }
+
+    var s = d.summary || {};
+    if (summaryEl) {
+      summaryEl.innerHTML = [
+        {label:'Score Promedio', value: (s.avg_score||0).toFixed(1), icon:'📊', color:'#F97316', sub:'de 100 puntos'},
+        {label:'Grado A (≥85)', value: s.grade_A||0, icon:'🟢', color:'#10B981', sub:'excelente calidad'},
+        {label:'Grado B/C', value: (s.grade_B||0)+(s.grade_C||0), icon:'🟡', color:'#D97706', sub:'mejorar'},
+        {label:'Grado D (<55)', value: s.grade_D||0, icon:'🔴', color:'#EF4444', sub:'crítico'},
+      ].map(function(c) {
+        return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
+          '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
+          '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
+          '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
+      }).join('');
+    }
+
+    var items = d.items || [];
+    if (filter === 'D') items = items.filter(function(i){ return i.grade === 'D'; });
+    else if (filter === 'C') items = items.filter(function(i){ return i.grade === 'C' || i.grade === 'D'; });
+    else if (filter === 'issues') items = items.filter(function(i){ return i.issues_count > 0; });
+
+    if (!items.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay listings para el filtro seleccionado</div>'; return; }
+
+    var html = '<table class="w-full text-sm min-w-[600px]">';
+    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
+    html += '<th class="py-3 px-4 font-semibold">SKU / Título</th>';
+    html += '<th class="py-3 px-3 text-center font-semibold">Grado</th>';
+    html += '<th class="py-3 px-3 text-center font-semibold">Score</th>';
+    html += '<th class="py-3 px-3 text-center font-semibold">Estado</th>';
+    html += '<th class="py-3 px-3 font-semibold">Issues</th>';
+    html += '</tr></thead><tbody class="divide-y divide-gray-50">';
+
+    items.forEach(function(item) {
+      var gradeColor = {A:'bg-green-100 text-green-700', B:'bg-blue-100 text-blue-700', C:'bg-yellow-100 text-yellow-700', D:'bg-red-100 text-red-700'};
+      var scoreColor = item.score >= 85 ? '#10B981' : (item.score >= 70 ? '#3B82F6' : (item.score >= 55 ? '#D97706' : '#EF4444'));
+      var statusColors = {ACTIVE:'text-green-600', INACTIVE:'text-gray-400', SUPPRESSED:'text-red-600', DISCOVERABLE:'text-yellow-600'};
+      var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
+      html += '<tr class="hover:bg-gray-50">';
+      html += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[250px]">' + (item.title || '—') + '</div></td>';
+      html += '<td class="py-3 px-3 text-center"><span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold ' + gc + '">' + item.grade + '</span></td>';
+      html += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
+      html += '<td class="py-3 px-3 text-center text-xs font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</td>';
+      var issuesHtml = (item.issues || []).map(function(i){ return '<div class="text-xs text-red-600 truncate max-w-[220px]">• ' + i + '</div>'; }).join('');
+      html += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+  } catch(e) {
+    wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar listings: ' + e.message + '</div>';
+  }
+}
+
+// ─── AI Advisor ─────────────────────────────────────────────────────────────
+var amzAIDrawerOpen = false;
+var amzAIMode = 'general';
+var amzAIStreaming = false;
+
+function toggleAmzAIDrawer() {
+  amzAIDrawerOpen = !amzAIDrawerOpen;
+  var drawer = document.getElementById('amz-ai-drawer');
+  var overlay = document.getElementById('amz-ai-overlay');
+  if (amzAIDrawerOpen) {
+    drawer.classList.remove('translate-x-full');
+    overlay.classList.remove('hidden');
+  } else {
+    drawer.classList.add('translate-x-full');
+    overlay.classList.add('hidden');
+  }
+}
+
+function setAmzAIMode(mode) {
+  amzAIMode = mode;
+  document.querySelectorAll('.amz-ai-mode-btn').forEach(function(btn) {
+    var active = btn.getAttribute('data-mode') === mode;
+    btn.classList.toggle('border-orange-400', active);
+    btn.classList.toggle('bg-orange-50', active);
+    btn.classList.toggle('text-orange-700', active);
+    btn.classList.toggle('border-gray-200', !active);
+    btn.classList.toggle('text-gray-600', !active);
+    btn.classList.toggle('bg-white', !active);
+  });
+}
+
+function askAmzAI(question) {
+  var input = document.getElementById('amz-ai-input');
+  if (input) input.value = question;
+  sendAmzAI();
+}
+
+async function sendAmzAI() {
+  if (amzAIStreaming) return;
+  var input = document.getElementById('amz-ai-input');
+  var sendBtn = document.getElementById('amz-ai-send');
+  var messages = document.getElementById('amz-ai-messages');
+  var question = (input ? input.value.trim() : '');
+  if (!question) return;
+
+  // Add user bubble
+  var userBubble = '<div class="flex justify-end"><div class="bg-orange-500 text-white rounded-2xl rounded-tr-sm px-4 py-3 text-sm max-w-[85%]">' + question.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div></div>';
+  messages.insertAdjacentHTML('beforeend', userBubble);
+  if (input) input.value = '';
+
+  // Add AI bubble placeholder
+  var aiBubbleId = 'amz-ai-bubble-' + Date.now();
+  messages.insertAdjacentHTML('beforeend',
+    '<div class="flex gap-3"><div class="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center text-white text-sm shrink-0">🤖</div>' +
+    '<div class="bg-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-gray-800 max-w-[85%] flex-1" id="' + aiBubbleId + '">' +
+    '<span class="inline-block w-2 h-2 rounded-full bg-gray-400 animate-bounce"></span>' +
+    '<span class="inline-block w-2 h-2 rounded-full bg-gray-400 animate-bounce mx-1" style="animation-delay:0.15s"></span>' +
+    '<span class="inline-block w-2 h-2 rounded-full bg-gray-400 animate-bounce" style="animation-delay:0.3s"></span>' +
+    '</div></div>'
+  );
+  messages.scrollTop = messages.scrollHeight;
+
+  amzAIStreaming = true;
+  if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '...'; }
+
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var resp = await fetch('/api/amazon/ai-advisor' + sellerParam, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: question, mode: amzAIMode})
+    });
+
+    var bubble = document.getElementById(aiBubbleId);
+    var text = '';
+    bubble.innerHTML = '';
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+      buffer += decoder.decode(result.value, {stream: true});
+      var lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].trim();
+        if (line.startsWith('data: ')) {
+          var chunk = line.slice(6);
+          if (chunk === '[DONE]') break;
+          try {
+            var obj = JSON.parse(chunk);
+            if (obj.text) {
+              text += obj.text;
+              bubble.innerHTML = text.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>');
+              messages.scrollTop = messages.scrollHeight;
+            } else if (obj.error) {
+              bubble.innerHTML = '<span class="text-red-500">Error: ' + obj.error + '</span>';
+            }
+          } catch(e2) {}
+        }
+      }
+    }
+  } catch(e) {
+    var bubble2 = document.getElementById(aiBubbleId);
+    if (bubble2) bubble2.innerHTML = '<span class="text-red-500">Error de conexión: ' + e.message + '</span>';
+  } finally {
+    amzAIStreaming = false;
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
+    messages.scrollTop = messages.scrollHeight;
+  }
 }
 </script>
 {% endif %}
