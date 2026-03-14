@@ -1080,6 +1080,45 @@ class AmazonClient:
         except Exception as e:
             return {"pending_amount": None, "currency": "MXN", "error": str(e)}
 
+    async def get_financial_event_groups(self, max_results: int = 10) -> list:
+        """
+        Retorna los grupos de liquidación (períodos de pago) más recientes.
+        Cada grupo representa un ciclo de liquidación de Amazon.
+        Endpoint: GET /finances/v0/financialEventGroups
+        """
+        try:
+            params = {
+                "MaxResultsPerPage": max_results,
+                "FinancialEventGroupStartedAfter": (
+                    datetime.utcnow() - timedelta(days=180)
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            data = await self._request(
+                "GET", "/finances/v0/financialEventGroups", params=params
+            )
+            groups = (
+                data.get("payload", {})
+                    .get("FinancialEventGroupList", [])
+            )
+            result = []
+            for g in groups:
+                original = g.get("OriginalTotal") or {}
+                converted = g.get("ConvertedTotal") or {}
+                result.append({
+                    "group_id": g.get("FinancialEventGroupId", ""),
+                    "status": g.get("ProcessingStatus", ""),
+                    "fund_transfer_date": g.get("FundTransferDate", ""),
+                    "original_total": float(original.get("Amount") or 0),
+                    "converted_total": float(converted.get("Amount") or 0),
+                    "currency": converted.get("CurrencyCode") or original.get("CurrencyCode") or "MXN",
+                    "beginning_balance": float((g.get("BeginningBalance") or {}).get("Amount") or 0),
+                    "account_tail": g.get("AccountTail", ""),
+                })
+            return result
+        except Exception as e:
+            logger.warning(f"[Amazon] get_financial_event_groups error: {e}")
+            return []
+
     async def fetch_orders_range(
         self,
         date_from: str,

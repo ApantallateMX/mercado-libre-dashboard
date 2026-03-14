@@ -71,6 +71,7 @@
         <table class="w-full text-sm">
             <thead>
                 <tr class="bg-gray-50 border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-3 w-10"><input type="checkbox" id="amz-select-all" class="rounded border-gray-300"></th>
                     <th class="py-3 px-4 font-semibold">#</th>
                     <th class="py-3 px-4 font-semibold">Producto</th>
                     <th class="py-3 px-3 font-semibold text-right">Precio</th>
@@ -87,6 +88,7 @@
                 {% for item in listings %}
                 {% set fba_color = 'text-green-600 font-bold' if item.fba_stock >= 10 else ('text-yellow-600 font-bold' if item.fba_stock > 0 else 'text-red-600 font-bold') %}
                 <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition">
+                    <td class="px-3"><input type="checkbox" class="amz-sku-check rounded border-gray-300" data-sku="{{ item.sku or item.get('sku','') }}"></td>
                     <td class="py-2.5 px-4 text-gray-400 text-xs">{{ loop.index }}</td>
                     <td class="py-2.5 px-4">
                         <div class="flex items-center gap-2.5">

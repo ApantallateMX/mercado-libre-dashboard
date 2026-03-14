@@ -73,6 +73,46 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════
+     Botones de tabs internos
+     ══════════════════════════════════════════════════════════════════════ -->
+<div class="flex items-center gap-1 mb-4 border-b border-gray-200 overflow-x-auto">
+    <button data-tab="ventas" onclick="switchAmzTab('ventas')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   {% if active_amazon_tab == 'ventas' %}border-orange-500 text-orange-600 font-semibold{% else %}border-transparent text-gray-500 font-medium hover:text-gray-700{% endif %}">
+        📊 Ventas
+    </button>
+    <button data-tab="salud" onclick="switchAmzTab('salud')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   {% if active_amazon_tab == 'salud' %}border-orange-500 text-orange-600 font-semibold{% else %}border-transparent text-gray-500 font-medium hover:text-gray-700{% endif %}">
+        💚 Salud
+    </button>
+    <button data-tab="operaciones" onclick="switchAmzTab('operaciones')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   {% if active_amazon_tab == 'operaciones' %}border-orange-500 text-orange-600 font-semibold{% else %}border-transparent text-gray-500 font-medium hover:text-gray-700{% endif %}">
+        ⚙️ Operaciones
+    </button>
+    <button data-tab="finanzas" onclick="switchAmzTab('finanzas')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   {% if active_amazon_tab == 'finanzas' %}border-orange-500 text-orange-600 font-semibold{% else %}border-transparent text-gray-500 font-medium hover:text-gray-700{% endif %}">
+        💰 Finanzas
+    </button>
+</div>
+
+<!-- ── Panel de alertas críticas ──────────────────────────────────────────── -->
+<div id="amz-alerts-panel" class="mb-4">
+  <div id="amz-alerts-content">
+    <!-- Se carga via JS -->
+    <div class="flex items-center gap-2 text-sm text-gray-400 py-2">
+      <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+      </svg>
+      Verificando alertas...
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
      TAB: VENTAS
      ══════════════════════════════════════════════════════════════════════ -->
 <div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
@@ -203,7 +243,7 @@
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <h2 class="text-base font-bold text-gray-800">Últimas Órdenes Amazon</h2>
-        <a href="/amazon/products" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver productos →</a>
+        <button onclick="switchAmzTab('operaciones')" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver productos →</button>
     </div>
     <div id="amz-recent-orders" class="p-4 md:p-6">
         <div class="animate-pulse space-y-3">
@@ -227,6 +267,68 @@
             {% endfor %}
         </div>
     </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: OPERACIONES
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-operaciones" {% if active_amazon_tab != 'operaciones' %}class="hidden"{% endif %}>
+
+  <!-- Alertas detalladas -->
+  <div id="amz-ops-alerts" class="mb-6"></div>
+
+  <!-- Catálogo con bulk actions -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h3 class="font-semibold text-gray-800">Catálogo de Productos</h3>
+      <div class="flex items-center gap-3">
+        <select id="amz-ops-filter" onchange="loadOpsListing()" class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-white">
+          <option value="all">Todos los estados</option>
+          <option value="active">Activos</option>
+          <option value="inactive">Inactivos</option>
+          <option value="suppressed">Suprimidos</option>
+        </select>
+        <button onclick="loadOpsListing()" class="text-sm text-orange-600 hover:text-orange-700 font-medium">↻ Actualizar</button>
+      </div>
+    </div>
+    <div id="amz-ops-catalog-wrap" class="p-4">
+      <div class="text-center py-8 text-gray-400 text-sm">Cargando catálogo...</div>
+    </div>
+  </div>
+
+  <!-- Barra de acciones bulk (aparece al seleccionar) -->
+  <div id="amz-bulk-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4">
+    <span class="text-sm font-medium"><span id="amz-bulk-count">0</span> seleccionados</span>
+    <button onclick="executeBulkAction('pause')" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">⏸ Pausar</button>
+    <button onclick="executeBulkAction('reactivate_fba')" class="bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">▶ Activar FBA</button>
+    <button onclick="clearBulkSelection()" class="text-gray-400 hover:text-white text-sm transition">✕ Cancelar</button>
+  </div>
+
+  <!-- Configuración de threshold -->
+  <div class="mt-6 bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <h4 class="font-medium text-gray-700 mb-3">⚙️ Configuración de alertas de stock</h4>
+    <div class="flex items-center gap-3">
+      <label class="text-sm text-gray-600">Alertar cuando FBA stock sea menor a</label>
+      <input type="number" id="amz-threshold-input" min="0" max="999" value="5"
+             class="w-20 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-center">
+      <span class="text-sm text-gray-500">unidades</span>
+      <button onclick="saveStockThreshold()"
+              class="bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">
+        Guardar
+      </button>
+      <span id="amz-threshold-saved" class="hidden text-sm text-green-600 font-medium">✓ Guardado</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: FINANZAS
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-finanzas" {% if active_amazon_tab != 'finanzas' %}class="hidden"{% endif %}>
+  <div id="amz-finanzas-content">
+    <div class="text-center py-12 text-gray-400 text-sm">Cargando liquidaciones...</div>
+  </div>
 </div>
 
 {% endif %}
@@ -285,7 +387,7 @@ function _amzErrorBanner(msg) {
         '<button onclick="loadAmazonData()" class="mt-2 text-xs text-orange-500 underline">Reintentar</button>' +
         '</div>';
 }
-var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false };
+var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas' };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -308,7 +410,7 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['ventas', 'salud'].forEach(function(t) {
+    ['ventas', 'salud', 'operaciones', 'finanzas'].forEach(function(t) {
         var el = document.getElementById('amz-tab-' + t);
         if (el) el.classList.toggle('hidden', t !== tabName);
     });
@@ -324,11 +426,12 @@ function switchAmzTab(tabName) {
 
     amzActiveTab = tabName;
     if (!amzTabLoaded[tabName]) {
+        amzTabLoaded[tabName] = true;
         if (tabName === 'salud') loadAmzSaludTab();
+        else if (tabName === 'operaciones') loadAmzOperacionesTab();
+        else if (tabName === 'finanzas') loadAmzFinanzasTab();
     }
 }
-
-// Tabs ahora en el nav top — navegación por URL (/amazon o /amazon?tab=salud)
 
 // ─── Range helpers ────────────────────────────────────────────────────────────
 function setRange(days) {
@@ -577,6 +680,240 @@ function loadAmazonDashboard() {
     }, 1500);
 }
 
+// ── Alertas ────────────────────────────────────────────────────────────────
+async function loadAmzAlerts() {
+  try {
+    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+    var r = await fetch('/api/amazon/alerts' + sellerParam);
+    var d = await r.json();
+    if (!d || d.error) { document.getElementById('amz-alerts-content').innerHTML = ''; return; }
+
+    if (d.total_alerts === 0) {
+      document.getElementById('amz-alerts-content').innerHTML =
+        '<div class="flex items-center gap-2 text-sm text-green-600 bg-green-50 border border-green-200 rounded-xl px-4 py-2.5 mb-1"><span>✓</span><span>Sin alertas críticas</span></div>';
+      return;
+    }
+
+    var html = '<div class="flex flex-wrap gap-2 mb-1">';
+    if (d.suppressed && d.suppressed.length)
+      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 rounded-xl px-3 py-1.5 transition">🚫 ' + d.suppressed.length + ' suprimido' + (d.suppressed.length > 1 ? 's' : '') + '</button>';
+    if (d.no_stock_active && d.no_stock_active.length)
+      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-orange-50 border border-orange-200 text-orange-700 hover:bg-orange-100 rounded-xl px-3 py-1.5 transition">📦 ' + d.no_stock_active.length + ' sin stock</button>';
+    if (d.low_stock && d.low_stock.length)
+      html += '<button onclick="switchAmzTab(\'operaciones\')" class="flex items-center gap-1.5 text-sm bg-yellow-50 border border-yellow-200 text-yellow-700 hover:bg-yellow-100 rounded-xl px-3 py-1.5 transition">⚠️ ' + d.low_stock.length + ' stock bajo (&lt;' + d.threshold + 'u)</button>';
+    html += '</div>';
+    document.getElementById('amz-alerts-content').innerHTML = html;
+  } catch(e) { document.getElementById('amz-alerts-content').innerHTML = ''; }
+}
+
+// ── Tab Operaciones ────────────────────────────────────────────────────────
+var _opsLoaded = false;
+async function loadAmzOperacionesTab() {
+  if (_opsLoaded) return;
+  _opsLoaded = true;
+  loadOpsAlerts();
+  loadOpsListing();
+  loadStockThreshold();
+}
+
+async function loadOpsAlerts() {
+  var el = document.getElementById('amz-ops-alerts');
+  if (!el) return;
+  try {
+    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+    var r = await fetch('/api/amazon/alerts' + sellerParam);
+    var d = await r.json();
+    if (!d || d.total_alerts === 0) { el.innerHTML = ''; return; }
+    var html = '<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">';
+    if (d.suppressed && d.suppressed.length) {
+      html += '<div class="bg-red-50 border border-red-200 rounded-xl p-4"><p class="font-semibold text-red-700 mb-2">🚫 Listings suprimidos (' + d.suppressed.length + ')</p><ul class="text-sm text-red-600 space-y-1">';
+      d.suppressed.slice(0,5).forEach(function(s) { html += '<li class="truncate" title="' + s.title + '">• ' + s.sku + ' — ' + (s.first_issue || 'Ver issues') + '</li>'; });
+      if (d.suppressed.length > 5) html += '<li class="text-red-400">+' + (d.suppressed.length - 5) + ' más...</li>';
+      html += '</ul></div>';
+    }
+    if (d.no_stock_active && d.no_stock_active.length) {
+      html += '<div class="bg-orange-50 border border-orange-200 rounded-xl p-4"><p class="font-semibold text-orange-700 mb-2">📦 Sin stock activos (' + d.no_stock_active.length + ')</p><ul class="text-sm text-orange-600 space-y-1">';
+      d.no_stock_active.slice(0,5).forEach(function(s) { html += '<li class="truncate" title="' + s.title + '">• ' + s.sku + '</li>'; });
+      if (d.no_stock_active.length > 5) html += '<li class="text-orange-400">+' + (d.no_stock_active.length - 5) + ' más...</li>';
+      html += '</ul></div>';
+    }
+    if (d.low_stock && d.low_stock.length) {
+      html += '<div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4"><p class="font-semibold text-yellow-700 mb-2">⚠️ Stock bajo (' + d.low_stock.length + ')</p><ul class="text-sm text-yellow-700 space-y-1">';
+      d.low_stock.slice(0,5).forEach(function(s) { html += '<li class="truncate">• ' + s.sku + ': ' + s.fba_stock + '/' + s.threshold + 'u</li>'; });
+      if (d.low_stock.length > 5) html += '<li class="text-yellow-500">+' + (d.low_stock.length - 5) + ' más...</li>';
+      html += '</ul></div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = ''; }
+}
+
+async function loadOpsListing() {
+  var wrap = document.getElementById('amz-ops-catalog-wrap');
+  if (!wrap) return;
+  var filterEl = document.getElementById('amz-ops-filter');
+  var filter = filterEl ? filterEl.value : 'all';
+  var sellerParam = window.amzActiveSellerId ? '&seller_id=' + window.amzActiveSellerId : '';
+  wrap.innerHTML = '<div class="text-center py-8 text-gray-400 text-sm">Cargando...</div>';
+  try {
+    var r = await fetch('/api/amazon/products/catalog?status_filter=' + filter + '&include_checkboxes=1' + sellerParam);
+    var html = await r.text();
+    wrap.innerHTML = html;
+    initBulkSelection();
+  } catch(e) { wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error al cargar catálogo</div>'; }
+}
+
+// ── Bulk selection ─────────────────────────────────────────────────────────
+var amzSelectedSkus = new Set();
+
+function initBulkSelection() {
+  var all = document.getElementById('amz-select-all');
+  if (all) {
+    all.addEventListener('change', function() {
+      document.querySelectorAll('.amz-sku-check').forEach(function(cb) {
+        cb.checked = all.checked;
+        if (all.checked) amzSelectedSkus.add(cb.dataset.sku);
+        else amzSelectedSkus.delete(cb.dataset.sku);
+      });
+      updateBulkBar();
+    });
+  }
+  document.querySelectorAll('.amz-sku-check').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      if (this.checked) amzSelectedSkus.add(this.dataset.sku);
+      else amzSelectedSkus.delete(this.dataset.sku);
+      updateBulkBar();
+    });
+  });
+}
+
+function updateBulkBar() {
+  var bar = document.getElementById('amz-bulk-bar');
+  var cnt = document.getElementById('amz-bulk-count');
+  if (!bar || !cnt) return;
+  cnt.textContent = amzSelectedSkus.size;
+  bar.classList.toggle('hidden', amzSelectedSkus.size === 0);
+}
+
+function clearBulkSelection() {
+  amzSelectedSkus.clear();
+  document.querySelectorAll('.amz-sku-check, #amz-select-all').forEach(function(cb) { cb.checked = false; });
+  updateBulkBar();
+}
+
+async function executeBulkAction(action) {
+  if (amzSelectedSkus.size === 0) return;
+  var skuList = Array.from(amzSelectedSkus);
+  var label = action === 'pause' ? 'Pausar' : 'Activar FBA';
+  if (!confirm('¿' + label + ' ' + skuList.length + ' listing(s) seleccionados?')) return;
+
+  var bar = document.getElementById('amz-bulk-bar');
+  bar.innerHTML = '<span class="text-sm">Procesando...</span>';
+
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/products/bulk-action' + sellerParam, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({skus: skuList, action: action})
+    });
+    var d = await r.json();
+    clearBulkSelection();
+    _opsLoaded = false;
+    loadOpsListing();
+    loadAmzAlerts();
+    alert('✓ ' + d.succeeded + ' OK' + (d.failed > 0 ? ', ' + d.failed + ' con error' : ''));
+  } catch(e) {
+    alert('Error al ejecutar la acción');
+    clearBulkSelection();
+  }
+}
+
+// ── Stock threshold ─────────────────────────────────────────────────────────
+async function loadStockThreshold() {
+  try {
+    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+    var r = await fetch('/api/amazon/settings/stock-threshold' + sellerParam);
+    var d = await r.json();
+    var inp = document.getElementById('amz-threshold-input');
+    if (inp && d.threshold !== undefined) inp.value = d.threshold;
+  } catch(e) {}
+}
+
+async function saveStockThreshold() {
+  var inp = document.getElementById('amz-threshold-input');
+  var saved = document.getElementById('amz-threshold-saved');
+  if (!inp) return;
+  var threshold = parseInt(inp.value, 10);
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/settings/stock-threshold' + sellerParam, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({threshold: threshold})
+    });
+    var d = await r.json();
+    if (d.ok) {
+      saved.classList.remove('hidden');
+      setTimeout(function() { saved.classList.add('hidden'); }, 3000);
+      loadAmzAlerts();
+    }
+  } catch(e) { alert('Error al guardar'); }
+}
+
+// ── Tab Finanzas ────────────────────────────────────────────────────────────
+var _finanzasLoaded = false;
+async function loadAmzFinanzasTab() {
+  if (_finanzasLoaded) return;
+  _finanzasLoaded = true;
+  var el = document.getElementById('amz-finanzas-content');
+  if (!el) return;
+  var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/finances/summary' + sellerParam);
+    var d = await r.json();
+    if (d.error || !d.groups || !d.groups.length) {
+      el.innerHTML = '<div class="text-center py-12 text-gray-400 text-sm">Sin datos de liquidaciones disponibles</div>';
+      return;
+    }
+    var html = '<div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">' +
+      '<div class="px-6 py-4 border-b border-gray-100">' +
+        '<h3 class="font-semibold text-gray-800">Liquidaciones Amazon</h3>' +
+        '<p class="text-xs text-gray-400 mt-0.5">Períodos de pago recientes</p>' +
+      '</div>' +
+      '<div class="overflow-x-auto">' +
+        '<table class="w-full text-sm">' +
+          '<thead class="bg-gray-50">' +
+            '<tr class="text-left text-xs text-gray-500 uppercase tracking-wide">' +
+              '<th class="px-6 py-3">Período</th>' +
+              '<th class="px-6 py-3">Fecha transferencia</th>' +
+              '<th class="px-6 py-3 text-right">Monto neto</th>' +
+              '<th class="px-6 py-3 text-center">Estado</th>' +
+            '</tr>' +
+          '</thead>' +
+          '<tbody class="divide-y divide-gray-50">';
+
+    d.groups.forEach(function(g, i) {
+      var fecha = g.fund_transfer_date ? g.fund_transfer_date.split('T')[0] : '—';
+      var monto = g.converted_total || g.original_total;
+      var montoFmt = monto ? new Intl.NumberFormat('es-MX', {style:'currency',currency:g.currency||'MXN'}).format(monto) : '—';
+      var statusColor = g.status === 'Closed' ? 'bg-green-100 text-green-700' : (g.status === 'Open' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500');
+      var rowBg = i === 0 ? 'bg-orange-50' : '';
+      html += '<tr class="' + rowBg + ' hover:bg-gray-50 transition">' +
+        '<td class="px-6 py-3 font-mono text-xs text-gray-500">' + (g.group_id ? g.group_id.slice(-8) : '—') + '</td>' +
+        '<td class="px-6 py-3 text-gray-700">' + fecha + '</td>' +
+        '<td class="px-6 py-3 text-right font-semibold ' + (monto < 0 ? 'text-red-600' : 'text-gray-800') + '">' + montoFmt + '</td>' +
+        '<td class="px-6 py-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + statusColor + '">' + (g.status || '—') + '</span></td>' +
+        '</tr>';
+    });
+
+    html += '</tbody></table></div></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div class="text-center py-12 text-red-400 text-sm">Error al cargar liquidaciones</div>';
+  }
+}
+
 // ─── TAB SALUD ────────────────────────────────────────────────────────────────
 function loadAmzSaludTab() {
     var cont = document.getElementById('amz-health-content');
@@ -729,10 +1066,15 @@ highlightRangeBtn(document.querySelector('.amz-range-btn[data-days="30"]'));
 if (amzActiveTab === 'salud') {
     loadAmzSaludTab();
     amzTabLoaded.salud = true;
+} else if (amzActiveTab === 'operaciones') {
+    loadAmzOperacionesTab();
+} else if (amzActiveTab === 'finanzas') {
+    loadAmzFinanzasTab();
 } else {
     loadAmazonDashboard();
 }
 loadAmzBalance();
+loadAmzAlerts();
 
 function saveManualAmazonToken() {
     var token = (document.getElementById('amz-manual-token') || {}).value || '';

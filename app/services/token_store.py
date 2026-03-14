@@ -48,6 +48,13 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_settings (
+                seller_id     TEXT PRIMARY KEY,
+                stock_threshold INTEGER NOT NULL DEFAULT 5,
+                updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
         # ─────────────────────────────────────────────────────────────────
         # TABLA: amazon_accounts (cuentas de Amazon Seller)
         # Almacena credenciales LWA (Login with Amazon) para SP-API.
@@ -519,3 +526,26 @@ async def get_sync_status(user_id: str) -> Optional[dict]:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+
+async def get_amazon_stock_threshold(seller_id: str) -> int:
+    """Retorna el umbral de stock bajo configurado para la cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT stock_threshold FROM amazon_settings WHERE seller_id = ?",
+            (seller_id,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 5
+
+async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
+    """Guarda el umbral de stock bajo para la cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO amazon_settings (seller_id, stock_threshold, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(seller_id) DO UPDATE SET
+                stock_threshold = excluded.stock_threshold,
+                updated_at = CURRENT_TIMESTAMP
+        """, (seller_id, threshold))
+        await db.commit()

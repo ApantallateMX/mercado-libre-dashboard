@@ -2916,3 +2916,176 @@ def _render_error(request: Request, template: str, msg: str) -> HTMLResponse:
         f"partials/{template}",
         {"request": request, "error": msg, "no_account": False},
     )
+
+
+# ─── Alertas críticas consolidadas ──────────────────────────────────────────
+
+@router.get("/alerts")
+async def get_amazon_alerts(
+    seller_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    """
+    Retorna alertas críticas de la cuenta: listings suprimidos, stock bajo,
+    stock en cero con listing activo. Reutiliza caché existente — costo cero
+    si el caché está fresco.
+    """
+    from app.services import token_store as _ts
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    sid = client.seller_id
+    threshold = await _ts.get_amazon_stock_threshold(sid)
+
+    # Reutilizar caché existente (no fuerza nuevas llamadas a SP-API)
+    listings     = await _get_listings_cached(client)
+    fba_list     = await _get_fba_cached(client)
+    fba_index    = _build_fba_index(fba_list)
+
+    suppressed_items = []
+    low_stock_items  = []
+    no_stock_items   = []
+
+    for item in listings:
+        sku       = item.get("sku") or item.get("sellerSku") or ""
+        summaries = item.get("summaries", [{}])
+        summary_0 = summaries[0] if summaries else {}
+        title     = summary_0.get("itemName") or sku
+        issues    = item.get("issues") or []
+        status    = _listing_status(summaries)
+        fba_data  = fba_index.get(sku, {})
+        fba_units = fba_data.get("inventoryDetails", {}).get("fulfillableQuantity", 0) or 0
+
+        if status in ("INACTIVE", "SUPPRESSED") and issues:
+            suppressed_items.append({
+                "sku": sku,
+                "title": title,
+                "issues_count": len(issues),
+                "first_issue": issues[0].get("message", "") if issues else "",
+            })
+        elif status == "ACTIVE" and fba_units == 0:
+            no_stock_items.append({"sku": sku, "title": title})
+        elif status == "ACTIVE" and 0 < fba_units < threshold:
+            low_stock_items.append({
+                "sku": sku,
+                "title": title,
+                "fba_stock": fba_units,
+                "threshold": threshold,
+            })
+
+    return JSONResponse({
+        "suppressed":      suppressed_items,
+        "low_stock":       low_stock_items,
+        "no_stock_active": no_stock_items,
+        "threshold":       threshold,
+        "total_alerts":    len(suppressed_items) + len(low_stock_items) + len(no_stock_items),
+    })
+
+
+# ─── Bulk pause / activate ───────────────────────────────────────────────────
+
+@router.post("/products/bulk-action")
+async def bulk_listing_action(
+    payload: dict,
+    seller_id: Optional[str] = Query(None),
+):
+    """
+    Pausa o activa múltiples listings.
+    Body: {"skus": ["SKU1", "SKU2"], "action": "pause" | "reactivate_fba"}
+    """
+    import asyncio as _aio
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    skus   = payload.get("skus", [])
+    action = payload.get("action", "")
+
+    if action not in ("pause", "reactivate_fba"):
+        return JSONResponse({"error": "action debe ser 'pause' o 'reactivate_fba'"}, status_code=400)
+    if not skus:
+        return JSONResponse({"error": "Lista de SKUs vacía"}, status_code=400)
+
+    results: dict = {}
+    for sku in skus:
+        try:
+            await client.update_listing_fulfillment(sku=sku, action=action)
+            results[sku] = "ok"
+        except Exception as e:
+            results[sku] = f"error: {str(e)[:80]}"
+        await _aio.sleep(0.6)  # rate limit SP-API
+
+    # Invalidar caché de listings
+    sid = client.seller_id
+    _listings_cache.pop(sid, None)
+
+    succeeded = sum(1 for v in results.values() if v == "ok")
+    return JSONResponse({
+        "ok": succeeded == len(skus),
+        "results": results,
+        "succeeded": succeeded,
+        "failed": len(skus) - succeeded,
+    })
+
+
+# ─── Stock threshold settings ────────────────────────────────────────────────
+
+@router.get("/settings/stock-threshold")
+async def get_stock_threshold(seller_id: Optional[str] = Query(None)):
+    from app.services import token_store as _ts
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"threshold": 5})
+    threshold = await _ts.get_amazon_stock_threshold(client.seller_id)
+    return JSONResponse({"threshold": threshold, "seller_id": client.seller_id})
+
+
+@router.post("/settings/stock-threshold")
+async def set_stock_threshold(
+    payload: dict,
+    seller_id: Optional[str] = Query(None),
+):
+    from app.services import token_store as _ts
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    threshold = int(payload.get("threshold", 5))
+    if threshold < 0 or threshold > 9999:
+        return JSONResponse({"error": "Threshold fuera de rango (0-9999)"}, status_code=400)
+
+    await _ts.set_amazon_stock_threshold(client.seller_id, threshold)
+    return JSONResponse({"ok": True, "threshold": threshold})
+
+
+# ─── Finances summary ────────────────────────────────────────────────────────
+
+_finances_cache: dict = {}
+_FINANCES_TTL = 1800  # 30 minutos
+
+@router.get("/finances/summary")
+async def get_finances_summary(seller_id: Optional[str] = Query(None)):
+    """
+    Retorna grupos de liquidación recientes (últimos 6 meses).
+    TTL de caché: 30 minutos.
+    """
+    import time
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
+
+    sid = client.seller_id
+    cached = _finances_cache.get(sid)
+    if cached and (time.time() - cached["ts"]) < _FINANCES_TTL:
+        return JSONResponse(cached["data"])
+
+    groups = await client.get_financial_event_groups(max_results=10)
+    payload = {"groups": groups, "count": len(groups)}
+    _finances_cache[sid] = {"ts": time.time(), "data": payload}
+    return JSONResponse(payload)
