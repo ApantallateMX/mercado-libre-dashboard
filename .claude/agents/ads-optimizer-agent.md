@@ -48,7 +48,7 @@ CTR   = Clics / Impresiones × 100
 CVR   = Conversiones / Clics × 100
 ```
 
-## UMBRALES MELI ADS (benchmarks México 2025)
+## UMBRALES MELI ADS (benchmarks México 2026)
 
 | ROAS | ACoS equiv. | Evaluación | Acción |
 |------|-------------|------------|--------|
@@ -68,7 +68,7 @@ Margen 25%: ROAS mínimo = 4.0x
 Margen 30%: ROAS mínimo = 3.3x
 ```
 
-## UMBRALES AMAZON ADS (cuando esté disponible — referencia 2025)
+## UMBRALES AMAZON ADS (cuando esté disponible — referencia 2026)
 
 | ACoS | Evaluación |
 |------|------------|
@@ -159,7 +159,7 @@ Cálculo de presupuesto máximo por item:
   - Para ser rentable: necesitas CVR > 7.5% (4 clics/venta) con este CPC
 ```
 
-## NUEVOS FORMATOS MELI ADS 2024-2025
+## NUEVOS FORMATOS MELI ADS 2024-2026
 
 ```
 Display Ads:

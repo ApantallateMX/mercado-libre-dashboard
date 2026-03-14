@@ -62,7 +62,7 @@ Amazon rankea por **probabilidad de venta**. Los factores clave en orden de peso
 7. In-stock rate — quedarse sin stock destruye el ranking
 ```
 
-### Señales de A+ (2025)
+### Señales de A+ (2026)
 ```
 - A+ Content aumenta CVR entre 3-10% según Amazon
 - A+ Premium (Brand Registry requerido) puede aumentar CVR hasta 20%
@@ -339,7 +339,7 @@ Sponsored Display (SD):
   - Ideal para reconquista de visitantes que no convirtieron
 ```
 
-### KPIs de Amazon Ads (benchmarks México 2025)
+### KPIs de Amazon Ads (benchmarks México 2026)
 ```
 ACoS (Advertising Cost of Sales):
   Excelente: < 10%

@@ -36,7 +36,7 @@ Eres el agente de calidad de publicaciones de Apantallate para MeLi y Amazon. Tu
 
 Score: 85-100 Excelente | 70-84 Bueno | 50-69 Regular | < 50 Crítico
 
-## MELI — TÍTULOS 2025
+## MELI — TÍTULOS 2026
 
 ```
 Formato: [Marca] + [Tipo producto] + [Atributo 1] + [Atributo 2]
@@ -52,13 +52,13 @@ Formato: [Marca] + [Tipo producto] + [Atributo 1] + [Atributo 2]
 ✗ NO: repetición de palabras
 ✗ NO: nombre del vendedor
 
-MeLi 2025 — penaliza más fuerte los títulos con:
+MeLi 2026 — penaliza más fuerte los títulos con:
   - Menos de 40 caracteres (sin información suficiente)
   - Repetición de la misma palabra 2+ veces
   - Caracteres especiales que impiden indexación correcta
 ```
 
-## AMAZON — TÍTULOS 2025 (algoritmo A9/A10)
+## AMAZON — TÍTULOS 2026 (algoritmo A9/A10)
 
 ```
 Formato: [Marca] [Tipo Producto] [Atributo 1] [Atributo 2] [Modelo/Spec]
@@ -117,7 +117,7 @@ NO incluir:
   ✗ Palabras ya en el título exactas (duplicar no ayuda)
 ```
 
-## IMÁGENES — MELI 2025
+## IMÁGENES — MELI 2026
 
 ```
 Foto principal:
@@ -145,7 +145,7 @@ Video (MeLi 2024+, Amazon siempre):
   Aumenta conversión especialmente en electrónica y gadgets
 ```
 
-## IMÁGENES — AMAZON 2025
+## IMÁGENES — AMAZON 2026
 
 ```
 Igual que MeLi en lo básico, diferencias:
