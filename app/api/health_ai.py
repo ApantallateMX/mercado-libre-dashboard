@@ -1,6 +1,7 @@
 """AI-powered endpoints for the Health section (questions, claims, messages)."""
 
 import json
+import os
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -16,6 +17,42 @@ from app.services.health_ai import (
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
 
 _UNAVAILABLE_MSG = "API de IA no disponible. Configura ANTHROPIC_API_KEY en el servidor."
+
+
+@router.get("/debug-key")
+async def debug_key():
+    """Diagnose Anthropic API key configuration (masked for security)."""
+    from app.config import ANTHROPIC_API_KEY
+    key = ANTHROPIC_API_KEY or ""
+    raw_env = os.getenv("ANTHROPIC_API_KEY", "")
+    p1 = os.getenv("AI_KEY_P1", "")
+    p2 = os.getenv("AI_KEY_P2", "")
+    masked = (key[:8] + "..." + key[-4:]) if len(key) > 12 else ("(vacía)" if not key else "(muy corta: " + str(len(key)) + " chars)")
+    source = "ANTHROPIC_API_KEY env" if raw_env else ("AI_KEY_P1+P2 reconstruida" if (p1 and p2) else "no configurada")
+    # Quick test call
+    test_result = None
+    if key and len(key) > 10:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]},
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                )
+                if r.status_code == 200:
+                    test_result = "✅ Key válida — API responde OK"
+                else:
+                    try:
+                        err = r.json().get("error", {}).get("message", r.text[:200])
+                    except Exception:
+                        err = r.text[:200]
+                    test_result = f"❌ Error {r.status_code}: {err}"
+        except Exception as e:
+            test_result = f"❌ Error de conexión: {e}"
+    else:
+        test_result = "❌ Key no configurada o muy corta"
+    return {"key_masked": masked, "source": source, "length": len(key), "available": claude_client.is_available(), "test": test_result}
 
 
 async def _sse_stream(system: str, prompt: str, max_tokens: int):

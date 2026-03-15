@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 from app.config import ANTHROPIC_API_KEY
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 
 def is_available() -> bool:
