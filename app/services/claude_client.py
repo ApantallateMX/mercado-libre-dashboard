@@ -5,20 +5,27 @@ Used for AI-powered title/description/attributes improvement.
 
 import httpx
 from typing import AsyncGenerator
-from app.config import ANTHROPIC_API_KEY
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 
 
+def _get_key() -> str:
+    """Always read key fresh from config to avoid stale module-level imports."""
+    from app.config import ANTHROPIC_API_KEY
+    return ANTHROPIC_API_KEY or ""
+
+
 def is_available() -> bool:
     """Check if the Anthropic API key is configured."""
-    return bool(ANTHROPIC_API_KEY and len(ANTHROPIC_API_KEY) > 10)
+    k = _get_key()
+    return bool(k and len(k) > 10)
 
 
 async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str:
     """Generate a complete response (non-streaming)."""
-    if not is_available():
+    key = _get_key()
+    if not key or len(key) <= 10:
         raise RuntimeError("ANTHROPIC_API_KEY not configured")
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -34,7 +41,7 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str
             ANTHROPIC_API_URL,
             json=payload,
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
+                "x-api-key": key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
@@ -53,7 +60,8 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str
 
 async def generate_stream(prompt: str, system: str = "", max_tokens: int = 1024) -> AsyncGenerator[str, None]:
     """Generate a streaming response (SSE). Yields text chunks."""
-    if not is_available():
+    key = _get_key()
+    if not key or len(key) <= 10:
         raise RuntimeError("ANTHROPIC_API_KEY not configured")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -71,7 +79,7 @@ async def generate_stream(prompt: str, system: str = "", max_tokens: int = 1024)
             ANTHROPIC_API_URL,
             json=payload,
             headers={
-                "x-api-key": ANTHROPIC_API_KEY,
+                "x-api-key": key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
