@@ -646,6 +646,9 @@ function fmtCompact(n) {
     return '$' + fmtMoney(n);
 }
 
+// ─── Paginación genérica (compartida con tab Deals) ──────────────────────────
+// _renderPaginated definida más abajo en el bloque TAB DEALS
+
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
     ['ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings', 'deals'].forEach(function(t) {
@@ -815,17 +818,7 @@ function renderAmazonDailyTable(data) {
     var todayStr = toDateStr(new Date());
     var todayRevenue = 0, todayOrders = 0, todayUnits = 0;
 
-    var html = '<table class="w-full text-sm">';
-    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
-    html += '<th class="py-2.5 px-4 font-semibold">Fecha</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Órd.</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Revenue</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">% Meta</th>';
-    html += '<th class="py-2.5 px-4 font-semibold w-36">Progreso</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-center">Estado</th>';
-    html += '</tr></thead><tbody>';
-
+    var _amzDailyRows = [];
     daily.forEach(function(day) {
         var pct = day.pct_of_goal, isToday = day.date === todayStr;
         if (isToday) { todayRevenue = day.revenue; todayOrders = day.orders; todayUnits = day.units; }
@@ -838,28 +831,43 @@ function renderAmazonDailyTable(data) {
         else if(pct>0){badge='Bajo';bc='bg-red-100 text-red-700';}
         else{badge='—';bc='bg-gray-100 text-gray-400';}
         var dateDisp = isToday ? '<span class="font-bold text-orange-500">● Hoy</span>' : day.date;
-        html += '<tr class="'+rowBg+' border-b border-gray-100 hover:bg-gray-50 transition">';
-        html += '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">'+dateDisp+'</td>';
-        html += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.orders+'</td>';
-        html += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.units+'</td>';
-        html += '<td class="py-2.5 px-3 text-right font-semibold text-orange-700">$'+fmtMoney(day.revenue)+'</td>';
-        html += '<td class="py-2.5 px-3 text-right font-bold" style="color:'+barColor+'">'+pct.toFixed(1)+'%</td>';
-        html += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:'+Math.min(pct,100)+'%;background:'+barColor+'"></div></div></td>';
-        html += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold '+bc+'">'+badge+'</span></td>';
-        html += '</tr>';
+        var row = '<tr class="'+rowBg+' border-b border-gray-100 hover:bg-gray-50 transition">';
+        row += '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">'+dateDisp+'</td>';
+        row += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.orders+'</td>';
+        row += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.units+'</td>';
+        row += '<td class="py-2.5 px-3 text-right font-semibold text-orange-700">$'+fmtMoney(day.revenue)+'</td>';
+        row += '<td class="py-2.5 px-3 text-right font-bold" style="color:'+barColor+'">'+pct.toFixed(1)+'%</td>';
+        row += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:'+Math.min(pct,100)+'%;background:'+barColor+'"></div></div></td>';
+        row += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold '+bc+'">'+badge+'</span></td>';
+        row += '</tr>';
+        _amzDailyRows.push(row);
     });
 
-    html += '</tbody><tfoot class="bg-orange-50/50 text-sm font-semibold border-t-2 border-orange-200"><tr>';
-    html += '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">('+totals.total_days+' días)</span></td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">'+totals.orders+'</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">'+totals.units+'</td>';
-    html += '<td class="py-3 px-3 text-right text-orange-700">$'+fmtMoney(totals.revenue)+'</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-500">Prom: '+totals.avg_pct.toFixed(1)+'%</td>';
-    html += '<td class="py-3 px-4"></td>';
-    html += '<td class="py-3 px-3 text-center text-xs text-gray-500">'+totals.days_met+'/'+totals.total_days+' días</td>';
-    html += '</tr></tfoot></table>';
+    var tfoot = '<tfoot class="bg-orange-50/50 text-sm font-semibold border-t-2 border-orange-200"><tr>';
+    tfoot += '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">('+totals.total_days+' días)</span></td>';
+    tfoot += '<td class="py-3 px-3 text-right text-gray-800">'+totals.orders+'</td>';
+    tfoot += '<td class="py-3 px-3 text-right text-gray-800">'+totals.units+'</td>';
+    tfoot += '<td class="py-3 px-3 text-right text-orange-700">$'+fmtMoney(totals.revenue)+'</td>';
+    tfoot += '<td class="py-3 px-3 text-right text-gray-500">Prom: '+totals.avg_pct.toFixed(1)+'%</td>';
+    tfoot += '<td class="py-3 px-4"></td>';
+    tfoot += '<td class="py-3 px-3 text-center text-xs text-gray-500">'+totals.days_met+'/'+totals.total_days+' días</td>';
+    tfoot += '</tr></tfoot>';
 
-    document.getElementById('amz-daily-sales-table').innerHTML = html;
+    var thead = '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+        '<th class="py-2.5 px-4 font-semibold">Fecha</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Órd.</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Revenue</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">% Meta</th>' +
+        '<th class="py-2.5 px-4 font-semibold w-36">Progreso</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-center">Estado</th>' +
+        '</tr></thead>';
+    document.getElementById('amz-daily-sales-table').innerHTML =
+        '<table class="w-full text-sm">' + thead +
+        '<tbody id="amz-daily-tbody"></tbody>' + tfoot + '</table>' +
+        '<div id="amz-daily-pag"></div>';
+    window['amz-daily-pag_go'] = function(p) { _renderPaginated(_amzDailyRows, p, 'amz-daily-tbody', 'amz-daily-pag'); };
+    _renderPaginated(_amzDailyRows, 1, 'amz-daily-tbody', 'amz-daily-pag');
     updateAmazonTodayBar(todayRevenue, todayOrders, todayUnits);
 }
 
@@ -1117,6 +1125,20 @@ async function loadAmzFinanzasTab() {
       el.innerHTML = '<div class="text-center py-12 text-gray-400 text-sm">Sin datos de liquidaciones disponibles</div>';
       return;
     }
+    var _finRows = d.groups.map(function(g, i) {
+      var fecha = g.fund_transfer_date ? g.fund_transfer_date.split('T')[0] : '—';
+      var monto = g.converted_total || g.original_total;
+      var montoFmt = monto ? new Intl.NumberFormat('es-MX', {style:'currency',currency:g.currency||'MXN'}).format(monto) : '—';
+      var statusColor = g.status === 'Closed' ? 'bg-green-100 text-green-700' : (g.status === 'Open' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500');
+      var rowBg = i === 0 ? 'bg-orange-50' : '';
+      return '<tr class="' + rowBg + ' hover:bg-gray-50 transition">' +
+        '<td class="px-6 py-3 font-mono text-xs text-gray-500">' + (g.group_id ? g.group_id.slice(-8) : '—') + '</td>' +
+        '<td class="px-6 py-3 text-gray-700">' + fecha + '</td>' +
+        '<td class="px-6 py-3 text-right font-semibold ' + (monto < 0 ? 'text-red-600' : 'text-gray-800') + '">' + montoFmt + '</td>' +
+        '<td class="px-6 py-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + statusColor + '">' + (g.status || '—') + '</span></td>' +
+        '</tr>';
+    });
+
     var html = '<div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">' +
       '<div class="px-6 py-4 border-b border-gray-100">' +
         '<h3 class="font-semibold text-gray-800">Liquidaciones Amazon</h3>' +
@@ -1132,24 +1154,12 @@ async function loadAmzFinanzasTab() {
               '<th class="px-6 py-3 text-center">Estado</th>' +
             '</tr>' +
           '</thead>' +
-          '<tbody class="divide-y divide-gray-50">';
-
-    d.groups.forEach(function(g, i) {
-      var fecha = g.fund_transfer_date ? g.fund_transfer_date.split('T')[0] : '—';
-      var monto = g.converted_total || g.original_total;
-      var montoFmt = monto ? new Intl.NumberFormat('es-MX', {style:'currency',currency:g.currency||'MXN'}).format(monto) : '—';
-      var statusColor = g.status === 'Closed' ? 'bg-green-100 text-green-700' : (g.status === 'Open' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500');
-      var rowBg = i === 0 ? 'bg-orange-50' : '';
-      html += '<tr class="' + rowBg + ' hover:bg-gray-50 transition">' +
-        '<td class="px-6 py-3 font-mono text-xs text-gray-500">' + (g.group_id ? g.group_id.slice(-8) : '—') + '</td>' +
-        '<td class="px-6 py-3 text-gray-700">' + fecha + '</td>' +
-        '<td class="px-6 py-3 text-right font-semibold ' + (monto < 0 ? 'text-red-600' : 'text-gray-800') + '">' + montoFmt + '</td>' +
-        '<td class="px-6 py-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + statusColor + '">' + (g.status || '—') + '</span></td>' +
-        '</tr>';
-    });
-
-    html += '</tbody></table></div></div>';
+          '<tbody id="amz-fin-tbody" class="divide-y divide-gray-50"></tbody>' +
+        '</table></div></div>' +
+      '<div id="amz-fin-pag"></div>';
     el.innerHTML = html;
+    window['amz-fin-pag_go'] = function(p) { _renderPaginated(_finRows, p, 'amz-fin-tbody', 'amz-fin-pag'); };
+    _renderPaginated(_finRows, 1, 'amz-fin-tbody', 'amz-fin-pag');
   } catch(e) {
     el.innerHTML = '<div class="text-center py-12 text-red-400 text-sm">Error al cargar liquidaciones</div>';
   }
@@ -1383,21 +1393,23 @@ async function loadTopProducts() {
       el.innerHTML = '<div class="text-center py-6 text-gray-400 text-sm">Sin datos de ventas por SKU disponibles aún.<br><span class="text-xs">Los datos se procesan en segundo plano (puede tardar 1-2 minutos)</span></div>';
       return;
     }
-    var html = '<div class="overflow-x-auto"><table class="w-full text-sm">';
-    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50"><th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">SKU / Título</th><th class="py-2.5 px-4 text-right">Uds 30d</th><th class="py-2.5 px-4 text-right">Revenue</th><th class="py-2.5 px-4 text-right">% Total</th><th class="py-2.5 px-4 text-right">FBA Stock</th></tr></thead><tbody>';
-    d.items.forEach(function(item) {
+    var _topRows = d.items.map(function(item) {
       var barColor = item.rank <= 3 ? '#F97316' : (item.rank <= 7 ? '#FB923C' : '#FED7AA');
-      html += '<tr class="border-b border-gray-50 hover:bg-gray-50">';
-      html += '<td class="py-2.5 px-4"><span class="inline-flex w-6 h-6 rounded-full items-center justify-center text-xs font-bold text-white" style="background:' + barColor + '">' + item.rank + '</span></td>';
-      html += '<td class="py-2.5 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[200px]">' + (item.title || '—') + '</div></td>';
-      html += '<td class="py-2.5 px-4 text-right font-semibold text-gray-700">' + item.units_30d + '</td>';
-      html += '<td class="py-2.5 px-4 text-right font-bold text-orange-700">$' + (item.revenue_30d || 0).toLocaleString('es-MX', {minimumFractionDigits:2}) + '</td>';
-      html += '<td class="py-2.5 px-4 text-right"><div class="flex items-center justify-end gap-1"><div class="w-16 bg-gray-200 rounded-full h-1.5"><div class="h-1.5 rounded-full bg-orange-400" style="width:' + Math.min(item.share_pct || 0, 100) + '%"></div></div><span class="text-xs text-gray-500">' + (item.share_pct || 0).toFixed(1) + '%</span></div></td>';
-      html += '<td class="py-2.5 px-4 text-right ' + (item.fba_stock === 0 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + item.fba_stock + '</td>';
-      html += '</tr>';
+      var row = '<tr class="border-b border-gray-50 hover:bg-gray-50">';
+      row += '<td class="py-2.5 px-4"><span class="inline-flex w-6 h-6 rounded-full items-center justify-center text-xs font-bold text-white" style="background:' + barColor + '">' + item.rank + '</span></td>';
+      row += '<td class="py-2.5 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[200px]">' + (item.title || '—') + '</div></td>';
+      row += '<td class="py-2.5 px-4 text-right font-semibold text-gray-700">' + item.units_30d + '</td>';
+      row += '<td class="py-2.5 px-4 text-right font-bold text-orange-700">$' + (item.revenue_30d || 0).toLocaleString('es-MX', {minimumFractionDigits:2}) + '</td>';
+      row += '<td class="py-2.5 px-4 text-right"><div class="flex items-center justify-end gap-1"><div class="w-16 bg-gray-200 rounded-full h-1.5"><div class="h-1.5 rounded-full bg-orange-400" style="width:' + Math.min(item.share_pct || 0, 100) + '%"></div></div><span class="text-xs text-gray-500">' + (item.share_pct || 0).toFixed(1) + '%</span></div></td>';
+      row += '<td class="py-2.5 px-4 text-right ' + (item.fba_stock === 0 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + item.fba_stock + '</td>';
+      row += '</tr>';
+      return row;
     });
-    html += '</tbody></table></div>';
-    el.innerHTML = html;
+    el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm">' +
+      '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50"><th class="py-2.5 px-4">#</th><th class="py-2.5 px-4">SKU / Título</th><th class="py-2.5 px-4 text-right">Uds 30d</th><th class="py-2.5 px-4 text-right">Revenue</th><th class="py-2.5 px-4 text-right">% Total</th><th class="py-2.5 px-4 text-right">FBA Stock</th></tr></thead>' +
+      '<tbody id="amz-top-tbody"></tbody></table></div><div id="amz-top-pag"></div>';
+    window['amz-top-pag_go'] = function(p) { _renderPaginated(_topRows, p, 'amz-top-tbody', 'amz-top-pag'); };
+    _renderPaginated(_topRows, 1, 'amz-top-tbody', 'amz-top-pag');
   } catch(e) {
     el.innerHTML = '<div class="text-center py-6 text-red-400 text-sm">Error al cargar top productos</div>';
   }
@@ -1443,36 +1455,37 @@ async function loadFbaTab() {
 
     if (!items.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay items para el filtro seleccionado</div>'; return; }
 
-    var html = '<table class="w-full text-sm min-w-[700px]">';
-    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
-    html += '<th class="py-3 px-4 font-semibold">SKU / Producto</th>';
-    html += '<th class="py-3 px-3 text-right font-semibold">FBA Stock</th>';
-    html += '<th class="py-3 px-3 text-right font-semibold">En camino</th>';
-    html += '<th class="py-3 px-3 text-right font-semibold">Uds/día 30d</th>';
-    html += '<th class="py-3 px-3 text-right font-semibold">Días cobertura</th>';
-    html += '<th class="py-3 px-3 text-right font-semibold">Qty a pedir</th>';
-    html += '<th class="py-3 px-3 text-center font-semibold">Estado</th>';
-    html += '</tr></thead><tbody class="divide-y divide-gray-50">';
-
-    items.forEach(function(item) {
+    var _fbaRows = items.map(function(item) {
       var statusColor = {ok:'bg-green-100 text-green-700', warning:'bg-yellow-100 text-yellow-700', critical:'bg-red-100 text-red-700', out:'bg-gray-100 text-gray-600'};
       var statusLabel = {ok:'OK', warning:'⚠️ Advertencia', critical:'🚨 Crítico', out:'📦 Sin stock'};
       var sc = statusColor[item.status] || 'bg-gray-100 text-gray-500';
       var sl = statusLabel[item.status] || item.status;
       var daysText = item.days_coverage == null ? '∞' : (item.days_coverage > 999 ? '>999' : Math.round(item.days_coverage));
       var rowBg = item.status === 'critical' ? 'bg-red-50/30' : (item.status === 'out' ? 'bg-gray-50' : '');
-      html += '<tr class="' + rowBg + ' hover:bg-orange-50/20">';
-      html += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[220px]">' + (item.title || '—') + '</div></td>';
-      html += '<td class="py-3 px-3 text-right font-bold ' + (item.fba_stock === 0 ? 'text-red-600' : 'text-gray-800') + '">' + item.fba_stock + '</td>';
-      html += '<td class="py-3 px-3 text-right text-indigo-600">' + (item.inbound || 0) + '</td>';
-      html += '<td class="py-3 px-3 text-right text-gray-600">' + (item.velocity_daily > 0 ? item.velocity_daily : '—') + '</td>';
-      html += '<td class="py-3 px-3 text-right font-bold ' + (item.status === 'critical' ? 'text-red-600' : item.status === 'warning' ? 'text-yellow-600' : 'text-gray-700') + '">' + daysText + 'd</td>';
-      html += '<td class="py-3 px-3 text-right"><span class="' + (item.restock_qty > 0 ? 'font-bold text-orange-700' : 'text-gray-400') + '">' + (item.restock_qty > 0 ? item.restock_qty + ' u' : '—') + '</span></td>';
-      html += '<td class="py-3 px-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + sc + '">' + sl + '</span></td>';
-      html += '</tr>';
+      var row = '<tr class="' + rowBg + ' hover:bg-orange-50/20">';
+      row += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[220px]">' + (item.title || '—') + '</div></td>';
+      row += '<td class="py-3 px-3 text-right font-bold ' + (item.fba_stock === 0 ? 'text-red-600' : 'text-gray-800') + '">' + item.fba_stock + '</td>';
+      row += '<td class="py-3 px-3 text-right text-indigo-600">' + (item.inbound || 0) + '</td>';
+      row += '<td class="py-3 px-3 text-right text-gray-600">' + (item.velocity_daily > 0 ? item.velocity_daily : '—') + '</td>';
+      row += '<td class="py-3 px-3 text-right font-bold ' + (item.status === 'critical' ? 'text-red-600' : item.status === 'warning' ? 'text-yellow-600' : 'text-gray-700') + '">' + daysText + 'd</td>';
+      row += '<td class="py-3 px-3 text-right"><span class="' + (item.restock_qty > 0 ? 'font-bold text-orange-700' : 'text-gray-400') + '">' + (item.restock_qty > 0 ? item.restock_qty + ' u' : '—') + '</span></td>';
+      row += '<td class="py-3 px-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + sc + '">' + sl + '</span></td>';
+      row += '</tr>';
+      return row;
     });
-    html += '</tbody></table>';
-    wrap.innerHTML = html;
+    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
+      '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+      '<th class="py-3 px-4 font-semibold">SKU / Producto</th>' +
+      '<th class="py-3 px-3 text-right font-semibold">FBA Stock</th>' +
+      '<th class="py-3 px-3 text-right font-semibold">En camino</th>' +
+      '<th class="py-3 px-3 text-right font-semibold">Uds/día 30d</th>' +
+      '<th class="py-3 px-3 text-right font-semibold">Días cobertura</th>' +
+      '<th class="py-3 px-3 text-right font-semibold">Qty a pedir</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Estado</th>' +
+      '</tr></thead><tbody id="amz-fba-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
+      '<div id="amz-fba-pag"></div>';
+    window['amz-fba-pag_go'] = function(p) { _renderPaginated(_fbaRows, p, 'amz-fba-tbody', 'amz-fba-pag'); };
+    _renderPaginated(_fbaRows, 1, 'amz-fba-tbody', 'amz-fba-pag');
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar restock: ' + e.message + '</div>';
   }
@@ -1516,31 +1529,32 @@ async function loadListingsTab() {
 
     if (!items.length) { wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay listings para el filtro seleccionado</div>'; return; }
 
-    var html = '<table class="w-full text-sm min-w-[600px]">';
-    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
-    html += '<th class="py-3 px-4 font-semibold">SKU / Título</th>';
-    html += '<th class="py-3 px-3 text-center font-semibold">Grado</th>';
-    html += '<th class="py-3 px-3 text-center font-semibold">Score</th>';
-    html += '<th class="py-3 px-3 text-center font-semibold">Estado</th>';
-    html += '<th class="py-3 px-3 font-semibold">Issues</th>';
-    html += '</tr></thead><tbody class="divide-y divide-gray-50">';
-
-    items.forEach(function(item) {
+    var _lqRows = items.map(function(item) {
       var gradeColor = {A:'bg-green-100 text-green-700', B:'bg-blue-100 text-blue-700', C:'bg-yellow-100 text-yellow-700', D:'bg-red-100 text-red-700'};
       var scoreColor = item.score >= 85 ? '#10B981' : (item.score >= 70 ? '#3B82F6' : (item.score >= 55 ? '#D97706' : '#EF4444'));
       var statusColors = {ACTIVE:'text-green-600', INACTIVE:'text-gray-400', SUPPRESSED:'text-red-600', DISCOVERABLE:'text-yellow-600'};
       var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
-      html += '<tr class="hover:bg-gray-50">';
-      html += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[250px]">' + (item.title || '—') + '</div></td>';
-      html += '<td class="py-3 px-3 text-center"><span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold ' + gc + '">' + item.grade + '</span></td>';
-      html += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
-      html += '<td class="py-3 px-3 text-center text-xs font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</td>';
       var issuesHtml = (item.issues || []).map(function(i){ return '<div class="text-xs text-red-600 truncate max-w-[220px]">• ' + i + '</div>'; }).join('');
-      html += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
-      html += '</tr>';
+      var row = '<tr class="hover:bg-gray-50">';
+      row += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[250px]">' + (item.title || '—') + '</div></td>';
+      row += '<td class="py-3 px-3 text-center"><span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold ' + gc + '">' + item.grade + '</span></td>';
+      row += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
+      row += '<td class="py-3 px-3 text-center text-xs font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</td>';
+      row += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
+      row += '</tr>';
+      return row;
     });
-    html += '</tbody></table>';
-    wrap.innerHTML = html;
+    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[600px]">' +
+      '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+      '<th class="py-3 px-4 font-semibold">SKU / Título</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Grado</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Score</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Estado</th>' +
+      '<th class="py-3 px-3 font-semibold">Issues</th>' +
+      '</tr></thead><tbody id="amz-lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
+      '<div id="amz-lq-pag"></div>';
+    window['amz-lq-pag_go'] = function(p) { _renderPaginated(_lqRows, p, 'amz-lq-tbody', 'amz-lq-pag'); };
+    _renderPaginated(_lqRows, 1, 'amz-lq-tbody', 'amz-lq-pag');
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-10 text-red-400 text-sm">Error al cargar listings: ' + e.message + '</div>';
   }

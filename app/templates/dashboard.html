@@ -397,6 +397,29 @@ function updateTodayBar(todayGross, todayNet, todayUnits) {
     document.getElementById('qs-bar').style.background = barColor;
 }
 
+// ─── Paginación helper ────────────────────────────────────────────────────────
+var _PAGE_SIZE_MELI = 10;
+function _renderPaginatedMeli(rows, page, tbodyId, paginatorId) {
+    var total = rows.length;
+    var totalPages = Math.max(1, Math.ceil(total / _PAGE_SIZE_MELI));
+    var p = Math.min(Math.max(1, page), totalPages);
+    var start = (p - 1) * _PAGE_SIZE_MELI, end = Math.min(start + _PAGE_SIZE_MELI, total);
+    var tbody = document.getElementById(tbodyId);
+    if (tbody) tbody.innerHTML = rows.slice(start, end).join('');
+    var pag = document.getElementById(paginatorId);
+    if (!pag) return p;
+    if (total <= _PAGE_SIZE_MELI) { pag.innerHTML = ''; return p; }
+    pag.innerHTML = '<div class="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-t border-gray-100 text-xs text-gray-500">' +
+        '<button onclick="window[\'' + paginatorId + '_go\'](' + (p - 1) + ')" ' +
+        (p <= 1 ? 'disabled class="opacity-30 cursor-not-allowed"' : 'class="hover:text-gray-800 transition"') +
+        '>‹ Ant</button>' +
+        '<span>' + p + ' de ' + totalPages + '</span>' +
+        '<button onclick="window[\'' + paginatorId + '_go\'](' + (p + 1) + ')" ' +
+        (p >= totalPages ? 'disabled class="opacity-30 cursor-not-allowed"' : 'class="hover:text-gray-800 transition"') +
+        '>Sig ›</button></div>';
+    return p;
+}
+
 // ─── Tabla diaria ─────────────────────────────────────────────────────────────
 function renderDailyTable(data) {
     // Actualizar goal input con el valor de la DB
@@ -415,22 +438,10 @@ function renderDailyTable(data) {
     var todayStr = toDateStr(new Date());
     var todayGross = 0, todayNet = 0, todayUnits = 0;
 
-    var html = '<table class="w-full text-sm">';
-    html += '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">';
-    html += '<th class="py-2.5 px-4 font-semibold">Fecha</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Bruto</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">Neto</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-right">% Meta</th>';
-    html += '<th class="py-2.5 px-4 font-semibold w-36">Progreso</th>';
-    html += '<th class="py-2.5 px-3 font-semibold text-center">Estado</th>';
-    html += '</tr></thead><tbody>';
-
-    daily.forEach(function(day, i) {
+    var _meliDailyRows = daily.map(function(day) {
         var pct = day.pct_of_goal;
         var isToday = day.date === todayStr;
         if (isToday) { todayGross = day.revenue_gross; todayNet = day.revenue_net; todayUnits = day.units; }
-
         var rowBg = isToday ? 'bg-blue-50' : (pct >= 100 ? 'bg-green-50' : (pct >= 80 ? 'bg-yellow-50' : ''));
         var barColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#FBBF24' : '#EF4444');
         var badge, badgeClass;
@@ -439,35 +450,48 @@ function renderDailyTable(data) {
         else if (pct >= 80) { badge = 'Cerca'; badgeClass = 'bg-yellow-100 text-yellow-800'; }
         else if (pct > 0) { badge = 'Bajo'; badgeClass = 'bg-red-100 text-red-700'; }
         else { badge = '—'; badgeClass = 'bg-gray-100 text-gray-400'; }
-
         var dateDisplay = isToday ? '<span class="font-bold" style="color:'+accColor+'">● Hoy</span>' : day.date;
         var barW = Math.min(pct, 100);
-
-        html += '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">';
-        html += '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">' + dateDisplay + '</td>';
-        html += '<td class="py-2.5 px-3 text-right text-gray-600">' + day.units + '</td>';
-        html += '<td class="py-2.5 px-3 text-right font-semibold text-gray-800">$' + fmtMoney(day.revenue_gross) + '</td>';
-        html += '<td class="py-2.5 px-3 text-right text-green-700 font-medium">$' + fmtMoney(day.revenue_net) + '</td>';
-        html += '<td class="py-2.5 px-3 text-right font-bold" style="color:' + barColor + '">' + pct.toFixed(1) + '%</td>';
-        html += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + barW + '%;background:' + barColor + '"></div></div></td>';
-        html += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold ' + badgeClass + '">' + badge + '</span></td>';
-        html += '</tr>';
+        return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">' +
+            '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">' + dateDisplay + '</td>' +
+            '<td class="py-2.5 px-3 text-right text-gray-600">' + day.units + '</td>' +
+            '<td class="py-2.5 px-3 text-right font-semibold text-gray-800">$' + fmtMoney(day.revenue_gross) + '</td>' +
+            '<td class="py-2.5 px-3 text-right text-green-700 font-medium">$' + fmtMoney(day.revenue_net) + '</td>' +
+            '<td class="py-2.5 px-3 text-right font-bold" style="color:' + barColor + '">' + pct.toFixed(1) + '%</td>' +
+            '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + barW + '%;background:' + barColor + '"></div></div></td>' +
+            '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold ' + badgeClass + '">' + badge + '</span></td>' +
+            '</tr>';
     });
 
-    html += '</tbody>';
-    // Totales
-    html += '<tfoot class="bg-gray-50 text-sm font-semibold border-t-2 border-gray-200">';
-    html += '<tr>';
-    html += '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">(' + totals.total_days + ' días)</span></td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">' + totals.units + '</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-800">$' + fmtMoney(totals.revenue_gross) + '</td>';
-    html += '<td class="py-3 px-3 text-right text-green-700">$' + fmtMoney(totals.revenue_net) + '</td>';
-    html += '<td class="py-3 px-3 text-right text-gray-500">Prom: ' + totals.avg_pct.toFixed(1) + '%</td>';
-    html += '<td class="py-3 px-4"></td>';
-    html += '<td class="py-3 px-3 text-center text-xs text-gray-500">' + totals.days_met + '/' + totals.total_days + ' días</td>';
-    html += '</tr></tfoot></table>';
+    var tfoot = '<tfoot class="bg-gray-50 text-sm font-semibold border-t-2 border-gray-200">' +
+        '<tr>' +
+        '<td class="py-3 px-4 text-gray-600">Total <span class="font-normal text-gray-400">(' + totals.total_days + ' días)</span></td>' +
+        '<td class="py-3 px-3 text-right text-gray-800">' + totals.units + '</td>' +
+        '<td class="py-3 px-3 text-right text-gray-800">$' + fmtMoney(totals.revenue_gross) + '</td>' +
+        '<td class="py-3 px-3 text-right text-green-700">$' + fmtMoney(totals.revenue_net) + '</td>' +
+        '<td class="py-3 px-3 text-right text-gray-500">Prom: ' + totals.avg_pct.toFixed(1) + '%</td>' +
+        '<td class="py-3 px-4"></td>' +
+        '<td class="py-3 px-3 text-center text-xs text-gray-500">' + totals.days_met + '/' + totals.total_days + ' días</td>' +
+        '</tr></tfoot>';
+
+    var html = '<table class="w-full text-sm">' +
+        '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
+        '<th class="py-2.5 px-4 font-semibold">Fecha</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Bruto</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Neto</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">% Meta</th>' +
+        '<th class="py-2.5 px-4 font-semibold w-36">Progreso</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-center">Estado</th>' +
+        '</tr></thead>' +
+        '<tbody id="meli-daily-tbody"></tbody>' +
+        tfoot +
+        '</table>' +
+        '<div id="meli-daily-pag"></div>';
 
     document.getElementById('daily-sales-table').innerHTML = html;
+    window['meli-daily-pag_go'] = function(p) { _renderPaginatedMeli(_meliDailyRows, p, 'meli-daily-tbody', 'meli-daily-pag'); };
+    _renderPaginatedMeli(_meliDailyRows, 1, 'meli-daily-tbody', 'meli-daily-pag');
     updateTodayBar(todayGross, todayNet, todayUnits);
 }
 
