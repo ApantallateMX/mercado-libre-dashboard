@@ -29,7 +29,13 @@ async def debug_key():
     p2 = os.getenv("AI_KEY_P2", "")
     masked = (key[:8] + "..." + key[-4:]) if len(key) > 12 else ("(vacía)" if not key else "(muy corta: " + str(len(key)) + " chars)")
     source = "ANTHROPIC_API_KEY env" if raw_env else ("AI_KEY_P1+P2 reconstruida" if (p1 and p2) else "no configurada")
-    # Quick test call
+
+    # Key from claude_client._get_key() — what generate_stream actually uses
+    client_key = claude_client._get_key()
+    client_masked = (client_key[:8] + "..." + client_key[-4:]) if len(client_key) > 12 else ("(vacía)" if not client_key else f"(corta: {len(client_key)})")
+    keys_match = (key == client_key)
+
+    # Quick test call using config key
     test_result = None
     if key and len(key) > 10:
         import httpx
@@ -52,7 +58,29 @@ async def debug_key():
             test_result = f"❌ Error de conexión: {e}"
     else:
         test_result = "❌ Key no configurada o muy corta"
-    return {"key_masked": masked, "source": source, "length": len(key), "available": claude_client.is_available(), "test": test_result}
+
+    # Test generate_stream directly (what the AI buttons use)
+    stream_test = None
+    try:
+        chunks = []
+        async for chunk in claude_client.generate_stream("di hola", max_tokens=10):
+            chunks.append(chunk)
+            if len(chunks) >= 5:
+                break
+        stream_test = "✅ Stream OK: " + "".join(chunks)
+    except Exception as e:
+        stream_test = f"❌ Stream error: {e}"
+
+    return {
+        "config_key_masked": masked,
+        "client_key_masked": client_masked,
+        "keys_match": keys_match,
+        "source": source,
+        "length": len(key),
+        "available": claude_client.is_available(),
+        "test": test_result,
+        "stream_test": stream_test,
+    }
 
 
 async def _sse_stream(system: str, prompt: str, max_tokens: int):
