@@ -254,6 +254,14 @@ BASE_PATH = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_PATH / "templates")
 
+# Cache-bust token for static assets — changes on every deploy
+import subprocess as _sp, time as _time
+try:
+    _BUILD_ID = _sp.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=BASE_PATH.parent, text=True).strip()
+except Exception:
+    _BUILD_ID = str(int(_time.time()))
+templates.env.globals["build_id"] = _BUILD_ID
+
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
 _AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key")

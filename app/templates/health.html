@@ -121,7 +121,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/health_ai.js"></script>
+<script src="/static/js/health_ai.js?v={{ build_id }}"></script>
 <script>
     // Ultimos 7 dias incluyendo hoy
     function _fmtDate(d) { return d.toISOString().slice(0, 10); }
