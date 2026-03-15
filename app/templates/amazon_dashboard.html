@@ -1663,6 +1663,34 @@ async function sendAmzAI() {
 
 // ─── TAB DEALS ───────────────────────────────────────────────────────────────
 
+// Estado de paginación por tabla
+var _dealsPage = 1, _pricingPage = 1, _candidatesPage = 1;
+var _dealsRows = [], _pricingRows = [], _candidatesRows = [];
+var _PAGE_SIZE = 10;
+
+function _renderPaginated(rows, page, tbodyId, paginatorId) {
+  var total = rows.length;
+  var totalPages = Math.max(1, Math.ceil(total / _PAGE_SIZE));
+  var p = Math.min(Math.max(1, page), totalPages);
+  var start = (p - 1) * _PAGE_SIZE, end = Math.min(start + _PAGE_SIZE, total);
+  var tbody = document.getElementById(tbodyId);
+  if (tbody) tbody.innerHTML = rows.slice(start, end).join('');
+  var pag = document.getElementById(paginatorId);
+  if (!pag) return p;
+  if (total <= _PAGE_SIZE) { pag.innerHTML = ''; return p; }
+  pag.innerHTML =
+    '<div class="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">' +
+    '<span class="text-xs text-gray-400">' + (start+1) + '–' + end + ' de ' + total + '</span>' +
+    '<div class="flex items-center gap-1">' +
+      '<button onclick="window[\'' + paginatorId + '_go\'](' + (p-1) + ')" ' + (p<=1?'disabled':'') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">‹ Ant</button>' +
+      '<span class="px-3 text-xs text-gray-600 font-medium">' + p + ' / ' + totalPages + '</span>' +
+      '<button onclick="window[\'' + paginatorId + '_go\'](' + (p+1) + ')" ' + (p>=totalPages?'disabled':'') +
+        ' class="px-3 py-1.5 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition">Sig ›</button>' +
+    '</div></div>';
+  return p;
+}
+
 function loadDealsTab() {
   loadDealsSection();
   loadCompPricingSection(false);
@@ -1678,14 +1706,13 @@ async function loadDealsSection() {
   try {
     var r = await fetch('/api/amazon/deals?status=' + status + sp);
     var d = await r.json();
-    // KPIs
     var kpis = document.getElementById('amz-deals-kpis');
     if (kpis) {
       kpis.innerHTML = [
         { label: 'Activos ahora', val: d.running_count || 0,  color: '#10B981', icon: '⚡' },
         { label: 'Próximos',      val: d.upcoming_count || 0, color: '#F97316', icon: '📅' },
         { label: 'Total deals',   val: d.total || 0,          color: '#6366F1', icon: '🏷️' },
-        { label: 'Sin deals msg', val: d.no_deals_msg ? '—' : '✓', color: '#64748B', icon: '🔔' },
+        { label: 'Estado',        val: d.error ? '⚠️' : '✓', color: '#64748B', icon: '🔔' },
       ].map(function(k) {
         return '<div class="bg-white p-4 rounded-xl shadow">' +
           '<p class="text-xs text-gray-400 mb-1">' + k.icon + ' ' + k.label + '</p>' +
@@ -1693,7 +1720,6 @@ async function loadDealsSection() {
         '</div>';
       }).join('');
     }
-    // Lista
     if (!d.deals || d.deals.length === 0) {
       var msg = d.no_deals_msg || 'Sin deals para mostrar.';
       el.innerHTML = '<div class="flex flex-col items-center py-12 px-6 text-center">' +
@@ -1707,7 +1733,7 @@ async function loadDealsSection() {
     }
     var scBadge = { RUNNING: 'bg-green-100 text-green-700', UPCOMING: 'bg-blue-100 text-blue-700', ENDED: 'bg-gray-100 text-gray-500' };
     var tLabel  = { LIGHTNING_DEAL: '⚡ Lightning', BEST_DEAL: '⭐ Best Deal' };
-    var rows = d.deals.map(function(deal) {
+    _dealsRows = d.deals.map(function(deal) {
       var prog = deal.progress_pct != null
         ? '<div class="w-full bg-gray-200 rounded-full h-1 mt-1"><div class="bg-green-500 h-1 rounded-full" style="width:' + Math.min(deal.progress_pct,100) + '%"></div></div>'
         : '';
@@ -1720,12 +1746,17 @@ async function loadDealsSection() {
         '<td class="px-4 py-3 text-xs text-gray-400">' + (deal.end_time || '—') + '</td>' +
         '<td class="px-4 py-3 text-gray-600">' + (deal.units_sold != null ? deal.units_sold + ' uds' : '—') + prog + '</td>' +
       '</tr>';
-    }).join('');
-    el.innerHTML = '<table class="w-full text-left">' +
+    });
+    _dealsPage = 1;
+    el.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left">' +
       '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
       '<th class="px-4 py-3">Título</th><th class="px-4 py-3">Tipo</th><th class="px-4 py-3">Estado</th>' +
       '<th class="px-4 py-3">Precio deal</th><th class="px-4 py-3">Inicio</th><th class="px-4 py-3">Fin</th>' +
-      '<th class="px-4 py-3">Progreso</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      '<th class="px-4 py-3">Progreso</th></tr></thead>' +
+      '<tbody id="amz-deals-tbody"></tbody></table></div>' +
+      '<div id="amz-deals-pag"></div>';
+    window['amz-deals-pag_go'] = function(p) { _dealsPage = _renderPaginated(_dealsRows, p, 'amz-deals-tbody', 'amz-deals-pag'); };
+    _dealsPage = _renderPaginated(_dealsRows, 1, 'amz-deals-tbody', 'amz-deals-pag');
   } catch(e) {
     el.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
   }
@@ -1759,7 +1790,7 @@ async function loadCompPricingSection(forceRefresh) {
       return;
     }
     var sIcon = { above_bb: '🔴', at_bb: '🟢', below_bb: '🔵', no_bb: '⚪' };
-    var rows = d.items.map(function(item) {
+    _pricingRows = d.items.map(function(item) {
       var gapCls = item.status === 'above_bb' ? 'text-red-600 font-semibold' :
                    item.status === 'at_bb'    ? 'text-green-600' :
                    item.status === 'below_bb' ? 'text-indigo-600' : 'text-gray-400';
@@ -1776,14 +1807,18 @@ async function loadCompPricingSection(forceRefresh) {
         '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + item.action + '</td>' +
         '<td class="px-4 py-3 text-center text-gray-600">' + item.fba_stock + '</td>' +
       '</tr>';
-    }).join('');
-    wrap.innerHTML = '<table class="w-full text-left">' +
+    });
+    _pricingPage = 1;
+    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left">' +
       '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
       '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">ASIN</th>' +
       '<th class="px-4 py-3">Nuestro precio</th><th class="px-4 py-3">Buy Box</th>' +
       '<th class="px-4 py-3">Gap</th><th class="px-4 py-3">Recomendación</th>' +
       '<th class="px-4 py-3 text-center">Stock FBA</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>';
+      '<tbody id="amz-pricing-tbody"></tbody></table></div>' +
+      '<div id="amz-pricing-pag"></div>';
+    window['amz-pricing-pag_go'] = function(p) { _pricingPage = _renderPaginated(_pricingRows, p, 'amz-pricing-tbody', 'amz-pricing-pag'); };
+    _pricingPage = _renderPaginated(_pricingRows, 1, 'amz-pricing-tbody', 'amz-pricing-pag');
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
   }
@@ -1803,7 +1838,7 @@ async function loadDealCandidates() {
       wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay candidatos con stock suficiente.</div>';
       return;
     }
-    var rows = d.candidates.map(function(c) {
+    _candidatesRows = d.candidates.map(function(c) {
       var badge = c.is_on_deal
         ? '<span class="ml-1 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">En deal -' + c.current_deal_pct + '%</span>'
         : '';
@@ -1821,14 +1856,18 @@ async function loadDealCandidates() {
         '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + c.reason + '</td>' +
         '<td class="px-4 py-3">' + (c.asin ? '<a href="' + c.amazon_url + '" target="_blank" class="text-xs text-orange-500 hover:underline">Ver →</a>' : '—') + '</td>' +
       '</tr>';
-    }).join('');
-    wrap.innerHTML = '<table class="w-full text-left">' +
+    });
+    _candidatesPage = 1;
+    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left">' +
       '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
       '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">Precio actual</th>' +
       '<th class="px-4 py-3">Deal sugerido</th><th class="px-4 py-3 text-center">Stock FBA</th>' +
       '<th class="px-4 py-3 text-center">Ventas 30d</th><th class="px-4 py-3 text-center">Días inv.</th>' +
       '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Link</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table>';
+      '<tbody id="amz-candidates-tbody"></tbody></table></div>' +
+      '<div id="amz-candidates-pag"></div>';
+    window['amz-candidates-pag_go'] = function(p) { _candidatesPage = _renderPaginated(_candidatesRows, p, 'amz-candidates-tbody', 'amz-candidates-pag'); };
+    _candidatesPage = _renderPaginated(_candidatesRows, 1, 'amz-candidates-tbody', 'amz-candidates-pag');
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
   }
