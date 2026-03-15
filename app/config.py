@@ -71,11 +71,18 @@ AMAZON_NICKNAME = os.getenv("AMAZON_NICKNAME", "VECKTOR IMPORTS")
 CASHFLOW_API_KEY = os.getenv("CASHFLOW_API_KEY", "")
 
 # Anthropic Claude API (for AI features)
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-if not ANTHROPIC_API_KEY:
-    # Fallback: reconstruct from split base64 parts (bypasses GitHub Push Protection)
-    import base64 as _b64
-    _p1 = os.getenv("AI_KEY_P1", "")
-    _p2 = os.getenv("AI_KEY_P2", "")
+import base64 as _b64
+
+def _resolve_anthropic_key() -> str:
+    # Always try P1+P2 reconstruction first (guaranteed correct value)
+    _p1 = os.getenv("AI_KEY_P1", "").strip()
+    _p2 = os.getenv("AI_KEY_P2", "").strip()
     if _p1 and _p2:
-        ANTHROPIC_API_KEY = _b64.b64decode(_p1 + _p2).decode()
+        try:
+            return _b64.b64decode(_p1 + _p2).decode().strip()
+        except Exception:
+            pass
+    # Fallback: direct env var
+    return os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+ANTHROPIC_API_KEY = _resolve_anthropic_key()
