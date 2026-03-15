@@ -1150,6 +1150,86 @@ class AmazonClient:
             order_statuses=statuses,  # None = default Shipped+Unshipped+PartiallyShipped
         )
 
+    async def get_deals(self, status: str = None, deal_type: str = None) -> list:
+        """
+        Obtiene Lightning Deals y Best Deals disponibles para el seller.
+        Endpoint: GET /deals/v2024-11-19/deals
+        Rate limit: 1 req/s, burst 5.
+        Si el seller no tiene deals → retorna [] con HTTP 200 (comportamiento normal).
+        Si la cuenta no tiene acceso al programa de Deals → 403, retorna [].
+        """
+        params = [("marketplaceIds", self.marketplace_id)]
+        if status:
+            params.append(("status", status))
+        if deal_type:
+            params.append(("dealType", deal_type))
+
+        all_deals = []
+        next_token = None
+
+        for _ in range(10):  # máx 10 páginas
+            page_params = list(params)
+            if next_token:
+                page_params.append(("nextToken", next_token))
+            try:
+                result = await self._request(
+                    "GET", "/deals/v2024-11-19/deals",
+                    params=page_params, timeout=20,
+                )
+            except Exception as e:
+                err_str = str(e)
+                if "403" in err_str or "ACCESS_DENIED" in err_str or "404" in err_str:
+                    logger.warning(f"[Amazon Deals] No acceso a Deals API: {err_str[:100]}")
+                    return []
+                raise
+
+            all_deals.extend(result.get("deals", []))
+            next_token = (result.get("pagination") or {}).get("nextToken")
+            if not next_token:
+                break
+            await asyncio.sleep(1.0)
+
+        return all_deals
+
+    async def get_competitive_price(self, asin: str) -> dict:
+        """
+        Obtiene el precio del Buy Box y número de competidores para un ASIN.
+        Endpoint: GET /products/pricing/v0/price
+        Rate limit: 1 req/s — llamar con asyncio.sleep(1.1) entre requests.
+        """
+        try:
+            data = await self._request(
+                "GET", "/products/pricing/v0/price",
+                params=[
+                    ("MarketplaceId", self.marketplace_id),
+                    ("ItemType", "Asin"),
+                    ("Asins", asin),
+                ],
+                timeout=15,
+            )
+            payload = (data.get("payload") or [])
+            if not payload:
+                return {}
+            item = payload[0] if isinstance(payload, list) else payload
+            comp = (item.get("Product") or {}).get("CompetitivePricing") or {}
+            prices = comp.get("CompetitivePrices") or []
+            bb_price = None
+            for p in prices:
+                if p.get("CompetitivePriceId") == "1":  # 1 = Buy Box
+                    bb_price = float(
+                        (p.get("Price") or {}).get("ListingPrice", {}).get("Amount") or 0
+                    ) or None
+                    break
+            offers_list = comp.get("NumberOfOfferListings") or []
+            num_new = sum(
+                o.get("Count", 0) for o in offers_list
+                if str(o.get("condition", "")).lower() in ("new", "1")
+            )
+            return {"buybox_price": bb_price, "num_offers": num_new}
+        except Exception as e:
+            logger.warning(f"[Amazon CompPrice] Error para ASIN {asin}: {e}")
+            return {}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FACTORY — equivalente a get_meli_client() de meli_client.py

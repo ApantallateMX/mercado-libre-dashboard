@@ -106,6 +106,11 @@
                    border-transparent text-gray-500 font-medium hover:text-gray-700">
         🏷️ Listings
     </button>
+    <button data-tab="deals" onclick="switchAmzTab('deals')"
+            class="amz-tab-btn flex items-center gap-1.5 px-4 py-2.5 text-sm border-b-2 transition whitespace-nowrap
+                   border-transparent text-gray-500 font-medium hover:text-gray-700">
+        🎯 Deals
+    </button>
 </div>
 
 <!-- ── Panel de alertas críticas ──────────────────────────────────────────── -->
@@ -440,6 +445,74 @@
 
 </div>
 
+<!-- ══ TAB: DEALS & PROMOCIONES ════════════════════════════════════════════ -->
+<div id="amz-tab-deals" class="hidden space-y-5">
+
+  <!-- KPIs -->
+  <div id="amz-deals-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
+    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
+    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
+    <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
+  </div>
+
+  <!-- Sección 1: Lightning Deals & Best Deals -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">⚡ Lightning Deals & Best Deals</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Deals activos y próximos en Amazon MX</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <select id="amz-deals-filter" onchange="loadDealsSection()"
+                class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-600">
+          <option value="">Todos</option>
+          <option value="RUNNING">Activos ahora</option>
+          <option value="UPCOMING">Próximos</option>
+          <option value="ENDED">Terminados</option>
+        </select>
+        <button onclick="loadDealsSection()" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻</button>
+      </div>
+    </div>
+    <div id="amz-deals-list">
+      <div class="text-center py-10 text-gray-400 text-sm">Cargando deals...</div>
+    </div>
+  </div>
+
+  <!-- Sección 2: Precios vs Buy Box -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">📊 Nuestro Precio vs Buy Box</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Top productos — gap con el Buy Box actual · Primera carga ~20s</p>
+      </div>
+      <button onclick="loadCompPricingSection(true)" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻ Actualizar</button>
+    </div>
+    <div id="amz-pricing-mini-kpis" class="grid grid-cols-4 gap-px bg-gray-100 border-b border-gray-100"></div>
+    <div id="amz-pricing-table">
+      <div class="text-center py-10 text-gray-400 text-sm">Cargando análisis de precios...</div>
+    </div>
+  </div>
+
+  <!-- Sección 3: Candidatos a Deal -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800">💡 Candidatos a Promoción</h3>
+        <p class="text-xs text-gray-400 mt-0.5">Stock alto o ventas bajas — productos ideales para activar con un deal</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="amz-no-sales-warn" class="hidden text-xs bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-lg px-2 py-1">⚠️ Sin datos de ventas</span>
+        <button onclick="loadDealCandidates()" class="text-sm text-orange-500 hover:text-orange-600 font-medium">↻</button>
+      </div>
+    </div>
+    <div id="amz-candidates-table">
+      <div class="text-center py-10 text-gray-400 text-sm">Analizando candidatos...</div>
+    </div>
+  </div>
+
+</div><!-- /amz-tab-deals -->
+
 <!-- ══ AI ADVISOR DRAWER ═══════════════════════════════════════════════════ -->
 <button id="amz-ai-btn"
   onclick="toggleAmzAIDrawer()"
@@ -552,7 +625,7 @@ function _amzErrorBanner(msg) {
         '<button onclick="loadAmazonData()" class="mt-2 text-xs text-orange-500 underline">Reintentar</button>' +
         '</div>';
 }
-var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false };
+var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false, deals: false };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -575,7 +648,7 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings'].forEach(function(t) {
+    ['ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings', 'deals'].forEach(function(t) {
         var el = document.getElementById('amz-tab-' + t);
         if (el) el.classList.toggle('hidden', t !== tabName);
     });
@@ -597,6 +670,7 @@ function switchAmzTab(tabName) {
         else if (tabName === 'finanzas') loadAmzFinanzasTab();
         else if (tabName === 'fba') loadFbaTab();
         else if (tabName === 'listings') loadListingsTab();
+        else if (tabName === 'deals') loadDealsTab();
     }
 }
 
@@ -1584,6 +1658,179 @@ async function sendAmzAI() {
     amzAIStreaming = false;
     if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Enviar'; }
     messages.scrollTop = messages.scrollHeight;
+  }
+}
+
+// ─── TAB DEALS ───────────────────────────────────────────────────────────────
+
+function loadDealsTab() {
+  loadDealsSection();
+  loadCompPricingSection(false);
+  loadDealCandidates();
+}
+
+async function loadDealsSection() {
+  var el = document.getElementById('amz-deals-list');
+  if (!el) return;
+  el.innerHTML = '<div class="text-center py-8 text-gray-400 text-sm">Cargando deals...</div>';
+  var status = (document.getElementById('amz-deals-filter') || {}).value || '';
+  var sp = window.amzActiveSellerId ? '&seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/deals?status=' + status + sp);
+    var d = await r.json();
+    // KPIs
+    var kpis = document.getElementById('amz-deals-kpis');
+    if (kpis) {
+      kpis.innerHTML = [
+        { label: 'Activos ahora', val: d.running_count || 0,  color: '#10B981', icon: '⚡' },
+        { label: 'Próximos',      val: d.upcoming_count || 0, color: '#F97316', icon: '📅' },
+        { label: 'Total deals',   val: d.total || 0,          color: '#6366F1', icon: '🏷️' },
+        { label: 'Sin deals msg', val: d.no_deals_msg ? '—' : '✓', color: '#64748B', icon: '🔔' },
+      ].map(function(k) {
+        return '<div class="bg-white p-4 rounded-xl shadow">' +
+          '<p class="text-xs text-gray-400 mb-1">' + k.icon + ' ' + k.label + '</p>' +
+          '<p class="text-2xl font-bold" style="color:' + k.color + '">' + k.val + '</p>' +
+        '</div>';
+      }).join('');
+    }
+    // Lista
+    if (!d.deals || d.deals.length === 0) {
+      var msg = d.no_deals_msg || 'Sin deals para mostrar.';
+      el.innerHTML = '<div class="flex flex-col items-center py-12 px-6 text-center">' +
+        '<div class="text-5xl mb-3">🏷️</div>' +
+        '<p class="text-gray-500 text-sm max-w-md mb-4">' + msg + '</p>' +
+        '<a href="https://sellercentral.amazon.com.mx/gp/lightning-deals/home" target="_blank" ' +
+           'class="text-xs bg-orange-500 text-white px-4 py-2 rounded-lg hover:bg-orange-600 transition">' +
+           'Crear Deal en Seller Central →</a>' +
+      '</div>';
+      return;
+    }
+    var scBadge = { RUNNING: 'bg-green-100 text-green-700', UPCOMING: 'bg-blue-100 text-blue-700', ENDED: 'bg-gray-100 text-gray-500' };
+    var tLabel  = { LIGHTNING_DEAL: '⚡ Lightning', BEST_DEAL: '⭐ Best Deal' };
+    var rows = d.deals.map(function(deal) {
+      var prog = deal.progress_pct != null
+        ? '<div class="w-full bg-gray-200 rounded-full h-1 mt-1"><div class="bg-green-500 h-1 rounded-full" style="width:' + Math.min(deal.progress_pct,100) + '%"></div></div>'
+        : '';
+      return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
+        '<td class="px-4 py-3 font-medium text-gray-800 max-w-xs truncate">' + (deal.title || '—') + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-500">' + (tLabel[deal.deal_type] || deal.deal_type) + '</td>' +
+        '<td class="px-4 py-3"><span class="text-xs font-medium px-2 py-0.5 rounded-full ' + (scBadge[deal.status] || 'bg-gray-100 text-gray-500') + '">' + deal.status + '</span></td>' +
+        '<td class="px-4 py-3">' + (deal.deal_price ? '$' + fmtMoney(deal.deal_price) : '—') + (deal.discount_pct > 0 ? ' <span class="text-xs font-bold text-red-500">-' + deal.discount_pct + '%</span>' : '') + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-400">' + (deal.start_time || '—') + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-400">' + (deal.end_time || '—') + '</td>' +
+        '<td class="px-4 py-3 text-gray-600">' + (deal.units_sold != null ? deal.units_sold + ' uds' : '—') + prog + '</td>' +
+      '</tr>';
+    }).join('');
+    el.innerHTML = '<table class="w-full text-left">' +
+      '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
+      '<th class="px-4 py-3">Título</th><th class="px-4 py-3">Tipo</th><th class="px-4 py-3">Estado</th>' +
+      '<th class="px-4 py-3">Precio deal</th><th class="px-4 py-3">Inicio</th><th class="px-4 py-3">Fin</th>' +
+      '<th class="px-4 py-3">Progreso</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch(e) {
+    el.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
+  }
+}
+
+async function loadCompPricingSection(forceRefresh) {
+  var wrap = document.getElementById('amz-pricing-table');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Consultando precios competitivos… puede tardar ~20s la primera vez</div>';
+  var sp = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/competitive-pricing?limit=20' + (sp ? '&' + sp.slice(1) : ''));
+    var d = await r.json();
+    // Mini KPIs
+    var mkEl = document.getElementById('amz-pricing-mini-kpis');
+    if (mkEl) {
+      mkEl.innerHTML = [
+        { label: 'Por encima BB', val: d.above_bb_count, bg: 'bg-red-50',    color: '#EF4444' },
+        { label: 'En el BB',      val: d.at_bb_count,    bg: 'bg-green-50',  color: '#10B981' },
+        { label: 'Por debajo BB', val: d.below_bb_count, bg: 'bg-indigo-50', color: '#6366F1' },
+        { label: 'Sin Buy Box',   val: d.no_bb_count,    bg: 'bg-gray-50',   color: '#9CA3AF' },
+      ].map(function(c) {
+        return '<div class="' + c.bg + ' px-4 py-3 text-center">' +
+          '<p class="text-xs text-gray-400 mb-1">' + c.label + '</p>' +
+          '<p class="text-xl font-bold" style="color:' + c.color + '">' + (c.val || 0) + '</p>' +
+        '</div>';
+      }).join('');
+    }
+    if (!d.items || d.items.length === 0) {
+      wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Sin datos de pricing disponibles.</div>';
+      return;
+    }
+    var sIcon = { above_bb: '🔴', at_bb: '🟢', below_bb: '🔵', no_bb: '⚪' };
+    var rows = d.items.map(function(item) {
+      var gapCls = item.status === 'above_bb' ? 'text-red-600 font-semibold' :
+                   item.status === 'at_bb'    ? 'text-green-600' :
+                   item.status === 'below_bb' ? 'text-indigo-600' : 'text-gray-400';
+      var gapStr = item.buybox_price
+        ? (item.gap > 0 ? '+$' : '-$') + fmtMoney(Math.abs(item.gap)) + ' (' + item.gap_pct + '%)'
+        : '—';
+      return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
+        '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + item.sku + '</p>' +
+          '<p class="text-gray-400 text-xs truncate max-w-xs">' + item.title + '</p></td>' +
+        '<td class="px-4 py-3 text-xs">' + (item.asin ? '<a href="' + item.amazon_url + '" target="_blank" class="text-orange-500 hover:underline">' + item.asin + '</a>' : '—') + '</td>' +
+        '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(item.our_price) + '</td>' +
+        '<td class="px-4 py-3 text-gray-600">' + (item.buybox_price ? '$' + fmtMoney(item.buybox_price) : '—') + '</td>' +
+        '<td class="px-4 py-3 ' + gapCls + '">' + sIcon[item.status] + ' ' + gapStr + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + item.action + '</td>' +
+        '<td class="px-4 py-3 text-center text-gray-600">' + item.fba_stock + '</td>' +
+      '</tr>';
+    }).join('');
+    wrap.innerHTML = '<table class="w-full text-left">' +
+      '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
+      '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">ASIN</th>' +
+      '<th class="px-4 py-3">Nuestro precio</th><th class="px-4 py-3">Buy Box</th>' +
+      '<th class="px-4 py-3">Gap</th><th class="px-4 py-3">Recomendación</th>' +
+      '<th class="px-4 py-3 text-center">Stock FBA</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  } catch(e) {
+    wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
+  }
+}
+
+async function loadDealCandidates() {
+  var wrap = document.getElementById('amz-candidates-table');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">Analizando candidatos a deal...</div>';
+  var sp = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+  try {
+    var r = await fetch('/api/amazon/deal-candidates' + sp);
+    var d = await r.json();
+    var warn = document.getElementById('amz-no-sales-warn');
+    if (warn) warn.classList.toggle('hidden', !d.no_sales_data);
+    if (!d.candidates || d.candidates.length === 0) {
+      wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay candidatos con stock suficiente.</div>';
+      return;
+    }
+    var rows = d.candidates.map(function(c) {
+      var badge = c.is_on_deal
+        ? '<span class="ml-1 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">En deal -' + c.current_deal_pct + '%</span>'
+        : '';
+      var daysStr = c.days_inventory != null ? Math.round(c.days_inventory) + 'd' : '∞';
+      var salesStr = d.no_sales_data ? '?' : c.units_sold_30d;
+      return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
+        '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + c.sku + badge + '</p>' +
+          '<p class="text-gray-400 text-xs truncate max-w-xs">' + c.title + '</p></td>' +
+        '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(c.our_price) + '</td>' +
+        '<td class="px-4 py-3"><p class="font-bold text-orange-600">$' + fmtMoney(c.deal_price_suggestion) + '</p>' +
+          '<p class="text-xs text-gray-400">-' + c.discount_pct + '%</p></td>' +
+        '<td class="px-4 py-3 text-center font-bold text-indigo-700">' + c.fba_stock + '</td>' +
+        '<td class="px-4 py-3 text-center text-gray-600">' + salesStr + '</td>' +
+        '<td class="px-4 py-3 text-center text-gray-500 text-xs">' + daysStr + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + c.reason + '</td>' +
+        '<td class="px-4 py-3">' + (c.asin ? '<a href="' + c.amazon_url + '" target="_blank" class="text-xs text-orange-500 hover:underline">Ver →</a>' : '—') + '</td>' +
+      '</tr>';
+    }).join('');
+    wrap.innerHTML = '<table class="w-full text-left">' +
+      '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
+      '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">Precio actual</th>' +
+      '<th class="px-4 py-3">Deal sugerido</th><th class="px-4 py-3 text-center">Stock FBA</th>' +
+      '<th class="px-4 py-3 text-center">Ventas 30d</th><th class="px-4 py-3 text-center">Días inv.</th>' +
+      '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Link</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  } catch(e) {
+    wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
   }
 }
 </script>

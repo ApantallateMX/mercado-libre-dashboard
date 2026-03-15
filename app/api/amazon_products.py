@@ -58,6 +58,14 @@ _buybox_cache:     dict[str, tuple[float, dict]] = {}  # {seller_id:sku: (ts, da
 _sku_sales_cache:      dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: {units,revenue}})}
 _sku_sales_refreshing: set = set()  # seller_ids con refresh BG activo
 
+# ─── Deals & Competitive Pricing ─────────────────────────────────────────────
+_deals_cache:      dict[str, tuple[float, dict]] = {}  # {seller_id:status: (ts, data)}
+_comp_price_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, data)}
+_deal_cands_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, data)}
+_DEALS_TTL      = 300   # 5 min
+_COMP_PRICE_TTL = 600   # 10 min
+_DEAL_CANDS_TTL = 900   # 15 min
+
 _LISTINGS_TTL = 300   # 5 minutos
 _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
@@ -3430,3 +3438,334 @@ async def amazon_ai_advisor(
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEALS & PROMOCIONES
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/deals")
+async def amazon_deals(
+    seller_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),  # RUNNING | UPCOMING | ENDED | None=todos
+):
+    """Deals activos y próximos (Lightning Deals + Best Deals)."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cuenta Amazon configurada"}, status_code=401)
+
+    cache_key = f"{client.seller_id}:{status or 'all'}"
+    now = _time.time()
+    cached = _deals_cache.get(cache_key)
+    if cached and (now - cached[0]) < _DEALS_TTL:
+        return JSONResponse(cached[1])
+
+    try:
+        if status:
+            raw = await client.get_deals(status=status)
+        else:
+            results = await asyncio.gather(
+                client.get_deals(status="RUNNING"),
+                client.get_deals(status="UPCOMING"),
+                return_exceptions=True,
+            )
+            raw = []
+            for r in results:
+                if isinstance(r, list):
+                    raw.extend(r)
+
+        deals = []
+        for d in raw:
+            start_raw = d.get("startTime") or d.get("dealStartTime") or ""
+            end_raw   = d.get("endTime")   or d.get("dealEndTime")   or ""
+            dp = d.get("dealPrice") or d.get("price") or {}
+            op = d.get("originalPrice") or d.get("listingPrice") or {}
+            deal_price = float(dp.get("amount") or dp.get("Amount") or 0) or None
+            orig_price = float(op.get("amount") or op.get("Amount") or 0) or None
+            disc_pct = 0
+            if deal_price and orig_price and orig_price > deal_price:
+                disc_pct = round((1 - deal_price / orig_price) * 100)
+            deals.append({
+                "deal_id":       d.get("dealId", ""),
+                "title":         (d.get("title") or d.get("dealTitle") or "")[:80],
+                "deal_type":     d.get("dealType", ""),
+                "status":        d.get("status", ""),
+                "start_time":    start_raw[:16].replace("T", " ") if start_raw else "",
+                "end_time":      end_raw[:16].replace("T", " ")   if end_raw   else "",
+                "item_count":    d.get("itemCount") or 0,
+                "deal_price":    deal_price,
+                "original_price": orig_price,
+                "discount_pct":  disc_pct,
+                "units_sold":    d.get("unitsSoldInDeal"),
+                "progress_pct":  d.get("dealProgressPercent"),
+            })
+
+        running_count  = sum(1 for x in deals if x["status"] == "RUNNING")
+        upcoming_count = sum(1 for x in deals if x["status"] == "UPCOMING")
+        no_deals_msg = None
+        if not deals:
+            no_deals_msg = (
+                "No hay Lightning Deals ni Best Deals activos o próximos. "
+                "Los deals se crean en Seller Central → Publicidad → Deals."
+            )
+
+        resp = {
+            "deals": deals,
+            "total": len(deals),
+            "running_count": running_count,
+            "upcoming_count": upcoming_count,
+            "no_deals_msg": no_deals_msg,
+        }
+        _deals_cache[cache_key] = (_time.time(), resp)
+        return JSONResponse(resp)
+
+    except Exception as e:
+        logger.exception("[Amazon Deals] Error")
+        if cached:
+            return JSONResponse({**cached[1], "stale": True})
+        return JSONResponse(
+            {"deals": [], "total": 0, "running_count": 0, "upcoming_count": 0,
+             "no_deals_msg": None, "error": str(e)[:150]},
+            status_code=200,  # error suave — el tab no debe explotar
+        )
+
+
+@router.get("/competitive-pricing")
+async def amazon_competitive_pricing(
+    seller_id: Optional[str] = Query(None),
+    limit: int = Query(default=20, ge=1, le=40),
+):
+    """
+    Precios de nuestros top SKUs comparados contra el Buy Box actual.
+    Primera carga tarda ~22s (rate limit Pricing API 1 req/s).
+    Cache: 10 minutos.
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cuenta Amazon"}, status_code=401)
+
+    cache_key = f"{client.seller_id}:cp:{limit}"
+    now = _time.time()
+    cached = _comp_price_cache.get(cache_key)
+    if cached and (now - cached[0]) < _COMP_PRICE_TTL:
+        return JSONResponse({**cached[1], "cached": True})
+
+    try:
+        listings, fba_summaries = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+        )
+        fba_index = _build_fba_index(fba_summaries)
+
+        # Construir candidatos ACTIVOS con ASIN
+        candidates = []
+        for item in listings:
+            sku       = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            offers    = item.get("offers", [])
+            if _listing_status(summaries) != "ACTIVE":
+                continue
+            summary_0 = summaries[0] if summaries else {}
+            fba_data  = fba_index.get(sku, {})
+            asin = (fba_data.get("asin") or summary_0.get("asin") or
+                    (item.get("attributes") or {}).get("asin", [{}])[0].get("value") or "")
+            if not asin:
+                continue
+            fba_stock = int(
+                ((fba_data.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0)
+            )
+            our_price = _parse_price(offers)
+            title     = (summary_0.get("itemName") or sku)[:70]
+            candidates.append({
+                "sku": sku, "asin": asin, "title": title,
+                "our_price": our_price, "fba_stock": fba_stock,
+            })
+
+        # Priorizar por stock FBA
+        candidates.sort(key=lambda x: x["fba_stock"], reverse=True)
+        top = candidates[:limit]
+
+        # Consultar Buy Box para cada ASIN (rate-limited)
+        items_out = []
+        above_bb = at_bb = below_bb = no_bb = 0
+
+        for c in top:
+            pd = await client.get_competitive_price(c["asin"])
+            await asyncio.sleep(1.1)  # respetar 1 req/s
+
+            bb = pd.get("buybox_price")
+            our = c["our_price"]
+            gap = gap_pct = 0.0
+            status_str = "no_bb"
+            action = "Sin Buy Box activo para este ASIN"
+
+            if bb and our > 0:
+                gap     = round(our - bb, 2)
+                gap_pct = round(gap / our * 100, 1)
+                if abs(gap_pct) <= 2:
+                    status_str = "at_bb";   action = "Precio competitivo — mantener"; at_bb += 1
+                elif our > bb:
+                    status_str = "above_bb"; action = f"Bajar ${abs(gap):,.0f} ({abs(gap_pct):.1f}%) para alcanzar Buy Box"; above_bb += 1
+                else:
+                    status_str = "below_bb"; action = f"Puedes subir hasta ${abs(gap):,.0f} ({abs(gap_pct):.1f}%) sin perder Buy Box"; below_bb += 1
+            else:
+                no_bb += 1
+
+            items_out.append({
+                "sku":           c["sku"],
+                "asin":          c["asin"],
+                "title":         c["title"],
+                "our_price":     our,
+                "buybox_price":  bb,
+                "gap":           gap,
+                "gap_pct":       gap_pct,
+                "num_competitors": pd.get("num_offers", 0),
+                "fba_stock":     c["fba_stock"],
+                "status":        status_str,
+                "action":        action,
+                "amazon_url":    f"https://www.amazon.com.mx/dp/{c['asin']}" if c["asin"] else "",
+            })
+
+        resp = {
+            "items": items_out, "total": len(items_out),
+            "above_bb_count": above_bb, "at_bb_count": at_bb,
+            "below_bb_count": below_bb, "no_bb_count": no_bb,
+            "cached": False,
+        }
+        _comp_price_cache[cache_key] = (_time.time(), resp)
+        return JSONResponse(resp)
+
+    except Exception as e:
+        logger.exception("[Amazon CompPricing] Error")
+        if cached:
+            return JSONResponse({**cached[1], "cached": True, "stale_error": str(e)[:100]})
+        return JSONResponse(
+            {"items": [], "total": 0, "above_bb_count": 0, "at_bb_count": 0,
+             "below_bb_count": 0, "no_bb_count": 0, "error": str(e)[:150], "cached": False},
+            status_code=200,
+        )
+
+
+@router.get("/deal-candidates")
+async def amazon_deal_candidates(
+    seller_id: Optional[str] = Query(None),
+    min_stock: int = Query(default=3, ge=0),
+    limit: int = Query(default=30, ge=1, le=100),
+):
+    """
+    Productos candidatos a deal: stock alto + ventas bajas.
+    No hace llamadas nuevas a la API — usa caches existentes.
+    Instantáneo si los tabs Catálogo/FBA ya cargaron.
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "Sin cuenta Amazon"}, status_code=401)
+
+    cache_key = f"{client.seller_id}:dc:{min_stock}"
+    now = _time.time()
+    cached = _deal_cands_cache.get(cache_key)
+    if cached and (now - cached[0]) < _DEAL_CANDS_TTL:
+        return JSONResponse(cached[1])
+
+    try:
+        listings, fba_summaries = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+        )
+        fba_index = _build_fba_index(fba_summaries)
+
+        # Ventas 30d del cache (sin forzar refresh)
+        sku_sales_map = {}
+        no_sales_data = True
+        entry = _sku_sales_cache.get(client.seller_id)
+        if entry and (now - entry[0]) < _SKU_SALES_TTL:
+            _, sku_sales_map = entry
+            no_sales_data = False
+
+        candidates = []
+        on_deal_count = 0
+
+        for item in listings:
+            sku       = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            offers    = item.get("offers", [])
+            attributes = item.get("attributes") or {}
+            if _listing_status(summaries) != "ACTIVE":
+                continue
+
+            fba_data  = fba_index.get(sku, {})
+            fba_stock = int(
+                ((fba_data.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0)
+            )
+            if fba_stock < min_stock:
+                continue
+
+            summary_0 = summaries[0] if summaries else {}
+            asin      = (fba_data.get("asin") or summary_0.get("asin") or "")
+            title     = (summary_0.get("itemName") or sku)[:70]
+            our_price = _parse_price(offers)
+            if our_price <= 0:
+                continue
+
+            # Detectar deal activo
+            deal_info  = _parse_deal_info(offers, attributes)
+            is_on_deal = deal_info.get("is_deal", False)
+            if is_on_deal:
+                on_deal_count += 1
+
+            # Ventas 30d
+            sku_entry  = sku_sales_map.get(sku, {})
+            units_30d  = int(sku_entry.get("units", 0) if isinstance(sku_entry, dict) else sku_entry)
+
+            deal_price = round(our_price * 0.85, 2)
+            daily_rate = units_30d / 30 if units_30d > 0 else 0
+            days_inv   = round(fba_stock / daily_rate, 1) if daily_rate > 0 else None
+            deal_score = round((fba_stock / max(units_30d, 1)) * 10)
+
+            if is_on_deal:
+                reason = f"Ya tiene {deal_info.get('deal_pct', 0)}% de descuento activo"
+            elif units_30d == 0 and not no_sales_data:
+                reason = f"Sin ventas en 30d con {fba_stock}u en FBA — deal puede activar demanda"
+            elif days_inv and days_inv > 90:
+                reason = f"{int(days_inv)} días de inventario — deal para rotar stock"
+            elif fba_stock >= 20 and units_30d < 5:
+                reason = f"Stock alto ({fba_stock}u) con ventas bajas ({units_30d}u/30d)"
+            else:
+                reason = f"{fba_stock}u en FBA, {units_30d}u vendidas en 30d"
+
+            candidates.append({
+                "sku":                   sku,
+                "asin":                  asin,
+                "title":                 title,
+                "our_price":             our_price,
+                "deal_price_suggestion": deal_price,
+                "discount_pct":          15,
+                "fba_stock":             fba_stock,
+                "units_sold_30d":        units_30d,
+                "days_inventory":        days_inv,
+                "deal_score":            deal_score,
+                "is_on_deal":            is_on_deal,
+                "current_deal_pct":      deal_info.get("deal_pct", 0) if is_on_deal else 0,
+                "reason":                reason,
+                "amazon_url":            f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
+            })
+
+        candidates.sort(key=lambda x: (-x["is_on_deal"], -x["deal_score"]))
+        candidates = candidates[:limit]
+
+        resp = {
+            "candidates":    candidates,
+            "total":         len(candidates),
+            "on_deal_count": on_deal_count,
+            "no_sales_data": no_sales_data,
+        }
+        _deal_cands_cache[cache_key] = (_time.time(), resp)
+        return JSONResponse(resp)
+
+    except Exception as e:
+        logger.exception("[Amazon DealCandidates] Error")
+        return JSONResponse(
+            {"candidates": [], "total": 0, "on_deal_count": 0,
+             "no_sales_data": True, "error": str(e)[:150]},
+            status_code=200,
+        )
