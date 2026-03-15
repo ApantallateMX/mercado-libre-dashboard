@@ -256,7 +256,7 @@ templates = Jinja2Templates(directory=BASE_PATH / "templates")
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
