@@ -77,7 +77,14 @@ _D1 = "c2stYW50LWFwaTAzLWlvLVA1SlQ3b3hjb0F6X2dmUTVxaUZ6WFVEa05feUdHc2lsVUJBRWpW"
 _D2 = "ckFaOUtZdUFGZTVqXzlBUExJMFpoVUlfeDNwUF8tSFVWZ2lTWGhNbHBUV2tRLW1MU0lod0FB"
 
 def _resolve_anthropic_key() -> str:
-    # 1. Env vars override (Railway dashboard)
+    # 1. Hardcoded fallback is the source of truth — always reconstruct it
+    try:
+        _key = _b64.b64decode(_D1 + _D2).decode().strip()
+        if _key:
+            return _key
+    except Exception:
+        pass
+    # 2. Env vars P1+P2 (Railway dashboard override)
     _p1 = os.getenv("AI_KEY_P1", "").strip()
     _p2 = os.getenv("AI_KEY_P2", "").strip()
     if _p1 and _p2:
@@ -85,14 +92,10 @@ def _resolve_anthropic_key() -> str:
             return _b64.b64decode(_p1 + _p2).decode().strip()
         except Exception:
             pass
-    # 2. Direct env var override
+    # 3. Direct env var (only if it looks like a valid Anthropic key)
     _direct = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if _direct and len(_direct) > 20:
+    if _direct.startswith("sk-ant-"):
         return _direct
-    # 3. Hardcoded fallback (always works)
-    try:
-        return _b64.b64decode(_D1 + _D2).decode().strip()
-    except Exception:
-        return ""
+    return ""
 
 ANTHROPIC_API_KEY = _resolve_anthropic_key()
