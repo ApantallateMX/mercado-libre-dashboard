@@ -41,6 +41,29 @@
     </div>
 </div>
 
+<!-- ═══ ALERTAS URGENTES ═══ -->
+<div id="meli-alerts-strip" class="hidden mb-4"></div>
+<script>
+(function() {
+    fetch('/api/health/counts').then(function(r){ return r.json(); }).then(function(d) {
+        var alerts = [];
+        if (d.claims && d.claims > 0)    alerts.push({ icon:'🚨', text: d.claims + ' reclamo' + (d.claims > 1 ? 's' : '') + ' abierto' + (d.claims > 1 ? 's' : '') + ' — responde antes de 48h', url:'/health?tab=claims', color:'bg-red-50 border-red-300 text-red-800' });
+        if (d.questions && d.questions > 0) alerts.push({ icon:'❓', text: d.questions + ' pregunta' + (d.questions > 1 ? 's' : '') + ' sin responder', url:'/health?tab=questions', color:'bg-yellow-50 border-yellow-300 text-yellow-800' });
+        if (d.messages && d.messages > 0)   alerts.push({ icon:'💬', text: d.messages + ' mensaje' + (d.messages > 1 ? 's' : '') + ' pendiente' + (d.messages > 1 ? 's' : ''), url:'/health?tab=messages', color:'bg-blue-50 border-blue-300 text-blue-800' });
+        var strip = document.getElementById('meli-alerts-strip');
+        if (!strip || !alerts.length) return;
+        strip.innerHTML = alerts.map(function(a) {
+            return '<a href="' + a.url + '" class="flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-medium transition hover:opacity-80 ' + a.color + '">' +
+                '<span class="text-base">' + a.icon + '</span>' +
+                '<span class="flex-1">' + a.text + '</span>' +
+                '<span class="text-xs opacity-60">Ver →</span></a>';
+        }).join('');
+        strip.classList.remove('hidden');
+        strip.className = 'mb-4 flex flex-col gap-2';
+    }).catch(function(){});
+})();
+</script>
+
 <!-- ═══ FILTRO DE FECHAS ═══ -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
     <div class="flex flex-wrap gap-1.5 md:gap-2 mb-3" id="range-buttons">

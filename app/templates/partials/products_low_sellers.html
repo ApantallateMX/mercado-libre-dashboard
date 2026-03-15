@@ -17,6 +17,7 @@
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Fotos</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Video</th>
                 <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs">Recomendaciones</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs">Acciones</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-100">
@@ -116,10 +117,22 @@
                     <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
+                <td class="px-3 py-3 text-center">
+                    <div class="flex flex-col gap-1 items-center">
+                        <a href="{{ p.permalink }}" target="_blank"
+                           class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">
+                            ✏️ Editar
+                        </a>
+                        <a href="https://www.mercadolibre.com.mx/publicidad" target="_blank"
+                           class="text-xs bg-yellow-50 border border-yellow-300 text-yellow-700 hover:bg-yellow-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">
+                            🚀 Ads
+                        </a>
+                    </div>
+                </td>
             </tr>
             {% if p.get('variations') %}
             <tr id="ls-{{ loop.index }}" class="hidden bg-purple-50/30">
-                <td colspan="9" class="px-6 py-2">
+                <td colspan="10" class="px-6 py-2">
                     <div class="text-xs">
                         <table class="w-full">
                             <thead>
