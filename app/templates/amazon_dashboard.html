@@ -1863,6 +1863,94 @@ async function loadCompPricingSection(forceRefresh) {
   }
 }
 
+var _candidatesData = [];
+var _candidatesSortKey = 'rev_forecast';
+var _candidatesSortDir = -1; // -1 desc, 1 asc
+var _candidatesNoSalesData = false;
+
+function _buildCandidatesRow(c) {
+  var badge = c.is_on_deal
+    ? '<span class="ml-1 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">En deal -' + c.current_deal_pct + '%</span>'
+    : '';
+  var daysStr = c.days_inventory != null ? Math.round(c.days_inventory) + 'd' : '∞';
+  var salesStr = _candidatesNoSalesData ? '?' : c.units_sold_30d;
+  var dealPrice = c.deal_price_suggestion || 0;
+  var revForecast = c.fba_stock > 0 ? '$' + fmtMoney(c.rev_forecast) : '—';
+  var scBase = 'https://sellercentral.amazon.com.mx';
+  var copyBtn = '<button onclick="navigator.clipboard.writeText(\'' + dealPrice.toFixed(2) + '\').then(function(){var b=this;b.textContent=\'✓\';setTimeout(function(){b.textContent=\'📋\';},1500);}).catch(function(){})" ' +
+    'title="Copiar precio al portapapeles" class="ml-1 text-gray-400 hover:text-orange-500 transition text-xs">📋</button>';
+  var scDealLink = c.asin
+    ? '<a href="' + scBase + '/merchandising/deals" target="_blank" class="block text-xs text-orange-600 font-medium hover:underline whitespace-nowrap">Crear Deal →</a>'
+    : '';
+  var scProdLink = c.asin
+    ? '<a href="' + c.amazon_url + '" target="_blank" class="block text-xs text-gray-400 hover:text-orange-500 hover:underline whitespace-nowrap">Ver ASIN</a>'
+    : '—';
+  return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
+    '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + c.sku + badge + '</p>' +
+      '<p class="text-gray-400 text-xs truncate max-w-xs">' + c.title + '</p></td>' +
+    '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(c.our_price) + '</td>' +
+    '<td class="px-4 py-3"><p class="font-bold text-orange-600">$' + fmtMoney(dealPrice) + copyBtn + '</p>' +
+      '<p class="text-xs text-gray-400">-' + c.discount_pct + '%</p></td>' +
+    '<td class="px-4 py-3 text-center font-bold text-indigo-700">' + c.fba_stock + '</td>' +
+    '<td class="px-4 py-3 text-center text-gray-600">' + salesStr + '</td>' +
+    '<td class="px-4 py-3 text-center text-gray-500 text-xs">' + daysStr + '</td>' +
+    '<td class="px-4 py-3 text-right text-xs font-medium text-green-700">' + revForecast + '</td>' +
+    '<td class="px-4 py-3 text-xs text-gray-500">' + c.reason + '</td>' +
+    '<td class="px-4 py-3">' + scDealLink + scProdLink + '</td>' +
+  '</tr>';
+}
+
+function _sortCandidates(key) {
+  if (_candidatesSortKey === key) _candidatesSortDir *= -1;
+  else { _candidatesSortKey = key; _candidatesSortDir = -1; }
+  _candidatesData.sort(function(a, b) {
+    var va = a[key] != null ? a[key] : -Infinity;
+    var vb = b[key] != null ? b[key] : -Infinity;
+    return (va < vb ? -1 : va > vb ? 1 : 0) * _candidatesSortDir;
+  });
+  _candidatesRows = _candidatesData.map(_buildCandidatesRow);
+  _candidatesPage = 1;
+  _renderPaginatedCandidates();
+  // Update sort indicators
+  document.querySelectorAll('.cand-sort-btn').forEach(function(btn) {
+    var bk = btn.getAttribute('data-sort');
+    btn.querySelector('span').textContent = bk === _candidatesSortKey ? (_candidatesSortDir === -1 ? ' ▼' : ' ▲') : ' ↕';
+  });
+}
+
+function _renderPaginatedCandidates() {
+  _candidatesPage = _renderPaginated(_candidatesRows, _candidatesPage, 'amz-candidates-tbody', 'amz-candidates-pag');
+}
+
+function _renderCandidatesTable() {
+  var totalRevForecast = _candidatesData.reduce(function(s, c) { return s + (c.rev_forecast || 0); }, 0);
+  var sortArrow = function(k) { return k === _candidatesSortKey ? (_candidatesSortDir === -1 ? ' ▼' : ' ▲') : ' ↕'; };
+  var thSort = function(k, label, cls) {
+    return '<th class="px-4 py-3' + (cls ? ' ' + cls : '') + '">' +
+      '<button class="cand-sort-btn flex items-center gap-0.5 hover:text-orange-500 transition" data-sort="' + k + '" onclick="_sortCandidates(\'' + k + '\')">' +
+      label + '<span class="text-gray-300 text-xs">' + sortArrow(k) + '</span></button></th>';
+  };
+  var wrap = document.getElementById('amz-candidates-table');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left">' +
+    '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
+    '<th class="px-4 py-3">Producto</th>' +
+    thSort('our_price', 'Precio actual') +
+    thSort('deal_price_suggestion', 'Deal sugerido') +
+    thSort('fba_stock', 'Stock FBA', 'text-center') +
+    thSort('units_sold_30d', 'Ventas 30d', 'text-center') +
+    thSort('days_inventory', 'Días inv.', 'text-center') +
+    thSort('rev_forecast', 'Rev. si deal', 'text-right') +
+    '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Acciones</th></tr></thead>' +
+    '<tbody id="amz-candidates-tbody"></tbody></table></div>' +
+    '<div id="amz-candidates-pag"></div>' +
+    (totalRevForecast > 0 ? '<div class="px-4 py-3 bg-green-50 border-t border-green-100 flex items-center justify-between">' +
+      '<span class="text-xs text-green-700 font-medium">Revenue potencial total si ejecutas todos los deals:</span>' +
+      '<span class="text-sm font-bold text-green-700">$' + fmtMoney(totalRevForecast) + '</span></div>' : '');
+  window['amz-candidates-pag_go'] = function(p) { _candidatesPage = _renderPaginated(_candidatesRows, p, 'amz-candidates-tbody', 'amz-candidates-pag'); };
+  _renderPaginatedCandidates();
+}
+
 async function loadDealCandidates() {
   var wrap = document.getElementById('amz-candidates-table');
   if (!wrap) return;
@@ -1873,53 +1961,21 @@ async function loadDealCandidates() {
     var d = await r.json();
     var warn = document.getElementById('amz-no-sales-warn');
     if (warn) warn.classList.toggle('hidden', !d.no_sales_data);
+    _candidatesNoSalesData = !!d.no_sales_data;
     if (!d.candidates || d.candidates.length === 0) {
       wrap.innerHTML = '<div class="text-center py-10 text-gray-400 text-sm">No hay candidatos con stock suficiente.</div>';
       return;
     }
-    _candidatesRows = d.candidates.map(function(c) {
-      var badge = c.is_on_deal
-        ? '<span class="ml-1 text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded font-medium">En deal -' + c.current_deal_pct + '%</span>'
-        : '';
-      var daysStr = c.days_inventory != null ? Math.round(c.days_inventory) + 'd' : '∞';
-      var salesStr = d.no_sales_data ? '?' : c.units_sold_30d;
-      var dealPrice = c.deal_price_suggestion || 0;
-      var revForecast = c.fba_stock > 0 ? '$' + fmtMoney(c.fba_stock * dealPrice) : '—';
-      var scBase = 'https://sellercentral.amazon.com.mx';
-      var copyBtn = '<button onclick="navigator.clipboard.writeText(\'' + dealPrice.toFixed(2) + '\').then(function(){var b=this;b.textContent=\'✓\';setTimeout(function(){b.textContent=\'📋\';},1500);}).catch(function(){})" ' +
-        'title="Copiar precio al portapapeles" class="ml-1 text-gray-400 hover:text-orange-500 transition text-xs">📋</button>';
-      var scDealLink = c.asin
-        ? '<a href="' + scBase + '/merchandising/deals" target="_blank" class="block text-xs text-orange-600 font-medium hover:underline whitespace-nowrap">Crear Deal →</a>'
-        : '';
-      var scProdLink = c.asin
-        ? '<a href="' + c.amazon_url + '" target="_blank" class="block text-xs text-gray-400 hover:text-orange-500 hover:underline whitespace-nowrap">Ver ASIN</a>'
-        : '—';
-      return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
-        '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + c.sku + badge + '</p>' +
-          '<p class="text-gray-400 text-xs truncate max-w-xs">' + c.title + '</p></td>' +
-        '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(c.our_price) + '</td>' +
-        '<td class="px-4 py-3"><p class="font-bold text-orange-600">$' + fmtMoney(dealPrice) + copyBtn + '</p>' +
-          '<p class="text-xs text-gray-400">-' + c.discount_pct + '%</p></td>' +
-        '<td class="px-4 py-3 text-center font-bold text-indigo-700">' + c.fba_stock + '</td>' +
-        '<td class="px-4 py-3 text-center text-gray-600">' + salesStr + '</td>' +
-        '<td class="px-4 py-3 text-center text-gray-500 text-xs">' + daysStr + '</td>' +
-        '<td class="px-4 py-3 text-right text-xs font-medium text-green-700">' + revForecast + '</td>' +
-        '<td class="px-4 py-3 text-xs text-gray-500">' + c.reason + '</td>' +
-        '<td class="px-4 py-3">' + scDealLink + scProdLink + '</td>' +
-      '</tr>';
+    // Enrich candidates with rev_forecast
+    _candidatesData = d.candidates.map(function(c) {
+      c.rev_forecast = (c.fba_stock || 0) * (c.deal_price_suggestion || 0);
+      return c;
     });
+    // Default sort: highest revenue potential first
+    _candidatesData.sort(function(a, b) { return b.rev_forecast - a.rev_forecast; });
+    _candidatesRows = _candidatesData.map(_buildCandidatesRow);
     _candidatesPage = 1;
-    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-left">' +
-      '<thead><tr class="bg-gray-50 text-xs text-gray-400 uppercase tracking-wide">' +
-      '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">Precio actual</th>' +
-      '<th class="px-4 py-3">Deal sugerido</th><th class="px-4 py-3 text-center">Stock FBA</th>' +
-      '<th class="px-4 py-3 text-center">Ventas 30d</th><th class="px-4 py-3 text-center">Días inv.</th>' +
-      '<th class="px-4 py-3 text-right">Rev. total si deal</th>' +
-      '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Acciones</th></tr></thead>' +
-      '<tbody id="amz-candidates-tbody"></tbody></table></div>' +
-      '<div id="amz-candidates-pag"></div>';
-    window['amz-candidates-pag_go'] = function(p) { _candidatesPage = _renderPaginated(_candidatesRows, p, 'amz-candidates-tbody', 'amz-candidates-pag'); };
-    _candidatesPage = _renderPaginated(_candidatesRows, 1, 'amz-candidates-tbody', 'amz-candidates-pag');
+    _renderCandidatesTable();
   } catch(e) {
     wrap.innerHTML = '<div class="text-center py-8 text-red-400 text-sm">Error: ' + e.message + '</div>';
   }
