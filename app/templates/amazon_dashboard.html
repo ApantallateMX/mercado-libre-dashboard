@@ -1470,6 +1470,11 @@ async function loadFbaTab() {
       row += '<td class="py-3 px-3 text-right font-bold ' + (item.status === 'critical' ? 'text-red-600' : item.status === 'warning' ? 'text-yellow-600' : 'text-gray-700') + '">' + daysText + 'd</td>';
       row += '<td class="py-3 px-3 text-right"><span class="' + (item.restock_qty > 0 ? 'font-bold text-orange-700' : 'text-gray-400') + '">' + (item.restock_qty > 0 ? item.restock_qty + ' u' : '—') + '</span></td>';
       row += '<td class="py-3 px-3 text-center"><span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ' + sc + '">' + sl + '</span></td>';
+      // Action: for critical/out_of_stock items show link to create FBA shipment
+      var needsAction = item.status === 'critical' || item.status === 'out';
+      row += '<td class="py-3 px-3 text-center">' + (needsAction
+        ? '<a href="https://sellercentral.amazon.com.mx/fba/sendtoamazon" target="_blank" class="text-xs bg-red-50 border border-red-200 text-red-600 hover:bg-red-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">📦 Crear envío</a>'
+        : '') + '</td>';
       row += '</tr>';
       return row;
     });
@@ -1482,6 +1487,7 @@ async function loadFbaTab() {
       '<th class="py-3 px-3 text-right font-semibold">Días cobertura</th>' +
       '<th class="py-3 px-3 text-right font-semibold">Qty a pedir</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Estado</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
       '</tr></thead><tbody id="amz-fba-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
       '<div id="amz-fba-pag"></div>';
     window['amz-fba-pag_go'] = function(p) { _renderPaginated(_fbaRows, p, 'amz-fba-tbody', 'amz-fba-pag'); };
@@ -1541,6 +1547,12 @@ async function loadListingsTab() {
       row += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
       row += '<td class="py-3 px-3 text-center text-xs font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</td>';
       row += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
+      // Action: link to edit the listing in Seller Central (by SKU)
+      var encodedSku = encodeURIComponent(item.sku);
+      var editUrl = 'https://sellercentral.amazon.com.mx/inventory?search=' + encodedSku;
+      row += '<td class="py-3 px-3 text-center">' +
+        '<a href="' + editUrl + '" target="_blank" class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">✏️ Editar</a>' +
+        '</td>';
       row += '</tr>';
       return row;
     });
@@ -1551,6 +1563,7 @@ async function loadListingsTab() {
       '<th class="py-3 px-3 text-center font-semibold">Score</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Estado</th>' +
       '<th class="py-3 px-3 font-semibold">Issues</th>' +
+      '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
       '</tr></thead><tbody id="amz-lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
       '<div id="amz-lq-pag"></div>';
     window['amz-lq-pag_go'] = function(p) { _renderPaginated(_lqRows, p, 'amz-lq-tbody', 'amz-lq-pag'); };
@@ -1811,6 +1824,18 @@ async function loadCompPricingSection(forceRefresh) {
       var gapStr = item.buybox_price
         ? (item.gap > 0 ? '+$' : '-$') + fmtMoney(Math.abs(item.gap)) + ' (' + item.gap_pct + '%)'
         : '—';
+      // Action column: for above_bb → copy BB price; for others → text hint
+      var actionCell;
+      if (item.status === 'above_bb' && item.buybox_price) {
+        var bbPrice = item.buybox_price.toFixed(2);
+        actionCell = '<div class="flex flex-col gap-1">' +
+          '<span class="text-xs text-red-600">' + item.action + '</span>' +
+          '<button onclick="(function(b){navigator.clipboard.writeText(\'' + bbPrice + '\').then(function(){b.textContent=\'✓ Copiado\';setTimeout(function(){b.textContent=\'📋 Copiar $' + fmtMoney(item.buybox_price) + '\';},1500);});})(this)" ' +
+          'class="text-xs bg-orange-50 border border-orange-200 text-orange-600 hover:bg-orange-100 rounded px-2 py-0.5 font-medium transition whitespace-nowrap">📋 Copiar $' + fmtMoney(item.buybox_price) + '</button>' +
+        '</div>';
+      } else {
+        actionCell = '<span class="text-xs text-gray-500">' + item.action + '</span>';
+      }
       return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
         '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + item.sku + '</p>' +
           '<p class="text-gray-400 text-xs truncate max-w-xs">' + item.title + '</p></td>' +
@@ -1818,8 +1843,8 @@ async function loadCompPricingSection(forceRefresh) {
         '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(item.our_price) + '</td>' +
         '<td class="px-4 py-3 text-gray-600">' + (item.buybox_price ? '$' + fmtMoney(item.buybox_price) : '—') + '</td>' +
         '<td class="px-4 py-3 ' + gapCls + '">' + sIcon[item.status] + ' ' + gapStr + '</td>' +
-        '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + item.action + '</td>' +
-        '<td class="px-4 py-3 text-center text-gray-600">' + item.fba_stock + '</td>' +
+        '<td class="px-4 py-3 max-w-xs">' + actionCell + '</td>' +
+        '<td class="px-4 py-3 text-center ' + (item.fba_stock === 0 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + item.fba_stock + '</td>' +
       '</tr>';
     });
     _pricingPage = 1;
@@ -1858,17 +1883,29 @@ async function loadDealCandidates() {
         : '';
       var daysStr = c.days_inventory != null ? Math.round(c.days_inventory) + 'd' : '∞';
       var salesStr = d.no_sales_data ? '?' : c.units_sold_30d;
+      var dealPrice = c.deal_price_suggestion || 0;
+      var revForecast = c.fba_stock > 0 ? '$' + fmtMoney(c.fba_stock * dealPrice) : '—';
+      var scBase = 'https://sellercentral.amazon.com.mx';
+      var copyBtn = '<button onclick="navigator.clipboard.writeText(\'' + dealPrice.toFixed(2) + '\').then(function(){var b=this;b.textContent=\'✓\';setTimeout(function(){b.textContent=\'📋\';},1500);}).catch(function(){})" ' +
+        'title="Copiar precio al portapapeles" class="ml-1 text-gray-400 hover:text-orange-500 transition text-xs">📋</button>';
+      var scDealLink = c.asin
+        ? '<a href="' + scBase + '/merchandising/deals" target="_blank" class="block text-xs text-orange-600 font-medium hover:underline whitespace-nowrap">Crear Deal →</a>'
+        : '';
+      var scProdLink = c.asin
+        ? '<a href="' + c.amazon_url + '" target="_blank" class="block text-xs text-gray-400 hover:text-orange-500 hover:underline whitespace-nowrap">Ver ASIN</a>'
+        : '—';
       return '<tr class="border-b border-gray-50 hover:bg-orange-50 transition text-sm">' +
         '<td class="px-4 py-3"><p class="font-medium text-gray-700 text-xs">' + c.sku + badge + '</p>' +
           '<p class="text-gray-400 text-xs truncate max-w-xs">' + c.title + '</p></td>' +
         '<td class="px-4 py-3 font-medium text-gray-800">$' + fmtMoney(c.our_price) + '</td>' +
-        '<td class="px-4 py-3"><p class="font-bold text-orange-600">$' + fmtMoney(c.deal_price_suggestion) + '</p>' +
+        '<td class="px-4 py-3"><p class="font-bold text-orange-600">$' + fmtMoney(dealPrice) + copyBtn + '</p>' +
           '<p class="text-xs text-gray-400">-' + c.discount_pct + '%</p></td>' +
         '<td class="px-4 py-3 text-center font-bold text-indigo-700">' + c.fba_stock + '</td>' +
         '<td class="px-4 py-3 text-center text-gray-600">' + salesStr + '</td>' +
         '<td class="px-4 py-3 text-center text-gray-500 text-xs">' + daysStr + '</td>' +
-        '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs">' + c.reason + '</td>' +
-        '<td class="px-4 py-3">' + (c.asin ? '<a href="' + c.amazon_url + '" target="_blank" class="text-xs text-orange-500 hover:underline">Ver →</a>' : '—') + '</td>' +
+        '<td class="px-4 py-3 text-right text-xs font-medium text-green-700">' + revForecast + '</td>' +
+        '<td class="px-4 py-3 text-xs text-gray-500">' + c.reason + '</td>' +
+        '<td class="px-4 py-3">' + scDealLink + scProdLink + '</td>' +
       '</tr>';
     });
     _candidatesPage = 1;
@@ -1877,7 +1914,8 @@ async function loadDealCandidates() {
       '<th class="px-4 py-3">Producto</th><th class="px-4 py-3">Precio actual</th>' +
       '<th class="px-4 py-3">Deal sugerido</th><th class="px-4 py-3 text-center">Stock FBA</th>' +
       '<th class="px-4 py-3 text-center">Ventas 30d</th><th class="px-4 py-3 text-center">Días inv.</th>' +
-      '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Link</th></tr></thead>' +
+      '<th class="px-4 py-3 text-right">Rev. total si deal</th>' +
+      '<th class="px-4 py-3">Razón</th><th class="px-4 py-3">Acciones</th></tr></thead>' +
       '<tbody id="amz-candidates-tbody"></tbody></table></div>' +
       '<div id="amz-candidates-pag"></div>';
     window['amz-candidates-pag_go'] = function(p) { _candidatesPage = _renderPaginated(_candidatesRows, p, 'amz-candidates-tbody', 'amz-candidates-pag'); };
