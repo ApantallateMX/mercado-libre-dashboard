@@ -522,11 +522,14 @@ async def switch_account(request: Request):
     if uid:
         tokens = await token_store.get_tokens(uid)
         if tokens:
-            referer = request.headers.get("referer", "/dashboard")
-            # Si venimos desde cualquier página Amazon, ir al dashboard MeLi
-            if "/amazon" in referer:
-                referer = "/dashboard"
-            response = RedirectResponse(referer, status_code=303)
+            # Allow explicit redirect field; else use referer
+            redirect_to = form.get("redirect", "")
+            if not redirect_to:
+                redirect_to = request.headers.get("referer", "/dashboard")
+                # Si venimos desde cualquier página Amazon, ir al dashboard MeLi
+                if "/amazon" in redirect_to:
+                    redirect_to = "/dashboard"
+            response = RedirectResponse(redirect_to, status_code=303)
             response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
             return response
     return RedirectResponse("/dashboard", status_code=303)
@@ -6647,18 +6650,32 @@ async def morning_briefing():
         uid = a.get("user_id", "")
         alerts_by_user[uid] = alerts_by_user.get(uid, 0) + 1
 
+    # Fetch daily_goal per account in parallel
+    import asyncio as _asyncio
+    goals = await _asyncio.gather(*[
+        token_store.get_daily_goal(acc.get("user_id", ""))
+        for acc in accounts_list
+    ])
+    total_goal = sum(goals)
+
     result = []
-    for acc in accounts_list:
+    for acc, goal in zip(accounts_list, goals):
         uid = acc.get("user_id", "")
         label = acc.get("label", uid[:8])
         result.append({
             "user_id": uid,
             "label": label,
             "alert_count": alerts_by_user.get(uid, 0),
+            "daily_goal": goal,
             "today_revenue": 0,  # loaded async by client
         })
 
-    return {"accounts": result, "date": today, "total_alerts": len(all_alerts)}
+    return {
+        "accounts": result,
+        "date": today,
+        "total_alerts": len(all_alerts),
+        "total_goal": total_goal,
+    }
 
 
 @app.get("/api/dashboard/multi-account-amazon")
