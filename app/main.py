@@ -7070,56 +7070,116 @@ async def get_sync_alerts_partial(request: Request):
     last_run = status.get("last_run", "") if status else ""
     if not alerts:
         return HTMLResponse("")
-    # Render inline HTML (sin template separado para simplicidad)
-    rows = ""
-    for a in alerts[:20]:
-        rows += f"""<div class="flex items-center justify-between py-1.5 border-b border-red-100 last:border-0 text-xs gap-2">
-            <div class="min-w-0 flex-1">
-                <span class="font-mono text-red-700 mr-1">{a['item_id']}</span>
-                <span class="text-gray-600 truncate block">{a['title'][:60]}</span>
-            </div>
-            <div class="flex-shrink-0 text-right">
-                <span class="text-gray-500">MeLi: <strong class="text-red-600">{a['meli_stock']}</strong></span>
-                <span class="ml-2 text-gray-400">BM: 0</span>
-            </div>
-            <button onclick="closeItem('{a['item_id']}')"
-                    class="flex-shrink-0 bg-red-500 text-white px-2 py-1 rounded text-[10px] hover:bg-red-600">
-                Pausar
-            </button>
-        </div>"""
     total = len(alerts)
-    extra = f" (y {total - 20} más)" if total > 20 else ""
-    last_str = f" — sync: {last_run[:16]}" if last_run else ""
-    html = f"""<div class="mb-4 bg-red-50 border border-red-300 rounded-lg px-4 py-3">
-    <div class="flex items-center justify-between mb-2">
-        <div class="flex items-center gap-2">
-            <svg class="w-5 h-5 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            </svg>
-            <span class="font-semibold text-red-700 text-sm">
-                {total} item(s) en riesgo de sobreventa{extra}
-            </span>
-        </div>
-        <div class="flex items-center gap-2">
-            <span class="text-[10px] text-gray-400">{last_str}</span>
-            <button onclick="triggerStockSync()" id="btn-sync-now"
-                    class="text-xs text-red-600 hover:text-red-800 underline">Sync ahora</button>
-        </div>
+    last_str = f"sync: {last_run[:16]}" if last_run else ""
+    all_ids = ",".join(f"'{a['item_id']}'" for a in alerts)
+
+    rows = ""
+    for i, a in enumerate(alerts):
+        rows += (
+            f'<div class="alert-row flex items-center gap-3 px-4 py-2.5 border-b border-gray-100'
+            f' last:border-0 hover:bg-red-50/30 transition-colors" data-idx="{i}" style="display:none">'
+            f'<div class="min-w-0 flex-1 flex items-center gap-2">'
+            f'<span class="font-mono text-[11px] font-semibold text-red-600 flex-shrink-0 hidden sm:inline">{a["item_id"]}</span>'
+            f'<span class="text-xs text-gray-700 truncate" title="{a["title"]}">{a["title"][:65]}</span>'
+            f'</div>'
+            f'<div class="flex-shrink-0 flex items-center gap-2 text-xs">'
+            f'<span class="bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full text-[11px]">{a["meli_stock"]}</span>'
+            f'<span class="text-gray-300 text-[11px]">BM: 0</span>'
+            f'</div>'
+            f'<button onclick="closeItem(\'{a["item_id"]}\')"'
+            f' class="flex-shrink-0 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white'
+            f' px-3 py-1 rounded-lg text-[11px] font-medium transition-colors">Pausar</button>'
+            f'</div>'
+        )
+
+    html = f"""<div class="mb-4 bg-white border border-red-200 rounded-xl shadow-sm overflow-hidden">
+  <div class="flex items-center justify-between px-4 py-3 bg-red-50 border-b border-red-200">
+    <div class="flex items-center gap-2">
+      <svg class="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      </svg>
+      <span class="font-semibold text-red-700 text-sm">{total} items en riesgo de sobreventa</span>
+      {f'<span class="text-[10px] text-gray-400 hidden md:inline">— {last_str}</span>' if last_str else ''}
     </div>
-    <p class="text-xs text-red-600 mb-2">Items activos en MeLi con stock > 0 pero BM disponible = 0.
-        Riesgo de vender sin stock fisico.</p>
-    <div>{rows}</div>
+    <div class="flex items-center gap-2">
+      <button onclick="bulkPauseAlerts()" id="btn-bulk-pause"
+              class="text-[11px] bg-red-100 hover:bg-red-200 text-red-700 font-semibold px-3 py-1 rounded-lg transition-colors">
+        Pausar todos ({total})
+      </button>
+      <button onclick="triggerStockSync()" id="btn-sync-now"
+              class="text-[11px] text-red-600 hover:text-red-800 underline font-medium">Sync ahora</button>
+    </div>
+  </div>
+  <p class="text-[11px] text-red-500 px-4 py-2 border-b border-gray-100">
+    Items activos en MeLi con stock &gt; 0 pero BM disponible = 0. Riesgo de vender sin stock fisico.
+  </p>
+  <div id="alerts-list">{rows}</div>
+  <div class="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-t border-gray-100">
+    <span id="alerts-page-info" class="text-xs text-gray-500"></span>
+    <div class="flex items-center gap-1" id="alerts-pagination"></div>
+  </div>
 </div>
 <script>
+(function() {{
+  var _page = 1, _per = 10;
+  var _rows = document.querySelectorAll('#alerts-list .alert-row');
+  var _total = _rows.length;
+  var _pages = Math.ceil(_total / _per);
+  function render(p) {{
+    _page = p;
+    var s = (p - 1) * _per, e = Math.min(s + _per, _total);
+    _rows.forEach(function(r, i) {{ r.style.display = (i >= s && i < e) ? 'flex' : 'none'; }});
+    var info = document.getElementById('alerts-page-info');
+    if (info) info.textContent = 'Mostrando ' + (s + 1) + '\u2013' + e + ' de ' + _total;
+    var pag = document.getElementById('alerts-pagination');
+    if (!pag) return;
+    var btn = function(label, page, active, disabled) {{
+      return '<button onclick="window._alertsPage(' + page + ')" ' + (disabled ? 'disabled' : '') +
+        ' class="px-2.5 py-1 text-xs rounded-lg border font-medium transition-colors ' +
+        (disabled ? 'text-gray-300 border-gray-200 cursor-not-allowed ' :
+         active ? 'bg-red-500 text-white border-red-500 ' :
+         'text-gray-600 border-gray-300 hover:bg-gray-100 ') + '">' + label + '</button>';
+    }};
+    var html = btn('\u2039', p - 1, false, p <= 1);
+    var sp = Math.max(1, Math.min(p - 2, _pages - 4));
+    for (var i = sp; i <= Math.min(sp + 4, _pages); i++) html += btn(i, i, i === p, false);
+    html += btn('\u203a', p + 1, false, p >= _pages);
+    pag.innerHTML = html;
+  }}
+  window._alertsPage = function(p) {{ if (p >= 1 && p <= _pages) render(p); }};
+  window.bulkPauseAlerts = function() {{
+    var ids = [{all_ids}];
+    if (!confirm('Pausar ' + ids.length + ' productos en riesgo de sobreventa?')) return;
+    var btn = document.getElementById('btn-bulk-pause');
+    if (btn) {{ btn.disabled = true; btn.textContent = 'Pausando...'; }}
+    var done = 0;
+    ids.forEach(function(id) {{
+      fetch('/api/items/' + id + '/status', {{
+        method: 'PUT',
+        headers: {{'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}},
+        body: JSON.stringify({{status: 'paused'}})
+      }}).finally(function() {{
+        done++;
+        if (btn) btn.textContent = 'Pausando ' + done + '/' + ids.length + '...';
+        if (done === ids.length && btn) {{
+          btn.textContent = 'Completado \u2713';
+          btn.className = btn.className.replace('bg-red-100 hover:bg-red-200 text-red-700', 'bg-green-100 text-green-700');
+        }}
+      }});
+    }});
+  }};
+  render(1);
+}})();
 function triggerStockSync() {{
-    var btn = document.getElementById('btn-sync-now');
-    if(btn) {{ btn.textContent = 'Sincronizando...'; btn.style.pointerEvents = 'none'; }}
-    fetch('/api/sync/trigger', {{method:'POST'}}).then(function(r){{return r.json();}}).then(function(d){{
-        setTimeout(function(){{
-            htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
-        }}, 8000);
-    }}).catch(function(){{}});
+  var btn = document.getElementById('btn-sync-now');
+  if (btn) {{ btn.textContent = 'Sincronizando...'; btn.style.pointerEvents = 'none'; }}
+  fetch('/api/sync/trigger', {{method:'POST'}}).then(function(r) {{ return r.json(); }}).then(function() {{
+    setTimeout(function() {{
+      htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
+    }}, 8000);
+  }}).catch(function() {{}});
 }}
 </script>"""
     return HTMLResponse(html)
