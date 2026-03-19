@@ -7251,12 +7251,42 @@ async def get_sync_alerts_partial(request: Request):
 }})();
 function triggerStockSync() {{
   var btn = document.getElementById('btn-sync-now');
-  if (btn) {{ btn.textContent = 'Sincronizando...'; btn.style.pointerEvents = 'none'; }}
-  fetch('/api/sync/trigger', {{method:'POST'}}).then(function(r) {{ return r.json(); }}).then(function() {{
-    setTimeout(function() {{
-      htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
-    }}, 8000);
-  }}).catch(function() {{}});
+  if (btn) {{ btn.textContent = 'Iniciando...'; btn.style.pointerEvents = 'none'; }}
+  fetch('/api/sync/trigger', {{method:'POST'}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function() {{
+      var secs = 0;
+      var poll = setInterval(function() {{
+        secs += 2;
+        var b = document.getElementById('btn-sync-now');
+        if (b) b.textContent = 'Sincronizando (' + secs + 's)...';
+        fetch('/api/sync/status')
+          .then(function(r) {{ return r.json(); }})
+          .then(function(s) {{
+            if (!s.running) {{
+              clearInterval(poll);
+              htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
+              var n = s.alerts_count !== undefined ? s.alerts_count : '?';
+              var toast = document.createElement('div');
+              toast.textContent = n > 0 ? '⚠ Sync completado — ' + n + ' alertas activas' : '✓ Sync completado — sin alertas de sobreventa';
+              toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ' +
+                (n > 0 ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200');
+              document.body.appendChild(toast);
+              setTimeout(function() {{ toast.remove(); }}, 5000);
+            }}
+          }})
+          .catch(function() {{ clearInterval(poll); }});
+      }}, 2000);
+      setTimeout(function() {{
+        clearInterval(poll);
+        var b = document.getElementById('btn-sync-now');
+        if (b) {{ b.textContent = 'Sync'; b.style.pointerEvents = 'auto'; }}
+      }}, 90000);
+    }})
+    .catch(function() {{
+      var b = document.getElementById('btn-sync-now');
+      if (b) {{ b.textContent = 'Error — reintentar'; b.style.pointerEvents = 'auto'; b.style.color = '#dc2626'; }}
+    }});
 }}
 // Load initial auto-pause state
 fetch('/api/config/auto-pause').then(function(r){{return r.json();}}).then(function(d){{
