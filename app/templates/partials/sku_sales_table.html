@@ -10,6 +10,8 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Costo (USD)</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROI</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Margen</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ganancia/u</th>
         </tr>
     </thead>
     <tbody class="divide-y divide-gray-200" id="sku-tbody">
@@ -65,10 +67,28 @@
                 <span class="text-gray-300">—</span>
                 {% endif %}
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_margen_pct') is not none %}
+                <span class="font-semibold {% if sku_data._margen_pct >= 20 %}text-green-600{% elif sku_data._margen_pct >= 10 %}text-yellow-600{% elif sku_data._margen_pct >= 0 %}text-orange-500{% else %}text-red-600{% endif %}">
+                    {{ "%.1f"|format(sku_data._margen_pct) }}%
+                </span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_ganancia_est') is not none %}
+                <span class="font-medium {% if sku_data._ganancia_est >= 0 %}text-green-700{% else %}text-red-600{% endif %}">
+                    ${{ "{:,.0f}".format(sku_data._ganancia_est) }}
+                </span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="9" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+            <td colspan="11" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
         </tr>
         {% endfor %}
     </tbody>

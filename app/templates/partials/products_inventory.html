@@ -331,6 +331,10 @@
             <input type="checkbox" class="col-toggle rounded" data-col="margin" {{ 'checked' if preset in ('top', 'stock', 'full') }} onchange="toggleColumn('margin', this.checked)">
             <span>Margen</span>
         </label>
+        <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" class="col-toggle rounded" data-col="price_floor" onchange="toggleColumn('price_floor', this.checked)">
+                Precio Piso
+            </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" class="col-toggle rounded" data-col="photos" {{ 'checked' if preset == 'low' }} onchange="toggleColumn('photos', this.checked)">
             <span>Fotos</span>
@@ -482,6 +486,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="cost">Costo BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="margin">Margen</th>
+                    <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs hidden" data-col="price_floor">Precio Piso</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">Retail PH</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="photos">Fotos</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="video">Video</th>
@@ -685,6 +690,24 @@
                     <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
+                <!-- Precio Piso -->
+                    <td class="px-3 py-2 text-center hidden" data-col="price_floor">
+                        {% if p.get('_precio_piso') and p._precio_piso > 0 %}
+                        {% set below_floor = p.price and p.price < p._precio_piso %}
+                        <div class="flex flex-col items-center gap-0.5">
+                            <span class="text-xs font-mono {% if below_floor %}text-red-600 font-bold{% else %}text-gray-500{% endif %}">
+                                ${{ "{:,.0f}".format(p._precio_piso) }}
+                            </span>
+                            {% if below_floor %}
+                            <span class="text-[9px] bg-red-100 text-red-600 px-1 rounded font-medium">Por debajo</span>
+                            {% else %}
+                            <span class="text-[9px] bg-green-100 text-green-600 px-1 rounded">OK</span>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">—</span>
+                        {% endif %}
+                    </td>
                 <!-- RetailPrice PH -->
                 <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">
                     {% if p.get('_retail_ph_mxn') and p._retail_ph_mxn > 0 %}

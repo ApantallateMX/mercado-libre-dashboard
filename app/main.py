@@ -144,6 +144,15 @@ def _calc_margins(products: list, usd_to_mxn: float):
             p["_roi_pct"] = None
             p["_margen_ph_pct"] = None
 
+        # Precio piso: mínimo para lograr 15% de margen después de comisión MeLi
+        costo = p["_costo_mxn"]
+        if costo > 0:
+            # precio_piso = costo / (1 - comision_total - margen_objetivo)
+            # comision_total = 19.72% (17% + IVA 16% sobre comision); margen_obj = 15%; envio = 150 flat
+            p["_precio_piso"] = round(costo / (1 - 0.1972 - 0.15), 0)
+        else:
+            p["_precio_piso"] = None
+
 
 async def _seed_one(user_id: str, refresh_token: str, label: str):
     """Intenta recuperar tokens para una cuenta via refresh_token.
@@ -6622,6 +6631,34 @@ async def get_multi_account_dashboard(
 
     _multi_account_cache[cache_key] = (_time_module.time(), result)
     return result
+
+
+@app.get("/api/dashboard/morning-briefing")
+async def morning_briefing():
+    """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado."""
+    from datetime import date
+    today = date.today().isoformat()
+    accounts_list = await token_store.get_all_tokens()
+    all_alerts = await token_store.get_all_sync_alerts()
+
+    # Count alerts per user
+    alerts_by_user = {}
+    for a in all_alerts:
+        uid = a.get("user_id", "")
+        alerts_by_user[uid] = alerts_by_user.get(uid, 0) + 1
+
+    result = []
+    for acc in accounts_list:
+        uid = acc.get("user_id", "")
+        label = acc.get("label", uid[:8])
+        result.append({
+            "user_id": uid,
+            "label": label,
+            "alert_count": alerts_by_user.get(uid, 0),
+            "today_revenue": 0,  # loaded async by client
+        })
+
+    return {"accounts": result, "date": today, "total_alerts": len(all_alerts)}
 
 
 @app.get("/api/dashboard/multi-account-amazon")
