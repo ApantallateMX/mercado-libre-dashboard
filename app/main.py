@@ -24,6 +24,8 @@ from app.api.amazon_orders import router as amazon_orders_router
 from app.api.users import router as users_router
 from app.api.system_health import router as system_health_router
 from app.api.v1.sales import router as sales_v1_router
+from app.api.binmanager import router as binmanager_router
+from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
@@ -244,7 +246,10 @@ async def lifespan(app: FastAPI):
     # Health checker automático (cada 10 min) — verifica que todo el sistema funcione
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
+    # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
+    await price_monitor.start()
     yield
+    await price_monitor.stop()
 
 
 app = FastAPI(title="Mercado Libre Dashboard", lifespan=lifespan)
@@ -436,6 +441,7 @@ app.include_router(amazon_orders_router)
 app.include_router(users_router)
 app.include_router(system_health_router)
 app.include_router(sales_v1_router)
+app.include_router(binmanager_router)
 
 
 # ---------- Account switcher ----------
