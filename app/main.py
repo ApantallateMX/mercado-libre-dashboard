@@ -83,15 +83,23 @@ async def _get_usd_to_mxn(client) -> float:
 
 
 def _calc_margins(products: list, usd_to_mxn: float):
-    """Calcula _costo_mxn, _retail_mxn, _ganancia_est, _margen_pct para productos con BM data."""
+    """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto."""
     for p in products:
         avg_cost = p.get("_bm_avg_cost", 0) or 0
         retail = p.get("_bm_retail_price", 0) or 0
+        retail_ph = p.get("_bm_retail_ph", 0) or 0
+
         # Flag: BM tiene registro aunque costos sean sentinel (0 o 9999)
         p["_bm_has_data"] = bool(p.get("_bm_brand") or avg_cost > 0 or retail > 0)
-        p["_costo_mxn"] = round(avg_cost * usd_to_mxn, 2) if (avg_cost > 0 and avg_cost < 9999) else 0
-        p["_retail_mxn"] = round(retail * usd_to_mxn, 2) if (retail > 0 and retail < 9999) else 0
+
+        # Conversiones USD → MXN
+        p["_costo_mxn"] = round(avg_cost * usd_to_mxn, 2) if (0 < avg_cost < 9999) else 0
+        p["_retail_mxn"] = round(retail * usd_to_mxn, 2) if (0 < retail < 9999) else 0
+        p["_retail_ph_mxn"] = round(retail_ph * usd_to_mxn, 2) if (0 < retail_ph < 9999) else 0
+
         price = p.get("price", 0)
+
+        # ── Ganancia/margen vs precio de venta actual ──────────────────────
         if price > 0 and p["_costo_mxn"] > 0:
             comision = price * 0.17
             iva_comision = comision * 0.16
@@ -102,6 +110,34 @@ def _calc_margins(products: list, usd_to_mxn: float):
         else:
             p["_ganancia_est"] = None
             p["_margen_pct"] = None
+
+        # ── Comparativa vs RetailPrice PH ──────────────────────────────────
+        rph = p["_retail_ph_mxn"]
+        if rph > 0:
+            # % diferencia entre precio actual de venta y Retail PH
+            # > 0 → vendiendo sobre PH (bueno), < 0 → bajo PH (riesgo)
+            p["_vs_retail_ph_pct"] = round((price / rph - 1) * 100, 1) if price > 0 else None
+
+            # Precio sugerido: RetailPrice PH + 15% mínimo de margen sobre PH
+            p["_precio_sugerido_ph"] = round(rph * 1.15, 2)
+
+            # ROI potencial: (PH - costo) / costo × 100
+            costo = p["_costo_mxn"]
+            p["_roi_pct"] = round((rph - costo) / costo * 100, 1) if costo > 0 else None
+
+            # Margen neto si se vendiera al precio PH
+            if p["_costo_mxn"] > 0:
+                comision_ph = rph * 0.17
+                iva_ph = comision_ph * 0.16
+                ganancia_ph = rph - p["_costo_mxn"] - comision_ph - iva_ph - 150
+                p["_margen_ph_pct"] = round((ganancia_ph / rph) * 100, 1)
+            else:
+                p["_margen_ph_pct"] = None
+        else:
+            p["_vs_retail_ph_pct"] = None
+            p["_precio_sugerido_ph"] = None
+            p["_roi_pct"] = None
+            p["_margen_ph_pct"] = None
 
 
 async def _seed_one(user_id: str, refresh_token: str, label: str):
@@ -681,6 +717,7 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
                     "CONCEPTID": 8,
                     "NUMBERPAGE": 1,
                     "RECORDSPAGE": 10,
+                    "NEEDRETAILPRICEPH": True,
                 }, headers={"Content-Type": "application/json"}, timeout=30.0)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -725,6 +762,8 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             p["_bm_brand"] = bm.get("Brand", "")
             p["_bm_model"] = bm.get("Model", "")
             p["_bm_title"] = bm.get("Title", "")
+            # RetailPrice PH — último precio sugerido del historial de compras
+            p["_bm_retail_ph"] = bm.get("LastRetailPricePurchaseHistory", 0) or 0
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
@@ -1748,6 +1787,9 @@ _PRODUCTS_CACHE_TTL = 900   # 15 min
 _BM_CACHE_TTL = 900         # 15 min
 _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
+# Cache RetailPrice PH por SKU base — TTL 30 min (cambia lentamente)
+_bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_usd)
+_BM_RETAIL_PH_TTL = 1800    # 30 min
 # Cache para órdenes de Amazon — TTL corto porque es el dashboard del día
 # Key: "{seller_id}:{date}" para invalidar automáticamente al cambiar de día
 _amazon_daily_cache: dict[str, tuple[float, dict]] = {}

@@ -7,6 +7,9 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingreso Total</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">MTY</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">CDMX</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Costo (USD)</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROI</th>
         </tr>
     </thead>
     <tbody class="divide-y divide-gray-200" id="sku-tbody">
@@ -39,10 +42,33 @@
                 <span class="text-gray-300">—</span>
                 {% endif %}
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_bm_avg_cost') and sku_data._bm_avg_cost > 0 %}
+                <span class="text-gray-700 font-medium">${{ "%.2f"|format(sku_data._bm_avg_cost) }}</span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_retail_ph_mxn') and sku_data._retail_ph_mxn > 0 %}
+                <span class="text-blue-700 font-medium">${{ "%.2f"|format(sku_data._retail_ph_mxn) }} MXN</span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_roi_pct') is not none %}
+                <span class="font-semibold {% if sku_data._roi_pct >= 30 %}text-green-600{% elif sku_data._roi_pct >= 0 %}text-yellow-600{% else %}text-red-600{% endif %}">
+                    {{ "%.1f"|format(sku_data._roi_pct) }}%
+                </span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="6" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+            <td colspan="9" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
         </tr>
         {% endfor %}
     </tbody>

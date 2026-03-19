@@ -201,6 +201,55 @@
     <!-- Carga automática 3s después del dashboard para no bloquear lo crítico -->
 </div>
 
+<!-- ═══ SALUD DE PRECIOS BM ═══ -->
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mt-4" id="bm-price-health-widget">
+  <div class="flex items-center justify-between mb-3">
+    <h3 class="text-sm font-semibold text-gray-700">Salud de Precios BM</h3>
+    <span class="text-xs text-gray-400" id="bm-ph-updated">cargando...</span>
+  </div>
+  <div id="bm-ph-content" class="text-gray-400 text-sm">Cargando precios...</div>
+</div>
+
+<script>
+(async function() {
+  try {
+    const r = await fetch('/api/bm/prices');
+    const data = await r.json();
+    const prices = data.prices || [];
+
+    let html = '<div class="space-y-2">';
+    prices.forEach(p => {
+      const price = p.price ? `$${parseFloat(p.price).toFixed(2)} USD` : 'N/A';
+      const checked = p.last_changed ? new Date(p.last_changed).toLocaleDateString('es-MX') : '';
+      html += `<div class="flex items-center justify-between text-xs py-1 border-b border-gray-50">
+        <span class="font-mono font-medium text-gray-700">${p.sku}</span>
+        <span class="text-blue-700 font-semibold">${price}</span>
+        <span class="text-gray-400">${checked}</span>
+      </div>`;
+    });
+    html += '</div>';
+
+    document.getElementById('bm-ph-content').innerHTML = html;
+    document.getElementById('bm-ph-updated').textContent = 'actualizado ' + new Date().toLocaleTimeString('es-MX');
+
+    // SSE para actualizaciones en vivo
+    const es = new EventSource('/api/bm/stream');
+    es.onmessage = (e) => {
+      const evt = JSON.parse(e.data);
+      if (evt.type === 'change') {
+        const badge = document.createElement('div');
+        badge.className = 'fixed top-4 right-4 bg-blue-600 text-white text-xs px-4 py-2 rounded-lg shadow-lg z-50';
+        badge.textContent = `Precio actualizado: ${evt.sku} → $${evt.new_price} USD`;
+        document.body.appendChild(badge);
+        setTimeout(() => badge.remove(), 4000);
+      }
+    };
+  } catch(e) {
+    document.getElementById('bm-ph-content').textContent = 'Error cargando precios';
+  }
+})();
+</script>
+
 {% endblock %}
 
 {% block scripts %}

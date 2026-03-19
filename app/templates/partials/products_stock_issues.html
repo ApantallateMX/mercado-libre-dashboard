@@ -82,6 +82,11 @@
                     <span class="font-bold text-gray-800">${{ "{:,.0f}".format(p.price) }}</span>
                     {% endif %}
                 </div>
+                {% if p.get('_precio_sugerido_ph') and p._precio_sugerido_ph > 0 %}
+                <span class="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                    Precio PH sugerido: ${{ "%.2f"|format(p._precio_sugerido_ph) }} MXN
+                </span>
+                {% endif %}
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
@@ -178,6 +183,13 @@
                         <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
                         {% else %}
                         <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                        {% if p.get('_precio_sugerido_ph') and p._precio_sugerido_ph > 0 %}
+                        <div class="mt-0.5">
+                            <span class="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-medium whitespace-nowrap">
+                                PH: ${{ "%.2f"|format(p._precio_sugerido_ph) }} MXN
+                            </span>
+                        </div>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right">

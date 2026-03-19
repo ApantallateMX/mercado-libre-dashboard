@@ -482,6 +482,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="cost">Costo BM</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="margin">Margen</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">Retail PH</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="photos">Fotos</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="video">Video</th>
                 <th class="text-left px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="recs">Recomendaciones</th>
@@ -682,6 +683,23 @@
                     </div>
                     {% else %}
                     <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
+                </td>
+                <!-- RetailPrice PH -->
+                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">
+                    {% if p.get('_retail_ph_mxn') and p._retail_ph_mxn > 0 %}
+                    <div class="font-semibold text-gray-800 text-xs">${{ "%.2f"|format(p._retail_ph_mxn) }}</div>
+                    {% if p.get('_vs_retail_ph_pct') is not none %}
+                        {% if p._vs_retail_ph_pct >= 10 %}
+                        <div class="text-xs text-green-600 font-medium">+{{ p._vs_retail_ph_pct }}% sobre PH</div>
+                        {% elif p._vs_retail_ph_pct >= 0 %}
+                        <div class="text-xs text-yellow-600 font-medium">+{{ p._vs_retail_ph_pct }}% sobre PH</div>
+                        {% else %}
+                        <div class="text-xs text-red-600 font-bold">{{ p._vs_retail_ph_pct }}% bajo PH ⚠</div>
+                        {% endif %}
+                    {% endif %}
+                    {% else %}
+                    <span class="text-gray-300 text-xs">—</span>
                     {% endif %}
                 </td>
                 <!-- Fotos -->
