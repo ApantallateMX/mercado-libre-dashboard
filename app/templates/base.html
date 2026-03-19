@@ -280,6 +280,58 @@
 
             <!-- ── Selector de cuentas + Salir (MeLi) ───────────────────── -->
             <div class="flex items-center gap-2">
+                <!-- FX Rate Widget -->
+                <div class="flex items-center gap-1" id="fx-widget">
+                  <span class="text-[10px] text-gray-600 hidden md:inline">USD/MXN</span>
+                  <span id="fx-display" class="text-xs font-mono font-bold text-gray-600 cursor-pointer hover:text-blue-600"
+                        onclick="fxEditMode()" title="Click para editar tipo de cambio">$17.50</span>
+                  <input id="fx-input" type="number" step="0.01" min="10" max="30"
+                         class="hidden w-16 text-xs border rounded px-1 py-0.5 font-mono focus:ring-1 focus:ring-blue-400"
+                         onblur="fxSave()" onkeydown="if(event.key==='Enter')fxSave();if(event.key==='Escape')fxCancel()">
+                </div>
+                <script>
+                (function(){
+                  function loadFx(){
+                    fetch('/api/config/fx-rate').then(function(r){return r.json();}).then(function(d){
+                      var el = document.getElementById('fx-display');
+                      if (el) {
+                        el.textContent = '$' + (d.active_rate||0).toFixed(2);
+                        el.className = 'text-xs font-mono font-bold cursor-pointer hover:text-blue-600 ' + (d.is_manual ? 'text-blue-600' : 'text-gray-600');
+                        el.title = d.is_manual ? 'Tipo de cambio manual \u2014 click para editar' : 'Tipo de cambio MeLi API \u2014 click para sobrescribir';
+                      }
+                    }).catch(function(){});
+                  }
+                  window.fxEditMode = function(){
+                    var disp = document.getElementById('fx-display');
+                    var inp = document.getElementById('fx-input');
+                    if (!disp || !inp) return;
+                    inp.value = parseFloat(disp.textContent.replace('$','')) || 17.5;
+                    disp.classList.add('hidden');
+                    inp.classList.remove('hidden');
+                    inp.focus(); inp.select();
+                  };
+                  window.fxSave = function(){
+                    var inp = document.getElementById('fx-input');
+                    var disp = document.getElementById('fx-display');
+                    if (!inp) return;
+                    var rate = parseFloat(inp.value) || 0;
+                    inp.classList.add('hidden');
+                    if (disp) disp.classList.remove('hidden');
+                    if (rate > 0) {
+                      fetch('/api/config/fx-rate', {
+                        method:'POST', headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({rate: rate})
+                      }).then(function(){loadFx();}).catch(function(){});
+                    }
+                  };
+                  window.fxCancel = function(){
+                    document.getElementById('fx-input').classList.add('hidden');
+                    document.getElementById('fx-display').classList.remove('hidden');
+                  };
+                  loadFx();
+                  setInterval(loadFx, 300000); // refresh every 5 min
+                })();
+                </script>
                 <div class="relative" id="account-menu-wrap">
                     <button type="button"
                         onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"

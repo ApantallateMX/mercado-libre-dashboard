@@ -121,6 +121,8 @@
     </div>
 </div>
 
+<div id="idm-margin-banner" class="hidden mb-3 rounded-lg p-3 text-sm border"></div>
+
 <!-- Actions -->
 <div class="flex items-center gap-3 justify-end border-t pt-4">
     <button onclick="closeEditModal()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800">Cerrar</button>
@@ -166,6 +168,9 @@
         var gan = dp - BM_COST_MXN - com - iva - 150;
         var mar = dp > 0 ? (gan / dp * 100) : 0;
 
+        var MARGEN_OBJ = 0.15; // 15% target margin
+        var precioP = BM_COST_MXN > 0 ? Math.ceil(BM_COST_MXN / (1 - 0.1972 - MARGEN_OBJ)) : 0;
+
         document.getElementById('idm-c-price').textContent = fmt(dp);
         document.getElementById('idm-c-cost').textContent = BM_COST_MXN > 0 ? ('-' + fmt(BM_COST_MXN)) : '-';
         document.getElementById('idm-c-com').textContent = '-' + fmt(com);
@@ -175,9 +180,38 @@
         document.getElementById('idm-c-mar').textContent = Math.round(mar) + '%';
         document.getElementById('idm-c-mar').className = 'font-bold text-lg ' + (mar >= 15 ? 'text-green-600' : mar >= 0 ? 'text-yellow-600' : 'text-red-600');
 
+        // Margin banner logic
+        var banner = document.getElementById('idm-margin-banner');
+        var marginValid = true;
+        var activateBtn = document.getElementById('idm-activate-btn');
+        var origBtnText = activateBtn ? (activateBtn.dataset.origText || activateBtn.textContent) : '';
+        if (activateBtn && !activateBtn.dataset.origText) activateBtn.dataset.origText = activateBtn.textContent;
+        if (BM_COST_MXN <= 0) {
+            banner.classList.add('hidden');
+            if (activateBtn) { activateBtn.disabled = false; activateBtn.textContent = origBtnText; }
+        } else if (gan < 0) {
+            banner.className = 'mb-3 rounded-lg p-3 text-sm border bg-red-50 border-red-300 text-red-700';
+            banner.textContent = '\u274C Precio por debajo del costo \u2014 pierdes ' + fmt(Math.abs(gan)) + ' por unidad. Precio m\u00ednimo rentable: ' + fmt(precioP);
+            banner.classList.remove('hidden');
+            marginValid = false;
+            if (activateBtn) { activateBtn.disabled = true; activateBtn.textContent = '\u26D4 Precio con p\u00e9rdida'; }
+        } else if (mar >= 0 && mar < 15) {
+            banner.className = 'mb-3 rounded-lg p-3 text-sm border bg-yellow-50 border-yellow-300 text-yellow-700';
+            banner.textContent = '\u26A0 Margen bajo (' + Math.round(mar) + '%). Para 15% necesitas ' + fmt(precioP);
+            banner.classList.remove('hidden');
+            marginValid = true;
+            if (activateBtn) { activateBtn.textContent = origBtnText; }
+        } else {
+            banner.className = 'mb-3 rounded-lg p-3 text-sm border bg-green-50 border-green-300 text-green-700';
+            banner.textContent = '\u2713 Margen saludable (' + Math.round(mar) + '%)';
+            banner.classList.remove('hidden');
+            marginValid = true;
+            if (activateBtn) { activateBtn.textContent = origBtnText; }
+        }
+
         // Validate price within limits
         var warn = document.getElementById('idm-price-warning');
-        var valid = dp > 0 && _selectedPromo;
+        var valid = dp > 0 && _selectedPromo && (BM_COST_MXN <= 0 || marginValid);
         if (_selectedPromoData && dp > 0) {
             var maxP = _selectedPromoData.max_discounted_price;
             var minP = _selectedPromoData.min_discounted_price;

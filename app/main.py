@@ -73,8 +73,13 @@ def _clean_sku_for_bm(sku: str) -> str:
     return s
 
 
+_manual_fx_rate: float = 0.0  # 0 = usar tasa MeLi API; >0 = override manual
+
+
 async def _get_usd_to_mxn(client) -> float:
-    """Obtiene tipo de cambio USD->MXN de la API de MeLi."""
+    """Obtiene tipo de cambio USD->MXN. Prefiere override manual si está configurado."""
+    if _manual_fx_rate > 0:
+        return _manual_fx_rate
     try:
         fx_data = await client.get("/currency_conversions/search", params={"from": "USD", "to": "MXN"})
         return fx_data.get("ratio", 20.0)
@@ -6922,6 +6927,7 @@ async def amazon_orders_page(request: Request):
 
 _STOCK_SYNC_INTERVAL = 4 * 3600   # 4 horas
 _stock_sync_running: dict = {}     # user_id -> bool (lock por cuenta)
+_auto_pause_enabled: dict = {}     # user_id -> bool
 
 
 async def _run_stock_sync_for_user(user_id: str):
@@ -7005,6 +7011,18 @@ async def _run_stock_sync_for_user(user_id: str):
         await token_store.save_sync_alerts(user_id, alerts)
         await token_store.save_sync_status(user_id, len(alerts), "ok")
         print(f"[STOCK-SYNC] Done user {user_id}: {len(alerts)} alertas de sobreventa")
+
+        # Auto-pause items en riesgo si está habilitado
+        if _auto_pause_enabled.get(user_id) and alerts:
+            paused_count = 0
+            for alert in alerts:
+                try:
+                    await client.update_item_status(alert["item_id"], "paused")
+                    paused_count += 1
+                    print(f"[AUTO-PAUSE] Pausado {alert['item_id']} ({alert['sku']}) — BM=0, MeLi={alert['meli_stock']}")
+                except Exception as ep:
+                    print(f"[AUTO-PAUSE] Error pausando {alert['item_id']}: {ep}")
+            print(f"[AUTO-PAUSE] {paused_count}/{len(alerts)} items pausados para {user_id}")
     except Exception as e:
         print(f"[STOCK-SYNC] Error en sync para {user_id}: {e}")
         try:
@@ -7108,6 +7126,11 @@ async def get_sync_alerts_partial(request: Request):
               class="text-[11px] bg-red-100 hover:bg-red-200 text-red-700 font-semibold px-3 py-1 rounded-lg transition-colors">
         Pausar todos ({total})
       </button>
+      <label class="flex items-center gap-1.5 cursor-pointer" title="Pausar autom\u00e1ticamente al detectar riesgo">
+        <span class="text-[11px] text-gray-500">Auto-pausar</span>
+        <input type="checkbox" id="chk-auto-pause" onchange="toggleAutoPause(this.checked)"
+               class="w-3.5 h-3.5 accent-red-500">
+      </label>
       <button onclick="triggerStockSync()" id="btn-sync-now"
               class="text-[11px] text-red-600 hover:text-red-800 underline font-medium">Sync ahora</button>
     </div>
@@ -7181,6 +7204,21 @@ function triggerStockSync() {{
     }}, 8000);
   }}).catch(function() {{}});
 }}
+// Load initial auto-pause state
+fetch('/api/config/auto-pause').then(function(r){{return r.json();}}).then(function(d){{
+  var chk = document.getElementById('chk-auto-pause');
+  if (chk) chk.checked = d.enabled || false;
+}}).catch(function(){{}});
+function toggleAutoPause(enabled) {{
+  fetch('/api/config/auto-pause', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{enabled: enabled}})
+  }}).then(function(r){{return r.json();}}).then(function(d){{
+    var chk = document.getElementById('chk-auto-pause');
+    if (chk) chk.checked = d.enabled;
+  }});
+}}
 </script>"""
     return HTMLResponse(html)
 
@@ -7222,6 +7260,51 @@ async def get_sync_alerts_count():
         return {"count": 0}
     alerts = await token_store.get_sync_alerts(client.user_id)
     return {"count": len(alerts)}
+
+
+@app.get("/api/config/auto-pause")
+async def get_auto_pause():
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    return {"enabled": _auto_pause_enabled.get(client.user_id, False)}
+
+
+@app.post("/api/config/auto-pause")
+async def set_auto_pause(request: Request):
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    body = await request.json()
+    _auto_pause_enabled[client.user_id] = bool(body.get("enabled", False))
+    return {"enabled": _auto_pause_enabled[client.user_id]}
+
+
+@app.get("/api/config/fx-rate")
+async def get_fx_rate():
+    client = await get_meli_client()
+    meli_rate = 0.0
+    try:
+        if client:
+            fx_data = await client.get("/currency_conversions/search", params={"from": "USD", "to": "MXN"})
+            meli_rate = fx_data.get("ratio", 0.0)
+    except Exception:
+        pass
+    return {
+        "manual_rate": _manual_fx_rate,
+        "meli_rate": round(meli_rate, 4),
+        "active_rate": _manual_fx_rate if _manual_fx_rate > 0 else meli_rate,
+        "is_manual": _manual_fx_rate > 0,
+    }
+
+
+@app.post("/api/config/fx-rate")
+async def set_fx_rate(request: Request):
+    global _manual_fx_rate
+    body = await request.json()
+    rate = float(body.get("rate", 0) or 0)
+    _manual_fx_rate = max(0.0, rate)
+    return {"manual_rate": _manual_fx_rate, "is_manual": _manual_fx_rate > 0}
 
 
 if __name__ == "__main__":
