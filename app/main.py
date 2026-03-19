@@ -4428,6 +4428,17 @@ async def sku_sales_table_partial(
         total_quantity = sum(s["quantity"] for s in sku_sales)
         total_revenue = sum(s["revenue"] for s in sku_sales)
 
+        # Enriquecer con BinManager (costo, retail PH) y calcular márgenes
+        for s in sku_sales:
+            # Precio promedio de venta para cálculos de margen
+            s["price"] = round(s["revenue"] / s["quantity"], 2) if s["quantity"] else 0
+
+        usd_to_mxn, _ = await asyncio.gather(
+            _get_usd_to_mxn(client),
+            _enrich_with_bm_product_info(sku_sales),
+        )
+        _calc_margins(sku_sales, usd_to_mxn)
+
         return templates.TemplateResponse("partials/sku_sales_table.html", {
             "request": request,
             "sku_sales": sku_sales,
