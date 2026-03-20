@@ -238,6 +238,7 @@
     <div class="flex flex-wrap gap-2 items-center">
         <span class="text-xs text-gray-500 font-medium mr-1">Vista:</span>
         {% set presets = [
+            ("accion", "⚡ Acción Req."),
             ("all", "Todos"),
             ("top", "Top Ventas"),
             ("stock", "Mayor Stock"),
@@ -478,14 +479,14 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
                 <th class="text-right px-3 py-3 text-blue-700 font-bold text-xs bg-blue-50">BM Disp.</th>
                 <th class="text-right px-3 py-3 text-orange-600 font-bold text-xs bg-orange-50">BM Res.</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">MTY</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">CDMX</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock',) }}" data-col="warehouse">TJ</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">MTY</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">CDMX</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">TJ</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas {{ alert_days }}d</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="revenue">Revenue</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="cost">Costo BM</th>
-                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="margin">Margen</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="revenue">Revenue</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="cost">Costo BM</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="margin">Margen</th>
                     <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs hidden" data-col="price_floor">Precio Piso</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">Retail PH</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="photos">Fotos</th>
@@ -498,7 +499,12 @@
             {% set row_offset = (page - 1) * per_page %}
             {% for p in products %}
             {% set has_deal = (p.get('_has_deal')) or (p.original_price and p.original_price > p.price) %}
-            <tr class="hover:bg-gray-50 inv-row {{ 'bg-red-50/40' if p.available_quantity == 0 else '' }}"
+            {% set _urg = p.get('_urgency', '') %}
+            <tr class="hover:bg-gray-50 inv-row
+                {%- if _urg == 'risk' %} border-l-4 border-red-500 bg-red-50/30
+                {%- elif _urg == 'restock' %} border-l-4 border-orange-400 bg-orange-50/20
+                {%- elif _urg == 'critical' %} border-l-4 border-yellow-400 bg-yellow-50/20
+                {%- elif p.available_quantity == 0 %} bg-red-50/40{%- endif %}"
                 data-id="{{ p.id }}"
                 data-units="{{ p.get('units', 0) }}"
                 data-stock="{{ p.available_quantity }}"
@@ -511,7 +517,13 @@
                 data-revenue="{{ p.get('revenue', 0) }}"
                 data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
                 <!-- # -->
-                <td class="px-3 py-2 text-gray-400 font-bold text-xs">{{ row_offset + loop.index }}</td>
+                <td class="px-3 py-2 text-gray-400 font-bold text-xs">
+                    {{ row_offset + loop.index }}
+                    {% if _urg == 'risk' %}<span class="block text-[9px] font-bold text-red-600 uppercase leading-tight">sobreventa</span>
+                    {% elif _urg == 'restock' %}<span class="block text-[9px] font-bold text-orange-600 uppercase leading-tight">sin stock</span>
+                    {% elif _urg == 'critical' %}<span class="block text-[9px] font-bold text-yellow-700 uppercase leading-tight">crítico</span>
+                    {% endif %}
+                </td>
                 <!-- Producto -->
                 <td class="px-3 py-2">
                     <div class="flex items-center gap-2">
@@ -898,7 +910,7 @@ function alertGoToPage(pg) {
 function buildInvUrl(overrides) {
     overrides = overrides || {};
     var preset = overrides.preset || _invPreset;
-    var enrich = overrides.enrich || ((['top','stock','full'].indexOf(preset) >= 0) ? 'full' : _invEnrich);
+    var enrich = overrides.enrich || ((['top','stock','full','accion'].indexOf(preset) >= 0) ? 'full' : _invEnrich);
     var params = {
         preset: preset,
         enrich: enrich,

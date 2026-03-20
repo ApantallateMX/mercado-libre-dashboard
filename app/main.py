@@ -2446,6 +2446,43 @@ async def products_inventory_partial(
             products = [p for p in products if p.get("is_full")]
         elif preset == "no_stock":
             products = [p for p in products if p.get("available_quantity", 0) == 0]
+        elif preset == "accion":
+            # Vista unificada de urgencia: sobreventa + sin stock + stock crítico
+            THRESHOLD = 10
+            if enrich != "full":
+                enrich = "full"  # siempre enriquecido para mostrar costos y márgenes
+            risk_ids = {
+                p["id"] for p in products
+                if p.get("available_quantity", 0) > 0
+                and (p.get("_bm_total") or 0) == 0
+                and not p.get("is_full")
+                and p.get("sku")
+            }
+            restock_ids = {
+                p["id"] for p in products
+                if p.get("available_quantity", 0) == 0
+                and (p.get("_bm_avail") or 0) > 0
+                and p.get("units", 0) > 0
+            }
+            critical_ids = {
+                p["id"] for p in products
+                if p.get("available_quantity", 0) > 0
+                and 0 < (p.get("_bm_avail") or 0) <= THRESHOLD
+                and not p.get("is_full")
+                and p.get("sku")
+                and p["id"] not in risk_ids
+            }
+            for p in products:
+                pid = p["id"]
+                if pid in risk_ids:
+                    p["_urgency"] = "risk"
+                elif pid in restock_ids:
+                    p["_urgency"] = "restock"
+                elif pid in critical_ids:
+                    p["_urgency"] = "critical"
+            products = [p for p in products if p.get("_urgency")]
+            _urg_order = {"risk": 0, "restock": 1, "critical": 2}
+            products.sort(key=lambda x: (_urg_order[x.get("_urgency", "critical")], -x.get("units", 0)))
 
         # Filtro FULL adicional
         if full_filter == "full":
@@ -7307,6 +7344,30 @@ function toggleAutoPause(enabled) {{
 }}
 </script>"""
     return HTMLResponse(html)
+
+
+@app.get("/api/sync/stock-counts")
+async def get_stock_counts():
+    """Conteos rápidos de los 4 grupos de acción. Usa _stock_issues_cache si disponible."""
+    client = await get_meli_client()
+    if not client:
+        return {"sin_stock": 0, "riesgo": 0, "critico": 0, "sin_publicar": 0}
+    try:
+        key = f"stock_issues:{client.user_id}:t10"
+        entry = _stock_issues_cache.get(key)
+        if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
+            ctx = entry[1]
+            return {
+                "sin_stock": ctx.get("restock_count", 0),
+                "riesgo": ctx.get("risk_count", 0),
+                "critico": ctx.get("critical_count", 0),
+                "sin_publicar": 0,
+            }
+        # Fallback: solo alertas de sobreventa desde DB (siempre disponibles)
+        alerts = await token_store.get_sync_alerts(client.user_id)
+        return {"sin_stock": 0, "riesgo": len(alerts), "critico": 0, "sin_publicar": 0}
+    finally:
+        await client.close()
 
 
 @app.post("/api/sync/trigger")
