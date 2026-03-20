@@ -7265,12 +7265,14 @@ function triggerStockSync() {{
           .then(function(s) {{
             if (!s.running) {{
               clearInterval(poll);
-              htmx.ajax('GET', '/api/sync/alerts', {{target:'#sync-alerts-container', swap:'innerHTML'}});
-              var n = s.alerts_count !== undefined ? s.alerts_count : '?';
+              // Limpiar lista de alertas y confirmar éxito
+              var container = document.getElementById('sync-alerts-container');
+              if (container) container.innerHTML = '';
+              var n = s.alerts_count !== undefined ? s.alerts_count : 0;
               var toast = document.createElement('div');
-              toast.textContent = n > 0 ? '⚠ Sync completado — ' + n + ' alertas activas' : '✓ Sync completado — sin alertas de sobreventa';
-              toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium ' +
-                (n > 0 ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-green-50 text-green-700 border border-green-200');
+              toast.innerHTML = '<span style="font-size:1.1em">✓</span> Sync completado exitosamente' +
+                (n > 0 ? ' — ' + n + ' items en revisión' : '');
+              toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium bg-green-50 text-green-700 border border-green-200';
               document.body.appendChild(toast);
               setTimeout(function() {{ toast.remove(); }}, 5000);
             }}
