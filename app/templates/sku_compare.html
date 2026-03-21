@@ -3,10 +3,11 @@
 {% block title %}Comparativa de Ventas{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Comparativa de Ventas por SKU</h1>
-    <p class="text-gray-600">Compara dos periodos para identificar SKUs que subieron, bajaron o dejaron de venderse</p>
+<div class="mb-4">
+    <h1 class="text-2xl font-bold text-gray-800">SKU</h1>
+    <p class="text-gray-600">Ventas y comparativa por SKU</p>
 </div>
+{% include "partials/sku_subnav.html" %}
 
 <!-- Presets rapidos -->
 <div class="bg-white p-4 rounded-lg shadow mb-4">

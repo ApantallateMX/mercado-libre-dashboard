@@ -1,0 +1,12 @@
+<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0">
+    <a href="/sku-sales"
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition
+              {% if active == 'sku_sales' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
+        Ventas por SKU
+    </a>
+    <a href="/sku-compare"
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition
+              {% if active == 'sku_compare' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
+        Comparativa
+    </a>
+</div>
