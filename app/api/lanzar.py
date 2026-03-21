@@ -134,6 +134,12 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
         }
         try:
             r = await http.post(_BM_INVENTORY_URL, json=payload, headers=_BM_AJAX, timeout=30)
+            # Session expired detection
+            if "User/Index" in str(r.url) or r.status_code == 401:
+                logger.warning("BM session expired during pagination — re-logging in")
+                if not await _bm_login(http):
+                    break
+                continue  # retry same page
             if r.status_code != 200:
                 break
             data = r.json()
@@ -143,38 +149,87 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
             if len(data) < per_page:
                 break
             page += 1
+            if page > 500:  # safety limit
+                logger.warning("BM pagination hit 500-page safety limit")
+                break
         except Exception as e:
             logger.error(f"BM fetch page {page} error: {e}")
             break
     return results
 
 
+_ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
+
+
+def _bm_conditions_for_sku(sku: str) -> str:
+    """Condiciones BM según sufijo — igual que main.py y sku_inventory.py."""
+    u = (sku or "").upper()
+    if u.endswith("-ICB") or u.endswith("-ICC"):
+        return "GRA,GRB,GRC,ICB,ICC,NEW"
+    return "GRA,GRB,GRC,NEW"
+
+
+def _wh_name_to_zone(name: str) -> str:
+    n = name.lower()
+    if "monterrey" in n or "maxx" in n:
+        return "mty"
+    if "autobot" in n or "cdmx" in n or "ebanistas" in n:
+        return "cdmx"
+    return "tj"
+
+
 async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
-    """Fetch MTY/CDMX stock for a given SKU."""
+    """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo."""
+    _BM_AVAIL_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
     try:
-        payload = {
+        base = sku.upper()
+        for sfx in _ALL_SUFFIXES:
+            if base.endswith(sfx):
+                base = base[:-len(sfx)]
+                break
+        conditions = _bm_conditions_for_sku(sku)
+        wh_payload = {
             "COMPANYID": _BM_COMPANY,
-            "SKU": sku,
+            "SKU": base,
             "WarehouseID": None,
             "LocationID": _BM_LOCATIONS,
             "BINID": None,
-            "Condition": "GRA,GRB,GRC,NEW",
+            "Condition": conditions,
             "ForInventory": 0,
             "SUPPLIERS": None,
         }
-        r = await http.post(_BM_WAREHOUSE_URL, json=payload, headers=_BM_AJAX, timeout=15)
+        avail_payload = {
+            "COMPANYID": _BM_COMPANY,
+            "TYPEINVENTORY": 0,
+            "WAREHOUSEID": None,
+            "LOCATIONID": _BM_LOCATIONS,
+            "BINID": None,
+            "PRODUCTSKU": base,
+            "CONDITION": conditions,
+            "SUPPLIERS": None,
+            "LCN": None,
+            "SEARCH": base,
+        }
+        r_wh, r_avail = await asyncio.gather(
+            http.post(_BM_WAREHOUSE_URL, json=wh_payload, headers=_BM_AJAX, timeout=15),
+            http.post(_BM_AVAIL_URL, json=avail_payload, headers=_BM_AJAX, timeout=15),
+            return_exceptions=True,
+        )
         mty = cdmx = 0
-        if r.status_code == 200:
-            for row in (r.json() or []):
+        if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
+            for row in (r_wh.json() or []):
                 qty = row.get("QtyTotal", 0) or 0
-                name = (row.get("WarehouseName") or "").lower()
-                if "monterrey" in name or "maxx" in name:
+                zone = _wh_name_to_zone(row.get("WarehouseName") or "")
+                if zone == "mty":
                     mty += qty
-                elif "autobot" in name or "cdmx" in name or "ebanistas" in name:
+                elif zone == "cdmx":
                     cdmx += qty
-        return {"mty": mty, "cdmx": cdmx}
+        avail = 0
+        if not isinstance(r_avail, Exception) and r_avail.status_code == 200:
+            avail = sum(row.get("Available", 0) or 0 for row in (r_avail.json() or []))
+        return {"mty": mty, "cdmx": cdmx, "avail": avail or mty + cdmx}
     except Exception:
-        return {"mty": 0, "cdmx": 0}
+        return {"mty": 0, "cdmx": 0, "avail": 0}
 
 
 async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
@@ -283,7 +338,27 @@ async def _run_gap_scan():
             if not accounts:
                 raise Exception("No MeLi accounts configured")
 
-            # 2. Fetch all BM SKUs with stock
+            # 2a. Get real USD→MXN FX rate from first MeLi account
+            fx = 17.5  # fallback
+            if accounts:
+                from app.services.meli_client import _active_user_id as _ctx_fx
+                first_uid = accounts[0]["user_id"]
+                token_fx = _ctx_fx.set(first_uid)
+                try:
+                    fx_client = await get_meli_client()
+                    if fx_client:
+                        fx_data = await fx_client.get(
+                            "/currency_conversions/search",
+                            params={"from": "USD", "to": "MXN"}
+                        )
+                        fx = float(fx_data.get("ratio", 17.5) or 17.5)
+                        logger.info(f"FX USD→MXN: {fx}")
+                except Exception as e:
+                    logger.warning(f"FX fetch failed, usando 17.5: {e}")
+                finally:
+                    _ctx_fx.reset(token_fx)
+
+            # 2b. Fetch all BM SKUs with stock
             async with httpx.AsyncClient(follow_redirects=True, timeout=30) as bm_http:
                 if not await _bm_login(bm_http):
                     raise Exception("BinManager login failed")
@@ -333,8 +408,6 @@ async def _run_gap_scan():
                     cost   = float(prod.get("AvgCostQTY", 0) or 0)
                     stock  = int(prod.get("QtyTotal", 0) or 0)
                     score  = _priority_score(stock, retail, cost)
-                    # Estimate MXN price (17.5 MXN/USD as fallback)
-                    fx = 17.5
                     suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
                     cost_mxn  = round(cost * fx, 0) if cost > 0 else 0
                     gaps.append({
