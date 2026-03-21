@@ -261,6 +261,25 @@
                     Salud
                     <span id="health-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
+                <a href="/returns" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition relative {% if active == 'returns' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
+                    Retornos
+                    <span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
+                </a>
+<script>
+(function() {
+    function _refreshReturnsBadge() {
+        fetch('/api/returns/analysis').then(function(r){ return r.json(); }).then(function(d) {
+            var b = document.getElementById('returns-badge');
+            if (!b) return;
+            var n = (d.by_status && d.by_status.opened) ? d.by_status.opened : 0;
+            if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
+            else { b.classList.add('hidden'); }
+        }).catch(function(){});
+    }
+    _refreshReturnsBadge();
+    setInterval(_refreshReturnsBadge, 60000);
+})();
+</script>
 <script>
 (function() {
     function _refreshHealthBadge() {

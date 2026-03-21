@@ -7454,6 +7454,385 @@ async def set_fx_rate(request: Request):
     return {"manual_rate": _manual_fx_rate, "is_manual": _manual_fx_rate > 0}
 
 
+# ===========================
+# RETORNOS / DEVOLUCIONES
+# ===========================
+
+@app.get("/returns", response_class=HTMLResponse)
+async def returns_page(request: Request):
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse("no_session.html", {"request": request})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse("returns.html", {
+        "request": request,
+        "user": user,
+        "active": "returns",
+        **ctx
+    })
+
+
+@app.get("/partials/returns-summary", response_class=HTMLResponse)
+async def returns_summary_partial(
+    request: Request,
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        df = date_from or None
+        dt = date_to or None
+
+        # Fetch all PDD claims in the period
+        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+        pdd_claims = [c for c in all_claims
+                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+
+        total = len(pdd_claims)
+        opened = sum(1 for c in pdd_claims if c.get("status") == "opened")
+        closed = total - opened
+
+        # Count urgent (opened with due_date < 24h)
+        from datetime import datetime, timezone
+        urgent = 0
+        for c in pdd_claims:
+            if c.get("status") != "opened":
+                continue
+            for player in c.get("players", []):
+                if player.get("role") == "respondent":
+                    for a in player.get("available_actions", []):
+                        if a.get("mandatory") and a.get("due_date"):
+                            try:
+                                due_dt = datetime.fromisoformat(
+                                    a["due_date"].replace("Z", "+00:00"))
+                                remaining_h = (due_dt - datetime.now(timezone.utc)).total_seconds() / 3600
+                                if remaining_h < 24:
+                                    urgent += 1
+                            except Exception:
+                                pass
+                    break
+
+        # Total orders for return rate calculation
+        total_orders = 0
+        try:
+            orders_data = await client.get(
+                "/orders/search",
+                params={"seller": (await client.get_user_info()).get("id", ""),
+                        "sort": "date_asc", "offset": 0, "limit": 1,
+                        **({"date_from": df} if df else {}),
+                        **({"date_to": dt} if dt else {})}
+            )
+            total_orders = orders_data.get("paging", {}).get("total", 0)
+        except Exception:
+            pass
+
+        return_rate = (total / total_orders * 100) if total_orders > 0 else 0.0
+
+        summary = SimpleNamespace(
+            total=total,
+            opened=opened,
+            closed=closed,
+            urgent=urgent,
+            total_orders=total_orders,
+            return_rate=round(return_rate, 2),
+        )
+
+        return templates.TemplateResponse("partials/returns_summary.html", {
+            "request": request,
+            "summary": summary,
+            "date_from": date_from,
+            "date_to": date_to,
+        })
+    except Exception as e:
+        return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando resumen de retornos: {e}</p>')
+    finally:
+        await client.close()
+
+
+@app.get("/partials/returns-table", response_class=HTMLResponse)
+async def returns_table_partial(
+    request: Request,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    status: str = Query(""),
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p>Error: No autenticado</p>")
+    try:
+        df = date_from or None
+        dt = date_to or None
+        params_status = status if status else None
+
+        # Fetch all PDD claims, then paginate client-side for accuracy
+        all_claims = await client.fetch_all_claims(status=params_status,
+                                                    date_from=df, date_to=dt)
+        pdd_all = [c for c in all_claims
+                   if str(c.get("reason_id", "")).upper().startswith("PDD")]
+
+        total_pdd = len(pdd_all)
+        paging = {"total": total_pdd, "offset": offset, "limit": limit}
+        raw_claims = pdd_all[offset:offset + limit]
+
+        # Refresh status of opened claims via detail endpoint
+        opened_ids = [c for c in raw_claims if c.get("status") == "opened"]
+        if opened_ids:
+            sem_refresh = asyncio.Semaphore(5)
+
+            async def _refresh_status(claim):
+                async with sem_refresh:
+                    try:
+                        detail = await client.get_claim_detail(str(claim.get("id", "")))
+                        if isinstance(detail, dict) and detail.get("status"):
+                            claim["status"] = detail["status"]
+                            if detail.get("stage"):
+                                claim["stage"] = detail["stage"]
+                            if detail.get("players"):
+                                claim["players"] = detail["players"]
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_refresh_status(c) for c in opened_ids[:30]],
+                                 return_exceptions=True)
+
+        # Batch fetch order info for product titles
+        order_ids = list({str(c.get("resource_id", "")) for c in raw_claims
+                          if c.get("resource") == "order" and c.get("resource_id")})
+        orders_map = {}
+        if order_ids:
+            for oid in order_ids[:20]:
+                try:
+                    order = await client.get(f"/orders/{oid}")
+                    oi = order.get("order_items", [])
+                    if oi:
+                        item = oi[0].get("item", {})
+                        orders_map[oid] = {
+                            "title": item.get("title", ""),
+                            "price": order.get("total_amount", 0),
+                            "item_id": item.get("id", ""),
+                        }
+                except Exception:
+                    pass
+
+        # Fetch claim messages for all claims (opened + closed for analysis)
+        sem = asyncio.Semaphore(5)
+        claim_messages_map = {}
+
+        async def _fetch_msgs(claim_id):
+            async with sem:
+                try:
+                    msgs = await client.get_claim_messages(str(claim_id))
+                    if isinstance(msgs, list):
+                        return str(claim_id), msgs
+                    return str(claim_id), msgs.get("results", msgs.get("messages", []))
+                except Exception:
+                    return str(claim_id), []
+
+        msg_results = await asyncio.gather(
+            *[_fetch_msgs(c.get("id", "")) for c in raw_claims[:20]],
+            return_exceptions=True
+        )
+        for r in msg_results:
+            if isinstance(r, tuple):
+                claim_messages_map[r[0]] = r[1]
+
+        REASON_MAP = {
+            "PDD": ("Producto defectuoso o diferente", "defective"),
+        }
+
+        from datetime import datetime, timezone
+
+        enriched = []
+        for c in raw_claims:
+            date_created = c.get("date_created", "")
+            elapsed_str, elapsed_secs = _elapsed_str(date_created)
+            days_open = elapsed_secs // 86400 if elapsed_secs else 0
+
+            c_status = c.get("status", "")
+            stage = c.get("stage", "")
+
+            # Due date
+            due_date_raw = ""
+            due_date = ""
+            for player in c.get("players", []):
+                if player.get("role") == "respondent":
+                    for a in player.get("available_actions", []):
+                        if a.get("mandatory") and a.get("due_date"):
+                            due_date_raw = a["due_date"]
+                            due_date = due_date_raw[:10]
+                            break
+                    break
+
+            # Countdown hours
+            countdown_hours = None
+            if due_date_raw and c_status == "opened":
+                try:
+                    due_dt = datetime.fromisoformat(due_date_raw.replace("Z", "+00:00"))
+                    remaining = due_dt - datetime.now(timezone.utc)
+                    countdown_hours = max(0, round(remaining.total_seconds() / 3600, 1))
+                except Exception:
+                    pass
+
+            # Urgency
+            if c_status == "opened":
+                if countdown_hours is not None:
+                    urgency = "red" if countdown_hours < 8 else ("yellow" if countdown_hours < 24 else "green")
+                else:
+                    urgency = "red" if days_open > 7 else ("yellow" if days_open > 3 else "green")
+            else:
+                urgency = "gray"
+
+            reason_id = c.get("reason_id", "")
+            reason_prefix = reason_id[:3].upper() if reason_id else ""
+            reason_info = REASON_MAP.get(reason_prefix, ("Retorno / Devolucion", "defective"))
+            reason_desc = reason_info[0]
+
+            resource_id = str(c.get("resource_id", ""))
+            order_info = orders_map.get(resource_id, {})
+
+            # Conversation messages
+            claim_id_str = str(c.get("id", ""))
+            raw_msgs = claim_messages_map.get(claim_id_str, [])
+            conversation = []
+            buyer_complaint = ""
+            for msg in raw_msgs:
+                sender = msg.get("sender_role", msg.get("role", ""))
+                text = msg.get("text", msg.get("message", ""))
+                msg_date = msg.get("date_created", "")
+                if sender == "complainant" and text and not buyer_complaint:
+                    buyer_complaint = text
+                conversation.append({
+                    "sender": sender,
+                    "text": text,
+                    "date": msg_date[:16].replace("T", " ") if msg_date else "",
+                })
+
+            # Suggestions
+            suggestions = []
+            if c_status == "opened":
+                if countdown_hours is not None and countdown_hours < 24:
+                    suggestions.append("URGENTE: Responde antes de " + due_date + " para evitar penalizacion")
+                suggestions.append("Solicita fotos del defecto o diferencia al comprador")
+                suggestions.append("Ofrece solucion: reemplazo, devolucion o descuento")
+                if stage == "dispute":
+                    suggestions.append("Responde al mediador de MeLi con evidencia clara")
+            else:
+                suggestions.append("Retorno resuelto — revisa si el producto tiene un problema recurrente")
+
+            enriched.append(SimpleNamespace(
+                id=c.get("id", ""),
+                order_id=resource_id,
+                status=c_status,
+                stage=stage,
+                date_created=date_created[:10] if date_created else "-",
+                _sort_date=date_created or "",
+                elapsed=elapsed_str,
+                days_open=days_open,
+                urgency=urgency,
+                countdown_hours=countdown_hours,
+                reason_desc=reason_desc,
+                reason_id=reason_id,
+                product_title=order_info.get("title", ""),
+                product_price=order_info.get("price", 0),
+                due_date=due_date,
+                buyer_complaint=buyer_complaint,
+                conversation=conversation,
+                suggestions=suggestions,
+                tracking={},
+            ))
+
+        # Sort: urgency first, then by date desc
+        _urgency_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
+        enriched.sort(key=lambda c: (_urgency_order.get(c.urgency, 3), not c._sort_date, c._sort_date))
+
+        return templates.TemplateResponse("partials/returns_table.html", {
+            "request": request,
+            "returns": enriched,
+            "paging": paging,
+            "offset": offset,
+            "limit": limit,
+            "status": status,
+        })
+    except Exception as e:
+        return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando retornos: {e}</p>')
+    finally:
+        await client.close()
+
+
+@app.get("/api/returns/analysis")
+async def returns_analysis(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No autenticado"}
+    try:
+        df = date_from or None
+        dt = date_to or None
+
+        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+        pdd_claims = [c for c in all_claims
+                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+
+        total = len(pdd_claims)
+        opened = sum(1 for c in pdd_claims if c.get("status") == "opened")
+        closed = total - opened
+
+        # Top products by return count
+        order_ids = list({str(c.get("resource_id", "")) for c in pdd_claims
+                          if c.get("resource") == "order" and c.get("resource_id")})
+        product_counts: dict = {}
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_order_title(oid):
+            async with sem:
+                try:
+                    order = await client.get(f"/orders/{oid}")
+                    oi = order.get("order_items", [])
+                    if oi:
+                        return oid, oi[0].get("item", {}).get("title", "")
+                except Exception:
+                    pass
+                return oid, ""
+
+        title_results = await asyncio.gather(
+            *[_fetch_order_title(oid) for oid in order_ids[:30]],
+            return_exceptions=True
+        )
+        order_title_map = {}
+        for r in title_results:
+            if isinstance(r, tuple):
+                order_title_map[r[0]] = r[1]
+
+        for c in pdd_claims:
+            oid = str(c.get("resource_id", ""))
+            title = order_title_map.get(oid, "Producto desconocido")
+            if not title:
+                title = "Producto desconocido"
+            product_counts[title] = product_counts.get(title, 0) + 1
+
+        top_products = sorted(
+            [{"title": t, "count": n} for t, n in product_counts.items()],
+            key=lambda x: x["count"],
+            reverse=True
+        )[:5]
+
+        return {
+            "total": total,
+            "by_status": {"opened": opened, "closed": closed},
+            "top_products": top_products,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await client.close()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

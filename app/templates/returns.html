@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+
+{% block title %}Retornos y Devoluciones{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Retornos y Devoluciones</h1>
+    <p class="text-gray-600">Productos defectuosos o diferentes reportados por compradores</p>
+</div>
+
+<!-- Date Filters -->
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+    <div class="flex flex-wrap items-end gap-4">
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">Desde</label>
+            <input type="date" id="ret-date-from" class="border rounded px-3 py-1.5 text-sm">
+        </div>
+        <div>
+            <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+            <input type="date" id="ret-date-to" class="border rounded px-3 py-1.5 text-sm">
+        </div>
+        <button onclick="applyRetFilters()"
+                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
+            Aplicar
+        </button>
+        <button onclick="clearRetFilters()"
+                class="bg-gray-200 text-gray-700 px-4 py-1.5 rounded hover:bg-gray-300 text-sm">
+            Limpiar
+        </button>
+        <span id="ret-filter-indicator" class="text-xs text-gray-400 ml-2"></span>
+        <div class="flex items-center gap-2 text-xs text-gray-400 ml-auto">
+            <span id="ret-last-update"></span>
+            <span id="ret-refresh-indicator" class="hidden">
+                <svg class="inline animate-spin h-3 w-3 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                Actualizando...
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- KPI Summary -->
+<div id="ret-summary">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {% for i in range(4) %}
+        <div class="bg-white p-5 rounded-lg shadow animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+            <div class="h-8 bg-gray-200 rounded w-3/4"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Main content + Sidebar -->
+<div class="flex gap-6">
+    <div class="flex-1 min-w-0">
+        <!-- Returns Table -->
+        <div class="bg-white rounded-lg shadow">
+            <div class="border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+                <h2 class="text-sm font-semibold text-gray-700">Lista de Retornos</h2>
+                <div class="flex gap-2">
+                    <button onclick="setRetStatus('')"
+                            id="ret-btn-all"
+                            class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
+                        Todos
+                    </button>
+                    <button onclick="setRetStatus('opened')"
+                            id="ret-btn-opened"
+                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                        Abiertos
+                    </button>
+                    <button onclick="setRetStatus('closed')"
+                            id="ret-btn-closed"
+                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                        Cerrados
+                    </button>
+                </div>
+            </div>
+            <div id="ret-table" class="p-6">
+                <div class="animate-pulse space-y-3">
+                    {% for i in range(5) %}
+                    <div class="h-24 bg-gray-200 rounded"></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="hidden lg:block lg:w-72 flex-shrink-0">
+        <!-- Top productos -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
+            <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
+                <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                Productos con mas retornos
+            </h3>
+            <div id="ret-top-products">
+                <div class="animate-pulse space-y-2">
+                    {% for i in range(3) %}
+                    <div class="h-8 bg-gray-100 rounded"></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Grafico de motivos -->
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
+            <h3 class="text-sm font-bold text-gray-800 mb-3">Distribucion por Estado</h3>
+            <canvas id="ret-status-chart" height="160"></canvas>
+        </div>
+
+        <!-- Consejos de mejora -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
+                <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346A3.284 3.284 0 0119 16.5h-6a3.284 3.284 0 01-2.316-.904l-.347-.346z"/></svg>
+                Como reducir retornos
+            </h3>
+            <ul class="text-xs text-gray-600 space-y-2">
+                <li class="flex items-start gap-1.5">
+                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
+                    Agrega fotos reales del producto desde todos los angulos
+                </li>
+                <li class="flex items-start gap-1.5">
+                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
+                    Verifica que el titulo y descripcion sean exactos — no exagerar
+                </li>
+                <li class="flex items-start gap-1.5">
+                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
+                    Incluye dimensiones, peso y especificaciones tecnicas completas
+                </li>
+                <li class="flex items-start gap-1.5">
+                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
+                    Usa empaque adecuado para evitar danos en transito
+                </li>
+                <li class="flex items-start gap-1.5">
+                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
+                    Responde retornos en &lt;24h para evitar impacto en reputacion
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+    function _fmtDate(d) { return d.toISOString().slice(0, 10); }
+    var _today = new Date();
+    var _monthAgo = new Date(_today);
+    _monthAgo.setDate(_today.getDate() - 29);
+
+    var retFilters = {
+        date_from: _fmtDate(_monthAgo),
+        date_to: _fmtDate(_today),
+        status: '',
+        offset: 0,
+        limit: 20,
+    };
+
+    // --- Init date inputs ---
+    document.getElementById('ret-date-from').value = retFilters.date_from;
+    document.getElementById('ret-date-to').value = retFilters.date_to;
+
+    function buildParams() {
+        var p = [];
+        if (retFilters.date_from) p.push('date_from=' + retFilters.date_from);
+        if (retFilters.date_to) p.push('date_to=' + retFilters.date_to);
+        if (retFilters.status) p.push('status=' + retFilters.status);
+        return p;
+    }
+
+    // --- Load summary KPIs ---
+    function loadSummary() {
+        var p = buildParams();
+        var url = '/partials/returns-summary' + (p.length ? '?' + p.join('&') : '');
+        fetch(url).then(function(r) { return r.text(); })
+            .then(function(html) { document.getElementById('ret-summary').innerHTML = html; })
+            .catch(function() { document.getElementById('ret-summary').innerHTML = '<p class="text-center text-red-500 py-4">Error cargando resumen</p>'; });
+    }
+
+    // --- Load returns table ---
+    function loadTable() {
+        var p = buildParams();
+        p.push('offset=' + retFilters.offset);
+        p.push('limit=' + retFilters.limit);
+        var url = '/partials/returns-table?' + p.join('&');
+        var container = document.getElementById('ret-table');
+        container.innerHTML = '<div class="animate-pulse space-y-3">' +
+            Array(4).fill('<div class="h-24 bg-gray-200 rounded"></div>').join('') + '</div>';
+        fetch(url).then(function(r) { return r.text(); })
+            .then(function(html) { container.innerHTML = html; })
+            .catch(function() { container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando retornos</p>'; });
+    }
+
+    // --- Load analysis data (sidebar) ---
+    var _chartInstance = null;
+    function loadAnalysis() {
+        var p = buildParams();
+        var url = '/api/returns/analysis' + (p.length ? '?' + p.join('&') : '');
+        fetch(url).then(function(r) { return r.json(); })
+            .then(function(data) {
+                // Top products
+                var topEl = document.getElementById('ret-top-products');
+                if (data.top_products && data.top_products.length) {
+                    var html = '<div class="space-y-2">';
+                    data.top_products.forEach(function(p, i) {
+                        var pct = data.total > 0 ? Math.round(p.count / data.total * 100) : 0;
+                        var colors = ['bg-red-400', 'bg-orange-400', 'bg-yellow-400', 'bg-blue-400', 'bg-gray-400'];
+                        html += '<div>';
+                        html += '<div class="flex justify-between text-xs text-gray-700 mb-0.5">';
+                        html += '<span class="truncate flex-1 mr-2" title="' + p.title + '">' + (i+1) + '. ' + (p.title.length > 28 ? p.title.slice(0,28)+'...' : p.title) + '</span>';
+                        html += '<span class="font-bold text-red-600 flex-shrink-0">' + p.count + '</span>';
+                        html += '</div>';
+                        html += '<div class="h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 rounded-full ' + (colors[i] || 'bg-gray-400') + '" style="width:' + pct + '%"></div></div>';
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                    topEl.innerHTML = html;
+                } else {
+                    topEl.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este periodo</p>';
+                }
+
+                // Status chart
+                var ctx = document.getElementById('ret-status-chart').getContext('2d');
+                if (_chartInstance) _chartInstance.destroy();
+                var opened = data.by_status ? (data.by_status.opened || 0) : 0;
+                var closed = data.by_status ? (data.by_status.closed || 0) : 0;
+                if (opened + closed > 0) {
+                    _chartInstance = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Abiertos', 'Cerrados'],
+                            datasets: [{
+                                data: [opened, closed],
+                                backgroundColor: ['#ef4444', '#22c55e'],
+                                borderWidth: 2,
+                                borderColor: '#fff'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { position: 'bottom', labels: { font: { size: 11 } } }
+                            },
+                            cutout: '65%'
+                        }
+                    });
+                } else {
+                    document.getElementById('ret-status-chart').parentElement.innerHTML =
+                        '<p class="text-xs text-gray-400 text-center py-4">Sin datos en este periodo</p>';
+                }
+            })
+            .catch(function() {
+                document.getElementById('ret-top-products').innerHTML =
+                    '<p class="text-xs text-gray-400 text-center py-2">Error cargando analisis</p>';
+            });
+    }
+
+    // --- Filter controls ---
+    window.applyRetFilters = function() {
+        retFilters.date_from = document.getElementById('ret-date-from').value;
+        retFilters.date_to = document.getElementById('ret-date-to').value;
+        retFilters.offset = 0;
+        _updateFilterIndicator();
+        loadAll();
+        _updateTimestamp();
+        _startAutoRefresh();
+    };
+
+    window.clearRetFilters = function() {
+        retFilters.date_from = '';
+        retFilters.date_to = '';
+        retFilters.offset = 0;
+        document.getElementById('ret-date-from').value = '';
+        document.getElementById('ret-date-to').value = '';
+        _updateFilterIndicator();
+        loadAll();
+        _updateTimestamp();
+        _startAutoRefresh();
+    };
+
+    window.setRetStatus = function(status) {
+        retFilters.status = status;
+        retFilters.offset = 0;
+        // Update button styles
+        ['all', 'opened', 'closed'].forEach(function(s) {
+            var btn = document.getElementById('ret-btn-' + (s === '' ? 'all' : s));
+            if (btn) btn.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
+        });
+        var activeId = status === '' ? 'ret-btn-all' : 'ret-btn-' + status;
+        var activeBtn = document.getElementById(activeId);
+        if (activeBtn) activeBtn.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
+        loadTable();
+    };
+
+    window.retNextPage = function() {
+        retFilters.offset += retFilters.limit;
+        loadTable();
+    };
+
+    window.retPrevPage = function() {
+        retFilters.offset = Math.max(0, retFilters.offset - retFilters.limit);
+        loadTable();
+    };
+
+    function _updateFilterIndicator() {
+        var ind = document.getElementById('ret-filter-indicator');
+        if (retFilters.date_from || retFilters.date_to) {
+            var t = 'Filtrando: ';
+            if (retFilters.date_from) t += 'desde ' + retFilters.date_from;
+            if (retFilters.date_from && retFilters.date_to) t += ' ';
+            if (retFilters.date_to) t += 'hasta ' + retFilters.date_to;
+            ind.textContent = t;
+        } else {
+            ind.textContent = '';
+        }
+    }
+
+    function _updateTimestamp() {
+        var el = document.getElementById('ret-last-update');
+        if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+    }
+
+    var _autoRefreshTimer = null;
+    function _startAutoRefresh() {
+        if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+        _autoRefreshTimer = setInterval(function() {
+            if (document.visibilityState === 'hidden') return;
+            document.getElementById('ret-refresh-indicator').classList.remove('hidden');
+            loadAll();
+            setTimeout(function() {
+                document.getElementById('ret-refresh-indicator').classList.add('hidden');
+            }, 2000);
+            _updateTimestamp();
+        }, 60000);
+    }
+
+    function loadAll() {
+        loadSummary();
+        loadTable();
+        loadAnalysis();
+    }
+
+    // --- Init ---
+    _updateFilterIndicator();
+    loadAll();
+    _updateTimestamp();
+    _startAutoRefresh();
+})();
+</script>
+{% endblock %}

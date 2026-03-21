@@ -1,0 +1,95 @@
+{% if date_from or date_to %}
+<div class="mb-2">
+    <span class="text-xs text-gray-400">
+        Periodo:
+        {% if date_from %}desde {{ date_from }}{% endif %}
+        {% if date_to %} hasta {{ date_to }}{% endif %}
+    </span>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+    <!-- Total retornos -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-xs text-gray-500 mb-1">Total Retornos</p>
+        <p class="text-2xl font-bold {% if summary.total > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+            {{ summary.total }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">en el periodo</p>
+        <div class="h-1.5 rounded-full mt-2 {% if summary.total == 0 %}bg-green-200{% elif summary.total <= 3 %}bg-yellow-200{% else %}bg-red-200{% endif %}">
+            <div class="h-1.5 rounded-full {% if summary.total == 0 %}bg-green-500{% elif summary.total <= 3 %}bg-yellow-500{% else %}bg-red-500{% endif %}"
+                 style="width:{{ [summary.total * 10, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Abiertos urgentes -->
+    <div class="bg-white p-5 rounded-lg shadow {% if summary.opened > 0 %}ring-2 ring-red-300{% endif %}">
+        <p class="text-xs text-gray-500 mb-1">Abiertos</p>
+        <p class="text-2xl font-bold {% if summary.opened > 0 %}text-red-600{% else %}text-green-600{% endif %}">
+            {{ summary.opened }}
+        </p>
+        {% if summary.urgent > 0 %}
+        <p class="text-[10px] text-red-500 font-semibold mt-1 flex items-center gap-1">
+            <span class="flex h-2 w-2 relative inline-block">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+            </span>
+            {{ summary.urgent }} urgente{{ 's' if summary.urgent != 1 else '' }}
+        </p>
+        {% else %}
+        <p class="text-[10px] text-gray-400 mt-1">sin urgentes</p>
+        {% endif %}
+        <div class="h-1.5 rounded-full mt-2 bg-red-100">
+            <div class="h-1.5 rounded-full bg-red-500" style="width:{{ [summary.opened * 20, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Cerrados / resueltos -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-xs text-gray-500 mb-1">Resueltos</p>
+        <p class="text-2xl font-bold text-green-600">{{ summary.closed }}</p>
+        {% if summary.total > 0 %}
+        <p class="text-[10px] text-gray-400 mt-1">
+            {{ "%.0f"|format(summary.closed / summary.total * 100) }}% de resolucion
+        </p>
+        {% else %}
+        <p class="text-[10px] text-gray-400 mt-1">&nbsp;</p>
+        {% endif %}
+        <div class="h-1.5 rounded-full mt-2 bg-green-100">
+            <div class="h-1.5 rounded-full bg-green-500"
+                 style="width:{{ (summary.closed / summary.total * 100)|int if summary.total > 0 else 0 }}%"></div>
+        </div>
+    </div>
+
+    <!-- Tasa de retorno -->
+    <div class="bg-white p-5 rounded-lg shadow">
+        <p class="text-xs text-gray-500 mb-1">Tasa de Retorno</p>
+        <p class="text-2xl font-bold {% if summary.return_rate >= 5 %}text-red-600{% elif summary.return_rate >= 2 %}text-yellow-600{% else %}text-green-600{% endif %}">
+            {{ "%.1f"|format(summary.return_rate) }}%
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">sobre {{ summary.total_orders }} ventas</p>
+        <div class="h-1.5 rounded-full mt-2 bg-gray-100">
+            <div class="h-1.5 rounded-full {% if summary.return_rate >= 5 %}bg-red-500{% elif summary.return_rate >= 2 %}bg-yellow-500{% else %}bg-green-500{% endif %}"
+                 style="width:{{ [summary.return_rate * 5, 100]|min }}%"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Alert banner si hay urgentes -->
+{% if summary.opened > 0 %}
+<div class="flex items-center gap-3 p-3 bg-red-50 border border-red-200 rounded-lg mb-4">
+    <span class="flex h-3 w-3 relative flex-shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+    </span>
+    <p class="text-sm text-red-700 font-medium">
+        {{ summary.opened }} retorno{{ 's' if summary.opened != 1 else '' }} abierto{{ 's' if summary.opened != 1 else '' }} requiere{{ 'n' if summary.opened != 1 else '' }} atencion.
+        Resolver antes de 72h evita impacto en reputacion.
+    </p>
+</div>
+{% elif summary.total == 0 %}
+<div class="flex items-center gap-3 p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
+    <svg class="w-5 h-5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="text-sm text-green-700 font-medium">Sin retornos en el periodo seleccionado.</p>
+</div>
+{% endif %}
