@@ -25,6 +25,7 @@ from app.api.users import router as users_router
 from app.api.system_health import router as system_health_router
 from app.api.v1.sales import router as sales_v1_router
 from app.api.binmanager import router as binmanager_router
+from app.api.lanzar import router as lanzar_router, start_gap_scan_loop
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
@@ -298,6 +299,8 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
+    # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
+    start_gap_scan_loop()
     yield
     await price_monitor.stop()
 
@@ -492,6 +495,7 @@ app.include_router(users_router)
 app.include_router(system_health_router)
 app.include_router(sales_v1_router)
 app.include_router(binmanager_router)
+app.include_router(lanzar_router)
 
 
 # ---------- Account switcher ----------
