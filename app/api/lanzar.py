@@ -7,6 +7,7 @@ y presenta los gaps con pricing, datos del producto e IA para generar listings.
 """
 import asyncio
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -134,12 +135,10 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
         }
         try:
             r = await http.post(_BM_INVENTORY_URL, json=payload, headers=_BM_AJAX, timeout=30)
-            # Session expired detection
+            # Redireccion a login = sin acceso — salir
             if "User/Index" in str(r.url) or r.status_code == 401:
-                logger.warning("BM session expired during pagination — re-logging in")
-                if not await _bm_login(http):
-                    break
-                continue  # retry same page
+                logger.warning("BM requiere autenticacion en pagina %d — saliendo", page)
+                break
             if r.status_code != 200:
                 break
             data = r.json()
@@ -359,9 +358,9 @@ async def _run_gap_scan():
                     _ctx_fx.reset(token_fx)
 
             # 2b. Fetch all BM SKUs with stock
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30) as bm_http:
-                if not await _bm_login(bm_http):
-                    raise Exception("BinManager login failed")
+            # Nota: Get_GlobalStock_InventoryBySKU funciona sin auth de sesion
+            # (igual que todos los otros endpoints BM del app)
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
                 bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
@@ -486,12 +485,14 @@ async def _run_gap_scan():
                 await db.commit()
             logger.info(f"BM gap scan completado: {total_gaps} gaps en {len(accounts)} cuentas")
 
-        except Exception as e:
-            logger.error(f"BM gap scan error: {e}")
+        except BaseException as e:
+            tb = traceback.format_exc()
+            err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.error(f"BM gap scan error: {tb}")
             async with aiosqlite.connect(DATABASE_PATH) as db:
                 await db.execute(
                     "UPDATE bm_gap_scan_status SET status='error', finished_at=?, error=? WHERE id=1",
-                    (datetime.utcnow().isoformat(), str(e))
+                    (datetime.utcnow().isoformat(), err_msg)
                 )
                 await db.commit()
 
