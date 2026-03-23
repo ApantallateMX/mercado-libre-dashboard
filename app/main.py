@@ -25,6 +25,7 @@ from app.api.users import router as users_router
 from app.api.system_health import router as system_health_router
 from app.api.v1.sales import router as sales_v1_router
 from app.api.binmanager import router as binmanager_router
+from app.api.lanzar import router as lanzar_router, start_gap_scan_loop
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
@@ -298,6 +299,8 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
+    # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
+    start_gap_scan_loop()
     yield
     await price_monitor.stop()
 
@@ -488,6 +491,7 @@ app.include_router(users_router)
 app.include_router(system_health_router)
 app.include_router(sales_v1_router)
 app.include_router(binmanager_router)
+app.include_router(lanzar_router)
 
 
 # ---------- Account switcher ----------
@@ -928,25 +932,19 @@ async def auditoria_page(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
-    import traceback as _tb
-    try:
-        user = await get_current_user()
-        if not user:
-            return templates.TemplateResponse(request, "no_session.html", {})
-        # Pre-warm caches al entrar al dashboard
-        global _prewarm_task
-        if _prewarm_task is None or _prewarm_task.done():
-            _prewarm_task = asyncio.create_task(_prewarm_caches())
-        ctx = await _accounts_ctx(request)
-        return templates.TemplateResponse(request, "dashboard.html", {            "user": user,
-            "active": "dashboard",
-            **ctx
-        })
-    except Exception:
-        err = _tb.format_exc()
-        import logging as _log
-        _log.getLogger(__name__).error(f"dashboard_page error:\n{err}")
-        return HTMLResponse(f"<pre>ERROR:\n{err}</pre>", status_code=500)
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    # Pre-warm caches al entrar al dashboard
+    global _prewarm_task
+    if _prewarm_task is None or _prewarm_task.done():
+        _prewarm_task = asyncio.create_task(_prewarm_caches())
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "user": user,
+        "active": "dashboard",
+        **ctx
+    })
 
 
 @app.get("/orders", response_class=HTMLResponse)
@@ -1254,8 +1252,9 @@ async def metrics_partial(
 
         paid_orders = [o for o in all_orders if o.get("status") in ["paid", "delivered"]]
 
-        # Enrich with net_received_amount for accurate revenue
+        # Enrich with net_received_amount (total - taxes) and shipping cost
         await client.enrich_orders_with_net_amount(paid_orders)
+        await client.enrich_orders_with_shipping(paid_orders)
 
         metrics = {
             "summary": {
@@ -1339,7 +1338,9 @@ async def orders_table_partial(
         orders_data = await client.get_orders(offset=offset, limit=limit, sort=sort)
         raw_orders = orders_data.get("results", [])
 
-        # Fetch net_received_amount from collections API for accurate totals
+        # Fetch net_received_amount from collections API
+        # net_received = total - impuestos_retenidos (MeLi ya descontó IVA/ISR)
+        # net_real_vendedor = net_received - sale_fee - shipping_cost
         net_amounts = {}  # order_id -> net_received_amount
         for o in raw_orders:
             payments = o.get("payments", [])
@@ -1355,6 +1356,20 @@ async def orders_table_partial(
                         pass
             if total_net > 0:
                 net_amounts[o.get("id")] = total_net
+
+        # Fetch real sale_fee desde /orders/{id} (search devuelve 0 frecuentemente)
+        fee_amounts = {}  # order_id -> total sale_fee
+        for o in raw_orders:
+            oid = o.get("id")
+            # Intentar primero desde los resultados del search
+            search_fee = sum(float(oi.get("sale_fee", 0) or 0) for oi in o.get("order_items", []))
+            if search_fee > 0:
+                fee_amounts[oid] = search_fee
+            elif o.get("status") in ("paid", "delivered", "payment_required"):
+                try:
+                    fee_amounts[oid] = await client.get_order_sale_fee(str(oid))
+                except Exception:
+                    fee_amounts[oid] = 0.0
 
         # Fetch shipping costs sequentially (Windows select() FD limit)
         shipping_costs = {}  # order_id -> cost
@@ -1372,17 +1387,18 @@ async def orders_table_partial(
         for o in raw_orders:
             total = o.get("total_amount", 0) or 0
             items = o.get("order_items", [])
-            total_fees = 0.0
+            # Usar sale_fee real (de /orders/{id} si search devolvió 0)
+            total_fees = fee_amounts.get(o.get("id"), 0)
             items_detail = []
             for oi in items:
                 item_info = oi.get("item", {})
                 qty = oi.get("quantity", 1)
                 unit_price = oi.get("unit_price", 0) or 0
                 full_price = oi.get("full_unit_price", 0) or 0
-                fee = oi.get("sale_fee", 0) or 0
+                # Distribuir el fee total proporcionalmente si hay varios items
+                fee = float(oi.get("sale_fee", 0) or 0)
                 iva_fee = round(fee * 0.16, 2)
                 subtotal = unit_price * qty
-                total_fees += fee
                 items_detail.append(SimpleNamespace(
                     title=item_info.get("title", "-"),
                     sku=item_info.get("seller_sku") or item_info.get("seller_custom_field") or "-",
@@ -1396,18 +1412,26 @@ async def orders_table_partial(
                     iva_fee=iva_fee,
                     listing_type=oi.get("listing_type_id", "-"),
                 ))
-            total_iva = round(total_fees * 0.16, 2)
 
             # Shipping cost from API
             shipping = o.get("shipping", {})
             ship_cost = shipping_costs.get(o.get("id"), 0)
             iva_ship = round(ship_cost * 0.16, 2)
 
-            # Use net_received_amount from MeLi if available (includes all taxes)
-            if o.get("id") in net_amounts:
-                net = net_amounts[o.get("id")]
+            # ─── Cálculo financiero corregido ────────────────────────────────
+            # net_received (de /collections) = total - impuestos_retenidos
+            #   Incluye IVA + retención ISR ya descontados por MeLi
+            # net_real = net_received - sale_fee - shipping_cost
+            # taxes    = total - net_received  (lo que MeLi retiene como impuestos)
+            net_received = net_amounts.get(o.get("id"), 0)
+            if net_received > 0:
+                taxes = round(total - net_received, 2)
+                net   = round(net_received - total_fees - ship_cost, 2)
             else:
-                net = round(total - total_fees - total_iva - ship_cost - iva_ship, 2)
+                # Fallback: estimación con IVA conocido
+                iva_fee = round(total_fees * 0.16, 2)
+                taxes = round(iva_fee + iva_ship, 2)
+                net   = round(total - total_fees - taxes - ship_cost, 2)
 
             # Payment info
             payments = o.get("payments", [])
@@ -1421,9 +1445,7 @@ async def orders_table_partial(
             installments = approved_payment.get("installments", 1) if approved_payment else 1
 
             buyer_raw = o.get("buyer") or {}
-            # Calcular impuestos como MeLi: bruto - comisión - envío - neto
-            # Esto incluye IVA sobre comisión, IVA sobre envío, y retenciones
-            taxes = round(total - total_fees - ship_cost - net, 2)
+            total_iva = round(total_fees * 0.16, 2)  # IVA estimado sobre comisión
 
             enriched.append(SimpleNamespace(
                 id=o.get("id", "-"),

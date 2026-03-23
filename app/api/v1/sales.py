@@ -98,6 +98,7 @@ async def _fetch_meli_orders_range(date_from: date, date_to: date) -> list[dict]
             date_from_str = date_from.strftime("%Y-%m-%dT00:00:00.000Z")
             date_to_str   = date_to.strftime("%Y-%m-%dT23:59:59.000Z")
 
+            account_orders = []
             offset = 0
             limit  = 50
             while True:
@@ -117,7 +118,7 @@ async def _fetch_meli_orders_range(date_from: date, date_to: date) -> list[dict]
                 for o in results:
                     o["_account_nickname"] = nickname
                     o["_account_uid"] = uid
-                all_orders.extend(results)
+                account_orders.extend(results)
 
                 total = data.get("paging", {}).get("total", 0)
                 offset += limit
@@ -126,6 +127,11 @@ async def _fetch_meli_orders_range(date_from: date, date_to: date) -> list[dict]
 
                 # Rate limit suave
                 await asyncio.sleep(0.2)
+
+            # Enriquecer con net_received_amount real (total - impuestos retenidos)
+            await client.enrich_orders_with_net_amount(account_orders)
+            all_orders.extend(account_orders)
+            await client.close()
 
         except Exception as e:
             print(f"[API-v1] Error fetching MeLi orders for {uid}: {e}")

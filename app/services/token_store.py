@@ -142,6 +142,39 @@ async def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_sku_gaps (SKUs con stock en BM pero no lanzados en MeLi)
+        # Generado por el scanner nocturno (3am Mexico = 9am UTC)
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_sku_gaps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL, nickname TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL, product_title TEXT NOT NULL DEFAULT '',
+                brand TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+                image_url TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+                stock_mty INTEGER NOT NULL DEFAULT 0, stock_cdmx INTEGER NOT NULL DEFAULT 0,
+                stock_total INTEGER NOT NULL DEFAULT 0,
+                retail_price_usd REAL NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'unlaunched', priority_score INTEGER NOT NULL DEFAULT 0,
+                suggested_price_mxn REAL NOT NULL DEFAULT 0, cost_price_mxn REAL NOT NULL DEFAULT 0,
+                competitor_price REAL NOT NULL DEFAULT 0, competitor_count INTEGER NOT NULL DEFAULT 0,
+                deal_price REAL NOT NULL DEFAULT 0, listing_type_rec TEXT NOT NULL DEFAULT 'gold_special',
+                last_scan TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, sku)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_gap_scan_status (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                status TEXT NOT NULL DEFAULT 'idle',
+                started_at TIMESTAMP DEFAULT NULL, finished_at TIMESTAMP DEFAULT NULL,
+                total_skus INTEGER DEFAULT 0, gaps_found INTEGER DEFAULT 0,
+                error TEXT DEFAULT NULL
+            )
+        """)
+        await db.execute("INSERT OR IGNORE INTO bm_gap_scan_status (id, status) VALUES (1, 'idle')")
         await db.commit()
 
 

@@ -79,16 +79,19 @@ def _wh_name_to_zone(wname: str) -> str:
     return "tj"
 
 
-async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
-    """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
+BINMANAGER_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 
-    - Warehouse: da totales reales por almacen (MTY/CDMX/TJ)
-    - Condition: da desglose GR vs IC por condicion
-    Retorna {stock_gr, stock_ic, stock_other, total_stock}
+
+async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
+    """Consulta stock vendible en BinManager via Warehouse + Avail + Condition endpoints.
+
+    - Warehouse: totales reales por almacen (MTY/CDMX/TJ)
+    - InventoryBySKUAndCondicion_Quantity: stock disponible neto (excluye reservados)
+    - Condition: desglose GR vs IC por condicion
+    Retorna {stock_gr, stock_ic, stock_other, total_stock, avail_total}
     """
     import json as _json
     base = _extract_base_sku(sku)
-
     conditions = _bm_conditions_for_sku(sku)
 
     wh_payload = {
@@ -101,6 +104,18 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "ForInventory": 0,
         "SUPPLIERS": None,
     }
+    avail_payload = {
+        "COMPANYID": BINMANAGER_COMPANY_ID,
+        "TYPEINVENTORY": 0,
+        "WAREHOUSEID": None,
+        "LOCATIONID": BM_LOCATION_IDS,
+        "BINID": None,
+        "PRODUCTSKU": base,
+        "CONDITION": conditions,
+        "SUPPLIERS": None,
+        "LCN": None,
+        "SEARCH": base,
+    }
     cond_payload = {
         "COMPANYID": BINMANAGER_COMPANY_ID,
         "SKU": base,
@@ -112,13 +127,14 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "SUPPLIERS": None,
     }
 
-    wh_resp, cond_resp = await asyncio.gather(
+    wh_resp, avail_resp, cond_resp = await asyncio.gather(
         http.post(BINMANAGER_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
+        http.post(BINMANAGER_AVAIL_URL, json=avail_payload, timeout=15.0),
         http.post(BINMANAGER_CONDITION_URL, json=cond_payload, timeout=15.0),
         return_exceptions=True,
     )
 
-    # --- Totales por almacen ---
+    # --- Totales por almacen (fisico) ---
     total_mty = total_cdmx = total_tj = 0
     if not isinstance(wh_resp, Exception) and wh_resp.status_code == 200:
         for row in (wh_resp.json() or []):
@@ -133,14 +149,20 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
 
     grand_total = total_mty + total_cdmx  # TJ excluido
 
+    # --- Stock disponible neto (excluye reservados para ordenes pendientes) ---
+    avail_total = 0
+    if not isinstance(avail_resp, Exception) and avail_resp.status_code == 200:
+        avail_total = sum(row.get("Available", 0) or 0 for row in (avail_resp.json() or []))
+    avail_total = avail_total or grand_total  # fallback a total fisico si falla
+
     # --- Desglose GR vs IC por condicion ---
     gr_qty = ic_qty = 0
     if not isinstance(cond_resp, Exception) and cond_resp.status_code == 200:
         cond_data = cond_resp.json() or {}
         conditions_raw = cond_data.get("Conditions_JSON") or "[]"
         try:
-            conditions = _json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
-            for c in conditions:
+            cond_list = _json.loads(conditions_raw) if isinstance(conditions_raw, str) else conditions_raw
+            for c in cond_list:
                 cond = (c.get("Condition") or "").upper()
                 qty = c.get("TotalQty", 0) or 0
                 if cond in ("GRA", "GRB", "GRC", "NEW"):
@@ -173,6 +195,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "stock_ic": ic,
         "stock_other": 0,
         "total_stock": grand_total,
+        "avail_total": avail_total,
     }
 
 
