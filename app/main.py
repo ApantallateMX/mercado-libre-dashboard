@@ -936,20 +936,27 @@ async def auditoria_page(request: Request):
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
-    # Pre-warm caches al entrar al dashboard
-    global _prewarm_task
-    if _prewarm_task is None or _prewarm_task.done():
-        _prewarm_task = asyncio.create_task(_prewarm_caches())
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "user": user,
-        "active": "dashboard",
-        **ctx
-    })
+    import traceback as _tb
+    try:
+        user = await get_current_user()
+        if not user:
+            return templates.TemplateResponse("no_session.html", {"request": request})
+        # Pre-warm caches al entrar al dashboard
+        global _prewarm_task
+        if _prewarm_task is None or _prewarm_task.done():
+            _prewarm_task = asyncio.create_task(_prewarm_caches())
+        ctx = await _accounts_ctx(request)
+        return templates.TemplateResponse("dashboard.html", {
+            "request": request,
+            "user": user,
+            "active": "dashboard",
+            **ctx
+        })
+    except Exception:
+        err = _tb.format_exc()
+        import logging as _log
+        _log.getLogger(__name__).error(f"dashboard_page error:\n{err}")
+        return HTMLResponse(f"<pre>ERROR:\n{err}</pre>", status_code=500)
 
 
 @app.get("/orders", response_class=HTMLResponse)
