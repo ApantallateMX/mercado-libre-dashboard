@@ -307,6 +307,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mercado Libre Dashboard", lifespan=lifespan)
 
+# ── DEBUG: exception handler temporal para ver errores en Railway ──────────────
+import traceback as _traceback
+from starlette.requests import Request as _SR
+from starlette.responses import PlainTextResponse as _PTR
+
+@app.exception_handler(Exception)
+async def _debug_exception_handler(request: _SR, exc: Exception):
+    tb = _traceback.format_exc()
+    import logging as _logging
+    _logging.getLogger("app.debug").error(f"Unhandled exception on {request.url.path}:\n{tb}")
+    return _PTR(f"ERROR en {request.url.path}:\n\n{tb}", status_code=500)
+# ──────────────────────────────────────────────────────────────────────────────
+
 # Static files y templates
 BASE_PATH = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=BASE_PATH / "static"), name="static")
