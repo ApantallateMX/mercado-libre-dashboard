@@ -1277,8 +1277,9 @@ async def metrics_partial(
 
         paid_orders = [o for o in all_orders if o.get("status") in ["paid", "delivered"]]
 
-        # Enrich with net_received_amount for accurate revenue
+        # Enrich with net_received_amount (total - taxes) and shipping cost
         await client.enrich_orders_with_net_amount(paid_orders)
+        await client.enrich_orders_with_shipping(paid_orders)
 
         metrics = {
             "summary": {
