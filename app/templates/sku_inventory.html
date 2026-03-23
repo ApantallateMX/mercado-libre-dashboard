@@ -9,24 +9,6 @@
 </div>
 {% include "partials/productos_subnav.html" %}
 
-<!-- ════════════════════════════════════════════════════════════
-     LANZADOR INTELIGENTE — SKUs con stock en BM sin publicar
-     ════════════════════════════════════════════════════════════ -->
-<div class="bg-white rounded-lg shadow mb-6 overflow-hidden">
-    <div class="px-4 py-3 bg-gradient-to-r from-yellow-50 to-white border-b border-yellow-100 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M13 10V3L4 14h7v7l9-11h-7z"/>
-            </svg>
-            <span class="font-bold text-gray-800 text-sm">Lanzador Inteligente</span>
-            <span class="text-xs text-gray-400">— SKUs con stock en BinManager sin publicar en esta cuenta</span>
-        </div>
-        <span class="text-xs text-gray-400" id="gaps-last-scan-label"></span>
-    </div>
-    {% include "partials/lanzar_gaps.html" %}
-</div>
-
 <!-- Seccion de carga de SKUs -->
 <div class="bg-white p-6 rounded-lg shadow mb-6">
     <h2 class="text-lg font-semibold text-gray-800 mb-4">1. Cargar lista de SKUs</h2>
