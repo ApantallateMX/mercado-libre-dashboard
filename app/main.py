@@ -369,9 +369,7 @@ async def login_page(request: Request, error: str = "", next: str = "/dashboard"
         du = await user_store.get_session(token)
         if du and not du.get("must_change_pw"):
             return RedirectResponse(next, status_code=302)
-    return templates.TemplateResponse("login_dash.html", {
-        "request": request,
-        "error": error,
+    return templates.TemplateResponse(request, "login_dash.html", {        "error": error,
         "next": next,
         "username": username,
     })
@@ -440,9 +438,7 @@ async def set_password_page(request: Request, error: str = ""):
     du = await user_store.get_session(token)
     if not du:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("set_password.html", {
-        "request": request,
-        "username": du["username"],
+    return templates.TemplateResponse(request, "set_password.html", {        "username": du["username"],
         "error": error,
     })
 
@@ -911,9 +907,7 @@ async def usuarios_page(request: Request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = await _accounts_ctx(request)
     user = await get_current_user()
-    return templates.TemplateResponse("usuarios.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "usuarios.html", {        "user": user,
         "active": "usuarios",
         **ctx,
     })
@@ -926,9 +920,7 @@ async def auditoria_page(request: Request):
         return RedirectResponse("/dashboard", status_code=302)
     ctx = await _accounts_ctx(request)
     user = await get_current_user()
-    return templates.TemplateResponse("auditoria.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "auditoria.html", {        "user": user,
         "active": "auditoria",
         **ctx,
     })
@@ -940,15 +932,13 @@ async def dashboard_page(request: Request):
     try:
         user = await get_current_user()
         if not user:
-            return templates.TemplateResponse("no_session.html", {"request": request})
+            return templates.TemplateResponse(request, "no_session.html", {})
         # Pre-warm caches al entrar al dashboard
         global _prewarm_task
         if _prewarm_task is None or _prewarm_task.done():
             _prewarm_task = asyncio.create_task(_prewarm_caches())
         ctx = await _accounts_ctx(request)
-        return templates.TemplateResponse("dashboard.html", {
-            "request": request,
-            "user": user,
+        return templates.TemplateResponse(request, "dashboard.html", {            "user": user,
             "active": "dashboard",
             **ctx
         })
@@ -963,11 +953,9 @@ async def dashboard_page(request: Request):
 async def orders_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("orders.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "orders.html", {        "user": user,
         "active": "orders",
         **ctx
     })
@@ -977,15 +965,13 @@ async def orders_page(request: Request):
 async def items_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     # Pre-warm caches al entrar a Centro de Productos
     global _prewarm_task
     if _prewarm_task is None or _prewarm_task.done():
         _prewarm_task = asyncio.create_task(_prewarm_caches())
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("items.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "items.html", {        "user": user,
         "active": "items",
         **ctx
     })
@@ -995,11 +981,9 @@ async def items_page(request: Request):
 async def sku_sales_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("sku_sales.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "sku_sales.html", {        "user": user,
         "active": "sku_sales",
         **ctx
     })
@@ -1009,11 +993,9 @@ async def sku_sales_page(request: Request):
 async def sku_compare_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("sku_compare.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "sku_compare.html", {        "user": user,
         "active": "sku_compare",
         **ctx
     })
@@ -1023,11 +1005,9 @@ async def sku_compare_page(request: Request):
 async def sku_inventory_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("sku_inventory.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "sku_inventory.html", {        "user": user,
         "active": "sku_inventory",
         **ctx
     })
@@ -1218,11 +1198,9 @@ async def sku_compare_api(
 async def ads_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("ads.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "ads.html", {        "user": user,
         "active": "ads",
         **ctx
     })
@@ -1232,11 +1210,9 @@ async def ads_page(request: Request):
 async def health_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("health.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "health.html", {        "user": user,
         "active": "health",
         **ctx
     })
@@ -1246,11 +1222,9 @@ async def health_page(request: Request):
 async def items_health_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("items_health.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "items_health.html", {        "user": user,
         "active": "items_health",
         **ctx
     })
@@ -1292,9 +1266,7 @@ async def metrics_partial(
             }
         }
 
-        return templates.TemplateResponse("partials/metrics_cards.html", {
-            "request": request,
-            "metrics": metrics
+        return templates.TemplateResponse(request, "partials/metrics_cards.html", {            "metrics": metrics
         })
     finally:
         await client.close()
@@ -1474,9 +1446,7 @@ async def orders_table_partial(
                 tags=o.get("tags", []),
             ))
 
-        return templates.TemplateResponse("partials/orders_table.html", {
-            "request": request,
-            "orders": enriched,
+        return templates.TemplateResponse(request, "partials/orders_table.html", {            "orders": enriched,
             "paging": orders_data.get("paging", {}),
             "offset": offset,
             "limit": limit,
@@ -1630,9 +1600,7 @@ async def items_grid_partial(
                 "sold_qty": body.get("sold_quantity", 0),
             }
 
-        return templates.TemplateResponse("partials/items_grid.html", {
-            "request": request,
-            "items": items,
+        return templates.TemplateResponse(request, "partials/items_grid.html", {            "items": items,
             "paging": items_search.get("paging", {}),
             "offset": offset,
             "limit": limit,
@@ -1701,8 +1669,7 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
             ctx = entry[1].copy()
             # include_paused: traer items pausados para seccion Activar
-            ctx["request"] = request
-            return templates.TemplateResponse("partials/products_stock_issues.html", ctx)
+            return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
         from datetime import datetime, timedelta
         now = datetime.utcnow()
@@ -1793,8 +1760,7 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         }
         _stock_issues_cache[key] = (_time.time(), ctx)
         ctx_with_req = ctx.copy()
-        ctx_with_req["request"] = request
-        return templates.TemplateResponse("partials/products_stock_issues.html", ctx_with_req)
+        return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx_with_req)
     finally:
         await client.close()
 
@@ -2660,9 +2626,7 @@ async def products_inventory_partial(
             a["_est_lost_revenue"] = round(daily_avg * price * d * 0.5, 0)
         stock_alerts.sort(key=lambda x: x.get("_est_lost_revenue", 0), reverse=True)
 
-        return templates.TemplateResponse("partials/products_inventory.html", {
-            "request": request,
-            "products": page_products,
+        return templates.TemplateResponse(request, "partials/products_inventory.html", {            "products": page_products,
             "preset": preset,
             "search": search,
             "sort_by": sort_by,
@@ -2758,9 +2722,7 @@ async def products_summary_partial(request: Request):
             })
 
         daily_goal = await token_store.get_daily_goal(client.user_id)
-        return templates.TemplateResponse("partials/products_summary.html", {
-            "request": request,
-            "revenue_30d": revenue_30d,
+        return templates.TemplateResponse(request, "partials/products_summary.html", {            "revenue_30d": revenue_30d,
             "total_units": total_units,
             "total_orders": total_orders,
             "total_active": total_active,
@@ -2910,9 +2872,7 @@ async def products_deals_partial(request: Request):
                 cat_counts[cn] = cat_counts.get(cn, 0) + 1
         categories = sorted(cat_counts.keys())
 
-        return templates.TemplateResponse("partials/products_deals.html", {
-            "request": request,
-            "active_deals": active_deals,
+        return templates.TemplateResponse(request, "partials/products_deals.html", {            "active_deals": active_deals,
             "candidates": candidates,
             "usd_to_mxn": round(usd_to_mxn, 2),
             "deals_revenue": deals_revenue,
@@ -3110,9 +3070,7 @@ async def products_not_published_partial(request: Request):
 
         not_published.sort(key=lambda x: x["total_stock"], reverse=True)
 
-        return templates.TemplateResponse("partials/products_not_published.html", {
-            "request": request,
-            "products": not_published,
+        return templates.TemplateResponse(request, "partials/products_not_published.html", {            "products": not_published,
             "usd_to_mxn": usd_to_mxn,
         })
     finally:
@@ -3391,9 +3349,7 @@ async def health_summary_partial(
             delay_margin=delay_margin,
         )
 
-        return templates.TemplateResponse("partials/health_summary.html", {
-            "request": request,
-            "summary": summary,
+        return templates.TemplateResponse(request, "partials/health_summary.html", {            "summary": summary,
             "thresholds": _MELI_THRESHOLDS,
             "errors": errors,
             "date_from": date_from,
@@ -3684,9 +3640,7 @@ async def health_claims_partial(
         enriched.sort(key=lambda c: (_urgency_order.get(c.urgency, 3), not c._sort_date, c._sort_date), reverse=False)
         # Reverse date within same urgency (newest first) — already handled by tuple sort
 
-        return templates.TemplateResponse("partials/health_claims.html", {
-            "request": request,
-            "claims": enriched,
+        return templates.TemplateResponse(request, "partials/health_claims.html", {            "claims": enriched,
             "paging": paging,
             "offset": offset,
             "limit": limit,
@@ -3872,9 +3826,7 @@ async def health_questions_partial(
             sorted_enriched.extend(grp)
         enriched = sorted_enriched
 
-        return templates.TemplateResponse("partials/health_questions.html", {
-            "request": request,
-            "questions": enriched,
+        return templates.TemplateResponse(request, "partials/health_questions.html", {            "questions": enriched,
             "paging": paging,
             "offset": offset,
             "limit": limit,
@@ -4021,9 +3973,7 @@ async def health_search_partial(
             except Exception:
                 pass
 
-        return templates.TemplateResponse("partials/health_search_results.html", {
-            "request": request,
-            "results": results,
+        return templates.TemplateResponse(request, "partials/health_search_results.html", {            "results": results,
             "query": query,
             "result_type": result_type,
         })
@@ -4156,9 +4106,7 @@ async def health_messages_partial(
             sorted_msgs.extend(grp)
         enriched = sorted_msgs
 
-        return templates.TemplateResponse("partials/health_messages.html", {
-            "request": request,
-            "conversations": enriched,
+        return templates.TemplateResponse(request, "partials/health_messages.html", {            "conversations": enriched,
             "paging": paging,
             "offset": offset,
             "limit": limit,
@@ -4277,9 +4225,7 @@ async def health_reputation_partial(request: Request):
             period=period,
         )
 
-        return templates.TemplateResponse("partials/health_reputation.html", {
-            "request": request,
-            "reputation": reputation,
+        return templates.TemplateResponse(request, "partials/health_reputation.html", {            "reputation": reputation,
             "thresholds": _MELI_THRESHOLDS,
         })
     finally:
@@ -4326,9 +4272,7 @@ async def item_edit_partial(request: Request, item_id: str):
                     seller_sku = var["seller_custom_field"]
                     break
 
-        return templates.TemplateResponse("partials/item_edit_modal.html", {
-            "request": request,
-            "item": item,
+        return templates.TemplateResponse(request, "partials/item_edit_modal.html", {            "item": item,
             "description": description,
             "score": score,
             "problems": problems,
@@ -4391,9 +4335,7 @@ async def item_deal_partial(request: Request, item_id: str):
             _get_usd_to_mxn(client),
         )
 
-        return templates.TemplateResponse("partials/item_deal_modal.html", {
-            "request": request,
-            "item_id": item_id,
+        return templates.TemplateResponse(request, "partials/item_deal_modal.html", {            "item_id": item_id,
             "title": item.get("title", ""),
             "thumbnail": item.get("thumbnail", ""),
             "sku": sku,
@@ -4500,9 +4442,7 @@ async def sku_sales_table_partial(
         )
         _calc_margins(sku_sales, usd_to_mxn)
 
-        return templates.TemplateResponse("partials/sku_sales_table.html", {
-            "request": request,
-            "sku_sales": sku_sales,
+        return templates.TemplateResponse(request, "partials/sku_sales_table.html", {            "sku_sales": sku_sales,
             "total_quantity": total_quantity,
             "total_revenue": total_revenue
         })
@@ -4660,9 +4600,7 @@ async def ads_campaigns_partial(
         enriched = _enrich_campaigns(campaigns_data)
         enriched.sort(key=lambda x: x["cost"], reverse=True)
 
-        return templates.TemplateResponse("partials/ads_campaigns.html", {
-            "request": request,
-            "campaigns": enriched,
+        return templates.TemplateResponse(request, "partials/ads_campaigns.html", {            "campaigns": enriched,
         })
     finally:
         await client.close()
@@ -4713,9 +4651,7 @@ async def ads_products_partial(
                 })
             products.sort(key=lambda x: x["cost"], reverse=True)
             top = products[:20]
-            return templates.TemplateResponse("partials/ads_products.html", {
-                "request": request,
-                "products": top,
+            return templates.TemplateResponse(request, "partials/ads_products.html", {                "products": top,
                 "total_cost": sum(p["cost"] for p in products),
                 "total_revenue": sum(p["revenue"] for p in products),
             })
@@ -4726,17 +4662,13 @@ async def ads_products_partial(
         if camps:
             camps_with_cost = [c for c in camps if c["cost"] > 0]
             camps_with_cost.sort(key=lambda x: x["cost"], reverse=True)
-            return templates.TemplateResponse("partials/ads_products.html", {
-                "request": request,
-                "products": [],
+            return templates.TemplateResponse(request, "partials/ads_products.html", {                "products": [],
                 "total_cost": sum(c["cost"] for c in camps_with_cost),
                 "total_revenue": sum(c["revenue"] for c in camps_with_cost),
                 "fallback_campaigns": camps_with_cost,
             })
 
-        return templates.TemplateResponse("partials/ads_products.html", {
-            "request": request,
-            "products": [],
+        return templates.TemplateResponse(request, "partials/ads_products.html", {            "products": [],
             "total_cost": 0,
             "total_revenue": 0,
             "unavailable": True,
@@ -4777,15 +4709,11 @@ async def ads_burning_partial(
             if camps is not None:
                 burning_camps = [c for c in camps if c["cost"] > 0 and c["units"] == 0]
                 burning_camps.sort(key=lambda x: x["cost"], reverse=True)
-                return templates.TemplateResponse("partials/ads_burning.html", {
-                    "request": request,
-                    "burning": [],
+                return templates.TemplateResponse(request, "partials/ads_burning.html", {                    "burning": [],
                     "total_burned": sum(c["cost"] for c in burning_camps),
                     "fallback_campaigns": burning_camps,
                 })
-            return templates.TemplateResponse("partials/ads_burning.html", {
-                "request": request,
-                "burning": [],
+            return templates.TemplateResponse(request, "partials/ads_burning.html", {                "burning": [],
                 "total_burned": 0,
                 "unavailable": True,
             })
@@ -4886,9 +4814,7 @@ async def ads_burning_partial(
         # Enriquecer con sale_price para detectar deals
         await _enrich_with_sale_prices(client, burning, id_key="item_id", price_key="price")
 
-        return templates.TemplateResponse("partials/ads_burning.html", {
-            "request": request,
-            "burning": burning,
+        return templates.TemplateResponse(request, "partials/ads_burning.html", {            "burning": burning,
             "total_burned": total_burned,
         })
     finally:
@@ -5016,17 +4942,13 @@ async def ads_best_partial(
             if camps is not None:
                 best_camps = [c for c in camps if c["units"] > 0 and c["cost"] > 0]
                 best_camps.sort(key=lambda x: x["roas"], reverse=True)
-                return templates.TemplateResponse("partials/ads_best.html", {
-                    "request": request,
-                    "best": [],
+                return templates.TemplateResponse(request, "partials/ads_best.html", {                    "best": [],
                     "total_cost": sum(c["cost"] for c in best_camps),
                     "total_units": sum(c["units"] for c in best_camps),
                     "total_revenue": sum(c["revenue"] for c in best_camps),
                     "fallback_campaigns": best_camps,
                 })
-            return templates.TemplateResponse("partials/ads_best.html", {
-                "request": request,
-                "best": [],
+            return templates.TemplateResponse(request, "partials/ads_best.html", {                "best": [],
                 "total_cost": 0,
                 "total_units": 0,
                 "total_revenue": 0,
@@ -5063,9 +4985,7 @@ async def ads_best_partial(
         total_units = sum(p["units"] for p in top)
         total_revenue = sum(p["revenue"] for p in top)
 
-        return templates.TemplateResponse("partials/ads_best.html", {
-            "request": request,
-            "best": top,
+        return templates.TemplateResponse(request, "partials/ads_best.html", {            "best": top,
             "total_cost": total_cost,
             "total_units": total_units,
             "total_revenue": total_revenue,
@@ -5199,9 +5119,7 @@ async def ads_performance_partial(
                 key=lambda x: x[1]
             )
 
-            return templates.TemplateResponse("partials/ads_performance.html", {
-                "request": request,
-                "products": page_products,
+            return templates.TemplateResponse(request, "partials/ads_performance.html", {                "products": page_products,
                 "total_cost": all_products_cost,
                 "total_revenue": all_products_revenue,
                 "current_sort": sort_key,
@@ -5222,9 +5140,7 @@ async def ads_performance_partial(
         if camps:
             camps_with_cost = [c for c in camps if c["cost"] > 0]
             camps_with_cost.sort(key=lambda x: x.get(sort_key, 0), reverse=True)
-            return templates.TemplateResponse("partials/ads_performance.html", {
-                "request": request,
-                "products": [],
+            return templates.TemplateResponse(request, "partials/ads_performance.html", {                "products": [],
                 "total_cost": sum(c["cost"] for c in camps_with_cost),
                 "total_revenue": sum(c["revenue"] for c in camps_with_cost),
                 "fallback_campaigns": camps_with_cost,
@@ -5240,9 +5156,7 @@ async def ads_performance_partial(
                 "all_categories": [],
             })
 
-        return templates.TemplateResponse("partials/ads_performance.html", {
-            "request": request,
-            "products": [],
+        return templates.TemplateResponse(request, "partials/ads_performance.html", {            "products": [],
             "total_cost": 0,
             "total_revenue": 0,
             "unavailable": True,
@@ -5376,9 +5290,7 @@ async def ads_no_ads_partial(
             except Exception:
                 pass
 
-        return templates.TemplateResponse("partials/ads_no_ads.html", {
-            "request": request,
-            "products": products,
+        return templates.TemplateResponse(request, "partials/ads_no_ads.html", {            "products": products,
             "total_active": len(all_active_ids),
             "total_with_ads": len(ads_item_ids),
             "campaigns": campaigns,
@@ -5730,9 +5642,7 @@ async def ads_by_category_partial(
         cached = _ads_category_cache.get(cache_key)
         if cached and (_time_mod.time() - cached[0]) < _ADS_CATEGORY_CACHE_TTL:
             categories = cached[1]
-            return templates.TemplateResponse("partials/ads_by_category.html", {
-                "request": request,
-                "categories": categories,
+            return templates.TemplateResponse(request, "partials/ads_by_category.html", {                "categories": categories,
                 "from_cache": True,
             })
 
@@ -5853,9 +5763,7 @@ async def ads_by_category_partial(
         # Guardar en cache
         _ads_category_cache[cache_key] = (_time_mod.time(), categories)
 
-        return templates.TemplateResponse("partials/ads_by_category.html", {
-            "request": request,
-            "categories": categories,
+        return templates.TemplateResponse(request, "partials/ads_by_category.html", {            "categories": categories,
             "from_cache": False,
         })
     finally:
@@ -6261,11 +6169,9 @@ async def inventory_global_page(request: Request):
     """Centro de inventario global: BM × 4 cuentas MeLi."""
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("inventory_global.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "inventory_global.html", {        "user": user,
         "active": "inventory_global",
         **ctx
     })
@@ -6466,11 +6372,9 @@ async def multi_dashboard_page(request: Request):
     """Vista general consolidada de todas las cuentas MeLi."""
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("multi_dashboard.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "multi_dashboard.html", {        "user": user,
         "active": "multi_dashboard",
         **ctx
     })
@@ -6992,7 +6896,7 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="ventas"))
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = active_tab
-    return templates.TemplateResponse("amazon_dashboard.html", {"request": request, "user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
 
 
 @app.get("/amazon/products", response_class=HTMLResponse)
@@ -7015,7 +6919,7 @@ async def amazon_orders_page(request: Request):
     ctx["amazon_account"] = amazon_account
     ctx["active_platform"] = "amazon"
     ctx["active_amazon_tab"] = "orders"
-    return templates.TemplateResponse("amazon_orders.html", {"request": request, "user": user, **ctx})
+    return templates.TemplateResponse(request, "amazon_orders.html", {"user": user, **ctx})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -7469,11 +7373,9 @@ async def set_fx_rate(request: Request):
 async def returns_page(request: Request):
     user = await get_current_user()
     if not user:
-        return templates.TemplateResponse("no_session.html", {"request": request})
+        return templates.TemplateResponse(request, "no_session.html", {})
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse("returns.html", {
-        "request": request,
-        "user": user,
+    return templates.TemplateResponse(request, "returns.html", {        "user": user,
         "active": "returns",
         **ctx
     })
@@ -7546,9 +7448,7 @@ async def returns_summary_partial(
             return_rate=round(return_rate, 2),
         )
 
-        return templates.TemplateResponse("partials/returns_summary.html", {
-            "request": request,
-            "summary": summary,
+        return templates.TemplateResponse(request, "partials/returns_summary.html", {            "summary": summary,
             "date_from": date_from,
             "date_to": date_to,
         })
@@ -7756,9 +7656,7 @@ async def returns_table_partial(
         _urgency_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
         enriched.sort(key=lambda c: (_urgency_order.get(c.urgency, 3), not c._sort_date, c._sort_date))
 
-        return templates.TemplateResponse("partials/returns_table.html", {
-            "request": request,
-            "returns": enriched,
+        return templates.TemplateResponse(request, "partials/returns_table.html", {            "returns": enriched,
             "paging": paging,
             "offset": offset,
             "limit": limit,

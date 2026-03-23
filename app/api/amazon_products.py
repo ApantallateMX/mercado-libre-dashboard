@@ -575,7 +575,6 @@ async def amazon_products_summary(
             })
 
         ctx = {
-            "request":         request,
             "nickname":        client.nickname,
             "marketplace":     client.marketplace_name,
             # KPIs
@@ -591,7 +590,7 @@ async def amazon_products_summary(
             "top_listings":    top_listings,
             "alerts":          alerts,
         }
-        return _templates.TemplateResponse("partials/amazon_products_summary.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_summary.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en summary")
@@ -704,7 +703,6 @@ async def amazon_products_catalog(
             enriched.sort(key=lambda x: x["fba_stock"], reverse=reverse)
 
         ctx = {
-            "request":       request,
             "listings":      enriched,
             "total":         len(enriched),
             "status_filter": status_filter,
@@ -714,7 +712,7 @@ async def amazon_products_catalog(
             "marketplace":   client.marketplace_name,
             "seller_id":     client.seller_id,
         }
-        return _templates.TemplateResponse("partials/amazon_products_catalog.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_catalog.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en catalog")
@@ -840,7 +838,6 @@ async def amazon_products_inventory(
         items.sort(key=lambda x: (x["fulfillable"], -x["unfulfillable"]))
 
         ctx = {
-            "request":              request,
             "items":                items,
             "total_items":          len(fba_summaries),
             "filter_type":          filter_type,
@@ -855,7 +852,7 @@ async def amazon_products_inventory(
             "nickname":             client.nickname,
             "marketplace":          client.marketplace_name,
         }
-        return _templates.TemplateResponse("partials/amazon_products_inventory.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_inventory.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en FBA inventory")
@@ -957,7 +954,6 @@ async def amazon_products_buybox(request: Request):
         )
 
         ctx = {
-            "request":             request,
             "buybox_results":      buybox_results,
             "bb_won":              bb_won,
             "bb_lost":             bb_lost,
@@ -967,7 +963,7 @@ async def amazon_products_buybox(request: Request):
             "nickname":            client.nickname,
             "marketplace":         client.marketplace_name,
         }
-        return _templates.TemplateResponse("partials/amazon_products_buybox.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_buybox.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en buybox")
@@ -1587,7 +1583,6 @@ async def amazon_products_resumen(request: Request):
         sin_publicar_count = inactive_count + suppressed_count
 
         ctx = {
-            "request": request,
             "nickname": client.nickname,
             "marketplace": client.marketplace_name,
             "revenue_30d": round(revenue_30d, 2),
@@ -1606,7 +1601,7 @@ async def amazon_products_resumen(request: Request):
             "date_to": date_to,
             "sku_sales_loading": _sku_loading_resumen,  # True = BG refresh activo
         }
-        return _templates.TemplateResponse("partials/amazon_products_resumen.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_resumen.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en resumen v2")
@@ -1891,7 +1886,6 @@ async def amazon_products_inventario(
         cache_ts = int(_listings_cache.get(client.seller_id, (_time.time(), None))[0])
 
         ctx = {
-            "request":          request,
             "listings":         page_items,
             "total":            total,
             "total_pages":      total_pages,
@@ -1908,7 +1902,7 @@ async def amazon_products_inventario(
             "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
             "bm_loading":        bm_loading,         # True = BG pre-fetch BM activo
         }
-        return _templates.TemplateResponse("partials/amazon_products_inventario.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_inventario.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en inventario v2")
@@ -2446,14 +2440,13 @@ async def amazon_products_stock_alerts(request: Request):
         restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
 
         ctx = {
-            "request": request,
             "sin_stock": sin_stock,
             "stock_bajo": stock_bajo,
             "restock_urgente": restock_urgente,
             "nickname": client.nickname,
             "marketplace": client.marketplace_name,
         }
-        return _templates.TemplateResponse("partials/amazon_products_stock.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_stock.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en stock-alerts")
@@ -2517,14 +2510,13 @@ async def amazon_products_sin_publicar(request: Request):
                 inactivos.append(item_data)
 
         ctx = {
-            "request": request,
             "suprimidos": suprimidos,
             "inactivos": inactivos,
             "con_issues": con_issues,
             "nickname": client.nickname,
             "marketplace": client.marketplace_name,
         }
-        return _templates.TemplateResponse("partials/amazon_products_sin_publicar.html", ctx)
+        return _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en sin-publicar")
@@ -2628,15 +2620,12 @@ async def amazon_products_seller_flex(
         ))
 
         ctx = {
-            "request":     request,
             "items":       flx_items,
             "total":       len(flx_items),
             "q":           q,
             "flx_loading": flx_loading,
         }
-        return _templates.TemplateResponse(
-            "partials/amazon_products_seller_flex.html", ctx
-        )
+        return _templates.TemplateResponse(request, "partials/amazon_products_seller_flex.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en Seller Flex")
@@ -2914,16 +2903,16 @@ def start_onsite_background_sync() -> None:
 def _render_no_account(request: Request, template: str) -> HTMLResponse:
     """Template de error cuando no hay cuenta Amazon configurada."""
     return _templates.TemplateResponse(
-        f"partials/{template}",
-        {"request": request, "error": "Sin cuenta Amazon", "no_account": True},
+        request, f"partials/{template}",
+        {"error": "Sin cuenta Amazon", "no_account": True},
     )
 
 
 def _render_error(request: Request, template: str, msg: str) -> HTMLResponse:
     """Template de error genérico."""
     return _templates.TemplateResponse(
-        f"partials/{template}",
-        {"request": request, "error": msg, "no_account": False},
+        request, f"partials/{template}",
+        {"error": msg, "no_account": False},
     )
 
 

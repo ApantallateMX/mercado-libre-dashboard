@@ -332,10 +332,7 @@ async def get_amazon_daily_sales(
     if not client:
         # Sin cuenta Amazon configurada → partial vacío con mensaje
         return _templates.TemplateResponse(
-            "partials/amazon_daily_card.html",
-            {
-                "request": request,
-                "not_connected": True,
+            request, "partials/amazon_daily_card.html", {                "not_connected": True,
                 "daily_data": [],
                 "totals": {},
                 "date_from": date_from,
@@ -357,8 +354,7 @@ async def get_amazon_daily_sales(
     if cache_key in _amazon_daily_cache:
         ts, cached = _amazon_daily_cache[cache_key]
         if _time.time() - ts < _AMAZON_DAILY_TTL:
-            cached["request"] = request  # request no es serializable — se reconstruye
-            return _templates.TemplateResponse("partials/amazon_daily_card.html", cached)
+            return _templates.TemplateResponse(request,"partials/amazon_daily_card.html", cached)
 
     # ── 4. Obtener órdenes via SP-API ─────────────────────────────────────────
     try:
@@ -366,10 +362,7 @@ async def get_amazon_daily_sales(
         orders = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
     except Exception as exc:
         return _templates.TemplateResponse(
-            "partials/amazon_daily_card.html",
-            {
-                "request": request,
-                "error": str(exc),
+            request, "partials/amazon_daily_card.html", {                "error": str(exc),
                 "daily_data": [],
                 "totals": {},
                 "date_from": date_from,
@@ -447,7 +440,6 @@ async def get_amazon_daily_sales(
 
     # ── 8. Guardar en caché y renderizar partial ──────────────────────────────
     ctx = {
-        "request":      request,
         "daily_data":   daily_data,
         "totals":       totals,
         "date_from":    date_from,
@@ -460,7 +452,7 @@ async def get_amazon_daily_sales(
     # Guardar sin `request` (no serializable)
     _amazon_daily_cache[cache_key] = (_time.time(), {k: v for k, v in ctx.items() if k != "request"})
 
-    return _templates.TemplateResponse("partials/amazon_daily_card.html", ctx)
+    return _templates.TemplateResponse(request, "partials/amazon_daily_card.html", ctx)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -903,8 +895,7 @@ async def get_amazon_recent_orders(request: Request):
     recent = list(await asyncio.gather(*[_fetch_items(o) for o in recent]))
 
     return _templates.TemplateResponse(
-        "partials/amazon_recent_orders.html",
-        {"request": request, "orders": recent},
+        request, "partials/amazon_recent_orders.html", {"orders": recent},
     )
 
 

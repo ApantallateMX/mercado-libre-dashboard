@@ -188,10 +188,7 @@ async def get_amazon_orders(
         _orders_cache[cache_key] = (_time.time(), (orders, stats))
 
     return _templates.TemplateResponse(
-        "partials/amazon_orders_table.html",
-        {
-            "request":   request,
-            "orders":    orders,
+        request, "partials/amazon_orders_table.html", {            "orders":    orders,
             "stats":     stats,
             "date_from": date_from,
             "date_to":   date_to,
@@ -285,10 +282,7 @@ async def get_order_items_partial(
     }
 
     return _templates.TemplateResponse(
-        "partials/amazon_order_items.html",
-        {
-            "request":   request,
-            "items":     items,
+        request, "partials/amazon_order_items.html", {            "items":     items,
             "desglose":  desglose,
             "order_ctx": order_ctx,
         },
