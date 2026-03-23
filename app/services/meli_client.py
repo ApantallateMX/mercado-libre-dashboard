@@ -489,12 +489,30 @@ class MeliClient:
         return orders
 
     async def get_payment_net_amount(self, payment_id: str) -> float | None:
-        """Obtiene net_received_amount de un pago desde /collections/{id}."""
+        """Obtiene net_received_amount de un pago desde /collections/{id}.
+        IMPORTANTE: net_received_amount = total_amount - impuestos_retenidos.
+        La comisión (sale_fee) y el envío se descuentan por separado.
+        net_real_vendedor = net_received - sale_fee - shipping_cost
+        """
         try:
             data = await self.get(f"/collections/{payment_id}")
             return data.get("net_received_amount")
         except Exception:
             return None
+
+    async def get_order_sale_fee(self, order_id: str) -> float:
+        """Obtiene sale_fee real desde el endpoint individual /orders/{id}.
+        /orders/search devuelve sale_fee=0 en muchos casos; el endpoint individual
+        siempre retorna el valor correcto calculado por MeLi.
+        """
+        try:
+            data = await self.get(f"/orders/{order_id}")
+            fee = 0.0
+            for item in data.get("order_items", []):
+                fee += float(item.get("sale_fee", 0) or 0)
+            return fee
+        except Exception:
+            return 0.0
 
     async def enrich_orders_with_net_amount(self, orders: list) -> list:
         """Enriquece ordenes con _net_received_amount desde la API de collections.

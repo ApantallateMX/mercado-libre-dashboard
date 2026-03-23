@@ -143,10 +143,19 @@ def _meli_order_to_day_entry(order: dict) -> dict:
     except Exception:
         day = dt_str[:10]
 
-    gross = order.get("total_amount", 0) or 0
-    fee   = sum(item.get("sale_fee", 0) or 0 for item in order.get("order_items", []))
-    iva   = round(fee * 0.16, 2)
-    net   = round(gross - fee - iva, 2)
+    gross        = order.get("total_amount", 0) or 0
+    fee          = sum(float(item.get("sale_fee", 0) or 0) for item in order.get("order_items", []))
+    net_received = order.get("_net_received_amount", 0) or 0
+    shipping     = order.get("_shipping_cost", 0) or 0
+
+    if net_received > 0:
+        # Cálculo exacto: net_received = gross - impuestos; net_real = net_received - fee - shipping
+        iva  = round(gross - net_received, 2)  # impuestos reales retenidos por MeLi
+        net  = round(net_received - fee - shipping, 2)
+    else:
+        # Fallback: estimación con IVA sobre comisión
+        iva  = round(fee * 0.16, 2)
+        net  = round(gross - fee - iva, 2)
 
     return {
         "date":    day,
