@@ -7701,6 +7701,7 @@ async def returns_table_partial(
 async def returns_analysis(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    limit: int = Query(5, ge=1, le=20),
 ):
     client = await get_meli_client()
     if not client:
@@ -7717,49 +7718,166 @@ async def returns_analysis(
         opened = sum(1 for c in pdd_claims if c.get("status") == "opened")
         closed = total - opened
 
-        # Top products by return count
         order_ids = list({str(c.get("resource_id", "")) for c in pdd_claims
                           if c.get("resource") == "order" and c.get("resource_id")})
-        product_counts: dict = {}
         sem = asyncio.Semaphore(5)
 
-        async def _fetch_order_title(oid):
+        async def _fetch_order_info(oid):
             async with sem:
                 try:
                     order = await client.get(f"/orders/{oid}")
                     oi = order.get("order_items", [])
                     if oi:
-                        return oid, oi[0].get("item", {}).get("title", "")
+                        item = oi[0].get("item", {})
+                        return oid, {"title": item.get("title", ""), "item_id": str(item.get("id", ""))}
                 except Exception:
                     pass
-                return oid, ""
+                return oid, {"title": "", "item_id": ""}
 
-        title_results = await asyncio.gather(
-            *[_fetch_order_title(oid) for oid in order_ids[:30]],
+        info_results = await asyncio.gather(
+            *[_fetch_order_info(oid) for oid in order_ids[:40]],
             return_exceptions=True
         )
-        order_title_map = {}
-        for r in title_results:
+        order_info_map = {}
+        for r in info_results:
             if isinstance(r, tuple):
-                order_title_map[r[0]] = r[1]
+                order_info_map[r[0]] = r[1]
 
+        product_counts: dict = {}
         for c in pdd_claims:
             oid = str(c.get("resource_id", ""))
-            title = order_title_map.get(oid, "Producto desconocido")
-            if not title:
-                title = "Producto desconocido"
-            product_counts[title] = product_counts.get(title, 0) + 1
+            info = order_info_map.get(oid, {})
+            title = info.get("title") or "Producto desconocido"
+            item_id = info.get("item_id", "")
+            if title not in product_counts:
+                product_counts[title] = {"title": title, "item_id": item_id, "count": 0}
+            product_counts[title]["count"] += 1
 
-        top_products = sorted(
-            [{"title": t, "count": n} for t, n in product_counts.items()],
-            key=lambda x: x["count"],
-            reverse=True
-        )[:5]
+        top_products = sorted(product_counts.values(), key=lambda x: x["count"], reverse=True)[:limit]
 
         return {
             "total": total,
             "by_status": {"opened": opened, "closed": closed},
             "top_products": top_products,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await client.close()
+
+
+@app.get("/api/returns/top-products")
+async def returns_top_products(
+    date_from: str = Query("", description="Period A start YYYY-MM-DD"),
+    date_to: str = Query("", description="Period A end YYYY-MM-DD"),
+    compare_from: str = Query("", description="Period B start YYYY-MM-DD"),
+    compare_to: str = Query("", description="Period B end YYYY-MM-DD"),
+    limit: int = Query(10, ge=1, le=20),
+):
+    """Top N returned products with optional period-over-period comparison."""
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No autenticado"}
+    try:
+        df_a = date_from or None
+        dt_a = date_to or None
+        df_b = compare_from or None
+        dt_b = compare_to or None
+
+        async def _fetch_pdd(df, dt):
+            claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+            return [c for c in claims if str(c.get("reason_id", "")).upper().startswith("PDD")]
+
+        # Fetch both periods in parallel when comparison is requested
+        if df_b or dt_b:
+            pdd_a, pdd_b = await asyncio.gather(_fetch_pdd(df_a, dt_a), _fetch_pdd(df_b, dt_b))
+        else:
+            pdd_a = await _fetch_pdd(df_a, dt_a)
+            pdd_b = []
+
+        # Collect all unique order IDs from both periods
+        oids_a = {str(c.get("resource_id", "")) for c in pdd_a
+                  if c.get("resource") == "order" and c.get("resource_id")}
+        oids_b = {str(c.get("resource_id", "")) for c in pdd_b
+                  if c.get("resource") == "order" and c.get("resource_id")}
+        all_oids = list(oids_a | oids_b)
+
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_order_info(oid):
+            async with sem:
+                try:
+                    order = await client.get(f"/orders/{oid}")
+                    oi = order.get("order_items", [])
+                    if oi:
+                        item = oi[0].get("item", {})
+                        return oid, {
+                            "title": item.get("title", "") or "Producto desconocido",
+                            "item_id": str(item.get("id", "")),
+                        }
+                except Exception:
+                    pass
+                return oid, {"title": "Producto desconocido", "item_id": ""}
+
+        results = await asyncio.gather(
+            *[_fetch_order_info(oid) for oid in all_oids[:50]],
+            return_exceptions=True
+        )
+        order_map = {r[0]: r[1] for r in results if isinstance(r, tuple)}
+
+        def _count_by_product(claims):
+            counts = {}
+            for c in claims:
+                oid = str(c.get("resource_id", ""))
+                info = order_map.get(oid, {"title": "Producto desconocido", "item_id": ""})
+                title = info["title"]
+                if title not in counts:
+                    counts[title] = {"title": title, "item_id": info["item_id"], "count": 0}
+                counts[title]["count"] += 1
+            return counts
+
+        counts_a = _count_by_product(pdd_a)
+        counts_b = _count_by_product(pdd_b)
+
+        total_a = len(pdd_a)
+        total_b = len(pdd_b)
+
+        # Rank by period A counts, take top N
+        top_a = sorted(counts_a.values(), key=lambda x: x["count"], reverse=True)[:limit]
+
+        products = []
+        for p in top_a:
+            count_a = p["count"]
+            b_entry = counts_b.get(p["title"])
+            count_b = b_entry["count"] if b_entry else (0 if pdd_b else None)
+
+            delta_pct = None
+            if count_b is not None and count_b > 0:
+                delta_pct = round((count_a - count_b) / count_b * 100, 1)
+            elif count_b == 0 and pdd_b:
+                delta_pct = None  # new in period A
+
+            products.append({
+                "title": p["title"],
+                "item_id": p["item_id"],
+                "count_a": count_a,
+                "count_b": count_b,
+                "delta_pct": delta_pct,
+                "pct_of_total": round(count_a / total_a * 100, 1) if total_a > 0 else 0,
+            })
+
+        def _label(df, dt):
+            if df and dt:
+                return f"{df} al {dt}"
+            elif df:
+                return f"Desde {df}"
+            elif dt:
+                return f"Hasta {dt}"
+            return "Todo el historial"
+
+        return {
+            "period_a": {"label": _label(df_a, dt_a), "total": total_a, "products": products},
+            "period_b": {"label": _label(df_b, dt_b), "total": total_b} if (df_b or dt_b) else None,
         }
     except Exception as e:
         return {"error": str(e)}

@@ -53,28 +53,104 @@
     </div>
 </div>
 
+<!-- ===== TOP PRODUCTOS ANALYTICS ===== -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <!-- Header — toggle collapse -->
+    <div class="px-6 py-3 flex items-center justify-between cursor-pointer select-none border-b border-gray-100"
+         onclick="toggleTopSection()">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+            </svg>
+            <h2 class="text-sm font-semibold text-gray-700">Análisis de Productos — Top Retornos</h2>
+            <span class="text-[10px] text-gray-400 font-normal">(comparativo de periodos)</span>
+        </div>
+        <svg id="ret-top-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </div>
+
+    <!-- Collapsible content -->
+    <div id="ret-top-content" class="p-5">
+        <!-- Controls bar -->
+        <div class="flex flex-wrap items-end gap-4 p-4 bg-gray-50 rounded-lg mb-5">
+            <!-- Top N selector -->
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Mostrar</label>
+                <select id="ret-top-limit" onchange="loadTopProducts()"
+                        class="border rounded px-3 py-1.5 text-sm bg-white">
+                    <option value="10">Top 10</option>
+                    <option value="20">Top 20</option>
+                </select>
+            </div>
+
+            <!-- Period A label -->
+            <div class="border-l border-gray-300 pl-4">
+                <p class="text-xs text-gray-500 mb-1">Período A (filtro activo)</p>
+                <p class="text-xs font-semibold text-gray-700" id="ret-top-period-a-label">—</p>
+            </div>
+
+            <!-- Period B for comparison -->
+            <div class="border-l border-gray-300 pl-4">
+                <p class="text-xs text-gray-500 mb-1">Comparar con (Período B) — opcional</p>
+                <div class="flex items-center gap-2">
+                    <input type="date" id="ret-compare-from"
+                           class="border rounded px-2 py-1 text-xs bg-white">
+                    <span class="text-gray-400 text-xs">→</span>
+                    <input type="date" id="ret-compare-to"
+                           class="border rounded px-2 py-1 text-xs bg-white">
+                    <button onclick="loadTopProducts()"
+                            class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1.5 rounded hover:bg-yellow-500 text-xs">
+                        Analizar
+                    </button>
+                    <button onclick="clearTopComparison()"
+                            class="bg-gray-200 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-300 text-xs">
+                        Limpiar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="ret-top-results">
+            <div class="text-center py-6 text-gray-400 text-sm">
+                Ajusta los filtros de fecha y haz clic en <strong>Analizar</strong> para ver el ranking de productos.
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Main content + Sidebar -->
 <div class="flex gap-6">
     <div class="flex-1 min-w-0">
         <!-- Returns Table -->
         <div class="bg-white rounded-lg shadow">
-            <div class="border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-                <h2 class="text-sm font-semibold text-gray-700">Lista de Retornos</h2>
+            <div class="border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
+                <!-- Status filters -->
                 <div class="flex gap-2">
-                    <button onclick="setRetStatus('')"
-                            id="ret-btn-all"
+                    <button onclick="setRetStatus('')" id="ret-btn-all"
                             class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
                         Todos
                     </button>
-                    <button onclick="setRetStatus('opened')"
-                            id="ret-btn-opened"
+                    <button onclick="setRetStatus('opened')" id="ret-btn-opened"
                             class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
                         Abiertos
                     </button>
-                    <button onclick="setRetStatus('closed')"
-                            id="ret-btn-closed"
+                    <button onclick="setRetStatus('closed')" id="ret-btn-closed"
                             class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
                         Cerrados
+                    </button>
+                </div>
+                <!-- Manual refresh + timestamp -->
+                <div class="ml-auto flex items-center gap-2">
+                    <span id="ret-table-timestamp" class="text-[10px] text-gray-400"></span>
+                    <button onclick="manualRefreshTable()"
+                            title="Refrescar lista"
+                            class="flex items-center gap-1 text-xs text-gray-400 hover:text-yellow-700 hover:bg-yellow-50 px-2 py-1 rounded transition">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        Actualizar
                     </button>
                 </div>
             </div>
@@ -90,11 +166,11 @@
 
     <!-- Sidebar -->
     <div class="hidden lg:block lg:w-72 flex-shrink-0">
-        <!-- Top productos -->
+        <!-- Top productos (sidebar mini) -->
         <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                Productos con mas retornos
+                Top 5 productos
             </h3>
             <div id="ret-top-products">
                 <div class="animate-pulse space-y-2">
@@ -105,39 +181,24 @@
             </div>
         </div>
 
-        <!-- Grafico de motivos -->
+        <!-- Grafico de estados -->
         <div class="bg-white rounded-lg shadow p-4 mb-4">
-            <h3 class="text-sm font-bold text-gray-800 mb-3">Distribucion por Estado</h3>
+            <h3 class="text-sm font-bold text-gray-800 mb-3">Distribución por Estado</h3>
             <canvas id="ret-status-chart" height="160"></canvas>
         </div>
 
-        <!-- Consejos de mejora -->
+        <!-- Consejos -->
         <div class="bg-white rounded-lg shadow p-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346A3.284 3.284 0 0119 16.5h-6a3.284 3.284 0 01-2.316-.904l-.347-.346z"/></svg>
-                Como reducir retornos
+                Cómo reducir retornos
             </h3>
             <ul class="text-xs text-gray-600 space-y-2">
-                <li class="flex items-start gap-1.5">
-                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
-                    Agrega fotos reales del producto desde todos los angulos
-                </li>
-                <li class="flex items-start gap-1.5">
-                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
-                    Verifica que el titulo y descripcion sean exactos — no exagerar
-                </li>
-                <li class="flex items-start gap-1.5">
-                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
-                    Incluye dimensiones, peso y especificaciones tecnicas completas
-                </li>
-                <li class="flex items-start gap-1.5">
-                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
-                    Usa empaque adecuado para evitar danos en transito
-                </li>
-                <li class="flex items-start gap-1.5">
-                    <span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>
-                    Responde retornos en &lt;24h para evitar impacto en reputacion
-                </li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Agrega fotos reales desde todos los ángulos</li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Verifica que título y descripción sean exactos — no exagerar</li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Incluye dimensiones, peso y especificaciones completas</li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Usa empaque adecuado para evitar daños en tránsito</li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Responde retornos en &lt;24h para proteger reputación</li>
             </ul>
         </div>
     </div>
@@ -148,208 +209,510 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 (function() {
-    function _fmtDate(d) { return d.toISOString().slice(0, 10); }
-    var _today = new Date();
-    var _monthAgo = new Date(_today);
-    _monthAgo.setDate(_today.getDate() - 29);
+// ============================================================
+// State
+// ============================================================
+function _fmtDate(d) { return d.toISOString().slice(0, 10); }
+var _today = new Date();
+var _monthAgo = new Date(_today);
+_monthAgo.setDate(_today.getDate() - 29);
 
-    var retFilters = {
-        date_from: _fmtDate(_monthAgo),
-        date_to: _fmtDate(_today),
-        status: '',
-        offset: 0,
-        limit: 20,
-    };
+var retFilters = {
+    date_from: _fmtDate(_monthAgo),
+    date_to:   _fmtDate(_today),
+    status:    '',
+    offset:    0,
+    limit:     20,
+};
 
-    // --- Init date inputs ---
-    document.getElementById('ret-date-from').value = retFilters.date_from;
-    document.getElementById('ret-date-to').value = retFilters.date_to;
+// AbortControllers — one per section to cancel stale requests
+var _tableCtrl   = null;
+var _summaryCtrl = null;
 
-    function buildParams() {
-        var p = [];
-        if (retFilters.date_from) p.push('date_from=' + retFilters.date_from);
-        if (retFilters.date_to) p.push('date_to=' + retFilters.date_to);
-        if (retFilters.status) p.push('status=' + retFilters.status);
-        return p;
-    }
+// Last known open count for change detection
+var _knownOpenCount = -1;
 
-    // --- Load summary KPIs ---
-    function loadSummary() {
-        var p = buildParams();
-        var url = '/partials/returns-summary' + (p.length ? '?' + p.join('&') : '');
-        fetch(url).then(function(r) { return r.text(); })
-            .then(function(html) { document.getElementById('ret-summary').innerHTML = html; })
-            .catch(function() { document.getElementById('ret-summary').innerHTML = '<p class="text-center text-red-500 py-4">Error cargando resumen</p>'; });
-    }
+// ============================================================
+// URL builders
+// ============================================================
+function _buildParams() {
+    var p = [];
+    if (retFilters.date_from) p.push('date_from=' + retFilters.date_from);
+    if (retFilters.date_to)   p.push('date_to='   + retFilters.date_to);
+    if (retFilters.status)    p.push('status='    + retFilters.status);
+    return p;
+}
 
-    // --- Load returns table ---
-    function loadTable() {
-        var p = buildParams();
-        p.push('offset=' + retFilters.offset);
-        p.push('limit=' + retFilters.limit);
-        var url = '/partials/returns-table?' + p.join('&');
-        var container = document.getElementById('ret-table');
-        container.innerHTML = '<div class="animate-pulse space-y-3">' +
-            Array(4).fill('<div class="h-24 bg-gray-200 rounded"></div>').join('') + '</div>';
-        fetch(url).then(function(r) { return r.text(); })
-            .then(function(html) { container.innerHTML = html; })
-            .catch(function() { container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando retornos</p>'; });
-    }
-
-    // --- Load analysis data (sidebar) ---
-    var _chartInstance = null;
-    function loadAnalysis() {
-        var p = buildParams();
-        var url = '/api/returns/analysis' + (p.length ? '?' + p.join('&') : '');
-        fetch(url).then(function(r) { return r.json(); })
-            .then(function(data) {
-                // Top products
-                var topEl = document.getElementById('ret-top-products');
-                if (data.top_products && data.top_products.length) {
-                    var html = '<div class="space-y-2">';
-                    data.top_products.forEach(function(p, i) {
-                        var pct = data.total > 0 ? Math.round(p.count / data.total * 100) : 0;
-                        var colors = ['bg-red-400', 'bg-orange-400', 'bg-yellow-400', 'bg-blue-400', 'bg-gray-400'];
-                        html += '<div>';
-                        html += '<div class="flex justify-between text-xs text-gray-700 mb-0.5">';
-                        html += '<span class="truncate flex-1 mr-2" title="' + p.title + '">' + (i+1) + '. ' + (p.title.length > 28 ? p.title.slice(0,28)+'...' : p.title) + '</span>';
-                        html += '<span class="font-bold text-red-600 flex-shrink-0">' + p.count + '</span>';
-                        html += '</div>';
-                        html += '<div class="h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 rounded-full ' + (colors[i] || 'bg-gray-400') + '" style="width:' + pct + '%"></div></div>';
-                        html += '</div>';
-                    });
-                    html += '</div>';
-                    topEl.innerHTML = html;
-                } else {
-                    topEl.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este periodo</p>';
-                }
-
-                // Status chart
-                var ctx = document.getElementById('ret-status-chart').getContext('2d');
-                if (_chartInstance) _chartInstance.destroy();
-                var opened = data.by_status ? (data.by_status.opened || 0) : 0;
-                var closed = data.by_status ? (data.by_status.closed || 0) : 0;
-                if (opened + closed > 0) {
-                    _chartInstance = new Chart(ctx, {
-                        type: 'doughnut',
-                        data: {
-                            labels: ['Abiertos', 'Cerrados'],
-                            datasets: [{
-                                data: [opened, closed],
-                                backgroundColor: ['#ef4444', '#22c55e'],
-                                borderWidth: 2,
-                                borderColor: '#fff'
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            plugins: {
-                                legend: { position: 'bottom', labels: { font: { size: 11 } } }
-                            },
-                            cutout: '65%'
-                        }
-                    });
-                } else {
-                    document.getElementById('ret-status-chart').parentElement.innerHTML =
-                        '<p class="text-xs text-gray-400 text-center py-4">Sin datos en este periodo</p>';
-                }
-            })
-            .catch(function() {
-                document.getElementById('ret-top-products').innerHTML =
-                    '<p class="text-xs text-gray-400 text-center py-2">Error cargando analisis</p>';
-            });
-    }
-
-    // --- Filter controls ---
-    window.applyRetFilters = function() {
-        retFilters.date_from = document.getElementById('ret-date-from').value;
-        retFilters.date_to = document.getElementById('ret-date-to').value;
-        retFilters.offset = 0;
-        _updateFilterIndicator();
-        loadAll();
-        _updateTimestamp();
-        _startAutoRefresh();
-    };
-
-    window.clearRetFilters = function() {
-        retFilters.date_from = '';
-        retFilters.date_to = '';
-        retFilters.offset = 0;
-        document.getElementById('ret-date-from').value = '';
-        document.getElementById('ret-date-to').value = '';
-        _updateFilterIndicator();
-        loadAll();
-        _updateTimestamp();
-        _startAutoRefresh();
-    };
-
-    window.setRetStatus = function(status) {
-        retFilters.status = status;
-        retFilters.offset = 0;
-        // Update button styles
-        ['all', 'opened', 'closed'].forEach(function(s) {
-            var btn = document.getElementById('ret-btn-' + (s === '' ? 'all' : s));
-            if (btn) btn.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
+// ============================================================
+// Summary — always safe to refresh (no user work here)
+// ============================================================
+function loadSummary() {
+    var p = _buildParams();
+    var url = '/partials/returns-summary' + (p.length ? '?' + p.join('&') : '');
+    if (_summaryCtrl) _summaryCtrl.abort();
+    _summaryCtrl = new AbortController();
+    fetch(url, { signal: _summaryCtrl.signal })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            document.getElementById('ret-summary').innerHTML = html;
+            _checkForNewReturns();
+        })
+        .catch(function(e) {
+            if (e.name !== 'AbortError')
+                document.getElementById('ret-summary').innerHTML =
+                    '<p class="text-center text-red-500 py-4">Error cargando resumen</p>';
         });
-        var activeId = status === '' ? 'ret-btn-all' : 'ret-btn-' + status;
-        var activeBtn = document.getElementById(activeId);
-        if (activeBtn) activeBtn.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
-        loadTable();
-    };
+}
 
-    window.retNextPage = function() {
-        retFilters.offset += retFilters.limit;
-        loadTable();
-    };
+// ============================================================
+// Table — ONLY on explicit user action, never by auto-refresh
+// ============================================================
+function loadTable() {
+    var p = _buildParams();
+    p.push('offset=' + retFilters.offset);
+    p.push('limit='  + retFilters.limit);
+    var url = '/partials/returns-table?' + p.join('&');
+    if (_tableCtrl) _tableCtrl.abort();
+    _tableCtrl = new AbortController();
+    var container = document.getElementById('ret-table');
+    _clearUpdateNotif();
+    container.innerHTML = '<div class="animate-pulse space-y-3">' +
+        Array(4).fill('<div class="h-24 bg-gray-200 rounded"></div>').join('') + '</div>';
+    fetch(url, { signal: _tableCtrl.signal })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            container.innerHTML = html;
+            _updateTableTimestamp();
+            _syncKnownCount();
+        })
+        .catch(function(e) {
+            if (e.name !== 'AbortError')
+                container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando retornos</p>';
+        });
+}
 
-    window.retPrevPage = function() {
-        retFilters.offset = Math.max(0, retFilters.offset - retFilters.limit);
-        loadTable();
-    };
+window.manualRefreshTable = function() { loadTable(); };
 
-    function _updateFilterIndicator() {
-        var ind = document.getElementById('ret-filter-indicator');
-        if (retFilters.date_from || retFilters.date_to) {
-            var t = 'Filtrando: ';
-            if (retFilters.date_from) t += 'desde ' + retFilters.date_from;
-            if (retFilters.date_from && retFilters.date_to) t += ' ';
-            if (retFilters.date_to) t += 'hasta ' + retFilters.date_to;
-            ind.textContent = t;
-        } else {
-            ind.textContent = '';
+// ============================================================
+// Sidebar analysis
+// ============================================================
+var _chartInstance = null;
+function loadAnalysis() {
+    var p = _buildParams();
+    var url = '/api/returns/analysis' + (p.length ? '?' + p.join('&') : '');
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            // Top 5 sidebar
+            var topEl = document.getElementById('ret-top-products');
+            if (data.top_products && data.top_products.length) {
+                var html = '<div class="space-y-2">';
+                data.top_products.forEach(function(p, i) {
+                    var pct = data.total > 0 ? Math.round(p.count / data.total * 100) : 0;
+                    var colors = ['bg-red-400','bg-orange-400','bg-yellow-400','bg-blue-400','bg-gray-400'];
+                    html += '<div>' +
+                        '<div class="flex justify-between text-xs text-gray-700 mb-0.5">' +
+                        '<span class="truncate flex-1 mr-2" title="' + p.title + '">' + (i+1) + '. ' +
+                        (p.title.length > 28 ? p.title.slice(0,28)+'…' : p.title) + '</span>' +
+                        '<span class="font-bold text-red-600 flex-shrink-0">' + p.count + '</span></div>' +
+                        '<div class="h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 rounded-full ' +
+                        (colors[i]||'bg-gray-400') + '" style="width:' + pct + '%"></div></div></div>';
+                });
+                html += '</div>';
+                topEl.innerHTML = html;
+            } else {
+                topEl.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este periodo</p>';
+            }
+
+            // Doughnut chart
+            var canvas = document.getElementById('ret-status-chart');
+            if (!canvas) return;
+            var ctx = canvas.getContext('2d');
+            if (_chartInstance) _chartInstance.destroy();
+            var opened = (data.by_status || {}).opened || 0;
+            var closed = (data.by_status || {}).closed || 0;
+            if (opened + closed > 0) {
+                _chartInstance = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Abiertos','Cerrados'],
+                        datasets: [{ data: [opened, closed],
+                            backgroundColor: ['#ef4444','#22c55e'],
+                            borderWidth: 2, borderColor: '#fff' }]
+                    },
+                    options: { responsive: true, cutout: '65%',
+                        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
+                });
+            } else {
+                canvas.parentElement.innerHTML =
+                    '<p class="text-xs text-gray-400 text-center py-4">Sin datos en este periodo</p>';
+            }
+
+            // Store known open count for change detection
+            if (_knownOpenCount < 0) _knownOpenCount = opened;
+        })
+        .catch(function() {
+            document.getElementById('ret-top-products').innerHTML =
+                '<p class="text-xs text-gray-400 text-center py-2">Error cargando análisis</p>';
+        });
+}
+
+// ============================================================
+// Change detection: show notification if new returns appeared
+// ============================================================
+function _checkForNewReturns() {
+    // Read open count from summary DOM (data attribute set by template)
+    var dataEl = document.getElementById('ret-summary-counts');
+    if (!dataEl) return;
+    var currentOpen = parseInt(dataEl.getAttribute('data-opened') || '0');
+    if (_knownOpenCount >= 0 && currentOpen > _knownOpenCount) {
+        _showUpdateNotif(currentOpen - _knownOpenCount);
+    }
+}
+
+function _syncKnownCount() {
+    var dataEl = document.getElementById('ret-summary-counts');
+    if (dataEl) _knownOpenCount = parseInt(dataEl.getAttribute('data-opened') || '0');
+}
+
+function _showUpdateNotif(diff) {
+    var container = document.getElementById('ret-table');
+    if (!container || container.querySelector('.animate-pulse')) return;
+    _clearUpdateNotif();
+    var notif = document.createElement('div');
+    notif.id = 'ret-update-notif';
+    notif.innerHTML =
+        '<div class="flex items-center gap-3 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">' +
+        '<svg class="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+        '<span class="text-sm text-blue-800 flex-1">Hay <strong>' + diff + ' nuevo' +
+        (diff !== 1 ? 's' : '') + '</strong> retorno' + (diff !== 1 ? 's' : '') + ' abierto' +
+        (diff !== 1 ? 's' : '') + ' desde tu última actualización.</span>' +
+        '<button onclick="window.manualRefreshTable()" ' +
+        'class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 font-semibold flex-shrink-0 transition">Actualizar</button>' +
+        '<button onclick="document.getElementById(\'ret-update-notif\').remove()" ' +
+        'class="ml-1 text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>' +
+        '</div>';
+    container.insertBefore(notif, container.firstChild);
+}
+
+function _clearUpdateNotif() {
+    var n = document.getElementById('ret-update-notif');
+    if (n) n.remove();
+}
+
+// ============================================================
+// Top Products Analytics (full section)
+// ============================================================
+var _topChartInstance = null;
+var _topSectionOpen = true;
+
+window.toggleTopSection = function() {
+    _topSectionOpen = !_topSectionOpen;
+    var content = document.getElementById('ret-top-content');
+    var chevron = document.getElementById('ret-top-chevron');
+    if (_topSectionOpen) {
+        content.classList.remove('hidden');
+        chevron.style.transform = '';
+    } else {
+        content.classList.add('hidden');
+        chevron.style.transform = 'rotate(-90deg)';
+    }
+};
+
+window.loadTopProducts = function() {
+    var limit  = document.getElementById('ret-top-limit').value;
+    var cfrom  = document.getElementById('ret-compare-from').value;
+    var cto    = document.getElementById('ret-compare-to').value;
+
+    // Update period A label
+    var pa = document.getElementById('ret-top-period-a-label');
+    if (pa) {
+        var from = retFilters.date_from, to = retFilters.date_to;
+        pa.textContent = from && to ? (from + ' → ' + to) : from ? ('Desde ' + from) : to ? ('Hasta ' + to) : 'Todo el historial';
+    }
+
+    var params = [];
+    if (retFilters.date_from) params.push('date_from=' + retFilters.date_from);
+    if (retFilters.date_to)   params.push('date_to='   + retFilters.date_to);
+    if (cfrom)                params.push('compare_from=' + cfrom);
+    if (cto)                  params.push('compare_to='   + cto);
+    params.push('limit=' + limit);
+
+    var resultsEl = document.getElementById('ret-top-results');
+    resultsEl.innerHTML =
+        '<div class="flex items-center justify-center gap-3 py-8 text-sm text-gray-500">' +
+        '<svg class="animate-spin h-5 w-5 text-yellow-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
+        'Analizando retornos...</div>';
+
+    fetch('/api/returns/top-products?' + params.join('&'))
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderTopProducts(data, cfrom || cto); })
+        .catch(function(e) {
+            resultsEl.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error al cargar análisis: ' + e.message + '</p>';
+        });
+};
+
+window.clearTopComparison = function() {
+    document.getElementById('ret-compare-from').value = '';
+    document.getElementById('ret-compare-to').value   = '';
+    window.loadTopProducts();
+};
+
+function _renderTopProducts(data, hasComparison) {
+    var el = document.getElementById('ret-top-results');
+    if (data.error) {
+        el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + data.error + '</p>';
+        return;
+    }
+
+    var products = (data.period_a || {}).products || [];
+    if (!products.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin retornos en este periodo.</p>';
+        return;
+    }
+
+    var totalA   = (data.period_a || {}).total || 0;
+    var totalB   = (data.period_b || {}).total || 0;
+    var labelA   = (data.period_a || {}).label || 'Período A';
+    var labelB   = (data.period_b || {}).label || 'Período B';
+    var hasComp  = !!data.period_b;
+    var maxCount = products[0].count_a;
+
+    // --- Summary bar ---
+    var html = '<div class="flex flex-wrap gap-4 mb-5">';
+    html += '<div class="bg-red-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
+            '<p class="text-xs text-gray-500">Total retornos — ' + labelA + '</p>' +
+            '<p class="text-2xl font-bold text-red-600">' + totalA + '</p></div>';
+    if (hasComp) {
+        var totalDelta = totalB > 0 ? Math.round((totalA - totalB) / totalB * 100) : null;
+        var deltaColor = totalDelta === null ? 'text-gray-500' : (totalDelta > 0 ? 'text-red-600' : 'text-green-600');
+        var deltaIcon  = totalDelta === null ? '' : (totalDelta > 0 ? '▲' : '▼');
+        html += '<div class="bg-blue-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
+                '<p class="text-xs text-gray-500">Total retornos — ' + labelB + '</p>' +
+                '<p class="text-2xl font-bold text-blue-600">' + totalB + '</p></div>';
+        if (totalDelta !== null) {
+            html += '<div class="bg-gray-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
+                    '<p class="text-xs text-gray-500">Variación total</p>' +
+                    '<p class="text-2xl font-bold ' + deltaColor + '">' + deltaIcon + ' ' + Math.abs(totalDelta) + '%</p></div>';
         }
     }
+    html += '</div>';
 
-    function _updateTimestamp() {
-        var el = document.getElementById('ret-last-update');
-        if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+    // --- Products table ---
+    html += '<div class="overflow-x-auto">';
+    html += '<table class="w-full text-sm border-collapse">';
+    html += '<thead><tr class="border-b border-gray-200 text-left text-xs text-gray-500">';
+    html += '<th class="pb-2 pr-3 font-semibold w-8">#</th>';
+    html += '<th class="pb-2 pr-3 font-semibold">Producto</th>';
+    html += '<th class="pb-2 pr-3 font-semibold text-right whitespace-nowrap">' +
+            (hasComp ? 'Per. A' : 'Retornos') + '</th>';
+    if (hasComp) html += '<th class="pb-2 pr-3 font-semibold text-right">Per. B</th>' +
+                         '<th class="pb-2 pr-3 font-semibold text-right">Variación</th>';
+    html += '<th class="pb-2 pr-3 font-semibold text-right">% total</th>';
+    html += '<th class="pb-2 font-semibold text-right">Proporción</th>';
+    html += '</tr></thead><tbody>';
+
+    var rankColors = ['text-red-600','text-red-500','text-orange-500',
+                      'text-yellow-600','text-yellow-500','text-gray-500'];
+
+    products.forEach(function(p, i) {
+        var rankColor = rankColors[Math.min(i, rankColors.length-1)];
+        var rank = i + 1;
+        var barW  = maxCount > 0 ? Math.round(p.count_a / maxCount * 100) : 0;
+        var barColor = i < 3 ? 'bg-red-400' : (i < 6 ? 'bg-orange-400' : 'bg-yellow-400');
+
+        // Delta badge
+        var deltaBadge = '';
+        if (hasComp) {
+            if (p.delta_pct === null && p.count_b === 0) {
+                deltaBadge = '<span class="px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded font-semibold">Nuevo</span>';
+            } else if (p.delta_pct !== null) {
+                var up = p.delta_pct > 0;
+                deltaBadge = '<span class="px-1.5 py-0.5 text-[10px] rounded font-semibold ' +
+                    (up ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' +
+                    (up ? '▲' : '▼') + ' ' + Math.abs(p.delta_pct) + '%</span>';
+            } else {
+                deltaBadge = '<span class="text-gray-400 text-xs">—</span>';
+            }
+        }
+
+        html += '<tr class="border-b border-gray-100 hover:bg-gray-50 transition">';
+        html += '<td class="py-2.5 pr-3 font-bold ' + rankColor + ' text-center">' + rank + '</td>';
+        html += '<td class="py-2.5 pr-3 max-w-xs">' +
+                '<p class="text-gray-800 font-medium truncate" title="' + p.title + '">' + p.title + '</p>' +
+                '</td>';
+        html += '<td class="py-2.5 pr-3 text-right font-bold text-gray-800">' + p.count_a + '</td>';
+        if (hasComp) {
+            html += '<td class="py-2.5 pr-3 text-right text-gray-600">' +
+                    (p.count_b !== null ? p.count_b : '—') + '</td>';
+            html += '<td class="py-2.5 pr-3 text-right">' + deltaBadge + '</td>';
+        }
+        html += '<td class="py-2.5 pr-3 text-right text-gray-500">' + p.pct_of_total + '%</td>';
+        html += '<td class="py-2.5 w-28">' +
+                '<div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
+                '<div class="h-2 rounded-full ' + barColor + ' transition-all" style="width:' + barW + '%"></div>' +
+                '</div></td>';
+        html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+
+    // --- Period labels footer ---
+    if (hasComp) {
+        html += '<div class="flex gap-4 mt-3 text-xs text-gray-400">' +
+                '<span>Per. A = ' + labelA + '</span>' +
+                '<span class="border-l border-gray-200 pl-4">Per. B = ' + labelB + '</span>' +
+                '</div>';
     }
 
-    var _autoRefreshTimer = null;
-    function _startAutoRefresh() {
-        if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
-        _autoRefreshTimer = setInterval(function() {
-            if (document.visibilityState === 'hidden') return;
-            document.getElementById('ret-refresh-indicator').classList.remove('hidden');
-            loadAll();
-            setTimeout(function() {
-                document.getElementById('ret-refresh-indicator').classList.add('hidden');
-            }, 2000);
-            _updateTimestamp();
-        }, 60000);
-    }
+    el.innerHTML = html;
+}
 
-    function loadAll() {
-        loadSummary();
-        loadTable();
-        loadAnalysis();
-    }
-
-    // --- Init ---
+// ============================================================
+// Filter controls
+// ============================================================
+window.applyRetFilters = function() {
+    retFilters.date_from = document.getElementById('ret-date-from').value;
+    retFilters.date_to   = document.getElementById('ret-date-to').value;
+    retFilters.offset    = 0;
     _updateFilterIndicator();
-    loadAll();
+    loadSummary();
+    loadTable();
+    loadAnalysis();
     _updateTimestamp();
     _startAutoRefresh();
+};
+
+window.clearRetFilters = function() {
+    retFilters.date_from = '';
+    retFilters.date_to   = '';
+    retFilters.offset    = 0;
+    document.getElementById('ret-date-from').value = '';
+    document.getElementById('ret-date-to').value   = '';
+    _updateFilterIndicator();
+    loadSummary();
+    loadTable();
+    loadAnalysis();
+    _updateTimestamp();
+    _startAutoRefresh();
+};
+
+window.setRetStatus = function(status) {
+    retFilters.status = status;
+    retFilters.offset = 0;
+    ['all','opened','closed'].forEach(function(s) {
+        var btn = document.getElementById('ret-btn-' + s);
+        if (btn) btn.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200';
+    });
+    var active = document.getElementById('ret-btn-' + (status || 'all'));
+    if (active) active.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
+    loadTable();
+};
+
+window.retNextPage = function() {
+    retFilters.offset += retFilters.limit;
+    loadTable();
+};
+window.retPrevPage = function() {
+    retFilters.offset = Math.max(0, retFilters.offset - retFilters.limit);
+    loadTable();
+};
+
+function _updateFilterIndicator() {
+    var ind = document.getElementById('ret-filter-indicator');
+    if (retFilters.date_from || retFilters.date_to) {
+        var t = 'Filtrando: ';
+        if (retFilters.date_from) t += 'desde ' + retFilters.date_from;
+        if (retFilters.date_from && retFilters.date_to) t += ' ';
+        if (retFilters.date_to)   t += 'hasta '  + retFilters.date_to;
+        ind.textContent = t;
+    } else {
+        ind.textContent = '';
+    }
+}
+
+function _updateTimestamp() {
+    var ts = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    var el = document.getElementById('ret-last-update');
+    if (el) el.textContent = 'Actualizado: ' + ts;
+}
+
+function _updateTableTimestamp() {
+    var ts = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    var el = document.getElementById('ret-table-timestamp');
+    if (el) el.textContent = 'Lista: ' + ts;
+}
+
+// ============================================================
+// Auto-refresh: ONLY summary + sidebar analysis.
+// The returns TABLE is NEVER touched by auto-refresh.
+// If new returns appear, a notification banner shows instead.
+// ============================================================
+var _autoRefreshTimer = null;
+
+function _startAutoRefresh() {
+    if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+    _autoRefreshTimer = setInterval(function() {
+        if (document.visibilityState === 'hidden') return;
+        var ind = document.getElementById('ret-refresh-indicator');
+        if (ind) ind.classList.remove('hidden');
+        loadSummary();   // KPI cards only
+        loadAnalysis();  // sidebar + change detection
+        _updateTimestamp();
+        setTimeout(function() { if (ind) ind.classList.add('hidden'); }, 1500);
+    }, 60000);
+}
+
+// ============================================================
+// Respond to return claim
+// ============================================================
+window.respondReturn = function(claimId) {
+    var textarea = document.getElementById('ret-text-' + claimId);
+    var action   = document.getElementById('ret-action-' + claimId);
+    var text = textarea ? textarea.value.trim() : '';
+    if (!text) return;
+    var btn   = document.getElementById('ret-btn-respond-' + claimId);
+    var msgEl = document.getElementById('ret-msg-' + claimId);
+    if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
+    fetch('/api/health/claims/' + claimId + '/respond', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ action: action ? action.value : 'message', text: text })
+    })
+    .then(function(r) {
+        if (r.ok) {
+            if (msgEl) { msgEl.textContent = 'Respuesta enviada'; msgEl.className = 'text-xs text-green-600 mt-1'; }
+            if (btn) btn.textContent = 'Enviado';
+        } else {
+            return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+        }
+    })
+    .catch(function(e) {
+        if (msgEl) { msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-600 mt-1'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Responder'; }
+    });
+};
+
+// ============================================================
+// Init
+// ============================================================
+document.getElementById('ret-date-from').value = retFilters.date_from;
+document.getElementById('ret-date-to').value   = retFilters.date_to;
+_updateFilterIndicator();
+loadSummary();
+loadTable();
+loadAnalysis();
+_updateTimestamp();
+_startAutoRefresh();
+
+// Pre-fill period A label on top section
+(function() {
+    var pa = document.getElementById('ret-top-period-a-label');
+    if (pa) pa.textContent = retFilters.date_from + ' → ' + retFilters.date_to;
+})();
+
 })();
 </script>
 {% endblock %}
