@@ -3441,7 +3441,10 @@ async def health_claims_partial(
                     except Exception:
                         pass  # Keep original status if detail fetch fails
 
-            await asyncio.gather(*[_refresh_status(c) for c in opened_ids[:30]],
+            # Only refresh the most recent 10 opened claims (the ones most likely
+            # to have a tight deadline). Older claims rarely change status and
+            # the 30-call cap was adding unnecessary latency.
+            await asyncio.gather(*[_refresh_status(c) for c in opened_ids[:10]],
                                  return_exceptions=True)
 
         # Reason code mapping (PDD = producto defectuoso, PNR = no recibido)

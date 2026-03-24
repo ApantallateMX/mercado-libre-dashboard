@@ -81,23 +81,38 @@
     <div class="flex-1 min-w-0">
         <div class="bg-white rounded-lg shadow">
             <div class="border-b border-gray-200">
-                <nav class="flex -mb-px" id="health-tabs">
+                <nav class="flex -mb-px items-center" id="health-tabs">
                     <button type="button" data-tab="claims"
-                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600">
+                            class="health-tab px-5 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600 flex items-center gap-1.5">
                         Reclamos
+                        <span id="tab-badge-claims" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full leading-none"></span>
                     </button>
                     <button type="button" data-tab="questions"
-                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                            class="health-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5">
                         Preguntas
+                        <span id="tab-badge-questions" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-yellow-500 text-white rounded-full leading-none"></span>
                     </button>
                     <button type="button" data-tab="messages"
-                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                            class="health-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5">
                         Mensajes
+                        <span id="tab-badge-messages" class="hidden px-1.5 py-0.5 text-[10px] font-bold bg-blue-500 text-white rounded-full leading-none"></span>
                     </button>
                     <button type="button" data-tab="reputation"
-                            class="health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                            class="health-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
                         Reputacion
                     </button>
+                    <!-- Manual refresh button -->
+                    <div class="ml-auto pr-3 flex items-center gap-2">
+                        <span id="tab-last-update" class="text-[10px] text-gray-400"></span>
+                        <button onclick="window.manualRefreshTab()"
+                                title="Refrescar lista"
+                                class="flex items-center gap-1 text-xs text-gray-400 hover:text-yellow-700 hover:bg-yellow-50 px-2 py-1 rounded transition">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Actualizar
+                        </button>
+                    </div>
                 </nav>
             </div>
 
@@ -123,493 +138,516 @@
 {% block scripts %}
 <script src="/static/js/health_ai.js?v={{ build_id }}"></script>
 <script>
-    // Ultimos 7 dias incluyendo hoy
-    function _fmtDate(d) { return d.toISOString().slice(0, 10); }
-    var _today = new Date();
-    var _weekAgo = new Date(_today);
-    _weekAgo.setDate(_today.getDate() - 6);
+// ============================================================
+// Health Dashboard — State & Smart Refresh
+// ============================================================
 
-    var healthFilters = {
-        currentTab: 'claims',
-        date_from: _fmtDate(_weekAgo),
-        date_to: _fmtDate(_today),
-        offsets: { claims: 0, questions: 0, messages: 0 },
-        statuses: { claims: '', questions: 'UNANSWERED' },
-        limit: 20,
-        _filterOrderId: ''
-    };
+function _fmtDate(d) { return d.toISOString().slice(0, 10); }
+var _today = new Date();
+var _weekAgo = new Date(_today);
+_weekAgo.setDate(_today.getDate() - 6);
 
-    function buildParams() {
-        var params = [];
-        if (healthFilters.date_from) params.push('date_from=' + healthFilters.date_from);
-        if (healthFilters.date_to) params.push('date_to=' + healthFilters.date_to);
-        return params;
-    }
+var healthFilters = {
+    currentTab: 'claims',
+    date_from: _fmtDate(_weekAgo),
+    date_to: _fmtDate(_today),
+    offsets: { claims: 0, questions: 0, messages: 0 },
+    statuses: { claims: '', questions: 'UNANSWERED' },
+    limit: 20,
+    _filterOrderId: ''
+};
 
-    function buildTabParams(tab) {
-        var params = buildParams();
-        var offset = healthFilters.offsets[tab] || 0;
-        params.push('offset=' + offset);
-        params.push('limit=' + healthFilters.limit);
-        if (tab === 'claims' && healthFilters.statuses.claims) {
-            params.push('status=' + healthFilters.statuses.claims);
-        }
-        if (tab === 'claims' && healthFilters._filterOrderId) {
-            params.push('order_id=' + healthFilters._filterOrderId);
-        }
-        if (tab === 'questions' && healthFilters.statuses.questions) {
-            params.push('status=' + healthFilters.statuses.questions);
-        }
-        return params.join('&');
-    }
+// One AbortController per section — cancels stale in-flight requests
+var _tabController = null;
+var _summaryController = null;
 
-    function loadSummary() {
-        var params = buildParams();
-        var url = '/partials/health-summary' + (params.length ? '?' + params.join('&') : '');
-        var container = document.getElementById('health-summary');
-        fetch(url)
-            .then(function(r) { return r.text(); })
-            .then(function(html) { container.innerHTML = html; })
-            .catch(function() { container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando resumen</p>'; });
-    }
+// Last known counts from summary — used to detect new items
+var _knownCounts = { claims: -1, questions: -1, messages: -1 };
 
-    function loadTab(tab) {
-        healthFilters.currentTab = tab;
-        // Update tab styles
-        document.querySelectorAll('.health-tab').forEach(function(btn) {
-            if (btn.getAttribute('data-tab') === tab) {
-                btn.className = 'health-tab px-6 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600';
-            } else {
-                btn.className = 'health-tab px-6 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300';
-            }
+// ---- URL builders ----
+
+function buildParams() {
+    var p = [];
+    if (healthFilters.date_from) p.push('date_from=' + healthFilters.date_from);
+    if (healthFilters.date_to)   p.push('date_to='   + healthFilters.date_to);
+    return p;
+}
+
+function buildTabParams(tab) {
+    var p = buildParams();
+    p.push('offset=' + (healthFilters.offsets[tab] || 0));
+    p.push('limit='  + healthFilters.limit);
+    if (tab === 'claims'    && healthFilters.statuses.claims)    p.push('status=' + healthFilters.statuses.claims);
+    if (tab === 'claims'    && healthFilters._filterOrderId)     p.push('order_id=' + healthFilters._filterOrderId);
+    if (tab === 'questions' && healthFilters.statuses.questions) p.push('status=' + healthFilters.statuses.questions);
+    return p.join('&');
+}
+
+// ---- Summary: always safe to refresh (no user work lives here) ----
+
+function loadSummary() {
+    var params = buildParams();
+    var url = '/partials/health-summary' + (params.length ? '?' + params.join('&') : '');
+    if (_summaryController) _summaryController.abort();
+    _summaryController = new AbortController();
+    var container = document.getElementById('health-summary');
+    fetch(url, { signal: _summaryController.signal })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            container.innerHTML = html;
+            _syncTabBadgesAndNotify();
+        })
+        .catch(function(e) {
+            if (e.name !== 'AbortError')
+                container.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando resumen</p>';
         });
+}
 
-        var content = document.getElementById('health-tab-content');
-        content.innerHTML = '<div class="animate-pulse space-y-3">' +
-            Array(5).fill('<div class="h-10 bg-gray-200 rounded"></div>').join('') + '</div>';
+// ---- Tab: only on EXPLICIT user action (never by auto-refresh) ----
 
-        var qs = buildTabParams(tab);
-        fetch('/partials/health-' + tab + '?' + qs)
-            .then(function(r) { return r.text(); })
-            .then(function(html) { content.innerHTML = html; })
-            .catch(function() { content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando datos</p>'; });
-    }
+function loadTab(tab) {
+    healthFilters.currentTab = tab;
 
-    function applyHealthFilters() {
-        healthFilters.date_from = document.getElementById('health-date-from').value;
-        healthFilters.date_to = document.getElementById('health-date-to').value;
-        healthFilters.offsets = { claims: 0, questions: 0, messages: 0 };
-        updateFilterIndicator();
-        loadSummary();
-        loadTab(healthFilters.currentTab);
-        _updateTimestamp();
-        _startAutoRefresh();
-    }
+    // Cancel any in-flight tab request
+    if (_tabController) { _tabController.abort(); }
+    _tabController = new AbortController();
 
-    function clearHealthFilters() {
-        healthFilters.date_from = '';
-        healthFilters.date_to = '';
-        healthFilters.offsets = { claims: 0, questions: 0, messages: 0 };
-        healthFilters.statuses = { claims: '', questions: 'UNANSWERED' };
-        document.getElementById('health-date-from').value = '';
-        document.getElementById('health-date-to').value = '';
-        updateFilterIndicator();
-        loadSummary();
-        loadTab(healthFilters.currentTab);
-        _updateTimestamp();
-        _startAutoRefresh();
-    }
-
-    function updateFilterIndicator() {
-        var indicator = document.getElementById('health-filter-indicator');
-        if (healthFilters.date_from || healthFilters.date_to) {
-            var text = 'Filtrando: ';
-            if (healthFilters.date_from) text += 'desde ' + healthFilters.date_from;
-            if (healthFilters.date_from && healthFilters.date_to) text += ' ';
-            if (healthFilters.date_to) text += 'hasta ' + healthFilters.date_to;
-            indicator.textContent = text;
-        } else {
-            indicator.textContent = '';
-        }
-    }
-
-    // Pagination functions called from partials
-    window.healthNextPage = function(tab) {
-        var offset = healthFilters.offsets[tab] || 0;
-        healthFilters.offsets[tab] = offset + healthFilters.limit;
-        loadTab(tab);
-    };
-
-    window.healthPrevPage = function(tab) {
-        var offset = healthFilters.offsets[tab] || 0;
-        healthFilters.offsets[tab] = Math.max(0, offset - healthFilters.limit);
-        loadTab(tab);
-    };
-
-    // Status filter functions called from partials
-    window.setHealthStatus = function(tab, status) {
-        healthFilters.statuses[tab] = status;
-        healthFilters.offsets[tab] = 0;
-        // Clear order filter when user manually changes status
-        if (tab === 'claims') healthFilters._filterOrderId = '';
-        loadTab(tab);
-    };
-
+    // Update tab button active styles
     document.querySelectorAll('.health-tab').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            loadTab(this.getAttribute('data-tab'));
+        var isActive = btn.getAttribute('data-tab') === tab;
+        btn.className = isActive
+            ? 'health-tab px-5 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600 flex items-center gap-1.5'
+            : 'health-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 flex items-center gap-1.5';
+    });
+    // Reputation tab has no badge so uses shorter class
+    var repBtn = document.querySelector('[data-tab="reputation"]');
+    if (repBtn && tab !== 'reputation') {
+        repBtn.className = 'health-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300';
+    } else if (repBtn && tab === 'reputation') {
+        repBtn.className = 'health-tab px-5 py-3 text-sm font-medium border-b-2 border-yellow-400 text-yellow-600';
+    }
+
+    _clearUpdateNotification();
+
+    var content = document.getElementById('health-tab-content');
+    content.innerHTML = '<div class="animate-pulse space-y-3">' +
+        Array(5).fill('<div class="h-10 bg-gray-200 rounded"></div>').join('') + '</div>';
+
+    var qs = buildTabParams(tab);
+    fetch('/partials/health-' + tab + '?' + qs, { signal: _tabController.signal })
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            content.innerHTML = html;
+            _updateTimestamp();
+            // After a manual load, reset known counts so we don't immediately re-notify
+            _syncKnownCountsFromSummary();
+        })
+        .catch(function(e) {
+            if (e.name !== 'AbortError')
+                content.innerHTML = '<p class="text-center text-red-500 py-4">Error cargando datos</p>';
         });
-    });
+}
 
-    // Exponer loadTab globalmente para que los cards KPI puedan usarlo
-    window.loadTab = loadTab;
+window.loadTab = loadTab;
 
-    // --- Search ---
-    window.healthSearch = function() {
-        var query = document.getElementById('health-search-input').value.trim();
-        var container = document.getElementById('health-search-results');
-        if (!query) {
-            container.classList.add('hidden');
-            container.innerHTML = '';
-            return;
-        }
-        container.classList.remove('hidden');
-        container.innerHTML = '<div class="animate-pulse"><div class="h-8 bg-gray-200 rounded mb-2"></div><div class="h-8 bg-gray-200 rounded"></div></div>';
-        fetch('/partials/health-search?q=' + encodeURIComponent(query))
-            .then(function(r) { return r.text(); })
-            .then(function(html) { container.innerHTML = html; })
-            .catch(function() { container.innerHTML = '<p class="text-center text-red-500 text-sm py-2">Error en busqueda</p>'; });
-    };
+// ---- Manual refresh (button in tab header) ----
 
-    window.clearHealthSearch = function() {
-        document.getElementById('health-search-input').value = '';
-        var container = document.getElementById('health-search-results');
-        container.classList.add('hidden');
-        container.innerHTML = '';
-    };
+window.manualRefreshTab = function() { loadTab(healthFilters.currentTab); };
 
-    // Navigate to a specific claim from search results
-    window.goToClaim = function(claimId) {
-        // Switch to claims tab and highlight the specific claim
-        clearHealthSearch();
-        healthFilters.statuses.claims = ''; // Show all to find it
-        healthFilters.offsets.claims = 0;
-        loadTab('claims');
-        // After tab loads, scroll to and highlight the claim
-        setTimeout(function() {
-            var el = document.getElementById('claim-row-' + claimId);
-            if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                el.classList.add('ring-2', 'ring-yellow-400');
-                setTimeout(function() { el.classList.remove('ring-2', 'ring-yellow-400'); }, 3000);
-            }
-        }, 1500);
-    };
+// ---- Filters ----
 
-    // Navigate to claims tab filtered by a specific order
-    window.goToClaimsForOrder = function(orderId) {
-        clearHealthSearch();
-        healthFilters.statuses.claims = '';
-        healthFilters.offsets.claims = 0;
-        healthFilters._filterOrderId = orderId;
-        loadTab('claims');
-    };
-
-    // Clear the order filter and reload claims normally
-    window.clearClaimsOrderFilter = function() {
-        healthFilters._filterOrderId = '';
-        healthFilters.offsets.claims = 0;
-        loadTab('claims');
-    };
-
-    // Navigate to messages for a specific order
-    window.goToMessagesForOrder = function(orderId) {
-        clearHealthSearch();
-        loadTab('messages');
-    };
-
-    // --- Auto-refresh system (non-intrusive) ---
-    var _autoRefreshInterval = null;
-    var _AUTO_REFRESH_MS = 60000; // 60s instead of 30s to reduce disruption
-    var _lastUserActivity = Date.now();
-
-    // Track ANY user activity on the page
-    document.addEventListener('mousedown', function() { _lastUserActivity = Date.now(); }, true);
-    document.addEventListener('keydown', function() { _lastUserActivity = Date.now(); }, true);
-    document.addEventListener('scroll', function() { _lastUserActivity = Date.now(); }, true);
-    document.addEventListener('focus', function() { _lastUserActivity = Date.now(); }, true);
-
-    function _updateTimestamp() {
-        var now = new Date();
-        var hh = String(now.getHours()).padStart(2, '0');
-        var mm = String(now.getMinutes()).padStart(2, '0');
-        var ss = String(now.getSeconds()).padStart(2, '0');
-        var el = document.getElementById('health-last-update');
-        if (el) el.textContent = 'Actualizado: ' + hh + ':' + mm + ':' + ss;
-    }
-
-    function _isUserInteracting() {
-        // If user was active in the last 10 seconds, they're interacting
-        if (Date.now() - _lastUserActivity < 10000) return true;
-
-        var activeEl = document.activeElement;
-        // Any focused input/textarea/select anywhere on the page
-        if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT')) {
-            return true;
-        }
-
-        // Check if search results are visible
-        var searchResults = document.getElementById('health-search-results');
-        if (searchResults && !searchResults.classList.contains('hidden') && searchResults.innerHTML.trim()) {
-            return true;
-        }
-
-        // Check search input has text
-        var searchInput = document.getElementById('health-search-input');
-        if (searchInput && searchInput.value.trim().length > 0) {
-            return true;
-        }
-
-        var content = document.getElementById('health-tab-content');
-        if (!content) return false;
-
-        // Check if any textarea has text
-        var textareas = content.querySelectorAll('textarea');
-        for (var i = 0; i < textareas.length; i++) {
-            if (textareas[i].value.trim().length > 0) return true;
-        }
-        // Check if any AI suggestion panel is visible
-        var aiPanels = content.querySelectorAll('[id^="ai-panel-"]');
-        for (var j = 0; j < aiPanels.length; j++) {
-            if (!aiPanels[j].classList.contains('hidden')) return true;
-        }
-        // Check if any accordion/conversation is expanded
-        var accordions = content.querySelectorAll('.border-l-2:not(.hidden)');
-        for (var k = 0; k < accordions.length; k++) {
-            if (!accordions[k].classList.contains('hidden')) {
-                var parent = accordions[k].parentElement;
-                if (parent && !parent.querySelector('.hidden') === accordions[k]) return true;
-            }
-        }
-        return false;
-    }
-
-    function _autoRefresh() {
-        // Skip entirely if user is interacting
-        if (_isUserInteracting()) return;
-
-        var indicator = document.getElementById('health-refresh-indicator');
-        if (indicator) indicator.classList.remove('hidden');
-
-        // Refresh summary (KPI cards)
-        loadSummary();
-        // Refresh current tab
-        loadTab(healthFilters.currentTab);
-
-        _updateTimestamp();
-        setTimeout(function() {
-            if (indicator) indicator.classList.add('hidden');
-        }, 1500);
-    }
-
-    function _startAutoRefresh() {
-        if (_autoRefreshInterval) clearInterval(_autoRefreshInterval);
-        _autoRefreshInterval = setInterval(_autoRefresh, _AUTO_REFRESH_MS);
-    }
-
-    function _stopAutoRefresh() {
-        if (_autoRefreshInterval) {
-            clearInterval(_autoRefreshInterval);
-            _autoRefreshInterval = null;
-        }
-    }
-
-    // Pausar/reanudar al cambiar de pestana del navegador
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            _stopAutoRefresh();
-        } else {
-            // Don't immediately refresh when coming back — give user a moment
-            _startAutoRefresh();
-        }
-    });
-
-    // Carga inicial — precargar fechas en los inputs
-    document.getElementById('health-date-from').value = healthFilters.date_from;
-    document.getElementById('health-date-to').value = healthFilters.date_to;
+function applyHealthFilters() {
+    healthFilters.date_from = document.getElementById('health-date-from').value;
+    healthFilters.date_to   = document.getElementById('health-date-to').value;
+    healthFilters.offsets   = { claims: 0, questions: 0, messages: 0 };
     updateFilterIndicator();
     loadSummary();
-    loadTab('claims');
-    _updateTimestamp();
+    loadTab(healthFilters.currentTab);
     _startAutoRefresh();
+}
 
-    // Eliminar pregunta
-    window.deleteQuestion = function(questionId, btnEl) {
-        if (!confirm('¿Eliminar esta pregunta? Esta accion no se puede deshacer.')) return;
-        var row = document.getElementById('question-row-' + questionId);
-        if (btnEl) {
-            btnEl.disabled = true;
-            btnEl.innerHTML = '<svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+function clearHealthFilters() {
+    healthFilters.date_from = '';
+    healthFilters.date_to   = '';
+    healthFilters.offsets   = { claims: 0, questions: 0, messages: 0 };
+    healthFilters.statuses  = { claims: '', questions: 'UNANSWERED' };
+    document.getElementById('health-date-from').value = '';
+    document.getElementById('health-date-to').value   = '';
+    updateFilterIndicator();
+    loadSummary();
+    loadTab(healthFilters.currentTab);
+    _startAutoRefresh();
+}
+
+function updateFilterIndicator() {
+    var el   = document.getElementById('health-filter-indicator');
+    var from = healthFilters.date_from, to = healthFilters.date_to;
+    if (from || to) {
+        var t = 'Filtrando: ';
+        if (from) t += 'desde ' + from;
+        if (from && to) t += ' ';
+        if (to) t += 'hasta ' + to;
+        el.textContent = t;
+    } else {
+        el.textContent = '';
+    }
+}
+
+// ---- Pagination (called from partials) ----
+
+window.healthNextPage = function(tab) {
+    healthFilters.offsets[tab] = (healthFilters.offsets[tab] || 0) + healthFilters.limit;
+    loadTab(tab);
+};
+window.healthPrevPage = function(tab) {
+    healthFilters.offsets[tab] = Math.max(0, (healthFilters.offsets[tab] || 0) - healthFilters.limit);
+    loadTab(tab);
+};
+
+// ---- Status filter (called from partials) ----
+
+window.setHealthStatus = function(tab, status) {
+    healthFilters.statuses[tab] = status;
+    healthFilters.offsets[tab]  = 0;
+    if (tab === 'claims') healthFilters._filterOrderId = '';
+    loadTab(tab);
+};
+
+// ---- Tab click handlers ----
+
+document.querySelectorAll('.health-tab').forEach(function(btn) {
+    btn.addEventListener('click', function() { loadTab(this.getAttribute('data-tab')); });
+});
+
+// ============================================================
+// Tab Badge + Change Notification System
+// ============================================================
+
+function _syncTabBadgesAndNotify() {
+    var dataEl = document.getElementById('health-counts-data');
+    if (!dataEl) return;
+
+    var counts = {
+        claims:    parseInt(dataEl.getAttribute('data-claims')    || '0'),
+        questions: parseInt(dataEl.getAttribute('data-questions') || '0'),
+        messages:  parseInt(dataEl.getAttribute('data-messages')  || '0')
+    };
+
+    // Update badge pills on each tab button
+    ['claims', 'questions', 'messages'].forEach(function(tab) {
+        var badge = document.getElementById('tab-badge-' + tab);
+        if (!badge) return;
+        var c = counts[tab];
+        if (c > 0) { badge.textContent = c > 99 ? '99+' : String(c); badge.classList.remove('hidden'); }
+        else        { badge.classList.add('hidden'); }
+    });
+
+    // Detect new items on current tab since last explicit load
+    var cur = healthFilters.currentTab;
+    if (cur in counts) {
+        var known = _knownCounts[cur];
+        var latest = counts[cur];
+        if (known >= 0 && latest > known && !_isUserInteracting()) {
+            _showUpdateNotification(cur, latest - known);
         }
-        fetch('/api/health/questions/' + questionId, {
-            method: 'DELETE',
-            headers: {'ngrok-skip-browser-warning': 'true'}
-        })
-        .then(function(r) {
-            if (r.ok) {
-                if (row) {
-                    row.style.transition = 'opacity 0.3s, max-height 0.3s';
-                    row.style.opacity = '0';
-                    row.style.maxHeight = row.scrollHeight + 'px';
-                    setTimeout(function() {
-                        row.style.maxHeight = '0';
-                        row.style.overflow = 'hidden';
-                        row.style.padding = '0';
-                        row.style.margin = '0';
-                        row.style.border = 'none';
-                    }, 300);
-                    setTimeout(function() { row.remove(); }, 600);
+    }
+
+    // For non-current tabs always sync silently
+    ['claims', 'questions', 'messages'].forEach(function(tab) {
+        if (tab !== healthFilters.currentTab) _knownCounts[tab] = counts[tab];
+    });
+}
+
+function _syncKnownCountsFromSummary() {
+    var dataEl = document.getElementById('health-counts-data');
+    if (!dataEl) return;
+    _knownCounts.claims    = parseInt(dataEl.getAttribute('data-claims')    || '0');
+    _knownCounts.questions = parseInt(dataEl.getAttribute('data-questions') || '0');
+    _knownCounts.messages  = parseInt(dataEl.getAttribute('data-messages')  || '0');
+}
+
+var _tabLabels = {
+    claims:    'reclamos abiertos',
+    questions: 'preguntas sin responder',
+    messages:  'mensajes nuevos'
+};
+
+function _showUpdateNotification(tab, diff) {
+    var content = document.getElementById('health-tab-content');
+    if (!content || content.querySelector('.animate-pulse')) return;
+    _clearUpdateNotification();
+    var label = _tabLabels[tab] || tab;
+    var plural = diff !== 1;
+    var notif = document.createElement('div');
+    notif.id = 'health-update-notification';
+    notif.innerHTML =
+        '<div class="flex items-center gap-3 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">' +
+        '<svg class="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+        '<span class="text-sm text-blue-800 flex-1">Hay <strong>' + diff + ' nuevo' + (plural ? 's' : '') + '</strong> ' + label + '.</span>' +
+        '<button onclick="window.manualRefreshTab()" ' +
+        'class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 font-semibold flex-shrink-0 transition">Actualizar</button>' +
+        '<button onclick="document.getElementById(\'health-update-notification\').remove()" ' +
+        'class="ml-1 text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>' +
+        '</div>';
+    content.insertBefore(notif, content.firstChild);
+}
+
+function _clearUpdateNotification() {
+    var n = document.getElementById('health-update-notification');
+    if (n) n.remove();
+}
+
+// ============================================================
+// Auto-refresh: ONLY the KPI summary — tab content is NEVER
+// touched by auto-refresh. If new items appear, a notification
+// badge appears letting the user decide when to reload.
+// ============================================================
+
+var _autoRefreshInterval = null;
+var _AUTO_REFRESH_MS     = 60000; // 60 s
+var _lastUserActivity    = Date.now();
+
+document.addEventListener('mousedown', function() { _lastUserActivity = Date.now(); }, true);
+document.addEventListener('keydown',   function() { _lastUserActivity = Date.now(); }, true);
+document.addEventListener('scroll',    function() { _lastUserActivity = Date.now(); }, true);
+document.addEventListener('focus',     function() { _lastUserActivity = Date.now(); }, true);
+
+function _updateTimestamp() {
+    var now = new Date();
+    var ts  = [now.getHours(), now.getMinutes(), now.getSeconds()]
+                  .map(function(n) { return String(n).padStart(2, '0'); }).join(':');
+    var el = document.getElementById('health-last-update');
+    if (el) el.textContent = 'Actualizado: ' + ts;
+    var el2 = document.getElementById('tab-last-update');
+    if (el2) el2.textContent = 'Actualizado ' + ts;
+}
+
+function _isUserInteracting() {
+    if (Date.now() - _lastUserActivity < 10000) return true;
+    var a = document.activeElement;
+    if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.tagName === 'SELECT')) return true;
+    var sr = document.getElementById('health-search-results');
+    if (sr && !sr.classList.contains('hidden') && sr.innerHTML.trim()) return true;
+    var si = document.getElementById('health-search-input');
+    if (si && si.value.trim().length > 0) return true;
+    var content = document.getElementById('health-tab-content');
+    if (!content) return false;
+    var tas = content.querySelectorAll('textarea');
+    for (var i = 0; i < tas.length; i++) { if (tas[i].value.trim().length > 0) return true; }
+    var panels = content.querySelectorAll('[id^="ai-panel-"]');
+    for (var j = 0; j < panels.length; j++) { if (!panels[j].classList.contains('hidden')) return true; }
+    return false;
+}
+
+function _autoRefresh() {
+    // Only refresh summary KPIs — the tab content is left untouched.
+    // If counts changed, _syncTabBadgesAndNotify() will show a banner.
+    var ind = document.getElementById('health-refresh-indicator');
+    if (ind) ind.classList.remove('hidden');
+    loadSummary();
+    setTimeout(function() { if (ind) ind.classList.add('hidden'); }, 1500);
+}
+
+function _startAutoRefresh() {
+    if (_autoRefreshInterval) clearInterval(_autoRefreshInterval);
+    _autoRefreshInterval = setInterval(_autoRefresh, _AUTO_REFRESH_MS);
+}
+function _stopAutoRefresh() {
+    if (_autoRefreshInterval) { clearInterval(_autoRefreshInterval); _autoRefreshInterval = null; }
+}
+
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) { _stopAutoRefresh(); } else { _startAutoRefresh(); }
+});
+
+// ============================================================
+// Search
+// ============================================================
+
+window.healthSearch = function() {
+    var query = document.getElementById('health-search-input').value.trim();
+    var container = document.getElementById('health-search-results');
+    if (!query) { container.classList.add('hidden'); container.innerHTML = ''; return; }
+    container.classList.remove('hidden');
+    container.innerHTML = '<div class="animate-pulse"><div class="h-8 bg-gray-200 rounded mb-2"></div><div class="h-8 bg-gray-200 rounded"></div></div>';
+    fetch('/partials/health-search?q=' + encodeURIComponent(query))
+        .then(function(r) { return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function() { container.innerHTML = '<p class="text-center text-red-500 text-sm py-2">Error en busqueda</p>'; });
+};
+window.clearHealthSearch = function() {
+    document.getElementById('health-search-input').value = '';
+    var c = document.getElementById('health-search-results');
+    c.classList.add('hidden'); c.innerHTML = '';
+};
+window.goToClaim = function(claimId) {
+    window.clearHealthSearch();
+    healthFilters.statuses.claims = ''; healthFilters.offsets.claims = 0;
+    loadTab('claims');
+    setTimeout(function() {
+        var el = document.getElementById('claim-row-' + claimId);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('ring-2', 'ring-yellow-400');
+            setTimeout(function() { el.classList.remove('ring-2', 'ring-yellow-400'); }, 3000);
+        }
+    }, 1500);
+};
+window.goToClaimsForOrder = function(orderId) {
+    window.clearHealthSearch();
+    healthFilters.statuses.claims = ''; healthFilters.offsets.claims = 0;
+    healthFilters._filterOrderId = orderId;
+    loadTab('claims');
+};
+window.clearClaimsOrderFilter = function() {
+    healthFilters._filterOrderId = ''; healthFilters.offsets.claims = 0;
+    loadTab('claims');
+};
+window.goToMessagesForOrder = function() {
+    window.clearHealthSearch(); loadTab('messages');
+};
+
+// ============================================================
+// Action handlers (answer question, send message, respond claim)
+// ============================================================
+
+window.deleteQuestion = function(questionId, btnEl) {
+    if (!confirm('¿Eliminar esta pregunta? Esta accion no se puede deshacer.')) return;
+    var row = document.getElementById('question-row-' + questionId);
+    if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.innerHTML = '<svg class="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>';
+    }
+    fetch('/api/health/questions/' + questionId, {
+        method: 'DELETE', headers: {'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) {
+        if (r.ok) {
+            if (row) {
+                row.style.transition = 'opacity 0.3s, max-height 0.3s';
+                row.style.opacity = '0'; row.style.maxHeight = row.scrollHeight + 'px';
+                setTimeout(function() {
+                    row.style.maxHeight = '0'; row.style.overflow = 'hidden';
+                    row.style.padding = '0'; row.style.margin = '0'; row.style.border = 'none';
+                }, 300);
+                setTimeout(function() { row.remove(); }, 600);
+            }
+        } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
+    })
+    .catch(function(e) {
+        alert('Error eliminando pregunta: ' + e.message);
+        if (btnEl) {
+            btnEl.disabled = false;
+            btnEl.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
+        }
+    });
+};
+
+window.answerQuestion = function(questionId) {
+    var textarea = document.getElementById('answer-' + questionId);
+    var text = textarea.value.trim();
+    if (!text) return;
+    var btn = document.getElementById('btn-answer-' + questionId);
+    var msg = document.getElementById('msg-question-' + questionId);
+    btn.disabled = true; btn.textContent = 'Enviando...'; msg.textContent = '';
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 15000);
+    fetch('/api/health/questions/' + questionId + '/answer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text}),
+        signal: controller.signal
+    })
+    .then(function(r) {
+        clearTimeout(timeoutId);
+        if (r.ok) {
+            var row = document.getElementById('question-row-' + questionId);
+            if (row) {
+                var sec = row.querySelector('.border-t.pt-3');
+                if (sec) {
+                    sec.innerHTML = '<div class="bg-green-50 border border-green-200 rounded-lg p-3">' +
+                        '<div class="flex items-center gap-2 mb-1"><svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>' +
+                        '<span class="text-sm font-semibold text-green-700">Respuesta enviada</span></div>' +
+                        '<p class="text-xs text-gray-600 ml-7">' + text.substring(0, 120) + (text.length > 120 ? '...' : '') + '</p></div>';
                 }
-            } else {
-                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
-            }
-        })
-        .catch(function(e) {
-            alert('Error eliminando pregunta: ' + e.message);
-            if (btnEl) {
-                btnEl.disabled = false;
-                btnEl.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
-            }
-        });
-    };
-
-    // Funciones de respuesta
-    window.answerQuestion = function(questionId) {
-        var textarea = document.getElementById('answer-' + questionId);
-        var text = textarea.value.trim();
-        if (!text) return;
-        var btn = document.getElementById('btn-answer-' + questionId);
-        var msg = document.getElementById('msg-question-' + questionId);
-        btn.disabled = true;
-        btn.textContent = 'Enviando...';
-        msg.textContent = '';
-
-        var controller = new AbortController();
-        var timeoutId = setTimeout(function() { controller.abort(); }, 15000);
-
-        fetch('/api/health/questions/' + questionId + '/answer', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({text: text}),
-            signal: controller.signal
-        })
-        .then(function(r) {
-            clearTimeout(timeoutId);
-            if (r.ok) {
-                var row = document.getElementById('question-row-' + questionId);
-                if (row) {
-                    // Replace answer section with success confirmation
-                    var answerSection = row.querySelector('.border-t.pt-3');
-                    if (answerSection) {
-                        answerSection.innerHTML = '<div class="bg-green-50 border border-green-200 rounded-lg p-3">' +
-                            '<div class="flex items-center gap-2 mb-1">' +
-                            '<svg class="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>' +
-                            '<span class="text-sm font-semibold text-green-700">Respuesta enviada</span></div>' +
-                            '<p class="text-xs text-gray-600 ml-7">' + text.substring(0, 120) + (text.length > 120 ? '...' : '') + '</p></div>';
-                    }
-                    // Animate out after 1.5s
+                setTimeout(function() {
+                    row.style.transition = 'opacity 0.5s, max-height 0.5s';
+                    row.style.opacity = '0'; row.style.maxHeight = row.scrollHeight + 'px';
                     setTimeout(function() {
-                        row.style.transition = 'opacity 0.5s, max-height 0.5s';
-                        row.style.opacity = '0';
-                        row.style.maxHeight = row.scrollHeight + 'px';
-                        setTimeout(function() {
-                            row.style.maxHeight = '0';
-                            row.style.overflow = 'hidden';
-                            row.style.padding = '0';
-                            row.style.margin = '0';
-                            row.style.border = 'none';
-                        }, 500);
-                        setTimeout(function() { row.remove(); }, 1000);
-                    }, 1500);
-                }
-            } else {
-                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
+                        row.style.maxHeight = '0'; row.style.overflow = 'hidden';
+                        row.style.padding = '0'; row.style.margin = '0'; row.style.border = 'none';
+                    }, 500);
+                    setTimeout(function() { row.remove(); }, 1000);
+                }, 1500);
             }
-        })
-        .catch(function(e) {
-            clearTimeout(timeoutId);
-            var errorMsg = e.name === 'AbortError' ? 'Timeout: sin respuesta en 15s' : 'Error: ' + e.message;
-            msg.textContent = errorMsg;
-            msg.className = 'text-xs text-red-600 mt-1';
-            btn.disabled = false;
-            btn.textContent = 'Responder';
-        });
-    };
+        } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
+    })
+    .catch(function(e) {
+        clearTimeout(timeoutId);
+        var em = e.name === 'AbortError' ? 'Timeout: sin respuesta en 15s' : 'Error: ' + e.message;
+        msg.textContent = em; msg.className = 'text-xs text-red-600 mt-1';
+        btn.disabled = false; btn.textContent = 'Responder';
+    });
+};
 
-    window.sendChatMessage = function(packId) {
-        var textarea = document.getElementById('msg-input-' + packId);
-        var text = textarea.value.trim();
-        if (!text) return;
-        var btn = document.getElementById('btn-msg-' + packId);
-        var msgEl = document.getElementById('msg-status-' + packId);
-        btn.disabled = true;
-        btn.textContent = 'Enviando...';
-        msgEl.textContent = '';
+window.sendChatMessage = function(packId) {
+    var textarea = document.getElementById('msg-input-' + packId);
+    var text = textarea.value.trim();
+    if (!text) return;
+    var btn = document.getElementById('btn-msg-' + packId);
+    var msgEl = document.getElementById('msg-status-' + packId);
+    btn.disabled = true; btn.textContent = 'Enviando...'; msgEl.textContent = '';
+    fetch('/api/health/messages/' + packId + '/send', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text: text})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            msgEl.textContent = 'Mensaje enviado'; msgEl.className = 'text-xs text-green-600 mt-1';
+            textarea.value = ''; btn.disabled = false; btn.textContent = 'Enviar';
+        } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
+    })
+    .catch(function(e) {
+        msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-600 mt-1';
+        btn.disabled = false; btn.textContent = 'Enviar';
+    });
+};
 
-        fetch('/api/health/messages/' + packId + '/send', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({text: text})
-        })
-        .then(function(r) {
-            if (r.ok) {
-                msgEl.textContent = 'Mensaje enviado';
-                msgEl.className = 'text-xs text-green-600 mt-1';
-                textarea.value = '';
-                btn.disabled = false;
-                btn.textContent = 'Enviar';
-            } else {
-                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
-            }
-        })
-        .catch(function(e) {
-            msgEl.textContent = 'Error: ' + e.message;
-            msgEl.className = 'text-xs text-red-600 mt-1';
-            btn.disabled = false;
-            btn.textContent = 'Enviar';
-        });
-    };
+window.respondClaim = function(claimId) {
+    var textarea = document.getElementById('claim-text-' + claimId);
+    var action   = document.getElementById('claim-action-' + claimId).value;
+    var text = textarea.value.trim();
+    if (!text) return;
+    var btn   = document.getElementById('btn-claim-' + claimId);
+    var msgEl = document.getElementById('msg-claim-' + claimId);
+    btn.disabled = true; btn.textContent = 'Enviando...';
+    fetch('/api/health/claims/' + claimId + '/respond', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: action, text: text})
+    })
+    .then(function(r) {
+        if (r.ok) {
+            msgEl.textContent = 'Respuesta enviada'; msgEl.className = 'text-xs text-green-600 mt-1';
+            btn.textContent = 'Enviado';
+        } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
+    })
+    .catch(function(e) {
+        msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-600 mt-1';
+        btn.disabled = false; btn.textContent = 'Responder';
+    });
+};
 
-    window.respondClaim = function(claimId) {
-        var textarea = document.getElementById('claim-text-' + claimId);
-        var action = document.getElementById('claim-action-' + claimId).value;
-        var text = textarea.value.trim();
-        if (!text) return;
-        var btn = document.getElementById('btn-claim-' + claimId);
-        var msgEl = document.getElementById('msg-claim-' + claimId);
-        btn.disabled = true;
-        btn.textContent = 'Enviando...';
+// ============================================================
+// Initial load
+// ============================================================
 
-        fetch('/api/health/claims/' + claimId + '/respond', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({action: action, text: text})
-        })
-        .then(function(r) {
-            if (r.ok) {
-                msgEl.textContent = 'Respuesta enviada';
-                msgEl.className = 'text-xs text-green-600 mt-1';
-                btn.textContent = 'Enviado';
-            } else {
-                return r.json().then(function(d) { throw new Error(d.detail || 'Error'); });
-            }
-        })
-        .catch(function(e) {
-            msgEl.textContent = 'Error: ' + e.message;
-            msgEl.className = 'text-xs text-red-600 mt-1';
-            btn.disabled = false;
-            btn.textContent = 'Responder';
-        });
-    };
+document.getElementById('health-date-from').value = healthFilters.date_from;
+document.getElementById('health-date-to').value   = healthFilters.date_to;
+updateFilterIndicator();
+loadSummary();
+loadTab('claims');
+_updateTimestamp();
+_startAutoRefresh();
 </script>
 {% endblock %}
