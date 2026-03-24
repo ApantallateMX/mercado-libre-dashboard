@@ -320,15 +320,19 @@ function _renderVelocityTable(items) {
         var barW = maxRate > 0 ? Math.round(p.daily_rate / maxRate * 100) : 0;
         var barC = i < 3 ? 'bg-red-400' : (i < 8 ? 'bg-orange-400' : 'bg-yellow-400');
         var skuChip = p.sku
-            ? '<span class="ml-1 px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
-            : '<span class="ml-1 px-1 py-0.5 text-[9px] bg-gray-50 text-gray-400 rounded border">sin SKU</span>';
+            ? '<span class="px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
+            : '<span class="px-1 py-0.5 text-[9px] bg-gray-50 text-gray-400 rounded border">sin SKU</span>';
+
+        var acctChips = (p.accounts || []).map(function(a) {
+            return '<span class="px-1 py-0.5 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100 font-medium">' + a + '</span>';
+        }).join('');
 
         var row = '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition" ' +
-            'data-search="' + (p.title + ' ' + p.sku + ' ' + p.item_id).toLowerCase() + '">' +
+            'data-search="' + (p.title + ' ' + p.sku + ' ' + p.item_id + ' ' + (p.accounts||[]).join(' ')).toLowerCase() + '">' +
             '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (i+1) + '</td>' +
             '<td class="py-2 pr-3 max-w-xs">' +
                 '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
-                '<div class="flex items-center gap-1 mt-0.5">' + skuChip +
+                '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips +
                 '<span class="text-[9px] text-gray-400">' + p.item_id + '</span></div>' +
             '</td>' +
             '<td class="py-2 pr-3 text-right font-black text-gray-800">' + p.daily_rate + '</td>' +
@@ -434,12 +438,20 @@ function _renderCoverage(d) {
             ? '<strong class="text-red-700">' + p.units_to_request + ' uds</strong>'
             : '<span class="text-gray-400">—</span>';
 
+        var covAccts = (p.accounts || []).map(function(a) {
+            return '<span class="px-1 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100">' + a + '</span>';
+        }).join('');
+        var covItemIds = (p.item_ids || []).length > 1
+            ? '<span class="text-[8px] text-gray-400">(' + p.item_ids.length + ' publicaciones)</span>'
+            : '';
+
         html += '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
             '<td class="py-2.5 pr-3">' +
                 '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
-                '<div class="flex gap-1 mt-0.5">' +
+                '<div class="flex flex-wrap gap-1 mt-0.5">' +
                 (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
-                (p.brand ? '<span class="text-[9px] text-gray-400">' + p.brand + '</span>' : '') +
+                (p.brand ? '<span class="text-[9px] text-gray-400">' + (p.brand || '') + (p.size ? ' ' + p.size + '"' : '') + '</span>' : '') +
+                covAccts + covItemIds +
                 '</div>' +
             '</td>' +
             '<td class="py-2.5 pr-3 text-right font-bold text-gray-800">' + p.daily_rate + '</td>' +

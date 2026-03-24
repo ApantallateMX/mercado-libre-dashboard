@@ -214,15 +214,19 @@ class BinManagerClient:
             if not await self.login():
                 return {}
         c = self._client()
+        # Use full base payload so BM returns all quantity/cost fields
         payload = {
-            "COMPANYID": 1, "SEARCH": sku, "CONCEPTID": 8,
-            "NUMBERPAGE": 1, "RECORDSPAGE": 5, "NEEDRETAILPRICEPH": True,
+            **_GS_BASE_PAYLOAD,
+            "SEARCH": sku,
+            "NEEDAVGCOST": True,
+            "NEEDRETAILPRICE": True,
+            "RECORDSPAGE": 10,
         }
         for attempt in range(2):
             try:
                 r = await c.post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=payload, headers=_AJAX_HEADERS, timeout=10,
+                    json=payload, headers=_AJAX_HEADERS, timeout=20,
                 )
                 if self._session_expired(r):
                     self._logged_in = False
@@ -234,13 +238,17 @@ class BinManagerClient:
                     data = r.json()
                     if isinstance(data, list) and data:
                         row = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
+                        # BM returns quantity in uppercase field "QTY"
+                        stock = row.get("QTY") or row.get("QtyTotal") or row.get("Qty") or 0
                         return {
-                            "stock": row.get("QtyTotal", 0) or 0,
+                            "stock": int(stock) if stock else 0,
                             "retail_price": row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0,
-                            "brand": row.get("Brand", ""),
-                            "model": row.get("Model", ""),
+                            "avg_cost": row.get("AvgCostQTY") or 0,
+                            "brand": row.get("BRAND") or row.get("Brand", ""),
+                            "model": row.get("MODEL") or row.get("Model", ""),
+                            "size": row.get("SIZE") or row.get("Size", ""),
                             "category": row.get("CategoryName", "") or row.get("Category", ""),
-                            "title": row.get("Title", "") or row.get("Model", ""),
+                            "title": row.get("Title", "") or row.get("MODEL") or row.get("Model", ""),
                         }
                 return {}
             except Exception as e:

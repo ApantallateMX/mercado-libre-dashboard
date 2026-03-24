@@ -8027,15 +8027,20 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
     df7_str = date_from_7.strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
     dt_str  = now.strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
 
+    # Build a user_id → nickname map for display
+    nick_map = {a["user_id"]: (a.get("nickname") or a["user_id"]) for a in accounts}
+
     order_lists = await asyncio.gather(
         *[_planning_fetch_orders_for_user(a["user_id"], df_str, dt_str) for a in accounts],
         return_exceptions=True,
     )
 
     item_agg: dict = {}
-    for orders in order_lists:
+    for acct, orders in zip(accounts, order_lists):
         if not isinstance(orders, list):
             continue
+        acct_uid = acct["user_id"]
+        acct_nick = nick_map.get(acct_uid, acct_uid)
         for order in orders:
             if order.get("status") not in ("paid", "delivered", "completed"):
                 continue
@@ -8052,9 +8057,11 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
                         "item_id": iid,
                         "title": item.get("title", "") or "Sin título",
                         "units": 0, "units_7d": 0, "revenue": 0.0, "sku": "",
+                        "accounts": set(),
                     }
                 item_agg[iid]["units"]   += qty
                 item_agg[iid]["revenue"] += qty * price
+                item_agg[iid]["accounts"].add(acct_nick)
                 if is_7d:
                     item_agg[iid]["units_7d"] += qty
 
@@ -8104,6 +8111,7 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
             "units_7d": d["units_7d"],
             "revenue_30d": round(d["revenue"], 2),
             "daily_rate": daily_rate,
+            "accounts": sorted(d["accounts"]),  # list of nicknames
         })
     result_items.sort(key=lambda x: x["daily_rate"], reverse=True)
     return {"items": result_items[:100], "total_items": len(result_items),
@@ -8170,8 +8178,41 @@ async def planning_coverage(
         return {"error": vel.get("error", "Sin datos de velocidad"), "items": []}
 
     all_vel_items  = vel["items"]
-    items_with_sku = [x for x in all_vel_items if x.get("sku")][:50]
     items_without_sku_count = len([x for x in all_vel_items if not x.get("sku")])
+
+    # Aggregate by SKU — multiple ML listings with same SKU share BM stock
+    sku_agg: dict = {}
+    for item in all_vel_items:
+        sku = item.get("sku", "").strip()
+        if not sku:
+            continue
+        if sku not in sku_agg:
+            sku_agg[sku] = {
+                "sku": sku,
+                "title": item["title"],
+                "item_ids": [],
+                "accounts": set(),
+                "daily_rate": 0.0,
+                "units_30d": 0,
+                "units_7d": 0,
+                "revenue_30d": 0.0,
+            }
+        sku_agg[sku]["daily_rate"]   += item["daily_rate"]
+        sku_agg[sku]["units_30d"]    += item["units_30d"]
+        sku_agg[sku]["units_7d"]     += item["units_7d"]
+        sku_agg[sku]["revenue_30d"]  += item["revenue_30d"]
+        sku_agg[sku]["item_ids"].append(item["item_id"])
+        for acc in item.get("accounts", []):
+            sku_agg[sku]["accounts"].add(acc)
+
+    # Convert to list, round rates, serialize accounts
+    items_with_sku = []
+    for d in sku_agg.values():
+        d["daily_rate"]  = round(d["daily_rate"], 2)
+        d["accounts"]    = sorted(d["accounts"])
+        items_with_sku.append(d)
+    items_with_sku.sort(key=lambda x: x["daily_rate"], reverse=True)
+    items_with_sku = items_with_sku[:50]
 
     if not items_with_sku:
         return {
