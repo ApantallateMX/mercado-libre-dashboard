@@ -7774,7 +7774,7 @@ async def returns_top_products(
     compare_to: str = Query("", description="Period B end YYYY-MM-DD"),
     limit: int = Query(10, ge=1, le=20),
 ):
-    """Top N returned products with optional period-over-period comparison."""
+    """Top N returned products with period comparison, reason breakdown, and action recommendations."""
     client = await get_meli_client()
     if not client:
         return {"error": "No autenticado"}
@@ -7784,30 +7784,41 @@ async def returns_top_products(
         df_b = compare_from or None
         dt_b = compare_to or None
 
+        # PDD sub-reason labels
+        REASON_LABELS = {
+            "PDD1": "Defecto de fábrica",
+            "PDD2": "No coincide con descripción",
+            "PDD3": "Producto incorrecto enviado",
+            "PDD4": "Partes/accesorios faltantes",
+            "PDD5": "Dañado en tránsito",
+            "PDD6": "No funciona",
+            "PDD":  "Defectuoso o diferente",
+        }
+
         async def _fetch_pdd(df, dt):
             claims = await client.fetch_all_claims(date_from=df, date_to=dt)
             return [c for c in claims if str(c.get("reason_id", "")).upper().startswith("PDD")]
 
-        # Fetch both periods in parallel when comparison is requested
         if df_b or dt_b:
             pdd_a, pdd_b = await asyncio.gather(_fetch_pdd(df_a, dt_a), _fetch_pdd(df_b, dt_b))
         else:
             pdd_a = await _fetch_pdd(df_a, dt_a)
             pdd_b = []
 
-        # Collect all unique order IDs from both periods
+        # Cap order lookups to avoid rate limiting — semaphore(3) + max 30 orders
         oids_a = {str(c.get("resource_id", "")) for c in pdd_a
                   if c.get("resource") == "order" and c.get("resource_id")}
         oids_b = {str(c.get("resource_id", "")) for c in pdd_b
                   if c.get("resource") == "order" and c.get("resource_id")}
-        all_oids = list(oids_a | oids_b)
+        max_orders = max(limit * 2, 30)
+        all_oids = list(oids_a | oids_b)[:max_orders]
 
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(3)
 
         async def _fetch_order_info(oid):
             async with sem:
                 try:
-                    order = await client.get(f"/orders/{oid}")
+                    order = await asyncio.wait_for(client.get(f"/orders/{oid}"), timeout=8.0)
                     oi = order.get("order_items", [])
                     if oi:
                         item = oi[0].get("item", {})
@@ -7819,10 +7830,7 @@ async def returns_top_products(
                     pass
                 return oid, {"title": "Producto desconocido", "item_id": ""}
 
-        results = await asyncio.gather(
-            *[_fetch_order_info(oid) for oid in all_oids[:50]],
-            return_exceptions=True
-        )
+        results = await asyncio.gather(*[_fetch_order_info(oid) for oid in all_oids], return_exceptions=True)
         order_map = {r[0]: r[1] for r in results if isinstance(r, tuple)}
 
         def _count_by_product(claims):
@@ -7831,18 +7839,77 @@ async def returns_top_products(
                 oid = str(c.get("resource_id", ""))
                 info = order_map.get(oid, {"title": "Producto desconocido", "item_id": ""})
                 title = info["title"]
+                reason_id = str(c.get("reason_id", "PDD")).upper()
+                status = c.get("status", "")
                 if title not in counts:
-                    counts[title] = {"title": title, "item_id": info["item_id"], "count": 0}
+                    counts[title] = {
+                        "title": title, "item_id": info["item_id"],
+                        "count": 0, "opened": 0, "closed": 0, "reasons": {},
+                    }
                 counts[title]["count"] += 1
+                if status == "opened":
+                    counts[title]["opened"] += 1
+                else:
+                    counts[title]["closed"] += 1
+                label = REASON_LABELS.get(reason_id, REASON_LABELS.get("PDD", reason_id))
+                counts[title]["reasons"][label] = counts[title]["reasons"].get(label, 0) + 1
             return counts
+
+        def _recommendation(reasons: dict, opened: int, total: int) -> dict:
+            if not reasons:
+                return {"text": "Analizar manualmente", "color": "gray",
+                        "actions": ["Revisar historial de mensajes de compradores"]}
+            top_reason = max(reasons, key=reasons.get)
+            top_pct = round(reasons[top_reason] / total * 100) if total > 0 else 0
+            urgency = "high" if opened > 0 else "medium"
+            r = top_reason.lower()
+            if "descripción" in r or "coincide" in r:
+                return {"text": "Actualizar fotos y descripción",
+                        "detail": f"{top_pct}% no coincide con descripción",
+                        "color": "orange", "urgency": urgency,
+                        "actions": ["Verificar fotos vs producto real",
+                                    "Actualizar especificaciones exactas",
+                                    "Agregar tabla de medidas si aplica"]}
+            elif "incorrecto" in r or "diferente" in r:
+                return {"text": "Revisar proceso de picking",
+                        "detail": f"{top_pct}% producto incorrecto enviado",
+                        "color": "red", "urgency": urgency,
+                        "actions": ["Verificar SKUs en almacén",
+                                    "Auditar últimos envíos de este producto",
+                                    "Separar variantes similares"]}
+            elif "defecto" in r or "fábrica" in r or "funciona" in r:
+                return {"text": "Revisar calidad con proveedor",
+                        "detail": f"{top_pct}% defectos de producto",
+                        "color": "red", "urgency": urgency,
+                        "actions": ["Contactar proveedor con evidencia",
+                                    "Revisar lote actual en almacén",
+                                    "Implementar control de calidad pre-envío"]}
+            elif "tránsito" in r or "dañado" in r:
+                return {"text": "Mejorar empaque para envío",
+                        "detail": f"{top_pct}% daños en tránsito",
+                        "color": "yellow", "urgency": "medium",
+                        "actions": ["Usar caja más resistente",
+                                    "Agregar protección interna (burbuja/foam)",
+                                    "Verificar peso y dimensiones declarados"]}
+            elif "faltante" in r:
+                return {"text": "Verificar contenido del paquete",
+                        "detail": f"{top_pct}% partes faltantes",
+                        "color": "orange", "urgency": urgency,
+                        "actions": ["Crear checklist de contenido por producto",
+                                    "Verificar accesorios listados en descripción",
+                                    "Revisar proceso de empaque con proveedor"]}
+            else:
+                return {"text": "Analizar patrón de retornos",
+                        "detail": f"Razón principal: {top_reason}",
+                        "color": "gray", "urgency": "medium",
+                        "actions": ["Revisar mensajes de compradores",
+                                    "Comparar con descripción actual del producto"]}
 
         counts_a = _count_by_product(pdd_a)
         counts_b = _count_by_product(pdd_b)
-
         total_a = len(pdd_a)
         total_b = len(pdd_b)
 
-        # Rank by period A counts, take top N
         top_a = sorted(counts_a.values(), key=lambda x: x["count"], reverse=True)[:limit]
 
         products = []
@@ -7850,13 +7917,10 @@ async def returns_top_products(
             count_a = p["count"]
             b_entry = counts_b.get(p["title"])
             count_b = b_entry["count"] if b_entry else (0 if pdd_b else None)
-
             delta_pct = None
             if count_b is not None and count_b > 0:
                 delta_pct = round((count_a - count_b) / count_b * 100, 1)
-            elif count_b == 0 and pdd_b:
-                delta_pct = None  # new in period A
-
+            rec = _recommendation(p["reasons"], p["opened"], count_a)
             products.append({
                 "title": p["title"],
                 "item_id": p["item_id"],
@@ -7864,15 +7928,16 @@ async def returns_top_products(
                 "count_b": count_b,
                 "delta_pct": delta_pct,
                 "pct_of_total": round(count_a / total_a * 100, 1) if total_a > 0 else 0,
+                "opened": p["opened"],
+                "closed": p["closed"],
+                "reasons": p["reasons"],
+                "recommendation": rec,
             })
 
         def _label(df, dt):
-            if df and dt:
-                return f"{df} al {dt}"
-            elif df:
-                return f"Desde {df}"
-            elif dt:
-                return f"Hasta {dt}"
+            if df and dt: return f"{df} al {dt}"
+            elif df: return f"Desde {df}"
+            elif dt: return f"Hasta {dt}"
             return "Todo el historial"
 
         return {

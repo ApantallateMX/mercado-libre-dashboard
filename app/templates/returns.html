@@ -28,15 +28,16 @@
             Limpiar
         </button>
         <span id="ret-filter-indicator" class="text-xs text-gray-400 ml-2"></span>
-        <div class="flex items-center gap-2 text-xs text-gray-400 ml-auto">
+        <div class="flex items-center gap-3 text-xs text-gray-400 ml-auto">
             <span id="ret-last-update"></span>
-            <span id="ret-refresh-indicator" class="hidden">
-                <svg class="inline animate-spin h-3 w-3 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            <button onclick="manualRefreshAll()"
+                    title="Refrescar todo"
+                    class="flex items-center gap-1 hover:text-yellow-700 hover:bg-yellow-50 px-2 py-1 rounded transition">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
-                Actualizando...
-            </span>
+                Refrescar
+            </button>
         </div>
     </div>
 </div>
@@ -55,7 +56,7 @@
 
 <!-- ===== TOP PRODUCTOS ANALYTICS ===== -->
 <div class="bg-white rounded-lg shadow mb-6">
-    <!-- Header — toggle collapse -->
+    <!-- Header -->
     <div class="px-6 py-3 flex items-center justify-between cursor-pointer select-none border-b border-gray-100"
          onclick="toggleTopSection()">
         <div class="flex items-center gap-2">
@@ -63,58 +64,66 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
             </svg>
             <h2 class="text-sm font-semibold text-gray-700">Análisis de Productos — Top Retornos</h2>
-            <span class="text-[10px] text-gray-400 font-normal">(comparativo de periodos)</span>
+            <span class="text-[10px] text-gray-400 font-normal">(razones + recomendaciones + comparativa)</span>
         </div>
         <svg id="ret-top-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
         </svg>
     </div>
 
-    <!-- Collapsible content -->
     <div id="ret-top-content" class="p-5">
-        <!-- Controls bar -->
-        <div class="flex flex-wrap items-end gap-4 p-4 bg-gray-50 rounded-lg mb-5">
-            <!-- Top N selector -->
+        <!-- Controls -->
+        <div class="flex flex-wrap items-end gap-5 p-4 bg-gray-50 rounded-lg mb-5">
+            <!-- Top N -->
             <div>
                 <label class="block text-xs text-gray-500 mb-1">Mostrar</label>
-                <select id="ret-top-limit" onchange="loadTopProducts()"
-                        class="border rounded px-3 py-1.5 text-sm bg-white">
+                <select id="ret-top-limit" class="border rounded px-3 py-1.5 text-sm bg-white">
                     <option value="10">Top 10</option>
                     <option value="20">Top 20</option>
                 </select>
             </div>
 
-            <!-- Period A label -->
-            <div class="border-l border-gray-300 pl-4">
-                <p class="text-xs text-gray-500 mb-1">Período A (filtro activo)</p>
-                <p class="text-xs font-semibold text-gray-700" id="ret-top-period-a-label">—</p>
+            <!-- Period A — now fully editable -->
+            <div class="border-l border-gray-300 pl-5">
+                <p class="text-xs text-gray-500 mb-1 font-semibold">Período A <span class="font-normal text-gray-400">(principal)</span></p>
+                <div class="flex items-center gap-2">
+                    <input type="date" id="ret-top-from-a"
+                           class="border rounded px-2 py-1 text-xs bg-white">
+                    <span class="text-gray-400 text-xs">→</span>
+                    <input type="date" id="ret-top-to-a"
+                           class="border rounded px-2 py-1 text-xs bg-white">
+                </div>
             </div>
 
-            <!-- Period B for comparison -->
-            <div class="border-l border-gray-300 pl-4">
-                <p class="text-xs text-gray-500 mb-1">Comparar con (Período B) — opcional</p>
+            <!-- Period B — optional comparison -->
+            <div class="border-l border-gray-300 pl-5">
+                <p class="text-xs text-gray-500 mb-1 font-semibold">Período B <span class="font-normal text-gray-400">(comparativo — opcional)</span></p>
                 <div class="flex items-center gap-2">
                     <input type="date" id="ret-compare-from"
                            class="border rounded px-2 py-1 text-xs bg-white">
                     <span class="text-gray-400 text-xs">→</span>
                     <input type="date" id="ret-compare-to"
                            class="border rounded px-2 py-1 text-xs bg-white">
-                    <button onclick="loadTopProducts()"
-                            class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1.5 rounded hover:bg-yellow-500 text-xs">
-                        Analizar
-                    </button>
-                    <button onclick="clearTopComparison()"
-                            class="bg-gray-200 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-300 text-xs">
-                        Limpiar
-                    </button>
                 </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="flex items-center gap-2 pb-0.5">
+                <button onclick="loadTopProducts()"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-xs">
+                    Analizar
+                </button>
+                <button onclick="clearTopComparison()"
+                        class="bg-gray-200 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-300 text-xs">
+                    Limpiar
+                </button>
             </div>
         </div>
 
         <!-- Results -->
         <div id="ret-top-results">
-            <div class="text-center py-6 text-gray-400 text-sm">
-                Ajusta los filtros de fecha y haz clic en <strong>Analizar</strong> para ver el ranking de productos.
+            <div class="text-center py-8 text-gray-400 text-sm">
+                Selecciona un Período A y haz clic en <strong>Analizar</strong> para ver el ranking.
             </div>
         </div>
     </div>
@@ -126,7 +135,6 @@
         <!-- Returns Table -->
         <div class="bg-white rounded-lg shadow">
             <div class="border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
-                <!-- Status filters -->
                 <div class="flex gap-2">
                     <button onclick="setRetStatus('')" id="ret-btn-all"
                             class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
@@ -141,7 +149,6 @@
                         Cerrados
                     </button>
                 </div>
-                <!-- Manual refresh + timestamp -->
                 <div class="ml-auto flex items-center gap-2">
                     <span id="ret-table-timestamp" class="text-[10px] text-gray-400"></span>
                     <button onclick="manualRefreshTable()"
@@ -166,7 +173,6 @@
 
     <!-- Sidebar -->
     <div class="hidden lg:block lg:w-72 flex-shrink-0">
-        <!-- Top productos (sidebar mini) -->
         <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
@@ -181,13 +187,11 @@
             </div>
         </div>
 
-        <!-- Grafico de estados -->
         <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3">Distribución por Estado</h3>
             <canvas id="ret-status-chart" height="160"></canvas>
         </div>
 
-        <!-- Consejos -->
         <div class="bg-white rounded-lg shadow p-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346A3.284 3.284 0 0119 16.5h-6a3.284 3.284 0 01-2.316-.904l-.347-.346z"/></svg>
@@ -195,7 +199,7 @@
             </h3>
             <ul class="text-xs text-gray-600 space-y-2">
                 <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Agrega fotos reales desde todos los ángulos</li>
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Verifica que título y descripción sean exactos — no exagerar</li>
+                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Verifica que título y descripción sean exactos</li>
                 <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Incluye dimensiones, peso y especificaciones completas</li>
                 <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Usa empaque adecuado para evitar daños en tránsito</li>
                 <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Responde retornos en &lt;24h para proteger reputación</li>
@@ -225,12 +229,8 @@ var retFilters = {
     limit:     20,
 };
 
-// AbortControllers — one per section to cancel stale requests
 var _tableCtrl   = null;
 var _summaryCtrl = null;
-
-// Last known open count for change detection
-var _knownOpenCount = -1;
 
 // ============================================================
 // URL builders
@@ -244,7 +244,7 @@ function _buildParams() {
 }
 
 // ============================================================
-// Summary — always safe to refresh (no user work here)
+// Summary — safe to refresh (KPI cards only)
 // ============================================================
 function loadSummary() {
     var p = _buildParams();
@@ -253,10 +253,7 @@ function loadSummary() {
     _summaryCtrl = new AbortController();
     fetch(url, { signal: _summaryCtrl.signal })
         .then(function(r) { return r.text(); })
-        .then(function(html) {
-            document.getElementById('ret-summary').innerHTML = html;
-            _checkForNewReturns();
-        })
+        .then(function(html) { document.getElementById('ret-summary').innerHTML = html; })
         .catch(function(e) {
             if (e.name !== 'AbortError')
                 document.getElementById('ret-summary').innerHTML =
@@ -265,7 +262,7 @@ function loadSummary() {
 }
 
 // ============================================================
-// Table — ONLY on explicit user action, never by auto-refresh
+// Table — ONLY on explicit user action
 // ============================================================
 function loadTable() {
     var p = _buildParams();
@@ -275,7 +272,6 @@ function loadTable() {
     if (_tableCtrl) _tableCtrl.abort();
     _tableCtrl = new AbortController();
     var container = document.getElementById('ret-table');
-    _clearUpdateNotif();
     container.innerHTML = '<div class="animate-pulse space-y-3">' +
         Array(4).fill('<div class="h-24 bg-gray-200 rounded"></div>').join('') + '</div>';
     fetch(url, { signal: _tableCtrl.signal })
@@ -283,7 +279,6 @@ function loadTable() {
         .then(function(html) {
             container.innerHTML = html;
             _updateTableTimestamp();
-            _syncKnownCount();
         })
         .catch(function(e) {
             if (e.name !== 'AbortError')
@@ -292,6 +287,7 @@ function loadTable() {
 }
 
 window.manualRefreshTable = function() { loadTable(); };
+window.manualRefreshAll   = function() { loadSummary(); loadTable(); loadAnalysis(); _updateTimestamp(); };
 
 // ============================================================
 // Sidebar analysis
@@ -323,7 +319,6 @@ function loadAnalysis() {
             } else {
                 topEl.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este periodo</p>';
             }
-
             // Doughnut chart
             var canvas = document.getElementById('ret-status-chart');
             if (!canvas) return;
@@ -334,12 +329,10 @@ function loadAnalysis() {
             if (opened + closed > 0) {
                 _chartInstance = new Chart(ctx, {
                     type: 'doughnut',
-                    data: {
-                        labels: ['Abiertos','Cerrados'],
+                    data: { labels: ['Abiertos','Cerrados'],
                         datasets: [{ data: [opened, closed],
                             backgroundColor: ['#ef4444','#22c55e'],
-                            borderWidth: 2, borderColor: '#fff' }]
-                    },
+                            borderWidth: 2, borderColor: '#fff' }] },
                     options: { responsive: true, cutout: '65%',
                         plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
                 });
@@ -347,9 +340,6 @@ function loadAnalysis() {
                 canvas.parentElement.innerHTML =
                     '<p class="text-xs text-gray-400 text-center py-4">Sin datos en este periodo</p>';
             }
-
-            // Store known open count for change detection
-            if (_knownOpenCount < 0) _knownOpenCount = opened;
         })
         .catch(function() {
             document.getElementById('ret-top-products').innerHTML =
@@ -358,97 +348,48 @@ function loadAnalysis() {
 }
 
 // ============================================================
-// Change detection: show notification if new returns appeared
+// Top Products Analytics — full section
 // ============================================================
-function _checkForNewReturns() {
-    // Read open count from summary DOM (data attribute set by template)
-    var dataEl = document.getElementById('ret-summary-counts');
-    if (!dataEl) return;
-    var currentOpen = parseInt(dataEl.getAttribute('data-opened') || '0');
-    if (_knownOpenCount >= 0 && currentOpen > _knownOpenCount) {
-        _showUpdateNotif(currentOpen - _knownOpenCount);
-    }
-}
-
-function _syncKnownCount() {
-    var dataEl = document.getElementById('ret-summary-counts');
-    if (dataEl) _knownOpenCount = parseInt(dataEl.getAttribute('data-opened') || '0');
-}
-
-function _showUpdateNotif(diff) {
-    var container = document.getElementById('ret-table');
-    if (!container || container.querySelector('.animate-pulse')) return;
-    _clearUpdateNotif();
-    var notif = document.createElement('div');
-    notif.id = 'ret-update-notif';
-    notif.innerHTML =
-        '<div class="flex items-center gap-3 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">' +
-        '<svg class="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
-        '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
-        '<span class="text-sm text-blue-800 flex-1">Hay <strong>' + diff + ' nuevo' +
-        (diff !== 1 ? 's' : '') + '</strong> retorno' + (diff !== 1 ? 's' : '') + ' abierto' +
-        (diff !== 1 ? 's' : '') + ' desde tu última actualización.</span>' +
-        '<button onclick="window.manualRefreshTable()" ' +
-        'class="text-xs bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700 font-semibold flex-shrink-0 transition">Actualizar</button>' +
-        '<button onclick="document.getElementById(\'ret-update-notif\').remove()" ' +
-        'class="ml-1 text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>' +
-        '</div>';
-    container.insertBefore(notif, container.firstChild);
-}
-
-function _clearUpdateNotif() {
-    var n = document.getElementById('ret-update-notif');
-    if (n) n.remove();
-}
-
-// ============================================================
-// Top Products Analytics (full section)
-// ============================================================
-var _topChartInstance = null;
 var _topSectionOpen = true;
 
 window.toggleTopSection = function() {
     _topSectionOpen = !_topSectionOpen;
     var content = document.getElementById('ret-top-content');
     var chevron = document.getElementById('ret-top-chevron');
-    if (_topSectionOpen) {
-        content.classList.remove('hidden');
-        chevron.style.transform = '';
-    } else {
-        content.classList.add('hidden');
-        chevron.style.transform = 'rotate(-90deg)';
-    }
+    content.classList.toggle('hidden', !_topSectionOpen);
+    chevron.style.transform = _topSectionOpen ? '' : 'rotate(-90deg)';
 };
 
 window.loadTopProducts = function() {
-    var limit  = document.getElementById('ret-top-limit').value;
-    var cfrom  = document.getElementById('ret-compare-from').value;
-    var cto    = document.getElementById('ret-compare-to').value;
+    var limit = document.getElementById('ret-top-limit').value;
+    var fromA = document.getElementById('ret-top-from-a').value;
+    var toA   = document.getElementById('ret-top-to-a').value;
+    var cfrom = document.getElementById('ret-compare-from').value;
+    var cto   = document.getElementById('ret-compare-to').value;
 
-    // Update period A label
-    var pa = document.getElementById('ret-top-period-a-label');
-    if (pa) {
-        var from = retFilters.date_from, to = retFilters.date_to;
-        pa.textContent = from && to ? (from + ' → ' + to) : from ? ('Desde ' + from) : to ? ('Hasta ' + to) : 'Todo el historial';
+    if (!fromA && !toA) {
+        document.getElementById('ret-top-results').innerHTML =
+            '<p class="text-center text-yellow-600 py-6 text-sm">Selecciona al menos una fecha para el Período A.</p>';
+        return;
     }
 
     var params = [];
-    if (retFilters.date_from) params.push('date_from=' + retFilters.date_from);
-    if (retFilters.date_to)   params.push('date_to='   + retFilters.date_to);
-    if (cfrom)                params.push('compare_from=' + cfrom);
-    if (cto)                  params.push('compare_to='   + cto);
+    if (fromA) params.push('date_from=' + fromA);
+    if (toA)   params.push('date_to='   + toA);
+    if (cfrom) params.push('compare_from=' + cfrom);
+    if (cto)   params.push('compare_to='   + cto);
     params.push('limit=' + limit);
 
     var resultsEl = document.getElementById('ret-top-results');
     resultsEl.innerHTML =
-        '<div class="flex items-center justify-center gap-3 py-8 text-sm text-gray-500">' +
+        '<div class="flex items-center justify-center gap-3 py-10 text-sm text-gray-500">' +
         '<svg class="animate-spin h-5 w-5 text-yellow-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
         '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
-        'Analizando retornos...</div>';
+        'Analizando retornos — esto puede tomar unos segundos...</div>';
 
     fetch('/api/returns/top-products?' + params.join('&'))
         .then(function(r) { return r.json(); })
-        .then(function(data) { _renderTopProducts(data, cfrom || cto); })
+        .then(function(data) { _renderTopProducts(data); })
         .catch(function(e) {
             resultsEl.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error al cargar análisis: ' + e.message + '</p>';
         });
@@ -457,117 +398,210 @@ window.loadTopProducts = function() {
 window.clearTopComparison = function() {
     document.getElementById('ret-compare-from').value = '';
     document.getElementById('ret-compare-to').value   = '';
-    window.loadTopProducts();
 };
 
-function _renderTopProducts(data, hasComparison) {
+// ============================================================
+// Render top products — rich cards
+// ============================================================
+var REC_COLORS = {
+    red:    { bg: 'bg-red-50',    border: 'border-red-200',    text: 'text-red-700',    badge: 'bg-red-100 text-red-700' },
+    orange: { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', badge: 'bg-orange-100 text-orange-700' },
+    yellow: { bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', badge: 'bg-yellow-100 text-yellow-700' },
+    gray:   { bg: 'bg-gray-50',   border: 'border-gray-200',   text: 'text-gray-600',   badge: 'bg-gray-100 text-gray-600' },
+};
+
+function _renderTopProducts(data) {
     var el = document.getElementById('ret-top-results');
     if (data.error) {
-        el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + data.error + '</p>';
+        el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm font-medium">Error: ' + data.error + '</p>';
         return;
     }
-
     var products = (data.period_a || {}).products || [];
     if (!products.length) {
-        el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin retornos en este periodo.</p>';
+        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin retornos en este periodo.</p>';
         return;
     }
 
-    var totalA   = (data.period_a || {}).total || 0;
-    var totalB   = (data.period_b || {}).total || 0;
-    var labelA   = (data.period_a || {}).label || 'Período A';
-    var labelB   = (data.period_b || {}).label || 'Período B';
-    var hasComp  = !!data.period_b;
+    var totalA  = (data.period_a || {}).total || 0;
+    var totalB  = (data.period_b || {}).total || 0;
+    var labelA  = (data.period_a || {}).label || 'Período A';
+    var labelB  = (data.period_b || {}).label || 'Período B';
+    var hasComp = !!data.period_b;
     var maxCount = products[0].count_a;
 
-    // --- Summary bar ---
-    var html = '<div class="flex flex-wrap gap-4 mb-5">';
-    html += '<div class="bg-red-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
-            '<p class="text-xs text-gray-500">Total retornos — ' + labelA + '</p>' +
-            '<p class="text-2xl font-bold text-red-600">' + totalA + '</p></div>';
+    // === KPI bar ===
+    var html = '<div class="flex flex-wrap gap-3 mb-6">';
+    html += _kpiCard('Total — ' + labelA, totalA, 'text-red-600', 'bg-red-50');
     if (hasComp) {
-        var totalDelta = totalB > 0 ? Math.round((totalA - totalB) / totalB * 100) : null;
-        var deltaColor = totalDelta === null ? 'text-gray-500' : (totalDelta > 0 ? 'text-red-600' : 'text-green-600');
-        var deltaIcon  = totalDelta === null ? '' : (totalDelta > 0 ? '▲' : '▼');
-        html += '<div class="bg-blue-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
-                '<p class="text-xs text-gray-500">Total retornos — ' + labelB + '</p>' +
-                '<p class="text-2xl font-bold text-blue-600">' + totalB + '</p></div>';
-        if (totalDelta !== null) {
-            html += '<div class="bg-gray-50 rounded-lg px-4 py-3 flex-1 min-w-[140px]">' +
-                    '<p class="text-xs text-gray-500">Variación total</p>' +
-                    '<p class="text-2xl font-bold ' + deltaColor + '">' + deltaIcon + ' ' + Math.abs(totalDelta) + '%</p></div>';
+        html += _kpiCard('Total — ' + labelB, totalB, 'text-blue-600', 'bg-blue-50');
+        if (totalB > 0) {
+            var td = Math.round((totalA - totalB) / totalB * 100);
+            var up = td > 0;
+            html += _kpiCard('Variación total',
+                (up ? '▲' : '▼') + ' ' + Math.abs(td) + '%',
+                up ? 'text-red-600' : 'text-green-600', 'bg-gray-50');
         }
+    }
+    // Urgency summary
+    var openTotal = products.reduce(function(s, p) { return s + (p.opened || 0); }, 0);
+    if (openTotal > 0) {
+        html += _kpiCard('Reclamos abiertos', openTotal, 'text-red-600', 'bg-red-50',
+                         'Requieren atención inmediata');
     }
     html += '</div>';
 
-    // --- Products table ---
-    html += '<div class="overflow-x-auto">';
-    html += '<table class="w-full text-sm border-collapse">';
-    html += '<thead><tr class="border-b border-gray-200 text-left text-xs text-gray-500">';
-    html += '<th class="pb-2 pr-3 font-semibold w-8">#</th>';
-    html += '<th class="pb-2 pr-3 font-semibold">Producto</th>';
-    html += '<th class="pb-2 pr-3 font-semibold text-right whitespace-nowrap">' +
-            (hasComp ? 'Per. A' : 'Retornos') + '</th>';
-    if (hasComp) html += '<th class="pb-2 pr-3 font-semibold text-right">Per. B</th>' +
-                         '<th class="pb-2 pr-3 font-semibold text-right">Variación</th>';
-    html += '<th class="pb-2 pr-3 font-semibold text-right">% total</th>';
-    html += '<th class="pb-2 font-semibold text-right">Proporción</th>';
-    html += '</tr></thead><tbody>';
+    // === Product cards ===
+    html += '<div class="space-y-4">';
 
-    var rankColors = ['text-red-600','text-red-500','text-orange-500',
-                      'text-yellow-600','text-yellow-500','text-gray-500'];
+    var rankColors = ['text-red-600','text-red-500','text-orange-500','text-yellow-600','text-yellow-500',
+                      'text-gray-500','text-gray-500','text-gray-500','text-gray-500','text-gray-500',
+                      'text-gray-500','text-gray-500','text-gray-500','text-gray-500','text-gray-500',
+                      'text-gray-500','text-gray-500','text-gray-500','text-gray-500','text-gray-500'];
 
     products.forEach(function(p, i) {
-        var rankColor = rankColors[Math.min(i, rankColors.length-1)];
-        var rank = i + 1;
-        var barW  = maxCount > 0 ? Math.round(p.count_a / maxCount * 100) : 0;
-        var barColor = i < 3 ? 'bg-red-400' : (i < 6 ? 'bg-orange-400' : 'bg-yellow-400');
+        var rank      = i + 1;
+        var rColor    = rankColors[Math.min(i, rankColors.length - 1)];
+        var barW      = maxCount > 0 ? Math.round(p.count_a / maxCount * 100) : 0;
+        var barColor  = i < 3 ? 'bg-red-400' : (i < 7 ? 'bg-orange-400' : 'bg-yellow-400');
+        var rec       = p.recommendation || {};
+        var recStyle  = REC_COLORS[rec.color] || REC_COLORS.gray;
+        var hasOpen   = p.opened > 0;
 
         // Delta badge
         var deltaBadge = '';
         if (hasComp) {
-            if (p.delta_pct === null && p.count_b === 0) {
-                deltaBadge = '<span class="px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded font-semibold">Nuevo</span>';
+            if (p.count_b === 0 && p.delta_pct === null) {
+                deltaBadge = '<span class="ml-2 px-1.5 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded font-semibold">Nuevo</span>';
             } else if (p.delta_pct !== null) {
                 var up = p.delta_pct > 0;
-                deltaBadge = '<span class="px-1.5 py-0.5 text-[10px] rounded font-semibold ' +
+                deltaBadge = '<span class="ml-2 px-1.5 py-0.5 text-[10px] rounded font-semibold ' +
                     (up ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' +
                     (up ? '▲' : '▼') + ' ' + Math.abs(p.delta_pct) + '%</span>';
-            } else {
-                deltaBadge = '<span class="text-gray-400 text-xs">—</span>';
             }
         }
 
-        html += '<tr class="border-b border-gray-100 hover:bg-gray-50 transition">';
-        html += '<td class="py-2.5 pr-3 font-bold ' + rankColor + ' text-center">' + rank + '</td>';
-        html += '<td class="py-2.5 pr-3 max-w-xs">' +
-                '<p class="text-gray-800 font-medium truncate" title="' + p.title + '">' + p.title + '</p>' +
-                '</td>';
-        html += '<td class="py-2.5 pr-3 text-right font-bold text-gray-800">' + p.count_a + '</td>';
-        if (hasComp) {
-            html += '<td class="py-2.5 pr-3 text-right text-gray-600">' +
-                    (p.count_b !== null ? p.count_b : '—') + '</td>';
-            html += '<td class="py-2.5 pr-3 text-right">' + deltaBadge + '</td>';
+        // Reasons pills
+        var reasonsPills = '';
+        if (p.reasons && Object.keys(p.reasons).length) {
+            var reasonTotal = Object.values(p.reasons).reduce(function(s, v) { return s + v; }, 0);
+            Object.entries(p.reasons).sort(function(a, b) { return b[1] - a[1]; }).forEach(function(kv) {
+                var pct = reasonTotal > 0 ? Math.round(kv[1] / reasonTotal * 100) : 0;
+                reasonsPills += '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-700 border border-gray-200">' +
+                    '<span class="w-1.5 h-1.5 rounded-full bg-gray-400 flex-shrink-0"></span>' +
+                    kv[0] + ' <span class="font-semibold text-gray-500">' + kv[1] + ' (' + pct + '%)</span></span>';
+            });
+        } else {
+            reasonsPills = '<span class="text-xs text-gray-400">Sin detalle de razón</span>';
         }
-        html += '<td class="py-2.5 pr-3 text-right text-gray-500">' + p.pct_of_total + '%</td>';
-        html += '<td class="py-2.5 w-28">' +
-                '<div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
-                '<div class="h-2 rounded-full ' + barColor + ' transition-all" style="width:' + barW + '%"></div>' +
-                '</div></td>';
-        html += '</tr>';
+
+        // Action items
+        var actionItems = '';
+        if (rec.actions && rec.actions.length) {
+            rec.actions.forEach(function(a) {
+                actionItems += '<li class="flex items-start gap-1.5"><span class="mt-0.5 flex-shrink-0 text-xs ' +
+                    recStyle.text + '">›</span><span>' + a + '</span></li>';
+            });
+        }
+
+        // Card
+        html += '<div class="border border-gray-200 rounded-xl overflow-hidden">';
+
+        // --- Header row ---
+        html += '<div class="flex items-start gap-4 px-5 py-4 bg-white">';
+
+        // Rank
+        html += '<div class="flex-shrink-0 w-8 text-center">' +
+                '<span class="text-xl font-black ' + rColor + '">' + rank + '</span>' +
+                '</div>';
+
+        // Title + meta
+        html += '<div class="flex-1 min-w-0">';
+        html += '<div class="flex flex-wrap items-center gap-2 mb-1">';
+        html += '<p class="text-sm font-semibold text-gray-800 truncate" title="' + p.title + '">' + p.title + '</p>';
+        if (hasOpen) {
+            html += '<span class="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-red-100 text-red-700 rounded font-semibold">' +
+                    '<span class="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>' +
+                    p.opened + ' abierto' + (p.opened !== 1 ? 's' : '') + '</span>';
+        }
+        if (p.item_id) {
+            html += '<span class="text-[10px] text-gray-400 font-mono">' + p.item_id + '</span>';
+        }
+        html += deltaBadge;
+        html += '</div>';
+
+        // Count + comparison row
+        html += '<div class="flex items-center gap-4 mb-2">';
+        html += '<span class="text-2xl font-black text-gray-800">' + p.count_a + '</span>';
+        html += '<span class="text-xs text-gray-400">retorno' + (p.count_a !== 1 ? 's' : '') + '</span>';
+        if (hasComp && p.count_b !== null) {
+            html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-4">' +
+                    'Per. B: <strong>' + p.count_b + '</strong></span>';
+        }
+        html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-4">' +
+                p.pct_of_total + '% del total</span>';
+        // Open/closed split
+        html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-4">' +
+                '<span class="text-red-500 font-semibold">' + p.opened + '</span> abiertos · ' +
+                '<span class="text-green-600 font-semibold">' + p.closed + '</span> cerrados</span>';
+        html += '</div>';
+
+        // Proportion bar
+        html += '<div class="h-2 bg-gray-100 rounded-full overflow-hidden mb-2">' +
+                '<div class="h-2 rounded-full ' + barColor + ' transition-all" style="width:' + barW + '%"></div></div>';
+
+        // Reasons pills
+        html += '<div class="flex flex-wrap gap-1">' + reasonsPills + '</div>';
+
+        html += '</div>'; // end title column
+
+        html += '</div>'; // end header row
+
+        // --- Recommendation block ---
+        if (rec.text) {
+            html += '<div class="' + recStyle.bg + ' ' + recStyle.border + ' border-t px-5 py-3">';
+            html += '<div class="flex items-start gap-3">';
+            html += '<div class="flex-shrink-0 mt-0.5">';
+            if (rec.color === 'red') {
+                html += '<svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>';
+            } else if (rec.color === 'orange' || rec.color === 'yellow') {
+                html += '<svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346A3.284 3.284 0 0119 16.5h-6a3.284 3.284 0 01-2.316-.904l-.347-.346z"/></svg>';
+            } else {
+                html += '<svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+            }
+            html += '</div>';
+            html += '<div class="flex-1">';
+            html += '<p class="text-xs font-bold ' + recStyle.text + ' mb-0.5">Acción recomendada: ' + rec.text + '</p>';
+            if (rec.detail) {
+                html += '<p class="text-[10px] text-gray-500 mb-1.5">' + rec.detail + '</p>';
+            }
+            if (actionItems) {
+                html += '<ul class="text-[10px] text-gray-600 space-y-0.5">' + actionItems + '</ul>';
+            }
+            html += '</div>';
+            html += '</div>';
+            html += '</div>';
+        }
+
+        html += '</div>'; // end card
     });
 
-    html += '</tbody></table></div>';
+    html += '</div>'; // end space-y-4
 
-    // --- Period labels footer ---
+    // Footer note for comparison
     if (hasComp) {
-        html += '<div class="flex gap-4 mt-3 text-xs text-gray-400">' +
-                '<span>Per. A = ' + labelA + '</span>' +
-                '<span class="border-l border-gray-200 pl-4">Per. B = ' + labelB + '</span>' +
-                '</div>';
+        html += '<p class="mt-4 text-[10px] text-gray-400 text-right">' +
+                'Per. A = ' + labelA + ' &nbsp;|&nbsp; Per. B = ' + labelB + '</p>';
     }
 
     el.innerHTML = html;
+}
+
+function _kpiCard(label, value, textClass, bgClass, note) {
+    return '<div class="' + bgClass + ' rounded-xl px-5 py-4 flex-1 min-w-[140px]">' +
+           '<p class="text-[10px] text-gray-500 uppercase tracking-wide mb-1">' + label + '</p>' +
+           '<p class="text-2xl font-black ' + textClass + '">' + value + '</p>' +
+           (note ? '<p class="text-[10px] text-gray-400 mt-0.5">' + note + '</p>' : '') +
+           '</div>';
 }
 
 // ============================================================
@@ -582,7 +616,6 @@ window.applyRetFilters = function() {
     loadTable();
     loadAnalysis();
     _updateTimestamp();
-    _startAutoRefresh();
 };
 
 window.clearRetFilters = function() {
@@ -596,7 +629,6 @@ window.clearRetFilters = function() {
     loadTable();
     loadAnalysis();
     _updateTimestamp();
-    _startAutoRefresh();
 };
 
 window.setRetStatus = function(status) {
@@ -626,7 +658,7 @@ function _updateFilterIndicator() {
         var t = 'Filtrando: ';
         if (retFilters.date_from) t += 'desde ' + retFilters.date_from;
         if (retFilters.date_from && retFilters.date_to) t += ' ';
-        if (retFilters.date_to)   t += 'hasta '  + retFilters.date_to;
+        if (retFilters.date_to)   t += 'hasta ' + retFilters.date_to;
         ind.textContent = t;
     } else {
         ind.textContent = '';
@@ -643,26 +675,6 @@ function _updateTableTimestamp() {
     var ts = new Date().toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
     var el = document.getElementById('ret-table-timestamp');
     if (el) el.textContent = 'Lista: ' + ts;
-}
-
-// ============================================================
-// Auto-refresh: ONLY summary + sidebar analysis.
-// The returns TABLE is NEVER touched by auto-refresh.
-// If new returns appear, a notification banner shows instead.
-// ============================================================
-var _autoRefreshTimer = null;
-
-function _startAutoRefresh() {
-    if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
-    _autoRefreshTimer = setInterval(function() {
-        if (document.visibilityState === 'hidden') return;
-        var ind = document.getElementById('ret-refresh-indicator');
-        if (ind) ind.classList.remove('hidden');
-        loadSummary();   // KPI cards only
-        loadAnalysis();  // sidebar + change detection
-        _updateTimestamp();
-        setTimeout(function() { if (ind) ind.classList.add('hidden'); }, 1500);
-    }, 60000);
 }
 
 // ============================================================
@@ -696,22 +708,20 @@ window.respondReturn = function(claimId) {
 };
 
 // ============================================================
-// Init
+// Init — NO auto-refresh. Manual control only.
 // ============================================================
 document.getElementById('ret-date-from').value = retFilters.date_from;
 document.getElementById('ret-date-to').value   = retFilters.date_to;
+
+// Pre-fill Period A inputs with same default
+document.getElementById('ret-top-from-a').value = retFilters.date_from;
+document.getElementById('ret-top-to-a').value   = retFilters.date_to;
+
 _updateFilterIndicator();
 loadSummary();
 loadTable();
 loadAnalysis();
 _updateTimestamp();
-_startAutoRefresh();
-
-// Pre-fill period A label on top section
-(function() {
-    var pa = document.getElementById('ret-top-period-a-label');
-    if (pa) pa.textContent = retFilters.date_from + ' → ' + retFilters.date_to;
-})();
 
 })();
 </script>

@@ -405,7 +405,7 @@ function _clearUpdateNotification() {
 // ============================================================
 
 var _autoRefreshInterval = null;
-var _AUTO_REFRESH_MS     = 60000; // 60 s
+var _AUTO_REFRESH_MS     = 120000; // 2 min — no interrumpir lectura
 var _lastUserActivity    = Date.now();
 
 document.addEventListener('mousedown', function() { _lastUserActivity = Date.now(); }, true);
@@ -441,6 +441,8 @@ function _isUserInteracting() {
 }
 
 function _autoRefresh() {
+    // Skip entirely if user is actively working in a panel or textarea
+    if (_isUserInteracting()) return;
     // Only refresh summary KPIs — the tab content is left untouched.
     // If counts changed, _syncTabBadgesAndNotify() will show a banner.
     var ind = document.getElementById('health-refresh-indicator');
