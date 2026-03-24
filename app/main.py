@@ -8118,9 +8118,10 @@ async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
 
     bm = BinManagerClient()
     try:
-        now   = datetime.now(timezone.utc)
-        start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-        end   = now.strftime("%Y-%m-%d")
+        now       = datetime.now(timezone.utc)
+        yesterday = now - timedelta(days=1)  # datos del día en curso aún incompletos en BM
+        start     = (yesterday - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        end       = yesterday.strftime("%Y-%m-%d")
 
         # Explicit login step for better error diagnosis
         login_ok = await bm.login()

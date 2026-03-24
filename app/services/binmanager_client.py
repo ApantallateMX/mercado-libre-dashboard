@@ -151,7 +151,7 @@ class BinManagerClient:
             try:
                 r = await c.post(
                     f"{_BM_BASE}/ReportsBinManager/OperationsDashboard/GetDashboardKPIs",
-                    json=payload, headers=_AJAX_HEADERS, timeout=20,
+                    json=payload, headers=_AJAX_HEADERS, timeout=45,
                 )
                 if self._session_expired(r):
                     self._logged_in = False
