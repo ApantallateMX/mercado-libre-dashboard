@@ -3466,6 +3466,7 @@ async def health_claims_partial(
                                 "title": item.get("title", ""),
                                 "price": order.get("total_amount", 0),
                                 "item_id": item.get("id", ""),
+                                "seller_sku": item.get("seller_sku") or item.get("seller_custom_field") or "",
                             }
                     except Exception:
                         pass
@@ -3649,6 +3650,7 @@ async def health_claims_partial(
                 reason_type=reason_type,
                 product_title=order_info.get("title", ""),
                 product_price=order_info.get("price", 0),
+                product_sku=order_info.get("seller_sku", ""),
                 seller_actions=seller_actions,
                 due_date=due_date,
                 issues=issues,
@@ -3721,6 +3723,7 @@ async def health_questions_partial(
                                 "thumbnail": body.get("thumbnail", body.get("secure_thumbnail", "")),
                                 "price": body.get("price", 0),
                                 "stock": body.get("available_quantity", 0),
+                                "seller_sku": body.get("seller_custom_field") or "",
                             }
             except Exception:
                 pass
@@ -3823,6 +3826,7 @@ async def health_questions_partial(
                 product_thumbnail=prod.get("thumbnail", ""),
                 product_price=prod.get("price", 0),
                 product_stock=prod.get("stock", 0),
+                product_sku=prod.get("seller_sku", ""),
                 answer=answer,
                 buyer_id=buyer_id,
                 buyer_history=buyer_history,

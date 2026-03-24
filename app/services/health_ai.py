@@ -4,7 +4,28 @@ import json
 import re
 
 
-def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed, buyer_history=None, user_context=None):
+def _bm_product_block(bm_product: dict) -> str:
+    """Build a product info block from BinManager data for prompt injection."""
+    if not bm_product:
+        return ""
+    parts = []
+    if bm_product.get("brand"):
+        parts.append(f"- Marca: {bm_product['brand']}")
+    if bm_product.get("model"):
+        parts.append(f"- Modelo: {bm_product['model']}")
+    if bm_product.get("title"):
+        parts.append(f"- Nombre comercial: {bm_product['title']}")
+    if bm_product.get("category"):
+        parts.append(f"- Categoria: {bm_product['category']}")
+    if bm_product.get("description"):
+        desc = bm_product["description"][:500]
+        parts.append(f"- Descripcion: {desc}")
+    if not parts:
+        return ""
+    return "\nInformacion real del producto (BinManager):\n" + "\n".join(parts) + "\n"
+
+
+def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed, buyer_history=None, user_context=None, bm_product=None):
     system = (
         "Eres un vendedor profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
         "ESTRUCTURA OBLIGATORIA de cada respuesta:\n"
@@ -47,17 +68,21 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
             "- Si sus preguntas previas sugieren intencion de compra, refuerza el cierre\n\n"
         )
 
+    stock_note = ""
+    if product_stock == 0:
+        stock_note = " (SIN STOCK — sugiere que pregunte de nuevo pronto o vea productos similares)"
+    elif product_stock <= 3:
+        stock_note = " (POCO STOCK — menciona sutilmente que quedan pocas unidades)"
+    bm_block = _bm_product_block(bm_product or {})
     user += (
         f"Datos del producto:\n"
-        f"- Titulo: {product_title}\n"
+        f"- Titulo MeLi: {product_title}\n"
         f"- Precio: ${product_price}\n"
-        f"- Stock disponible: {product_stock} unidades"
+        f"- Stock disponible: {product_stock} unidades{stock_note}\n"
     )
-    if product_stock == 0:
-        user += " (SIN STOCK — sugiere que pregunte de nuevo pronto o vea productos similares)"
-    elif product_stock <= 3:
-        user += " (POCO STOCK — menciona sutilmente que quedan pocas unidades)"
-    user += f"\n- Tiempo desde la pregunta: {elapsed}\n"
+    if bm_block:
+        user += bm_block
+    user += f"- Tiempo desde la pregunta: {elapsed}\n"
     if elapsed:
         # Add urgency context
         user += "(Responde con tono acorde a la espera del comprador)\n"
@@ -69,7 +94,7 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     return system, user, 800
 
 
-def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title, days_open, issues, suggestions):
+def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title, days_open, issues, suggestions, bm_product=None):
     system = (
         "Eres un gestor de reclamos profesional en Mercado Libre Mexico. "
         "Tu objetivo es resolver reclamos rapidamente manteniendo la reputacion del vendedor.\n"
@@ -82,11 +107,13 @@ def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title,
     )
     issues_str = "; ".join(issues) if issues else "No especificados"
     suggestions_str = "; ".join(suggestions) if suggestions else "Ninguna"
+    bm_block = _bm_product_block(bm_product or {})
     user = (
         f"Reclamo #{claim_id}\n"
         f"Razon: {reason_desc} (ID: {reason_id})\n"
-        f"Producto: {product_title}\n"
-        f"Dias abierto: {days_open}\n"
+        f"Producto MeLi: {product_title}\n"
+        + (bm_block if bm_block else "")
+        + f"Dias abierto: {days_open}\n"
         f"Problemas detectados: {issues_str}\n"
         f"Sugerencias del sistema: {suggestions_str}\n\n"
         "Genera un mensaje empatico y con solucion concreta para el comprador:"
@@ -95,17 +122,19 @@ def build_claim_response_prompt(claim_id, reason_id, reason_desc, product_title,
 
 
 def build_claim_analysis_prompt(reason_desc, product_title, product_price, days_open,
-                                claims_rate, claims_status, sale_fee, shipping_cost):
+                                claims_rate, claims_status, sale_fee, shipping_cost, bm_product=None):
     system = (
         "Eres un consultor experto en Mercado Libre Mexico. "
         "Analiza reclamos y recomienda la mejor accion para el vendedor. "
         "Responde UNICAMENTE con un JSON valido (sin markdown, sin texto extra, sin backticks)."
     )
+    bm_block = _bm_product_block(bm_product or {})
     user = (
         f"Analiza este reclamo y da tu recomendacion:\n\n"
         f"Razon: {reason_desc}\n"
-        f"Producto: {product_title}\n"
-        f"Precio del producto: ${product_price}\n"
+        f"Producto MeLi: {product_title}\n"
+        + (bm_block if bm_block else "")
+        + f"Precio del producto: ${product_price}\n"
         f"Dias abierto: {days_open}\n"
         f"Tasa de reclamos actual: {claims_rate}% ({claims_status})\n"
         f"Comision de venta: ${sale_fee}\n"

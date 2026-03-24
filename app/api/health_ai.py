@@ -2,6 +2,7 @@
 
 import json
 import os
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
@@ -13,6 +14,50 @@ from app.services.health_ai import (
     build_message_reply_prompt,
     parse_claim_analysis,
 )
+
+_BM_INVENTORY_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+_BM_COMPANY_ID = 1
+_BM_CONCEPT_ID = 8
+
+
+async def _fetch_bm_product(sku: str) -> dict:
+    """Fetch Brand, Model, Title, Description from BinManager for a given SKU.
+    Returns empty dict on failure or missing SKU.
+    """
+    if not sku:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            resp = await http.post(
+                _BM_INVENTORY_URL,
+                json={
+                    "COMPANYID": _BM_COMPANY_ID,
+                    "SEARCH": sku,
+                    "CONCEPTID": _BM_CONCEPT_ID,
+                    "NUMBERPAGE": 1,
+                    "RECORDSPAGE": 10,
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and isinstance(data, list):
+                    row = data[0]
+                    for item in data:
+                        if item.get("SKU", "").upper() == sku.upper():
+                            row = item
+                            break
+                    return {
+                        "brand": row.get("Brand", "") or "",
+                        "model": row.get("Model", "") or "",
+                        "title": row.get("Title", "") or "",
+                        "description": row.get("Description", "") or "",
+                        "upc": row.get("UPC", "") or "",
+                        "category": row.get("CategoryName", "") or "",
+                    }
+    except Exception:
+        pass
+    return {}
 
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
 
@@ -99,6 +144,8 @@ async def suggest_answer(request: Request):
     if not claude_client.is_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
+    sku = body.get("sku", "")
+    bm_product = await _fetch_bm_product(sku)
     system, prompt, max_tokens = build_question_answer_prompt(
         body.get("question_text", ""),
         body.get("product_title", ""),
@@ -107,6 +154,7 @@ async def suggest_answer(request: Request):
         body.get("elapsed", ""),
         buyer_history=body.get("buyer_history", []),
         user_context=body.get("user_context", ""),
+        bm_product=bm_product,
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),
@@ -121,6 +169,8 @@ async def suggest_claim_response(request: Request):
     if not claude_client.is_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
+    sku = body.get("sku", "")
+    bm_product = await _fetch_bm_product(sku)
     system, prompt, max_tokens = build_claim_response_prompt(
         body.get("claim_id", ""),
         body.get("reason_id", ""),
@@ -129,6 +179,7 @@ async def suggest_claim_response(request: Request):
         body.get("days_open", 0),
         body.get("issues", []),
         body.get("suggestions", []),
+        bm_product=bm_product,
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),
@@ -143,6 +194,8 @@ async def claim_analysis(request: Request):
     if not claude_client.is_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
+    sku = body.get("sku", "")
+    bm_product = await _fetch_bm_product(sku)
     system, prompt, max_tokens = build_claim_analysis_prompt(
         body.get("reason_desc", ""),
         body.get("product_title", ""),
@@ -152,6 +205,7 @@ async def claim_analysis(request: Request):
         body.get("claims_status", ""),
         body.get("sale_fee", 0),
         body.get("shipping_cost", 0),
+        bm_product=bm_product,
     )
     try:
         raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)

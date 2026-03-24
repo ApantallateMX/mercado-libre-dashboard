@@ -148,6 +148,7 @@ window.suggestQuestionAnswer = function (btn) {
         product_title: btn.getAttribute('data-product-title') || '',
         product_price: parseFloat(btn.getAttribute('data-price')) || 0,
         product_stock: parseInt(btn.getAttribute('data-stock')) || 0,
+        sku: btn.getAttribute('data-sku') || '',
         elapsed: btn.getAttribute('data-elapsed') || '',
         buyer_history: buyerHistory,
         user_context: userContext
@@ -175,6 +176,7 @@ window.analyzeClaimAi = function (btn) {
     var payload = {
         reason_desc: btn.getAttribute('data-reason-desc'),
         product_title: btn.getAttribute('data-product-title') || '',
+        sku: btn.getAttribute('data-sku') || '',
         product_price: parseFloat(btn.getAttribute('data-price')) || 0,
         days_open: parseInt(btn.getAttribute('data-days-open')) || 0,
         claims_rate: parseFloat(btn.getAttribute('data-claims-rate')) || 0,
@@ -292,6 +294,7 @@ window.suggestClaimResponse = function (btn) {
         reason_id: btn.getAttribute('data-reason-id'),
         reason_desc: btn.getAttribute('data-reason-desc'),
         product_title: btn.getAttribute('data-product-title') || '',
+        sku: btn.getAttribute('data-sku') || '',
         days_open: parseInt(btn.getAttribute('data-days-open')) || 0,
         issues: issues,
         suggestions: suggestions
