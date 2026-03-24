@@ -140,6 +140,116 @@ class BinManagerClient:
 
         return None
 
+    async def get_operations_kpis(self, start_date: str, end_date: str) -> Optional[dict]:
+        """Get KPIs from BinManager Operations Dashboard (MTY MAXX Plant Report)."""
+        if not self._logged_in:
+            if not await self.login():
+                return None
+        c = self._client()
+        payload = {"StartDate": start_date, "EndDate": end_date, "excludedhv": 0, "needtv": 0}
+        for attempt in range(2):
+            try:
+                r = await c.post(
+                    f"{_BM_BASE}/ReportsBinManager/OperationsDashboard/GetDashboardKPIs",
+                    json=payload, headers=_AJAX_HEADERS, timeout=20,
+                )
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return None
+                if r.status_code == 200:
+                    data = r.json()
+                    return data[0] if isinstance(data, list) and data else None
+                return None
+            except Exception as e:
+                logger.error(f"BinManager GetDashboardKPIs error: {e}")
+                if attempt == 0:
+                    continue
+                return None
+        return None
+
+    async def get_global_inventory(self, page: int = 1, per_page: int = 50, min_qty: int = 1) -> list:
+        """Get global inventory page from BinManager (all SKUs with stock)."""
+        if not self._logged_in:
+            if not await self.login():
+                return []
+        c = self._client()
+        payload = {
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 8,
+            "NUMBERPAGE": page, "RECORDSPAGE": per_page,
+            "MinQty": min_qty, "NEEDRETAILPRICEPH": True,
+            "CATEGORYID": None, "WAREHOUSEID": None, "LOCATIONID": None,
+            "BINID": None, "CONDITION": None, "FORINVENTORY": None,
+            "BUSCADOR": False, "BRAND": None, "MODEL": None,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+        }
+        for attempt in range(2):
+            try:
+                r = await c.post(
+                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                    json=payload, headers=_AJAX_HEADERS, timeout=25,
+                )
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return []
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, list) else []
+                return []
+            except Exception as e:
+                logger.error(f"BinManager get_global_inventory error: {e}")
+                if attempt == 0:
+                    continue
+                return []
+        return []
+
+    async def get_sku_stock(self, sku: str) -> dict:
+        """Get stock and product info for a specific SKU."""
+        if not self._logged_in:
+            if not await self.login():
+                return {}
+        c = self._client()
+        payload = {
+            "COMPANYID": 1, "SEARCH": sku, "CONCEPTID": 8,
+            "NUMBERPAGE": 1, "RECORDSPAGE": 5, "NEEDRETAILPRICEPH": True,
+        }
+        for attempt in range(2):
+            try:
+                r = await c.post(
+                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                    json=payload, headers=_AJAX_HEADERS, timeout=10,
+                )
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return {}
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and data:
+                        row = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
+                        return {
+                            "stock": row.get("QtyTotal", 0) or 0,
+                            "retail_price": row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0,
+                            "brand": row.get("Brand", ""),
+                            "model": row.get("Model", ""),
+                            "category": row.get("CategoryName", "") or row.get("Category", ""),
+                            "title": row.get("Title", "") or row.get("Model", ""),
+                        }
+                return {}
+            except Exception as e:
+                logger.error(f"BinManager get_sku_stock error {sku}: {e}")
+                if attempt == 0:
+                    continue
+                return {}
+        return {}
+
     async def close(self):
         if self._http:
             await self._http.aclose()

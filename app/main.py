@@ -7950,6 +7950,311 @@ async def returns_top_products(
         await client.close()
 
 
+# ============================================================
+# PLANNING — Planeación & Requerimientos de Producción
+# ============================================================
+
+@app.get("/planning", response_class=HTMLResponse)
+async def planning_page(request: Request):
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "planning.html", {**ctx, "active": "planning"})
+
+
+async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) -> list:
+    """Fetch paginated paid orders for a MeLi user in a date range."""
+    client = await get_meli_client(user_id=uid)
+    if not client:
+        return []
+    try:
+        all_orders, offset, limit = [], 0, 50
+        while True:
+            try:
+                result = await client.get(
+                    f"/orders/search?seller={uid}&sort=date_desc"
+                    f"&order.status=paid"
+                    f"&order.date_created.from={df_str}"
+                    f"&order.date_created.to={dt_str}"
+                    f"&limit={limit}&offset={offset}"
+                )
+                orders = result.get("results", [])
+                if not orders:
+                    break
+                all_orders.extend(orders)
+                total = result.get("paging", {}).get("total", 0)
+                offset += len(orders)
+                if offset >= total or offset >= 600:
+                    break
+            except Exception:
+                break
+        return all_orders
+    finally:
+        await client.close()
+
+
+@app.get("/api/planning/velocity")
+async def planning_velocity(days: int = Query(30, ge=7, le=90)):
+    """Sales velocity per item/SKU from all MeLi accounts in last N days."""
+    from app.services.meli_client import token_store as _ts
+    from datetime import datetime, timedelta, timezone
+
+    accounts = await _ts.get_all_tokens()
+    if not accounts:
+        return {"error": "No hay cuentas configuradas", "items": [], "accounts_count": 0}
+
+    now = datetime.now(timezone.utc)
+    date_from   = now - timedelta(days=days)
+    date_from_7 = now - timedelta(days=7)
+    df_str  = date_from.strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
+    df7_str = date_from_7.strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
+    dt_str  = now.strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
+
+    order_lists = await asyncio.gather(
+        *[_planning_fetch_orders_for_user(a["user_id"], df_str, dt_str) for a in accounts],
+        return_exceptions=True,
+    )
+
+    item_agg: dict = {}
+    for orders in order_lists:
+        if not isinstance(orders, list):
+            continue
+        for order in orders:
+            if order.get("status") not in ("paid", "delivered", "completed"):
+                continue
+            is_7d = (order.get("date_created", "") >= df7_str)
+            for oi in order.get("order_items", []):
+                item = oi.get("item", {})
+                iid  = str(item.get("id", ""))
+                if not iid:
+                    continue
+                qty   = oi.get("quantity", 0) or 0
+                price = oi.get("unit_price", 0) or 0
+                if iid not in item_agg:
+                    item_agg[iid] = {
+                        "item_id": iid,
+                        "title": item.get("title", "") or "Sin título",
+                        "units": 0, "units_7d": 0, "revenue": 0.0, "sku": "",
+                    }
+                item_agg[iid]["units"]   += qty
+                item_agg[iid]["revenue"] += qty * price
+                if is_7d:
+                    item_agg[iid]["units_7d"] += qty
+
+    # Batch-fetch item details (top 60 by units) to get seller_custom_field / SKU
+    top_ids = sorted(item_agg, key=lambda x: item_agg[x]["units"], reverse=True)[:60]
+    if top_ids and accounts:
+        uid0 = accounts[0]["user_id"]
+        client0 = await get_meli_client(user_id=uid0)
+        if client0:
+            try:
+                batches = [top_ids[i:i+20] for i in range(0, len(top_ids), 20)]
+                sem_b = asyncio.Semaphore(3)
+
+                async def _fetch_batch(batch):
+                    async with sem_b:
+                        try:
+                            return await client0.get(f"/items?ids={','.join(batch)}&attributes=id,seller_custom_field,attributes")
+                        except Exception:
+                            return []
+
+                batch_results = await asyncio.gather(*[_fetch_batch(b) for b in batches], return_exceptions=True)
+                for br in batch_results:
+                    if not isinstance(br, list):
+                        continue
+                    for entry in br:
+                        if not isinstance(entry, dict):
+                            continue
+                        body = entry.get("body", entry)
+                        iid  = str(body.get("id", ""))
+                        sku  = (body.get("seller_custom_field") or "").upper().strip()
+                        if not sku:
+                            for attr in body.get("attributes", []):
+                                if attr.get("id") == "SELLER_SKU":
+                                    sku = (attr.get("value_name") or "").upper().strip()
+                                    break
+                        if iid in item_agg and sku:
+                            item_agg[iid]["sku"] = sku
+            finally:
+                await client0.close()
+
+    result_items = []
+    for d in item_agg.values():
+        daily_rate = round(d["units"] / days, 2)
+        result_items.append({
+            "item_id": d["item_id"], "sku": d["sku"],
+            "title": d["title"], "units_30d": d["units"],
+            "units_7d": d["units_7d"],
+            "revenue_30d": round(d["revenue"], 2),
+            "daily_rate": daily_rate,
+        })
+    result_items.sort(key=lambda x: x["daily_rate"], reverse=True)
+    return {"items": result_items[:100], "total_items": len(result_items),
+            "days": days, "accounts_count": len(accounts)}
+
+
+@app.get("/api/planning/production-kpis")
+async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
+    """Production KPIs from BinManager Operations Dashboard."""
+    from datetime import datetime, timedelta, timezone
+    from app.services.binmanager_client import BinManagerClient
+
+    bm = BinManagerClient()
+    try:
+        now   = datetime.now(timezone.utc)
+        start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        end   = now.strftime("%Y-%m-%d")
+        kpis  = await bm.get_operations_kpis(start, end)
+        if not kpis:
+            return {"error": "No se pudo conectar a BinManager"}
+
+        fft      = kpis.get("FFT", 0) or 0
+        received = kpis.get("QtyReceived", 0) or 0
+        sorting  = kpis.get("Sorting", 0) or 0
+        recycled = kpis.get("Recycle", 0) or 0
+        shipped  = kpis.get("TotalQtyShipped", 0) or 0
+
+        sellable_rate  = round(fft / sorting * 100, 1) if sorting > 0 else 0
+        daily_sellable = round(fft / days, 0)
+        daily_received = round(received / days, 0)
+
+        return {
+            "received": received, "sorting": sorting, "fft": fft,
+            "recycled": recycled, "shipped": shipped,
+            "sellable_rate": sellable_rate,
+            "daily_sellable": int(daily_sellable),
+            "daily_received": int(daily_received),
+            "days": days, "period": f"{start} al {end}",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await bm.close()
+
+
+@app.get("/api/planning/coverage")
+async def planning_coverage(
+    days: int = Query(30, ge=7, le=90),
+    target_days: int = Query(14, ge=7, le=60),
+):
+    """Sales velocity + BinManager stock = days of coverage per SKU."""
+    from app.services.binmanager_client import BinManagerClient
+
+    vel = await planning_velocity(days=days)
+    if vel.get("error") or not vel.get("items"):
+        return {"error": vel.get("error", "Sin datos de velocidad"), "items": []}
+
+    items_with_sku = [x for x in vel["items"] if x.get("sku")][:50]
+    if not items_with_sku:
+        return {"items": [], "target_days": target_days, "note": "Ningún item tiene SKU asignado en BinManager"}
+
+    bm  = BinManagerClient()
+    sem = asyncio.Semaphore(3)
+    await bm.login()
+
+    async def _get_stock(item):
+        async with sem:
+            info = await bm.get_sku_stock(item["sku"])
+            return item, info
+
+    stock_results = await asyncio.gather(*[_get_stock(it) for it in items_with_sku], return_exceptions=True)
+    await bm.close()
+
+    result = []
+    for r in stock_results:
+        if isinstance(r, Exception):
+            continue
+        item, bm_info = r
+        stock  = bm_info.get("stock", 0)
+        daily  = item["daily_rate"]
+
+        coverage_days = round(stock / daily, 1) if daily > 0 else None
+        if daily == 0:
+            status = "no_movement"
+        elif stock == 0:
+            status = "out_of_stock"
+        elif coverage_days is not None and coverage_days < 3:
+            status = "critical"
+        elif coverage_days is not None and coverage_days < 7:
+            status = "alert"
+        else:
+            status = "ok"
+
+        stock_target      = daily * target_days
+        units_to_request  = max(0, round(stock_target - stock)) if daily > 0 else 0
+
+        result.append({
+            **item,
+            "stock_bm": stock,
+            "coverage_days": coverage_days,
+            "status": status,
+            "units_to_request": units_to_request,
+            "retail_price": bm_info.get("retail_price", 0),
+            "brand": bm_info.get("brand", ""),
+            "model": bm_info.get("model", ""),
+            "bm_category": bm_info.get("category", ""),
+        })
+
+    order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
+    result.sort(key=lambda x: (order.get(x["status"], 5), -(x["daily_rate"] or 0)))
+    return {"items": result, "target_days": target_days, "days": days}
+
+
+@app.get("/api/planning/unlaunched")
+async def planning_unlaunched():
+    """BinManager products with stock that have zero or very low ML sales."""
+    from app.services.binmanager_client import BinManagerClient
+
+    # Get velocity to know what's already selling
+    vel = await planning_velocity(days=30)
+    selling_skus = {x["sku"].upper() for x in vel.get("items", []) if x.get("sku") and x.get("daily_rate", 0) > 0.1}
+
+    bm = BinManagerClient()
+    await bm.login()
+
+    bm_items = []
+    for page in range(1, 4):
+        page_items = await bm.get_global_inventory(page=page, per_page=50, min_qty=1)
+        bm_items.extend(page_items)
+        if len(page_items) < 50:
+            break
+
+    await bm.close()
+
+    result = []
+    for row in bm_items:
+        sku   = (row.get("SKU") or "").upper().strip()
+        stock = row.get("QtyTotal", 0) or 0
+        if not sku or stock <= 0:
+            continue
+
+        in_velocity = sku in selling_skus
+        if in_velocity:
+            tag = "sleeping"
+        else:
+            tag = "unlaunched"
+
+        retail_usd = row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0
+        rev_potential = round(stock * float(retail_usd) * 17.5, 0) if retail_usd else 0
+
+        result.append({
+            "sku": sku,
+            "title": row.get("Title", "") or row.get("Model", sku),
+            "brand": row.get("Brand", ""),
+            "model": row.get("Model", ""),
+            "category": row.get("CategoryName", "") or row.get("Category", ""),
+            "stock": stock,
+            "retail_price_usd": float(retail_usd),
+            "revenue_potential_mxn": rev_potential,
+            "tag": tag,
+        })
+
+    result.sort(key=lambda x: x["revenue_potential_mxn"], reverse=True)
+    return {
+        "items": result[:80],
+        "total_unlaunched": sum(1 for x in result if x["tag"] == "unlaunched"),
+        "total_sleeping": sum(1 for x in result if x["tag"] == "sleeping"),
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

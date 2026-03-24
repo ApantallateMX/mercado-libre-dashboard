@@ -1,0 +1,755 @@
+{% extends "base.html" %}
+{% block title %}Planeación & Requerimientos{% endblock %}
+
+{% block content %}
+<div class="mb-5">
+    <div class="flex items-center gap-3">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Planeación & Requerimientos</h1>
+            <p class="text-gray-500 text-sm">Velocidad de ventas · Cobertura de stock · Orden de separación · Productos sin lanzar</p>
+        </div>
+        <div class="ml-auto flex items-center gap-2">
+            <select id="plan-days" onchange="reloadAll()"
+                    class="border rounded px-3 py-1.5 text-sm bg-white">
+                <option value="30" selected>Últimos 30 días</option>
+                <option value="14">Últimos 14 días</option>
+                <option value="7">Últimos 7 días</option>
+                <option value="60">Últimos 60 días</option>
+            </select>
+            <select id="plan-target" class="border rounded px-3 py-1.5 text-sm bg-white">
+                <option value="14" selected>Meta cobertura: 14 días</option>
+                <option value="21">Meta cobertura: 21 días</option>
+                <option value="30">Meta cobertura: 30 días</option>
+                <option value="7">Meta cobertura: 7 días</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 1 — Producción vs Demanda (KPI Cards)
+═══════════════════════════════════════════════════════════ -->
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-6" id="plan-production-kpis">
+    {% for i in range(7) %}
+    <div class="bg-white rounded-xl shadow p-4 animate-pulse">
+        <div class="h-3 bg-gray-200 rounded w-2/3 mb-2"></div>
+        <div class="h-6 bg-gray-200 rounded w-1/2"></div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 2 — Velocidad de Ventas
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+        <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Velocidad de Ventas</h2>
+        <span class="text-xs text-gray-400">— por producto / SKU</span>
+        <div class="ml-auto flex items-center gap-2">
+            <input type="text" id="plan-vel-search" placeholder="Buscar..." oninput="filterVelocityTable()"
+                   class="border rounded px-2 py-1 text-xs w-36">
+            <span id="plan-vel-count" class="text-xs text-gray-400"></span>
+        </div>
+    </div>
+    <div id="plan-velocity-content" class="p-4">
+        <div class="animate-pulse space-y-2">
+            {% for i in range(8) %}
+            <div class="h-10 bg-gray-100 rounded"></div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 3 — Cobertura de Stock + Orden de Separación
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
+         onclick="toggleSection('plan-coverage')">
+        <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Cobertura de Stock & Orden de Separación</h2>
+        <span class="text-xs text-gray-400">— stock BinManager vs demanda ML</span>
+        <button onclick="event.stopPropagation(); loadCoverage()" id="btn-load-coverage"
+                class="ml-auto bg-blue-600 text-white text-xs px-3 py-1.5 rounded hover:bg-blue-700 font-semibold">
+            Analizar cobertura
+        </button>
+        <svg id="chevron-plan-coverage" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </div>
+    <div id="plan-coverage" class="hidden">
+        <div id="plan-coverage-content" class="p-5">
+            <p class="text-center text-gray-400 text-sm py-6">Haz clic en <strong>Analizar cobertura</strong> para cruzar ventas ML con stock BinManager.</p>
+        </div>
+        <!-- Orden de Separación -->
+        <div id="plan-order-section" class="hidden border-t border-gray-100 p-5">
+            <div class="flex items-center gap-3 mb-4">
+                <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                </svg>
+                <h3 class="text-sm font-bold text-gray-700">Orden de Separación</h3>
+                <span class="text-xs text-gray-400">— productos que necesitan reposición de producción</span>
+                <div class="ml-auto flex gap-2">
+                    <button onclick="copyOrderWhatsApp()" class="flex items-center gap-1 text-xs bg-green-500 text-white px-3 py-1.5 rounded hover:bg-green-600 font-semibold">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+                        WhatsApp
+                    </button>
+                    <button onclick="exportOrderCSV()" class="flex items-center gap-1 text-xs bg-gray-700 text-white px-3 py-1.5 rounded hover:bg-gray-800 font-semibold">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                        CSV
+                    </button>
+                    <button onclick="window.print()" class="flex items-center gap-1 text-xs bg-gray-200 text-gray-700 px-3 py-1.5 rounded hover:bg-gray-300 font-semibold">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/></svg>
+                        Imprimir
+                    </button>
+                </div>
+            </div>
+            <div id="plan-order-content"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 4 — Nuevos Productos / Sin Lanzar
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
+         onclick="toggleSection('plan-unlaunched')">
+        <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Nuevos Productos & Oportunidades Sin Lanzar</h2>
+        <span class="text-xs text-gray-400">— stock en BM que no está generando ventas en ML</span>
+        <button onclick="event.stopPropagation(); loadUnlaunched()" id="btn-load-unlaunched"
+                class="ml-auto bg-purple-600 text-white text-xs px-3 py-1.5 rounded hover:bg-purple-700 font-semibold">
+            Descubrir oportunidades
+        </button>
+        <svg id="chevron-plan-unlaunched" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </div>
+    <div id="plan-unlaunched" class="hidden p-5">
+        <p class="text-center text-gray-400 text-sm py-6">Haz clic en <strong>Descubrir oportunidades</strong> para ver productos en BinManager sin ventas activas en ML.</p>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 5 — Radar de Oportunidad
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Radar de Oportunidad</h2>
+        <span class="text-xs text-gray-400">— dinero perdido y quick wins</span>
+    </div>
+    <div id="plan-radar-content" class="p-5">
+        <p class="text-center text-gray-400 text-sm py-4">Carga la cobertura primero para ver el radar de oportunidad.</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+// ============================================================
+// State
+// ============================================================
+var _velocityData  = [];   // raw items from /api/planning/velocity
+var _coverageData  = [];   // enriched items from /api/planning/coverage
+var _unlaunchedData = [];  // items from /api/planning/unlaunched
+var _productionKpis = {};
+
+var _sectionStates = { 'plan-coverage': false, 'plan-unlaunched': false };
+
+// ============================================================
+// Helpers
+// ============================================================
+function _days()  { return parseInt(document.getElementById('plan-days').value) || 30; }
+function _target(){ return parseInt(document.getElementById('plan-target').value) || 14; }
+
+function _spinner(msg) {
+    return '<div class="flex items-center justify-center gap-3 py-10 text-sm text-gray-500">' +
+        '<svg class="animate-spin h-5 w-5 text-yellow-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
+        (msg || 'Cargando...') + '</div>';
+}
+
+function _fmtNum(n, decimals) {
+    if (n == null) return '—';
+    return Number(n).toLocaleString('es-MX', {minimumFractionDigits: decimals || 0, maximumFractionDigits: decimals || 0});
+}
+
+function _fmtMXN(n) {
+    if (!n) return '—';
+    return '$' + _fmtNum(n, 0);
+}
+
+function toggleSection(id) {
+    _sectionStates[id] = !_sectionStates[id];
+    var el = document.getElementById(id);
+    var ch = document.getElementById('chevron-' + id);
+    if (el) el.classList.toggle('hidden', !_sectionStates[id]);
+    if (ch) ch.style.transform = _sectionStates[id] ? '' : 'rotate(-90deg)';
+}
+
+function _openSection(id) {
+    _sectionStates[id] = true;
+    var el = document.getElementById(id);
+    var ch = document.getElementById('chevron-' + id);
+    if (el) el.classList.remove('hidden');
+    if (ch) ch.style.transform = '';
+}
+
+// ============================================================
+// LOAD PRODUCTION KPIs
+// ============================================================
+function loadProduction() {
+    fetch('/api/planning/production-kpis?days=7')
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            _productionKpis = d;
+            _renderProductionKpis(d);
+        })
+        .catch(function(){
+            document.getElementById('plan-production-kpis').innerHTML =
+                '<p class="col-span-7 text-center text-red-500 text-xs py-2">Error cargando KPIs de producción</p>';
+        });
+}
+
+function _renderProductionKpis(d) {
+    if (d.error) {
+        document.getElementById('plan-production-kpis').innerHTML =
+            '<div class="col-span-7 text-center text-sm text-red-500 py-2 bg-white rounded-xl shadow p-4">BinManager: ' + d.error + '</div>';
+        return;
+    }
+    var sellColor = d.sellable_rate >= 70 ? 'text-green-600' : (d.sellable_rate >= 50 ? 'text-yellow-600' : 'text-red-600');
+    var html = [
+        _kpiCard('Recibidas / día', d.daily_received, 'text-blue-600', 'Unidades al almacén'),
+        _kpiCard('Procesadas FFT / día', d.daily_sellable, 'text-indigo-600', 'Listas para vender'),
+        _kpiCard('Sorting total', _fmtNum(d.sorting), 'text-gray-700', 'En el periodo'),
+        _kpiCard('FFT total', _fmtNum(d.fft), 'text-indigo-600', 'En el periodo'),
+        _kpiCard('Tasa Sellable', d.sellable_rate + '%', sellColor, 'FFT / Sorting'),
+        _kpiCard('Recicladas', _fmtNum(d.recycled), 'text-orange-500', 'No sellables'),
+        _kpiCard('Despachadas total', _fmtNum(d.shipped), 'text-green-600', d.period || ''),
+    ].join('');
+    document.getElementById('plan-production-kpis').innerHTML = html;
+}
+
+function _kpiCard(label, value, cls, sub) {
+    return '<div class="bg-white rounded-xl shadow p-4">' +
+        '<p class="text-[10px] text-gray-500 uppercase tracking-wide mb-1">' + label + '</p>' +
+        '<p class="text-xl font-black ' + cls + '">' + value + '</p>' +
+        (sub ? '<p class="text-[10px] text-gray-400 mt-0.5">' + sub + '</p>' : '') +
+        '</div>';
+}
+
+// ============================================================
+// LOAD VELOCITY
+// ============================================================
+function loadVelocity() {
+    var el = document.getElementById('plan-velocity-content');
+    el.innerHTML = _spinner('Calculando velocidad de ventas...');
+    fetch('/api/planning/velocity?days=' + _days())
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            _velocityData = d.items || [];
+            _renderVelocityTable(_velocityData);
+            _renderRadar();
+        })
+        .catch(function(e){
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+}
+
+var _velRows = [];
+function _renderVelocityTable(items) {
+    var el = document.getElementById('plan-velocity-content');
+    var cnt = document.getElementById('plan-vel-count');
+    if (!items.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin ventas en el periodo seleccionado.</p>';
+        return;
+    }
+    if (cnt) cnt.textContent = items.length + ' productos';
+
+    var statusCfg = {
+        critical:    { cls:'bg-red-100 text-red-700 border-red-200',    label:'CRÍTICO',    icon:'🔴' },
+        alert:       { cls:'bg-yellow-100 text-yellow-700 border-yellow-200', label:'ALERTA', icon:'🟡' },
+        ok:          { cls:'bg-green-100 text-green-700 border-green-200', label:'OK',       icon:'🟢' },
+        no_movement: { cls:'bg-gray-100 text-gray-500 border-gray-200',  label:'SIN MOV',   icon:'⚪' },
+        out_of_stock:{ cls:'bg-red-200 text-red-800 border-red-300',     label:'AGOTADO',   icon:'🔴' },
+    };
+
+    var maxRate = items[0] ? items[0].daily_rate : 1;
+    var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
+        '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
+        '<th class="pb-2 pl-1 w-6">#</th>' +
+        '<th class="pb-2 pr-3">Producto</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Venta/día</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
+        '<th class="pb-2 pr-3">Proporción</th>' +
+        '</tr></thead><tbody>';
+
+    _velRows = [];
+    items.forEach(function(p, i) {
+        var barW = maxRate > 0 ? Math.round(p.daily_rate / maxRate * 100) : 0;
+        var barC = i < 3 ? 'bg-red-400' : (i < 8 ? 'bg-orange-400' : 'bg-yellow-400');
+        var skuChip = p.sku
+            ? '<span class="ml-1 px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
+            : '<span class="ml-1 px-1 py-0.5 text-[9px] bg-gray-50 text-gray-400 rounded border">sin SKU</span>';
+
+        var row = '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition" ' +
+            'data-search="' + (p.title + ' ' + p.sku + ' ' + p.item_id).toLowerCase() + '">' +
+            '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (i+1) + '</td>' +
+            '<td class="py-2 pr-3 max-w-xs">' +
+                '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
+                '<div class="flex items-center gap-1 mt-0.5">' + skuChip +
+                '<span class="text-[9px] text-gray-400">' + p.item_id + '</span></div>' +
+            '</td>' +
+            '<td class="py-2 pr-3 text-right font-black text-gray-800">' + p.daily_rate + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + p.units_7d + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + p.units_30d + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
+            '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
+                '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
+            '</tr>';
+        html += row;
+        _velRows.push(row);
+    });
+
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
+
+window.filterVelocityTable = function() {
+    var q = (document.getElementById('plan-vel-search').value || '').toLowerCase();
+    document.querySelectorAll('.vel-row').forEach(function(row) {
+        var match = !q || row.getAttribute('data-search').includes(q);
+        row.style.display = match ? '' : 'none';
+    });
+};
+
+// ============================================================
+// LOAD COVERAGE
+// ============================================================
+window.loadCoverage = function() {
+    _openSection('plan-coverage');
+    var el = document.getElementById('plan-coverage-content');
+    el.innerHTML = _spinner('Cruzando ventas ML con stock BinManager — puede tomar ~20 segundos...');
+    document.getElementById('plan-order-section').classList.add('hidden');
+
+    fetch('/api/planning/coverage?days=' + _days() + '&target_days=' + _target())
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            _coverageData = d.items || [];
+            _renderCoverage(d);
+            _renderOrderSection(d);
+            _renderRadar();
+        })
+        .catch(function(e){
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+};
+
+var STATUS_CFG = {
+    out_of_stock: { label:'AGOTADO',  cls:'bg-red-200 text-red-800 border-red-300',      bar:'bg-red-500' },
+    critical:     { label:'CRÍTICO',  cls:'bg-red-100 text-red-700 border-red-200',      bar:'bg-red-400' },
+    alert:        { label:'ALERTA',   cls:'bg-yellow-100 text-yellow-700 border-yellow-200', bar:'bg-yellow-400' },
+    ok:           { label:'OK',       cls:'bg-green-100 text-green-700 border-green-200', bar:'bg-green-400' },
+    no_movement:  { label:'SIN MOV', cls:'bg-gray-100 text-gray-500 border-gray-200',   bar:'bg-gray-300' },
+};
+
+function _renderCoverage(d) {
+    var el = document.getElementById('plan-coverage-content');
+    if (!d.items || !d.items.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-6">Sin productos con SKU identificado. Verifica que tus listings tengan <code>seller_custom_field</code> asignado.</p>';
+        return;
+    }
+
+    // Summary chips
+    var critical = d.items.filter(function(x){ return x.status === 'critical' || x.status === 'out_of_stock'; });
+    var alert    = d.items.filter(function(x){ return x.status === 'alert'; });
+    var ok       = d.items.filter(function(x){ return x.status === 'ok'; });
+    var noMov    = d.items.filter(function(x){ return x.status === 'no_movement'; });
+
+    var html = '<div class="flex flex-wrap gap-3 mb-5">' +
+        _summaryChip(critical.length, 'CRÍTICOS / AGOTADOS', 'bg-red-100 text-red-700') +
+        _summaryChip(alert.length,    'EN ALERTA',           'bg-yellow-100 text-yellow-700') +
+        _summaryChip(ok.length,       'OK',                  'bg-green-100 text-green-700') +
+        _summaryChip(noMov.length,    'SIN MOVIMIENTO',      'bg-gray-100 text-gray-500') +
+        '</div>';
+
+    html += '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
+        '<th class="pb-2 pr-3">Producto / SKU</th>' +
+        '<th class="pb-2 pr-3 text-right">Venta/día</th>' +
+        '<th class="pb-2 pr-3 text-right">Stock BM</th>' +
+        '<th class="pb-2 pr-3 text-right">Cobertura</th>' +
+        '<th class="pb-2 pr-3 text-right">A solicitar</th>' +
+        '<th class="pb-2 pr-3 text-right">Precio USD</th>' +
+        '<th class="pb-2 pr-3">Estado</th>' +
+        '</tr></thead><tbody>';
+
+    d.items.forEach(function(p) {
+        var cfg = STATUS_CFG[p.status] || STATUS_CFG.ok;
+        var covText = p.coverage_days != null ? p.coverage_days + 'd' : '—';
+        var reqText = p.units_to_request > 0
+            ? '<strong class="text-red-700">' + p.units_to_request + ' uds</strong>'
+            : '<span class="text-gray-400">—</span>';
+
+        html += '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+            '<td class="py-2.5 pr-3">' +
+                '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
+                '<div class="flex gap-1 mt-0.5">' +
+                (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
+                (p.brand ? '<span class="text-[9px] text-gray-400">' + p.brand + '</span>' : '') +
+                '</div>' +
+            '</td>' +
+            '<td class="py-2.5 pr-3 text-right font-bold text-gray-800">' + p.daily_rate + '</td>' +
+            '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
+            '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
+            '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
+            '<td class="py-2.5 pr-3 text-right text-gray-500">' + (p.retail_price ? '$' + p.retail_price : '—') + '</td>' +
+            '<td class="py-2.5 pr-3"><span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + cfg.cls + '">' + cfg.label + '</span></td>' +
+            '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
+
+function _summaryChip(n, label, cls) {
+    return '<div class="' + cls + ' rounded-xl px-4 py-3 flex-1 min-w-[120px]">' +
+        '<p class="text-xl font-black">' + n + '</p>' +
+        '<p class="text-[10px] uppercase tracking-wide mt-0.5">' + label + '</p>' +
+        '</div>';
+}
+
+// ============================================================
+// ORDER SECTION
+// ============================================================
+function _renderOrderSection(d) {
+    var needReplenish = (d.items || []).filter(function(x){
+        return x.units_to_request > 0 && x.status !== 'no_movement';
+    });
+    var orderSection = document.getElementById('plan-order-section');
+    var orderContent = document.getElementById('plan-order-content');
+    if (!needReplenish.length) {
+        orderSection.classList.remove('hidden');
+        orderContent.innerHTML = '<p class="text-center text-green-600 text-sm py-4">Todos los productos tienen cobertura suficiente para la meta configurada.</p>';
+        return;
+    }
+    orderSection.classList.remove('hidden');
+
+    var today = new Date().toLocaleDateString('es-MX', {year:'numeric',month:'long',day:'numeric'});
+    var html = '<div class="mb-3 text-xs text-gray-400">Fecha de requerimiento: ' + today +
+        ' &nbsp;|&nbsp; Meta de cobertura: <strong>' + _target() + ' días</strong>' +
+        ' &nbsp;|&nbsp; <strong>' + needReplenish.length + ' productos</strong> a solicitar</div>';
+
+    html += '<table class="w-full text-xs border-collapse" id="order-table">' +
+        '<thead><tr class="bg-gray-50 border-y border-gray-200 text-[10px] text-gray-500 uppercase">' +
+        '<th class="py-2 px-3 text-left">#</th>' +
+        '<th class="py-2 px-3 text-left">SKU</th>' +
+        '<th class="py-2 px-3 text-left">Producto</th>' +
+        '<th class="py-2 px-3 text-right">Stock actual</th>' +
+        '<th class="py-2 px-3 text-right">Venta/día</th>' +
+        '<th class="py-2 px-3 text-right font-bold text-red-700">SOLICITAR</th>' +
+        '<th class="py-2 px-3 text-center">Prioridad</th>' +
+        '<th class="py-2 px-3 text-left">Nota</th>' +
+        '</tr></thead><tbody>';
+
+    needReplenish.sort(function(a,b){
+        var o = {out_of_stock:0,critical:1,alert:2,ok:3};
+        return (o[a.status]||9)-(o[b.status]||9);
+    }).forEach(function(p, i){
+        var prio = p.status === 'out_of_stock' || p.status === 'critical'
+            ? '<span class="px-1.5 py-0.5 text-[10px] bg-red-100 text-red-700 rounded font-bold border border-red-200">URGENTE</span>'
+            : '<span class="px-1.5 py-0.5 text-[10px] bg-yellow-100 text-yellow-700 rounded font-semibold border border-yellow-200">Esta semana</span>';
+
+        html += '<tr class="border-b border-gray-100 hover:bg-gray-50 order-row"' +
+            ' data-sku="' + p.sku + '"' +
+            ' data-title="' + p.title.replace(/"/g, '&quot;') + '"' +
+            ' data-stock="' + p.stock_bm + '"' +
+            ' data-daily="' + p.daily_rate + '"' +
+            ' data-qty="' + p.units_to_request + '">' +
+            '<td class="py-2 px-3 font-bold text-gray-400">' + (i+1) + '</td>' +
+            '<td class="py-2 px-3 font-mono text-blue-600">' + (p.sku || '—') + '</td>' +
+            '<td class="py-2 px-3 font-medium text-gray-800 max-w-xs truncate" title="' + p.title + '">' + p.title + '</td>' +
+            '<td class="py-2 px-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + p.stock_bm + '</td>' +
+            '<td class="py-2 px-3 text-right text-gray-600">' + p.daily_rate + '</td>' +
+            '<td class="py-2 px-3 text-right">' +
+                '<input type="number" value="' + p.units_to_request + '" min="0" ' +
+                'class="w-20 text-right border rounded px-1 py-0.5 text-xs font-bold text-red-700 focus:ring-1 focus:ring-red-400" ' +
+                'data-field="qty" oninput="this.closest(\'tr\').setAttribute(\'data-qty\', this.value)">' +
+            '</td>' +
+            '<td class="py-2 px-3 text-center">' + prio + '</td>' +
+            '<td class="py-2 px-3"><input type="text" placeholder="Nota..." class="w-full border rounded px-1 py-0.5 text-xs text-gray-600" data-field="note"></td>' +
+            '</tr>';
+    });
+    html += '</tbody></table>';
+    orderContent.innerHTML = html;
+}
+
+window.copyOrderWhatsApp = function() {
+    var rows = document.querySelectorAll('.order-row');
+    if (!rows.length) return;
+    var today = new Date().toLocaleDateString('es-MX', {day:'numeric',month:'short',year:'numeric'});
+    var lines = ['*Requerimiento de Separación — ' + today + '*',
+                 'Meta de cobertura: ' + _target() + ' días',
+                 ''];
+    var i = 1;
+    rows.forEach(function(row){
+        var sku   = row.getAttribute('data-sku') || '—';
+        var title = row.getAttribute('data-title') || '';
+        var qty   = (row.querySelector('[data-field="qty"]') || {}).value || row.getAttribute('data-qty') || '0';
+        var note  = (row.querySelector('[data-field="note"]') || {}).value || '';
+        if (parseInt(qty) > 0) {
+            lines.push(i + '. *' + sku + '* — ' + title);
+            lines.push('   Cantidad a separar: *' + qty + ' uds*' + (note ? ' | ' + note : ''));
+            i++;
+        }
+    });
+    lines.push('', '_Generado desde el Dashboard — ' + window.location.origin + '/planning_');
+    var text = lines.join('\n');
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(function(){
+            alert('Orden copiada al portapapeles. Pégala en WhatsApp.');
+        });
+    } else {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        alert('Orden copiada al portapapeles.');
+    }
+};
+
+window.exportOrderCSV = function() {
+    var rows = document.querySelectorAll('.order-row');
+    if (!rows.length) return;
+    var lines = ['SKU,Producto,Stock Actual,Venta/Dia,Solicitar,Nota'];
+    rows.forEach(function(row){
+        var sku   = row.getAttribute('data-sku') || '';
+        var title = (row.getAttribute('data-title') || '').replace(/,/g, ' ');
+        var stock = row.getAttribute('data-stock') || '0';
+        var daily = row.getAttribute('data-daily') || '0';
+        var qty   = (row.querySelector('[data-field="qty"]') || {}).value || row.getAttribute('data-qty') || '0';
+        var note  = ((row.querySelector('[data-field="note"]') || {}).value || '').replace(/,/g,' ');
+        lines.push([sku, title, stock, daily, qty, note].join(','));
+    });
+    var blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'requerimiento_' + new Date().toISOString().slice(0,10) + '.csv';
+    a.click();
+};
+
+// ============================================================
+// LOAD UNLAUNCHED
+// ============================================================
+window.loadUnlaunched = function() {
+    _openSection('plan-unlaunched');
+    var el = document.getElementById('plan-unlaunched');
+    el.innerHTML = _spinner('Comparando inventario BinManager vs ventas ML...');
+
+    fetch('/api/planning/unlaunched')
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            _unlaunchedData = d.items || [];
+            _renderUnlaunched(d);
+        })
+        .catch(function(e){
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+};
+
+function _renderUnlaunched(d) {
+    var el = document.getElementById('plan-unlaunched');
+    var items = d.items || [];
+    if (!items.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">No se encontraron productos en BinManager sin ventas activas.</p>';
+        return;
+    }
+
+    // Filter tabs
+    var filter = 'all';
+    function applyFilter(f) {
+        filter = f;
+        document.querySelectorAll('.unl-tab').forEach(function(b){ b.className = 'unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer'; });
+        document.getElementById('unl-tab-' + f).className = 'unl-tab px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold cursor-pointer';
+        var filtered = f === 'all' ? items
+            : items.filter(function(x){ return x.tag === f; });
+        renderCards(filtered);
+    }
+    window._unl_applyFilter = applyFilter;
+
+    var unlCount = d.total_unlaunched || 0;
+    var slpCount = d.total_sleeping  || 0;
+    var totalRev = items.reduce(function(s,x){ return s + (x.revenue_potential_mxn || 0); }, 0);
+
+    var html = '<div class="flex flex-wrap items-center gap-3 mb-5">' +
+        '<div class="flex gap-2">' +
+        '<span id="unl-tab-all" class="unl-tab px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold cursor-pointer" onclick="_unl_applyFilter(\'all\')">Todos (' + items.length + ')</span>' +
+        '<span id="unl-tab-unlaunched" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'unlaunched\')">Sin listing (' + unlCount + ')</span>' +
+        '<span id="unl-tab-sleeping" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'sleeping\')">Dormidos (' + slpCount + ')</span>' +
+        '</div>' +
+        '<div class="ml-auto text-sm text-purple-700 font-semibold bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100">' +
+        'Revenue potencial: ' + _fmtMXN(totalRev) + ' MXN</div>' +
+        '</div>';
+    html += '<div id="unl-cards"></div>';
+    el.innerHTML = html;
+
+    function renderCards(filtered) {
+        var cardsEl = document.getElementById('unl-cards');
+        if (!filtered.length) {
+            cardsEl.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin resultados.</p>';
+            return;
+        }
+        var c = '';
+        filtered.slice(0, 40).forEach(function(p, i){
+            var tagCfg = p.tag === 'unlaunched'
+                ? { cls:'bg-purple-100 text-purple-700 border-purple-200', label:'Sin listing en ML' }
+                : { cls:'bg-orange-100 text-orange-700 border-orange-200', label:'Listing sin ventas +30d' };
+
+            var revMxn = p.revenue_potential_mxn;
+            var revBadge = revMxn > 50000
+                ? '<span class="px-1.5 py-0.5 text-[10px] bg-green-100 text-green-700 rounded font-semibold border border-green-200">💰 ' + _fmtMXN(revMxn) + '</span>'
+                : (revMxn > 10000
+                    ? '<span class="px-1.5 py-0.5 text-[10px] bg-yellow-100 text-yellow-700 rounded font-semibold border border-yellow-200">' + _fmtMXN(revMxn) + '</span>'
+                    : '<span class="text-[10px] text-gray-400">' + _fmtMXN(revMxn) + '</span>');
+
+            var checkItems = p.tag === 'unlaunched'
+                ? ['Tomar fotos del producto', 'Redactar título y descripción', 'Definir precio (' + (p.retail_price_usd ? '$' + p.retail_price_usd.toFixed(2) + ' USD sugerido' : 'sin precio BM') + ')', 'Elegir cuenta para publicar']
+                : ['Revisar precio vs competencia', 'Actualizar fotos y descripción', 'Activar campaña de Ads', 'Verificar si listing está pausado'];
+
+            c += '<div class="border border-gray-200 rounded-xl overflow-hidden mb-3">' +
+                '<div class="flex items-start gap-4 px-5 py-4 bg-white">' +
+                '<div class="w-7 text-center flex-shrink-0"><span class="text-lg font-black text-gray-300">' + (i+1) + '</span></div>' +
+                '<div class="flex-1 min-w-0">' +
+                '<div class="flex flex-wrap items-center gap-2 mb-1">' +
+                '<p class="text-sm font-semibold text-gray-800">' + p.title + '</p>' +
+                '<span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + tagCfg.cls + '">' + tagCfg.label + '</span>' +
+                revBadge +
+                '</div>' +
+                '<div class="flex flex-wrap items-center gap-3 text-xs text-gray-500 mb-1">' +
+                (p.sku ? '<span class="font-mono bg-blue-50 text-blue-600 px-1 rounded border border-blue-100 text-[10px]">' + p.sku + '</span>' : '') +
+                (p.brand ? '<span>' + p.brand + (p.model ? ' ' + p.model : '') + '</span>' : '') +
+                (p.category ? '<span class="text-gray-400">' + p.category + '</span>' : '') +
+                '<span><strong>' + p.stock + '</strong> uds en BM</span>' +
+                (p.retail_price_usd ? '<span>$' + p.retail_price_usd.toFixed(2) + ' USD</span>' : '') +
+                '</div>' +
+                '</div></div>' +
+                '<div class="bg-gray-50 border-t border-gray-100 px-5 py-3">' +
+                '<p class="text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Pasos para activar:</p>' +
+                '<ul class="flex flex-wrap gap-x-4 gap-y-0.5">' +
+                checkItems.map(function(s){ return '<li class="flex items-center gap-1 text-[10px] text-gray-600"><span class="text-gray-400">☐</span>' + s + '</li>'; }).join('') +
+                '</ul></div></div>';
+        });
+        cardsEl.innerHTML = c;
+    }
+    renderCards(items);
+}
+
+// ============================================================
+// RADAR DE OPORTUNIDAD
+// ============================================================
+function _renderRadar() {
+    var el = document.getElementById('plan-radar-content');
+    var vel = _velocityData;
+    var cov = _coverageData;
+
+    if (!vel.length && !cov.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 text-sm py-4">Carga la cobertura primero para ver el radar de oportunidad.</p>';
+        return;
+    }
+
+    var html = '<div class="grid md:grid-cols-3 gap-4">';
+
+    // Lost revenue (out of stock items)
+    if (cov.length) {
+        var outOfStock = cov.filter(function(x){ return x.status === 'out_of_stock' || x.status === 'critical'; });
+        var lostRev = outOfStock.reduce(function(s, x){
+            return s + (x.daily_rate * x.retail_price * 17.5 * 7);
+        }, 0);
+
+        html += '<div class="bg-red-50 rounded-xl p-4 border border-red-100">' +
+            '<p class="text-[10px] text-red-600 uppercase font-bold tracking-wide mb-2">Ingresos en riesgo (próx. 7 días)</p>' +
+            '<p class="text-2xl font-black text-red-700">' + _fmtMXN(Math.round(lostRev)) + '</p>' +
+            '<p class="text-xs text-red-500 mt-1">' + outOfStock.length + ' productos críticos o agotados</p>' +
+            (outOfStock.length ? '<ul class="mt-2 space-y-0.5">' +
+                outOfStock.slice(0,3).map(function(x){
+                    return '<li class="text-[10px] text-red-700 truncate">• ' + x.title + '</li>';
+                }).join('') + '</ul>' : '') +
+            '</div>';
+
+        // ABC Analysis
+        var aItems = vel.filter(function(x){ return x.daily_rate >= 1; });
+        var bItems = vel.filter(function(x){ return x.daily_rate >= 0.3 && x.daily_rate < 1; });
+        var cItems = vel.filter(function(x){ return x.daily_rate < 0.3 && x.daily_rate > 0; });
+        html += '<div class="bg-blue-50 rounded-xl p-4 border border-blue-100">' +
+            '<p class="text-[10px] text-blue-600 uppercase font-bold tracking-wide mb-3">Clasificación ABC</p>' +
+            '<div class="space-y-2">' +
+            _abcRow('A', aItems.length, 'Venden ≥1/día', 'bg-red-400', 'Meta: 21 días de stock') +
+            _abcRow('B', bItems.length, 'Venden semanal', 'bg-yellow-400', 'Meta: 14 días de stock') +
+            _abcRow('C', cItems.length, 'Venden lento', 'bg-gray-400', 'Meta: 7 días de stock') +
+            '</div></div>';
+    } else {
+        html += '<div class="bg-gray-50 rounded-xl p-4 border border-gray-100 flex items-center justify-center text-gray-400 text-sm">Carga cobertura para ver análisis</div>';
+        html += '<div class="bg-gray-50 rounded-xl p-4 border border-gray-100 flex items-center justify-center text-gray-400 text-sm">Clasificación ABC disponible con cobertura</div>';
+    }
+
+    // Top revenue velocity
+    var topRev = vel.slice(0, 5);
+    html += '<div class="bg-green-50 rounded-xl p-4 border border-green-100">' +
+        '<p class="text-[10px] text-green-600 uppercase font-bold tracking-wide mb-3">Top 5 por Revenue</p>' +
+        '<div class="space-y-2">' +
+        topRev.map(function(x, i){
+            return '<div class="flex items-center gap-2">' +
+                '<span class="w-4 text-xs font-bold text-gray-400">' + (i+1) + '</span>' +
+                '<div class="flex-1 min-w-0"><p class="text-xs font-medium text-gray-700 truncate">' + x.title + '</p></div>' +
+                '<span class="text-xs font-bold text-green-700 flex-shrink-0">' + _fmtMXN(x.revenue_30d) + '</span>' +
+                '</div>';
+        }).join('') +
+        '</div></div>';
+
+    html += '</div>';
+    el.innerHTML = html;
+}
+
+function _abcRow(letter, count, desc, barCls, note) {
+    return '<div class="flex items-center gap-2">' +
+        '<span class="w-5 h-5 rounded text-xs font-black text-white flex items-center justify-center ' + barCls + '">' + letter + '</span>' +
+        '<div class="flex-1">' +
+        '<p class="text-xs font-semibold text-gray-700">' + count + ' productos — ' + desc + '</p>' +
+        '<p class="text-[10px] text-gray-400">' + note + '</p>' +
+        '</div></div>';
+}
+
+// ============================================================
+// Init & reload
+// ============================================================
+window.reloadAll = function() {
+    _velocityData = [];
+    _coverageData = [];
+    document.getElementById('plan-velocity-content').innerHTML = _spinner('Recalculando...');
+    document.getElementById('plan-coverage-content').innerHTML = '<p class="text-center text-gray-400 text-sm py-6">Haz clic en <strong>Analizar cobertura</strong> para actualizar.</p>';
+    loadProduction();
+    loadVelocity();
+};
+
+loadProduction();
+loadVelocity();
+
+})();
+</script>
+{% endblock %}
