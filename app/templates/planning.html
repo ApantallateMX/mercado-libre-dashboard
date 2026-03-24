@@ -224,9 +224,26 @@ function loadProduction() {
 }
 
 function _renderProductionKpis(d) {
+    var container = document.getElementById('plan-production-kpis');
     if (d.error) {
-        document.getElementById('plan-production-kpis').innerHTML =
-            '<div class="col-span-7 text-center text-sm text-red-500 py-2 bg-white rounded-xl shadow p-4">BinManager: ' + d.error + '</div>';
+        // Degraded state: show greyed-out cards + inline error note
+        var naCard = function(label) {
+            return '<div class="bg-white rounded-xl shadow p-4 opacity-40">' +
+                '<p class="text-[10px] text-gray-400 uppercase tracking-wide mb-1">' + label + '</p>' +
+                '<p class="text-xl font-black text-gray-300">—</p>' +
+                '</div>';
+        };
+        container.innerHTML = [
+            naCard('Recibidas / día'), naCard('Procesadas FFT / día'),
+            naCard('Sorting total'), naCard('FFT total'),
+            naCard('Tasa Sellable'), naCard('Recicladas'), naCard('Despachadas'),
+        ].join('') +
+        '<div class="col-span-2 md:col-span-4 lg:col-span-7 mt-1">' +
+        '<p class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-1.5 flex items-center gap-2">' +
+        '<svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+        'BinManager: ' + d.error +
+        ' <button onclick="loadProduction()" class="ml-auto underline font-semibold whitespace-nowrap">Reintentar</button>' +
+        '</p></div>';
         return;
     }
     var sellColor = d.sellable_rate >= 70 ? 'text-green-600' : (d.sellable_rate >= 50 ? 'text-yellow-600' : 'text-red-600');
@@ -239,7 +256,7 @@ function _renderProductionKpis(d) {
         _kpiCard('Recicladas', _fmtNum(d.recycled), 'text-orange-500', 'No sellables'),
         _kpiCard('Despachadas total', _fmtNum(d.shipped), 'text-green-600', d.period || ''),
     ].join('');
-    document.getElementById('plan-production-kpis').innerHTML = html;
+    container.innerHTML = html;
 }
 
 function _kpiCard(label, value, cls, sub) {
@@ -370,9 +387,21 @@ var STATUS_CFG = {
 function _renderCoverage(d) {
     var el = document.getElementById('plan-coverage-content');
     if (!d.items || !d.items.length) {
-        el.innerHTML = '<p class="text-center text-gray-400 py-6">Sin productos con SKU identificado. Verifica que tus listings tengan <code>seller_custom_field</code> asignado.</p>';
+        el.innerHTML =
+            '<div class="text-center py-6 space-y-2">' +
+            '<p class="text-gray-500 text-sm">No se encontraron productos con SKU identificado para cruzar con BinManager.</p>' +
+            '<p class="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2 inline-block">' +
+            '💡 Para habilitar la cobertura, agrega el campo <strong>seller_custom_field</strong> (SKU) en tus publicaciones de Mercado Libre.' +
+            '</p></div>';
         return;
     }
+
+    // Note about items without SKU (shown at top)
+    var noSkuNote = d.items_without_sku > 0
+        ? '<p class="text-xs text-blue-600 bg-blue-50 border border-blue-100 rounded px-3 py-1.5 mb-4">' +
+          '📋 ' + d.items_without_sku + ' producto(s) sin SKU excluidos del análisis — agrega <strong>seller_custom_field</strong> en esas publicaciones para incluirlos.' +
+          '</p>'
+        : '';
 
     // Summary chips
     var critical = d.items.filter(function(x){ return x.status === 'critical' || x.status === 'out_of_stock'; });
@@ -380,7 +409,7 @@ function _renderCoverage(d) {
     var ok       = d.items.filter(function(x){ return x.status === 'ok'; });
     var noMov    = d.items.filter(function(x){ return x.status === 'no_movement'; });
 
-    var html = '<div class="flex flex-wrap gap-3 mb-5">' +
+    var html = noSkuNote + '<div class="flex flex-wrap gap-3 mb-5">' +
         _summaryChip(critical.length, 'CRÍTICOS / AGOTADOS', 'bg-red-100 text-red-700') +
         _summaryChip(alert.length,    'EN ALERTA',           'bg-yellow-100 text-yellow-700') +
         _summaryChip(ok.length,       'OK',                  'bg-green-100 text-green-700') +

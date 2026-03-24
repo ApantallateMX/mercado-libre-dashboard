@@ -7954,6 +7954,25 @@ async def returns_top_products(
 # PLANNING — Planeación & Requerimientos de Producción
 # ============================================================
 
+@app.get("/api/planning/bm-ping")
+async def planning_bm_ping():
+    """Quick BinManager connectivity check — returns login status and env var presence."""
+    import os
+    from app.services.binmanager_client import BinManagerClient, _BM_USER, _BM_BASE
+    bm = BinManagerClient()
+    try:
+        login_ok = await bm.login()
+        return {
+            "login": login_ok,
+            "bm_base": _BM_BASE,
+            "bm_user": _BM_USER,
+            "has_bm_pass_env": bool(os.getenv("BM_PASS")),
+        }
+    except Exception as e:
+        return {"login": False, "error": str(e)}
+    finally:
+        await bm.close()
+
 @app.get("/planning", response_class=HTMLResponse)
 async def planning_page(request: Request):
     ctx = await _accounts_ctx(request)
@@ -8102,9 +8121,15 @@ async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
         now   = datetime.now(timezone.utc)
         start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
         end   = now.strftime("%Y-%m-%d")
-        kpis  = await bm.get_operations_kpis(start, end)
+
+        # Explicit login step for better error diagnosis
+        login_ok = await bm.login()
+        if not login_ok:
+            return {"error": "Login fallido — verifica credenciales BM_USER/BM_PASS", "bm_unavailable": True}
+
+        kpis = await bm.get_operations_kpis(start, end)
         if not kpis:
-            return {"error": "No se pudo conectar a BinManager"}
+            return {"error": f"GetDashboardKPIs sin datos para {start}→{end}", "bm_unavailable": True}
 
         fft      = kpis.get("FFT", 0) or 0
         received = kpis.get("QtyReceived", 0) or 0
@@ -8125,7 +8150,8 @@ async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
             "days": days, "period": f"{start} al {end}",
         }
     except Exception as e:
-        return {"error": str(e)}
+        logger.error(f"planning_production_kpis error: {e}")
+        return {"error": str(e), "bm_unavailable": True}
     finally:
         await bm.close()
 
@@ -8142,9 +8168,16 @@ async def planning_coverage(
     if vel.get("error") or not vel.get("items"):
         return {"error": vel.get("error", "Sin datos de velocidad"), "items": []}
 
-    items_with_sku = [x for x in vel["items"] if x.get("sku")][:50]
+    all_vel_items  = vel["items"]
+    items_with_sku = [x for x in all_vel_items if x.get("sku")][:50]
+    items_without_sku_count = len([x for x in all_vel_items if not x.get("sku")])
+
     if not items_with_sku:
-        return {"items": [], "target_days": target_days, "note": "Ningún item tiene SKU asignado en BinManager"}
+        return {
+            "items": [], "target_days": target_days,
+            "items_without_sku": items_without_sku_count,
+            "note": "Ningún item tiene SKU asignado — agrega seller_custom_field en tus publicaciones de ML",
+        }
 
     bm  = BinManagerClient()
     sem = asyncio.Semaphore(3)
@@ -8195,7 +8228,12 @@ async def planning_coverage(
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
     result.sort(key=lambda x: (order.get(x["status"], 5), -(x["daily_rate"] or 0)))
-    return {"items": result, "target_days": target_days, "days": days}
+    return {
+        "items": result,
+        "target_days": target_days,
+        "days": days,
+        "items_without_sku": items_without_sku_count,
+    }
 
 
 @app.get("/api/planning/unlaunched")
