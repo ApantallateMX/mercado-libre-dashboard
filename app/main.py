@@ -8062,45 +8062,63 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
                 item_agg[iid]["units"]   += qty
                 item_agg[iid]["revenue"] += qty * price
                 item_agg[iid]["accounts"].add(acct_nick)
+                # Record seller uid — seller_custom_field only visible with owner's token
+                if "seller_uid" not in item_agg[iid]:
+                    item_agg[iid]["seller_uid"] = acct_uid
                 if is_7d:
                     item_agg[iid]["units_7d"] += qty
 
-    # Batch-fetch item details (top 60 by units) to get seller_custom_field / SKU
-    top_ids = sorted(item_agg, key=lambda x: item_agg[x]["units"], reverse=True)[:60]
-    if top_ids and accounts:
-        uid0 = accounts[0]["user_id"]
-        client0 = await get_meli_client(user_id=uid0)
-        if client0:
-            try:
-                batches = [top_ids[i:i+20] for i in range(0, len(top_ids), 20)]
-                sem_b = asyncio.Semaphore(3)
+    # Batch-fetch item details to get seller_custom_field / SKU.
+    # CRITICAL: must use each item's owner token — MeLi returns seller_custom_field
+    # only when the request is authenticated as the listing owner.
+    top_ids = sorted(item_agg, key=lambda x: item_agg[x]["units"], reverse=True)[:100]
 
-                async def _fetch_batch(batch):
-                    async with sem_b:
-                        try:
-                            return await client0.get(f"/items?ids={','.join(batch)}&attributes=id,seller_custom_field,attributes")
-                        except Exception:
-                            return []
+    # Group top items by their seller account
+    items_by_uid: dict = {}
+    for iid in top_ids:
+        uid = item_agg[iid].get("seller_uid", "")
+        if uid not in items_by_uid:
+            items_by_uid[uid] = []
+        items_by_uid[uid].append(iid)
 
-                batch_results = await asyncio.gather(*[_fetch_batch(b) for b in batches], return_exceptions=True)
-                for br in batch_results:
-                    if not isinstance(br, list):
-                        continue
-                    for entry in br:
-                        if not isinstance(entry, dict):
+    sem_b = asyncio.Semaphore(3)
+
+    async def _fetch_sku_for_account(uid: str, iids: list):
+        client = await get_meli_client(user_id=uid)
+        if not client:
+            return
+        try:
+            batches = [iids[i:i+20] for i in range(0, len(iids), 20)]
+            for batch in batches:
+                async with sem_b:
+                    try:
+                        entries = await client.get(
+                            f"/items?ids={','.join(batch)}&attributes=id,seller_custom_field,attributes"
+                        )
+                        if not isinstance(entries, list):
                             continue
-                        body = entry.get("body", entry)
-                        iid  = str(body.get("id", ""))
-                        sku  = (body.get("seller_custom_field") or "").upper().strip()
-                        if not sku:
-                            for attr in body.get("attributes", []):
-                                if attr.get("id") == "SELLER_SKU":
-                                    sku = (attr.get("value_name") or "").upper().strip()
-                                    break
-                        if iid in item_agg and sku:
-                            item_agg[iid]["sku"] = sku
-            finally:
-                await client0.close()
+                        for entry in entries:
+                            if not isinstance(entry, dict):
+                                continue
+                            body = entry.get("body", entry)
+                            iid  = str(body.get("id", ""))
+                            sku  = (body.get("seller_custom_field") or "").upper().strip()
+                            if not sku:
+                                for attr in body.get("attributes", []):
+                                    if attr.get("id") == "SELLER_SKU":
+                                        sku = (attr.get("value_name") or "").upper().strip()
+                                        break
+                            if iid in item_agg and sku:
+                                item_agg[iid]["sku"] = sku
+                    except Exception:
+                        pass
+        finally:
+            await client.close()
+
+    await asyncio.gather(
+        *[_fetch_sku_for_account(uid, iids) for uid, iids in items_by_uid.items()],
+        return_exceptions=True,
+    )
 
     result_items = []
     for d in item_agg.values():
