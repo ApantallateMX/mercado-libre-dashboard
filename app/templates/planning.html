@@ -451,10 +451,13 @@ function _renderCoverage(d) {
         _summaryChip(noMov.length,    'SIN MOVIMIENTO',      'bg-gray-100 text-gray-500') +
         '</div>';
 
+    var hasAmzCov = d.items.some(function(p){ return (p.amz_daily_rate || 0) > 0; });
+
     html += '<div class="overflow-x-auto"><table class="w-full text-xs">' +
         '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
         '<th class="pb-2 pr-3">Producto / SKU</th>' +
-        '<th class="pb-2 pr-3 text-right">Venta/día</th>' +
+        (hasAmzCov ? '<th class="pb-2 pr-3 text-right">ML/día</th><th class="pb-2 pr-3 text-right text-orange-500">AMZ/día</th>' : '') +
+        '<th class="pb-2 pr-3 text-right font-bold">Total/día</th>' +
         '<th class="pb-2 pr-3 text-right">Stock BM</th>' +
         '<th class="pb-2 pr-3 text-right">Cobertura</th>' +
         '<th class="pb-2 pr-3 text-right">A solicitar</th>' +
@@ -476,6 +479,7 @@ function _renderCoverage(d) {
             ? '<span class="text-[8px] text-gray-400">(' + p.item_ids.length + ' publicaciones)</span>'
             : '';
 
+        var totalRate = p.total_daily_rate || p.daily_rate;
         html += '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
             '<td class="py-2.5 pr-3">' +
                 '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
@@ -485,7 +489,9 @@ function _renderCoverage(d) {
                 covAccts + covItemIds +
                 '</div>' +
             '</td>' +
-            '<td class="py-2.5 pr-3 text-right font-bold text-gray-800">' + p.daily_rate + '</td>' +
+            (hasAmzCov ? '<td class="py-2.5 pr-3 text-right text-gray-600">' + (p.daily_rate || 0) + '</td>' +
+                '<td class="py-2.5 pr-3 text-right ' + ((p.amz_daily_rate || 0) > 0 ? 'text-orange-500 font-semibold' : 'text-gray-300') + '">' + ((p.amz_daily_rate || 0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
+            '<td class="py-2.5 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
             '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
             '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
             '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
@@ -632,7 +638,7 @@ window.exportOrderCSV = function() {
 window.loadUnlaunched = function() {
     _openSection('plan-unlaunched');
     var el = document.getElementById('plan-unlaunched');
-    el.innerHTML = _spinner('Comparando inventario BinManager vs ventas ML...');
+    el.innerHTML = _spinner('Comparando inventario BinManager vs ventas ML y Amazon...');
 
     fetch('/api/planning/unlaunched')
         .then(function(r){ return r.json(); })
@@ -667,13 +673,15 @@ function _renderUnlaunched(d) {
 
     var unlCount = d.total_unlaunched || 0;
     var slpCount = d.total_sleeping  || 0;
+    var amzCount = d.total_amz_only  || 0;
     var totalRev = items.reduce(function(s,x){ return s + (x.revenue_potential_mxn || 0); }, 0);
 
     var html = '<div class="flex flex-wrap items-center gap-3 mb-5">' +
-        '<div class="flex gap-2">' +
+        '<div class="flex gap-2 flex-wrap">' +
         '<span id="unl-tab-all" class="unl-tab px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold cursor-pointer" onclick="_unl_applyFilter(\'all\')">Todos (' + items.length + ')</span>' +
         '<span id="unl-tab-unlaunched" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'unlaunched\')">Sin listing (' + unlCount + ')</span>' +
-        '<span id="unl-tab-sleeping" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'sleeping\')">Dormidos (' + slpCount + ')</span>' +
+        '<span id="unl-tab-sleeping" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'sleeping\')">Dormidos en ML (' + slpCount + ')</span>' +
+        (amzCount > 0 ? '<span id="unl-tab-amz_only" class="unl-tab px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 cursor-pointer" onclick="_unl_applyFilter(\'amz_only\')">Solo Amazon (' + amzCount + ')</span>' : '') +
         '</div>' +
         '<div class="ml-auto text-sm text-purple-700 font-semibold bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100">' +
         'Revenue potencial: ' + _fmtMXN(totalRev) + ' MXN</div>' +
@@ -691,7 +699,9 @@ function _renderUnlaunched(d) {
         filtered.slice(0, 40).forEach(function(p, i){
             var tagCfg = p.tag === 'unlaunched'
                 ? { cls:'bg-purple-100 text-purple-700 border-purple-200', label:'Sin listing en ML' }
-                : { cls:'bg-orange-100 text-orange-700 border-orange-200', label:'Listing sin ventas +30d' };
+                : p.tag === 'amz_only'
+                ? { cls:'bg-orange-100 text-orange-700 border-orange-200', label:'Solo Amazon — publicar en ML' }
+                : { cls:'bg-yellow-100 text-yellow-700 border-yellow-200', label:'Dormido en ML' };
 
             var revMxn = p.revenue_potential_mxn;
             var revBadge = revMxn > 50000
@@ -700,7 +710,9 @@ function _renderUnlaunched(d) {
                     ? '<span class="px-1.5 py-0.5 text-[10px] bg-yellow-100 text-yellow-700 rounded font-semibold border border-yellow-200">' + _fmtMXN(revMxn) + '</span>'
                     : '<span class="text-[10px] text-gray-400">' + _fmtMXN(revMxn) + '</span>');
 
-            var checkItems = p.tag === 'unlaunched'
+            var checkItems = p.tag === 'amz_only'
+                ? ['Ya vende ' + (p.amz_daily_rate || '?') + ' uds/día en Amazon', 'Crear listing en Mercado Libre', 'Definir precio MXN (' + (p.retail_price_usd ? '$' + p.retail_price_usd.toFixed(2) + ' USD' : 'sin precio BM') + ')', 'Elegir cuenta ML para publicar']
+                : p.tag === 'unlaunched'
                 ? ['Tomar fotos del producto', 'Redactar título y descripción', 'Definir precio (' + (p.retail_price_usd ? '$' + p.retail_price_usd.toFixed(2) + ' USD sugerido' : 'sin precio BM') + ')', 'Elegir cuenta para publicar']
                 : ['Revisar precio vs competencia', 'Actualizar fotos y descripción', 'Activar campaña de Ads', 'Verificar si listing está pausado'];
 
@@ -719,6 +731,8 @@ function _renderUnlaunched(d) {
                 (p.category ? '<span class="text-gray-400">' + p.category + '</span>' : '') +
                 '<span><strong>' + p.stock + '</strong> uds en BM</span>' +
                 (p.retail_price_usd ? '<span>$' + p.retail_price_usd.toFixed(2) + ' USD</span>' : '') +
+                (p.amz_daily_rate > 0 ? '<span class="text-orange-600 font-semibold">Amazon: ' + p.amz_daily_rate + ' uds/día</span>' : '') +
+                ((p.amz_accounts || []).length ? '<span class="text-[9px] text-orange-500 bg-orange-50 px-1 rounded border border-orange-100">' + (p.amz_accounts || []).join(', ') + '</span>' : '') +
                 '</div>' +
                 '</div></div>' +
                 '<div class="bg-gray-50 border-t border-gray-100 px-5 py-3">' +

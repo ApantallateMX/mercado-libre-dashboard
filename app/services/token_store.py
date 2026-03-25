@@ -1,3 +1,4 @@
+import json
 import os
 import aiosqlite
 from datetime import datetime, timedelta
@@ -181,6 +182,13 @@ async def init_db():
                 user_id   TEXT NOT NULL DEFAULT '',
                 sku       TEXT NOT NULL DEFAULT '',
                 synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_vel_cache (
+                days         INTEGER PRIMARY KEY,
+                data_json    TEXT NOT NULL DEFAULT '{}',
+                computed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         await db.commit()
@@ -617,6 +625,30 @@ async def save_skus_cache(entries: list) -> None:
                        synced_at = CURRENT_TIMESTAMP""",
                 (e["item_id"], e.get("user_id", ""), e["sku"]),
             )
+        await db.commit()
+
+
+async def get_amazon_vel_cache(days: int, max_age_hours: int = 2) -> Optional[dict]:
+    """Retorna caché de velocidad Amazon si existe y no expiró. None si no hay."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT data_json FROM amazon_vel_cache "
+            "WHERE days = ? AND computed_at > datetime('now', ? || ' hours')",
+            (days, f"-{max_age_hours}"),
+        )
+        row = await cursor.fetchone()
+        return json.loads(row[0]) if row else None
+
+
+async def save_amazon_vel_cache(days: int, data: dict) -> None:
+    """Guarda/actualiza caché de velocidad Amazon para N días."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO amazon_vel_cache (days, data_json) VALUES (?, ?) "
+            "ON CONFLICT(days) DO UPDATE SET "
+            "data_json=excluded.data_json, computed_at=CURRENT_TIMESTAMP",
+            (days, json.dumps(data)),
+        )
         await db.commit()
 
 

@@ -8013,13 +8013,18 @@ async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) ->
 async def _planning_fetch_amazon_velocity(days: int) -> dict:
     """
     Retorna {SKU_UPPER: {units, units_7d, revenue, accounts}} desde todas las cuentas Amazon.
-    Silenciosamente retorna {} si no hay cuentas o hay errores.
+    Usa caché SQLite de 2 horas para no bloquear. Retorna {} si no hay cuentas o hay errores.
     """
     from app.services.amazon_client import get_amazon_client as _get_amz
-    from app.services.token_store import get_all_amazon_accounts
+    from app.services.token_store import get_all_amazon_accounts, get_amazon_vel_cache, save_amazon_vel_cache
     from datetime import datetime, timedelta, timezone
 
     try:
+        # Check cache first — avoid hammering SP-API on every page load
+        cached = await get_amazon_vel_cache(days)
+        if cached is not None:
+            return cached
+
         amazon_accounts = await get_all_amazon_accounts()
         if not amazon_accounts:
             return {}
@@ -8072,6 +8077,12 @@ async def _planning_fetch_amazon_velocity(days: int) -> dict:
         # Serialize sets
         for v in sku_agg.values():
             v["accounts"] = sorted(v["accounts"])
+
+        # Persist to cache so next call is instant
+        try:
+            await save_amazon_vel_cache(days, sku_agg)
+        except Exception:
+            pass
         return sku_agg
     except Exception:
         return {}
@@ -8208,7 +8219,12 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
             pass
 
     # ── Step 4: Merge Amazon velocity ─────────────────────────────────────────
-    amz_vel = await amz_task
+    # Use shield so the background task keeps running even if we time out.
+    # If cached (common case) this resolves instantly; cold compute has 12s budget.
+    try:
+        amz_vel = await asyncio.wait_for(asyncio.shield(amz_task), timeout=12.0)
+    except asyncio.TimeoutError:
+        amz_vel = {}  # Return ML data now; Amazon will be cached for next request
 
     result_items = []
     for d in item_agg.values():
@@ -8398,14 +8414,18 @@ async def planning_coverage(
                 "item_ids": [],
                 "accounts": set(),
                 "daily_rate": 0.0,
+                "amz_daily_rate": 0.0,
+                "total_daily_rate": 0.0,
                 "units_30d": 0,
                 "units_7d": 0,
                 "revenue_30d": 0.0,
             }
-        sku_agg[sku]["daily_rate"]   += item["daily_rate"]
-        sku_agg[sku]["units_30d"]    += item["units_30d"]
-        sku_agg[sku]["units_7d"]     += item["units_7d"]
-        sku_agg[sku]["revenue_30d"]  += item["revenue_30d"]
+        sku_agg[sku]["daily_rate"]       += item["daily_rate"]
+        sku_agg[sku]["amz_daily_rate"]   += item.get("amz_daily_rate", 0)
+        sku_agg[sku]["total_daily_rate"] += item.get("total_daily_rate", item["daily_rate"])
+        sku_agg[sku]["units_30d"]        += item["units_30d"]
+        sku_agg[sku]["units_7d"]         += item["units_7d"]
+        sku_agg[sku]["revenue_30d"]      += item["revenue_30d"]
         sku_agg[sku]["item_ids"].append(item["item_id"])
         for acc in item.get("accounts", []):
             sku_agg[sku]["accounts"].add(acc)
@@ -8413,10 +8433,12 @@ async def planning_coverage(
     # Convert to list, round rates, serialize accounts
     items_with_sku = []
     for d in sku_agg.values():
-        d["daily_rate"]  = round(d["daily_rate"], 2)
-        d["accounts"]    = sorted(d["accounts"])
+        d["daily_rate"]       = round(d["daily_rate"], 2)
+        d["amz_daily_rate"]   = round(d["amz_daily_rate"], 2)
+        d["total_daily_rate"] = round(d["total_daily_rate"], 2)
+        d["accounts"]         = sorted(d["accounts"])
         items_with_sku.append(d)
-    items_with_sku.sort(key=lambda x: x["daily_rate"], reverse=True)
+    items_with_sku.sort(key=lambda x: x["total_daily_rate"], reverse=True)
     items_with_sku = items_with_sku[:50]
 
     if not items_with_sku:
@@ -8444,7 +8466,8 @@ async def planning_coverage(
             continue
         item, bm_info = r
         stock  = bm_info.get("stock", 0)
-        daily  = item["daily_rate"]
+        # Use combined ML+Amazon rate for stock coverage (real demand)
+        daily  = item.get("total_daily_rate", item["daily_rate"])
 
         coverage_days = round(stock / daily, 1) if daily > 0 else None
         if daily == 0:
@@ -8485,12 +8508,35 @@ async def planning_coverage(
 
 @app.get("/api/planning/unlaunched")
 async def planning_unlaunched():
-    """BinManager products with stock that have zero or very low ML sales."""
+    """BinManager products with stock that have zero or very low ML/Amazon sales."""
     from app.services.binmanager_client import BinManagerClient
 
-    # Get velocity to know what's already selling
-    vel = await planning_velocity(days=30)
-    selling_skus = {x["sku"].upper() for x in vel.get("items", []) if x.get("sku") and x.get("daily_rate", 0) > 0.1}
+    # Fetch ML velocity + Amazon velocity in parallel
+    vel_task = asyncio.create_task(planning_velocity(days=30))
+    amz_task = asyncio.create_task(_planning_fetch_amazon_velocity(days=30))
+
+    vel = await vel_task
+    # Amazon: use shield+timeout (cached = instant, cold = up to 10s)
+    try:
+        amz_vel = await asyncio.wait_for(asyncio.shield(amz_task), timeout=10.0)
+    except asyncio.TimeoutError:
+        amz_vel = {}
+
+    vel_items = vel.get("items", [])
+
+    # ML-selling SKUs (have ML orders)
+    ml_selling_skus = {
+        x["sku"].upper() for x in vel_items
+        if x.get("sku") and x.get("daily_rate", 0) > 0.1
+    }
+    # Amazon-selling SKUs (selling on Amazon regardless of ML)
+    amz_selling_skus = {
+        sku for sku, data in amz_vel.items()
+        if (data.get("units", 0) / 30) > 0.1
+    }
+
+    # Daily rate lookup for Amazon-only SKUs (for revenue potential)
+    amz_rate_map = {sku: round(data.get("units", 0) / 30, 2) for sku, data in amz_vel.items()}
 
     bm = BinManagerClient()
     await bm.login()
@@ -8507,36 +8553,51 @@ async def planning_unlaunched():
     result = []
     for row in bm_items:
         sku   = (row.get("SKU") or "").upper().strip()
-        stock = row.get("QtyTotal", 0) or 0
+        # BinManager returns stock in QTY (uppercase) — fallback to QtyTotal for older responses
+        stock = row.get("QTY") or row.get("QtyTotal") or 0
+        try:
+            stock = int(stock)
+        except (TypeError, ValueError):
+            stock = 0
         if not sku or stock <= 0:
             continue
 
-        in_velocity = sku in selling_skus
-        if in_velocity:
-            tag = "sleeping"
+        ml_selling  = sku in ml_selling_skus
+        amz_selling = sku in amz_selling_skus
+
+        if ml_selling:
+            tag = "sleeping"       # Has BM stock + ML sales → boost / promote
+        elif amz_selling:
+            tag = "amz_only"       # Sells on Amazon but not ML → ML opportunity
         else:
-            tag = "unlaunched"
+            tag = "unlaunched"     # Stock in BM but no sales anywhere
 
         retail_usd = row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0
         rev_potential = round(stock * float(retail_usd) * 17.5, 0) if retail_usd else 0
 
-        result.append({
+        entry = {
             "sku": sku,
             "title": row.get("Title", "") or row.get("Model", sku),
-            "brand": row.get("Brand", ""),
-            "model": row.get("Model", ""),
+            "brand": row.get("Brand", "") or row.get("BRAND", ""),
+            "model": row.get("Model", "") or row.get("MODEL", ""),
             "category": row.get("CategoryName", "") or row.get("Category", ""),
             "stock": stock,
             "retail_price_usd": float(retail_usd),
             "revenue_potential_mxn": rev_potential,
             "tag": tag,
-        })
+        }
+        if amz_selling:
+            entry["amz_daily_rate"] = amz_rate_map.get(sku, 0)
+            entry["amz_accounts"]   = amz_vel.get(sku, {}).get("accounts", [])
+        result.append(entry)
 
     result.sort(key=lambda x: x["revenue_potential_mxn"], reverse=True)
     return {
         "items": result[:80],
         "total_unlaunched": sum(1 for x in result if x["tag"] == "unlaunched"),
-        "total_sleeping": sum(1 for x in result if x["tag"] == "sleeping"),
+        "total_sleeping":   sum(1 for x in result if x["tag"] == "sleeping"),
+        "total_amz_only":   sum(1 for x in result if x["tag"] == "amz_only"),
+        "has_amazon": bool(amz_vel),
     }
 
 
