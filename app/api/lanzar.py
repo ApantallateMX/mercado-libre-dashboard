@@ -559,46 +559,135 @@ def start_gap_scan_loop():
 
 # ─── API Endpoints ────────────────────────────────────────────────────────────
 
-@router.get("/gaps")
-async def get_gaps(
-    request: Request,
-    status: str = Query("unlaunched"),
-    sort: str = Query("priority"),
-    limit: int = Query(100),
-    offset: int = Query(0),
-):
-    """Lista SKUs no lanzados para la cuenta activa."""
+@router.get("/filters")
+async def get_gap_filters(request: Request):
+    """Devuelve categorías y marcas únicas disponibles en los gaps de la cuenta activa."""
     from app.services.meli_client import _active_user_id as _ctx
     user_id = _ctx.get()
     if not user_id:
         return JSONResponse({"error": "no_account"}, status_code=401)
 
-    order = "priority_score DESC" if sort == "priority" else "product_title ASC"
-    status_filter = status if status in ("unlaunched", "ignored", "all") else "unlaunched"
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Categories with count
+        cur = await db.execute(
+            """SELECT category, COUNT(*) as cnt, SUM(stock_total) as total_stock
+               FROM bm_sku_gaps WHERE user_id=? AND status='unlaunched' AND category != ''
+               GROUP BY category ORDER BY cnt DESC""",
+            (user_id,)
+        )
+        cats = [{"category": r[0], "count": r[1], "total_stock": r[2] or 0}
+                for r in await cur.fetchall()]
+
+        # Brands with count
+        cur2 = await db.execute(
+            """SELECT brand, COUNT(*) as cnt FROM bm_sku_gaps
+               WHERE user_id=? AND status='unlaunched' AND brand != ''
+               GROUP BY brand ORDER BY cnt DESC LIMIT 50""",
+            (user_id,)
+        )
+        brands = [{"brand": r[0], "count": r[1]} for r in await cur2.fetchall()]
+
+        # Summary stats
+        cur3 = await db.execute(
+            """SELECT COUNT(*), SUM(stock_total), SUM(suggested_price_mxn * stock_total)
+               FROM bm_sku_gaps WHERE user_id=? AND status='unlaunched'""",
+            (user_id,)
+        )
+        row = await cur3.fetchone()
+        total_gaps   = row[0] or 0
+        total_stock  = row[1] or 0
+        revenue_pot  = row[2] or 0
+
+    return {
+        "total_gaps": total_gaps,
+        "total_stock": total_stock,
+        "revenue_potential_mxn": round(revenue_pot, 0),
+        "categories": cats,
+        "brands": brands,
+    }
+
+
+@router.get("/gaps")
+async def get_gaps(
+    request: Request,
+    status:   str   = Query("unlaunched"),
+    sort:     str   = Query("priority"),
+    page:     int   = Query(1, ge=1),
+    per_page: int   = Query(10, ge=5, le=100),
+    category: str   = Query(""),
+    brand:    str   = Query(""),
+    search:   str   = Query(""),
+    min_stock: int  = Query(0, ge=0),
+    min_price: float = Query(0.0, ge=0),
+):
+    """Lista SKUs no lanzados para la cuenta activa con filtros, orden y paginación."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    _SORT_MAP = {
+        "priority":    "priority_score DESC, stock_total DESC",
+        "stock_desc":  "stock_total DESC",
+        "stock_asc":   "stock_total ASC",
+        "price_desc":  "retail_price_usd DESC",
+        "price_asc":   "retail_price_usd ASC",
+        "name_asc":    "product_title ASC",
+    }
+    order = _SORT_MAP.get(sort, "priority_score DESC, stock_total DESC")
+    status_filter = status if status in ("unlaunched", "ignored") else "unlaunched"
+
+    # Build WHERE clause dynamically
+    conditions = ["user_id=?", "status=?"]
+    params: list = [user_id, status_filter]
+
+    if category:
+        conditions.append("category=?")
+        params.append(category)
+    if brand:
+        conditions.append("brand=?")
+        params.append(brand)
+    if search:
+        conditions.append("(product_title LIKE ? OR sku LIKE ? OR model LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+    if min_stock > 0:
+        conditions.append("stock_total >= ?")
+        params.append(min_stock)
+    if min_price > 0:
+        conditions.append("retail_price_usd >= ?")
+        params.append(min_price)
+
+    where = " AND ".join(conditions)
+    offset = (page - 1) * per_page
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        if status_filter == "all":
-            cursor = await db.execute(
-                f"SELECT * FROM bm_sku_gaps WHERE user_id=? ORDER BY {order} LIMIT ? OFFSET ?",
-                (user_id, limit, offset)
-            )
-        else:
-            cursor = await db.execute(
-                f"SELECT * FROM bm_sku_gaps WHERE user_id=? AND status=? ORDER BY {order} LIMIT ? OFFSET ?",
-                (user_id, status_filter, limit, offset)
-            )
-        rows = await cursor.fetchall()
-        total_cursor = await db.execute(
-            "SELECT COUNT(*) FROM bm_sku_gaps WHERE user_id=? AND status=?",
-            (user_id, "unlaunched")
+
+        total_cur = await db.execute(f"SELECT COUNT(*) FROM bm_sku_gaps WHERE {where}", params)
+        total = (await total_cur.fetchone())[0]
+
+        rows_cur = await db.execute(
+            f"SELECT * FROM bm_sku_gaps WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+            params + [per_page, offset],
         )
-        total = (await total_cursor.fetchone())[0]
+        rows = await rows_cur.fetchall()
+
+        # Total gaps for the status (unfiltered count for badge)
+        badge_cur = await db.execute(
+            "SELECT COUNT(*) FROM bm_sku_gaps WHERE user_id=? AND status='unlaunched'",
+            (user_id,)
+        )
+        badge_total = (await badge_cur.fetchone())[0]
 
     return {
-        "user_id": user_id,
-        "total": total,
-        "items": [dict(r) for r in rows]
+        "user_id":     user_id,
+        "total":       total,          # filtered count
+        "badge_total": badge_total,    # unfiltered count for the badge
+        "page":        page,
+        "per_page":    per_page,
+        "pages":       max(1, -(-total // per_page)),  # ceiling division
+        "items":       [dict(r) for r in rows],
     }
 
 
