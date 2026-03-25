@@ -232,10 +232,12 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
 
 
 async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
-    """Return set of base SKUs active in a MeLi account.
-    Uses item_sku_cache to avoid re-fetching already-known SKUs.
+    """Return set of base SKUs published in a MeLi account (active + paused).
+    Uses item_sku_cache to skip re-fetching already-known items.
+
+    KNOWN LIMITATION: ML items/search caps at ~1000 items via offset pagination.
+    For accounts with many items some may be missed — use scan logs to detect.
     """
-    from app.services.meli_client import get_meli_client
     import re as _re
 
     _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -247,14 +249,43 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
                 return u[:-len(s)]
         return u
 
-    # Use user_id directly — context var pattern is unreliable in background tasks
+    def _skus_from_body(body: dict) -> list[str]:
+        """Extract all SKUs from a ML item body dict."""
+        found = []
+        # seller_custom_field (most common — SKU set by seller at listing time)
+        scf = (body.get("seller_custom_field") or "").strip().upper()
+        if scf:
+            for part in _re.split(r'\s*[/+,]\s*', scf):
+                if part.strip():
+                    found.append(part.strip())
+        # attributes array → SELLER_SKU id
+        for a in (body.get("attributes") or []):
+            if a.get("id") == "SELLER_SKU":
+                v = (a.get("value_name") or "").strip().upper()
+                if v:
+                    found.append(v)
+        # variations (multi-variant listings)
+        for var in (body.get("variations") or []):
+            vscf = (var.get("seller_custom_field") or "").strip().upper()
+            if vscf:
+                found.append(vscf)
+            for a in (var.get("attributes") or []):
+                if a.get("id") == "SELLER_SKU":
+                    v = (a.get("value_name") or "").strip().upper()
+                    if v:
+                        found.append(v)
+        return found
+
     client = await get_meli_client(user_id=user_id)
     if not client:
         return set()
 
     try:
-        # 1. Fetch all item IDs (active + paused to be thorough about what's listed)
-        item_ids = []
+        # ── Step 1: Collect all item IDs ──────────────────────────────────────
+        # items/search returns active + paused + recently closed by default.
+        # ML hard-caps offset pagination at ~1000 items; for larger accounts
+        # some items near the tail may be missed.
+        item_ids: list[str] = []
         offset = 0
         while True:
             try:
@@ -263,67 +294,76 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
                     params={"limit": 100, "offset": offset},
                 )
                 ids = resp.get("results", [])
-                item_ids.extend(ids)
+                if not ids:
+                    break
+                item_ids.extend(str(i) for i in ids)
                 paging = resp.get("paging", {})
-                if len(ids) < 100 or offset + 100 >= paging.get("total", 0):
+                total  = paging.get("total", 0)
+                if len(ids) < 100 or offset + 100 >= total:
                     break
                 offset += 100
-                if offset > 8000:
+                if offset >= 10000:
+                    logger.warning(f"{nickname}: items/search offset cap hit at 10k")
                     break
             except Exception as e:
                 logger.warning(f"items/search error {nickname} offset={offset}: {e}")
                 break
 
+        logger.info(f"{nickname}: {len(item_ids)} item IDs from ML items/search")
         if not item_ids:
             return set()
 
-        # 2. Check cache first — skip items we already know the SKU for
+        # ── Step 2: Check cache ───────────────────────────────────────────────
         from app.services.token_store import get_cached_skus, save_skus_cache
-        cached = await get_cached_skus(item_ids)
-        cached_skus = {_base(v) for v in cached.values() if v}
-        needs_fetch = [iid for iid in item_ids if iid not in cached]
+        cached       = await get_cached_skus(item_ids)
+        cached_skus  = {_base(v) for v in cached.values() if v}
+        needs_fetch  = [iid for iid in item_ids if iid not in cached]
+        logger.info(f"{nickname}: {len(cached)} cached SKUs, {len(needs_fetch)} items to fetch")
 
-        # 3. Batch fetch only uncached items — include attributes & variations
-        new_entries = []
+        # ── Step 3: Batch-fetch uncached items ───────────────────────────────
+        # CRITICAL: Do NOT add ?attributes= filter here.
+        # The ML multi-item endpoint can silently drop seller_custom_field
+        # when attribute filtering is active, causing false "sin publicar" gaps.
+        new_entries: list[dict] = []
         sku_set = set(cached_skus)
-        for i in range(0, len(needs_fetch), 20):
-            batch = needs_fetch[i:i+20]
-            try:
-                details = await client.get(
-                    f"/items?ids={','.join(batch)}"
-                    f"&attributes=id,seller_custom_field,attributes,variations"
-                )
-                if isinstance(details, list):
-                    for entry in details:
-                        body = entry.get("body", {}) if isinstance(entry, dict) else {}
-                        iid  = str(body.get("id", ""))
-                        # seller_custom_field
-                        scf = (body.get("seller_custom_field") or "").upper()
-                        if scf:
-                            scf = _re.split(r'\s*[/+]\s*', scf)[0].strip()
-                            sku_set.add(_base(scf))
-                            if iid:
-                                new_entries.append({"item_id": iid, "user_id": user_id, "sku": scf})
-                        # attributes SELLER_SKU
-                        for a in (body.get("attributes") or []):
-                            if a.get("id") == "SELLER_SKU":
-                                v = (a.get("value_name") or "").upper()
-                                if v:
-                                    sku_set.add(_base(v))
-                        # variations
-                        for var in (body.get("variations") or []):
-                            vscf = (var.get("seller_custom_field") or "").upper()
-                            if vscf:
-                                sku_set.add(_base(vscf))
-                            for a in (var.get("attributes") or []):
-                                if a.get("id") == "SELLER_SKU":
-                                    v = (a.get("value_name") or "").upper()
-                                    if v:
-                                        sku_set.add(_base(v))
-            except Exception as e:
-                logger.warning(f"Batch SKU fetch error {nickname}: {e}")
 
-        # 4. Persist new SKUs to cache for future scans
+        for i in range(0, len(needs_fetch), 20):
+            batch = needs_fetch[i:i + 20]
+            try:
+                # Embed IDs directly in URL to avoid httpx percent-encoding commas
+                details = await client.get(f"/items?ids={','.join(batch)}")
+
+                items_list = details if isinstance(details, list) else []
+                batch_found = 0
+                for entry in items_list:
+                    if not isinstance(entry, dict):
+                        continue
+                    body = entry.get("body") or {}
+                    if not isinstance(body, dict):
+                        continue
+                    iid  = str(body.get("id", ""))
+                    skus = _skus_from_body(body)
+                    for raw_sku in skus:
+                        base = _base(raw_sku)
+                        sku_set.add(base)
+                        if iid:
+                            new_entries.append({"item_id": iid, "user_id": user_id, "sku": raw_sku})
+                    if skus:
+                        batch_found += 1
+
+                if batch_found == 0 and items_list:
+                    # Whole batch had no SKUs — log first item for debugging
+                    sample = items_list[0].get("body", {}) if items_list else {}
+                    logger.warning(
+                        f"{nickname}: batch {i//20} — {len(items_list)} items, 0 with SKU. "
+                        f"Sample keys: {list(sample.keys())[:10]}"
+                    )
+            except Exception as e:
+                logger.warning(f"{nickname}: batch {i//20} fetch error: {e}")
+
+        logger.info(f"{nickname}: {len(sku_set)} unique base SKUs detected in ML")
+
+        # ── Step 4: Persist new mappings to cache ─────────────────────────────
         if new_entries:
             try:
                 await save_skus_cache(new_entries)
@@ -711,14 +751,14 @@ async def get_scan_status():
 
 
 @router.get("/debug-scan")
-async def debug_scan():
-    """Diagnóstico: muestra cuántos SKUs encontró BM, cuántos tiene ML, y los primeros gaps."""
+async def debug_scan(sku: str = ""):
+    """Diagnóstico detallado del scan: BM, ML item IDs, batch fetch, caché."""
     from app.services.meli_client import _active_user_id as _ctx
     user_id = _ctx.get()
 
-    result: dict = {"user_id": user_id, "bm": {}, "ml": {}, "sample_gaps": [], "error": None}
+    result: dict = {"user_id": user_id, "bm": {}, "ml": {}, "cache": {}, "scan_status": {}, "gaps_in_db": []}
 
-    # 1. BM login + first page
+    # 1. BM quick check
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
             logged_in = await _bm_login(bm_http)
@@ -726,34 +766,99 @@ async def debug_scan():
             if logged_in:
                 page1 = await _bm_fetch_all_skus_with_stock(bm_http)
                 result["bm"]["total_skus"] = len(page1)
-                # Show full first row so we can see EXACT field names BM returns
-                result["bm"]["first_row_raw"] = page1[0] if page1 else {}
-                result["bm"]["sample"] = [
-                    {"sku": p.get("SKU"), "qty_total": p.get("QtyTotal"), "qty": p.get("QTY"), "retail": p.get("RetailPrice"),
-                     "all_keys": list(p.keys())}
-                    for p in page1[:3]
-                ]
+                result["bm"]["first_row_keys"] = list(page1[0].keys()) if page1 else []
     except Exception as e:
         result["bm"]["error"] = str(e)
 
-    # 2. ML SKU set for active account
+    # 2. ML items/search — show first 10 IDs and test batch fetch on them
     if user_id:
-        try:
-            meli_skus = await _get_meli_sku_set(user_id, user_id)
-            result["ml"]["sku_count"] = len(meli_skus)
-            result["ml"]["sample"] = list(meli_skus)[:10]
-        except Exception as e:
-            result["ml"]["error"] = str(e)
+        client = await get_meli_client(user_id=user_id)
+        if client:
+            try:
+                resp = await client.get(
+                    f"/users/{user_id}/items/search",
+                    params={"limit": 100, "offset": 0},
+                )
+                ids = resp.get("results", [])
+                paging = resp.get("paging", {})
+                result["ml"]["items_search_total"] = paging.get("total", 0)
+                result["ml"]["first_10_ids"] = ids[:10]
+
+                # Test batch fetch on first 5 items WITHOUT attribute filter
+                if ids:
+                    sample_batch = ids[:5]
+                    try:
+                        details = await client.get(f"/items?ids={','.join(sample_batch)}")
+                        batch_result = []
+                        for entry in (details if isinstance(details, list) else []):
+                            body = entry.get("body", {}) or {}
+                            batch_result.append({
+                                "id": body.get("id"),
+                                "seller_custom_field": body.get("seller_custom_field"),
+                                "has_attributes": bool(body.get("attributes")),
+                                "has_variations": bool(body.get("variations")),
+                            })
+                        result["ml"]["batch_fetch_sample"] = batch_result
+                    except Exception as e:
+                        result["ml"]["batch_fetch_error"] = str(e)
+
+                # If a specific SKU is provided, check if its item is in the results
+                if sku:
+                    sku_upper = sku.upper()
+                    result["ml"]["sku_check"] = {"sku": sku_upper, "found_in_item_ids": False}
+                    # Check cache
+                    from app.services.token_store import get_cached_skus
+                    cached = await get_cached_skus(ids)
+                    cached_by_sku = {v: k for k, v in cached.items()}
+                    result["cache"]["total_cached_for_page1"] = len(cached)
+                    if sku_upper in cached_by_sku:
+                        result["ml"]["sku_check"]["in_cache"] = True
+                        result["ml"]["sku_check"]["cached_item_id"] = cached_by_sku[sku_upper]
+
+            except Exception as e:
+                result["ml"]["items_search_error"] = str(e)
+            finally:
+                await client.close()
 
     # 3. DB state
     async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
-        status_row = await cursor.fetchone()
-        result["scan_status"] = dict(zip([d[0] for d in cursor.description], status_row)) if status_row else {}
+        row = await cursor.fetchone()
+        result["scan_status"] = dict(row) if row else {}
         cursor2 = await db.execute("SELECT COUNT(*), user_id FROM bm_sku_gaps GROUP BY user_id")
         result["gaps_in_db"] = [{"count": r[0], "user_id": r[1]} for r in await cursor2.fetchall()]
 
+        # Show specific SKU in gaps if provided
+        if sku and user_id:
+            cursor3 = await db.execute(
+                "SELECT * FROM bm_sku_gaps WHERE sku=? AND user_id=?",
+                (sku.upper(), user_id)
+            )
+            gap_row = await cursor3.fetchone()
+            result["gap_record"] = dict(gap_row) if gap_row else None
+
     return result
+
+
+@router.post("/clear-sku-cache")
+async def clear_sku_cache(request: Request):
+    """Limpia la caché de item→SKU para forzar re-fetch completo en el próximo scan."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        if user_id:
+            result = await db.execute(
+                "DELETE FROM item_sku_cache WHERE user_id=?", (user_id,)
+            )
+            deleted = result.rowcount
+        else:
+            result = await db.execute("DELETE FROM item_sku_cache")
+            deleted = result.rowcount
+        await db.commit()
+
+    return {"ok": True, "deleted": deleted}
 
 
 @router.post("/ignore/{sku}")
