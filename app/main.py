@@ -8226,31 +8226,74 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
     except asyncio.TimeoutError:
         amz_vel = {}  # Return ML data now; Amazon will be cached for next request
 
-    result_items = []
+    # ── Step 5: Aggregate by SKU ──────────────────────────────────────────────
+    # Same SKU can appear in multiple accounts/listings — consolidate for run-rate.
+    sku_agg: dict = {}
+    no_sku_list: list = []
+
     for d in item_agg.values():
-        daily_rate = round(d["units"] / days, 2)
-        sku_upper = (d["sku"] or "").upper()
-        amz = amz_vel.get(sku_upper, {}) if sku_upper else {}
+        sku = (d["sku"] or "").upper().strip()
+        if not sku:
+            no_sku_list.append(d)
+            continue
+        if sku not in sku_agg:
+            sku_agg[sku] = {
+                "sku": sku, "title": d["title"],
+                "units": 0, "units_7d": 0, "revenue": 0.0,
+                "accounts": set(), "item_ids": [],
+                "_best_units": 0,
+            }
+        ag = sku_agg[sku]
+        ag["units"]    += d["units"]
+        ag["units_7d"] += d["units_7d"]
+        ag["revenue"]  += d["revenue"]
+        ag["accounts"]  |= d["accounts"]
+        ag["item_ids"].append(d["item_id"])
+        # Keep title from the listing with highest individual sales
+        if d["units"] > ag["_best_units"]:
+            ag["_best_units"] = d["units"]
+            ag["title"] = d["title"]
+
+    result_items = []
+
+    # Aggregated SKU rows
+    for sku, ag in sku_agg.items():
+        daily_rate = round(ag["units"] / days, 2)
+        amz = amz_vel.get(sku, {})
         item = {
-            "item_id": d["item_id"], "sku": d["sku"],
-            "title": d["title"], "units_30d": d["units"],
-            "units_7d": d["units_7d"],
-            "revenue_30d": round(d["revenue"], 2),
+            "item_id": ag["item_ids"][0],
+            "item_ids": ag["item_ids"],
+            "sku": sku,
+            "title": ag["title"],
+            "units_30d": ag["units"],
+            "units_7d": ag["units_7d"],
+            "revenue_30d": round(ag["revenue"], 2),
             "daily_rate": daily_rate,
-            "accounts": sorted(d["accounts"]),
+            "accounts": sorted(ag["accounts"]),
         }
         if amz:
             amz_daily = round(amz["units"] / days, 2)
-            item["amz_units_30d"]  = amz["units"]
-            item["amz_units_7d"]   = amz.get("units_7d", 0)
-            item["amz_revenue_30d"]= round(amz.get("revenue", 0), 2)
-            item["amz_daily_rate"] = amz_daily
-            item["amz_accounts"]   = amz.get("accounts", [])
-            # Combined daily rate (ML + Amazon)
-            item["total_daily_rate"] = round(daily_rate + amz_daily, 2)
+            item["amz_units_30d"]   = amz["units"]
+            item["amz_units_7d"]    = amz.get("units_7d", 0)
+            item["amz_revenue_30d"] = round(amz.get("revenue", 0), 2)
+            item["amz_daily_rate"]  = amz_daily
+            item["amz_accounts"]    = amz.get("accounts", [])
+            item["total_daily_rate"]= round(daily_rate + amz_daily, 2)
         else:
             item["total_daily_rate"] = daily_rate
         result_items.append(item)
+
+    # Items without SKU — still useful for context, appended at the end
+    for d in no_sku_list:
+        daily_rate = round(d["units"] / days, 2)
+        result_items.append({
+            "item_id": d["item_id"], "item_ids": [d["item_id"]],
+            "sku": "", "title": d["title"],
+            "units_30d": d["units"], "units_7d": d["units_7d"],
+            "revenue_30d": round(d["revenue"], 2),
+            "daily_rate": daily_rate, "accounts": sorted(d["accounts"]),
+            "total_daily_rate": daily_rate,
+        })
 
     result_items.sort(key=lambda x: x["total_daily_rate"], reverse=True)
     return {

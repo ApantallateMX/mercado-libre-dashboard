@@ -329,15 +329,15 @@ function _renderVelocityTable(items) {
         out_of_stock:{ cls:'bg-red-200 text-red-800 border-red-300',     label:'AGOTADO',   icon:'🔴' },
     };
 
-    var maxRate = items[0] ? items[0].daily_rate : 1;
+    var maxRate = items[0] ? (items[0].total_daily_rate || items[0].daily_rate) : 1;
     var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
     var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
         '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
         '<th class="pb-2 pl-1 w-6">#</th>' +
-        '<th class="pb-2 pr-3">Producto</th>' +
+        '<th class="pb-2 pr-3">Producto / SKU</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">ML/día</th>' +
         (hasAmz ? '<th class="pb-2 pr-3 text-right whitespace-nowrap text-orange-600">AMZ/día</th>' : '') +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Total/día</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap font-bold">Total/día</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
@@ -346,7 +346,8 @@ function _renderVelocityTable(items) {
 
     _velRows = [];
     items.forEach(function(p, i) {
-        var barW = maxRate > 0 ? Math.round(p.daily_rate / maxRate * 100) : 0;
+        var totalRate = p.total_daily_rate || p.daily_rate;
+        var barW = maxRate > 0 ? Math.round(totalRate / maxRate * 100) : 0;
         var barC = i < 3 ? 'bg-red-400' : (i < 8 ? 'bg-orange-400' : 'bg-yellow-400');
         var skuChip = p.sku
             ? '<span class="px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
@@ -356,19 +357,27 @@ function _renderVelocityTable(items) {
             return '<span class="px-1 py-0.5 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100 font-medium">' + a + '</span>';
         }).join('');
 
+        // Show number of listings consolidated under this SKU
+        var listingsChip = (p.item_ids || []).length > 1
+            ? '<span class="px-1 py-0.5 text-[8px] bg-gray-100 text-gray-500 rounded border">' + p.item_ids.length + ' listings</span>'
+            : '';
+
+        var amzAcctChips = (p.amz_accounts || []).map(function(a) {
+            return '<span class="px-1 py-0.5 text-[8px] bg-orange-50 text-orange-500 rounded border border-orange-100">' + a + '</span>';
+        }).join('');
+
         var row = '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition" ' +
-            'data-search="' + (p.title + ' ' + p.sku + ' ' + p.item_id + ' ' + (p.accounts||[]).join(' ')).toLowerCase() + '">' +
+            'data-search="' + (p.title + ' ' + p.sku + ' ' + (p.item_ids||[]).join(' ') + ' ' + (p.accounts||[]).join(' ')).toLowerCase() + '">' +
             '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (i+1) + '</td>' +
             '<td class="py-2 pr-3 max-w-xs">' +
                 '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
-                '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips +
-                '<span class="text-[9px] text-gray-400">' + p.item_id + '</span></div>' +
+                '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips + listingsChip + amzAcctChips + '</div>' +
             '</td>' +
             '<td class="py-2 pr-3 text-right font-bold text-gray-700">' + p.daily_rate + '</td>' +
-            (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + (p.amz_daily_rate || '—') + '</td>' : '') +
-            '<td class="py-2 pr-3 text-right font-black text-gray-900">' + (p.total_daily_rate || p.daily_rate) + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + (p.units_7d + (p.amz_units_7d||0)) + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + (p.units_30d + (p.amz_units_30d||0)) + '</td>' +
+            (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + ((p.amz_daily_rate||0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
+            '<td class="py-2 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_7d||0) + (p.amz_units_7d||0)) + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_30d||0) + (p.amz_units_30d||0)) + '</td>' +
             '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
             '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
                 '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
