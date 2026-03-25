@@ -189,7 +189,7 @@ class BinManagerClient:
             try:
                 r = await c.post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=payload, headers=_AJAX_HEADERS, timeout=25,
+                    json=payload, headers=_AJAX_HEADERS, timeout=45,
                 )
                 if self._session_expired(r):
                     self._logged_in = False
