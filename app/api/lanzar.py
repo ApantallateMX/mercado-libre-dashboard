@@ -232,9 +232,10 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
 
 
 async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
-    """Return set of base SKUs that are active in a MeLi account."""
+    """Return set of base SKUs active in a MeLi account.
+    Uses item_sku_cache to avoid re-fetching already-known SKUs.
+    """
     from app.services.meli_client import get_meli_client
-    from app.services.meli_client import _active_user_id as _ctx
     import re as _re
 
     _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -243,57 +244,74 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
         u = sku.upper()
         for s in _ALL_SUFFIXES:
             if u.endswith(s):
-                return sku[:-len(s)].upper()
+                return u[:-len(s)]
         return u
 
-    token = _ctx.set(user_id)
-    try:
-        client = await get_meli_client()
-        if not client:
-            return set()
+    # Use user_id directly — context var pattern is unreliable in background tasks
+    client = await get_meli_client(user_id=user_id)
+    if not client:
+        return set()
 
-        # 1. Fetch all active item IDs
+    try:
+        # 1. Fetch all item IDs (active + paused to be thorough about what's listed)
         item_ids = []
         offset = 0
         while True:
-            resp = await client.get(
-                f"/users/{user_id}/items/search",
-                params={"status": "active", "limit": 100, "offset": offset}
-            )
-            ids = resp.get("results", [])
-            item_ids.extend(ids)
-            if len(ids) < 100:
-                break
-            offset += 100
-            if offset > 5000:
+            try:
+                resp = await client.get(
+                    f"/users/{user_id}/items/search",
+                    params={"limit": 100, "offset": offset},
+                )
+                ids = resp.get("results", [])
+                item_ids.extend(ids)
+                paging = resp.get("paging", {})
+                if len(ids) < 100 or offset + 100 >= paging.get("total", 0):
+                    break
+                offset += 100
+                if offset > 8000:
+                    break
+            except Exception as e:
+                logger.warning(f"items/search error {nickname} offset={offset}: {e}")
                 break
 
         if not item_ids:
             return set()
 
-        # 2. Batch fetch SKUs (200 per call)
-        sku_set = set()
-        for i in range(0, len(item_ids), 20):
-            batch = item_ids[i:i+20]
+        # 2. Check cache first — skip items we already know the SKU for
+        from app.services.token_store import get_cached_skus, save_skus_cache
+        cached = await get_cached_skus(item_ids)
+        cached_skus = {_base(v) for v in cached.values() if v}
+        needs_fetch = [iid for iid in item_ids if iid not in cached]
+
+        # 3. Batch fetch only uncached items — include attributes & variations
+        new_entries = []
+        sku_set = set(cached_skus)
+        for i in range(0, len(needs_fetch), 20):
+            batch = needs_fetch[i:i+20]
             try:
-                details = await client.get("/items", params={"ids": ",".join(batch)})
+                details = await client.get(
+                    f"/items?ids={','.join(batch)}"
+                    f"&attributes=id,seller_custom_field,attributes,variations"
+                )
                 if isinstance(details, list):
                     for entry in details:
-                        item = entry.get("body", {}) if isinstance(entry, dict) else {}
+                        body = entry.get("body", {}) if isinstance(entry, dict) else {}
+                        iid  = str(body.get("id", ""))
                         # seller_custom_field
-                        scf = (item.get("seller_custom_field") or "").upper()
+                        scf = (body.get("seller_custom_field") or "").upper()
                         if scf:
-                            # clean pack suffixes: "SKU / SKU2" → "SKU"
                             scf = _re.split(r'\s*[/+]\s*', scf)[0].strip()
                             sku_set.add(_base(scf))
+                            if iid:
+                                new_entries.append({"item_id": iid, "user_id": user_id, "sku": scf})
                         # attributes SELLER_SKU
-                        for a in (item.get("attributes") or []):
+                        for a in (body.get("attributes") or []):
                             if a.get("id") == "SELLER_SKU":
                                 v = (a.get("value_name") or "").upper()
                                 if v:
                                     sku_set.add(_base(v))
                         # variations
-                        for var in (item.get("variations") or []):
+                        for var in (body.get("variations") or []):
                             vscf = (var.get("seller_custom_field") or "").upper()
                             if vscf:
                                 sku_set.add(_base(vscf))
@@ -303,10 +321,18 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
                                     if v:
                                         sku_set.add(_base(v))
             except Exception as e:
-                logger.warning(f"Error fetching batch SKUs for {nickname}: {e}")
+                logger.warning(f"Batch SKU fetch error {nickname}: {e}")
+
+        # 4. Persist new SKUs to cache for future scans
+        if new_entries:
+            try:
+                await save_skus_cache(new_entries)
+            except Exception:
+                pass
+
         return sku_set
     finally:
-        _ctx.reset(token)
+        await client.close()
 
 
 def _priority_score(stock_total: int, retail_usd: float, cost_usd: float) -> int:
@@ -357,10 +383,11 @@ async def _run_gap_scan():
                 finally:
                     _ctx_fx.reset(token_fx)
 
-            # 2b. Fetch all BM SKUs with stock
-            # Nota: Get_GlobalStock_InventoryBySKU funciona sin auth de sesion
-            # (igual que todos los otros endpoints BM del app)
+            # 2b. Fetch all BM SKUs with stock — must login first
             async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
+                bm_logged_in = await _bm_login(bm_http)
+                if not bm_logged_in:
+                    raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
                 bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
@@ -374,17 +401,26 @@ async def _run_gap_scan():
                         return u[:-len(s)]
                 return u
 
+            def _bm_qty(prod: dict) -> int:
+                """BM returns stock in QtyTotal (when NameQty='QtyTotal' is set)
+                or QTY (uppercase). Check both fields."""
+                v = prod.get("QtyTotal") or prod.get("QTY") or 0
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return 0
+
             bm_map = {}
             for prod in bm_products:
                 raw_sku = prod.get("SKU") or ""
                 if not raw_sku:
                     continue
                 base = _base(raw_sku)
-                qty = prod.get("QtyTotal", 0) or 0
+                qty = _bm_qty(prod)
                 if qty <= 0:
                     continue
-                # Keep the one with most stock if duplicate
-                if base not in bm_map or qty > bm_map[base].get("QtyTotal", 0):
+                # Keep the one with most stock if duplicate base SKU
+                if base not in bm_map or qty > _bm_qty(bm_map[base]):
                     bm_map[base] = prod
 
             # 3. For each account, find gaps
@@ -405,7 +441,7 @@ async def _run_gap_scan():
                         continue
                     retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                     cost   = float(prod.get("AvgCostQTY", 0) or 0)
-                    stock  = int(prod.get("QtyTotal", 0) or 0)
+                    stock  = _bm_qty(prod)
                     score  = _priority_score(stock, retail, cost)
                     suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
                     cost_mxn  = round(cost * fx, 0) if cost > 0 else 0
