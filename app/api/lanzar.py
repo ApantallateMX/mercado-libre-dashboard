@@ -920,3 +920,221 @@ Genera:
             yield f"\n\n[Error al generar: {e}]"
 
     return StreamingResponse(stream(), media_type="text/plain")
+
+
+@router.post("/ai-draft-json")
+async def ai_draft_json_endpoint(request: Request):
+    """Genera borrador de listing como JSON estructurado (para wizard de publicación)."""
+    import json as _json, re as _re
+    body = await request.json()
+    sku        = body.get("sku", "")
+    brand      = body.get("brand", "")
+    model      = body.get("model", "")
+    title_bm   = body.get("product_title", "")
+    category   = body.get("category", "")
+    price_mxn  = body.get("suggested_price_mxn", 0)
+    comp_price = body.get("competitor_price", 0)
+    stock      = body.get("stock_total", 0)
+
+    system = (
+        "Eres un experto en Mercado Libre México. "
+        "Retorna ÚNICAMENTE JSON válido, sin markdown, sin texto extra."
+    )
+    prompt = f"""Crea un listing optimizado para Mercado Libre México:
+
+SKU: {sku}
+Marca: {brand}
+Modelo: {model}
+Título en sistema: {title_bm}
+Categoría: {category}
+Precio sugerido: ${price_mxn:,.0f} MXN
+Precio competencia: ${comp_price:,.0f} MXN
+Stock disponible: {stock} unidades
+
+Retorna SOLO este JSON (sin markdown, sin texto extra):
+{{
+  "title": "(max 60 chars, incluye marca + modelo + beneficio clave)",
+  "description": "(texto plano, 3-4 párrafos: beneficios, specs, garantía)",
+  "bullet_points": ["punto 1 conciso", "punto 2", "punto 3", "punto 4", "punto 5"],
+  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+  "price_regular": {int(price_mxn) if price_mxn else 0},
+  "price_deal": {int(price_mxn * 0.9) if price_mxn else 0},
+  "listing_type": "gold_special",
+  "condition": "new"
+}}"""
+
+    try:
+        raw = await claude_client.generate(prompt, system=system, max_tokens=1400)
+        raw = _re.sub(r'^```[a-z]*\n?', '', raw.strip(), flags=_re.MULTILINE)
+        raw = _re.sub(r'\n?```$', '', raw.strip(), flags=_re.MULTILINE)
+        data = _json.loads(raw.strip())
+        return data
+    except Exception as e:
+        logger.error(f"ai-draft-json error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/predict-category")
+async def predict_category_endpoint(request: Request):
+    """Predice categoría ML usando domain_discovery/search."""
+    body = await request.json()
+    title = body.get("title", "").strip()
+    if not title:
+        return JSONResponse({"error": "title required"}, status_code=400)
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        result = await client.get(
+            "/sites/MLM/domain_discovery/search",
+            params={"q": title, "limit": 4},
+        )
+        suggestions = []
+        for r in (result if isinstance(result, list) else []):
+            suggestions.append({
+                "category_id":   r.get("category_id"),
+                "category_name": r.get("category_name"),
+                "domain_id":     r.get("domain_id"),
+                "domain_name":   r.get("domain_name"),
+            })
+        return {"suggestions": suggestions}
+    except Exception as e:
+        logger.error(f"predict-category error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.get("/category-attrs/{category_id}")
+async def category_attrs_endpoint(category_id: str):
+    """Atributos requeridos de una categoría ML (endpoint público)."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(
+                f"https://api.mercadolibre.com/categories/{category_id}/attributes"
+            )
+            if r.status_code == 200:
+                attrs = r.json()
+                required = [a for a in attrs if a.get("tags", {}).get("required")]
+                optional = [a for a in attrs[:40] if not a.get("tags", {}).get("required")]
+                return {"required": required[:20], "optional": optional[:20]}
+            return JSONResponse({"error": f"ML {r.status_code}"}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/upload-picture")
+async def upload_picture_endpoint(request: Request):
+    """Descarga imagen desde URL y la sube a ML. Retorna picture_id."""
+    body = await request.json()
+    image_url = body.get("image_url", "").strip()
+    if not image_url:
+        return JSONResponse({"error": "image_url required"}, status_code=400)
+
+    # Download image bytes
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
+            img_resp = await http.get(image_url)
+            if img_resp.status_code != 200:
+                return JSONResponse({"error": f"Could not fetch image: {img_resp.status_code}"}, status_code=400)
+            img_bytes = img_resp.content
+            content_type = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+    except Exception as e:
+        return JSONResponse({"error": f"Image fetch error: {e}"}, status_code=400)
+
+    ext = {"image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(content_type, "jpg")
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        result = await client.post(
+            "/pictures/items/upload",
+            files={"file": (f"product.{ext}", img_bytes, content_type)},
+        )
+        pic_id = result.get("id")
+        if not pic_id:
+            return JSONResponse({"error": f"ML upload no id: {result}"}, status_code=502)
+        return {"picture_id": pic_id, "secure_url": result.get("secure_url") or result.get("url", "")}
+    except Exception as e:
+        logger.error(f"upload-picture error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.post("/create-listing")
+async def create_listing_endpoint(request: Request):
+    """Crea el listing en Mercado Libre y marca el gap como lanzado."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body = await request.json()
+    category_id = body.get("category_id", "").strip()
+    title       = body.get("title", "").strip()
+    price       = body.get("price", 0)
+    if not category_id or not title or not price:
+        return JSONResponse({"error": "category_id, title y price son requeridos"}, status_code=400)
+
+    description = body.get("description", "")
+    sku         = body.get("sku", "")
+    pictures    = body.get("pictures", [])
+
+    item_payload: dict = {
+        "title":              title,
+        "category_id":        category_id,
+        "price":              float(price),
+        "currency_id":        "MXN",
+        "available_quantity": int(body.get("available_quantity", 1)),
+        "listing_type_id":    body.get("listing_type_id", "gold_special"),
+        "condition":          body.get("condition", "new"),
+    }
+    if pictures:
+        item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
+    if sku:
+        item_payload["seller_custom_field"] = sku
+    if body.get("attributes"):
+        item_payload["attributes"] = body["attributes"]
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        result = await client.post("/items", json=item_payload)
+        item_id = result.get("id")
+        if not item_id:
+            err = result.get("message") or result.get("error") or str(result)
+            return JSONResponse({"error": err}, status_code=400)
+
+        # Add description separately (ML doesn't accept it in the initial POST)
+        if description:
+            try:
+                await client.post(
+                    f"/items/{item_id}/description",
+                    json={"plain_text": description},
+                )
+            except Exception as e:
+                logger.warning(f"Description upload failed for {item_id}: {e}")
+
+        # Mark gap as launched
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute(
+                "UPDATE bm_sku_gaps SET status='launched' WHERE user_id=? AND sku=?",
+                (user_id, sku.upper()),
+            )
+            await db.commit()
+
+        logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
+        return {"ok": True, "item_id": item_id, "permalink": result.get("permalink", ""), "status": result.get("status", "")}
+
+    except Exception as e:
+        logger.error(f"create-listing error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()

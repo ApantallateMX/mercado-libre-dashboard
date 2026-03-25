@@ -1,4 +1,4 @@
-<!-- Partial: lanzar_gaps.html — Lanzador Inteligente con filtros, paginación y modal IA -->
+<!-- Partial: lanzar_gaps.html — Lanzador Inteligente con filtros, paginación y wizard de publicación -->
 <div id="gaps-root">
 
   <!-- ── Header bar ──────────────────────────────────────────────────────────── -->
@@ -45,24 +45,17 @@
 
   <!-- ── Filters & controls ────────────────────────────────────────────────── -->
   <div class="px-4 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-white">
-    <!-- Search -->
     <input id="gaps-search" type="text" placeholder="Buscar SKU o producto..."
            class="text-xs border border-gray-200 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:border-yellow-400"
            oninput="window._gapsDebounce()"/>
-
-    <!-- Category -->
     <select id="gaps-cat" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400 max-w-[180px]">
       <option value="">Todas las categorías</option>
     </select>
-
-    <!-- Brand -->
     <select id="gaps-brand" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400 max-w-[140px]">
       <option value="">Todas las marcas</option>
     </select>
-
-    <!-- Min stock -->
     <select id="gaps-min-stock" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
       <option value="0">Stock: todos</option>
@@ -71,8 +64,6 @@
       <option value="50">Stock ≥ 50</option>
       <option value="100">Stock ≥ 100</option>
     </select>
-
-    <!-- Min price -->
     <select id="gaps-min-price" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
       <option value="0">Precio: todos</option>
@@ -81,8 +72,6 @@
       <option value="200">USD ≥ $200</option>
       <option value="500">USD ≥ $500</option>
     </select>
-
-    <!-- Sort -->
     <select id="gaps-sort" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
       <option value="priority">Prioridad ↓</option>
@@ -92,8 +81,6 @@
       <option value="price_asc">Precio USD ↑</option>
       <option value="name_asc">Nombre A→Z</option>
     </select>
-
-    <!-- Per page -->
     <select id="gaps-per-page" onchange="window._gapsFilter()"
             class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
       <option value="10" selected>10 por página</option>
@@ -101,8 +88,6 @@
       <option value="50">50 por página</option>
       <option value="100">100 por página</option>
     </select>
-
-    <!-- Reset -->
     <button onclick="window._gapsReset()"
             class="text-xs text-gray-400 hover:text-gray-600 underline">Limpiar</button>
   </div>
@@ -136,256 +121,361 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- Modal: AI Listing Draft                                                     -->
+<!-- Modal: Wizard de Publicación en MeLi (3 pasos)                             -->
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div id="ai-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-  <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-      <div>
-        <h3 class="font-bold text-gray-800" id="ai-modal-title">Generar Listing con IA</h3>
-        <p class="text-xs text-gray-400 mt-0.5" id="ai-modal-sku"></p>
+<div id="wizard-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+  <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+      <div class="min-w-0">
+        <h3 class="font-bold text-gray-800 text-sm truncate" id="wiz-title">Publicar en Mercado Libre</h3>
+        <p class="text-xs text-gray-400 mt-0.5" id="wiz-subtitle"></p>
       </div>
-      <button onclick="window._closeAiModal()" class="text-gray-400 hover:text-gray-600 transition">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      <button onclick="window._closeWizard()" class="ml-3 flex-shrink-0 text-gray-400 hover:text-gray-600 transition text-lg leading-none">✕</button>
     </div>
-    <div class="flex border-b border-gray-100">
-      <button onclick="window._aiTab('draft')" id="tab-draft"
-              class="px-4 py-2.5 text-xs font-semibold text-yellow-700 border-b-2 border-yellow-400">
-        Borrador IA
-      </button>
-      <button onclick="window._aiTab('competitor')" id="tab-competitor"
-              class="px-4 py-2.5 text-xs font-semibold text-gray-500 border-b-2 border-transparent hover:text-gray-700">
-        Competencia
-      </button>
-    </div>
-    <div class="flex-1 overflow-y-auto p-5">
-      <div id="panel-draft">
-        <div id="ai-stream-output"
-             class="font-mono text-xs text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-4 min-h-[200px] max-h-[50vh] overflow-y-auto border border-gray-200">
-          Haz clic en "Generar con IA" para crear el listing.
+
+    <!-- Stepper -->
+    <div class="px-5 py-3 border-b border-gray-100 flex-shrink-0">
+      <div class="flex items-center">
+        <!-- Step 1 -->
+        <div class="flex flex-col items-center flex-shrink-0">
+          <div id="wiz-dot-1" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-yellow-400 text-gray-800">1</div>
+          <span id="wiz-lbl-1" class="text-[10px] mt-1 text-gray-700 whitespace-nowrap">Borrador</span>
         </div>
-        <button onclick="window._generateDraft()" id="btn-gen-draft"
-                class="mt-4 w-full bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold py-2.5 rounded-lg transition text-sm flex items-center justify-center gap-2">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        <div id="wiz-line-1" class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
+        <!-- Step 2 -->
+        <div class="flex flex-col items-center flex-shrink-0">
+          <div id="wiz-dot-2" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-gray-200 text-gray-400">2</div>
+          <span id="wiz-lbl-2" class="text-[10px] mt-1 text-gray-400 whitespace-nowrap">Detalles</span>
+        </div>
+        <div id="wiz-line-2" class="flex-1 h-0.5 bg-gray-200 mx-2"></div>
+        <!-- Step 3 -->
+        <div class="flex flex-col items-center flex-shrink-0">
+          <div id="wiz-dot-3" class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-gray-200 text-gray-400">3</div>
+          <span id="wiz-lbl-3" class="text-[10px] mt-1 text-gray-400 whitespace-nowrap">Publicar</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Body (scrollable) -->
+    <div class="flex-1 overflow-y-auto">
+
+      <!-- ── Step 1: Borrador IA ─────────────────────────────────────────── -->
+      <div id="wiz-panel-1" class="p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-gray-500">Genera el contenido con IA o edita manualmente.</p>
+          <button onclick="window._wizGenDraft()" id="wiz-btn-gen"
+                  class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 flex-shrink-0">
+            ⚡ Generar con IA
+          </button>
+        </div>
+        <div id="wiz-draft-loading" class="hidden text-xs text-blue-500 text-center py-2 flex items-center justify-center gap-2">
+          <svg class="animate-spin w-3.5 h-3.5" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
           </svg>
-          Generar con IA
+          Generando borrador con IA...
+        </div>
+        <!-- Title -->
+        <div>
+          <label class="text-xs font-semibold text-gray-600 block mb-1">
+            Título <span class="font-normal text-gray-400">(máx. 60 caracteres)</span>
+          </label>
+          <input id="wiz-f-title" type="text" maxlength="60"
+                 oninput="window._wizTitleLen()"
+                 class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400"
+                 placeholder="Marca + Modelo + beneficio clave para SEO..."/>
+          <div class="flex justify-between mt-0.5">
+            <span class="text-[10px] text-gray-400">Incluye marca, modelo y característica principal</span>
+            <span id="wiz-title-len" class="text-[10px] text-gray-400">0/60</span>
+          </div>
+        </div>
+        <!-- Description -->
+        <div>
+          <label class="text-xs font-semibold text-gray-600 block mb-1">Descripción</label>
+          <textarea id="wiz-f-desc" rows="5"
+                    class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400 resize-y"
+                    placeholder="Descripción del producto (beneficios, especificaciones, garantía)..."></textarea>
+        </div>
+        <!-- Bullets -->
+        <div>
+          <label class="text-xs font-semibold text-gray-600 block mb-1.5">Puntos clave</label>
+          <div id="wiz-bullets" class="space-y-1.5"></div>
+        </div>
+        <!-- Keywords -->
+        <div id="wiz-kw-row" class="hidden">
+          <label class="text-xs font-semibold text-gray-600 block mb-1.5">Palabras clave SEO</label>
+          <div id="wiz-keywords" class="flex flex-wrap gap-1.5"></div>
+        </div>
+      </div>
+
+      <!-- ── Step 2: Detalles ───────────────────────────────────────────── -->
+      <div id="wiz-panel-2" class="hidden p-5 space-y-4">
+        <!-- Category -->
+        <div>
+          <label class="text-xs font-semibold text-gray-600 block mb-2">
+            Categoría Mercado Libre
+            <span class="font-normal text-gray-400">(selecciona o ingresa ID manualmente)</span>
+          </label>
+          <div id="wiz-cat-loading" class="text-xs text-gray-400 flex items-center gap-1.5 py-1">
+            <svg class="animate-spin w-3 h-3" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+            Buscando categorías...
+          </div>
+          <div id="wiz-cat-list" class="hidden space-y-2 mb-2"></div>
+          <input id="wiz-f-cat-id" type="text"
+                 placeholder="O escribe el category_id (ej. MLM1055)"
+                 class="w-full text-xs border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-yellow-400"/>
+        </div>
+        <!-- Price + Listing type -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold text-gray-600 block mb-1">Precio MXN</label>
+            <input id="wiz-f-price" type="number" min="1" step="1"
+                   class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400"/>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-gray-600 block mb-1">Tipo de publicación</label>
+            <select id="wiz-f-listing-type"
+                    class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400">
+              <option value="gold_special">Gold Special</option>
+              <option value="gold_pro">Gold Pro (premium)</option>
+              <option value="silver">Silver</option>
+              <option value="free">Gratis (1 unidad)</option>
+            </select>
+          </div>
+        </div>
+        <!-- Condition + Qty -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-semibold text-gray-600 block mb-1">Condición</label>
+            <select id="wiz-f-condition"
+                    class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400">
+              <option value="new">Nuevo</option>
+              <option value="used">Usado</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-gray-600 block mb-1">Cantidad a publicar</label>
+            <input id="wiz-f-qty" type="number" min="1" step="1"
+                   class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400"/>
+          </div>
+        </div>
+        <!-- Competitor ref -->
+        <div id="wiz-comp-ref" class="hidden bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700">
+          Competencia promedio: <span id="wiz-comp-price" class="font-semibold"></span>
+        </div>
+      </div>
+
+      <!-- ── Step 3: Publicar ──────────────────────────────────────────── -->
+      <div id="wiz-panel-3" class="hidden p-5 space-y-4">
+        <!-- Summary card -->
+        <div class="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+          <div class="flex gap-3">
+            <div id="wiz-prev-img"
+                 class="flex-shrink-0 w-16 h-16 bg-gray-100 rounded-lg border border-gray-200 flex items-center justify-center overflow-hidden text-gray-300 text-[9px]">
+              IMG
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="font-bold text-gray-800 text-sm leading-snug" id="wiz-sum-title">—</p>
+              <p class="text-xs text-gray-400 mt-0.5" id="wiz-sum-sku"></p>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs border-t border-gray-200 pt-3">
+            <div class="flex justify-between"><span class="text-gray-400">Categoría</span><span id="wiz-sum-cat" class="font-medium text-gray-700 text-right ml-2">—</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">Precio</span><span id="wiz-sum-price" class="font-medium text-gray-700">—</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">Tipo</span><span id="wiz-sum-type" class="font-medium text-gray-700">—</span></div>
+            <div class="flex justify-between"><span class="text-gray-400">Cantidad</span><span id="wiz-sum-qty" class="font-medium text-gray-700">—</span></div>
+          </div>
+        </div>
+
+        <!-- Options -->
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="wiz-cb-img" checked class="w-4 h-4 accent-yellow-500 rounded"/>
+          <span class="text-xs text-gray-600">Subir imagen de BinManager a Mercado Libre</span>
+        </label>
+
+        <!-- Publish button -->
+        <button onclick="window._wizPublish()" id="wiz-btn-publish"
+                class="w-full bg-green-500 hover:bg-green-600 active:bg-green-700 text-white font-bold py-3 rounded-xl transition text-sm flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+          </svg>
+          Publicar en Mercado Libre
+        </button>
+
+        <!-- Status message -->
+        <div id="wiz-pub-status" class="hidden text-center text-sm py-1"></div>
+      </div>
+
+    </div><!-- /body -->
+
+    <!-- Footer nav -->
+    <div class="px-5 py-3 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
+      <button id="wiz-btn-back" onclick="window._wizBack()"
+              class="hidden text-xs text-gray-500 hover:text-gray-700 border border-gray-200 hover:border-gray-300 px-4 py-2 rounded-lg transition">
+        ← Atrás
+      </button>
+      <div class="ml-auto">
+        <button id="wiz-btn-next" onclick="window._wizNext()"
+                class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-5 py-2 rounded-lg transition">
+          Siguiente →
         </button>
       </div>
-      <div id="panel-competitor" class="hidden">
-        <div id="comp-loading" class="text-center py-8 text-gray-400 text-sm">Cargando competidores...</div>
-        <div id="comp-list" class="space-y-3 hidden"></div>
-      </div>
     </div>
+
   </div>
 </div>
 
 <script>
 (function() {
-  // ── State ───────────────────────────────────────────────────────────────────
+  // ── Gap list state ───────────────────────────────────────────────────────────
   var _state = {
     page: 1, per_page: 10, sort: 'priority', status: 'unlaunched',
     category: '', brand: '', search: '', min_stock: 0, min_price: 0,
     total: 0, pages: 1, badge_total: 0,
   };
   var _gaps = [];
-  var _currentGap = null;
   var _scanPolling = null;
   var _debounceTimer = null;
 
-  // ── Build query string ───────────────────────────────────────────────────────
   function _qs() {
     var p = [
-      'page=' + _state.page,
-      'per_page=' + _state.per_page,
-      'sort=' + _state.sort,
-      'status=' + _state.status,
+      'page=' + _state.page, 'per_page=' + _state.per_page,
+      'sort=' + _state.sort, 'status=' + _state.status,
     ];
     if (_state.category) p.push('category=' + encodeURIComponent(_state.category));
     if (_state.brand)    p.push('brand='    + encodeURIComponent(_state.brand));
     if (_state.search)   p.push('search='   + encodeURIComponent(_state.search));
-    if (_state.min_stock > 0)  p.push('min_stock='  + _state.min_stock);
-    if (_state.min_price > 0)  p.push('min_price='  + _state.min_price);
+    if (_state.min_stock > 0) p.push('min_stock=' + _state.min_stock);
+    if (_state.min_price > 0) p.push('min_price=' + _state.min_price);
     return '?' + p.join('&');
   }
 
-  // ── Load gaps ────────────────────────────────────────────────────────────────
   function _loadGaps() {
     var tbody = document.getElementById('gaps-tbody');
     tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-gray-300 text-sm">Cargando...</td></tr>';
-
     fetch('/api/lanzar/gaps' + _qs())
       .then(function(r) { return r.json(); })
       .then(function(d) {
         _gaps = d.items || [];
-        _state.total    = d.total || 0;
-        _state.pages    = d.pages || 1;
+        _state.total = d.total || 0; _state.pages = d.pages || 1;
         _state.badge_total = d.badge_total || d.total || 0;
-        _renderBadge();
-        _renderTable();
-        _renderPagination();
+        _renderBadge(); _renderTable(); _renderPagination();
       })
       .catch(function(e) {
         tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-6 text-center text-red-400 text-sm">Error: ' + e + '</td></tr>';
       });
   }
 
-  // ── Load filters (categories + brands + stats) ───────────────────────────────
   function _loadFilters() {
     fetch('/api/lanzar/filters')
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        // Category select
-        var catSel = document.getElementById('gaps-cat');
-        var prev = catSel.value;
+        var catSel = document.getElementById('gaps-cat'), prev = catSel.value;
         catSel.innerHTML = '<option value="">Todas las categorías (' + d.total_gaps + ')</option>';
         (d.categories || []).forEach(function(c) {
-          var opt = document.createElement('option');
-          opt.value = c.category;
-          opt.textContent = c.category + ' (' + c.count + ')';
-          catSel.appendChild(opt);
+          var o = document.createElement('option');
+          o.value = c.category; o.textContent = c.category + ' (' + c.count + ')';
+          catSel.appendChild(o);
         });
         catSel.value = prev;
 
-        // Brand select
-        var brandSel = document.getElementById('gaps-brand');
-        var prevB = brandSel.value;
+        var brandSel = document.getElementById('gaps-brand'), prevB = brandSel.value;
         brandSel.innerHTML = '<option value="">Todas las marcas</option>';
         (d.brands || []).forEach(function(b) {
-          var opt = document.createElement('option');
-          opt.value = b.brand;
-          opt.textContent = b.brand + ' (' + b.count + ')';
-          brandSel.appendChild(opt);
+          var o = document.createElement('option');
+          o.value = b.brand; o.textContent = b.brand + ' (' + b.count + ')';
+          brandSel.appendChild(o);
         });
         brandSel.value = prevB;
 
-        // Stats bar
         var stats = document.getElementById('gaps-stats');
         if (d.total_gaps > 0) {
-          var revStr = d.revenue_potential_mxn > 0
+          var rev = d.revenue_potential_mxn > 0
             ? ' · <span class="text-green-700 font-semibold">$' + Math.round(d.revenue_potential_mxn).toLocaleString() + ' MXN potencial</span>'
             : '';
           stats.innerHTML =
             '<span>' + d.total_gaps + ' SKUs sin publicar</span>' +
-            '<span>· ' + (d.total_stock || 0).toLocaleString() + ' uds en BM</span>' +
-            revStr;
+            '<span>· ' + (d.total_stock || 0).toLocaleString() + ' uds en BM</span>' + rev;
           stats.classList.remove('hidden');
         }
       });
   }
 
   function _renderBadge() {
-    var badge = document.getElementById('gaps-badge');
-    if (badge) badge.textContent = _state.badge_total;
+    var b = document.getElementById('gaps-badge');
+    if (b) b.textContent = _state.badge_total;
   }
 
-  // ── Render table ──────────────────────────────────────────────────────────────
   function _renderTable() {
     var tbody = document.getElementById('gaps-tbody');
     if (!_gaps.length) {
-      var msg = _state.status === 'ignored'
-        ? 'No hay SKUs ignorados.'
-        : 'Sin resultados con los filtros aplicados.';
-      tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-gray-400 text-sm">' +
-        '<div class="text-2xl mb-2">🎉</div>' + msg + '</td></tr>';
+      var msg = _state.status === 'ignored' ? 'No hay SKUs ignorados.' : 'Sin resultados con los filtros aplicados.';
+      tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-gray-400 text-sm"><div class="text-2xl mb-2">🎉</div>' + msg + '</td></tr>';
       return;
     }
     tbody.innerHTML = _gaps.map(function(g) {
-      var scoreColor = g.priority_score >= 70 ? 'text-red-600 font-bold' :
-                       g.priority_score >= 40 ? 'text-yellow-600 font-semibold' : 'text-gray-500';
-      var priceUsd  = g.retail_price_usd > 0   ? '$' + g.retail_price_usd.toFixed(2)  : '—';
-      var priceMxn  = g.suggested_price_mxn > 0 ? '$' + Math.round(g.suggested_price_mxn).toLocaleString() : '—';
-      var compStr   = g.competitor_price > 0    ? '$' + Math.round(g.competitor_price).toLocaleString() : '—';
-      var imgTag    = g.image_url
+      var sc = g.priority_score >= 70 ? 'text-red-600 font-bold' : g.priority_score >= 40 ? 'text-yellow-600 font-semibold' : 'text-gray-500';
+      var priceUsd = g.retail_price_usd > 0 ? '$' + g.retail_price_usd.toFixed(2) : '—';
+      var priceMxn = g.suggested_price_mxn > 0 ? '$' + Math.round(g.suggested_price_mxn).toLocaleString() : '—';
+      var compStr  = g.competitor_price > 0 ? '$' + Math.round(g.competitor_price).toLocaleString() : '—';
+      var imgTag   = g.image_url
         ? '<img src="' + g.image_url + '" class="w-9 h-9 object-contain rounded border border-gray-100 flex-shrink-0" onerror="this.style.display=\'none\'">'
-        : '<div class="w-9 h-9 bg-gray-100 rounded border border-gray-200 flex-shrink-0 flex items-center justify-center text-gray-300 text-[10px]">IMG</div>';
-      var catBadge  = g.category
+        : '<div class="w-9 h-9 bg-gray-100 rounded border border-gray-200 flex-shrink-0 flex items-center justify-center text-gray-300 text-[9px]">IMG</div>';
+      var catBadge = g.category
         ? '<span class="px-1 py-0.5 bg-blue-50 text-blue-600 text-[9px] rounded border border-blue-100">' + g.category + '</span>'
         : '<span class="text-gray-300 text-[9px]">—</span>';
-
+      var gJson = JSON.stringify(g).replace(/"/g, '&quot;');
       return '<tr class="hover:bg-gray-50 transition">' +
-        '<td class="px-4 py-3 max-w-xs">' +
-          '<div class="flex items-center gap-2">' + imgTag +
+        '<td class="px-4 py-3 max-w-xs"><div class="flex items-center gap-2">' + imgTag +
           '<div class="min-w-0">' +
-            '<div class="font-medium text-gray-800 text-xs leading-tight truncate" title="' + (g.product_title || '') + '">' +
-              (g.product_title || g.sku) +
-            '</div>' +
+            '<div class="font-medium text-gray-800 text-xs leading-tight truncate" title="' + (g.product_title||'') + '">' + (g.product_title || g.sku) + '</div>' +
             '<div class="text-gray-400 text-[10px] mt-0.5 flex gap-1 flex-wrap">' +
               '<span class="font-mono bg-gray-50 px-1 rounded border border-gray-100">' + g.sku + '</span>' +
               (g.brand ? '<span>' + g.brand + '</span>' : '') +
               (g.model ? '<span class="truncate max-w-[120px]">' + g.model + '</span>' : '') +
-            '</div>' +
-          '</div></div>' +
-        '</td>' +
-        '<td class="px-3 py-3 text-center">' +
-          '<span class="text-gray-700 font-semibold text-xs">' + (g.stock_total || 0).toLocaleString() + '</span>' +
-        '</td>' +
+            '</div></div></div></td>' +
+        '<td class="px-3 py-3 text-center"><span class="text-gray-700 font-semibold text-xs">' + (g.stock_total||0).toLocaleString() + '</span></td>' +
         '<td class="px-3 py-3 text-center">' + catBadge + '</td>' +
-        '<td class="px-3 py-3 text-right">' +
-          '<span class="text-gray-600 text-xs font-mono">' + priceUsd + '</span>' +
-        '</td>' +
-        '<td class="px-3 py-3 text-right">' +
-          '<span class="text-gray-700 text-xs">' + priceMxn + ' MXN</span>' +
-        '</td>' +
-        '<td class="px-3 py-3 text-right">' +
-          '<span class="text-gray-400 text-xs">' + compStr + '</span>' +
-        '</td>' +
-        '<td class="px-3 py-3 text-center">' +
-          '<span class="text-xs ' + scoreColor + '">' + g.priority_score + '</span>' +
-        '</td>' +
-        '<td class="px-3 py-3">' +
-          '<div class="flex items-center justify-center gap-1.5">' +
-            '<button onclick="window._openAiModal(' + JSON.stringify(g).replace(/"/g, '&quot;') + ')" ' +
-              'class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-2.5 py-1.5 rounded-lg transition">Lanzar</button>' +
-            (g.status === 'unlaunched'
-              ? '<button onclick="window._ignoreGap(\'' + g.sku + '\')" ' +
-                'class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2 py-1.5 rounded-lg transition" title="Ignorar">✕</button>'
-              : '<button onclick="window._restoreGap(\'' + g.sku + '\')" ' +
-                'class="text-xs text-blue-400 hover:text-blue-600 border border-gray-200 hover:border-blue-300 px-2 py-1.5 rounded-lg transition" title="Restaurar">↩</button>'
-            ) +
-          '</div>' +
-        '</td>' +
-        '</tr>';
+        '<td class="px-3 py-3 text-right"><span class="text-gray-600 text-xs font-mono">' + priceUsd + '</span></td>' +
+        '<td class="px-3 py-3 text-right"><span class="text-gray-700 text-xs">' + priceMxn + ' MXN</span></td>' +
+        '<td class="px-3 py-3 text-right"><span class="text-gray-400 text-xs">' + compStr + '</span></td>' +
+        '<td class="px-3 py-3 text-center"><span class="text-xs ' + sc + '">' + g.priority_score + '</span></td>' +
+        '<td class="px-3 py-3"><div class="flex items-center justify-center gap-1.5">' +
+          '<button onclick="window._openWizard(' + gJson + ')" ' +
+            'class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-2.5 py-1.5 rounded-lg transition">Lanzar</button>' +
+          (g.status === 'unlaunched'
+            ? '<button onclick="window._ignoreGap(\'' + g.sku + '\')" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2 py-1.5 rounded-lg transition" title="Ignorar">✕</button>'
+            : '<button onclick="window._restoreGap(\'' + g.sku + '\')" class="text-xs text-blue-400 hover:text-blue-600 border border-gray-200 hover:border-blue-300 px-2 py-1.5 rounded-lg transition" title="Restaurar">↩</button>'
+          ) +
+        '</div></td></tr>';
     }).join('');
   }
 
-  // ── Pagination ────────────────────────────────────────────────────────────────
   function _renderPagination() {
     var cont = document.getElementById('gaps-pagination');
     if (!cont) return;
     var total = _state.total, pp = _state.per_page, page = _state.page, pages = _state.pages;
-    var from = (page - 1) * pp + 1, to = Math.min(page * pp, total);
-
-    if (total === 0) { cont.innerHTML = ''; return; }
-
-    var html = '<div class="flex items-center justify-between text-xs text-gray-500">' +
-      '<span>Mostrando ' + from + '–' + to + ' de ' + total + '</span>' +
-      '<div class="flex gap-1 items-center">';
-
+    var from = (page-1)*pp+1, to = Math.min(page*pp, total);
+    if (!total) { cont.innerHTML = ''; return; }
+    var html = '<div class="flex items-center justify-between text-xs text-gray-500"><span>Mostrando ' + from + '–' + to + ' de ' + total + '</span><div class="flex gap-1 items-center">';
     if (page > 1) html += '<button onclick="window._gapsGoPage(' + (page-1) + ')" class="px-2.5 py-1 border border-gray-200 rounded hover:border-yellow-400 transition">‹</button>';
-
-    // Show up to 5 page buttons
-    var start = Math.max(1, page - 2), end = Math.min(pages, start + 4);
+    var start = Math.max(1, page-2), end = Math.min(pages, start+4);
     for (var i = start; i <= end; i++) {
       html += '<button onclick="window._gapsGoPage(' + i + ')" class="px-2.5 py-1 border rounded transition ' +
-        (i === page ? 'border-yellow-400 bg-yellow-50 font-bold text-yellow-700' : 'border-gray-200 hover:border-yellow-400') + '">' + i + '</button>';
+        (i===page ? 'border-yellow-400 bg-yellow-50 font-bold text-yellow-700' : 'border-gray-200 hover:border-yellow-400') + '">' + i + '</button>';
     }
-
     if (page < pages) html += '<button onclick="window._gapsGoPage(' + (page+1) + ')" class="px-2.5 py-1 border border-gray-200 rounded hover:border-yellow-400 transition">›</button>';
     html += '</div></div>';
     cont.innerHTML = html;
   }
 
-  window._gapsGoPage = function(p) {
-    _state.page = p;
-    _loadGaps();
-    window.scrollTo(0, 0);
-  };
+  window._gapsGoPage = function(p) { _state.page = p; _loadGaps(); window.scrollTo(0, 0); };
 
-  // ── Filter controls ───────────────────────────────────────────────────────────
   window._gapsFilter = function() {
     _state.page      = 1;
     _state.category  = document.getElementById('gaps-cat').value;
@@ -409,8 +499,7 @@
   };
 
   window._gapsSetStatus = function(status) {
-    _state.status = status;
-    _state.page   = 1;
+    _state.status = status; _state.page = 1;
     document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
       t.className = 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2';
     });
@@ -420,20 +509,19 @@
   };
 
   window._gapsReset = function() {
-    document.getElementById('gaps-search').value    = '';
-    document.getElementById('gaps-cat').value        = '';
-    document.getElementById('gaps-brand').value      = '';
-    document.getElementById('gaps-min-stock').value  = '0';
-    document.getElementById('gaps-min-price').value  = '0';
-    document.getElementById('gaps-sort').value       = 'priority';
-    document.getElementById('gaps-per-page').value   = '10';
+    document.getElementById('gaps-search').value = '';
+    document.getElementById('gaps-cat').value = '';
+    document.getElementById('gaps-brand').value = '';
+    document.getElementById('gaps-min-stock').value = '0';
+    document.getElementById('gaps-min-price').value = '0';
+    document.getElementById('gaps-sort').value = 'priority';
+    document.getElementById('gaps-per-page').value = '10';
     _state.category = ''; _state.brand = ''; _state.search = '';
     _state.min_stock = 0; _state.min_price = 0;
     _state.sort = 'priority'; _state.per_page = 10; _state.page = 1;
     _loadGaps();
   };
 
-  // ── Gap actions ───────────────────────────────────────────────────────────────
   window._ignoreGap = function(sku) {
     fetch('/api/lanzar/ignore/' + encodeURIComponent(sku), { method: 'POST' })
       .then(function() { _loadGaps(); _loadFilters(); });
@@ -444,7 +532,6 @@
       .then(function() { _loadGaps(); _loadFilters(); });
   };
 
-  // ── Scan ──────────────────────────────────────────────────────────────────────
   window._scanNow = function() {
     var btn = document.getElementById('btn-scan-now');
     btn.disabled = true; btn.classList.add('opacity-50');
@@ -452,8 +539,7 @@
   };
 
   function _startScanPolling() {
-    var bar = document.getElementById('scan-status-bar');
-    var txt = document.getElementById('scan-status-text');
+    var bar = document.getElementById('scan-status-bar'), txt = document.getElementById('scan-status-text');
     if (bar) bar.classList.remove('hidden');
     if (_scanPolling) clearInterval(_scanPolling);
     _scanPolling = setInterval(function() {
@@ -465,109 +551,356 @@
           if (bar) bar.classList.add('hidden');
           var btn = document.getElementById('btn-scan-now');
           if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
-          if (s.status === 'done') {
-            _loadGaps(); _loadFilters();
-          } else if (s.status === 'error') {
-            alert('Error en el scan: ' + (s.error || 'desconocido'));
-          }
+          if (s.status === 'done') { _loadGaps(); _loadFilters(); }
+          else if (s.status === 'error') { alert('Error en el scan: ' + (s.error || 'desconocido')); }
         }
       });
     }, 3000);
   }
 
-  // ── AI Modal ──────────────────────────────────────────────────────────────────
-  window._openAiModal = function(gap) {
-    _currentGap = gap;
-    document.getElementById('ai-modal').classList.remove('hidden');
-    document.getElementById('ai-modal-title').textContent =
-      (gap.brand || '') + ' ' + (gap.model || gap.sku);
-    document.getElementById('ai-modal-sku').textContent =
-      'SKU: ' + gap.sku + (gap.category ? ' · ' + gap.category : '');
-    document.getElementById('ai-stream-output').textContent =
-      'Haz clic en "Generar con IA" para crear el listing.';
-    _aiTab('draft');
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Wizard de Publicación
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  var _wiz = {
+    step: 1, gap: null,
+    draft: { title: '', description: '', bullet_points: [], keywords: [] },
+    category_id: '', category_name: '', price: 0,
+    listing_type: 'gold_special', condition: 'new', qty: 1,
   };
 
-  window._closeAiModal = function() {
-    document.getElementById('ai-modal').classList.add('hidden');
-    _currentGap = null;
+  window._openWizard = function(gap) {
+    _wiz.gap = gap;
+    _wiz.price = gap.suggested_price_mxn || 0;
+    _wiz.qty   = Math.min(gap.stock_total || 1, 999);
+    _wiz.category_id = ''; _wiz.category_name = '';
+    _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
+
+    document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);
+    document.getElementById('wiz-subtitle').textContent = 'SKU: ' + gap.sku + (gap.category ? ' · ' + gap.category : '');
+    document.getElementById('wiz-f-title').value = gap.product_title || '';
+    document.getElementById('wiz-f-desc').value = '';
+    _wizBullets([]);
+    _wizKeywords([]);
+    window._wizTitleLen();
+
+    _wizGoStep(1);
+    document.getElementById('wizard-modal').classList.remove('hidden');
   };
 
-  window._aiTab = function(tab) {
-    document.getElementById('panel-draft').classList.toggle('hidden', tab !== 'draft');
-    document.getElementById('panel-competitor').classList.toggle('hidden', tab !== 'competitor');
-    document.getElementById('tab-draft').className =
-      'px-4 py-2.5 text-xs font-semibold border-b-2 ' +
-      (tab === 'draft' ? 'text-yellow-700 border-yellow-400' : 'text-gray-500 border-transparent hover:text-gray-700');
-    document.getElementById('tab-competitor').className =
-      'px-4 py-2.5 text-xs font-semibold border-b-2 ' +
-      (tab === 'competitor' ? 'text-yellow-700 border-yellow-400' : 'text-gray-500 border-transparent hover:text-gray-700');
-    if (tab === 'competitor' && _currentGap) _loadCompetitors(_currentGap);
+  window._closeWizard = function() {
+    document.getElementById('wizard-modal').classList.add('hidden');
+    _wiz.gap = null;
   };
 
-  window._generateDraft = function() {
-    if (!_currentGap) return;
-    var btn = document.getElementById('btn-gen-draft');
+  function _wizGoStep(step) {
+    _wiz.step = step;
+    for (var i = 1; i <= 3; i++) {
+      var panel = document.getElementById('wiz-panel-' + i);
+      if (panel) panel.classList.toggle('hidden', i !== step);
+    }
+    // Update stepper dots
+    for (var i = 1; i <= 3; i++) {
+      var dot = document.getElementById('wiz-dot-' + i);
+      var lbl = document.getElementById('wiz-lbl-' + i);
+      if (dot) {
+        if (i < step) {
+          dot.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-green-500 text-white';
+          dot.textContent = '✓';
+        } else if (i === step) {
+          dot.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-yellow-400 text-gray-800';
+          dot.textContent = i;
+        } else {
+          dot.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold bg-gray-200 text-gray-400';
+          dot.textContent = i;
+        }
+      }
+      if (lbl) lbl.className = 'text-[10px] mt-1 whitespace-nowrap ' + (i <= step ? 'text-gray-700' : 'text-gray-400');
+    }
+    // Lines
+    var line1 = document.getElementById('wiz-line-1');
+    if (line1) line1.className = 'flex-1 h-0.5 mx-2 ' + (step > 1 ? 'bg-green-400' : 'bg-gray-200');
+    var line2 = document.getElementById('wiz-line-2');
+    if (line2) line2.className = 'flex-1 h-0.5 mx-2 ' + (step > 2 ? 'bg-green-400' : 'bg-gray-200');
+
+    // Buttons
+    var back = document.getElementById('wiz-btn-back');
+    var next = document.getElementById('wiz-btn-next');
+    if (back) back.classList.toggle('hidden', step === 1);
+    if (next) next.classList.toggle('hidden', step === 3);
+
+    // Step-specific init
+    if (step === 2) _wizLoadCategories();
+    if (step === 3) _wizPopulateSummary();
+  }
+
+  window._wizNext = function() {
+    if (_wiz.step === 1) {
+      var t = document.getElementById('wiz-f-title').value.trim();
+      if (!t) { alert('El título es requerido para continuar.'); return; }
+      _wiz.draft.title = t;
+      _wiz.draft.description = document.getElementById('wiz-f-desc').value.trim();
+      _wiz.draft.bullet_points = Array.from(document.querySelectorAll('#wiz-bullets input')).map(function(i) { return i.value.trim(); }).filter(Boolean);
+      _wizGoStep(2);
+    } else if (_wiz.step === 2) {
+      // Read selected category
+      var radio = document.querySelector('input[name="wiz-cat"]:checked');
+      var manualId = document.getElementById('wiz-f-cat-id').value.trim();
+      _wiz.category_id   = manualId || (radio ? radio.value : '');
+      _wiz.category_name = manualId || (radio ? (radio.closest('label') ? radio.closest('label').querySelector('.wiz-cat-name').textContent : radio.value) : '');
+      if (!_wiz.category_id) { alert('Selecciona o ingresa una categoría.'); return; }
+      _wiz.price        = parseFloat(document.getElementById('wiz-f-price').value) || 0;
+      _wiz.listing_type = document.getElementById('wiz-f-listing-type').value;
+      _wiz.condition    = document.getElementById('wiz-f-condition').value;
+      _wiz.qty          = parseInt(document.getElementById('wiz-f-qty').value) || 1;
+      if (!_wiz.price) { alert('Ingresa el precio.'); return; }
+      _wizGoStep(3);
+    }
+  };
+
+  window._wizBack = function() {
+    if (_wiz.step > 1) _wizGoStep(_wiz.step - 1);
+  };
+
+  // ── Title length counter
+  window._wizTitleLen = function() {
+    var inp = document.getElementById('wiz-f-title');
+    var lbl = document.getElementById('wiz-title-len');
+    if (!inp || !lbl) return;
+    var n = inp.value.length;
+    lbl.textContent = n + '/60';
+    lbl.className = 'text-[10px] ' + (n > 55 ? 'text-red-500 font-semibold' : 'text-gray-400');
+  };
+
+  // ── Generate AI draft
+  window._wizGenDraft = function() {
+    if (!_wiz.gap) return;
+    var btn = document.getElementById('wiz-btn-gen');
+    var loading = document.getElementById('wiz-draft-loading');
     btn.disabled = true; btn.classList.add('opacity-50');
-    var output = document.getElementById('ai-stream-output');
-    output.textContent = '';
+    loading.classList.remove('hidden');
 
-    fetch('/api/lanzar/ai-draft', {
+    fetch('/api/lanzar/ai-draft-json', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(_currentGap),
-    }).then(function(r) {
-      var reader = r.body.getReader(), dec = new TextDecoder();
-      function read() {
-        reader.read().then(function(res) {
-          if (res.done) { btn.disabled = false; btn.classList.remove('opacity-50'); return; }
-          output.textContent += dec.decode(res.value, { stream: true });
-          output.scrollTop = output.scrollHeight;
-          read();
-        });
-      }
-      read();
-    }).catch(function(e) {
-      output.textContent = 'Error: ' + e;
+      body: JSON.stringify(_wiz.gap),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { alert('Error IA: ' + d.error); return; }
+      _wiz.draft = d;
+      document.getElementById('wiz-f-title').value = d.title || '';
+      document.getElementById('wiz-f-desc').value  = d.description || '';
+      _wizBullets(d.bullet_points || []);
+      _wizKeywords(d.keywords || []);
+      window._wizTitleLen();
+      if (d.price_regular && !_wiz.price) _wiz.price = d.price_regular;
+    })
+    .catch(function(e) { alert('Error generando borrador: ' + e); })
+    .finally(function() {
       btn.disabled = false; btn.classList.remove('opacity-50');
+      loading.classList.add('hidden');
     });
   };
 
-  function _loadCompetitors(gap) {
-    var loading = document.getElementById('comp-loading'), list = document.getElementById('comp-list');
-    if (loading) loading.classList.remove('hidden');
-    if (list) list.classList.add('hidden');
-    fetch('/api/lanzar/prepare/' + encodeURIComponent(gap.sku))
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (loading) loading.classList.add('hidden');
-        var comps = data.competitors || [];
-        if (!comps.length) {
-          if (list) { list.innerHTML = '<p class="text-gray-400 text-sm text-center py-4">Sin competidores encontrados</p>'; list.classList.remove('hidden'); }
-          return;
-        }
-        if (list) {
-          list.innerHTML = comps.map(function(c) {
-            return '<div class="border border-gray-100 rounded-lg p-3">' +
-              '<div class="flex items-start justify-between gap-2">' +
-                '<div class="flex-1 min-w-0">' +
-                  '<p class="text-xs font-medium text-gray-800 leading-tight">' + (c.title || '') + '</p>' +
-                  '<p class="text-xs text-gray-400 mt-0.5">' + (c.seller || '') + ' · ' + (c.condition || '') + '</p>' +
-                '</div>' +
-                '<div class="text-right flex-shrink-0">' +
-                  '<p class="text-sm font-bold text-gray-800">$' + ((c.price||0).toLocaleString()) + '</p>' +
-                  '<p class="text-xs text-gray-400">' + (c.sold_qty||0) + ' vendidos</p>' +
-                '</div>' +
-              '</div>' +
-            '</div>';
-          }).join('');
-          list.classList.remove('hidden');
-        }
-      })
-      .catch(function() { if (loading) loading.textContent = 'Error cargando competidores'; });
+  function _wizBullets(bullets) {
+    var cont = document.getElementById('wiz-bullets');
+    var filled = bullets.concat(['','','','','']).slice(0, 5);
+    cont.innerHTML = filled.map(function(b, i) {
+      return '<div class="flex items-center gap-2">' +
+        '<span class="text-gray-300 text-xs leading-none">•</span>' +
+        '<input type="text" value="' + (b||'').replace(/"/g,'&quot;').replace(/</g,'&lt;') + '" ' +
+        'class="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400" ' +
+        'placeholder="Punto clave ' + (i+1) + '..."/>' +
+        '</div>';
+    }).join('');
   }
 
-  // ── Init ──────────────────────────────────────────────────────────────────────
+  function _wizKeywords(kws) {
+    var row = document.getElementById('wiz-kw-row'), cont = document.getElementById('wiz-keywords');
+    if (!kws.length) { if (row) row.classList.add('hidden'); return; }
+    if (row) row.classList.remove('hidden');
+    cont.innerHTML = kws.map(function(k) {
+      return '<span class="bg-gray-100 text-gray-600 text-[10px] px-2 py-0.5 rounded-full border border-gray-200">' + k + '</span>';
+    }).join('');
+  }
+
+  // ── Load category predictions (Step 2)
+  function _wizLoadCategories() {
+    var loading = document.getElementById('wiz-cat-loading');
+    var list = document.getElementById('wiz-cat-list');
+    list.classList.add('hidden');
+    list.innerHTML = '';
+
+    var title = (document.getElementById('wiz-f-title').value.trim()) ||
+                ((_wiz.gap && (_wiz.gap.brand + ' ' + _wiz.gap.model).trim()) || '');
+
+    // Pre-fill price + qty
+    document.getElementById('wiz-f-price').value = _wiz.price || (_wiz.gap && _wiz.gap.suggested_price_mxn) || '';
+    document.getElementById('wiz-f-qty').value   = _wiz.qty;
+
+    // Competitor reference
+    if (_wiz.gap && _wiz.gap.competitor_price > 0) {
+      document.getElementById('wiz-comp-price').textContent =
+        '$' + Math.round(_wiz.gap.competitor_price).toLocaleString() + ' MXN (promedio)';
+      document.getElementById('wiz-comp-ref').classList.remove('hidden');
+    }
+
+    if (!title) {
+      loading.innerHTML = 'Ingresa un título en el Paso 1 para ver sugerencias.';
+      loading.classList.remove('hidden');
+      return;
+    }
+
+    loading.innerHTML = '<svg class="animate-spin w-3 h-3 inline mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Buscando categorías...';
+    loading.classList.remove('hidden');
+
+    fetch('/api/lanzar/predict-category', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loading.classList.add('hidden');
+      var suggs = d.suggestions || [];
+      if (!suggs.length) {
+        loading.textContent = 'Sin sugerencias automáticas. Ingresa el ID manualmente.';
+        loading.classList.remove('hidden');
+        return;
+      }
+      list.innerHTML = suggs.map(function(s, i) {
+        return '<label class="flex items-center gap-2.5 p-2.5 border border-gray-200 rounded-lg cursor-pointer hover:border-yellow-400 transition has-[:checked]:border-yellow-400 has-[:checked]:bg-yellow-50">' +
+          '<input type="radio" name="wiz-cat" value="' + s.category_id + '" ' + (i===0?'checked':'') +
+          ' onchange="document.getElementById(\'wiz-f-cat-id\').value=\'\'" class="accent-yellow-500 flex-shrink-0"/>' +
+          '<div class="min-w-0">' +
+            '<p class="text-xs font-medium text-gray-800 wiz-cat-name">' + (s.category_name || s.category_id) + '</p>' +
+            '<p class="text-[10px] text-gray-400 mt-0.5">' + (s.domain_name || '') + ' · ' + s.category_id + '</p>' +
+          '</div>' +
+          '</label>';
+      }).join('');
+      list.classList.remove('hidden');
+      if (suggs[0]) { _wiz.category_id = suggs[0].category_id; _wiz.category_name = suggs[0].category_name; }
+    })
+    .catch(function(e) {
+      loading.textContent = 'Error: ' + e + '. Ingresa el ID manualmente.';
+      loading.classList.remove('hidden');
+    });
+  }
+
+  // ── Populate summary (Step 3)
+  function _wizPopulateSummary() {
+    var gap = _wiz.gap;
+    // Re-read selected category
+    var radio = document.querySelector('input[name="wiz-cat"]:checked');
+    var manualId = document.getElementById('wiz-f-cat-id').value.trim();
+    if (manualId) {
+      _wiz.category_id = manualId; _wiz.category_name = manualId;
+    } else if (radio) {
+      _wiz.category_id = radio.value;
+      var lbl = radio.closest('label');
+      _wiz.category_name = lbl ? lbl.querySelector('.wiz-cat-name').textContent : radio.value;
+    }
+
+    _wiz.price        = parseFloat(document.getElementById('wiz-f-price').value) || _wiz.price;
+    _wiz.listing_type = document.getElementById('wiz-f-listing-type').value;
+    _wiz.condition    = document.getElementById('wiz-f-condition').value;
+    _wiz.qty          = parseInt(document.getElementById('wiz-f-qty').value) || 1;
+    _wiz.draft.title  = document.getElementById('wiz-f-title').value.trim();
+    _wiz.draft.description = document.getElementById('wiz-f-desc').value.trim();
+    _wiz.draft.bullet_points = Array.from(document.querySelectorAll('#wiz-bullets input')).map(function(i) { return i.value.trim(); }).filter(Boolean);
+
+    var typeNames = { gold_special:'Gold Special', gold_pro:'Gold Pro', silver:'Silver', free:'Gratis' };
+
+    document.getElementById('wiz-sum-title').textContent  = _wiz.draft.title || '(sin título)';
+    document.getElementById('wiz-sum-sku').textContent    = gap ? 'SKU: ' + gap.sku : '';
+    document.getElementById('wiz-sum-cat').textContent    = _wiz.category_name || _wiz.category_id || '—';
+    document.getElementById('wiz-sum-price').textContent  = _wiz.price ? '$' + Math.round(_wiz.price).toLocaleString() + ' MXN' : '—';
+    document.getElementById('wiz-sum-type').textContent   = typeNames[_wiz.listing_type] || _wiz.listing_type;
+    document.getElementById('wiz-sum-qty').textContent    = _wiz.qty + ' unidades';
+
+    var imgCont = document.getElementById('wiz-prev-img');
+    if (gap && gap.image_url) {
+      imgCont.innerHTML = '<img src="' + gap.image_url + '" class="w-full h-full object-contain" onerror="this.parentElement.innerHTML=\'<span class=text-gray-300 text-[9px]>IMG</span>\'">';
+    }
+
+    var status = document.getElementById('wiz-pub-status');
+    status.classList.add('hidden');
+    var btn = document.getElementById('wiz-btn-publish');
+    btn.disabled = false; btn.classList.remove('opacity-50');
+  }
+
+  // ── Publish
+  window._wizPublish = function() {
+    var btn = document.getElementById('wiz-btn-publish');
+    var status = document.getElementById('wiz-pub-status');
+    btn.disabled = true; btn.classList.add('opacity-50');
+    status.className = 'text-center text-xs py-1 text-gray-500';
+    status.classList.remove('hidden');
+
+    var gap = _wiz.gap;
+    var doImg = document.getElementById('wiz-cb-img').checked && gap && gap.image_url;
+
+    function _create(pictureId) {
+      status.textContent = 'Creando publicación en Mercado Libre...';
+      var descText = _wiz.draft.description || '';
+      if (_wiz.draft.bullet_points && _wiz.draft.bullet_points.length) {
+        descText += (descText ? '\n\n' : '') + _wiz.draft.bullet_points.map(function(b) { return '• ' + b; }).join('\n');
+      }
+      var payload = {
+        sku:                gap ? gap.sku : '',
+        category_id:        _wiz.category_id,
+        title:              _wiz.draft.title,
+        description:        descText,
+        price:              _wiz.price,
+        available_quantity: _wiz.qty,
+        listing_type_id:    _wiz.listing_type,
+        condition:          _wiz.condition,
+        pictures:           pictureId ? [pictureId] : [],
+      };
+      fetch('/api/lanzar/create-listing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.error) {
+          status.textContent = '❌ ' + d.error;
+          status.className = 'text-center text-xs py-1 text-red-500 font-medium';
+          btn.disabled = false; btn.classList.remove('opacity-50');
+          return;
+        }
+        var link = d.permalink
+          ? ' <a href="' + d.permalink + '" target="_blank" class="underline text-green-700 font-semibold">Ver en MeLi →</a>'
+          : '';
+        status.innerHTML = '✅ Publicado exitosamente!' + link;
+        status.className = 'text-center text-xs py-1 text-green-600';
+        setTimeout(function() { _loadGaps(); _loadFilters(); }, 2000);
+      })
+      .catch(function(e) {
+        status.textContent = '❌ Error: ' + e;
+        status.className = 'text-center text-xs py-1 text-red-500';
+        btn.disabled = false; btn.classList.remove('opacity-50');
+      });
+    }
+
+    if (doImg) {
+      status.textContent = 'Subiendo imagen a Mercado Libre...';
+      fetch('/api/lanzar/upload-picture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: gap.image_url }),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { _create(d.picture_id || null); })
+      .catch(function() { _create(null); }); // continue without picture
+    } else {
+      _create(null);
+    }
+  };
+
+  // ── Init
   fetch('/api/lanzar/scan-status')
     .then(function(r) { return r.json(); })
     .then(function(s) { if (s.status === 'running') _startScanPolling(); });
