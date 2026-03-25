@@ -636,9 +636,12 @@ async def debug_scan():
             if logged_in:
                 page1 = await _bm_fetch_all_skus_with_stock(bm_http)
                 result["bm"]["total_skus"] = len(page1)
+                # Show full first row so we can see EXACT field names BM returns
+                result["bm"]["first_row_raw"] = page1[0] if page1 else {}
                 result["bm"]["sample"] = [
-                    {"sku": p.get("SKU"), "qty_total": p.get("QtyTotal"), "qty": p.get("QTY"), "retail": p.get("RetailPrice")}
-                    for p in page1[:5]
+                    {"sku": p.get("SKU"), "qty_total": p.get("QtyTotal"), "qty": p.get("QTY"), "retail": p.get("RetailPrice"),
+                     "all_keys": list(p.keys())}
+                    for p in page1[:3]
                 ]
     except Exception as e:
         result["bm"]["error"] = str(e)
