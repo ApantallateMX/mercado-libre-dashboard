@@ -402,9 +402,10 @@ async def _run_gap_scan():
                 return u
 
             def _bm_qty(prod: dict) -> int:
-                """BM returns stock in QtyTotal (when NameQty='QtyTotal' is set)
-                or QTY (uppercase). Check both fields."""
-                v = prod.get("QtyTotal") or prod.get("QTY") or 0
+                """BM returns stock in TotalQty (global inventory endpoint).
+                Fallbacks for other endpoint variants: AvailableQTY, QtyTotal, QTY."""
+                v = (prod.get("TotalQty") or prod.get("AvailableQTY")
+                     or prod.get("QtyTotal") or prod.get("QTY") or 0)
                 try:
                     return int(v)
                 except (TypeError, ValueError):

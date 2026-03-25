@@ -238,8 +238,9 @@ class BinManagerClient:
                     data = r.json()
                     if isinstance(data, list) and data:
                         row = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
-                        # BM returns quantity in uppercase field "QTY"
-                        stock = row.get("QTY") or row.get("QtyTotal") or row.get("Qty") or 0
+                        # BM field name varies by payload: TotalQty (global), QTY (per-SKU), QtyTotal (legacy)
+                        stock = (row.get("TotalQty") or row.get("AvailableQTY")
+                                 or row.get("QTY") or row.get("QtyTotal") or row.get("Qty") or 0)
                         return {
                             "stock": int(stock) if stock else 0,
                             "retail_price": row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0,

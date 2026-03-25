@@ -8481,8 +8481,10 @@ async def planning_coverage(
         }
 
     def _bm_normalize(row: dict) -> dict:
-        """Normalize raw BM inventory row to standard fields."""
-        stock = row.get("QTY") or row.get("QtyTotal") or 0
+        """Normalize raw BM inventory row to standard fields.
+        BM global inventory uses TotalQty or AvailableQTY; per-SKU uses QTY."""
+        stock = (row.get("TotalQty") or row.get("AvailableQTY")
+                 or row.get("QTY") or row.get("QtyTotal") or 0)
         try:
             stock = int(stock)
         except (TypeError, ValueError):
@@ -8591,8 +8593,9 @@ async def planning_unlaunched():
     result = []
     for row in bm_items:
         sku   = (row.get("SKU") or "").upper().strip()
-        # BinManager returns stock in QTY (uppercase) — fallback to QtyTotal for older responses
-        stock = row.get("QTY") or row.get("QtyTotal") or 0
+        # BM global inventory uses TotalQty; per-SKU uses QTY; older responses QtyTotal
+        stock = (row.get("TotalQty") or row.get("AvailableQTY")
+                 or row.get("QTY") or row.get("QtyTotal") or 0)
         try:
             stock = int(stock)
         except (TypeError, ValueError):
