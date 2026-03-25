@@ -620,6 +620,49 @@ async def get_scan_status():
     return dict(row) if row else {"status": "idle"}
 
 
+@router.get("/debug-scan")
+async def debug_scan():
+    """Diagnóstico: muestra cuántos SKUs encontró BM, cuántos tiene ML, y los primeros gaps."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+
+    result: dict = {"user_id": user_id, "bm": {}, "ml": {}, "sample_gaps": [], "error": None}
+
+    # 1. BM login + first page
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
+            logged_in = await _bm_login(bm_http)
+            result["bm"]["login"] = logged_in
+            if logged_in:
+                page1 = await _bm_fetch_all_skus_with_stock(bm_http)
+                result["bm"]["total_skus"] = len(page1)
+                result["bm"]["sample"] = [
+                    {"sku": p.get("SKU"), "qty_total": p.get("QtyTotal"), "qty": p.get("QTY"), "retail": p.get("RetailPrice")}
+                    for p in page1[:5]
+                ]
+    except Exception as e:
+        result["bm"]["error"] = str(e)
+
+    # 2. ML SKU set for active account
+    if user_id:
+        try:
+            meli_skus = await _get_meli_sku_set(user_id, user_id)
+            result["ml"]["sku_count"] = len(meli_skus)
+            result["ml"]["sample"] = list(meli_skus)[:10]
+        except Exception as e:
+            result["ml"]["error"] = str(e)
+
+    # 3. DB state
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
+        status_row = await cursor.fetchone()
+        result["scan_status"] = dict(zip([d[0] for d in cursor.description], status_row)) if status_row else {}
+        cursor2 = await db.execute("SELECT COUNT(*), user_id FROM bm_sku_gaps GROUP BY user_id")
+        result["gaps_in_db"] = [{"count": r[0], "user_id": r[1]} for r in await cursor2.fetchall()]
+
+    return result
+
+
 @router.post("/ignore/{sku}")
 async def ignore_sku(sku: str, request: Request):
     """Marca un SKU como ignorado para no mostrarlo en el lanzador."""
