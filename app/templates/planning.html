@@ -47,8 +47,13 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
         </svg>
         <h2 class="text-sm font-bold text-gray-700">Velocidad de Ventas</h2>
-        <span class="text-xs text-gray-400">— por producto / SKU</span>
+        <span class="text-xs text-gray-400">— ML + Amazon por SKU</span>
         <div class="ml-auto flex items-center gap-2">
+            <button onclick="syncSkus()" id="btn-sync-skus" title="Sincronizar SKUs desde todas las cuentas ML"
+                    class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded border flex items-center gap-1">
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Sync SKUs
+            </button>
             <input type="text" id="plan-vel-search" placeholder="Buscar..." oninput="filterVelocityTable()"
                    class="border rounded px-2 py-1 text-xs w-36">
             <span id="plan-vel-count" class="text-xs text-gray-400"></span>
@@ -268,6 +273,27 @@ function _kpiCard(label, value, cls, sub) {
 }
 
 // ============================================================
+// SYNC SKUs
+// ============================================================
+window.syncSkus = function() {
+    var btn = document.getElementById('btn-sync-skus');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sincronizando...'; }
+    fetch('/api/planning/sync-skus', { method: 'POST' })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.error) {
+                alert('Error: ' + d.error);
+            } else {
+                alert('Sync completado:\n✅ ' + d.with_sku + ' publicaciones con SKU\n⚪ ' + d.without_sku + ' sin SKU\nTotal: ' + d.synced_items + ' publicaciones en ' + d.accounts + ' cuentas.\n\nRecarga la tabla para ver los cambios.');
+            }
+        })
+        .catch(function(e){ alert('Error: ' + e.message); })
+        .finally(function(){
+            if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Sync SKUs'; }
+        });
+};
+
+// ============================================================
 // LOAD VELOCITY
 // ============================================================
 function loadVelocity() {
@@ -304,11 +330,14 @@ function _renderVelocityTable(items) {
     };
 
     var maxRate = items[0] ? items[0].daily_rate : 1;
+    var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
     var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
         '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
         '<th class="pb-2 pl-1 w-6">#</th>' +
         '<th class="pb-2 pr-3">Producto</th>' +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Venta/día</th>' +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">ML/día</th>' +
+        (hasAmz ? '<th class="pb-2 pr-3 text-right whitespace-nowrap text-orange-600">AMZ/día</th>' : '') +
+        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Total/día</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
         '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
@@ -335,9 +364,11 @@ function _renderVelocityTable(items) {
                 '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips +
                 '<span class="text-[9px] text-gray-400">' + p.item_id + '</span></div>' +
             '</td>' +
-            '<td class="py-2 pr-3 text-right font-black text-gray-800">' + p.daily_rate + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + p.units_7d + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + p.units_30d + '</td>' +
+            '<td class="py-2 pr-3 text-right font-bold text-gray-700">' + p.daily_rate + '</td>' +
+            (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + (p.amz_daily_rate || '—') + '</td>' : '') +
+            '<td class="py-2 pr-3 text-right font-black text-gray-900">' + (p.total_daily_rate || p.daily_rate) + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + (p.units_7d + (p.amz_units_7d||0)) + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-600">' + (p.units_30d + (p.amz_units_30d||0)) + '</td>' +
             '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
             '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
                 '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +

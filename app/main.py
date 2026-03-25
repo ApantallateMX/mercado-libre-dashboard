@@ -8010,6 +8010,73 @@ async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) ->
         await client.close()
 
 
+async def _planning_fetch_amazon_velocity(days: int) -> dict:
+    """
+    Retorna {SKU_UPPER: {units, units_7d, revenue, accounts}} desde todas las cuentas Amazon.
+    Silenciosamente retorna {} si no hay cuentas o hay errores.
+    """
+    from app.services.amazon_client import get_amazon_client as _get_amz
+    from app.services.token_store import get_all_amazon_accounts
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        amazon_accounts = await get_all_amazon_accounts()
+        if not amazon_accounts:
+            return {}
+
+        now = datetime.now(timezone.utc)
+        date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        date_to   = now.strftime("%Y-%m-%d")
+        date_7d   = (now - timedelta(days=7)).isoformat()
+
+        sku_agg: dict = {}
+        sem = asyncio.Semaphore(2)  # SP-API rate limit más estricto
+
+        async def _process_account(acc):
+            client = await _get_amz(seller_id=acc.get("seller_id"))
+            if not client:
+                return
+            try:
+                orders = await client.fetch_orders_range(date_from, date_to)
+                for order in orders:
+                    if order.get("OrderStatus") in ("Cancelled", "Pending"):
+                        continue
+                    order_id = order.get("AmazonOrderId", "")
+                    purchase_date = order.get("PurchaseDate", "")
+                    is_7d = purchase_date >= date_7d
+                    if not order_id:
+                        continue
+                    try:
+                        async with sem:
+                            items = await client.get_order_items(order_id)
+                        for item in items:
+                            sku = (item.get("SellerSKU") or "").upper().strip()
+                            qty = int(item.get("QuantityOrdered") or 0)
+                            price = float((item.get("ItemPrice") or {}).get("Amount") or 0)
+                            if not sku or qty <= 0:
+                                continue
+                            if sku not in sku_agg:
+                                sku_agg[sku] = {"units": 0, "units_7d": 0, "revenue": 0.0, "accounts": set()}
+                            sku_agg[sku]["units"]   += qty
+                            sku_agg[sku]["revenue"] += price
+                            sku_agg[sku]["accounts"].add(acc.get("nickname") or acc.get("seller_id", ""))
+                            if is_7d:
+                                sku_agg[sku]["units_7d"] += qty
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        await asyncio.gather(*[_process_account(a) for a in amazon_accounts], return_exceptions=True)
+
+        # Serialize sets
+        for v in sku_agg.values():
+            v["accounts"] = sorted(v["accounts"])
+        return sku_agg
+    except Exception:
+        return {}
+
+
 @app.get("/api/planning/velocity")
 async def planning_velocity(days: int = Query(30, ge=7, le=90)):
     """Sales velocity per item/SKU from all MeLi accounts in last N days."""
@@ -8068,20 +8135,28 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
                 if is_7d:
                     item_agg[iid]["units_7d"] += qty
 
-    # Batch-fetch item details to get seller_custom_field / SKU.
-    # CRITICAL: must use each item's owner token — MeLi returns seller_custom_field
-    # only when the request is authenticated as the listing owner.
+    # ── Step 1: Load cached SKUs from DB ──────────────────────────────────────
+    from app.services import token_store as _ts_planning
     top_ids = sorted(item_agg, key=lambda x: item_agg[x]["units"], reverse=True)[:100]
 
-    # Group top items by their seller account
+    cached_skus = await _ts_planning.get_cached_skus(top_ids)
+    for iid, sku in cached_skus.items():
+        if iid in item_agg:
+            item_agg[iid]["sku"] = sku
+
+    # ── Step 2: Live-fetch SKUs only for items still without SKU ───────────────
+    # CRITICAL: seller_custom_field only visible with the listing owner's token.
+    needs_sku = [iid for iid in top_ids if not item_agg[iid].get("sku")]
+
     items_by_uid: dict = {}
-    for iid in top_ids:
+    for iid in needs_sku:
         uid = item_agg[iid].get("seller_uid", "")
         if uid not in items_by_uid:
             items_by_uid[uid] = []
         items_by_uid[uid].append(iid)
 
     sem_b = asyncio.Semaphore(3)
+    new_sku_entries: list = []
 
     async def _fetch_sku_for_account(uid: str, iids: list):
         client = await get_meli_client(user_id=uid)
@@ -8092,8 +8167,10 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
             for batch in batches:
                 async with sem_b:
                     try:
+                        # Include variations — SKU may be stored per-variation
                         entries = await client.get(
-                            f"/items?ids={','.join(batch)}&attributes=id,seller_custom_field,attributes"
+                            f"/items?ids={','.join(batch)}"
+                            f"&attributes=id,seller_custom_field,attributes,variations"
                         )
                         if not isinstance(entries, list):
                             continue
@@ -8102,38 +8179,148 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
                                 continue
                             body = entry.get("body", entry)
                             iid  = str(body.get("id", ""))
-                            sku  = (body.get("seller_custom_field") or "").upper().strip()
-                            if not sku:
-                                for attr in body.get("attributes", []):
-                                    if attr.get("id") == "SELLER_SKU":
-                                        sku = (attr.get("value_name") or "").upper().strip()
-                                        break
+                            sku  = _get_item_sku(body).upper().strip()
                             if iid in item_agg and sku:
                                 item_agg[iid]["sku"] = sku
+                                new_sku_entries.append({
+                                    "item_id": iid,
+                                    "user_id": uid,
+                                    "sku": sku,
+                                })
                     except Exception:
                         pass
         finally:
             await client.close()
+
+    # Run Amazon velocity fetch in parallel with MeLi SKU fetch
+    amz_task = asyncio.create_task(_planning_fetch_amazon_velocity(days=days))
 
     await asyncio.gather(
         *[_fetch_sku_for_account(uid, iids) for uid, iids in items_by_uid.items()],
         return_exceptions=True,
     )
 
+    # ── Step 3: Persist new SKUs to cache ─────────────────────────────────────
+    if new_sku_entries:
+        try:
+            await _ts_planning.save_skus_cache(new_sku_entries)
+        except Exception:
+            pass
+
+    # ── Step 4: Merge Amazon velocity ─────────────────────────────────────────
+    amz_vel = await amz_task
+
     result_items = []
     for d in item_agg.values():
         daily_rate = round(d["units"] / days, 2)
-        result_items.append({
+        sku_upper = (d["sku"] or "").upper()
+        amz = amz_vel.get(sku_upper, {}) if sku_upper else {}
+        item = {
             "item_id": d["item_id"], "sku": d["sku"],
             "title": d["title"], "units_30d": d["units"],
             "units_7d": d["units_7d"],
             "revenue_30d": round(d["revenue"], 2),
             "daily_rate": daily_rate,
-            "accounts": sorted(d["accounts"]),  # list of nicknames
-        })
-    result_items.sort(key=lambda x: x["daily_rate"], reverse=True)
-    return {"items": result_items[:100], "total_items": len(result_items),
-            "days": days, "accounts_count": len(accounts)}
+            "accounts": sorted(d["accounts"]),
+        }
+        if amz:
+            amz_daily = round(amz["units"] / days, 2)
+            item["amz_units_30d"]  = amz["units"]
+            item["amz_units_7d"]   = amz.get("units_7d", 0)
+            item["amz_revenue_30d"]= round(amz.get("revenue", 0), 2)
+            item["amz_daily_rate"] = amz_daily
+            item["amz_accounts"]   = amz.get("accounts", [])
+            # Combined daily rate (ML + Amazon)
+            item["total_daily_rate"] = round(daily_rate + amz_daily, 2)
+        else:
+            item["total_daily_rate"] = daily_rate
+        result_items.append(item)
+
+    result_items.sort(key=lambda x: x["total_daily_rate"], reverse=True)
+    return {
+        "items": result_items[:100],
+        "total_items": len(result_items),
+        "days": days,
+        "accounts_count": len(accounts),
+        "has_amazon": bool(amz_vel),
+    }
+
+
+@app.post("/api/planning/sync-skus")
+async def planning_sync_skus():
+    """
+    Pre-fetches ALL MeLi listings for all accounts and caches item_id → SKU in DB.
+    Run once to populate the cache — subsequent velocity calls will be instant.
+    """
+    from app.services.meli_client import token_store as _ts2
+    from app.services import token_store as _ts_cache
+
+    accounts = await _ts2.get_all_tokens()
+    if not accounts:
+        return {"error": "No hay cuentas configuradas"}
+
+    total_items = 0
+    all_entries: list = []
+    sem_s = asyncio.Semaphore(3)
+
+    for acct in accounts:
+        uid  = acct["user_id"]
+        nick = acct.get("nickname", uid)
+        client = await get_meli_client(user_id=uid)
+        if not client:
+            continue
+        try:
+            offset, limit = 0, 50
+            while True:
+                try:
+                    resp = await client.get(
+                        f"/users/{uid}/items/search",
+                        params={"limit": limit, "offset": offset},
+                    )
+                    ids = resp.get("results", [])
+                    if not ids:
+                        break
+                    total_items += len(ids)
+
+                    # Batch-fetch item details using owner's token
+                    for i in range(0, len(ids), 20):
+                        batch = ids[i:i+20]
+                        async with sem_s:
+                            try:
+                                entries = await client.get(
+                                    f"/items?ids={','.join(batch)}"
+                                    f"&attributes=id,seller_custom_field,attributes,variations"
+                                )
+                                if isinstance(entries, list):
+                                    for entry in entries:
+                                        if not isinstance(entry, dict):
+                                            continue
+                                        body = entry.get("body", entry)
+                                        iid  = str(body.get("id", ""))
+                                        sku  = _get_item_sku(body).upper().strip()
+                                        if iid and sku:
+                                            all_entries.append({"item_id": iid, "user_id": uid, "sku": sku})
+                            except Exception:
+                                pass
+
+                    paging = resp.get("paging", {})
+                    offset += len(ids)
+                    if offset >= paging.get("total", 0):
+                        break
+                except Exception:
+                    break
+        finally:
+            await client.close()
+
+    if all_entries:
+        await _ts_cache.save_skus_cache(all_entries)
+
+    return {
+        "synced_items": total_items,
+        "with_sku": len(all_entries),
+        "without_sku": total_items - len(all_entries),
+        "accounts": len(accounts),
+    }
 
 
 @app.get("/api/planning/production-kpis")

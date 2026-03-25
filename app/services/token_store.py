@@ -175,6 +175,14 @@ async def init_db():
             )
         """)
         await db.execute("INSERT OR IGNORE INTO bm_gap_scan_status (id, status) VALUES (1, 'idle')")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS item_sku_cache (
+                item_id   TEXT PRIMARY KEY,
+                user_id   TEXT NOT NULL DEFAULT '',
+                sku       TEXT NOT NULL DEFAULT '',
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -570,6 +578,47 @@ async def get_amazon_stock_threshold(seller_id: str) -> int:
         )
         row = await cursor.fetchone()
         return row[0] if row else 5
+
+# ─── ITEM SKU CACHE ───────────────────────────────────────────────────────────
+
+async def get_cached_skus(item_ids: list) -> dict:
+    """Retorna {item_id: sku} para los item_ids que están en caché (sku no vacío)."""
+    if not item_ids:
+        return {}
+    result = {}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # SQLite limit: 999 variables per query — chunk to be safe
+        for i in range(0, len(item_ids), 500):
+            chunk = item_ids[i:i+500]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = await db.execute(
+                f"SELECT item_id, sku FROM item_sku_cache WHERE item_id IN ({placeholders}) AND sku != ''",
+                chunk,
+            )
+            for row in await cursor.fetchall():
+                result[row["item_id"]] = row["sku"]
+    return result
+
+
+async def save_skus_cache(entries: list) -> None:
+    """Guarda [{item_id, user_id, sku}] en caché. Ignora entradas con sku vacío."""
+    valid = [e for e in entries if e.get("sku") and e.get("item_id")]
+    if not valid:
+        return
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for e in valid:
+            await db.execute(
+                """INSERT INTO item_sku_cache (item_id, user_id, sku, synced_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(item_id) DO UPDATE SET
+                       sku = excluded.sku,
+                       user_id = excluded.user_id,
+                       synced_at = CURRENT_TIMESTAMP""",
+                (e["item_id"], e.get("user_id", ""), e["sku"]),
+            )
+        await db.commit()
+
 
 async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
     """Guarda el umbral de stock bajo para la cuenta."""
