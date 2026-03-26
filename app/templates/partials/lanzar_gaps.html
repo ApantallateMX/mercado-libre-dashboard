@@ -294,7 +294,7 @@
   </div>
 
   <!-- ── Table ─────────────────────────────────────────────────────────────── -->
-  <div class="overflow-x-auto">
+  <div id="gaps-list" class="overflow-x-auto">
     <table class="min-w-full text-sm">
       <thead class="bg-gray-50 border-b border-gray-200">
         <tr>
@@ -998,6 +998,11 @@
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
+    // Pre-fill step 2 fields immediately — no dependency on _wizLoadCategories running first
+    document.getElementById('wiz-f-sku').value   = gap.sku   || '';
+    document.getElementById('wiz-f-model').value = gap.model || '';
+    document.getElementById('wiz-f-brand').value = gap.brand || '';
+    document.getElementById('wiz-f-gtin').value  = gap.upc   || '';
 
     document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);
     document.getElementById('wiz-subtitle').textContent = 'SKU: ' + gap.sku + (gap.category ? ' · ' + gap.category : '');
