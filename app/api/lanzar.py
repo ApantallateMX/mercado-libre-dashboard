@@ -1075,26 +1075,41 @@ async def ai_draft_json_endpoint(request: Request):
     stock      = body.get("stock_total", 0)
 
     system = (
-        "Eres un experto en Mercado Libre México. "
-        "Retorna ÚNICAMENTE JSON válido, sin markdown, sin texto extra."
+        "Eres un experto en eCommerce y Mercado Libre México (2026). "
+        "Conoces las mejores prácticas de SEO en MeLi, copywriting de conversión y políticas de la plataforma. "
+        "Retorna ÚNICAMENTE JSON válido, sin markdown, sin texto extra, sin comentarios."
     )
-    prompt = f"""Crea un listing optimizado para Mercado Libre México:
+    prompt = f"""Crea un listing de alta calidad para Mercado Libre México.
 
-SKU: {sku}
-Marca: {brand}
-Modelo: {model}
-Título en sistema: {title_bm}
-Categoría: {category}
-Precio sugerido: ${price_mxn:,.0f} MXN
-Precio competencia: ${comp_price:,.0f} MXN
-Stock disponible: {stock} unidades
+PRODUCTO:
+- SKU: {sku}
+- Marca: {brand}
+- Modelo: {model}
+- Nombre en sistema: {title_bm}
+- Categoría: {category}
+- Precio sugerido: ${price_mxn:,.0f} MXN
+- Precio competencia: ${comp_price:,.0f} MXN
+- Stock: {stock} unidades
+
+REGLAS MeLi 2026:
+1. TÍTULO: máx 60 chars. Formato: Marca + Tipo de producto + Tecnología/Característica clave + Tamaño/Capacidad.
+   - SIN número de modelo (va en ficha técnica)
+   - SIN signos de puntuación ni mayúsculas innecesarias
+   - SIN palabras como "nuevo", "oferta", "envío gratis"
+   - Ejemplo correcto: "Samsung Televisor QLED 4K Smart 65 Pulgadas"
+2. DESCRIPCIÓN: mínimo 4 párrafos. Incluye: beneficios principales, tecnología destacada, conectividad, compatibilidad, uso recomendado. Texto natural, orientado a compra.
+3. BULLETS: 5 puntos cortos y contundentes. Cada uno destaca UN beneficio/característica. Empiezan con sustantivo o verbo de acción.
+4. KEYWORDS: 8 palabras clave que los compradores mexicanos buscan en MeLi para este producto. Sin repetir palabras del título.
+5. GARANTÍA: sugiere tipo y tiempo de garantía apropiados para el producto.
 
 Retorna SOLO este JSON (sin markdown, sin texto extra):
 {{
-  "title": "(max 60 chars — Marca + Tipo producto + Característica clave + Tamaño. SIN número de modelo. Ej: 'Samsung Televisor QLED 4K Smart 65 Pulgadas')",
-  "description": "(texto plano, 3-4 párrafos: beneficios, specs, garantía)",
-  "bullet_points": ["punto 1 conciso", "punto 2", "punto 3", "punto 4", "punto 5"],
-  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+  "title": "string max 60 chars",
+  "description": "string 4+ párrafos separados por \\n\\n",
+  "bullet_points": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
+  "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5", "kw6", "kw7", "kw8"],
+  "warranty_type": "Garantía de fábrica",
+  "warranty_time": "12 meses",
   "price_regular": {int(price_mxn) if price_mxn else 0},
   "price_deal": {int(price_mxn * 0.9) if price_mxn else 0},
   "listing_type": "gold_special",
@@ -1285,6 +1300,9 @@ async def create_listing_endpoint(request: Request):
     sku         = body.get("sku", "")
     pictures    = body.get("pictures", [])
 
+    warranty_type = body.get("warranty_type", "")
+    warranty_time = body.get("warranty_time", "")
+
     item_payload: dict = {
         "title":              title,
         "category_id":        category_id,
@@ -1293,13 +1311,21 @@ async def create_listing_endpoint(request: Request):
         "available_quantity": int(body.get("available_quantity", 1)),
         "listing_type_id":    body.get("listing_type_id", "gold_special"),
         "condition":          body.get("condition", "new"),
+        "buying_mode":        "buy_it_now",
     }
     if pictures:
         item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
     if sku:
         item_payload["seller_custom_field"] = sku
-    if body.get("attributes"):
-        item_payload["attributes"] = body["attributes"]
+    # Merge attributes from body + auto-build from known fields
+    attrs = list(body.get("attributes") or [])
+    if warranty_type and warranty_time:
+        item_payload["sale_terms"] = [
+            {"id": "WARRANTY_TYPE", "value_name": warranty_type},
+            {"id": "WARRANTY_TIME", "value_name": warranty_time},
+        ]
+    if attrs:
+        item_payload["attributes"] = attrs
 
     client = await get_meli_client()
     if not client:
