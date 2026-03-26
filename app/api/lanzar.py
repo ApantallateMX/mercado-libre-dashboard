@@ -289,7 +289,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         # active+paused by default. Inactive (sin stock) and closed items are
         # excluded unless explicitly requested with status=inactive/closed.
         # SNTV007278-style items go inactive when stock hits 0 but still exist.
-        _ML_STATUSES = ("active", "paused", "inactive", "under_review", "not_yet_active")
+        _ML_STATUSES = ("active", "paused", "inactive", "closed", "under_review", "not_yet_active")
 
         async def _fetch_ids_for_status(status: str) -> list[str]:
             ids_out: list[str] = []
@@ -320,7 +320,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         seen_ids: set[str] = set()
         item_ids: list[str] = []
         # Track which item IDs came from inactive/paused status (reactivation candidates)
-        _REACTIVATABLE_STATUSES = {"inactive", "paused"}
+        _REACTIVATABLE_STATUSES = {"inactive", "paused", "closed"}
         reactivatable_ids: set[str] = set()
         active_ids: set[str] = set()
 
@@ -357,6 +357,43 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         inactive_sku_to_items: dict[str, list[str]] = {}
         # Map: base_sku → list of {item_id, price, title} for active items
         active_prices_map: dict[str, list[dict]] = {}
+        # Track which item IDs had their SKU successfully extracted (for fallback)
+        extracted_iids: set[str] = set()
+
+        def _process_item_body(body: dict, iid: str) -> None:
+            """Extract SKU and metadata from a single item body dict. Mutates outer scope collections."""
+            skus  = _skus_from_body(body)
+            title = body.get("title", "")
+            for raw_sku in skus:
+                base = _base(raw_sku)
+                sku_set.add(base)
+                if iid:
+                    new_entries.append({"item_id": iid, "user_id": user_id, "sku": raw_sku})
+                    if iid in reactivatable_ids:
+                        inactive_sku_to_items.setdefault(base, [])
+                        if iid not in inactive_sku_to_items[base]:
+                            inactive_sku_to_items[base].append(iid)
+                    if iid in active_ids:
+                        price = float(body.get("price") or 0)
+                        pics  = len(body.get("pictures") or [])
+                        attrs = body.get("attributes") or []
+                        has_gtin  = any(a.get("id") in ("GTIN", "EAN", "UPC") for a in attrs)
+                        has_brand = any(a.get("id") == "BRAND" for a in attrs)
+                        title_score  = min(len(title), 60) / 60 * 25
+                        pics_score   = min(pics, 6) / 6 * 25
+                        attr_score   = (10 if has_brand else 0) + (15 if has_gtin else 0)
+                        price_score  = 25 if price > 0 else 0
+                        quality_score = int(title_score + pics_score + attr_score + price_score)
+                        if price > 0:
+                            active_prices_map.setdefault(base, [])
+                            if not any(e["item_id"] == iid for e in active_prices_map[base]):
+                                active_prices_map[base].append({
+                                    "item_id": iid, "price": price, "title": title,
+                                    "pics": pics, "has_gtin": has_gtin, "has_brand": has_brand,
+                                    "quality_score": quality_score,
+                                })
+            if skus:
+                extracted_iids.add(iid)
 
         for i in range(0, len(needs_fetch), 20):
             batch = needs_fetch[i:i + 20]
@@ -370,39 +407,11 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                     body = entry.get("body") or {}
                     if not isinstance(body, dict):
                         continue
-                    iid   = str(body.get("id", ""))
-                    skus  = _skus_from_body(body)
-                    title = body.get("title", "")
-                    for raw_sku in skus:
-                        base = _base(raw_sku)
-                        sku_set.add(base)
-                        if iid:
-                            new_entries.append({"item_id": iid, "user_id": user_id, "sku": raw_sku})
-                            if iid in reactivatable_ids:
-                                inactive_sku_to_items.setdefault(base, [])
-                                if iid not in inactive_sku_to_items[base]:
-                                    inactive_sku_to_items[base].append(iid)
-                            if iid in active_ids:
-                                price = float(body.get("price") or 0)
-                                pics = len(body.get("pictures") or [])
-                                attrs = body.get("attributes") or []
-                                has_gtin = any(a.get("id") in ("GTIN","EAN","UPC") for a in attrs)
-                                has_brand = any(a.get("id") == "BRAND" for a in attrs)
-                                # score: title 25pts, pics 25pts, attrs 25pts, price 25pts
-                                title_score = min(len(title), 60) / 60 * 25
-                                pics_score = min(pics, 6) / 6 * 25
-                                attr_score = (10 if has_brand else 0) + (15 if has_gtin else 0)
-                                price_score = 25 if price > 0 else 0
-                                quality_score = int(title_score + pics_score + attr_score + price_score)
-                                if price > 0:
-                                    active_prices_map.setdefault(base, [])
-                                    if not any(e["item_id"] == iid for e in active_prices_map[base]):
-                                        active_prices_map[base].append({
-                                            "item_id": iid, "price": price, "title": title,
-                                            "pics": pics, "has_gtin": has_gtin, "has_brand": has_brand,
-                                            "quality_score": quality_score
-                                        })
-                    if skus:
+                    iid = str(body.get("id", ""))
+                    if not iid:
+                        continue
+                    _process_item_body(body, iid)
+                    if iid in extracted_iids:
                         batch_found += 1
 
                 if batch_found == 0 and items_list:
@@ -413,6 +422,25 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                     )
             except Exception as e:
                 logger.warning(f"{nickname}: batch {i//20} fetch error: {e}")
+
+        # ── Step 3b: Individual fallback for items where batch returned no SKU ──
+        # ML's multi-item endpoint can silently omit seller_custom_field for
+        # inactive/closed listings. Individual GET /items/{id} is more reliable.
+        no_sku_iids = [iid for iid in needs_fetch if iid not in extracted_iids]
+        if no_sku_iids:
+            logger.info(
+                f"{nickname}: {len(no_sku_iids)} items with no SKU from batch — "
+                f"retrying individually (max 300)"
+            )
+            for iid in no_sku_iids[:300]:
+                try:
+                    body = await client.get(f"/items/{iid}")
+                    if isinstance(body, dict) and body.get("id"):
+                        _process_item_body(body, iid)
+                        if iid in extracted_iids:
+                            logger.info(f"{nickname}: recovered SKU for {iid} via individual fetch")
+                except Exception as e:
+                    logger.warning(f"{nickname}: individual fetch error for {iid}: {e}")
 
         # Also map cached items that are reactivatable
         for iid, raw_sku in cached.items():
