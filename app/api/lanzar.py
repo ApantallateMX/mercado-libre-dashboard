@@ -525,60 +525,85 @@ async def _run_gap_scan():
                 if base not in bm_map or qty > _bm_qty(bm_map[base]):
                     bm_map[base] = prod
 
-            # 3. For each account, find gaps
-            total_gaps = 0
+            # ── FASE 1: Recolectar datos ML de TODAS las cuentas ──────────────
+            # Clave: los gaps se calculan contra el set GLOBAL (union de todas
+            # las cuentas). Un SKU publicado en Autobot NO debe aparecer como
+            # gap en Apantállate y viceversa. BM es inventario compartido.
             now_iso = datetime.utcnow().isoformat()
 
+            account_ml_data: dict = {}  # user_id → {meli_skus, inactive_map, active_prices, nickname}
+            global_meli_skus: set = set()  # union de TODAS las cuentas
+
             for account in accounts:
-                user_id = account["user_id"]
+                user_id  = account["user_id"]
                 nickname = account.get("nickname") or user_id
+                logger.info(f"[Fase1] Obteniendo items ML de {nickname} ({user_id})...")
+                skus, inactive_map, active_prices = await _get_meli_sku_set(user_id, nickname)
+                account_ml_data[user_id] = {
+                    "nickname":      nickname,
+                    "meli_skus":     skus,
+                    "inactive_map":  inactive_map,
+                    "active_prices": active_prices,
+                }
+                global_meli_skus |= skus
+                logger.info(f"  {nickname}: {len(skus)} SKUs en ML, {len(inactive_map)} reactivables")
 
-                logger.info(f"Checking gaps for {nickname} ({user_id})...")
-                meli_skus, inactive_sku_map, active_prices_map = await _get_meli_sku_set(user_id, nickname)
-                logger.info(f"  {nickname}: {len(meli_skus)} SKUs en MeLi, {len(inactive_sku_map)} reactivables")
+            logger.info(
+                f"[Fase1] Completo — {len(global_meli_skus)} SKUs publicados en total "
+                f"({len(accounts)} cuentas). BM tiene {len(bm_map)} SKUs con stock."
+            )
 
-                gaps = []
-                for base_sku, prod in bm_map.items():
-                    if base_sku in meli_skus:
-                        continue
-                    retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                    cost   = float(prod.get("AvgCostQTY", 0) or 0)
-                    stock  = _bm_qty(prod)
-                    score  = _priority_score(stock, retail, cost)
-                    suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
-                    cost_mxn  = round(cost * fx, 0) if cost > 0 else 0
-                    gaps.append({
-                        "user_id": user_id,
-                        "nickname": nickname,
-                        "sku": base_sku,
-                        "product_title": prod.get("Title", "") or "",
-                        "brand": prod.get("Brand", "") or "",
-                        "model": prod.get("Model", "") or "",
-                        "image_url": prod.get("ImageURL", "") or "",
-                        "category": prod.get("CategoryName", "") or "",
-                        "upc": prod.get("UPC", "") or prod.get("Upc", "") or "",
-                        "size": prod.get("Size", "") or prod.get("ScreenSize", "") or "",
-                        "stock_total": stock,
-                        "stock_mty": 0,   # will batch later if needed
-                        "stock_cdmx": 0,
-                        "retail_price_usd": retail,
-                        "cost_usd": cost,
-                        "priority_score": score,
-                        "suggested_price_mxn": suggested,
-                        "cost_price_mxn": cost_mxn,
-                        "last_scan": now_iso,
-                    })
+            # ── FASE 2: Calcular gaps globales y guardar por cuenta ────────────
+            # Gap = SKU en BM con stock que NO está publicado en NINGUNA cuenta.
+            current_bm_skus = set(bm_map.keys())
 
-                logger.info(f"  {nickname}: {len(gaps)} gaps encontrados")
-                total_gaps += len(gaps)
-                current_bm_skus = set(bm_map.keys())
+            global_gaps_base = []  # datos base sin user_id/nickname
+            for base_sku, prod in bm_map.items():
+                if base_sku in global_meli_skus:
+                    continue  # publicado en alguna cuenta → no es gap
+                retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
+                cost      = float(prod.get("AvgCostQTY", 0) or 0)
+                stock     = _bm_qty(prod)
+                score     = _priority_score(stock, retail, cost)
+                suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
+                cost_mxn  = round(cost * fx, 0) if cost > 0 else 0
+                global_gaps_base.append({
+                    "sku":               base_sku,
+                    "product_title":     prod.get("Title", "") or "",
+                    "brand":             prod.get("Brand", "") or "",
+                    "model":             prod.get("Model", "") or "",
+                    "image_url":         prod.get("ImageURL", "") or "",
+                    "category":          prod.get("CategoryName", "") or "",
+                    "upc":               prod.get("UPC", "") or prod.get("Upc", "") or "",
+                    "size":              prod.get("Size", "") or prod.get("ScreenSize", "") or "",
+                    "stock_total":       stock,
+                    "stock_mty":         0,
+                    "stock_cdmx":        0,
+                    "retail_price_usd":  retail,
+                    "cost_usd":          cost,
+                    "priority_score":    score,
+                    "suggested_price_mxn": suggested,
+                    "cost_price_mxn":    cost_mxn,
+                    "last_scan":         now_iso,
+                })
 
-                # Upsert gaps into DB (preserve status if already exists)
+            total_gaps = len(global_gaps_base)
+            logger.info(f"[Fase2] {total_gaps} gaps globales (no publicados en ninguna cuenta)")
+
+            # Guardar los mismos gaps para cada cuenta (el lanzamiento va a la cuenta activa)
+            # + datos per-cuenta: reactivaciones, precios, calidad, competencia
+            for account in accounts:
+                user_id  = account["user_id"]
+                acct     = account_ml_data[user_id]
+                nickname = acct["nickname"]
+                meli_skus        = acct["meli_skus"]
+                inactive_sku_map = acct["inactive_map"]
+                active_prices_map = acct["active_prices"]
+
                 async with aiosqlite.connect(DATABASE_PATH) as db:
-                    # ── Purge stale gaps ────────────────────────────────────────
-                    # Remove unlaunched entries whose SKU is no longer in BM with
-                    # stock (sold out) OR that are now published in ML.
-                    # Ignored entries are kept regardless.
+
+                    # ── Gaps: purgar obsoletos y upsert ────────────────────────
+                    # 1. Eliminar gaps cuyo SKU ya no tiene stock en BM
                     await db.execute(
                         """DELETE FROM bm_sku_gaps
                            WHERE user_id=? AND status='unlaunched'
@@ -587,7 +612,19 @@ async def _run_gap_scan():
                         ),
                         [user_id] + list(current_bm_skus)
                     )
-                    for g in gaps:
+                    # 2. Eliminar gaps que ahora están publicados en CUALQUIER cuenta
+                    if global_meli_skus:
+                        for chunk_start in range(0, len(global_meli_skus), 500):
+                            chunk = list(global_meli_skus)[chunk_start:chunk_start + 500]
+                            await db.execute(
+                                """DELETE FROM bm_sku_gaps
+                                   WHERE user_id=? AND status='unlaunched'
+                                   AND sku IN ({})""".format(",".join("?" * len(chunk))),
+                                [user_id] + chunk
+                            )
+                    # 3. Upsert gaps globales para esta cuenta
+                    for g_base in global_gaps_base:
+                        g = {**g_base, "user_id": user_id, "nickname": nickname}
                         await db.execute("""
                             INSERT INTO bm_sku_gaps
                                 (user_id, nickname, sku, product_title, brand, model,
@@ -604,15 +641,11 @@ async def _run_gap_scan():
                             ON CONFLICT(user_id, sku) DO UPDATE SET
                                 nickname=excluded.nickname,
                                 product_title=excluded.product_title,
-                                brand=excluded.brand,
-                                model=excluded.model,
-                                image_url=excluded.image_url,
-                                category=excluded.category,
-                                upc=excluded.upc,
-                                size=excluded.size,
+                                brand=excluded.brand, model=excluded.model,
+                                image_url=excluded.image_url, category=excluded.category,
+                                upc=excluded.upc, size=excluded.size,
                                 stock_total=excluded.stock_total,
-                                stock_mty=excluded.stock_mty,
-                                stock_cdmx=excluded.stock_cdmx,
+                                stock_mty=excluded.stock_mty, stock_cdmx=excluded.stock_cdmx,
                                 retail_price_usd=excluded.retail_price_usd,
                                 cost_usd=excluded.cost_usd,
                                 priority_score=excluded.priority_score,
@@ -621,30 +654,20 @@ async def _run_gap_scan():
                                 last_scan=excluded.last_scan
                             WHERE bm_sku_gaps.status != 'ignored'
                         """, g)
-                    # Remove SKUs that are now launched (in meli_skus) but still in DB as unlaunched
-                    if meli_skus:
-                        await db.execute(
-                            """DELETE FROM bm_sku_gaps
-                               WHERE user_id=? AND status='unlaunched'
-                               AND sku IN ({})""".format(",".join("?" * len(meli_skus))),
-                            [user_id] + list(meli_skus)
-                        )
 
-                    # ── Reactivation candidates ────────────────────────────────
-                    # SKUs with BM stock that have an inactive/paused ML listing
+                    # ── Reactivaciones (per-cuenta) ────────────────────────────
                     reactivation_count = 0
-                    # Clear old reactivation rows for this user first
                     await db.execute("DELETE FROM bm_reactivations WHERE user_id=?", (user_id,))
                     for base_sku, item_ids_list in inactive_sku_map.items():
                         prod = bm_map.get(base_sku)
                         if not prod:
-                            continue  # not in BM or no stock
+                            continue
                         stock = _bm_qty(prod)
                         if stock <= 0:
-                            continue  # has listing but no BM stock — skip
-                        retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
+                            continue
+                        retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                         suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
-                        title = prod.get("Title", "") or ""
+                        title     = prod.get("Title", "") or ""
                         for iid in item_ids_list:
                             await db.execute("""
                                 INSERT OR REPLACE INTO bm_reactivations
@@ -654,31 +677,27 @@ async def _run_gap_scan():
                             """, (user_id, nickname, base_sku, iid, title,
                                   stock, retail, suggested, now_iso))
                             reactivation_count += 1
-                    logger.info(f"  {nickname}: {reactivation_count} candidatos de reactivacion guardados")
-                    await db.commit()
+                    logger.info(f"  {nickname}: {reactivation_count} candidatos de reactivacion")
 
-                    # ── Price alerts ────────────────────────────────────────
-                    # Find active ML listings where price differs >10% from BM suggested
-                    PRICE_DRIFT_THRESHOLD = 0.10  # 10%
+                    # ── Alertas de precio (per-cuenta) ────────────────────────
+                    PRICE_DRIFT_THRESHOLD = 0.10
                     price_alert_count = 0
                     await db.execute("DELETE FROM ml_price_alerts WHERE user_id=?", (user_id,))
                     for base_sku, item_list in active_prices_map.items():
                         prod = bm_map.get(base_sku)
                         if not prod:
                             continue
-                        retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                        if retail <= 0:
-                            continue
+                        retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                         suggested = round(retail * fx * 1.3, 0)
-                        if suggested <= 0:
+                        if retail <= 0 or suggested <= 0:
                             continue
                         for item_info in item_list:
-                            ml_price = item_info["price"]
+                            ml_price = item_info.get("price", 0)
                             if ml_price <= 0:
                                 continue
-                            diff_pct = (ml_price - suggested) / suggested  # positive = ML too high, negative = ML too low
+                            diff_pct = (ml_price - suggested) / suggested
                             if abs(diff_pct) < PRICE_DRIFT_THRESHOLD:
-                                continue  # within acceptable range
+                                continue
                             title = item_info.get("title", "") or prod.get("Title", "")
                             await db.execute("""
                                 INSERT OR REPLACE INTO ml_price_alerts
@@ -688,15 +707,14 @@ async def _run_gap_scan():
                             """, (user_id, nickname, base_sku, item_info["item_id"], title,
                                   ml_price, suggested, round(diff_pct * 100, 1), now_iso))
                             price_alert_count += 1
-                    logger.info(f"  {nickname}: {price_alert_count} alertas de precio guardadas")
-                    await db.commit()
+                    logger.info(f"  {nickname}: {price_alert_count} alertas de precio")
 
-                    # ── Listing quality scores ─────────────────────────────
-                    await db.execute("DELETE FROM ml_listing_quality WHERE user_id=?", (user_id,))
+                    # ── Calidad de listings (per-cuenta) ──────────────────────
                     quality_count = 0
+                    await db.execute("DELETE FROM ml_listing_quality WHERE user_id=?", (user_id,))
                     for base_sku, item_list in active_prices_map.items():
                         for item_info in item_list:
-                            prod = bm_map.get(base_sku) or {}
+                            prod  = bm_map.get(base_sku) or {}
                             title = item_info.get("title", "") or prod.get("Title", "")
                             await db.execute("""
                                 INSERT OR REPLACE INTO ml_listing_quality
@@ -708,23 +726,14 @@ async def _run_gap_scan():
                                   item_info.get("pics", 0), 1 if item_info.get("has_gtin") else 0,
                                   1 if item_info.get("has_brand") else 0, len(title), now_iso))
                             quality_count += 1
-                    logger.info(f"  {nickname}: {quality_count} scores de calidad guardados")
-                    await db.commit()
+                    logger.info(f"  {nickname}: {quality_count} scores de calidad")
 
-                    # ── Competition alerts ──────────────────────────────────
-                    # For active ML items that have competitor price data in bm_sku_gaps
-                    await db.execute("DELETE FROM ml_competition_alerts WHERE user_id=?", (user_id,))
+                    # ── Alertas de competencia (per-cuenta) ───────────────────
                     comp_alert_count = 0
+                    await db.execute("DELETE FROM ml_competition_alerts WHERE user_id=?", (user_id,))
                     for base_sku, item_list in active_prices_map.items():
-                        # Get competitor price from gaps (may not exist if already launched)
-                        gap_cur = await db.execute(
-                            "SELECT competitor_price, product_title FROM bm_sku_gaps WHERE user_id=? AND sku=?",
-                            (user_id, base_sku)
-                        )
-                        gap_row = await gap_cur.fetchone()
-                        # Also check in bm_map for the price data
-                        prod = bm_map.get(base_sku) or {}
-                        comp_price = (gap_row[0] if gap_row else 0) or float(prod.get("CompetitorPrice", 0) or 0)
+                        prod       = bm_map.get(base_sku) or {}
+                        comp_price = float(prod.get("CompetitorPrice", 0) or 0)
                         if comp_price <= 0:
                             continue
                         for item_info in item_list:
@@ -732,9 +741,9 @@ async def _run_gap_scan():
                             if ml_price <= 0:
                                 continue
                             diff_pct = (ml_price - comp_price) / comp_price * 100
-                            if diff_pct <= 15:  # only alert if ML is >15% more expensive than competitor
+                            if diff_pct <= 15:
                                 continue
-                            title = item_info.get("title", "") or (gap_row[1] if gap_row else "")
+                            title = item_info.get("title", "") or prod.get("Title", "")
                             await db.execute("""
                                 INSERT OR REPLACE INTO ml_competition_alerts
                                     (user_id, nickname, sku, item_id, product_title,
@@ -743,7 +752,8 @@ async def _run_gap_scan():
                             """, (user_id, nickname, base_sku, item_info["item_id"], title,
                                   ml_price, comp_price, round(diff_pct, 1), now_iso))
                             comp_alert_count += 1
-                    logger.info(f"  {nickname}: {comp_alert_count} alertas de competencia guardadas")
+                    logger.info(f"  {nickname}: {comp_alert_count} alertas de competencia")
+
                     await db.commit()
 
             # Update scan status
