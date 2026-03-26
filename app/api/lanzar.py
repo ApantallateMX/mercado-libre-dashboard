@@ -1191,15 +1191,18 @@ async def bm_images_endpoint(sku: str):
 
             images = []
             for f in files:
-                url = (f.get("URL") or f.get("ImageName") or "").strip()
+                url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
+                ext = (f.get("PhotoExtension") or "").lower()
                 if not url:
                     continue
+                if ext and ext not in _IMAGE_EXTENSIONS:
+                    continue  # skip PDFs
                 url_lower = url.lower()
-                if not any(url_lower.endswith(ext) for ext in _IMAGE_EXTENSIONS):
-                    continue  # skip PDFs and other non-image files
+                if not any(url_lower.endswith(e) for e in _IMAGE_EXTENSIONS):
+                    continue
                 images.append({
                     "url": url,
-                    "type_name": f.get("TypeName") or f.get("type_name") or "",
+                    "type_name": f.get("TypeName") or "",
                 })
                 if len(images) >= 12:
                     break
