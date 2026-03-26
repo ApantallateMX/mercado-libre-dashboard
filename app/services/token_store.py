@@ -176,6 +176,12 @@ async def init_db():
             )
         """)
         await db.execute("INSERT OR IGNORE INTO bm_gap_scan_status (id, status) VALUES (1, 'idle')")
+        # Migrations — add columns if not present (SQLite doesn't support IF NOT EXISTS on columns)
+        for col, definition in [("upc", "TEXT NOT NULL DEFAULT ''"), ("size", "TEXT NOT NULL DEFAULT ''")]:
+            try:
+                await db.execute(f"ALTER TABLE bm_sku_gaps ADD COLUMN {col} {definition}")
+            except Exception:
+                pass  # column already exists
         await db.execute("""
             CREATE TABLE IF NOT EXISTS item_sku_cache (
                 item_id   TEXT PRIMARY KEY,

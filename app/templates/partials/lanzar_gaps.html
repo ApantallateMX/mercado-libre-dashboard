@@ -297,7 +297,7 @@
               <select id="wiz-f-warranty-type"
                       class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400">
                 <option value="Garantía de fábrica">Garantía de fábrica</option>
-                <option value="Garantía del vendedor">Garantía del vendedor</option>
+                <option value="Garantía del vendedor" selected>Garantía del vendedor</option>
                 <option value="Sin garantía">Sin garantía</option>
               </select>
             </div>
@@ -305,9 +305,9 @@
               <label class="text-[10px] text-gray-400 block mb-0.5">Tiempo de garantía</label>
               <select id="wiz-f-warranty-time"
                       class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400">
-                <option value="3 meses">3 meses</option>
+                <option value="3 meses" selected>3 meses</option>
                 <option value="6 meses">6 meses</option>
-                <option value="12 meses" selected>12 meses</option>
+                <option value="12 meses">12 meses</option>
                 <option value="24 meses">24 meses</option>
                 <option value="36 meses">36 meses</option>
               </select>
@@ -681,7 +681,7 @@
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_image_url: null,
-    model: '', brand: '', gtin: '', warranty_type: 'Garantía de fábrica', warranty_time: '12 meses', ml_attributes: [],
+    model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
   };
@@ -693,7 +693,7 @@
     _wiz.category_id = ''; _wiz.category_name = '';
     _wiz.selected_images = []; _wiz.ai_image_url = null;
     _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
-    _wiz.warranty_type = 'Garantía de fábrica'; _wiz.warranty_time = '12 meses'; _wiz.ml_attributes = [];
+    _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
 
     document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);

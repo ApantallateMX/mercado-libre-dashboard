@@ -496,6 +496,8 @@ async def _run_gap_scan():
                         "model": prod.get("Model", "") or "",
                         "image_url": prod.get("ImageURL", "") or "",
                         "category": prod.get("CategoryName", "") or "",
+                        "upc": prod.get("UPC", "") or prod.get("Upc", "") or "",
+                        "size": prod.get("Size", "") or prod.get("ScreenSize", "") or "",
                         "stock_total": stock,
                         "stock_mty": 0,   # will batch later if needed
                         "stock_cdmx": 0,
@@ -516,12 +518,14 @@ async def _run_gap_scan():
                         await db.execute("""
                             INSERT INTO bm_sku_gaps
                                 (user_id, nickname, sku, product_title, brand, model,
-                                 image_url, category, stock_total, stock_mty, stock_cdmx,
+                                 image_url, category, upc, size,
+                                 stock_total, stock_mty, stock_cdmx,
                                  retail_price_usd, cost_usd, priority_score,
                                  suggested_price_mxn, cost_price_mxn, last_scan)
                             VALUES
                                 (:user_id,:nickname,:sku,:product_title,:brand,:model,
-                                 :image_url,:category,:stock_total,:stock_mty,:stock_cdmx,
+                                 :image_url,:category,:upc,:size,
+                                 :stock_total,:stock_mty,:stock_cdmx,
                                  :retail_price_usd,:cost_usd,:priority_score,
                                  :suggested_price_mxn,:cost_price_mxn,:last_scan)
                             ON CONFLICT(user_id, sku) DO UPDATE SET
@@ -531,6 +535,8 @@ async def _run_gap_scan():
                                 model=excluded.model,
                                 image_url=excluded.image_url,
                                 category=excluded.category,
+                                upc=excluded.upc,
+                                size=excluded.size,
                                 stock_total=excluded.stock_total,
                                 stock_mty=excluded.stock_mty,
                                 stock_cdmx=excluded.stock_cdmx,
@@ -1073,12 +1079,16 @@ async def ai_draft_json_endpoint(request: Request):
     price_mxn  = body.get("suggested_price_mxn", 0)
     comp_price = body.get("competitor_price", 0)
     stock      = body.get("stock_total", 0)
+    size       = body.get("size", "")
+    upc        = body.get("upc", "")
 
     system = (
         "Eres un experto en eCommerce y Mercado Libre México (2026). "
         "Conoces las mejores prácticas de SEO en MeLi, copywriting de conversión y políticas de la plataforma. "
         "Retorna ÚNICAMENTE JSON válido, sin markdown, sin texto extra, sin comentarios."
     )
+    size_line = f"- Tamaño/Pantalla: {size}" if size else ""
+    upc_line  = f"- UPC/GTIN: {upc}" if upc else ""
     prompt = f"""Crea un listing de alta calidad para Mercado Libre México.
 
 PRODUCTO:
@@ -1087,6 +1097,8 @@ PRODUCTO:
 - Modelo: {model}
 - Nombre en sistema: {title_bm}
 - Categoría: {category}
+{size_line}
+{upc_line}
 - Precio sugerido: ${price_mxn:,.0f} MXN
 - Precio competencia: ${comp_price:,.0f} MXN
 - Stock: {stock} unidades
@@ -1108,8 +1120,8 @@ Retorna SOLO este JSON (sin markdown, sin texto extra):
   "description": "string 4+ párrafos separados por \\n\\n",
   "bullet_points": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"],
   "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5", "kw6", "kw7", "kw8"],
-  "warranty_type": "Garantía de fábrica",
-  "warranty_time": "12 meses",
+  "warranty_type": "Garantía del vendedor",
+  "warranty_time": "3 meses",
   "price_regular": {int(price_mxn) if price_mxn else 0},
   "price_deal": {int(price_mxn * 0.9) if price_mxn else 0},
   "listing_type": "gold_special",
