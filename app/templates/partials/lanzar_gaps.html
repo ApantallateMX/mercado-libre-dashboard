@@ -1009,13 +1009,17 @@
       document.getElementById('wiz-img-prompt').value = 'Professional product photography of ' + product + '. Studio lighting, pure white background, sharp focus, 4K, retail ready.';
     }
 
-    // Restore AI thumb if already generated
+    // Restore AI thumb if already generated (or reset if new SKU)
     var aiThumb = document.getElementById('wiz-img-ai-thumb');
     var aiNone = document.getElementById('wiz-img-ai-none');
     var aiCheck = document.getElementById('wiz-img-ai-check');
     if (_wiz.ai_image_url) {
       aiThumb.src = _wiz.ai_image_url; aiThumb.classList.remove('hidden'); aiNone.classList.add('hidden');
       if (_wiz.selected_images.indexOf(_wiz.ai_image_url) >= 0) aiCheck.classList.remove('hidden');
+      else aiCheck.classList.add('hidden');
+    } else {
+      aiThumb.src = ''; aiThumb.classList.add('hidden'); aiNone.classList.remove('hidden');
+      aiCheck.classList.add('hidden');
     }
 
     // Load BM images
@@ -1039,6 +1043,8 @@
     loading.classList.remove('hidden');
     empty.textContent = 'Cargando imágenes...';
     countEl.textContent = '';
+    // Clear grid immediately so old SKU images don't stay visible while loading
+    while (grid.firstChild) grid.removeChild(grid.firstChild);
 
     fetch('/api/lanzar/bm-images/' + encodeURIComponent(gap.sku))
     .then(function(r) { return r.json(); })
