@@ -939,7 +939,12 @@
         title: gap.product_title || '', category: gap.category || '',
       }),
     })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      return r.text().then(function(txt) {
+        try { return JSON.parse(txt); }
+        catch(e) { throw new Error('HTTP ' + r.status + ': ' + txt.slice(0, 120)); }
+      });
+    })
     .then(function(d) {
       spinner.classList.add('hidden');
       btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
@@ -955,7 +960,7 @@
     .catch(function(e) {
       spinner.classList.add('hidden'); aiNone.classList.remove('hidden');
       btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
-      errEl.textContent = '❌ Error: ' + e; errEl.classList.remove('hidden');
+      errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
     });
   };
 
