@@ -283,34 +283,49 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
 
     try:
         # ── Step 1: Collect all item IDs ──────────────────────────────────────
-        # items/search returns active + paused + recently closed by default.
-        # ML hard-caps offset pagination at ~1000 items; for larger accounts
-        # some items near the tail may be missed.
-        item_ids: list[str] = []
-        offset = 0
-        while True:
-            try:
-                resp = await client.get(
-                    f"/users/{user_id}/items/search",
-                    params={"limit": 100, "offset": offset},
-                )
-                ids = resp.get("results", [])
-                if not ids:
-                    break
-                item_ids.extend(str(i) for i in ids)
-                paging = resp.get("paging", {})
-                total  = paging.get("total", 0)
-                if len(ids) < 100 or offset + 100 >= total:
-                    break
-                offset += 100
-                if offset >= 10000:
-                    logger.warning(f"{nickname}: items/search offset cap hit at 10k")
-                    break
-            except Exception as e:
-                logger.warning(f"items/search error {nickname} offset={offset}: {e}")
-                break
+        # Must query all statuses separately — ML /items/search only returns
+        # active+paused by default. Inactive (sin stock) and closed items are
+        # excluded unless explicitly requested with status=inactive/closed.
+        # SNTV007278-style items go inactive when stock hits 0 but still exist.
+        _ML_STATUSES = ("active", "paused", "inactive", "under_review", "not_yet_active")
 
-        logger.info(f"{nickname}: {len(item_ids)} item IDs from ML items/search")
+        async def _fetch_ids_for_status(status: str) -> list[str]:
+            ids_out: list[str] = []
+            off = 0
+            while True:
+                try:
+                    resp = await client.get(
+                        f"/users/{user_id}/items/search",
+                        params={"limit": 100, "offset": off, "status": status},
+                    )
+                    batch = resp.get("results", [])
+                    if not batch:
+                        break
+                    ids_out.extend(str(i) for i in batch)
+                    paging = resp.get("paging", {})
+                    total  = paging.get("total", 0)
+                    if len(batch) < 100 or off + 100 >= total:
+                        break
+                    off += 100
+                    if off >= 10000:
+                        logger.warning(f"{nickname}: items/search status={status} offset cap at 10k")
+                        break
+                except Exception as e:
+                    logger.warning(f"items/search error {nickname} status={status} offset={off}: {e}")
+                    break
+            return ids_out
+
+        seen_ids: set[str] = set()
+        item_ids: list[str] = []
+        for _status in _ML_STATUSES:
+            batch_ids = await _fetch_ids_for_status(_status)
+            for iid in batch_ids:
+                if iid not in seen_ids:
+                    seen_ids.add(iid)
+                    item_ids.append(iid)
+            logger.info(f"{nickname}: status={_status} → {len(batch_ids)} items")
+
+        logger.info(f"{nickname}: {len(item_ids)} item IDs total across all statuses")
         if not item_ids:
             return set()
 
