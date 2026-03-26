@@ -384,10 +384,24 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                                     inactive_sku_to_items[base].append(iid)
                             if iid in active_ids:
                                 price = float(body.get("price") or 0)
+                                pics = len(body.get("pictures") or [])
+                                attrs = body.get("attributes") or []
+                                has_gtin = any(a.get("id") in ("GTIN","EAN","UPC") for a in attrs)
+                                has_brand = any(a.get("id") == "BRAND" for a in attrs)
+                                # score: title 25pts, pics 25pts, attrs 25pts, price 25pts
+                                title_score = min(len(title), 60) / 60 * 25
+                                pics_score = min(pics, 6) / 6 * 25
+                                attr_score = (10 if has_brand else 0) + (15 if has_gtin else 0)
+                                price_score = 25 if price > 0 else 0
+                                quality_score = int(title_score + pics_score + attr_score + price_score)
                                 if price > 0:
                                     active_prices_map.setdefault(base, [])
                                     if not any(e["item_id"] == iid for e in active_prices_map[base]):
-                                        active_prices_map[base].append({"item_id": iid, "price": price, "title": title})
+                                        active_prices_map[base].append({
+                                            "item_id": iid, "price": price, "title": title,
+                                            "pics": pics, "has_gtin": has_gtin, "has_brand": has_brand,
+                                            "quality_score": quality_score
+                                        })
                     if skus:
                         batch_found += 1
 
@@ -675,6 +689,61 @@ async def _run_gap_scan():
                                   ml_price, suggested, round(diff_pct * 100, 1), now_iso))
                             price_alert_count += 1
                     logger.info(f"  {nickname}: {price_alert_count} alertas de precio guardadas")
+                    await db.commit()
+
+                    # ── Listing quality scores ─────────────────────────────
+                    await db.execute("DELETE FROM ml_listing_quality WHERE user_id=?", (user_id,))
+                    quality_count = 0
+                    for base_sku, item_list in active_prices_map.items():
+                        for item_info in item_list:
+                            prod = bm_map.get(base_sku) or {}
+                            title = item_info.get("title", "") or prod.get("Title", "")
+                            await db.execute("""
+                                INSERT OR REPLACE INTO ml_listing_quality
+                                    (user_id, nickname, sku, item_id, product_title, ml_price,
+                                     quality_score, pics_count, has_gtin, has_brand, title_len, last_scan)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                            """, (user_id, nickname, base_sku, item_info["item_id"], title,
+                                  item_info.get("price", 0), item_info.get("quality_score", 0),
+                                  item_info.get("pics", 0), 1 if item_info.get("has_gtin") else 0,
+                                  1 if item_info.get("has_brand") else 0, len(title), now_iso))
+                            quality_count += 1
+                    logger.info(f"  {nickname}: {quality_count} scores de calidad guardados")
+                    await db.commit()
+
+                    # ── Competition alerts ──────────────────────────────────
+                    # For active ML items that have competitor price data in bm_sku_gaps
+                    await db.execute("DELETE FROM ml_competition_alerts WHERE user_id=?", (user_id,))
+                    comp_alert_count = 0
+                    for base_sku, item_list in active_prices_map.items():
+                        # Get competitor price from gaps (may not exist if already launched)
+                        gap_cur = await db.execute(
+                            "SELECT competitor_price, product_title FROM bm_sku_gaps WHERE user_id=? AND sku=?",
+                            (user_id, base_sku)
+                        )
+                        gap_row = await gap_cur.fetchone()
+                        # Also check in bm_map for the price data
+                        prod = bm_map.get(base_sku) or {}
+                        comp_price = (gap_row[0] if gap_row else 0) or float(prod.get("CompetitorPrice", 0) or 0)
+                        if comp_price <= 0:
+                            continue
+                        for item_info in item_list:
+                            ml_price = item_info.get("price", 0)
+                            if ml_price <= 0:
+                                continue
+                            diff_pct = (ml_price - comp_price) / comp_price * 100
+                            if diff_pct <= 15:  # only alert if ML is >15% more expensive than competitor
+                                continue
+                            title = item_info.get("title", "") or (gap_row[1] if gap_row else "")
+                            await db.execute("""
+                                INSERT OR REPLACE INTO ml_competition_alerts
+                                    (user_id, nickname, sku, item_id, product_title,
+                                     ml_price, competitor_price, diff_pct, last_scan)
+                                VALUES (?,?,?,?,?,?,?,?,?)
+                            """, (user_id, nickname, base_sku, item_info["item_id"], title,
+                                  ml_price, comp_price, round(diff_pct, 1), now_iso))
+                            comp_alert_count += 1
+                    logger.info(f"  {nickname}: {comp_alert_count} alertas de competencia guardadas")
                     await db.commit()
 
             # Update scan status
@@ -1058,6 +1127,145 @@ async def sync_price(request: Request):
         return {"ok": True, "item_id": item_id, "new_price": float(price)}
     except Exception as e:
         logger.error(f"sync-price error {item_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.get("/listing-quality")
+async def get_listing_quality(request: Request):
+    """Lista scores de calidad de listings activos, ordenados de peor a mejor."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ml_listing_quality WHERE user_id=? ORDER BY quality_score ASC",
+            (user_id,)
+        )
+        rows = await cur.fetchall()
+    return {"items": [dict(r) for r in rows], "total": len(rows)}
+
+
+@router.get("/competition-alerts")
+async def get_competition_alerts(request: Request):
+    """Lista items donde el precio ML supera >15% al precio de la competencia."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ml_competition_alerts WHERE user_id=? ORDER BY diff_pct DESC",
+            (user_id,)
+        )
+        rows = await cur.fetchall()
+    return {"items": [dict(r) for r in rows], "total": len(rows)}
+
+
+@router.get("/gaps-summary")
+async def get_gaps_summary(request: Request):
+    """Resumen de gaps: potencial de ingresos, stock total sin publicar."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            """SELECT COUNT(*), SUM(stock_total), SUM(suggested_price_mxn * stock_total)
+               FROM bm_sku_gaps WHERE user_id=? AND status='unlaunched'""",
+            (user_id,)
+        )
+        row = await cur.fetchone()
+    return {
+        "total_gaps": row[0] or 0,
+        "total_stock": row[1] or 0,
+        "revenue_potential_mxn": round(row[2] or 0, 0),
+    }
+
+
+@router.get("/sales-velocity")
+async def get_sales_velocity(request: Request, days: int = Query(30, ge=7, le=90)):
+    """Calcula velocidad de ventas (uds/día) de items activos y días de stock en BM."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        from datetime import timedelta
+        date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
+        date_to   = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000-00:00")
+
+        # Fetch orders for the period
+        orders_resp = await client.get(
+            f"/orders/search",
+            params={
+                "seller": user_id,
+                "order.status": "paid",
+                "order.date_created.from": date_from,
+                "order.date_created.to": date_to,
+                "limit": 50,
+            }
+        )
+        orders = orders_resp.get("results", [])
+
+        # Aggregate units sold per item_id
+        item_units: dict = {}
+        item_titles: dict = {}
+        for order in orders:
+            for ol in (order.get("order_items") or []):
+                item = ol.get("item") or {}
+                iid = str(item.get("id", ""))
+                qty = int(ol.get("quantity", 0))
+                if iid:
+                    item_units[iid] = item_units.get(iid, 0) + qty
+                    item_titles[iid] = item.get("title", "")
+
+        # Cross with item_sku_cache to get SKUs
+        result_rows = []
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            for iid, units in sorted(item_units.items(), key=lambda x: -x[1]):
+                vel = round(units / days, 2)
+                cur = await db.execute(
+                    "SELECT sku FROM item_sku_cache WHERE item_id=? AND user_id=?",
+                    (iid, user_id)
+                )
+                row = await cur.fetchone()
+                sku = row["sku"] if row else ""
+                # Get BM stock from gaps or reactivations
+                bm_stock = 0
+                if sku:
+                    scur = await db.execute(
+                        "SELECT stock_total FROM bm_sku_gaps WHERE user_id=? AND sku=?",
+                        (user_id, sku.upper().split("-")[0])
+                    )
+                    srow = await scur.fetchone()
+                    if srow:
+                        bm_stock = srow["stock_total"]
+                days_stock = round(bm_stock / vel, 0) if vel > 0 and bm_stock > 0 else None
+                result_rows.append({
+                    "item_id": iid,
+                    "sku": sku,
+                    "title": item_titles.get(iid, ""),
+                    "units_sold": units,
+                    "velocity_per_day": vel,
+                    "bm_stock": bm_stock,
+                    "days_of_stock": days_stock,
+                    "alert": days_stock is not None and days_stock < 14,
+                })
+
+        return {"items": result_rows, "period_days": days, "total_items": len(result_rows)}
+    except Exception as e:
+        logger.error(f"sales-velocity error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()

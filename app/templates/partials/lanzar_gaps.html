@@ -28,6 +28,42 @@
     <span id="scan-status-text">Escaneando BinManager vs MeLi — esto puede tomar 2-3 min...</span>
   </div>
 
+  <!-- ── Catalog health dashboard ──────────────────────────────────────────── -->
+  <div id="health-dashboard" class="px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
+    <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div class="bg-white rounded-xl border border-gray-100 p-3 text-center shadow-sm">
+        <div id="hd-gaps" class="text-lg font-bold text-yellow-600">—</div>
+        <div class="text-[10px] text-gray-400">Sin publicar</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-3 text-center shadow-sm">
+        <div id="hd-react" class="text-lg font-bold text-green-600">—</div>
+        <div class="text-[10px] text-gray-400">Para reactivar</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-3 text-center shadow-sm">
+        <div id="hd-price" class="text-lg font-bold text-orange-500">—</div>
+        <div class="text-[10px] text-gray-400">Precios desalineados</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-3 text-center shadow-sm">
+        <div id="hd-quality" class="text-lg font-bold text-purple-600">—</div>
+        <div class="text-[10px] text-gray-400">Calidad baja (&lt;60)</div>
+      </div>
+    </div>
+    <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+      <div class="bg-white rounded-xl border border-gray-100 p-3 shadow-sm">
+        <div id="hd-potential" class="text-sm font-bold text-gray-800">—</div>
+        <div class="text-[10px] text-gray-400">Potencial sin publicar (MXN)</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-3 shadow-sm">
+        <div id="hd-stock-bm" class="text-sm font-bold text-gray-800">—</div>
+        <div class="text-[10px] text-gray-400">Unidades BM sin publicar</div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-100 p-3 shadow-sm">
+        <div id="hd-comp-alerts" class="text-sm font-bold text-red-600">—</div>
+        <div class="text-[10px] text-gray-400">Alertas de competencia</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Summary stats ─────────────────────────────────────────────────────── -->
   <div id="gaps-stats" class="hidden px-4 py-2.5 bg-gray-50 border-b border-gray-100 flex flex-wrap gap-4 text-xs text-gray-600"></div>
 
@@ -46,6 +82,21 @@
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-orange-600 hover:text-orange-700 mr-2 flex items-center gap-1">
       💰 Precios
       <span id="precios-badge" class="hidden bg-orange-100 text-orange-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
+    <button id="tab-calidad" onclick="window._showQuality()"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-purple-600 hover:text-purple-700 mr-2 flex items-center gap-1">
+      ⭐ Calidad
+      <span id="calidad-badge" class="hidden bg-purple-100 text-purple-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
+    <button id="tab-competencia" onclick="window._showCompetition()"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-red-600 hover:text-red-700 mr-2 flex items-center gap-1">
+      🎯 Competencia
+      <span id="competencia-badge" class="hidden bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
+    <button id="tab-ventas" onclick="window._showVelocity()"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-blue-600 hover:text-blue-700 mr-2 flex items-center gap-1">
+      📈 Ventas
+      <span id="ventas-badge" class="hidden bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
     </button>
     <button id="tab-ignored" onclick="window._gapsSetStatus('ignored')"
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2">
@@ -114,6 +165,83 @@
       ✅ Todos los precios están alineados con BinManager. ¡Bien calibrado!
     </div>
     <div id="price-list" class="divide-y divide-gray-100"></div>
+  </div>
+
+  <!-- ── Quality panel ──────────────────────────────────────────────────────── -->
+  <div id="quality-panel" class="hidden">
+    <div class="px-4 py-2.5 bg-purple-50 border-b border-purple-100 text-xs text-purple-700 flex items-center gap-2">
+      ⭐ <strong>Score de calidad de tus listings activos en MeLi.</strong>
+      Mejora título, imágenes, GTIN y marca para aumentar conversión.
+    </div>
+    <div id="quality-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
+      <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>Cargando...
+    </div>
+    <div id="quality-empty" class="hidden px-4 py-8 text-center text-xs text-gray-400">Sin datos de calidad aún. Ejecuta un scan.</div>
+    <div id="quality-list" class="divide-y divide-gray-100"></div>
+  </div>
+
+  <!-- ── Competition panel ──────────────────────────────────────────────────── -->
+  <div id="competition-panel" class="hidden">
+    <div class="px-4 py-2.5 bg-red-50 border-b border-red-100 text-xs text-red-700 flex items-center gap-2">
+      🎯 <strong>Listings donde tu precio en MeLi supera más del 15% al precio de la competencia.</strong>
+      Baja el precio para mejorar conversión.
+    </div>
+    <div id="comp-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
+      <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>Cargando...
+    </div>
+    <div id="comp-empty" class="hidden px-4 py-8 text-center text-xs text-gray-400">Sin alertas de competencia. ¡Tus precios están competitivos!</div>
+    <div id="comp-list" class="divide-y divide-gray-100"></div>
+  </div>
+
+  <!-- ── Sales velocity panel ──────────────────────────────────────────────── -->
+  <div id="velocity-panel" class="hidden">
+    <div class="px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-xs text-blue-700 flex items-center justify-between">
+      <span>📈 <strong>Velocidad de ventas (últimos 30 días) vs stock disponible en BinManager.</strong></span>
+      <select id="vel-days" onchange="window._loadVelocity()" class="text-xs border border-blue-200 rounded-lg px-2 py-1 ml-2">
+        <option value="7">7 días</option>
+        <option value="30" selected>30 días</option>
+        <option value="60">60 días</option>
+        <option value="90">90 días</option>
+      </select>
+    </div>
+    <div id="vel-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
+      <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>Cargando ventas desde MeLi...
+    </div>
+    <div id="vel-empty" class="hidden px-4 py-8 text-center text-xs text-gray-400">Sin datos de ventas para el período seleccionado.</div>
+    <table class="w-full text-xs hidden" id="vel-table">
+      <thead class="bg-gray-50 border-b border-gray-100">
+        <tr>
+          <th class="px-4 py-2 text-left text-[10px] font-semibold text-gray-500 w-[40%]">Producto</th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-500">Vendidas</th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-500">Vel/día</th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-500">Stock BM</th>
+          <th class="px-4 py-2 text-right text-[10px] font-semibold text-gray-500">Días stock</th>
+        </tr>
+      </thead>
+      <tbody id="vel-tbody" class="divide-y divide-gray-100"></tbody>
+    </table>
+  </div>
+
+  <!-- ── Batch action bar ───────────────────────────────────────────────────── -->
+  <div id="batch-bar" class="hidden px-4 py-2 bg-yellow-50 border-b border-yellow-100 flex items-center justify-between gap-3">
+    <span id="batch-count-label" class="text-xs text-yellow-700 font-semibold">0 seleccionados</span>
+    <div class="flex gap-2">
+      <button onclick="window._selectAllGaps()" class="text-xs text-yellow-600 underline hover:text-yellow-800">Seleccionar todos</button>
+      <button onclick="window._clearBatchSelection()" class="text-xs text-gray-400 underline hover:text-gray-600">Limpiar</button>
+      <button onclick="window._batchLaunch()" id="btn-batch-launch"
+              class="bg-yellow-400 hover:bg-yellow-500 text-gray-800 text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+        🚀 Lanzar seleccionados
+      </button>
+    </div>
   </div>
 
   <!-- ── Filters & controls ────────────────────────────────────────────────── -->
@@ -191,6 +319,63 @@
 
   <!-- ── Pagination ────────────────────────────────────────────────────────── -->
   <div id="gaps-pagination" class="px-4 py-3 border-t border-gray-100"></div>
+</div>
+
+<!-- ── Batch launch modal ────────────────────────────────────────────────── -->
+<div id="batch-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
+    <div class="flex items-center justify-between">
+      <h3 class="text-sm font-bold text-gray-800">🚀 Lanzamiento en lote</h3>
+      <button onclick="document.getElementById('batch-modal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-lg">×</button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-[10px] text-gray-400 block mb-0.5">Categoría ML (aplica a todos)</label>
+        <input id="batch-cat-id" type="text" placeholder="Ej. MLM1000 — busca en paso 2 del wizard"
+               class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[10px] text-gray-400 block mb-0.5">Tipo de listing</label>
+          <select id="batch-listing-type" class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
+            <option value="gold_special">Gold Special</option>
+            <option value="gold_premium">Gold Premium</option>
+            <option value="gold_pro">Gold Pro</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[10px] text-gray-400 block mb-0.5">Condición</label>
+          <select id="batch-condition" class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-yellow-400">
+            <option value="new">Nuevo</option>
+            <option value="used">Usado</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="text-[10px] text-gray-400 block mb-0.5">Markup sobre precio BM (ej. 1.3 = +30%)</label>
+        <input id="batch-markup" type="number" value="1.3" step="0.05" min="1"
+               class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
+      </div>
+      <div id="batch-progress-wrap" class="hidden">
+        <div class="flex justify-between text-xs text-gray-600 mb-1">
+          <span id="batch-prog-text">Procesando...</span>
+          <span id="batch-prog-count"></span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2">
+          <div id="batch-prog-bar" class="bg-yellow-400 h-2 rounded-full transition-all" style="width:0%"></div>
+        </div>
+        <div id="batch-results" class="mt-2 text-xs text-gray-500 max-h-32 overflow-y-auto space-y-0.5"></div>
+      </div>
+    </div>
+    <div class="flex gap-2 justify-end">
+      <button onclick="document.getElementById('batch-modal').classList.add('hidden')"
+              class="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50">Cancelar</button>
+      <button id="btn-batch-go" onclick="window._doBatchLaunch()"
+              class="bg-yellow-400 hover:bg-yellow-500 text-gray-800 text-xs font-semibold px-4 py-1.5 rounded-lg transition">
+        🚀 Iniciar lanzamiento
+      </button>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
@@ -308,11 +493,25 @@
           <div>
             <label class="text-xs font-semibold text-gray-600 block mb-1">Precio MXN</label>
             <input id="wiz-f-price" type="number" min="1" step="1"
+                   oninput="window._wizUpdatePriceBreakdown()"
                    class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400"/>
+            <div id="wiz-price-breakdown" class="hidden mt-1 p-2 bg-gray-50 rounded-lg text-[10px] text-gray-500 space-y-0.5">
+              <div class="font-semibold text-gray-600 mb-1">Desglose de precio</div>
+              <div class="flex justify-between"><span>Costo BM (MXN):</span><span id="pb-cost" class="font-medium">—</span></div>
+              <div class="flex justify-between"><span>Comisión ML (<span id="pb-comm-pct">12.5</span>%):</span><span id="pb-comm" class="font-medium text-red-500">—</span></div>
+              <div class="flex justify-between"><span>Envío gratis (est.):</span><span id="pb-ship" class="font-medium text-red-500">~$150</span></div>
+              <div class="flex justify-between border-t border-gray-200 pt-0.5 mt-0.5"><span class="font-semibold">Ganancia neta:</span><span id="pb-margin" class="font-semibold text-green-600">—</span></div>
+              <div class="flex justify-between"><span>Margen %:</span><span id="pb-margin-pct" class="font-semibold">—</span></div>
+              <div class="mt-1 pt-1 border-t border-gray-200">
+                <span class="text-gray-400">Precio mínimo para 20% margen: </span>
+                <span id="pb-min-price" class="font-semibold text-yellow-600">—</span>
+              </div>
+            </div>
           </div>
           <div>
             <label class="text-xs font-semibold text-gray-600 block mb-1">Tipo de publicación</label>
             <select id="wiz-f-listing-type"
+                    onchange="window._wizUpdatePriceBreakdown()"
                     class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400">
               <option value="gold_special">Gold Special</option>
               <option value="gold_pro">Gold Pro (premium)</option>
@@ -550,6 +749,7 @@
       .then(function(r) { return r.json(); })
       .then(function(d) {
         _gaps = d.items || [];
+        _gapsCache = _gaps;
         _state.total = d.total || 0; _state.pages = d.pages || 1;
         _state.badge_total = d.badge_total || d.total || 0;
         _renderBadge(); _renderTable(); _renderPagination();
@@ -619,7 +819,9 @@
         : '<span class="text-gray-300 text-[9px]">—</span>';
       var gJson = JSON.stringify(g).replace(/"/g, '&quot;');
       return '<tr class="hover:bg-gray-50 transition">' +
-        '<td class="px-4 py-3 max-w-xs"><div class="flex items-center gap-2">' + imgTag +
+        '<td class="px-4 py-3 max-w-xs"><div class="flex items-center gap-2">' +
+          '<input type="checkbox" class="gap-batch-check mt-1 w-3.5 h-3.5 rounded accent-yellow-400 cursor-pointer shrink-0" data-sku="' + g.sku + '" onchange="window._updateBatchCount()">' +
+          imgTag +
           '<div class="min-w-0">' +
             '<div class="font-medium text-gray-800 text-xs leading-tight truncate" title="' + (g.product_title||'') + '">' + (g.product_title || g.sku) + '</div>' +
             '<div class="text-gray-400 text-[10px] mt-0.5 flex gap-1 flex-wrap">' +
@@ -945,6 +1147,7 @@
 
     // Pre-fill price + qty + product fields
     document.getElementById('wiz-f-price').value = _wiz.price || (_wiz.gap && _wiz.gap.suggested_price_mxn) || '';
+    window._wizUpdatePriceBreakdown();
     document.getElementById('wiz-f-qty').value   = _wiz.qty;
     var gap = _wiz.gap || {};
     document.getElementById('wiz-f-sku').value   = gap.sku || '';
@@ -1436,6 +1639,9 @@
     tab.classList.add('border-green-500', 'text-green-700');
 
     // Hide gaps table, show reactivations panel
+    document.getElementById('quality-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
     var panel = document.getElementById('reactivations-panel');
     panel.classList.remove('hidden');
     // Hide filters, gaps list, pagination
@@ -1453,6 +1659,9 @@
   var _origSetStatus = window._gapsSetStatus;
   window._gapsSetStatus = function(status) {
     document.getElementById('reactivations-panel').classList.add('hidden');
+    document.getElementById('quality-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
     ['gaps-stats', 'gaps-list', 'gaps-pagination'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.style.display = '';
@@ -1580,7 +1789,7 @@
 
   window._showPriceAlerts = function() {
     document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
-      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700');
+      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700','border-purple-500','text-purple-700','border-red-500','text-red-700','border-blue-500','text-blue-700');
       t.classList.add('border-transparent','text-gray-400');
     });
     var tab = document.getElementById('tab-precios');
@@ -1588,11 +1797,16 @@
     tab.classList.add('border-orange-500','text-orange-700');
 
     document.getElementById('reactivations-panel').classList.add('hidden');
+    document.getElementById('quality-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
     document.getElementById('price-alerts-panel').classList.remove('hidden');
     ['gaps-stats','gaps-list','gaps-pagination','gaps-filters-row'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = 'none';
     _loadPriceAlerts();
   };
 
@@ -1602,10 +1816,13 @@
     document.getElementById('price-alerts-panel').classList.add('hidden');
     _origSetStatus2(status);
   };
-  // Also patch _showReactivations to hide price panel
+  // Also patch _showReactivations to hide price panel and new panels
   var _origShowReact = window._showReactivations;
   window._showReactivations = function() {
     document.getElementById('price-alerts-panel').classList.add('hidden');
+    document.getElementById('quality-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
     _origShowReact();
   };
 
@@ -1719,6 +1936,373 @@
     _next(0);
   };
 
+  // ── Batch launch
+  var _batchSelected = [];
+  var _gapsCache = [];
+
+  window._updateBatchCount = function() {
+    _batchSelected = Array.from(document.querySelectorAll('.gap-batch-check:checked')).map(function(c){return c.dataset.sku;});
+    var bar = document.getElementById('batch-bar');
+    var lbl = document.getElementById('batch-count-label');
+    if (_batchSelected.length > 0) { bar.classList.remove('hidden'); lbl.textContent = _batchSelected.length + ' seleccionados'; }
+    else bar.classList.add('hidden');
+  };
+
+  window._selectAllGaps = function() {
+    document.querySelectorAll('.gap-batch-check').forEach(function(c){ c.checked = true; });
+    window._updateBatchCount();
+  };
+
+  window._clearBatchSelection = function() {
+    document.querySelectorAll('.gap-batch-check').forEach(function(c){ c.checked = false; });
+    _batchSelected = [];
+    document.getElementById('batch-bar').classList.add('hidden');
+  };
+
+  window._batchLaunch = function() {
+    if (!_batchSelected.length) return;
+    document.getElementById('batch-modal').classList.remove('hidden');
+    document.getElementById('batch-progress-wrap').classList.add('hidden');
+    document.getElementById('batch-results').innerHTML = '';
+  };
+
+  window._doBatchLaunch = function() {
+    var catId = document.getElementById('batch-cat-id').value.trim();
+    if (!catId) { alert('Ingresa una categoría ML.'); return; }
+    var listingType = document.getElementById('batch-listing-type').value;
+    var condition   = document.getElementById('batch-condition').value;
+    var markup      = parseFloat(document.getElementById('batch-markup').value) || 1.3;
+    var btn = document.getElementById('btn-batch-go');
+    var wrap = document.getElementById('batch-progress-wrap');
+    var progText = document.getElementById('batch-prog-text');
+    var progCount = document.getElementById('batch-prog-count');
+    var progBar = document.getElementById('batch-prog-bar');
+    var results = document.getElementById('batch-results');
+
+    btn.disabled = true; wrap.classList.remove('hidden');
+    var skus = _batchSelected.slice();
+    var total = skus.length; var done = 0; var failed = 0;
+
+    var gapMap = {};
+    _gapsCache.forEach(function(g){ gapMap[g.sku] = g; });
+
+    function _processNext(idx) {
+      if (idx >= skus.length) {
+        progText.textContent = '✅ Completado — ' + done + ' publicados' + (failed ? ', ' + failed + ' errores' : '');
+        progBar.style.width = '100%';
+        btn.disabled = false;
+        setTimeout(function(){ _loadGaps(); window._clearBatchSelection(); }, 2000);
+        return;
+      }
+      var sku = skus[idx];
+      var gap = gapMap[sku];
+      progText.textContent = 'Publicando ' + (idx+1) + '/' + total + '...';
+      progCount.textContent = sku;
+      progBar.style.width = Math.round((idx/total)*100) + '%';
+
+      if (!gap) {
+        results.innerHTML += '<div class="text-red-400">⚠ ' + sku + ' — no encontrado</div>';
+        failed++;
+        _processNext(idx + 1);
+        return;
+      }
+
+      var price = Math.round((gap.suggested_price_mxn || gap.retail_price_usd * 17.5) * markup);
+      if (!price) price = 999;
+
+      fetch('/api/lanzar/ai-draft-json', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(gap),
+      })
+      .then(function(r){return r.json();})
+      .then(function(draft){
+        var descText = (draft.description||'') + (draft.bullet_points&&draft.bullet_points.length ? '\n\n' + draft.bullet_points.map(function(b){return '• '+b;}).join('\n') : '');
+        var attrs = [];
+        if (gap.brand) attrs.push({id:'BRAND', value_name: gap.brand});
+        if (gap.model) attrs.push({id:'MODEL', value_name: gap.model});
+        if (gap.upc)   attrs.push({id:'GTIN',  value_name: gap.upc});
+        return fetch('/api/lanzar/create-listing', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            sku: gap.sku, category_id: catId,
+            title: draft.title || gap.product_title,
+            description: descText, price: price,
+            available_quantity: Math.min(gap.stock_total||1, 999),
+            listing_type_id: listingType, condition: condition,
+            buying_mode: 'buy_it_now', attributes: attrs,
+            warranty_type: 'Garantía del vendedor', warranty_time: '3 meses',
+          }),
+        });
+      })
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if (d.error) {
+          results.innerHTML += '<div class="text-red-400">❌ ' + sku + ': ' + d.error + '</div>';
+          failed++;
+        } else {
+          results.innerHTML += '<div class="text-green-600">✅ ' + sku + ' → ' + (d.item_id||'') + '</div>';
+          done++;
+        }
+        results.scrollTop = results.scrollHeight;
+        _processNext(idx + 1);
+      })
+      .catch(function(e){
+        results.innerHTML += '<div class="text-red-400">❌ ' + sku + ': ' + e.message + '</div>';
+        failed++; _processNext(idx + 1);
+      });
+    }
+    _processNext(0);
+  };
+
+  // ── Quality tab
+  window._showQuality = function() {
+    document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
+      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700','border-purple-500','text-purple-700','border-red-500','text-red-700','border-blue-500','text-blue-700');
+      t.classList.add('border-transparent','text-gray-400');
+    });
+    var tab = document.getElementById('tab-calidad');
+    tab.classList.remove('border-transparent','text-gray-400');
+    tab.classList.add('border-purple-500','text-purple-700');
+    document.getElementById('reactivations-panel').classList.add('hidden');
+    document.getElementById('price-alerts-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
+    document.getElementById('quality-panel').classList.remove('hidden');
+    ['gaps-stats','gaps-list','gaps-pagination','gaps-filters-row'].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.style.display='none';
+    });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = 'none';
+    _loadQuality();
+  };
+
+  function _loadQuality() {
+    var loading=document.getElementById('quality-loading');
+    var empty=document.getElementById('quality-empty');
+    var list=document.getElementById('quality-list');
+    loading.classList.remove('hidden'); empty.classList.add('hidden'); list.innerHTML='';
+    fetch('/api/lanzar/listing-quality')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      loading.classList.add('hidden');
+      var items=d.items||[];
+      var badge=document.getElementById('calidad-badge');
+      var poor=items.filter(function(i){return i.quality_score<60;}).length;
+      if(poor>0){badge.textContent=poor+' bajos';badge.classList.remove('hidden');}
+      else badge.classList.add('hidden');
+      if(!items.length){empty.classList.remove('hidden');return;}
+      items.forEach(function(item){
+        var score=item.quality_score||0;
+        var color=score>=80?'text-green-600':score>=60?'text-yellow-600':'text-red-600';
+        var barColor=score>=80?'bg-green-500':score>=60?'bg-yellow-400':'bg-red-500';
+        var issues=[];
+        if((item.title_len||0)<40) issues.push('Título corto ('+item.title_len+' chars)');
+        if((item.pics_count||0)<3) issues.push('Pocas imágenes ('+item.pics_count+')');
+        if(!item.has_gtin) issues.push('Sin GTIN/UPC');
+        if(!item.has_brand) issues.push('Sin marca');
+        var row=document.createElement('div');
+        row.className='flex items-center gap-3 px-4 py-3 hover:bg-purple-50 transition';
+        row.innerHTML=
+          '<div class="flex-1 min-w-0">'+
+            '<div class="text-xs font-semibold text-gray-800 truncate">'+(item.product_title||item.sku)+'</div>'+
+            '<div class="text-[10px] text-gray-400 mt-0.5">SKU: '+item.sku+' · '+item.item_id+'</div>'+
+            (issues.length?'<div class="text-[10px] text-red-500 mt-0.5">⚠ '+issues.join(' · ')+'</div>':'')+
+          '</div>'+
+          '<div class="shrink-0 text-right">'+
+            '<div class="'+color+' text-sm font-bold">'+score+'<span class="text-[10px] font-normal">/100</span></div>'+
+            '<div class="w-20 bg-gray-200 rounded-full h-1.5 mt-1">'+
+              '<div class="'+barColor+' h-1.5 rounded-full" style="width:'+score+'%"></div>'+
+            '</div>'+
+          '</div>';
+        list.appendChild(row);
+      });
+    })
+    .catch(function(e){
+      document.getElementById('quality-loading').classList.add('hidden');
+      document.getElementById('quality-empty').textContent='❌ Error: '+e.message;
+      document.getElementById('quality-empty').classList.remove('hidden');
+    });
+  }
+
+  // ── Competition tab
+  window._showCompetition = function() {
+    document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
+      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700','border-purple-500','text-purple-700','border-red-500','text-red-700','border-blue-500','text-blue-700');
+      t.classList.add('border-transparent','text-gray-400');
+    });
+    var tab = document.getElementById('tab-competencia');
+    tab.classList.remove('border-transparent','text-gray-400');
+    tab.classList.add('border-red-500','text-red-700');
+    document.getElementById('reactivations-panel').classList.add('hidden');
+    document.getElementById('price-alerts-panel').classList.add('hidden');
+    document.getElementById('quality-panel').classList.add('hidden');
+    document.getElementById('velocity-panel').classList.add('hidden');
+    document.getElementById('competition-panel').classList.remove('hidden');
+    ['gaps-stats','gaps-list','gaps-pagination','gaps-filters-row'].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.style.display='none';
+    });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = 'none';
+    _loadCompetition();
+  };
+
+  function _loadCompetition() {
+    var loading=document.getElementById('comp-loading');
+    var empty=document.getElementById('comp-empty');
+    var list=document.getElementById('comp-list');
+    loading.classList.remove('hidden'); empty.classList.add('hidden'); list.innerHTML='';
+    fetch('/api/lanzar/competition-alerts')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      loading.classList.add('hidden');
+      var items=d.items||[];
+      var badge=document.getElementById('competencia-badge');
+      if(items.length>0){badge.textContent=items.length;badge.classList.remove('hidden');}
+      else badge.classList.add('hidden');
+      if(!items.length){empty.classList.remove('hidden');return;}
+      items.forEach(function(item){
+        var diffPct=parseFloat(item.diff_pct)||0;
+        var mlFmt='$'+Math.round(item.ml_price).toLocaleString();
+        var compFmt='$'+Math.round(item.competitor_price).toLocaleString();
+        var row=document.createElement('div');
+        row.className='flex items-center gap-3 px-4 py-3 hover:bg-red-50 transition';
+        row.innerHTML=
+          '<div class="flex-1 min-w-0">'+
+            '<div class="text-xs font-semibold text-gray-800 truncate">'+(item.product_title||item.sku)+'</div>'+
+            '<div class="text-[10px] text-gray-400 mt-0.5">SKU: '+item.sku+' · '+item.item_id+'</div>'+
+          '</div>'+
+          '<div class="text-[10px] text-right shrink-0 space-y-0.5">'+
+            '<div class="text-gray-500">Tu precio: <span class="font-semibold text-red-600">'+mlFmt+' MXN</span></div>'+
+            '<div class="text-gray-500">Competencia: <span class="font-semibold text-green-700">'+compFmt+' MXN</span></div>'+
+            '<div class="text-red-600 font-semibold">↑ '+diffPct.toFixed(1)+'% más caro</div>'+
+          '</div>'+
+          '<button onclick="window._syncPrice(\''+item.item_id+'\','+item.competitor_price+',this)"'+
+            ' class="shrink-0 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">'+
+            '🎯 Igualar precio'+
+          '</button>';
+        list.appendChild(row);
+      });
+    })
+    .catch(function(e){
+      document.getElementById('comp-loading').classList.add('hidden');
+      document.getElementById('comp-empty').textContent='❌ Error: '+e.message;
+      document.getElementById('comp-empty').classList.remove('hidden');
+    });
+  }
+
+  // ── Velocity tab
+  window._showVelocity = function() {
+    document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
+      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700','border-purple-500','text-purple-700','border-red-500','text-red-700','border-blue-500','text-blue-700');
+      t.classList.add('border-transparent','text-gray-400');
+    });
+    var tab = document.getElementById('tab-ventas');
+    tab.classList.remove('border-transparent','text-gray-400');
+    tab.classList.add('border-blue-500','text-blue-700');
+    ['reactivations-panel','price-alerts-panel','quality-panel','competition-panel'].forEach(function(id){
+      document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('velocity-panel').classList.remove('hidden');
+    ['gaps-stats','gaps-list','gaps-pagination','gaps-filters-row'].forEach(function(id){
+      var el=document.getElementById(id); if(el) el.style.display='none';
+    });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = 'none';
+    window._loadVelocity();
+  };
+
+  window._loadVelocity = function() {
+    var days = document.getElementById('vel-days') ? document.getElementById('vel-days').value : 30;
+    var loading=document.getElementById('vel-loading');
+    var empty=document.getElementById('vel-empty');
+    var table=document.getElementById('vel-table');
+    var tbody=document.getElementById('vel-tbody');
+    loading.classList.remove('hidden'); empty.classList.add('hidden'); table.classList.add('hidden');
+    tbody.innerHTML='';
+    fetch('/api/lanzar/sales-velocity?days=' + days)
+    .then(function(r){return r.json();})
+    .then(function(d){
+      loading.classList.add('hidden');
+      var items=d.items||[];
+      var lowStock=items.filter(function(i){return i.alert;}).length;
+      var badge=document.getElementById('ventas-badge');
+      if(lowStock>0){badge.textContent=lowStock+' bajo stock';badge.classList.remove('hidden');}
+      else badge.classList.add('hidden');
+      if(!items.length){empty.classList.remove('hidden');return;}
+      table.classList.remove('hidden');
+      items.forEach(function(item){
+        var daysClass = item.alert ? 'text-red-600 font-bold' : item.days_of_stock !== null && item.days_of_stock < 30 ? 'text-yellow-600 font-semibold' : 'text-gray-700';
+        var daysText = item.days_of_stock !== null ? item.days_of_stock + 'd' + (item.alert ? ' ⚠' : '') : '∞';
+        var tr=document.createElement('tr');
+        tr.className='hover:bg-blue-50 transition';
+        tr.innerHTML=
+          '<td class="px-4 py-2.5">'+
+            '<div class="font-medium text-gray-800 truncate max-w-[200px]">'+(item.title||item.sku)+'</div>'+
+            (item.sku?'<div class="text-[9px] text-gray-400">'+item.sku+'</div>':'')+
+          '</td>'+
+          '<td class="px-4 py-2.5 text-right font-semibold text-gray-700">'+item.units_sold+'</td>'+
+          '<td class="px-4 py-2.5 text-right text-gray-600">'+item.velocity_per_day+'</td>'+
+          '<td class="px-4 py-2.5 text-right text-gray-700">'+(item.bm_stock||0).toLocaleString()+'</td>'+
+          '<td class="px-4 py-2.5 text-right '+daysClass+'">'+daysText+'</td>';
+        tbody.appendChild(tr);
+      });
+    })
+    .catch(function(e){
+      loading.classList.add('hidden');
+      empty.textContent='❌ Error cargando ventas: '+e.message;
+      empty.classList.remove('hidden');
+    });
+  };
+
+  // ── Price breakdown calculator
+  window._wizUpdatePriceBreakdown = function() {
+    var price = parseFloat(document.getElementById('wiz-f-price').value) || 0;
+    var breakdown = document.getElementById('wiz-price-breakdown');
+    if (!price || !_wiz.gap) { breakdown.classList.add('hidden'); return; }
+    breakdown.classList.remove('hidden');
+    var gap = _wiz.gap;
+    var costMxn = gap.cost_price_mxn || 0;
+    var listingTypeEl = document.getElementById('wiz-f-listing-type');
+    var listingType = listingTypeEl ? listingTypeEl.value : 'gold_special';
+    var commPct = listingType === 'gold_special' ? 12.5 : listingType === 'gold_premium' ? 12.5 : 8.0;
+    var comm = price * commPct / 100;
+    var ship = 150;
+    var netProfit = price - costMxn - comm - ship;
+    var marginPct = costMxn > 0 ? (netProfit / costMxn * 100) : 0;
+    var minPrice20 = costMxn > 0 ? Math.ceil((costMxn + ship) / (1 - commPct/100 - 0.20)) : 0;
+    document.getElementById('pb-cost').textContent = costMxn > 0 ? '$' + Math.round(costMxn).toLocaleString() : 'N/A';
+    document.getElementById('pb-comm-pct').textContent = commPct;
+    document.getElementById('pb-comm').textContent = '-$' + Math.round(comm).toLocaleString();
+    document.getElementById('pb-margin').textContent = '$' + Math.round(netProfit).toLocaleString() + ' MXN';
+    document.getElementById('pb-margin-pct').textContent = marginPct.toFixed(1) + '%';
+    document.getElementById('pb-margin').className = 'font-semibold ' + (netProfit >= 0 ? 'text-green-600' : 'text-red-600');
+    document.getElementById('pb-min-price').textContent = minPrice20 > 0 ? '$' + minPrice20.toLocaleString() + ' MXN' : 'N/A';
+  };
+
+  // ── Health dashboard
+  function _loadHealthDashboard() {
+    Promise.all([
+      fetch('/api/lanzar/gaps?per_page=1').then(function(r){return r.json();}),
+      fetch('/api/lanzar/reactivations').then(function(r){return r.json();}),
+      fetch('/api/lanzar/price-alerts').then(function(r){return r.json();}),
+      fetch('/api/lanzar/listing-quality').then(function(r){return r.json();}),
+      fetch('/api/lanzar/competition-alerts').then(function(r){return r.json();}),
+      fetch('/api/lanzar/gaps-summary').then(function(r){return r.json();}).catch(function(){return {};}),
+    ]).then(function(results) {
+      var gaps=results[0], react=results[1], prices=results[2], quality=results[3], comp=results[4], summary=results[5];
+      document.getElementById('hd-gaps').textContent = (gaps.badge_total||gaps.total||0).toLocaleString();
+      document.getElementById('hd-react').textContent = (react.total||0).toLocaleString();
+      document.getElementById('hd-price').textContent = (prices.total||0).toLocaleString();
+      var poorQuality = (quality.items||[]).filter(function(i){return i.quality_score<60;}).length;
+      document.getElementById('hd-quality').textContent = poorQuality.toLocaleString();
+      document.getElementById('hd-comp-alerts').textContent = (comp.total||0).toLocaleString();
+      var pot = summary.revenue_potential_mxn || 0;
+      document.getElementById('hd-potential').textContent = pot > 0 ? '$' + Math.round(pot/1000000*10)/10 + 'M MXN' : '—';
+      var stk = summary.total_stock || 0;
+      document.getElementById('hd-stock-bm').textContent = stk > 0 ? stk.toLocaleString() + ' uds' : '—';
+    }).catch(function(){});
+  }
+
   // ── Init
   fetch('/api/lanzar/scan-status')
     .then(function(r) { return r.json(); })
@@ -1739,6 +2323,22 @@
       if (d.total > 0) { badge.textContent = d.total; badge.classList.remove('hidden'); }
     }).catch(function() {});
 
+  fetch('/api/lanzar/listing-quality')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var poor=(d.items||[]).filter(function(i){return i.quality_score<60;}).length;
+      var badge=document.getElementById('calidad-badge');
+      if(poor>0){badge.textContent=poor+' bajos';badge.classList.remove('hidden');}
+    }).catch(function(){});
+
+  fetch('/api/lanzar/competition-alerts')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var badge=document.getElementById('competencia-badge');
+      if(d.total>0){badge.textContent=d.total;badge.classList.remove('hidden');}
+    }).catch(function(){});
+
+  _loadHealthDashboard();
   _loadFilters();
   _loadGaps();
 })();
