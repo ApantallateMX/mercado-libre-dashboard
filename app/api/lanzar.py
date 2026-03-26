@@ -442,6 +442,41 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                 except Exception as e:
                     logger.warning(f"{nickname}: individual fetch error for {iid}: {e}")
 
+        # ── Step 3c: /attributes fallback — last resort ───────────────────────
+        # GET /items/{id}/attributes returns the attributes array independently.
+        # This endpoint can return SELLER_SKU even when the main body endpoint
+        # omits seller_custom_field (known ML API quirk for inactive items).
+        still_no_sku = [iid for iid in no_sku_iids if iid not in extracted_iids]
+        if still_no_sku:
+            logger.info(
+                f"{nickname}: {len(still_no_sku)} items still with no SKU — "
+                f"trying /attributes endpoint (max 200)"
+            )
+            for iid in still_no_sku[:200]:
+                try:
+                    attrs = await client.get(f"/items/{iid}/attributes")
+                    if isinstance(attrs, list):
+                        for a in attrs:
+                            if not isinstance(a, dict):
+                                continue
+                            if a.get("id") == "SELLER_SKU":
+                                v = (a.get("value_name") or "").strip().upper()
+                                if v:
+                                    base = _base(v)
+                                    sku_set.add(base)
+                                    new_entries.append({"item_id": iid, "user_id": user_id, "sku": v})
+                                    extracted_iids.add(iid)
+                                    if iid in reactivatable_ids:
+                                        inactive_sku_to_items.setdefault(base, [])
+                                        if iid not in inactive_sku_to_items[base]:
+                                            inactive_sku_to_items[base].append(iid)
+                                    logger.info(
+                                        f"{nickname}: recovered SKU {v} for {iid} "
+                                        f"via /attributes endpoint"
+                                    )
+                except Exception as e:
+                    logger.warning(f"{nickname}: /attributes fetch error for {iid}: {e}")
+
         # Also map cached items that are reactivatable
         for iid, raw_sku in cached.items():
             if iid in reactivatable_ids and raw_sku:
@@ -626,23 +661,47 @@ async def _run_gap_scan():
             # CUALQUIER estado en CUALQUIER cuenta → no es gap.
             _verify_sem = asyncio.Semaphore(5)  # max 5 búsquedas concurrentes por cuenta
 
-            async def _sku_exists_in_account(sku: str, uid: str, cli) -> bool:
-                """True si el SKU existe en ML (cualquier estado) para esta cuenta."""
+            # Build search SKU set per gap: base SKU + raw BM SKU (might have suffix like -NEW)
+            # If ML has seller_custom_field="SNTV007910-NEW", searching for base "SNTV007910" misses it.
+            gap_sku_variants: dict[str, set[str]] = {}  # base_sku → {sku, raw_sku, ...}
+            for g in global_gaps_base:
+                base = g["sku"]
+                variants = {base}
+                raw_bm = (bm_map.get(base, {}).get("SKU") or base).upper().strip()
+                if raw_bm and raw_bm != base:
+                    variants.add(raw_bm)
+                gap_sku_variants[base] = variants
+
+            async def _sku_exists_in_account(base_sku: str, uid: str, cli) -> bool:
+                """True si el SKU (o alguna variante) existe en ML para esta cuenta.
+                Si encontrado, cachea el item_id→sku para que futuros scans usen Phase 1.
+                """
                 async with _verify_sem:
                     try:
-                        # 3 búsquedas en paralelo: sin filtro (activos/pausados),
-                        # status=inactive, status=closed
-                        r0, r1, r2 = await asyncio.gather(
-                            cli.get(f"/users/{uid}/items/search",
-                                    params={"seller_sku": sku, "limit": 1}),
-                            cli.get(f"/users/{uid}/items/search",
-                                    params={"seller_sku": sku, "status": "inactive", "limit": 1}),
-                            cli.get(f"/users/{uid}/items/search",
-                                    params={"seller_sku": sku, "status": "closed", "limit": 1}),
-                            return_exceptions=True,
-                        )
-                        for r in (r0, r1, r2):
+                        skus_to_try = list(gap_sku_variants.get(base_sku, {base_sku}))
+                        # For each SKU variant, search all relevant statuses
+                        search_calls = []
+                        for s in skus_to_try:
+                            search_calls += [
+                                cli.get(f"/users/{uid}/items/search",
+                                        params={"seller_sku": s, "limit": 3}),
+                                cli.get(f"/users/{uid}/items/search",
+                                        params={"seller_sku": s, "status": "inactive", "limit": 3}),
+                                cli.get(f"/users/{uid}/items/search",
+                                        params={"seller_sku": s, "status": "closed", "limit": 3}),
+                            ]
+                        results = await asyncio.gather(*search_calls, return_exceptions=True)
+                        for r, s in zip(results, [s for s in skus_to_try for _ in range(3)]):
                             if isinstance(r, dict) and r.get("results"):
+                                # Self-heal: cache item_id→sku so Phase 1 works next scan
+                                entries = [
+                                    {"item_id": str(iid), "user_id": uid, "sku": s}
+                                    for iid in r["results"][:3]
+                                ]
+                                try:
+                                    await token_store.save_skus_cache(entries)
+                                except Exception:
+                                    pass
                                 return True
                         return False
                     except Exception:
