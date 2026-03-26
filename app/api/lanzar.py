@@ -861,6 +861,35 @@ async def clear_sku_cache(request: Request):
     return {"ok": True, "deleted": deleted}
 
 
+@router.post("/generate-image")
+async def generate_image_endpoint(request: Request):
+    """Genera imagen de producto con FLUX Schnell via Replicate."""
+    from app.services import replicate_client
+
+    if not replicate_client.is_available():
+        return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
+
+    body = await request.json()
+    prompt = replicate_client.build_product_prompt(
+        brand    = body.get("brand", ""),
+        model    = body.get("model", ""),
+        title    = body.get("title", "") or body.get("product_title", ""),
+        category = body.get("category", ""),
+    )
+
+    # Permitir prompt personalizado desde el frontend
+    custom_prompt = (body.get("custom_prompt") or "").strip()
+    if custom_prompt:
+        prompt = custom_prompt
+
+    try:
+        image_url = await replicate_client.generate_image(prompt)
+        return {"image_url": image_url, "prompt": prompt}
+    except Exception as e:
+        logger.error(f"generate-image error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/ignore/{sku}")
 async def ignore_sku(sku: str, request: Request):
     """Marca un SKU como ignorado para no mostrarlo en el lanzador."""

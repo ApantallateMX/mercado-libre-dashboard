@@ -292,11 +292,54 @@
           </div>
         </div>
 
-        <!-- Options -->
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" id="wiz-cb-img" checked class="w-4 h-4 accent-yellow-500 rounded"/>
-          <span class="text-xs text-gray-600">Subir imagen de BinManager a Mercado Libre</span>
-        </label>
+        <!-- Image panel -->
+        <div class="space-y-3">
+          <div class="text-xs font-semibold text-gray-600">Imagen del producto</div>
+          <div class="grid grid-cols-2 gap-3">
+            <!-- BM Image -->
+            <div class="space-y-1">
+              <div class="text-xs text-gray-400 text-center">BinManager</div>
+              <div id="wiz-img-bm-wrap" onclick="window._wizSelectImgSrc('bm')"
+                   class="relative w-full aspect-square bg-gray-100 rounded-lg border-2 border-transparent overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-yellow-300">
+                <span id="wiz-img-bm-none" class="text-gray-300 text-xs">Sin imagen</span>
+                <img id="wiz-img-bm-thumb" class="hidden w-full h-full object-contain" alt="BM"/>
+              </div>
+              <label class="flex items-center gap-1.5 justify-center cursor-pointer" onclick="window._wizSelectImgSrc('bm')">
+                <input type="radio" name="wiz-img-src" value="bm" id="wiz-radio-bm" class="accent-yellow-500"/>
+                <span class="text-xs text-gray-600">Usar esta</span>
+              </label>
+            </div>
+            <!-- AI Image -->
+            <div class="space-y-1">
+              <div class="text-xs text-gray-400 text-center">Generada con IA</div>
+              <div id="wiz-img-ai-wrap" onclick="window._wizSelectImgSrc('ai')"
+                   class="relative w-full aspect-square bg-gray-100 rounded-lg border-2 border-transparent overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-purple-300">
+                <span id="wiz-img-ai-none" class="text-gray-300 text-xs text-center px-2">Presiona "Generar"</span>
+                <div id="wiz-img-ai-spin" class="hidden absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-90">
+                  <svg class="animate-spin w-7 h-7 text-purple-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                  </svg>
+                </div>
+                <img id="wiz-img-ai-thumb" class="hidden w-full h-full object-contain" alt="IA"/>
+              </div>
+              <label class="flex items-center gap-1.5 justify-center cursor-pointer">
+                <input type="radio" name="wiz-img-src" value="ai" id="wiz-radio-ai" disabled class="accent-purple-500"/>
+                <span class="text-xs text-gray-600">Usar esta</span>
+              </label>
+            </div>
+          </div>
+          <!-- Prompt + generate -->
+          <div class="space-y-1.5">
+            <input id="wiz-img-prompt" type="text" placeholder="Prompt para imagen IA (editable)..."
+                   class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-300"/>
+            <button onclick="window._wizGenImage()" id="wiz-btn-gen-img"
+                    class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2">
+              ✨ Generar imagen con IA
+            </button>
+            <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 text-center"></div>
+          </div>
+        </div>
 
         <!-- Publish button -->
         <button onclick="window._wizPublish()" id="wiz-btn-publish"
@@ -565,6 +608,7 @@
   var _wiz = {
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
+    img_src: null, ai_image_url: null,
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
   };
@@ -574,6 +618,7 @@
     _wiz.price = gap.suggested_price_mxn || 0;
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
+    _wiz.img_src = null; _wiz.ai_image_url = null;
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
 
     document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);
@@ -824,11 +869,95 @@
       imgCont.innerHTML = '<img src="' + gap.image_url + '" class="w-full h-full object-contain" onerror="this.parentElement.innerHTML=\'<span class=text-gray-300 text-[9px]>IMG</span>\'">';
     }
 
+    // Setup image panel
+    var bmNone = document.getElementById('wiz-img-bm-none');
+    var bmThumb = document.getElementById('wiz-img-bm-thumb');
+    var radioAI = document.getElementById('wiz-radio-ai');
+    var radioBM = document.getElementById('wiz-radio-bm');
+    if (gap && gap.image_url) {
+      bmThumb.src = gap.image_url; bmThumb.classList.remove('hidden'); bmNone.classList.add('hidden');
+      radioBM.disabled = false;
+      if (!_wiz.img_src) { radioBM.checked = true; _wiz.img_src = 'bm'; }
+    } else {
+      bmThumb.classList.add('hidden'); bmNone.classList.remove('hidden');
+      radioBM.disabled = true;
+    }
+    // Restore AI state if already generated
+    var aiThumb = document.getElementById('wiz-img-ai-thumb');
+    var aiNone = document.getElementById('wiz-img-ai-none');
+    if (_wiz.ai_image_url) {
+      aiThumb.src = _wiz.ai_image_url; aiThumb.classList.remove('hidden'); aiNone.classList.add('hidden');
+      radioAI.disabled = false;
+    }
+    if (_wiz.img_src === 'ai') { radioAI.checked = true; }
+
+    // Pre-fill prompt
+    if (!document.getElementById('wiz-img-prompt').value && gap) {
+      var product = ((gap.brand || '') + ' ' + (gap.model || '')).trim() || (gap.product_title || '');
+      document.getElementById('wiz-img-prompt').value = 'Professional product photography of ' + product + '. Studio lighting, pure white background, sharp focus, 4K, retail ready.';
+    }
+
     var status = document.getElementById('wiz-pub-status');
     status.classList.add('hidden');
     var btn = document.getElementById('wiz-btn-publish');
     btn.disabled = false; btn.classList.remove('opacity-50');
   }
+
+  // ── Select image source
+  window._wizSelectImgSrc = function(src) {
+    _wiz.img_src = src;
+    var rBM = document.getElementById('wiz-radio-bm');
+    var rAI = document.getElementById('wiz-radio-ai');
+    if (src === 'bm' && !rBM.disabled) rBM.checked = true;
+    if (src === 'ai' && !rAI.disabled) rAI.checked = true;
+    // Highlight selected wrap
+    document.getElementById('wiz-img-bm-wrap').style.borderColor = src === 'bm' ? '#facc15' : '';
+    document.getElementById('wiz-img-ai-wrap').style.borderColor = src === 'ai' ? '#a855f7' : '';
+  };
+
+  // ── Generate image with FLUX
+  window._wizGenImage = function() {
+    var btn = document.getElementById('wiz-btn-gen-img');
+    var spinner = document.getElementById('wiz-img-ai-spin');
+    var aiThumb = document.getElementById('wiz-img-ai-thumb');
+    var aiNone = document.getElementById('wiz-img-ai-none');
+    var errEl = document.getElementById('wiz-img-gen-err');
+    var prompt = document.getElementById('wiz-img-prompt').value.trim();
+    if (!prompt) { errEl.textContent = 'Escribe un prompt primero.'; errEl.classList.remove('hidden'); return; }
+
+    errEl.classList.add('hidden');
+    btn.disabled = true; btn.textContent = 'Generando...';
+    aiThumb.classList.add('hidden'); aiNone.classList.add('hidden'); spinner.classList.remove('hidden');
+
+    var gap = _wiz.gap || {};
+    fetch('/api/lanzar/generate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        custom_prompt: prompt,
+        brand: gap.brand || '', model: gap.model || '',
+        title: gap.product_title || '', category: gap.category || '',
+      }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      spinner.classList.add('hidden');
+      btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
+      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); aiNone.classList.remove('hidden'); return; }
+      _wiz.ai_image_url = d.image_url;
+      aiThumb.src = d.image_url; aiThumb.classList.remove('hidden');
+      var radioAI = document.getElementById('wiz-radio-ai');
+      radioAI.disabled = false; radioAI.checked = true;
+      _wiz.img_src = 'ai';
+      document.getElementById('wiz-img-ai-wrap').style.borderColor = '#a855f7';
+      document.getElementById('wiz-img-bm-wrap').style.borderColor = '';
+    })
+    .catch(function(e) {
+      spinner.classList.add('hidden'); aiNone.classList.remove('hidden');
+      btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
+      errEl.textContent = '❌ Error: ' + e; errEl.classList.remove('hidden');
+    });
+  };
 
   // ── Publish
   window._wizPublish = function() {
@@ -838,8 +967,13 @@
     status.className = 'text-center text-xs py-1 text-gray-500';
     status.classList.remove('hidden');
 
+    // Sync img_src from radio buttons
+    var r = document.querySelector('input[name="wiz-img-src"]:checked');
+    if (r) _wiz.img_src = r.value;
+
     var gap = _wiz.gap;
-    var doImg = document.getElementById('wiz-cb-img').checked && gap && gap.image_url;
+    var imgSrc = _wiz.img_src;  // 'bm' | 'ai' | null
+    var imageUrlToUpload = imgSrc === 'ai' ? _wiz.ai_image_url : (imgSrc === 'bm' && gap ? gap.image_url : null);
 
     function _create(pictureId) {
       status.textContent = 'Creando publicación en Mercado Libre...';
@@ -885,12 +1019,12 @@
       });
     }
 
-    if (doImg) {
+    if (imageUrlToUpload) {
       status.textContent = 'Subiendo imagen a Mercado Libre...';
       fetch('/api/lanzar/upload-picture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: gap.image_url }),
+        body: JSON.stringify({ image_url: imageUrlToUpload }),
       })
       .then(function(r) { return r.json(); })
       .then(function(d) { _create(d.picture_id || null); })
