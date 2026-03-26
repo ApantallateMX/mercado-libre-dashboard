@@ -1021,7 +1021,10 @@ Imagen: {image_url if image_url else "no disponible"}
 
 Genera:
 
-## TÍTULO (max 60 caracteres, incluye marca, modelo, beneficio clave)
+## TÍTULO (max 60 caracteres)
+REGLAS: Incluye marca + tipo de producto + característica clave + tamaño/capacidad. NO incluyas el número de modelo (va en ficha técnica). Optimiza para búsqueda, no para SEO técnico.
+EJEMPLO BUENO: "Samsung Televisor QLED 4K Smart 65 Pulgadas"
+EJEMPLO MALO: "Samsung QN65Q60CDFXZA 65 QLED 4K Smart TV"
 [título aquí]
 
 ## DESCRIPCIÓN (3-4 párrafos, beneficios, especificaciones, garantía)
@@ -1087,7 +1090,7 @@ Stock disponible: {stock} unidades
 
 Retorna SOLO este JSON (sin markdown, sin texto extra):
 {{
-  "title": "(max 60 chars, incluye marca + modelo + beneficio clave)",
+  "title": "(max 60 chars — Marca + Tipo producto + Característica clave + Tamaño. SIN número de modelo. Ej: 'Samsung Televisor QLED 4K Smart 65 Pulgadas')",
   "description": "(texto plano, 3-4 párrafos: beneficios, specs, garantía)",
   "bullet_points": ["punto 1 conciso", "punto 2", "punto 3", "punto 4", "punto 5"],
   "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
@@ -1170,6 +1173,7 @@ async def bm_images_endpoint(sku: str):
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as http:
             logged_in = await _bm_login(http)
+            logger.info(f"bm-images [{sku}]: login={'ok' if logged_in else 'FAILED'}")
             if not logged_in:
                 return JSONResponse({"images": [], "error": "BM login failed"})
 
@@ -1179,16 +1183,19 @@ async def bm_images_endpoint(sku: str):
                 headers=_BM_AJAX,
                 timeout=20,
             )
+            logger.info(f"bm-images [{sku}]: photos status={r.status_code} body={r.text[:200]}")
             if r.status_code != 200:
-                return JSONResponse({"images": []})
+                return JSONResponse({"images": [], "error": f"BM status {r.status_code}"})
 
             data = r.json()
             raw = data.get("JSONSKUFiles") or "[]"
             try:
                 files = json.loads(raw) if isinstance(raw, str) else raw
-            except Exception:
+            except Exception as e:
+                logger.error(f"bm-images [{sku}]: JSON parse error: {e}, raw={raw[:100]}")
                 return JSONResponse({"images": []})
 
+            logger.info(f"bm-images [{sku}]: {len(files)} files found")
             images = []
             for f in files:
                 url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
@@ -1207,6 +1214,7 @@ async def bm_images_endpoint(sku: str):
                 if len(images) >= 12:
                     break
 
+            logger.info(f"bm-images [{sku}]: returning {len(images)} images")
             return {"images": images}
 
     except Exception as e:
