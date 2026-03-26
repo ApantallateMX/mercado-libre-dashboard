@@ -615,8 +615,72 @@ async def _run_gap_scan():
                     "last_scan":         now_iso,
                 })
 
+            total_gaps_before_verify = len(global_gaps_base)
+            logger.info(f"[Fase2] {total_gaps_before_verify} gap candidates antes de verificación seller_sku")
+
+            # ── FASE 2b: Verificación seller_sku — safety net definitivo ──────
+            # La Fase 1 puede fallar en extraer SKUs de items inactivos/cerrados
+            # porque el endpoint /items?ids= omite seller_custom_field para esos.
+            # Aquí hacemos la búsqueda INVERSA: para cada candidato a gap,
+            # buscamos ese SKU directamente en ML. Si ML lo tiene publicado en
+            # CUALQUIER estado en CUALQUIER cuenta → no es gap.
+            _verify_sem = asyncio.Semaphore(5)  # max 5 búsquedas concurrentes por cuenta
+
+            async def _sku_exists_in_account(sku: str, uid: str, cli) -> bool:
+                """True si el SKU existe en ML (cualquier estado) para esta cuenta."""
+                async with _verify_sem:
+                    try:
+                        # 3 búsquedas en paralelo: sin filtro (activos/pausados),
+                        # status=inactive, status=closed
+                        r0, r1, r2 = await asyncio.gather(
+                            cli.get(f"/users/{uid}/items/search",
+                                    params={"seller_sku": sku, "limit": 1}),
+                            cli.get(f"/users/{uid}/items/search",
+                                    params={"seller_sku": sku, "status": "inactive", "limit": 1}),
+                            cli.get(f"/users/{uid}/items/search",
+                                    params={"seller_sku": sku, "status": "closed", "limit": 1}),
+                            return_exceptions=True,
+                        )
+                        for r in (r0, r1, r2):
+                            if isinstance(r, dict) and r.get("results"):
+                                return True
+                        return False
+                    except Exception:
+                        return False
+
+            verified_not_gaps: set[str] = set()
+            gap_skus_list = [g["sku"] for g in global_gaps_base]
+
+            logger.info(
+                f"[Fase2b] Verificando {len(gap_skus_list)} candidates via seller_sku "
+                f"en {len(accounts)} cuentas..."
+            )
+            for _acct in accounts:
+                _uid = _acct["user_id"]
+                _nick = _acct.get("nickname") or _uid
+                _cli = await get_meli_client(user_id=_uid)
+                if not _cli:
+                    continue
+                try:
+                    _tasks = [_sku_exists_in_account(sku, _uid, _cli) for sku in gap_skus_list]
+                    _flags = await asyncio.gather(*_tasks, return_exceptions=True)
+                    for sku, flag in zip(gap_skus_list, _flags):
+                        if flag is True:
+                            verified_not_gaps.add(sku)
+                            logger.info(f"[Fase2b] {sku} encontrado en {_nick} via seller_sku — no es gap")
+                finally:
+                    await _cli.close()
+
+            if verified_not_gaps:
+                logger.info(
+                    f"[Fase2b] {len(verified_not_gaps)} SKUs removidos de gaps "
+                    f"(encontrados via seller_sku): {sorted(verified_not_gaps)[:20]}"
+                )
+                global_gaps_base = [g for g in global_gaps_base if g["sku"] not in verified_not_gaps]
+                global_meli_skus |= verified_not_gaps  # asegurar limpieza en Fase 2
+
             total_gaps = len(global_gaps_base)
-            logger.info(f"[Fase2] {total_gaps} gaps globales (no publicados en ninguna cuenta)")
+            logger.info(f"[Fase2] {total_gaps} gaps reales confirmados (de {total_gaps_before_verify} candidates)")
 
             # Guardar los mismos gaps para cada cuenta (el lanzamiento va a la cuenta activa)
             # + datos per-cuenta: reactivaciones, precios, calidad, competencia
