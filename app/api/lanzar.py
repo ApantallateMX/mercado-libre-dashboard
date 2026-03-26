@@ -1161,11 +1161,11 @@ async def category_attrs_endpoint(category_id: str):
 
 @router.get("/bm-images/{sku}")
 async def bm_images_endpoint(sku: str):
-    """Fetch product images from BinManager for a given SKU.
-    Returns list of image URLs (up to 12, ML limit).
+    """Fetch product images from BinManager via GlobalStock_GetPhotoBySKU.
+    Returns list of {url, type_name} dicts (images only, up to 12 for ML).
     """
-    _BM_IMAGES_URL = f"{_BM_BASE}/Movements/Movement/GetImagesBySkuSQL"
-    _NOTFOUND_PLACEHOLDER = "notfound/NothingImg"
+    _BM_PHOTOS_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/GlobalStock_GetPhotoBySKU"
+    _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as http:
@@ -1174,8 +1174,8 @@ async def bm_images_endpoint(sku: str):
                 return JSONResponse({"images": [], "error": "BM login failed"})
 
             r = await http.post(
-                _BM_IMAGES_URL,
-                json={"SKU": sku.upper(), "COMPANYASSIGNEMNT": 1},
+                _BM_PHOTOS_URL,
+                json={"COMPANYID": _BM_COMPANY, "SKU": sku.upper()},
                 headers=_BM_AJAX,
                 timeout=20,
             )
@@ -1183,20 +1183,28 @@ async def bm_images_endpoint(sku: str):
                 return JSONResponse({"images": []})
 
             data = r.json()
-            if not data or not isinstance(data, list):
-                return JSONResponse({"images": []})
-
-            raw_images_str = data[0].get("Images", "[]") or "[]"
+            raw = data.get("JSONSKUFiles") or "[]"
             try:
-                img_list = json.loads(raw_images_str)
+                files = json.loads(raw) if isinstance(raw, str) else raw
             except Exception:
                 return JSONResponse({"images": []})
 
-            urls = [
-                item["ImageName"] for item in img_list
-                if item.get("ImageName") and _NOTFOUND_PLACEHOLDER not in item["ImageName"]
-            ]
-            return {"images": urls[:12]}  # ML max 12 images
+            images = []
+            for f in files:
+                url = (f.get("URL") or f.get("ImageName") or "").strip()
+                if not url:
+                    continue
+                url_lower = url.lower()
+                if not any(url_lower.endswith(ext) for ext in _IMAGE_EXTENSIONS):
+                    continue  # skip PDFs and other non-image files
+                images.append({
+                    "url": url,
+                    "type_name": f.get("TypeName") or f.get("type_name") or "",
+                })
+                if len(images) >= 12:
+                    break
+
+            return {"images": images}
 
     except Exception as e:
         logger.error(f"bm-images error for {sku}: {e}")

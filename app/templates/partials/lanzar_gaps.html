@@ -936,9 +936,11 @@
         return;
       }
 
-      imgs.forEach(function(url, idx) {
+      imgs.forEach(function(item, idx) {
+        var url = item.url || item;
+        var label = item.type_name || '';
         var wrapper = document.createElement('div');
-        wrapper.className = 'relative aspect-square rounded-lg overflow-hidden border-2 border-transparent cursor-pointer transition hover:border-yellow-400 bg-gray-100';
+        wrapper.className = 'relative rounded-lg overflow-hidden border-2 border-transparent cursor-pointer transition hover:border-yellow-400 bg-gray-100';
         wrapper.dataset.url = url;
 
         // First image selected by default
@@ -949,7 +951,17 @@
         if (isSelected) wrapper.style.borderColor = '#facc15';
 
         var img = document.createElement('img');
-        img.src = url; img.alt = ''; img.className = 'w-full h-full object-contain';
+        img.src = url; img.alt = label; img.className = 'w-full aspect-square object-contain';
+
+        // Label
+        if (label) {
+          var lbl = document.createElement('div');
+          lbl.className = 'text-[9px] text-center text-gray-500 py-0.5 truncate px-1 bg-white';
+          lbl.textContent = label;
+          wrapper.appendChild(img); wrapper.appendChild(lbl);
+        } else {
+          wrapper.appendChild(img);
+        }
 
         // Order badge
         var badge = document.createElement('div');
@@ -962,7 +974,7 @@
         check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
         check.innerHTML = '<svg class="w-2.5 h-2.5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';
 
-        wrapper.appendChild(img); wrapper.appendChild(badge); wrapper.appendChild(check);
+        wrapper.appendChild(badge); wrapper.appendChild(check);
         wrapper.addEventListener('click', function() { _wizToggleBMImage(this, url); });
         grid.appendChild(wrapper);
       });
@@ -993,7 +1005,9 @@
       var idx = _wiz.selected_images.indexOf(url);
       var isSelected = idx >= 0;
       wrapper.style.borderColor = isSelected ? '#facc15' : '';
-      var badge = wrapper.children[1], check = wrapper.children[2];
+      // badge and check are always the last two absolute-positioned children
+      var badge = wrapper.querySelector('div.absolute.top-0\\.5.left-0\\.5');
+      var check = wrapper.querySelector('div.absolute.top-0\\.5.right-0\\.5');
       if (badge) { badge.textContent = isSelected ? (idx + 1) : ''; badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ' + (isSelected ? 'bg-yellow-400 text-gray-800' : 'bg-gray-300 text-white'); }
       if (check) check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
     });
