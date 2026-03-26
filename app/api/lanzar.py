@@ -1215,7 +1215,7 @@ async def bm_images_endpoint(sku: str):
                     break
 
             logger.info(f"bm-images [{sku}]: returning {len(images)} images")
-            return {"images": images}
+            return {"images": images, "_debug": {"login": logged_in, "status": r.status_code, "files_raw": len(files), "files_returned": len(images), "raw_sample": str(raw)[:300]}}
 
     except Exception as e:
         logger.error(f"bm-images error for {sku}: {e}")
