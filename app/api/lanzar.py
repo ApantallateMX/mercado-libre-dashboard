@@ -545,9 +545,22 @@ async def _run_gap_scan():
 
                 logger.info(f"  {nickname}: {len(gaps)} gaps encontrados")
                 total_gaps += len(gaps)
+                current_bm_skus = set(bm_map.keys())
 
                 # Upsert gaps into DB (preserve status if already exists)
                 async with aiosqlite.connect(DATABASE_PATH) as db:
+                    # ── Purge stale gaps ────────────────────────────────────────
+                    # Remove unlaunched entries whose SKU is no longer in BM with
+                    # stock (sold out) OR that are now published in ML.
+                    # Ignored entries are kept regardless.
+                    await db.execute(
+                        """DELETE FROM bm_sku_gaps
+                           WHERE user_id=? AND status='unlaunched'
+                           AND sku NOT IN ({})""".format(
+                            ",".join("?" * len(current_bm_skus)) if current_bm_skus else "''"
+                        ),
+                        [user_id] + list(current_bm_skus)
+                    )
                     for g in gaps:
                         await db.execute("""
                             INSERT INTO bm_sku_gaps
