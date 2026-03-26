@@ -176,6 +176,22 @@ async def init_db():
             )
         """)
         await db.execute("INSERT OR IGNORE INTO bm_gap_scan_status (id, status) VALUES (1, 'idle')")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_reactivations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                nickname TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                product_title TEXT NOT NULL DEFAULT '',
+                stock_bm INTEGER NOT NULL DEFAULT 0,
+                retail_price_usd REAL NOT NULL DEFAULT 0,
+                suggested_price_mxn REAL NOT NULL DEFAULT 0,
+                ml_status TEXT NOT NULL DEFAULT 'inactive',
+                last_scan TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, item_id)
+            )
+        """)
         # Migrations — add columns if not present (SQLite doesn't support IF NOT EXISTS on columns)
         for col, definition in [("upc", "TEXT NOT NULL DEFAULT ''"), ("size", "TEXT NOT NULL DEFAULT ''")]:
             try:

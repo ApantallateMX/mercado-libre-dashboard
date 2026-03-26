@@ -232,12 +232,13 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
         return {"mty": 0, "cdmx": 0, "avail": 0}
 
 
-async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
-    """Return set of base SKUs published in a MeLi account (active + paused).
-    Uses item_sku_cache to skip re-fetching already-known items.
+async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict[str, list[str]]]:
+    """Return (all_sku_set, inactive_sku_to_item_ids).
 
-    KNOWN LIMITATION: ML items/search caps at ~1000 items via offset pagination.
-    For accounts with many items some may be missed — use scan logs to detect.
+    all_sku_set: base SKUs published in ML (any status — active, paused, inactive, etc.)
+    inactive_sku_to_item_ids: base_sku → [item_id, ...] for items currently inactive/paused.
+      These are candidates for reactivation when BM has stock.
+    Uses item_sku_cache to skip re-fetching already-known items.
     """
     import re as _re
 
@@ -317,17 +318,23 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
 
         seen_ids: set[str] = set()
         item_ids: list[str] = []
+        # Track which item IDs came from inactive/paused status (reactivation candidates)
+        _REACTIVATABLE_STATUSES = {"inactive", "paused"}
+        reactivatable_ids: set[str] = set()
+
         for _status in _ML_STATUSES:
             batch_ids = await _fetch_ids_for_status(_status)
             for iid in batch_ids:
                 if iid not in seen_ids:
                     seen_ids.add(iid)
                     item_ids.append(iid)
+                if _status in _REACTIVATABLE_STATUSES:
+                    reactivatable_ids.add(iid)
             logger.info(f"{nickname}: status={_status} → {len(batch_ids)} items")
 
-        logger.info(f"{nickname}: {len(item_ids)} item IDs total across all statuses")
+        logger.info(f"{nickname}: {len(item_ids)} item IDs total across all statuses, {len(reactivatable_ids)} reactivatable")
         if not item_ids:
-            return set()
+            return set(), {}
 
         # ── Step 2: Check cache ───────────────────────────────────────────────
         from app.services.token_store import get_cached_skus, save_skus_cache
@@ -342,13 +349,13 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
         # when attribute filtering is active, causing false "sin publicar" gaps.
         new_entries: list[dict] = []
         sku_set = set(cached_skus)
+        # Map: base_sku → list of item_ids that are reactivatable (inactive/paused)
+        inactive_sku_to_items: dict[str, list[str]] = {}
 
         for i in range(0, len(needs_fetch), 20):
             batch = needs_fetch[i:i + 20]
             try:
-                # Embed IDs directly in URL to avoid httpx percent-encoding commas
                 details = await client.get(f"/items?ids={','.join(batch)}")
-
                 items_list = details if isinstance(details, list) else []
                 batch_found = 0
                 for entry in items_list:
@@ -357,18 +364,22 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
                     body = entry.get("body") or {}
                     if not isinstance(body, dict):
                         continue
-                    iid  = str(body.get("id", ""))
-                    skus = _skus_from_body(body)
+                    iid   = str(body.get("id", ""))
+                    skus  = _skus_from_body(body)
+                    title = body.get("title", "")
                     for raw_sku in skus:
                         base = _base(raw_sku)
                         sku_set.add(base)
                         if iid:
                             new_entries.append({"item_id": iid, "user_id": user_id, "sku": raw_sku})
+                            if iid in reactivatable_ids:
+                                inactive_sku_to_items.setdefault(base, [])
+                                if iid not in inactive_sku_to_items[base]:
+                                    inactive_sku_to_items[base].append(iid)
                     if skus:
                         batch_found += 1
 
                 if batch_found == 0 and items_list:
-                    # Whole batch had no SKUs — log first item for debugging
                     sample = items_list[0].get("body", {}) if items_list else {}
                     logger.warning(
                         f"{nickname}: batch {i//20} — {len(items_list)} items, 0 with SKU. "
@@ -377,7 +388,15 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
             except Exception as e:
                 logger.warning(f"{nickname}: batch {i//20} fetch error: {e}")
 
-        logger.info(f"{nickname}: {len(sku_set)} unique base SKUs detected in ML")
+        # Also map cached items that are reactivatable
+        for iid, raw_sku in cached.items():
+            if iid in reactivatable_ids and raw_sku:
+                base = _base(raw_sku)
+                inactive_sku_to_items.setdefault(base, [])
+                if iid not in inactive_sku_to_items[base]:
+                    inactive_sku_to_items[base].append(iid)
+
+        logger.info(f"{nickname}: {len(sku_set)} unique base SKUs, {len(inactive_sku_to_items)} reactivatable SKUs")
 
         # ── Step 4: Persist new mappings to cache ─────────────────────────────
         if new_entries:
@@ -386,7 +405,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> set[str]:
             except Exception:
                 pass
 
-        return sku_set
+        return sku_set, inactive_sku_to_items
     finally:
         await client.close()
 
@@ -489,8 +508,8 @@ async def _run_gap_scan():
                 nickname = account.get("nickname") or user_id
 
                 logger.info(f"Checking gaps for {nickname} ({user_id})...")
-                meli_skus = await _get_meli_sku_set(user_id, nickname)
-                logger.info(f"  {nickname}: {len(meli_skus)} SKUs activos en MeLi")
+                meli_skus, inactive_sku_map = await _get_meli_sku_set(user_id, nickname)
+                logger.info(f"  {nickname}: {len(meli_skus)} SKUs en MeLi, {len(inactive_sku_map)} reactivables")
 
                 gaps = []
                 for base_sku, prod in bm_map.items():
@@ -571,6 +590,32 @@ async def _run_gap_scan():
                                AND sku IN ({})""".format(",".join("?" * len(meli_skus))),
                             [user_id] + list(meli_skus)
                         )
+
+                    # ── Reactivation candidates ────────────────────────────────
+                    # SKUs with BM stock that have an inactive/paused ML listing
+                    reactivation_count = 0
+                    # Clear old reactivation rows for this user first
+                    await db.execute("DELETE FROM bm_reactivations WHERE user_id=?", (user_id,))
+                    for base_sku, item_ids_list in inactive_sku_map.items():
+                        prod = bm_map.get(base_sku)
+                        if not prod:
+                            continue  # not in BM or no stock
+                        stock = _bm_qty(prod)
+                        if stock <= 0:
+                            continue  # has listing but no BM stock — skip
+                        retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
+                        suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
+                        title = prod.get("Title", "") or ""
+                        for iid in item_ids_list:
+                            await db.execute("""
+                                INSERT OR REPLACE INTO bm_reactivations
+                                    (user_id, nickname, sku, item_id, product_title,
+                                     stock_bm, retail_price_usd, suggested_price_mxn, last_scan)
+                                VALUES (?,?,?,?,?,?,?,?,?)
+                            """, (user_id, nickname, base_sku, iid, title,
+                                  stock, retail, suggested, now_iso))
+                            reactivation_count += 1
+                    logger.info(f"  {nickname}: {reactivation_count} candidatos de reactivacion guardados")
                     await db.commit()
 
             # Update scan status
@@ -829,6 +874,77 @@ async def get_scan_status():
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
     return dict(row) if row else {"status": "idle"}
+
+
+@router.get("/reactivations")
+async def get_reactivations(request: Request):
+    """Lista SKUs con stock en BM cuyo listing en ML está inactivo/pausado."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM bm_reactivations WHERE user_id=? ORDER BY stock_bm DESC",
+            (user_id,)
+        )
+        rows = await cur.fetchall()
+    return {"items": [dict(r) for r in rows], "total": len(rows)}
+
+
+@router.post("/reactivate")
+async def reactivate_listing(request: Request):
+    """Reactiva un listing inactivo/pausado en ML actualizando stock."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body      = await request.json()
+    item_id   = body.get("item_id", "")
+    stock_bm  = int(body.get("stock_bm", 1))
+    price     = body.get("price")   # optional override
+
+    if not item_id:
+        return JSONResponse({"error": "item_id required"}, status_code=400)
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        # Fetch current item to know its status
+        item = await client.get(f"/items/{item_id}")
+        current_status = item.get("status", "")
+
+        update_payload: dict = {"available_quantity": stock_bm}
+        if price:
+            update_payload["price"] = float(price)
+        # For paused items we need to explicitly set active
+        if current_status == "paused":
+            update_payload["status"] = "active"
+
+        result = await client.put(f"/items/{item_id}", json=update_payload)
+        err = result.get("error") or result.get("message")
+        if err and result.get("status") not in (None, 200):
+            return JSONResponse({"error": err}, status_code=400)
+
+        # Remove from reactivations table
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute(
+                "DELETE FROM bm_reactivations WHERE user_id=? AND item_id=?",
+                (user_id, item_id)
+            )
+            await db.commit()
+
+        permalink = item.get("permalink", "")
+        return {"ok": True, "item_id": item_id, "new_status": "active", "permalink": permalink}
+    except Exception as e:
+        logger.error(f"reactivate error {item_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
 
 
 @router.get("/debug-scan")

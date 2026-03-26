@@ -37,14 +37,38 @@
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-yellow-400 text-yellow-700 mr-2">
       Sin publicar
     </button>
+    <button id="tab-reactivar" onclick="window._showReactivations()"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-green-600 hover:text-green-700 mr-2 flex items-center gap-1">
+      ⚡ Reactivar
+      <span id="reactivar-badge" class="hidden bg-green-100 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
     <button id="tab-ignored" onclick="window._gapsSetStatus('ignored')"
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2">
       Ignorados
     </button>
   </div>
 
+  <!-- ── Reactivations panel ────────────────────────────────────────────────── -->
+  <div id="reactivations-panel" class="hidden">
+    <div class="px-4 py-2.5 bg-green-50 border-b border-green-100 text-xs text-green-700 flex items-center gap-2">
+      ⚡ <strong>Publicaciones con stock en BM que están inactivas/pausadas en MeLi.</strong>
+      Reactivarlas conserva historial de ventas, reseñas y posicionamiento.
+    </div>
+    <div id="react-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
+      <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      Cargando...
+    </div>
+    <div id="react-empty" class="hidden px-4 py-8 text-center text-xs text-gray-400">
+      ✅ No hay publicaciones inactivas con stock disponible. ¡Todo en orden!
+    </div>
+    <div id="react-list" class="divide-y divide-gray-100"></div>
+  </div>
+
   <!-- ── Filters & controls ────────────────────────────────────────────────── -->
-  <div class="px-4 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-white">
+  <div id="gaps-filters-row" class="gaps-filters-row px-4 py-3 border-b border-gray-100 flex flex-wrap gap-2 items-center bg-white">
     <input id="gaps-search" type="text" placeholder="Buscar SKU o producto..."
            class="text-xs border border-gray-200 rounded-lg px-3 py-1.5 w-44 focus:outline-none focus:border-yellow-400"
            oninput="window._gapsDebounce()"/>
@@ -1339,10 +1363,133 @@
     } // end _uploadAndCreate
   };
 
+  // ── Reactivations tab
+  var _gapsPanel = document.getElementById('gaps-list').parentElement;
+
+  function _hideAllPanels() {
+    document.getElementById('reactivations-panel').classList.add('hidden');
+    // Show gaps-related elements
+    var gapsEls = ['gaps-stats', 'gaps-filters-row', 'gaps-list', 'gaps-pagination'];
+    gapsEls.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.classList.remove('hidden-by-react');
+    });
+  }
+
+  window._showReactivations = function() {
+    // Switch active tab style
+    document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
+      t.classList.remove('border-yellow-400', 'text-yellow-700', 'border-green-500', 'text-green-700');
+      t.classList.add('border-transparent', 'text-gray-400');
+    });
+    var tab = document.getElementById('tab-reactivar');
+    tab.classList.remove('border-transparent', 'text-gray-400');
+    tab.classList.add('border-green-500', 'text-green-700');
+
+    // Hide gaps table, show reactivations panel
+    var panel = document.getElementById('reactivations-panel');
+    panel.classList.remove('hidden');
+    // Hide filters, gaps list, pagination
+    ['gaps-stats', 'gaps-list', 'gaps-pagination'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = 'none';
+
+    _loadReactivations();
+  };
+
+  // When switching back to gaps tabs, restore visibility
+  var _origSetStatus = window._gapsSetStatus;
+  window._gapsSetStatus = function(status) {
+    document.getElementById('reactivations-panel').classList.add('hidden');
+    ['gaps-stats', 'gaps-list', 'gaps-pagination'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = '';
+    });
+    var filtersRow = document.querySelector('.gaps-filters-row');
+    if (filtersRow) filtersRow.style.display = '';
+    _origSetStatus(status);
+  };
+
+  function _loadReactivations() {
+    var loading = document.getElementById('react-loading');
+    var empty   = document.getElementById('react-empty');
+    var list    = document.getElementById('react-list');
+    loading.classList.remove('hidden');
+    empty.classList.add('hidden');
+    list.innerHTML = '';
+
+    fetch('/api/lanzar/reactivations')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loading.classList.add('hidden');
+      var items = d.items || [];
+      // Update badge
+      var badge = document.getElementById('reactivar-badge');
+      if (items.length) { badge.textContent = items.length; badge.classList.remove('hidden'); }
+      else { badge.classList.add('hidden'); }
+
+      if (!items.length) { empty.classList.remove('hidden'); return; }
+
+      items.forEach(function(item) {
+        var row = document.createElement('div');
+        row.className = 'flex items-center gap-3 px-4 py-3 hover:bg-green-50 transition';
+        row.innerHTML =
+          '<div class="flex-1 min-w-0">' +
+            '<div class="text-xs font-semibold text-gray-800 truncate">' + (item.product_title || item.sku) + '</div>' +
+            '<div class="text-[10px] text-gray-400 mt-0.5">SKU: ' + item.sku + ' · Item: <a href="https://articulo.mercadolibre.com.mx/-" target="_blank" class="text-blue-500 hover:underline" onclick="window.open(\'https://www.mercadolibre.com.mx/\', \'_blank\'); return false">' + item.item_id + '</a></div>' +
+          '</div>' +
+          '<div class="text-[10px] text-gray-500 text-right shrink-0">' +
+            '<div class="font-semibold text-green-700">Stock BM: ' + item.stock_bm + ' uds</div>' +
+            (item.retail_price_usd > 0 ? '<div>USD $' + item.retail_price_usd.toFixed(0) + '</div>' : '') +
+            (item.suggested_price_mxn > 0 ? '<div class="text-gray-400">Sug. $' + Math.round(item.suggested_price_mxn).toLocaleString() + ' MXN</div>' : '') +
+          '</div>' +
+          '<button onclick="window._reactivate(\'' + item.item_id + '\',' + item.stock_bm + ',this)"' +
+            ' class="shrink-0 bg-green-500 hover:bg-green-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">' +
+            '⚡ Reactivar' +
+          '</button>';
+        list.appendChild(row);
+      });
+    })
+    .catch(function(e) {
+      loading.classList.add('hidden');
+      empty.textContent = '❌ Error: ' + e.message;
+      empty.classList.remove('hidden');
+    });
+  }
+
+  window._reactivate = function(itemId, stockBm, btn) {
+    btn.disabled = true; btn.textContent = 'Reactivando...';
+    fetch('/api/lanzar/reactivate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId, stock_bm: stockBm }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { btn.textContent = '❌ ' + d.error; btn.disabled = false; return; }
+      var row = btn.closest('div.flex');
+      row.innerHTML = '<div class="text-xs text-green-600 font-semibold py-1">✅ Reactivado — ' + itemId + '</div>';
+      // Reload reactivations count
+      _loadReactivations();
+    })
+    .catch(function(e) { btn.textContent = '❌ Error'; btn.disabled = false; });
+  };
+
   // ── Init
   fetch('/api/lanzar/scan-status')
     .then(function(r) { return r.json(); })
     .then(function(s) { if (s.status === 'running') _startScanPolling(); });
+
+  // Load initial reactivations count for badge
+  fetch('/api/lanzar/reactivations')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var badge = document.getElementById('reactivar-badge');
+      if (d.total > 0) { badge.textContent = d.total; badge.classList.remove('hidden'); }
+    }).catch(function() {});
 
   _loadFilters();
   _loadGaps();
