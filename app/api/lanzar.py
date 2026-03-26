@@ -6,6 +6,7 @@ Identifica SKUs con stock disponible que no están publicados en cada cuenta,
 y presenta los gaps con pricing, datos del producto e IA para generar listings.
 """
 import asyncio
+import json
 import logging
 import traceback
 from datetime import datetime, timezone
@@ -1216,8 +1217,7 @@ async def bm_images_endpoint(sku: str):
                 if len(images) >= 12:
                     break
 
-            dbg["images_returned"] = len(images)
-            return {"images": images, "_debug": dbg}
+            return {"images": images}
 
     except Exception as e:
         dbg["exception"] = str(e)
