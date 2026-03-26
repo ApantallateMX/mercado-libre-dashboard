@@ -192,6 +192,21 @@ async def init_db():
                 UNIQUE(user_id, item_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_price_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                nickname TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                product_title TEXT NOT NULL DEFAULT '',
+                ml_price REAL NOT NULL DEFAULT 0,
+                bm_suggested_mxn REAL NOT NULL DEFAULT 0,
+                diff_pct REAL NOT NULL DEFAULT 0,
+                last_scan TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, item_id)
+            )
+        """)
         # Migrations — add columns if not present (SQLite doesn't support IF NOT EXISTS on columns)
         for col, definition in [("upc", "TEXT NOT NULL DEFAULT ''"), ("size", "TEXT NOT NULL DEFAULT ''")]:
             try:

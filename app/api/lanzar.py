@@ -232,12 +232,13 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
         return {"mty": 0, "cdmx": 0, "avail": 0}
 
 
-async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict[str, list[str]]]:
-    """Return (all_sku_set, inactive_sku_to_item_ids).
+async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict[str, list[str]], dict[str, list[dict]]]:
+    """Return (all_sku_set, inactive_sku_to_item_ids, active_prices_map).
 
     all_sku_set: base SKUs published in ML (any status — active, paused, inactive, etc.)
     inactive_sku_to_item_ids: base_sku → [item_id, ...] for items currently inactive/paused.
       These are candidates for reactivation when BM has stock.
+    active_prices_map: base_sku → [{item_id, price, title}, ...] for active items.
     Uses item_sku_cache to skip re-fetching already-known items.
     """
     import re as _re
@@ -280,7 +281,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
 
     client = await get_meli_client(user_id=user_id)
     if not client:
-        return set()
+        return set(), {}, {}
 
     try:
         # ── Step 1: Collect all item IDs ──────────────────────────────────────
@@ -321,6 +322,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         # Track which item IDs came from inactive/paused status (reactivation candidates)
         _REACTIVATABLE_STATUSES = {"inactive", "paused"}
         reactivatable_ids: set[str] = set()
+        active_ids: set[str] = set()
 
         for _status in _ML_STATUSES:
             batch_ids = await _fetch_ids_for_status(_status)
@@ -330,11 +332,13 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                     item_ids.append(iid)
                 if _status in _REACTIVATABLE_STATUSES:
                     reactivatable_ids.add(iid)
+                if _status == "active":
+                    active_ids.add(iid)
             logger.info(f"{nickname}: status={_status} → {len(batch_ids)} items")
 
         logger.info(f"{nickname}: {len(item_ids)} item IDs total across all statuses, {len(reactivatable_ids)} reactivatable")
         if not item_ids:
-            return set(), {}
+            return set(), {}, {}
 
         # ── Step 2: Check cache ───────────────────────────────────────────────
         from app.services.token_store import get_cached_skus, save_skus_cache
@@ -351,6 +355,8 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         sku_set = set(cached_skus)
         # Map: base_sku → list of item_ids that are reactivatable (inactive/paused)
         inactive_sku_to_items: dict[str, list[str]] = {}
+        # Map: base_sku → list of {item_id, price, title} for active items
+        active_prices_map: dict[str, list[dict]] = {}
 
         for i in range(0, len(needs_fetch), 20):
             batch = needs_fetch[i:i + 20]
@@ -376,6 +382,12 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                                 inactive_sku_to_items.setdefault(base, [])
                                 if iid not in inactive_sku_to_items[base]:
                                     inactive_sku_to_items[base].append(iid)
+                            if iid in active_ids:
+                                price = float(body.get("price") or 0)
+                                if price > 0:
+                                    active_prices_map.setdefault(base, [])
+                                    if not any(e["item_id"] == iid for e in active_prices_map[base]):
+                                        active_prices_map[base].append({"item_id": iid, "price": price, "title": title})
                     if skus:
                         batch_found += 1
 
@@ -396,7 +408,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                 if iid not in inactive_sku_to_items[base]:
                     inactive_sku_to_items[base].append(iid)
 
-        logger.info(f"{nickname}: {len(sku_set)} unique base SKUs, {len(inactive_sku_to_items)} reactivatable SKUs")
+        logger.info(f"{nickname}: {len(sku_set)} unique base SKUs, {len(inactive_sku_to_items)} reactivatable SKUs, {len(active_prices_map)} SKUs with active prices")
 
         # ── Step 4: Persist new mappings to cache ─────────────────────────────
         if new_entries:
@@ -405,7 +417,7 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
             except Exception:
                 pass
 
-        return sku_set, inactive_sku_to_items
+        return sku_set, inactive_sku_to_items, active_prices_map
     finally:
         await client.close()
 
@@ -508,7 +520,7 @@ async def _run_gap_scan():
                 nickname = account.get("nickname") or user_id
 
                 logger.info(f"Checking gaps for {nickname} ({user_id})...")
-                meli_skus, inactive_sku_map = await _get_meli_sku_set(user_id, nickname)
+                meli_skus, inactive_sku_map, active_prices_map = await _get_meli_sku_set(user_id, nickname)
                 logger.info(f"  {nickname}: {len(meli_skus)} SKUs en MeLi, {len(inactive_sku_map)} reactivables")
 
                 gaps = []
@@ -629,6 +641,40 @@ async def _run_gap_scan():
                                   stock, retail, suggested, now_iso))
                             reactivation_count += 1
                     logger.info(f"  {nickname}: {reactivation_count} candidatos de reactivacion guardados")
+                    await db.commit()
+
+                    # ── Price alerts ────────────────────────────────────────
+                    # Find active ML listings where price differs >10% from BM suggested
+                    PRICE_DRIFT_THRESHOLD = 0.10  # 10%
+                    price_alert_count = 0
+                    await db.execute("DELETE FROM ml_price_alerts WHERE user_id=?", (user_id,))
+                    for base_sku, item_list in active_prices_map.items():
+                        prod = bm_map.get(base_sku)
+                        if not prod:
+                            continue
+                        retail = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
+                        if retail <= 0:
+                            continue
+                        suggested = round(retail * fx * 1.3, 0)
+                        if suggested <= 0:
+                            continue
+                        for item_info in item_list:
+                            ml_price = item_info["price"]
+                            if ml_price <= 0:
+                                continue
+                            diff_pct = (ml_price - suggested) / suggested  # positive = ML too high, negative = ML too low
+                            if abs(diff_pct) < PRICE_DRIFT_THRESHOLD:
+                                continue  # within acceptable range
+                            title = item_info.get("title", "") or prod.get("Title", "")
+                            await db.execute("""
+                                INSERT OR REPLACE INTO ml_price_alerts
+                                    (user_id, nickname, sku, item_id, product_title,
+                                     ml_price, bm_suggested_mxn, diff_pct, last_scan)
+                                VALUES (?,?,?,?,?,?,?,?,?)
+                            """, (user_id, nickname, base_sku, item_info["item_id"], title,
+                                  ml_price, suggested, round(diff_pct * 100, 1), now_iso))
+                            price_alert_count += 1
+                    logger.info(f"  {nickname}: {price_alert_count} alertas de precio guardadas")
                     await db.commit()
 
             # Update scan status
@@ -955,6 +1001,63 @@ async def reactivate_listing(request: Request):
         return {"ok": True, "item_id": item_id, "new_status": "active", "permalink": permalink}
     except Exception as e:
         logger.error(f"reactivate error {item_id}: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.get("/price-alerts")
+async def get_price_alerts(request: Request):
+    """Lista items con precio en ML que difiere >10% del precio sugerido por BM."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM ml_price_alerts WHERE user_id=? ORDER BY ABS(diff_pct) DESC",
+            (user_id,)
+        )
+        rows = await cur.fetchall()
+    return {"items": [dict(r) for r in rows], "total": len(rows)}
+
+
+@router.post("/sync-price")
+async def sync_price(request: Request):
+    """Actualiza el precio de un item en ML al precio sugerido por BM."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body    = await request.json()
+    item_id = body.get("item_id", "")
+    price   = body.get("price")
+
+    if not item_id or not price:
+        return JSONResponse({"error": "item_id and price required"}, status_code=400)
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        result = await client.put(f"/items/{item_id}", json={"price": float(price)})
+        err = result.get("error") or result.get("message")
+        if err and result.get("status") not in (None, 200):
+            return JSONResponse({"error": err}, status_code=400)
+
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute(
+                "DELETE FROM ml_price_alerts WHERE user_id=? AND item_id=?",
+                (user_id, item_id)
+            )
+            await db.commit()
+
+        return {"ok": True, "item_id": item_id, "new_price": float(price)}
+    except Exception as e:
+        logger.error(f"sync-price error {item_id}: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()

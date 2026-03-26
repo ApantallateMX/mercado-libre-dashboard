@@ -42,6 +42,11 @@
       ⚡ Reactivar
       <span id="reactivar-badge" class="hidden bg-green-100 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
     </button>
+    <button id="tab-precios" onclick="window._showPriceAlerts()"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-orange-600 hover:text-orange-700 mr-2 flex items-center gap-1">
+      💰 Precios
+      <span id="precios-badge" class="hidden bg-orange-100 text-orange-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
     <button id="tab-ignored" onclick="window._gapsSetStatus('ignored')"
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2">
       Ignorados
@@ -50,9 +55,22 @@
 
   <!-- ── Reactivations panel ────────────────────────────────────────────────── -->
   <div id="reactivations-panel" class="hidden">
-    <div class="px-4 py-2.5 bg-green-50 border-b border-green-100 text-xs text-green-700 flex items-center gap-2">
-      ⚡ <strong>Publicaciones con stock en BM que están inactivas/pausadas en MeLi.</strong>
-      Reactivarlas conserva historial de ventas, reseñas y posicionamiento.
+    <div class="px-4 py-2.5 bg-green-50 border-b border-green-100 text-xs text-green-700 flex items-center justify-between gap-2">
+      <span>⚡ <strong>Publicaciones con stock en BM que están inactivas/pausadas en MeLi.</strong>
+      Reactivarlas conserva historial de ventas, reseñas y posicionamiento.</span>
+      <button id="btn-react-all" onclick="window._reactivateAll()"
+              class="shrink-0 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+        ⚡ Reactivar todos
+      </button>
+    </div>
+    <div id="react-progress" class="hidden px-4 py-2 bg-green-100 border-b border-green-200">
+      <div class="flex items-center justify-between text-xs text-green-700 mb-1">
+        <span id="react-progress-text">Reactivando...</span>
+        <span id="react-progress-count"></span>
+      </div>
+      <div class="w-full bg-green-200 rounded-full h-1.5">
+        <div id="react-progress-bar" class="bg-green-600 h-1.5 rounded-full transition-all" style="width:0%"></div>
+      </div>
     </div>
     <div id="react-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
       <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
@@ -65,6 +83,37 @@
       ✅ No hay publicaciones inactivas con stock disponible. ¡Todo en orden!
     </div>
     <div id="react-list" class="divide-y divide-gray-100"></div>
+  </div>
+
+  <!-- ── Price alerts panel ─────────────────────────────────────────────────── -->
+  <div id="price-alerts-panel" class="hidden">
+    <div class="px-4 py-2.5 bg-orange-50 border-b border-orange-100 text-xs text-orange-700 flex items-center justify-between gap-2">
+      <span>💰 <strong>Listings activos cuyo precio en MeLi difiere más de 10% del precio sugerido por BinManager.</strong></span>
+      <button id="btn-sync-all" onclick="window._syncAllPrices()"
+              class="shrink-0 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">
+        💰 Sincronizar todos
+      </button>
+    </div>
+    <div id="price-sync-progress" class="hidden px-4 py-2 bg-orange-100 border-b border-orange-200">
+      <div class="flex items-center justify-between text-xs text-orange-700 mb-1">
+        <span id="price-sync-text">Sincronizando...</span>
+        <span id="price-sync-count"></span>
+      </div>
+      <div class="w-full bg-orange-200 rounded-full h-1.5">
+        <div id="price-sync-bar" class="bg-orange-500 h-1.5 rounded-full transition-all" style="width:0%"></div>
+      </div>
+    </div>
+    <div id="price-loading" class="hidden px-4 py-6 text-center text-xs text-gray-400">
+      <svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+      </svg>
+      Cargando...
+    </div>
+    <div id="price-empty" class="hidden px-4 py-8 text-center text-xs text-gray-400">
+      ✅ Todos los precios están alineados con BinManager. ¡Bien calibrado!
+    </div>
+    <div id="price-list" class="divide-y divide-gray-100"></div>
   </div>
 
   <!-- ── Filters & controls ────────────────────────────────────────────────── -->
@@ -1478,6 +1527,198 @@
     .catch(function(e) { btn.textContent = '❌ Error'; btn.disabled = false; });
   };
 
+  window._reactivateAll = function() {
+    var btn = document.getElementById('btn-react-all');
+    var list = document.getElementById('react-list');
+    var progressEl = document.getElementById('react-progress');
+    var progressText = document.getElementById('react-progress-text');
+    var progressCount = document.getElementById('react-progress-count');
+    var progressBar = document.getElementById('react-progress-bar');
+
+    var buttons = list.querySelectorAll('button[onclick^="window._reactivate"]');
+    if (!buttons.length) return;
+    var total = buttons.length;
+    var done = 0;
+    var failed = 0;
+
+    btn.disabled = true;
+    progressEl.classList.remove('hidden');
+    progressBar.style.width = '0%';
+
+    function _next(idx) {
+      if (idx >= buttons.length) {
+        progressText.textContent = '✅ Completado — ' + (done) + ' reactivados' + (failed ? ', ' + failed + ' errores' : '');
+        progressBar.style.width = '100%';
+        btn.disabled = false;
+        _loadReactivations();
+        return;
+      }
+      var b = buttons[idx];
+      // Extract item_id and stock from onclick attr
+      var match = b.getAttribute('onclick').match(/_reactivate\('([^']+)',(\d+)/);
+      if (!match) { _next(idx + 1); return; }
+      var itemId = match[1];
+      var stock = parseInt(match[2]);
+      progressText.textContent = 'Reactivando ' + (idx + 1) + '/' + total + '...';
+      progressCount.textContent = itemId;
+      progressBar.style.width = Math.round(((idx) / total) * 100) + '%';
+
+      fetch('/api/lanzar/reactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_id: itemId, stock_bm: stock }),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) done++; else failed++;
+        _next(idx + 1);
+      })
+      .catch(function() { failed++; _next(idx + 1); });
+    }
+    _next(0);
+  };
+
+  window._showPriceAlerts = function() {
+    document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
+      t.classList.remove('border-yellow-400','text-yellow-700','border-green-500','text-green-700','border-orange-500','text-orange-700');
+      t.classList.add('border-transparent','text-gray-400');
+    });
+    var tab = document.getElementById('tab-precios');
+    tab.classList.remove('border-transparent','text-gray-400');
+    tab.classList.add('border-orange-500','text-orange-700');
+
+    document.getElementById('reactivations-panel').classList.add('hidden');
+    document.getElementById('price-alerts-panel').classList.remove('hidden');
+    ['gaps-stats','gaps-list','gaps-pagination','gaps-filters-row'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    _loadPriceAlerts();
+  };
+
+  // Patch _gapsSetStatus to also hide price panel
+  var _origSetStatus2 = window._gapsSetStatus;
+  window._gapsSetStatus = function(status) {
+    document.getElementById('price-alerts-panel').classList.add('hidden');
+    _origSetStatus2(status);
+  };
+  // Also patch _showReactivations to hide price panel
+  var _origShowReact = window._showReactivations;
+  window._showReactivations = function() {
+    document.getElementById('price-alerts-panel').classList.add('hidden');
+    _origShowReact();
+  };
+
+  function _loadPriceAlerts() {
+    var loading = document.getElementById('price-loading');
+    var empty   = document.getElementById('price-empty');
+    var list    = document.getElementById('price-list');
+    loading.classList.remove('hidden');
+    empty.classList.add('hidden');
+    list.innerHTML = '';
+
+    fetch('/api/lanzar/price-alerts')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loading.classList.add('hidden');
+      var items = d.items || [];
+      var badge = document.getElementById('precios-badge');
+      if (items.length) { badge.textContent = items.length; badge.classList.remove('hidden'); }
+      else { badge.classList.add('hidden'); }
+
+      if (!items.length) { empty.classList.remove('hidden'); return; }
+
+      items.forEach(function(item) {
+        var diffPct = parseFloat(item.diff_pct) || 0;
+        var isHigh  = diffPct > 0;  // ML price higher than BM suggested
+        var color   = isHigh ? 'text-red-600' : 'text-blue-600';
+        var arrow   = isHigh ? '↑' : '↓';
+        var mlFmt   = '$' + Math.round(item.ml_price).toLocaleString();
+        var bmFmt   = '$' + Math.round(item.bm_suggested_mxn).toLocaleString();
+        var row = document.createElement('div');
+        row.className = 'flex items-center gap-3 px-4 py-3 hover:bg-orange-50 transition';
+        row.innerHTML =
+          '<div class="flex-1 min-w-0">' +
+            '<div class="text-xs font-semibold text-gray-800 truncate">' + (item.product_title || item.sku) + '</div>' +
+            '<div class="text-[10px] text-gray-400 mt-0.5">SKU: ' + item.sku + ' · ' + item.item_id + '</div>' +
+          '</div>' +
+          '<div class="text-[10px] text-right shrink-0 space-y-0.5">' +
+            '<div class="text-gray-500">ML actual: <span class="font-semibold">' + mlFmt + ' MXN</span></div>' +
+            '<div class="text-gray-500">BM sugerido: <span class="font-semibold text-green-700">' + bmFmt + ' MXN</span></div>' +
+            '<div class="' + color + ' font-semibold">' + arrow + ' ' + Math.abs(diffPct).toFixed(1) + '% ' + (isHigh ? 'sobre precio' : 'bajo precio') + '</div>' +
+          '</div>' +
+          '<button onclick="window._syncPrice(\'' + item.item_id + '\',' + item.bm_suggested_mxn + ',this)"' +
+            ' class="shrink-0 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition">' +
+            '💰 Sincronizar' +
+          '</button>';
+        list.appendChild(row);
+      });
+    })
+    .catch(function(e) {
+      document.getElementById('price-loading').classList.add('hidden');
+      document.getElementById('price-empty').textContent = '❌ Error: ' + e.message;
+      document.getElementById('price-empty').classList.remove('hidden');
+    });
+  }
+
+  window._syncPrice = function(itemId, newPrice, btn) {
+    btn.disabled = true; btn.textContent = 'Actualizando...';
+    fetch('/api/lanzar/sync-price', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_id: itemId, price: newPrice}),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { btn.textContent = '❌ ' + d.error; btn.disabled = false; return; }
+      var row = btn.closest('div.flex');
+      row.innerHTML = '<div class="text-xs text-green-600 font-semibold py-1">✅ Precio actualizado — ' + itemId + ' → $' + Math.round(newPrice).toLocaleString() + ' MXN</div>';
+      _loadPriceAlerts();
+    })
+    .catch(function(e) { btn.textContent = '❌ Error'; btn.disabled = false; });
+  };
+
+  window._syncAllPrices = function() {
+    var btn = document.getElementById('btn-sync-all');
+    var list = document.getElementById('price-list');
+    var progressEl = document.getElementById('price-sync-progress');
+    var progressText = document.getElementById('price-sync-text');
+    var progressCount = document.getElementById('price-sync-count');
+    var progressBar = document.getElementById('price-sync-bar');
+
+    var buttons = list.querySelectorAll('button[onclick^="window._syncPrice"]');
+    if (!buttons.length) return;
+    var total = buttons.length;
+    var done = 0; var failed = 0;
+    btn.disabled = true;
+    progressEl.classList.remove('hidden');
+
+    function _next(idx) {
+      if (idx >= buttons.length) {
+        progressText.textContent = '✅ Completado — ' + done + ' actualizados' + (failed ? ', ' + failed + ' errores' : '');
+        progressBar.style.width = '100%';
+        btn.disabled = false;
+        _loadPriceAlerts();
+        return;
+      }
+      var b = buttons[idx];
+      var match = b.getAttribute('onclick').match(/_syncPrice\('([^']+)',([\d.]+)/);
+      if (!match) { _next(idx + 1); return; }
+      var itemId = match[1]; var price = parseFloat(match[2]);
+      progressText.textContent = 'Actualizando ' + (idx+1) + '/' + total + '...';
+      progressCount.textContent = itemId;
+      progressBar.style.width = Math.round((idx/total)*100) + '%';
+      fetch('/api/lanzar/sync-price', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({item_id: itemId, price: price}),
+      })
+      .then(function(r){return r.json();})
+      .then(function(d){ if(d.ok) done++; else failed++; _next(idx+1); })
+      .catch(function(){ failed++; _next(idx+1); });
+    }
+    _next(0);
+  };
+
   // ── Init
   fetch('/api/lanzar/scan-status')
     .then(function(r) { return r.json(); })
@@ -1488,6 +1729,13 @@
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var badge = document.getElementById('reactivar-badge');
+      if (d.total > 0) { badge.textContent = d.total; badge.classList.remove('hidden'); }
+    }).catch(function() {});
+
+  fetch('/api/lanzar/price-alerts')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var badge = document.getElementById('precios-badge');
       if (d.total > 0) { badge.textContent = d.total; badge.classList.remove('hidden'); }
     }).catch(function() {});
 
