@@ -270,9 +270,9 @@
           <div class="text-xs font-semibold text-gray-600">Ficha técnica del producto</div>
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="text-[10px] text-gray-400 block mb-0.5">SKU (seller_custom_field)</label>
-              <input id="wiz-f-sku" type="text" readonly
-                     class="w-full text-xs bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5 text-gray-500"/>
+              <label class="text-[10px] text-gray-400 block mb-0.5">SKU <span class="text-yellow-600">(editable)</span></label>
+              <input id="wiz-f-sku" type="text" placeholder="SKU BinManager"
+                     class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
             </div>
             <div>
               <label class="text-[10px] text-gray-400 block mb-0.5">Modelo</label>
@@ -681,7 +681,7 @@
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_image_url: null,
-    model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
+    sku: '', model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
   };
@@ -692,7 +692,7 @@
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
     _wiz.selected_images = []; _wiz.ai_image_url = null;
-    _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
+    _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
 
@@ -773,6 +773,7 @@
       _wiz.listing_type = document.getElementById('wiz-f-listing-type').value;
       _wiz.condition    = document.getElementById('wiz-f-condition').value;
       _wiz.qty          = parseInt(document.getElementById('wiz-f-qty').value) || 1;
+      _wiz.sku          = document.getElementById('wiz-f-sku').value.trim() || (_wiz.gap && _wiz.gap.sku) || '';
       _wiz.model        = document.getElementById('wiz-f-model').value.trim();
       _wiz.brand        = document.getElementById('wiz-f-brand').value.trim();
       _wiz.gtin         = document.getElementById('wiz-f-gtin').value.trim();
@@ -1221,7 +1222,45 @@
     status.classList.remove('hidden');
 
     var gap = _wiz.gap;
+    var skuToPublish = _wiz.sku || (gap ? gap.sku : '');
     var imagesToUpload = _wiz.selected_images.slice(0, 12);
+
+    // ── Pre-check: warn if this SKU is already published in ML
+    function _doPublish() {
+      _uploadAndCreate(imagesToUpload);
+    }
+
+    if (skuToPublish) {
+      status.textContent = 'Verificando duplicados en Mercado Libre...';
+      fetch('/api/lanzar/check-sku?sku=' + encodeURIComponent(skuToPublish))
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.exists && d.item_ids && d.item_ids.length) {
+          var ids = d.item_ids.join(', ');
+          status.classList.add('hidden');
+          btn.disabled = false; btn.classList.remove('opacity-50');
+          var confirmed = confirm(
+            '⚠️ El SKU "' + skuToPublish + '" ya está publicado en Mercado Libre:\n' +
+            ids + '\n\n' +
+            'Publicar el mismo SKU dos veces generará error de duplicado.\n\n' +
+            '¿Deseas continuar de todas formas?\n' +
+            '(Puedes editar el SKU en el paso anterior antes de publicar)'
+          );
+          if (!confirmed) return;
+          btn.disabled = true; btn.classList.add('opacity-50');
+          status.classList.remove('hidden');
+        }
+        _doPublish();
+      })
+      .catch(function() {
+        // If check fails, continue anyway
+        _doPublish();
+      });
+    } else {
+      _doPublish();
+    }
+
+    function _uploadAndCreate(imgs) {
 
     function _create(pictureIds) {
       status.textContent = 'Creando publicación en Mercado Libre...';
@@ -1236,7 +1275,7 @@
       if (_wiz.gtin)  attrs.push({id: 'GTIN',  value_name: _wiz.gtin});
 
       var payload = {
-        sku:                gap ? gap.sku : '',
+        sku:                _wiz.sku || (gap ? gap.sku : ''),
         category_id:        _wiz.category_id,
         title:              _wiz.draft.title,
         description:        descText,
@@ -1281,25 +1320,23 @@
       });
     }
 
-    if (imagesToUpload.length) {
-      status.textContent = 'Subiendo ' + imagesToUpload.length + ' imagen(es) a Mercado Libre...';
-      // Upload all images in parallel, then create listing with all picture IDs
-      Promise.all(imagesToUpload.map(function(url) {
-        return fetch('/api/lanzar/upload-picture', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_url: url }),
-        })
-        .then(function(r) { return r.json(); })
-        .then(function(d) { return d.picture_id || null; })
-        .catch(function() { return null; });
-      }))
-      .then(function(ids) {
-        _create(ids.filter(Boolean));
-      });
-    } else {
-      _create([]);
-    }
+      if (imgs.length) {
+        status.textContent = 'Subiendo ' + imgs.length + ' imagen(es) a Mercado Libre...';
+        Promise.all(imgs.map(function(url) {
+          return fetch('/api/lanzar/upload-picture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_url: url }),
+          })
+          .then(function(r) { return r.json(); })
+          .then(function(d) { return d.picture_id || null; })
+          .catch(function() { return null; });
+        }))
+        .then(function(ids) { _create(ids.filter(Boolean)); });
+      } else {
+        _create([]);
+      }
+    } // end _uploadAndCreate
   };
 
   // ── Init

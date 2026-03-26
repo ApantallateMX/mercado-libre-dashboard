@@ -654,6 +654,65 @@ async def get_gap_filters(request: Request):
     }
 
 
+@router.get("/check-sku")
+async def check_sku_endpoint(sku: str = Query(...)):
+    """Check if a SKU is already published in ML (active or paused).
+    Searches by seller_sku param and also checks item_sku_cache.
+    Returns {exists: bool, item_ids: list[str]}.
+    """
+    from app.services.meli_client import _active_user_id as _ctx
+    from app.services.token_store import DATABASE_PATH
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
+    def _base(s: str) -> str:
+        u = (s or "").upper()
+        for sfx in _ALL_SUFFIXES:
+            if u.endswith(sfx):
+                return u[:-len(sfx)]
+        return u
+
+    base_sku = _base(sku)
+    found_ids: list[str] = []
+
+    # 1. Check item_sku_cache (fast — already fetched)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT item_id FROM item_sku_cache WHERE user_id=? AND (sku=? OR sku=?)",
+            (user_id, sku.upper(), base_sku)
+        )
+        rows = await cur.fetchall()
+        found_ids.extend(str(r["item_id"]) for r in rows)
+
+    # 2. Live ML search by seller_sku (catches items not in cache)
+    if not found_ids:
+        try:
+            client = await get_meli_client()
+            if client:
+                resp = await client.get(
+                    f"/users/{user_id}/items/search",
+                    params={"seller_sku": base_sku, "limit": 10},
+                )
+                ml_ids = resp.get("results", [])
+                found_ids.extend(str(i) for i in ml_ids)
+                # Also try with original sku if different
+                if sku.upper() != base_sku:
+                    resp2 = await client.get(
+                        f"/users/{user_id}/items/search",
+                        params={"seller_sku": sku.upper(), "limit": 10},
+                    )
+                    found_ids.extend(str(i) for i in resp2.get("results", []))
+                await client.close()
+        except Exception as e:
+            logger.warning(f"check-sku ML search error: {e}")
+
+    unique_ids = list(dict.fromkeys(found_ids))  # deduplicate, preserve order
+    return {"exists": bool(unique_ids), "item_ids": unique_ids, "sku": sku, "base_sku": base_sku}
+
+
 @router.get("/gaps")
 async def get_gaps(
     request: Request,
