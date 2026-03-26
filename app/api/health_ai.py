@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
-from app.services import claude_client
+from app.services import claude_client, openrouter_client
 from app.services.health_ai import (
     build_question_answer_prompt,
     build_claim_response_prompt,
@@ -61,7 +61,12 @@ async def _fetch_bm_product(sku: str) -> dict:
 
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
 
-_UNAVAILABLE_MSG = "API de IA no disponible. Configura ANTHROPIC_API_KEY en el servidor."
+_UNAVAILABLE_MSG = "API de IA no disponible. Configura OPENROUTER_API_KEY o ANTHROPIC_API_KEY."
+
+
+def _ai_available() -> bool:
+    """True si OpenRouter O Claude están disponibles."""
+    return openrouter_client.is_available() or claude_client.is_available()
 
 
 @router.get("/debug-key")
@@ -129,19 +134,32 @@ async def debug_key():
 
 
 async def _sse_stream(system: str, prompt: str, max_tokens: int):
-    """Yield SSE events from a Claude streaming response."""
+    """Yield SSE events — OpenRouter primario, Claude fallback."""
     try:
-        async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
-            yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+        if openrouter_client.is_available():
+            async for chunk in openrouter_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
+                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+        else:
+            async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
+                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
+        # Si OpenRouter falla, intentar Claude como fallback
+        if openrouter_client.is_available() and claude_client.is_available():
+            try:
+                async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
+                    yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            except Exception:
+                pass
         yield f"data: [ERROR] {e}\n\n"
 
 
 @router.post("/suggest-answer")
 async def suggest_answer(request: Request):
     """SSE stream: suggest an answer for a buyer question."""
-    if not claude_client.is_available():
+    if not _ai_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
     sku = body.get("sku", "")
@@ -166,7 +184,7 @@ async def suggest_answer(request: Request):
 @router.post("/suggest-claim-response")
 async def suggest_claim_response(request: Request):
     """SSE stream: suggest a response message for a claim."""
-    if not claude_client.is_available():
+    if not _ai_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
     sku = body.get("sku", "")
@@ -191,7 +209,7 @@ async def suggest_claim_response(request: Request):
 @router.post("/claim-analysis")
 async def claim_analysis(request: Request):
     """JSON: structured analysis of a claim (recommendation, financials, pros/cons)."""
-    if not claude_client.is_available():
+    if not _ai_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
     sku = body.get("sku", "")
@@ -208,17 +226,25 @@ async def claim_analysis(request: Request):
         bm_product=bm_product,
     )
     try:
-        raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)
+        if openrouter_client.is_available():
+            raw = await openrouter_client.generate(prompt, system=system, max_tokens=max_tokens)
+        else:
+            raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)
         analysis = parse_claim_analysis(raw)
         return JSONResponse(analysis)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        # Fallback
+        try:
+            raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)
+            return JSONResponse(parse_claim_analysis(raw))
+        except Exception:
+            return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/suggest-message")
 async def suggest_message(request: Request):
     """SSE stream: suggest a reply for a post-sale message thread."""
-    if not claude_client.is_available():
+    if not _ai_available():
         return JSONResponse({"error": _UNAVAILABLE_MSG}, status_code=503)
     body = await request.json()
     system, prompt, max_tokens = build_message_reply_prompt(
