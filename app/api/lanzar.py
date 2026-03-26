@@ -1164,18 +1164,17 @@ async def category_attrs_endpoint(category_id: str):
 
 @router.get("/bm-images/{sku}")
 async def bm_images_endpoint(sku: str):
-    """Fetch product images from BinManager via GlobalStock_GetPhotoBySKU.
-    Returns list of {url, type_name} dicts (images only, up to 12 for ML).
-    """
+    """Fetch product images from BinManager via GlobalStock_GetPhotoBySKU."""
     _BM_PHOTOS_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/GlobalStock_GetPhotoBySKU"
     _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+    dbg: dict = {"sku": sku}
 
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30) as http:
             logged_in = await _bm_login(http)
-            logger.info(f"bm-images [{sku}]: login={'ok' if logged_in else 'FAILED'}")
+            dbg["login"] = logged_in
             if not logged_in:
-                return JSONResponse({"images": [], "error": "BM login failed"})
+                return JSONResponse({"images": [], "_debug": dbg, "error": "BM login failed"})
 
             r = await http.post(
                 _BM_PHOTOS_URL,
@@ -1183,43 +1182,47 @@ async def bm_images_endpoint(sku: str):
                 headers=_BM_AJAX,
                 timeout=20,
             )
-            logger.info(f"bm-images [{sku}]: photos status={r.status_code} body={r.text[:200]}")
+            dbg["status"] = r.status_code
+            dbg["body_preview"] = r.text[:400]
             if r.status_code != 200:
-                return JSONResponse({"images": [], "error": f"BM status {r.status_code}"})
+                return JSONResponse({"images": [], "_debug": dbg, "error": f"BM status {r.status_code}"})
 
             data = r.json()
-            raw = data.get("JSONSKUFiles") or "[]"
+            dbg["data_keys"] = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+            raw = data.get("JSONSKUFiles") if isinstance(data, dict) else None
+            dbg["raw_type"] = type(raw).__name__
+            dbg["raw_len"] = len(raw) if raw else 0
+
+            if not raw:
+                return JSONResponse({"images": [], "_debug": dbg})
+
             try:
                 files = json.loads(raw) if isinstance(raw, str) else raw
+                dbg["files_count"] = len(files)
             except Exception as e:
-                logger.error(f"bm-images [{sku}]: JSON parse error: {e}, raw={raw[:100]}")
-                return JSONResponse({"images": []})
+                dbg["parse_error"] = str(e)
+                dbg["raw_sample"] = str(raw)[:200]
+                return JSONResponse({"images": [], "_debug": dbg})
 
-            logger.info(f"bm-images [{sku}]: {len(files)} files found")
             images = []
             for f in files:
                 url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
                 ext = (f.get("PhotoExtension") or "").lower()
-                if not url:
+                if not url or (ext and ext not in _IMAGE_EXTENSIONS):
                     continue
-                if ext and ext not in _IMAGE_EXTENSIONS:
-                    continue  # skip PDFs
-                url_lower = url.lower()
-                if not any(url_lower.endswith(e) for e in _IMAGE_EXTENSIONS):
+                if not any(url.lower().endswith(e) for e in _IMAGE_EXTENSIONS):
                     continue
-                images.append({
-                    "url": url,
-                    "type_name": f.get("TypeName") or "",
-                })
+                images.append({"url": url, "type_name": f.get("TypeName") or ""})
                 if len(images) >= 12:
                     break
 
-            logger.info(f"bm-images [{sku}]: returning {len(images)} images")
-            return {"images": images, "_debug": {"login": logged_in, "status": r.status_code, "files_raw": len(files), "files_returned": len(images), "raw_sample": str(raw)[:300]}}
+            dbg["images_returned"] = len(images)
+            return {"images": images, "_debug": dbg}
 
     except Exception as e:
+        dbg["exception"] = str(e)
         logger.error(f"bm-images error for {sku}: {e}")
-        return JSONResponse({"images": [], "error": str(e)})
+        return JSONResponse({"images": [], "_debug": dbg, "error": str(e)})
 
 
 @router.post("/upload-picture")
