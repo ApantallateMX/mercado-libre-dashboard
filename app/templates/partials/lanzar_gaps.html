@@ -293,51 +293,63 @@
         </div>
 
         <!-- Image panel -->
-        <div class="space-y-3">
-          <div class="text-xs font-semibold text-gray-600">Imagen del producto</div>
-          <div class="grid grid-cols-2 gap-3">
-            <!-- BM Image -->
-            <div class="space-y-1">
-              <div class="text-xs text-gray-400 text-center">BinManager</div>
-              <div id="wiz-img-bm-wrap" onclick="window._wizSelectImgSrc('bm')"
-                   class="relative w-full aspect-square bg-gray-100 rounded-lg border-2 border-transparent overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-yellow-300">
-                <span id="wiz-img-bm-none" class="text-gray-300 text-xs">Sin imagen</span>
-                <img id="wiz-img-bm-thumb" class="hidden w-full h-full object-contain" alt="BM"/>
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-gray-600">Imágenes del producto</span>
+            <span class="text-xs text-gray-400">Máx 12 · Primera = portada</span>
+          </div>
+
+          <!-- BM Images grid -->
+          <div>
+            <div class="flex items-center gap-2 mb-1.5">
+              <span class="text-xs text-gray-500 font-medium">BinManager</span>
+              <div id="wiz-bm-loading" class="hidden">
+                <svg class="animate-spin w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
               </div>
-              <label class="flex items-center gap-1.5 justify-center cursor-pointer" onclick="window._wizSelectImgSrc('bm')">
-                <input type="radio" name="wiz-img-src" value="bm" id="wiz-radio-bm" class="accent-yellow-500"/>
-                <span class="text-xs text-gray-600">Usar esta</span>
-              </label>
+              <span id="wiz-bm-count" class="text-xs text-gray-400"></span>
             </div>
-            <!-- AI Image -->
-            <div class="space-y-1">
-              <div class="text-xs text-gray-400 text-center">Generada con IA</div>
-              <div id="wiz-img-ai-wrap" onclick="window._wizSelectImgSrc('ai')"
-                   class="relative w-full aspect-square bg-gray-100 rounded-lg border-2 border-transparent overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-purple-300">
-                <span id="wiz-img-ai-none" class="text-gray-300 text-xs text-center px-2">Presiona "Generar"</span>
+            <div id="wiz-bm-grid" class="grid grid-cols-4 gap-1.5">
+              <div id="wiz-bm-empty" class="col-span-4 text-center py-3 text-xs text-gray-300 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                Cargando imágenes...
+              </div>
+            </div>
+          </div>
+
+          <!-- AI Image -->
+          <div>
+            <div class="text-xs text-gray-500 font-medium mb-1.5">Generar con IA (FLUX)</div>
+            <div class="flex gap-2">
+              <div id="wiz-img-ai-wrap" onclick="window._wizToggleAI()"
+                   class="relative flex-shrink-0 w-16 h-16 bg-gray-100 rounded-lg border-2 border-dashed border-gray-200 overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-purple-300">
+                <span id="wiz-img-ai-none" class="text-gray-300 text-[9px] text-center leading-tight px-1">IA</span>
                 <div id="wiz-img-ai-spin" class="hidden absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-90">
-                  <svg class="animate-spin w-7 h-7 text-purple-400" fill="none" viewBox="0 0 24 24">
+                  <svg class="animate-spin w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
                   </svg>
                 </div>
                 <img id="wiz-img-ai-thumb" class="hidden w-full h-full object-contain" alt="IA"/>
+                <div id="wiz-img-ai-check" class="hidden absolute top-0.5 right-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center">
+                  <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+                </div>
               </div>
-              <label class="flex items-center gap-1.5 justify-center cursor-pointer">
-                <input type="radio" name="wiz-img-src" value="ai" id="wiz-radio-ai" disabled class="accent-purple-500"/>
-                <span class="text-xs text-gray-600">Usar esta</span>
-              </label>
+              <div class="flex-1 space-y-1.5">
+                <input id="wiz-img-prompt" type="text" placeholder="Prompt para imagen IA (editable)..."
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300"/>
+                <button onclick="window._wizGenImage()" id="wiz-btn-gen-img"
+                        class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-1.5 rounded-lg transition">
+                  ✨ Generar imagen con IA
+                </button>
+              </div>
             </div>
+            <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
           </div>
-          <!-- Prompt + generate -->
-          <div class="space-y-1.5">
-            <input id="wiz-img-prompt" type="text" placeholder="Prompt para imagen IA (editable)..."
-                   class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-300"/>
-            <button onclick="window._wizGenImage()" id="wiz-btn-gen-img"
-                    class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition flex items-center justify-center gap-2">
-              ✨ Generar imagen con IA
-            </button>
-            <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 text-center"></div>
+
+          <div class="text-xs text-gray-400 bg-blue-50 rounded-lg px-3 py-2">
+            ✓ Selecciona hasta 12 imágenes · La primera será la portada · ML recomienda 1200×1200px mín
           </div>
         </div>
 
@@ -608,7 +620,7 @@
   var _wiz = {
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
-    img_src: null, ai_image_url: null,
+    selected_images: [], ai_image_url: null,
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
   };
@@ -618,7 +630,7 @@
     _wiz.price = gap.suggested_price_mxn || 0;
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
-    _wiz.img_src = null; _wiz.ai_image_url = null;
+    _wiz.selected_images = []; _wiz.ai_image_url = null;
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
 
     document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);
@@ -869,33 +881,23 @@
       imgCont.innerHTML = '<img src="' + gap.image_url + '" class="w-full h-full object-contain" onerror="this.parentElement.innerHTML=\'<span class=text-gray-300 text-[9px]>IMG</span>\'">';
     }
 
-    // Setup image panel
-    var bmNone = document.getElementById('wiz-img-bm-none');
-    var bmThumb = document.getElementById('wiz-img-bm-thumb');
-    var radioAI = document.getElementById('wiz-radio-ai');
-    var radioBM = document.getElementById('wiz-radio-bm');
-    if (gap && gap.image_url) {
-      bmThumb.src = gap.image_url; bmThumb.classList.remove('hidden'); bmNone.classList.add('hidden');
-      radioBM.disabled = false;
-      if (!_wiz.img_src) { radioBM.checked = true; _wiz.img_src = 'bm'; }
-    } else {
-      bmThumb.classList.add('hidden'); bmNone.classList.remove('hidden');
-      radioBM.disabled = true;
-    }
-    // Restore AI state if already generated
-    var aiThumb = document.getElementById('wiz-img-ai-thumb');
-    var aiNone = document.getElementById('wiz-img-ai-none');
-    if (_wiz.ai_image_url) {
-      aiThumb.src = _wiz.ai_image_url; aiThumb.classList.remove('hidden'); aiNone.classList.add('hidden');
-      radioAI.disabled = false;
-    }
-    if (_wiz.img_src === 'ai') { radioAI.checked = true; }
-
-    // Pre-fill prompt
-    if (!document.getElementById('wiz-img-prompt').value && gap) {
+    // Pre-fill AI prompt
+    if (gap) {
       var product = ((gap.brand || '') + ' ' + (gap.model || '')).trim() || (gap.product_title || '');
       document.getElementById('wiz-img-prompt').value = 'Professional product photography of ' + product + '. Studio lighting, pure white background, sharp focus, 4K, retail ready.';
     }
+
+    // Restore AI thumb if already generated
+    var aiThumb = document.getElementById('wiz-img-ai-thumb');
+    var aiNone = document.getElementById('wiz-img-ai-none');
+    var aiCheck = document.getElementById('wiz-img-ai-check');
+    if (_wiz.ai_image_url) {
+      aiThumb.src = _wiz.ai_image_url; aiThumb.classList.remove('hidden'); aiNone.classList.add('hidden');
+      if (_wiz.selected_images.indexOf(_wiz.ai_image_url) >= 0) aiCheck.classList.remove('hidden');
+    }
+
+    // Load BM images
+    _wizLoadBMImages();
 
     var status = document.getElementById('wiz-pub-status');
     status.classList.add('hidden');
@@ -903,16 +905,114 @@
     btn.disabled = false; btn.classList.remove('opacity-50');
   }
 
-  // ── Select image source
-  window._wizSelectImgSrc = function(src) {
-    _wiz.img_src = src;
-    var rBM = document.getElementById('wiz-radio-bm');
-    var rAI = document.getElementById('wiz-radio-ai');
-    if (src === 'bm' && !rBM.disabled) rBM.checked = true;
-    if (src === 'ai' && !rAI.disabled) rAI.checked = true;
-    // Highlight selected wrap
-    document.getElementById('wiz-img-bm-wrap').style.borderColor = src === 'bm' ? '#facc15' : '';
-    document.getElementById('wiz-img-ai-wrap').style.borderColor = src === 'ai' ? '#a855f7' : '';
+  // ── Load BM images for current gap
+  function _wizLoadBMImages() {
+    var gap = _wiz.gap;
+    if (!gap) return;
+    var grid = document.getElementById('wiz-bm-grid');
+    var empty = document.getElementById('wiz-bm-empty');
+    var loading = document.getElementById('wiz-bm-loading');
+    var countEl = document.getElementById('wiz-bm-count');
+
+    loading.classList.remove('hidden');
+    empty.textContent = 'Cargando imágenes...';
+    countEl.textContent = '';
+
+    fetch('/api/lanzar/bm-images/' + encodeURIComponent(gap.sku))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loading.classList.add('hidden');
+      var imgs = d.images || [];
+      countEl.textContent = imgs.length ? imgs.length + ' imagen' + (imgs.length > 1 ? 'es' : '') : '';
+
+      // Clear grid (keep empty placeholder)
+      while (grid.firstChild) grid.removeChild(grid.firstChild);
+
+      if (!imgs.length) {
+        var noImg = document.createElement('div');
+        noImg.className = 'col-span-4 text-center py-3 text-xs text-gray-300 bg-gray-50 rounded-lg border border-dashed border-gray-200';
+        noImg.textContent = 'Sin imágenes en BinManager';
+        grid.appendChild(noImg);
+        return;
+      }
+
+      imgs.forEach(function(url, idx) {
+        var wrapper = document.createElement('div');
+        wrapper.className = 'relative aspect-square rounded-lg overflow-hidden border-2 border-transparent cursor-pointer transition hover:border-yellow-400 bg-gray-100';
+        wrapper.dataset.url = url;
+
+        // First image selected by default
+        if (idx === 0 && _wiz.selected_images.indexOf(url) < 0) {
+          _wiz.selected_images.push(url);
+        }
+        var isSelected = _wiz.selected_images.indexOf(url) >= 0;
+        if (isSelected) wrapper.style.borderColor = '#facc15';
+
+        var img = document.createElement('img');
+        img.src = url; img.alt = ''; img.className = 'w-full h-full object-contain';
+
+        // Order badge
+        var badge = document.createElement('div');
+        badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ' + (isSelected ? 'bg-yellow-400 text-gray-800' : 'bg-gray-300 text-white');
+        var selIdx = _wiz.selected_images.indexOf(url);
+        badge.textContent = isSelected ? (selIdx + 1) : '';
+
+        // Checkmark
+        var check = document.createElement('div');
+        check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
+        check.innerHTML = '<svg class="w-2.5 h-2.5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';
+
+        wrapper.appendChild(img); wrapper.appendChild(badge); wrapper.appendChild(check);
+        wrapper.addEventListener('click', function() { _wizToggleBMImage(this, url); });
+        grid.appendChild(wrapper);
+      });
+    })
+    .catch(function() {
+      loading.classList.add('hidden');
+      empty.textContent = 'Error cargando imágenes';
+    });
+  }
+
+  function _wizToggleBMImage(wrapper, url) {
+    var idx = _wiz.selected_images.indexOf(url);
+    if (idx >= 0) {
+      if (_wiz.selected_images.length === 1 && !_wiz.ai_image_url) return; // keep at least 1 if no AI
+      _wiz.selected_images.splice(idx, 1);
+    } else {
+      if (_wiz.selected_images.length >= 12) return; // ML max
+      _wiz.selected_images.push(url);
+    }
+    _wizRefreshBMGrid();
+  }
+
+  function _wizRefreshBMGrid() {
+    var grid = document.getElementById('wiz-bm-grid');
+    Array.from(grid.children).forEach(function(wrapper) {
+      var url = wrapper.dataset.url;
+      if (!url) return;
+      var idx = _wiz.selected_images.indexOf(url);
+      var isSelected = idx >= 0;
+      wrapper.style.borderColor = isSelected ? '#facc15' : '';
+      var badge = wrapper.children[1], check = wrapper.children[2];
+      if (badge) { badge.textContent = isSelected ? (idx + 1) : ''; badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ' + (isSelected ? 'bg-yellow-400 text-gray-800' : 'bg-gray-300 text-white'); }
+      if (check) check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
+    });
+  }
+
+  // ── Toggle AI image selection
+  window._wizToggleAI = function() {
+    if (!_wiz.ai_image_url) return;
+    var idx = _wiz.selected_images.indexOf(_wiz.ai_image_url);
+    var check = document.getElementById('wiz-img-ai-check');
+    if (idx >= 0) {
+      _wiz.selected_images.splice(idx, 1);
+      check.classList.add('hidden');
+    } else {
+      if (_wiz.selected_images.length >= 12) return;
+      _wiz.selected_images.unshift(_wiz.ai_image_url); // AI goes first (main photo)
+      check.classList.remove('hidden');
+    }
+    _wizRefreshBMGrid();
   };
 
   // ── Generate image with FLUX
@@ -921,12 +1021,13 @@
     var spinner = document.getElementById('wiz-img-ai-spin');
     var aiThumb = document.getElementById('wiz-img-ai-thumb');
     var aiNone = document.getElementById('wiz-img-ai-none');
+    var aiCheck = document.getElementById('wiz-img-ai-check');
     var errEl = document.getElementById('wiz-img-gen-err');
     var prompt = document.getElementById('wiz-img-prompt').value.trim();
     if (!prompt) { errEl.textContent = 'Escribe un prompt primero.'; errEl.classList.remove('hidden'); return; }
 
     errEl.classList.add('hidden');
-    btn.disabled = true; btn.textContent = 'Generando...';
+    btn.disabled = true; btn.textContent = 'Generando (~10s)...';
     aiThumb.classList.add('hidden'); aiNone.classList.add('hidden'); spinner.classList.remove('hidden');
 
     var gap = _wiz.gap || {};
@@ -949,13 +1050,18 @@
       spinner.classList.add('hidden');
       btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
       if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); aiNone.classList.remove('hidden'); return; }
+      // Remove old AI url from selection if exists
+      if (_wiz.ai_image_url) {
+        var oi = _wiz.selected_images.indexOf(_wiz.ai_image_url);
+        if (oi >= 0) _wiz.selected_images.splice(oi, 1);
+      }
       _wiz.ai_image_url = d.image_url;
       aiThumb.src = d.image_url; aiThumb.classList.remove('hidden');
-      var radioAI = document.getElementById('wiz-radio-ai');
-      radioAI.disabled = false; radioAI.checked = true;
-      _wiz.img_src = 'ai';
+      // Auto-add to selection as first (main) image
+      _wiz.selected_images.unshift(d.image_url);
+      aiCheck.classList.remove('hidden');
       document.getElementById('wiz-img-ai-wrap').style.borderColor = '#a855f7';
-      document.getElementById('wiz-img-bm-wrap').style.borderColor = '';
+      _wizRefreshBMGrid();
     })
     .catch(function(e) {
       spinner.classList.add('hidden'); aiNone.classList.remove('hidden');
@@ -972,15 +1078,10 @@
     status.className = 'text-center text-xs py-1 text-gray-500';
     status.classList.remove('hidden');
 
-    // Sync img_src from radio buttons
-    var r = document.querySelector('input[name="wiz-img-src"]:checked');
-    if (r) _wiz.img_src = r.value;
-
     var gap = _wiz.gap;
-    var imgSrc = _wiz.img_src;  // 'bm' | 'ai' | null
-    var imageUrlToUpload = imgSrc === 'ai' ? _wiz.ai_image_url : (imgSrc === 'bm' && gap ? gap.image_url : null);
+    var imagesToUpload = _wiz.selected_images.slice(0, 12);
 
-    function _create(pictureId) {
+    function _create(pictureIds) {
       status.textContent = 'Creando publicación en Mercado Libre...';
       var descText = _wiz.draft.description || '';
       if (_wiz.draft.bullet_points && _wiz.draft.bullet_points.length) {
@@ -995,7 +1096,7 @@
         available_quantity: _wiz.qty,
         listing_type_id:    _wiz.listing_type,
         condition:          _wiz.condition,
-        pictures:           pictureId ? [pictureId] : [],
+        pictures:           pictureIds,
       };
       fetch('/api/lanzar/create-listing', {
         method: 'POST',
@@ -1024,18 +1125,24 @@
       });
     }
 
-    if (imageUrlToUpload) {
-      status.textContent = 'Subiendo imagen a Mercado Libre...';
-      fetch('/api/lanzar/upload-picture', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: imageUrlToUpload }),
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(d) { _create(d.picture_id || null); })
-      .catch(function() { _create(null); }); // continue without picture
+    if (imagesToUpload.length) {
+      status.textContent = 'Subiendo ' + imagesToUpload.length + ' imagen(es) a Mercado Libre...';
+      // Upload all images in parallel, then create listing with all picture IDs
+      Promise.all(imagesToUpload.map(function(url) {
+        return fetch('/api/lanzar/upload-picture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_url: url }),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) { return d.picture_id || null; })
+        .catch(function() { return null; });
+      }))
+      .then(function(ids) {
+        _create(ids.filter(Boolean));
+      });
     } else {
-      _create(null);
+      _create([]);
     }
   };
 

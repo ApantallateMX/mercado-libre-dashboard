@@ -1159,6 +1159,50 @@ async def category_attrs_endpoint(category_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/bm-images/{sku}")
+async def bm_images_endpoint(sku: str):
+    """Fetch product images from BinManager for a given SKU.
+    Returns list of image URLs (up to 12, ML limit).
+    """
+    _BM_IMAGES_URL = f"{_BM_BASE}/Movements/Movement/GetImagesBySkuSQL"
+    _NOTFOUND_PLACEHOLDER = "notfound/NothingImg"
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as http:
+            logged_in = await _bm_login(http)
+            if not logged_in:
+                return JSONResponse({"images": [], "error": "BM login failed"})
+
+            r = await http.post(
+                _BM_IMAGES_URL,
+                json={"SKU": sku.upper(), "COMPANYASSIGNEMNT": 1},
+                headers=_BM_AJAX,
+                timeout=20,
+            )
+            if r.status_code != 200:
+                return JSONResponse({"images": []})
+
+            data = r.json()
+            if not data or not isinstance(data, list):
+                return JSONResponse({"images": []})
+
+            raw_images_str = data[0].get("Images", "[]") or "[]"
+            try:
+                img_list = json.loads(raw_images_str)
+            except Exception:
+                return JSONResponse({"images": []})
+
+            urls = [
+                item["ImageName"] for item in img_list
+                if item.get("ImageName") and _NOTFOUND_PLACEHOLDER not in item["ImageName"]
+            ]
+            return {"images": urls[:12]}  # ML max 12 images
+
+    except Exception as e:
+        logger.error(f"bm-images error for {sku}: {e}")
+        return JSONResponse({"images": [], "error": str(e)})
+
+
 @router.post("/upload-picture")
 async def upload_picture_endpoint(request: Request):
     """Descarga imagen desde URL y la sube a ML. Retorna picture_id."""
