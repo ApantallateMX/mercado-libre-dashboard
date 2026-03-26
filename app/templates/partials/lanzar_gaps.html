@@ -925,6 +925,34 @@
   window._scanNow = function() {
     var btn = document.getElementById('btn-scan-now');
     btn.disabled = true; btn.classList.add('opacity-50');
+
+    // Limpiar todo inmediatamente — el usuario verá info fresca al terminar
+    var tbody = document.getElementById('gaps-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-gray-300 text-sm">🔄 Escaneando... aguarda un momento</td></tr>';
+    var badge = document.getElementById('gaps-badge');
+    if (badge) badge.textContent = '–';
+    // KPIs del health dashboard
+    ['kpi-gaps','kpi-reactivate','kpi-price-alerts','kpi-revenue',
+     'kpi-total-stock','kpi-quality','kpi-comp','kpi-velocity'].forEach(function(id) {
+      var el = document.getElementById(id); if (el) el.textContent = '–';
+    });
+    // Listas de tabs
+    ['react-list','price-list','quality-list','comp-list'].forEach(function(id) {
+      var el = document.getElementById(id); if (el) el.innerHTML = '';
+    });
+    // Ocultar estados vacíos/loading de tabs
+    ['react-empty','react-loading','price-empty','quality-empty',
+     'comp-empty','vel-empty','vel-table'].forEach(function(id) {
+      var el = document.getElementById(id); if (el) el.classList.add('hidden');
+    });
+    var velTbody = document.querySelector('#vel-table tbody');
+    if (velTbody) velTbody.innerHTML = '';
+    // Filtros de categoría/marca
+    var catSel = document.getElementById('gaps-cat');
+    if (catSel) catSel.innerHTML = '<option value="">Todas las categorías</option>';
+    var brandSel = document.getElementById('gaps-brand');
+    if (brandSel) brandSel.innerHTML = '<option value="">Todas las marcas</option>';
+
     fetch('/api/lanzar/scan-now', { method: 'POST' }).then(function() { _startScanPolling(); });
   };
 
