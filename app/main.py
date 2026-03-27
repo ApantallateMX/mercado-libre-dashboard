@@ -301,6 +301,31 @@ async def lifespan(app: FastAPI):
     await price_monitor.start()
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
+    # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
+    from app.api.lanzar import router as _lanzar_router_ref
+    try:
+        import aiosqlite
+        from app.config import DATABASE_PATH
+        updated = 0
+        async with aiosqlite.connect(DATABASE_PATH) as _db:
+            _rows = await (await _db.execute(
+                "SELECT rowid, retail_price_usd, cost_usd FROM bm_sku_gaps"
+            )).fetchall()
+            for _row in _rows:
+                _rowid, _retail, _cost = _row[0], float(_row[1] or 0), float(_row[2] or 0)
+                _new_sug  = round(_retail * 18 * 1.20, 0) if _retail > 0 else 0
+                _new_cost = round(_cost * 18, 0) if (0 < _cost < 9000) else 0
+                await _db.execute(
+                    "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=? WHERE rowid=?",
+                    (_new_sug, _new_cost, _rowid)
+                )
+                updated += 1
+            await _db.commit()
+        import logging as _logging
+        _logging.getLogger(__name__).info(f"Startup: recalculated prices for {updated} gap records")
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(f"Startup price recalc failed: {_e}")
     yield
     await price_monitor.stop()
 

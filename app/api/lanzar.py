@@ -1536,6 +1536,28 @@ async def debug_scan(sku: str = ""):
     return result
 
 
+@router.post("/recalc-prices")
+async def recalc_prices():
+    """Recalcula suggested_price_mxn y cost_price_mxn en la DB usando fórmula actual
+    (retail × 18 × 1.20) sin necesidad de hacer un nuevo scan completo."""
+    updated = 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            "SELECT rowid, retail_price_usd, cost_usd FROM bm_sku_gaps"
+        )).fetchall()
+        for row in rows:
+            rowid, retail, cost = row[0], float(row[1] or 0), float(row[2] or 0)
+            new_suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
+            new_cost_mxn  = round(cost * 18, 0) if (0 < cost < 9000) else 0
+            await db.execute(
+                "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=? WHERE rowid=?",
+                (new_suggested, new_cost_mxn, rowid)
+            )
+            updated += 1
+        await db.commit()
+    return {"updated": updated, "formula": "retail × 18 × 1.20"}
+
+
 @router.post("/clear-sku-cache")
 async def clear_sku_cache(request: Request):
     """Limpia la caché de item→SKU para forzar re-fetch completo en el próximo scan."""
