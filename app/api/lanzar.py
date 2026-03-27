@@ -1893,16 +1893,11 @@ async def generate_video_commercial_endpoint(request: Request):
         brand=brand, model=model, title=title, category=category, size=size
     )
 
-    has_tts = elevenlabs_client.is_available()
-
-    if has_tts:
-        tts_coro   = elevenlabs_client.generate_audio(script)
-        video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
-        results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
-        audio_result, video_result = results
-    else:
-        video_result = await replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
-        audio_result = None
+    # TTS (Bark via Replicate, siempre disponible) + video en paralelo
+    tts_coro   = elevenlabs_client.generate_audio(script)
+    video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
+    results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
+    audio_result, video_result = results
 
     if isinstance(video_result, Exception):
         logger.error(f"Video generation failed: {video_result}")
