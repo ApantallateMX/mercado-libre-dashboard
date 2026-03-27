@@ -2031,51 +2031,51 @@ async def generate_video_commercial_endpoint(request: Request):
 
     video_url = video_result  # URL pública de minimax
 
-    # ── Step 4: Descargar video y combinar con ffmpeg ───────────────────────
+    # ── Step 4: Descargar video y procesar con ffmpeg ───────────────────────
+    has_audio = isinstance(audio_result, bytes) and bool(audio_result)
     if isinstance(audio_result, Exception):
         logger.warning(f"TTS falló — video sin audio: {audio_result}")
-    else:
+    elif has_audio:
         logger.info(f"TTS exitoso: {len(audio_result)} bytes de audio")
 
-    if isinstance(audio_result, bytes) and audio_result:
-        vid_id = str(_uuid.uuid4())
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                vid_resp  = await client.get(video_url)
-                vid_bytes = vid_resp.content
+    vid_id = str(_uuid.uuid4())
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            vid_resp  = await client.get(video_url)
+            vid_bytes = vid_resp.content
 
-            with _tf.TemporaryDirectory() as tmpdir:
-                raw_path    = _os.path.join(tmpdir, "raw.mp4")
-                concat_path = _os.path.join(tmpdir, "concat.txt")
-                loop_path   = _os.path.join(tmpdir, "loop.mp4")
-                aud_path    = _os.path.join(tmpdir, "audio.mp3")
-                out_path    = _os.path.join(tmpdir, "output.mp4")
+        with _tf.TemporaryDirectory() as tmpdir:
+            raw_path    = _os.path.join(tmpdir, "raw.mp4")
+            concat_path = _os.path.join(tmpdir, "concat.txt")
+            loop_path   = _os.path.join(tmpdir, "loop.mp4")
+            aud_path    = _os.path.join(tmpdir, "audio.mp3")
+            out_path    = _os.path.join(tmpdir, "output.mp4")
 
-                with open(raw_path, "wb") as f: f.write(vid_bytes)
+            with open(raw_path, "wb") as f: f.write(vid_bytes)
+
+            # Step A: ALWAYS loop the clip to ~24s (ML spec: 10-60s)
+            with open(concat_path, "w") as f:
+                for _ in range(4):   # 4 repetitions × ~6s = ~24s
+                    f.write(f"file '{raw_path}'\n")
+
+            loop_proc = _sp.run(
+                [
+                    "ffmpeg", "-y",
+                    "-f", "concat", "-safe", "0",
+                    "-i", concat_path,
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-t", "24",
+                    loop_path,
+                ],
+                capture_output=True, timeout=90,
+            )
+            if loop_proc.returncode != 0:
+                logger.warning(f"ffmpeg concat error: {loop_proc.stderr.decode()[:300]} — using raw")
+                loop_path = raw_path
+
+            if has_audio:
+                # Step B: Combine looped video + audio
                 with open(aud_path, "wb") as f: f.write(audio_result)
-
-                # Step A: Loop the clip to ~24s using concat demuxer (reliable for all MP4)
-                # ML spec: 10-60 seconds, max 280MB
-                with open(concat_path, "w") as f:
-                    for _ in range(4):   # 4 repetitions × ~6s = ~24s
-                        f.write(f"file '{raw_path}'\n")
-
-                loop_proc = _sp.run(
-                    [
-                        "ffmpeg", "-y",
-                        "-f", "concat", "-safe", "0",
-                        "-i", concat_path,
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                        "-t", "24",
-                        loop_path,
-                    ],
-                    capture_output=True, timeout=90,
-                )
-                if loop_proc.returncode != 0:
-                    logger.warning(f"ffmpeg concat error: {loop_proc.stderr.decode()[:300]} — using raw")
-                    loop_path = raw_path
-
-                # Step B: Combine looped video + audio (-shortest: stops at audio end)
                 proc = _sp.run(
                     [
                         "ffmpeg", "-y",
@@ -2093,21 +2093,26 @@ async def generate_video_commercial_endpoint(request: Request):
                     capture_output=True, timeout=120,
                 )
                 if proc.returncode == 0:
-                    with open(out_path, "rb") as f:
-                        _video_cache[vid_id] = f.read()
-                    out_size_mb = len(_video_cache[vid_id]) / 1_048_576
-                    serve_url = f"/api/lanzar/video-file/{vid_id}"
-                    logger.info(f"Video comercial: {vid_id} ({out_size_mb:.1f} MB)")
-                    return {"video_url": serve_url, "script": script, "has_audio": True}
+                    final_path = out_path
                 else:
-                    logger.warning(f"ffmpeg combine error: {proc.stderr.decode()[:300]}")
+                    logger.warning(f"ffmpeg combine error: {proc.stderr.decode()[:300]} — using loop without audio")
+                    final_path = loop_path
+            else:
+                final_path = loop_path
 
-        except FileNotFoundError:
-            logger.warning("ffmpeg no instalado — retornando video sin audio")
-        except Exception as e:
-            logger.warning(f"Combine error: {e}")
+            with open(final_path, "rb") as f:
+                _video_cache[vid_id] = f.read()
+            out_size_mb = len(_video_cache[vid_id]) / 1_048_576
+            serve_url = f"/api/lanzar/video-file/{vid_id}"
+            logger.info(f"Video comercial: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
+            return {"video_url": serve_url, "script": script, "has_audio": has_audio}
 
-    # Fallback: retornar video de minimax sin audio
+    except FileNotFoundError:
+        logger.warning("ffmpeg no instalado — retornando video sin audio")
+    except Exception as e:
+        logger.warning(f"ffmpeg error: {e}")
+
+    # Fallback: retornar video de minimax sin procesar
     return {"video_url": video_url, "script": script, "has_audio": False}
 
 

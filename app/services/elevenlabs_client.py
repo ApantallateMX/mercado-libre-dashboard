@@ -3,8 +3,9 @@ TTS Client — Voz en español de México
 ======================================
 Cadena de fallbacks (mejor a peor calidad):
   1. ElevenLabs  — requiere ELEVENLABS_API_KEY (calidad premium)
-  2. edge-tts    — Microsoft Edge TTS, gratis, sin key, voz MX natural (~2s)
-  3. Replicate Bark — lento (~5 min) pero usa REPLICATE_API_KEY existente
+  2. gTTS        — Google TTS, gratis, sin key, HTTP puro (~1s), muy confiable
+  3. edge-tts    — Microsoft Edge TTS, gratis, sin key, voz MX natural (~2s)
+  4. Replicate Bark — lento (~5 min) pero usa REPLICATE_API_KEY existente
 """
 import asyncio
 import logging
@@ -59,6 +60,26 @@ async def _generate_elevenlabs(text: str) -> bytes:
         if resp.status_code != 200:
             raise RuntimeError(f"ElevenLabs {resp.status_code}: {resp.text[:200]}")
         return resp.content
+
+
+async def _generate_gtts(text: str) -> bytes:
+    """TTS con Google TTS (gratis, HTTP puro, sin WebSocket, muy confiable en producción)."""
+    import io
+    from gtts import gTTS
+
+    loop = asyncio.get_event_loop()
+
+    def _sync() -> bytes:
+        tts = gTTS(text=text, lang="es", tld="com.mx")
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        return buf.getvalue()
+
+    data = await loop.run_in_executor(None, _sync)
+    if not data:
+        raise RuntimeError("gTTS no generó audio")
+    logger.info(f"gTTS OK: {len(data)} bytes")
+    return data
 
 
 async def _generate_edge_tts(text: str) -> bytes:
@@ -166,13 +187,20 @@ async def generate_audio(text: str) -> bytes:
         except Exception as e:
             logger.warning(f"ElevenLabs falló: {e}")
 
-    # 2. edge-tts (primario gratuito)
+    # 2. gTTS (primario gratuito — HTTP puro, confiable en Railway)
+    try:
+        logger.info("TTS: usando gTTS (Google, es-MX)")
+        return await _generate_gtts(text)
+    except Exception as e:
+        logger.warning(f"gTTS falló: {e}")
+
+    # 3. edge-tts (fallback secundario)
     try:
         logger.info("TTS: usando edge-tts (es-MX-JorgeNeural)")
         return await _generate_edge_tts(text)
     except Exception as e:
         logger.warning(f"edge-tts falló: {e}")
 
-    # 3. Bark (último recurso)
+    # 4. Bark (último recurso)
     logger.info("TTS: último recurso — Replicate Bark")
     return await _generate_bark(text)
