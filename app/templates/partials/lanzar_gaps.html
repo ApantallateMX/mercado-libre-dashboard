@@ -650,33 +650,20 @@
             </div>
           </div>
 
-          <!-- AI Image -->
+          <!-- AI Images Gallery -->
           <div>
-            <div class="text-xs text-gray-500 font-medium mb-1.5">Generar con IA (FLUX)</div>
-            <div class="flex gap-2">
-              <div id="wiz-img-ai-wrap" onclick="window._wizToggleAI()"
-                   class="relative flex-shrink-0 w-16 h-16 bg-gray-100 rounded-lg border-2 border-dashed border-gray-200 overflow-hidden flex items-center justify-center cursor-pointer transition hover:border-purple-300">
-                <span id="wiz-img-ai-none" class="text-gray-300 text-[9px] text-center leading-tight px-1">IA</span>
-                <div id="wiz-img-ai-spin" class="hidden absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-90">
-                  <svg class="animate-spin w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                  </svg>
-                </div>
-                <img id="wiz-img-ai-thumb" class="hidden w-full h-full object-contain" alt="IA"/>
-                <div id="wiz-img-ai-check" class="hidden absolute top-0.5 right-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center">
-                  <svg class="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
-                </div>
-              </div>
-              <div class="flex-1 space-y-1.5">
-                <input id="wiz-img-prompt" type="text" placeholder="Prompt para imagen IA (editable)..."
-                       class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300"/>
-                <button onclick="window._wizGenImage()" id="wiz-btn-gen-img"
-                        class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-1.5 rounded-lg transition">
-                  ✨ Generar imagen con IA
-                </button>
-              </div>
+            <div class="flex items-center justify-between mb-1.5">
+              <div class="text-xs text-gray-500 font-medium">Generar con IA (FLUX)</div>
+              <span id="wiz-ai-sel-count" class="text-[10px] text-purple-600 font-semibold hidden"></span>
             </div>
+            <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
+                   class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300 mb-1.5"/>
+            <button onclick="window._wizGenImages()" id="wiz-btn-gen-img"
+                    class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition mb-2">
+              ✨ Generar 4 imágenes con IA
+            </button>
+            <!-- AI image grid — thumbnails render here -->
+            <div id="wiz-ai-grid" class="grid grid-cols-4 gap-1.5"></div>
             <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
           </div>
 
@@ -699,6 +686,30 @@
       </div>
 
     </div><!-- /body -->
+
+    <!-- Lightbox for AI images -->
+    <div id="wiz-lightbox" class="hidden fixed inset-0 z-[9999] bg-black bg-opacity-90 flex flex-col items-center justify-center"
+         onclick="if(event.target===this)window._closeLightbox()">
+      <button onclick="window._closeLightbox()"
+              class="absolute top-4 right-5 text-white text-3xl leading-none hover:text-gray-300">&times;</button>
+      <img id="wiz-lightbox-img" src="" alt=""
+           class="max-w-[88vw] max-h-[72vh] object-contain rounded-xl shadow-2xl"/>
+      <div class="flex gap-3 mt-5">
+        <button id="wiz-lightbox-toggle"
+                class="text-sm font-semibold px-5 py-2 rounded-xl transition"
+                onclick="window._lightboxToggleSelect()">
+          Agregar
+        </button>
+        <button class="bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold px-5 py-2 rounded-xl transition"
+                onclick="window._lightboxRegen()">
+          Regenerar esta imagen
+        </button>
+        <button onclick="window._closeLightbox()"
+                class="bg-gray-600 hover:bg-gray-500 text-white text-sm font-semibold px-5 py-2 rounded-xl transition">
+          Cerrar
+        </button>
+      </div>
+    </div>
 
     <!-- Footer nav -->
     <div class="px-5 py-3 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
@@ -983,10 +994,11 @@
   var _wiz = {
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
-    selected_images: [], ai_image_url: null,
+    selected_images: [], ai_images: [],  // ai_images = all generated; selected_images = chosen for listing
     sku: '', model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
+    _lightbox_idx: -1,  // index into _wiz.ai_images for lightbox
   };
 
   window._openWizard = function(gap) {
@@ -994,7 +1006,7 @@
     _wiz.price = gap.suggested_price_mxn || 0;
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
-    _wiz.selected_images = []; _wiz.ai_image_url = null;
+    _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1;
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
@@ -1338,18 +1350,8 @@
       document.getElementById('wiz-img-prompt').value = 'Professional product photography of ' + product + '. Studio lighting, pure white background, sharp focus, 4K, retail ready.';
     }
 
-    // Restore AI thumb if already generated (or reset if new SKU)
-    var aiThumb = document.getElementById('wiz-img-ai-thumb');
-    var aiNone = document.getElementById('wiz-img-ai-none');
-    var aiCheck = document.getElementById('wiz-img-ai-check');
-    if (_wiz.ai_image_url) {
-      aiThumb.src = _wiz.ai_image_url; aiThumb.classList.remove('hidden'); aiNone.classList.add('hidden');
-      if (_wiz.selected_images.indexOf(_wiz.ai_image_url) >= 0) aiCheck.classList.remove('hidden');
-      else aiCheck.classList.add('hidden');
-    } else {
-      aiThumb.src = ''; aiThumb.classList.add('hidden'); aiNone.classList.remove('hidden');
-      aiCheck.classList.add('hidden');
-    }
+    // Restore AI gallery if already generated
+    _wizRenderAIGrid();
 
     // Load BM images
     _wizLoadBMImages();
@@ -1445,7 +1447,7 @@
   function _wizToggleBMImage(wrapper, url) {
     var idx = _wiz.selected_images.indexOf(url);
     if (idx >= 0) {
-      if (_wiz.selected_images.length === 1 && !_wiz.ai_image_url) return; // keep at least 1 if no AI
+      if (_wiz.selected_images.length === 1 && !_wiz.ai_images.length) return; // keep at least 1 if no AI
       _wiz.selected_images.splice(idx, 1);
     } else {
       if (_wiz.selected_images.length >= 12) return; // ML max
@@ -1470,75 +1472,163 @@
     });
   }
 
-  // ── Toggle AI image selection
-  window._wizToggleAI = function() {
-    if (!_wiz.ai_image_url) return;
-    var idx = _wiz.selected_images.indexOf(_wiz.ai_image_url);
-    var check = document.getElementById('wiz-img-ai-check');
-    if (idx >= 0) {
-      _wiz.selected_images.splice(idx, 1);
-      check.classList.add('hidden');
-    } else {
-      if (_wiz.selected_images.length >= 12) return;
-      _wiz.selected_images.unshift(_wiz.ai_image_url); // AI goes first (main photo)
-      check.classList.remove('hidden');
+  // ── Render AI image grid (called after generation or on step 3 load)
+  function _wizRenderAIGrid() {
+    var grid = document.getElementById('wiz-ai-grid');
+    var selCount = document.getElementById('wiz-ai-sel-count');
+    if (!grid) return;
+    var aiSel = _wiz.selected_images.filter(function(u) {
+      return _wiz.ai_images.some(function(img) { return img.url === u; });
+    });
+    if (selCount) {
+      if (aiSel.length > 0) { selCount.textContent = aiSel.length + ' seleccionada' + (aiSel.length > 1 ? 's' : ''); selCount.classList.remove('hidden'); }
+      else selCount.classList.add('hidden');
     }
-    _wizRefreshBMGrid();
-  };
+    if (!_wiz.ai_images.length) { grid.innerHTML = ''; return; }
+    grid.innerHTML = _wiz.ai_images.map(function(img, i) {
+      var sel = _wiz.selected_images.indexOf(img.url) >= 0;
+      var selIdx = _wiz.selected_images.indexOf(img.url);
+      if (img.loading) {
+        return '<div class="aspect-square bg-gray-100 rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center">' +
+          '<svg class="animate-spin w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>' +
+          '</div>';
+      }
+      if (img.error) {
+        return '<div class="aspect-square bg-red-50 rounded-lg border border-red-200 flex items-center justify-center text-[9px] text-red-400 text-center px-1 cursor-pointer" onclick="window._wizRegenAIImage(' + i + ')">' +
+          'Error<br>Reintentar</div>';
+      }
+      return '<div class="relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 ' + (sel ? 'border-purple-500' : 'border-gray-200') + ' transition"' +
+        ' onclick="window._openLightbox(' + i + ')">' +
+        '<img src="' + img.url + '" class="w-full h-full object-cover"/>' +
+        (sel ? '<div class="absolute top-0.5 left-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center text-[8px] text-white font-bold">' + (selIdx + 1) + '</div>' : '') +
+        '<div class="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-20 transition flex items-end justify-center pb-1">' +
+          '<span class="text-[8px] text-white bg-black bg-opacity-50 rounded px-1 opacity-0 hover:opacity-100">' + (i + 1) + '</span>' +
+        '</div>' +
+        '</div>';
+    }).join('');
+  }
 
-  // ── Generate image with FLUX
-  window._wizGenImage = function() {
+  // ── Generate 4 images with FLUX (batch)
+  window._wizGenImages = function() {
     var btn = document.getElementById('wiz-btn-gen-img');
-    var spinner = document.getElementById('wiz-img-ai-spin');
-    var aiThumb = document.getElementById('wiz-img-ai-thumb');
-    var aiNone = document.getElementById('wiz-img-ai-none');
-    var aiCheck = document.getElementById('wiz-img-ai-check');
     var errEl = document.getElementById('wiz-img-gen-err');
     var prompt = document.getElementById('wiz-img-prompt').value.trim();
     if (!prompt) { errEl.textContent = 'Escribe un prompt primero.'; errEl.classList.remove('hidden'); return; }
-
     errEl.classList.add('hidden');
-    btn.disabled = true; btn.textContent = 'Generando (~10s)...';
-    aiThumb.classList.add('hidden'); aiNone.classList.add('hidden'); spinner.classList.remove('hidden');
+
+    // Show 4 loading spinners
+    _wiz.ai_images = [{loading:true},{loading:true},{loading:true},{loading:true}];
+    _wizRenderAIGrid();
+    btn.disabled = true; btn.textContent = 'Generando 4 imágenes (~30s)...';
 
     var gap = _wiz.gap || {};
-    fetch('/api/lanzar/generate-image', {
+    fetch('/api/lanzar/generate-images-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        custom_prompt: prompt,
+        custom_prompt: prompt, count: 4,
         brand: gap.brand || '', model: gap.model || '',
         title: gap.product_title || '', category: gap.category || '',
       }),
     })
-    .then(function(r) {
-      return r.text().then(function(txt) {
-        try { return JSON.parse(txt); }
-        catch(e) { throw new Error('HTTP ' + r.status + ': ' + txt.slice(0, 120)); }
-      });
-    })
+    .then(function(r) { return r.json(); })
     .then(function(d) {
-      spinner.classList.add('hidden');
-      btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
-      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); aiNone.classList.remove('hidden'); return; }
-      // Remove old AI url from selection if exists
-      if (_wiz.ai_image_url) {
-        var oi = _wiz.selected_images.indexOf(_wiz.ai_image_url);
-        if (oi >= 0) _wiz.selected_images.splice(oi, 1);
+      btn.disabled = false; btn.innerHTML = '✨ Generar 4 imágenes con IA';
+      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); _wiz.ai_images = []; _wizRenderAIGrid(); return; }
+      // Remove any previously generated AI images from selection
+      var oldUrls = (_wiz.ai_images || []).map(function(img) { return img.url; }).filter(Boolean);
+      _wiz.selected_images = _wiz.selected_images.filter(function(u) { return oldUrls.indexOf(u) < 0; });
+      _wiz.ai_images = (d.images || []).map(function(img) {
+        return img.error ? {error: img.error} : {url: img.url, prompt: img.prompt};
+      });
+      // Auto-select first successful image
+      var first = _wiz.ai_images.find(function(img) { return img.url; });
+      if (first && _wiz.selected_images.length < 12) {
+        _wiz.selected_images.unshift(first.url);
       }
-      _wiz.ai_image_url = d.image_url;
-      aiThumb.src = d.image_url; aiThumb.classList.remove('hidden');
-      // Auto-add to selection as first (main) image
-      _wiz.selected_images.unshift(d.image_url);
-      aiCheck.classList.remove('hidden');
-      document.getElementById('wiz-img-ai-wrap').style.borderColor = '#a855f7';
+      _wizRenderAIGrid();
       _wizRefreshBMGrid();
     })
     .catch(function(e) {
-      spinner.classList.add('hidden'); aiNone.classList.remove('hidden');
-      btn.disabled = false; btn.innerHTML = '✨ Generar imagen con IA';
+      btn.disabled = false; btn.innerHTML = '✨ Generar 4 imágenes con IA';
       errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
+      _wiz.ai_images = []; _wizRenderAIGrid();
     });
+  };
+
+  // ── Regenerate a single AI image (from lightbox or error tile)
+  window._wizRegenAIImage = function(idx) {
+    var gap = _wiz.gap || {};
+    var prompt = document.getElementById('wiz-img-prompt').value.trim() ||
+      'Professional product photography of ' + ((gap.brand || '') + ' ' + (gap.model || '')).trim() + '. Studio lighting, pure white background.';
+    var old = _wiz.ai_images[idx];
+    if (old && old.url) {
+      var si = _wiz.selected_images.indexOf(old.url);
+      if (si >= 0) _wiz.selected_images.splice(si, 1);
+    }
+    _wiz.ai_images[idx] = {loading: true};
+    _wizRenderAIGrid();
+    fetch('/api/lanzar/generate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ custom_prompt: prompt, brand: gap.brand || '', model: gap.model || '', title: gap.product_title || '', category: gap.category || '' }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { _wiz.ai_images[idx] = {error: d.error}; }
+      else { _wiz.ai_images[idx] = {url: d.image_url, prompt: d.prompt}; }
+      _wizRenderAIGrid();
+      _wizRefreshBMGrid();
+    })
+    .catch(function(e) { _wiz.ai_images[idx] = {error: e.message}; _wizRenderAIGrid(); });
+  };
+
+  // ── Lightbox
+  window._openLightbox = function(idx) {
+    var img = _wiz.ai_images[idx];
+    if (!img || !img.url) return;
+    _wiz._lightbox_idx = idx;
+    document.getElementById('wiz-lightbox-img').src = img.url;
+    var toggleBtn = document.getElementById('wiz-lightbox-toggle');
+    var sel = _wiz.selected_images.indexOf(img.url) >= 0;
+    toggleBtn.textContent = sel ? 'Quitar de publicación' : 'Agregar a publicación';
+    toggleBtn.className = 'text-sm font-semibold px-5 py-2 rounded-xl transition ' +
+      (sel ? 'bg-yellow-400 text-gray-800 hover:bg-yellow-500' : 'bg-green-500 text-white hover:bg-green-600');
+    document.getElementById('wiz-lightbox').classList.remove('hidden');
+  };
+
+  window._closeLightbox = function(e) {
+    document.getElementById('wiz-lightbox').classList.add('hidden');
+    _wiz._lightbox_idx = -1;
+  };
+
+  window._lightboxToggleSelect = function() {
+    var idx = _wiz._lightbox_idx;
+    if (idx < 0) return;
+    var img = _wiz.ai_images[idx];
+    if (!img || !img.url) return;
+    var si = _wiz.selected_images.indexOf(img.url);
+    if (si >= 0) {
+      _wiz.selected_images.splice(si, 1);
+    } else {
+      if (_wiz.selected_images.length >= 12) return;
+      _wiz.selected_images.unshift(img.url);  // AI goes first (main photo)
+    }
+    _wizRenderAIGrid();
+    _wizRefreshBMGrid();
+    // update button
+    var sel = _wiz.selected_images.indexOf(img.url) >= 0;
+    var toggleBtn = document.getElementById('wiz-lightbox-toggle');
+    toggleBtn.textContent = sel ? 'Quitar de publicación' : 'Agregar a publicación';
+    toggleBtn.className = 'text-sm font-semibold px-5 py-2 rounded-xl transition ' +
+      (sel ? 'bg-yellow-400 text-gray-800 hover:bg-yellow-500' : 'bg-green-500 text-white hover:bg-green-600');
+  };
+
+  window._lightboxRegen = function() {
+    var idx = _wiz._lightbox_idx;
+    if (idx < 0) return;
+    window._closeLightbox();
+    window._wizRegenAIImage(idx);
   };
 
   // ── Publish

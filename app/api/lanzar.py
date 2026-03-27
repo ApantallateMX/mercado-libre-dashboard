@@ -1139,6 +1139,15 @@ async def get_gaps(
         )
         badge_total = (await badge_cur.fetchone())[0]
 
+    items = []
+    for r in rows:
+        d = dict(r)
+        # Sanitize BM sentinel cost value (9999.99 = "cost unknown")
+        if (d.get("cost_usd") or 0) >= 9000:
+            d["cost_usd"] = 0
+            d["cost_price_mxn"] = 0
+        items.append(d)
+
     return {
         "user_id":     user_id,
         "total":       total,          # filtered count
@@ -1146,7 +1155,7 @@ async def get_gaps(
         "page":        page,
         "per_page":    per_page,
         "pages":       max(1, -(-total // per_page)),  # ceiling division
-        "items":       [dict(r) for r in rows],
+        "items":       items,
     }
 
 
@@ -1574,6 +1583,50 @@ async def generate_image_endpoint(request: Request):
     except Exception as e:
         logger.error(f"generate-image error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/generate-images-batch")
+async def generate_images_batch_endpoint(request: Request):
+    """Genera múltiples imágenes de producto en paralelo con distintos ángulos."""
+    from app.services import replicate_client
+
+    if not replicate_client.is_available():
+        return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
+
+    body = await request.json()
+    base_prompt = replicate_client.build_product_prompt(
+        brand    = body.get("brand", ""),
+        model    = body.get("model", ""),
+        title    = body.get("title", "") or body.get("product_title", ""),
+        category = body.get("category", ""),
+    )
+    custom = (body.get("custom_prompt") or "").strip()
+    if custom:
+        base_prompt = custom
+
+    n = min(int(body.get("count", 4)), 6)
+
+    _ANGLE_SUFFIXES = [
+        "",
+        " Slight 3/4 angle view.",
+        " Side profile view.",
+        " Top-front angled view.",
+        " Close-up of screen showing vibrant 4K content.",
+        " Product in modern living room, natural lighting.",
+    ]
+
+    prompts = [(base_prompt + _ANGLE_SUFFIXES[i]).strip() for i in range(n)]
+    tasks   = [replicate_client.generate_image(p) for p in prompts]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    images = []
+    for i, (r, p) in enumerate(zip(results, prompts)):
+        if isinstance(r, Exception):
+            images.append({"error": str(r), "prompt": p, "index": i})
+        else:
+            images.append({"image_url": r, "prompt": p, "index": i})
+
+    return {"images": images}
 
 
 @router.post("/ignore/{sku}")
