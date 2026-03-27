@@ -1751,33 +1751,57 @@ async def generate_product_prompts_endpoint(request: Request):
     import json as _json
     from app.services import replicate_client
 
-    body     = await request.json()
-    brand    = body.get("brand", "")
-    model    = body.get("model", "")
-    title    = body.get("title", "") or body.get("product_title", "")
-    category = body.get("category", "")
-    size     = str(body.get("size", "") or "").strip()
+    body          = await request.json()
+    brand         = body.get("brand", "")
+    model         = body.get("model", "")
+    title         = body.get("title", "") or body.get("product_title", "")
+    category      = body.get("category", "")
+    size          = str(body.get("size", "") or "").strip()
+    has_reference = bool(body.get("has_reference", False))
+
+    # KONTEXT mode: reference image already carries the product — prompts describe the scene/environment.
+    # FLUX mode: no reference — prompts must describe the product explicitly in each scene.
+    if has_reference:
+        mode_instruction = (
+            "MODO KONTEXT (hay imagen de referencia del producto real):\n"
+            "El TV ya está en la imagen de referencia — NO describas el TV en el prompt.\n"
+            "Describe SOLO la escena, ambiente, iluminación y estilo de vida donde se colocará.\n"
+            "Ejemplo correcto: 'Sophisticated modern Mexican penthouse living room at golden hour. "
+            "Warm cinematic light, plush cream sofa, city skyline through floor-to-ceiling windows. "
+            "Aspirational lifestyle photography, 8K, photorealistic.'\n"
+            "Ejemplo INCORRECTO: 'A Samsung TV in a living room' — no menciones el producto.\n"
+        )
+    else:
+        mode_instruction = (
+            "MODO FLUX TEXTO (sin imagen de referencia):\n"
+            "Menciona explícitamente el TV en cada prompt: "
+            f"'large flat-screen {brand} television with ultra-thin bezels, metallic stand'.\n"
+            "NUNCA uses palabras que puedan confundirse con una cámara o fotografía "
+            "(no: 'lens', 'shot', 'camera', 'photograph').\n"
+            "Sí usa: 'flat-screen television', 'large rectangular display', 'smart TV'.\n"
+        )
 
     system = (
-        "Eres un fotógrafo comercial experto y especialista en marketing digital para Mercado Libre México.\n\n"
-        "Genera exactamente 8 prompts en inglés para FLUX AI (text-to-image) para fotografías de producto.\n"
-        "Cada prompt debe generar una foto comercial diferente que motive la compra.\n\n"
-        "REGLAS ESTRICTAS:\n"
-        "- Prompt 1 (índice 0): Hero shot limpio. Fondo blanco seamless, producto de frente, perfectamente centrado. "
-        "Para Smart TVs: muestra la interfaz del sistema operativo integrado en pantalla (nunca dispositivo externo).\n"
-        "- Prompts 2-7 (índices 1-6): Fotografía lifestyle hermosa. Hogares modernos mexicanos de lujo, "
-        "iluminación cinematográfica cálida, escenas aspiracionales. Sin fondos blancos. "
-        "Cada imagen cuenta una historia diferente: familia, noche de cine, sala elegante, etc.\n"
-        "- Prompt 8 (índice 7): Close-up macro del panel trasero de conectividad. "
-        "Fondo oscuro, todos los puertos HDMI/USB/LAN claramente visibles y etiquetados.\n\n"
-        "CRÍTICO para Smart TVs con OS integrado (Roku TV, Google TV, Android TV, Fire TV, webOS, Tizen, VIDAA, SmartCast):\n"
-        "NUNCA mostrar un dispositivo externo de streaming (stick, dongle, caja, Chromecast, etc.).\n"
-        "El sistema operativo ES PARTE DEL TV — solo muestra el TV con su interfaz en pantalla.\n\n"
-        "- Sin texto visible en las imágenes lifestyle\n"
-        "- Calidad cinematográfica profesional: 8K, fotorrealista, editorial de revista\n"
-        "- Prompts específicos a este producto exacto — usa el nombre de marca y características reales\n\n"
+        "Eres un director creativo de fotografía comercial para Mercado Libre México.\n"
+        "Tu trabajo: generar 8 prompts en inglés para FLUX AI que cuenten una historia visual "
+        "aspiracional y hermosa del producto, capítulo por capítulo.\n\n"
+        + mode_instruction +
+        "\nLOS 8 CAPÍTULOS (en este orden exacto):\n"
+        "0. HERO — Fondo blanco seamless, producto centrado, iluminación de estudio perfecta.\n"
+        "1. PENTHOUSE — Sala de lujo moderna, golden hour, vista de ciudad, aspiracional máximo.\n"
+        "2. FAMILIA — Noche de película, familia reunida, palomitas, luz cálida y cómoda.\n"
+        "3. DEPORTE — Partido de fútbol en pantalla, sala con energía de estadio, colores vibrantes.\n"
+        "4. CINE OSCURO — Sala completamente oscura, solo la luz del TV ilumina la habitación, 4K dramático.\n"
+        "5. SMART / APPS — Pantalla mostrando interfaz de apps (Netflix/YouTube), sala minimalista moderna.\n"
+        "6. DISEÑO PREMIUM — Close-up angular del bezel ultra delgado, materiales premium, fondo oscuro elegante.\n"
+        "7. EXTERIOR NOCHE — Casa moderna de noche, TV visible desde ventana, exterior aspiracional.\n\n"
+        "REGLAS ABSOLUTAS:\n"
+        "- Sin texto visible en las imágenes\n"
+        "- Sin dispositivos externos (no sticks, no dongles, no cajas de streaming)\n"
+        "- Calidad: 'cinematic photography, 8K ultra-realistic, professional commercial'\n"
+        "- Cada prompt: mínimo 40 palabras, máximo 80 palabras\n\n"
         "Responde ÚNICAMENTE con un JSON array válido de exactamente 8 strings. "
-        "Sin markdown, sin explicaciones, sin backticks."
+        "Sin markdown, sin backticks, sin explicaciones."
     )
 
     user = (
@@ -1785,9 +1809,8 @@ async def generate_product_prompts_endpoint(request: Request):
         f"Marca: {brand}\n"
         f"Modelo: {model}\n"
         f"Categoría: {category}\n"
-        f"Tamaño de pantalla: {size}\"\n\n"
-        "Genera 8 prompts únicos de fotografía comercial que cuenten la historia de este producto "
-        "y motiven la compra en Mercado Libre México."
+        f"Tamaño: {size}\"\n\n"
+        "Genera los 8 prompts narrativos para este producto exacto."
     )
 
     try:
@@ -1853,45 +1876,66 @@ async def generate_video_commercial_endpoint(request: Request):
     size        = str(body.get("size", "") or "").strip()
     first_frame = (body.get("first_frame_image") or "").strip()
 
-    # ── Step 1: Generar guion en español con Claude ─────────────────────────
-    script = ""
-    script_system = (
-        "Eres un locutor profesional de comerciales de televisión en México.\n"
-        "Crea un guion comercial de exactamente 30-40 palabras en español de México, "
-        "emocionante y convincente.\n"
-        "El guion debe:\n"
-        "- Mencionar el nombre del producto y sus características principales\n"
-        "- Crear deseo de compra y urgencia emocional\n"
-        "- Sonar natural, profesional, como anuncio de TV mexicana\n"
-        "- Terminar EXACTAMENTE con: Disponible ahora en Mercado Libre.\n"
-        "Responde SOLO con el texto del guion, sin comillas ni explicaciones."
+    # ── Step 1: Claude genera guion + video_prompt juntos (coherencia visual) ──
+    script       = ""
+    video_prompt = ""
+
+    claude_system = (
+        "Eres el director creativo de un comercial de televisión para Mercado Libre México.\n"
+        "Tu tarea: crear dos cosas relacionadas para el mismo comercial de 6 segundos.\n\n"
+        "Responde ÚNICAMENTE con este JSON (sin markdown, sin backticks):\n"
+        '{"script": "...", "video_prompt": "..."}\n\n'
+        "SCRIPT (campo 'script'):\n"
+        "- Texto de locución en español de México, exactamente 25-35 palabras\n"
+        "- Tono emocionante, aspiracional, como comercial de TV premium\n"
+        "- Menciona el producto y una característica clave que lo hace único\n"
+        "- Termina EXACTAMENTE con: Disponible ahora en Mercado Libre.\n\n"
+        "VIDEO PROMPT (campo 'video_prompt'):\n"
+        "- Descripción en inglés de los MOVIMIENTOS CINEMATOGRÁFICOS del video (6 segundos)\n"
+        "- Debe COINCIDIR visualmente con lo que dice el script\n"
+        "- Describe: ángulo inicial → movimiento de cámara → qué se ve en pantalla → cómo termina\n"
+        "- Ejemplo: 'Cinematic slow push-in toward a large flat-screen television in a luxury penthouse "
+        "living room. Warm golden hour light. Camera glides right revealing slim bezels. "
+        "Screen displays vivid 4K nature scene. Premium lifestyle commercial, 8K.'\n"
+        "- NUNCA uses 'camera' como un sustantivo de equipo fotográfico — describe movimientos de escena\n"
+        "- SIEMPRE describe el TV como: 'large flat-screen television', 'big screen display'\n"
+        "- Máximo 60 palabras"
     )
-    script_user = (
+    claude_user = (
         f"Producto: {title}\n"
         f"Marca: {brand}\n"
         f"Modelo: {model}\n"
         f"Tamaño: {size}\"\n"
         f"Categoría: {category}\n"
-        "Genera el guion del comercial de 30 segundos."
+        f"Imagen de referencia disponible: {'sí' if first_frame else 'no'}\n\n"
+        "Genera el script en español y el video_prompt en inglés para el comercial."
     )
     try:
-        script = (await claude_client.generate(prompt=script_user, system=script_system, max_tokens=200)).strip()
-        script = script.strip('"').strip("'").strip()
+        import json as _json_inner
+        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=400)).strip()
+        # Strip markdown fences if present
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        parsed   = _json_inner.loads(raw.strip())
+        script   = parsed.get("script", "").strip().strip('"').strip("'")
+        video_prompt = parsed.get("video_prompt", "").strip()
+        logger.info(f"Script: {script[:80]}...")
+        logger.info(f"Video prompt: {video_prompt[:80]}...")
     except Exception as e:
-        logger.warning(f"Script generation failed: {e}")
+        logger.warning(f"Claude script+video_prompt failed: {e}")
         size_txt = f"{size} pulgadas " if size else ""
         script = (
             f"El {brand} {size_txt}{model} — imagen brillante, sonido envolvente y "
-            f"entretenimiento sin límites. Todo lo que tu familia merece, integrado en un solo televisor. "
+            f"entretenimiento sin límites. Todo lo que tu familia merece en un solo televisor. "
             f"Disponible ahora en Mercado Libre."
         )
 
-    logger.info(f"Script generado ({len(script)} chars): {script[:80]}...")
-
-    # ── Step 2 & 3: TTS + video en paralelo ────────────────────────────────
-    video_prompt = replicate_client.build_video_prompt(
-        brand=brand, model=model, title=title, category=category, size=size
-    )
+    if not video_prompt:
+        video_prompt = replicate_client.build_video_prompt(
+            brand=brand, model=model, title=title, category=category, size=size
+        )
 
     # TTS (Bark via Replicate, siempre disponible) + video en paralelo
     tts_coro   = elevenlabs_client.generate_audio(script)
@@ -1906,6 +1950,11 @@ async def generate_video_commercial_endpoint(request: Request):
     video_url = video_result  # URL pública de minimax
 
     # ── Step 4: Descargar video y combinar con ffmpeg ───────────────────────
+    if isinstance(audio_result, Exception):
+        logger.warning(f"TTS falló — video sin audio: {audio_result}")
+    else:
+        logger.info(f"TTS exitoso: {len(audio_result)} bytes de audio")
+
     if isinstance(audio_result, bytes) and audio_result:
         vid_id = str(_uuid.uuid4())
         try:

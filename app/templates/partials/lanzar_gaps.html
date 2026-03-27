@@ -662,38 +662,30 @@
               <span id="wiz-ai-sel-count" class="text-[10px] text-purple-600 font-semibold hidden"></span>
             </div>
 
-            <!-- Reference image — buscar o pegar URL -->
-            <div class="bg-blue-50 border border-blue-100 rounded-lg p-2.5 mb-2 space-y-2">
-              <div class="text-[10px] text-blue-700 font-semibold">📌 Imagen de referencia del producto real (opcional pero recomendado)</div>
-              <div class="flex gap-1.5">
-                <button onclick="window._wizSearchRefImage()" id="wiz-btn-search-ref"
-                        class="text-xs bg-blue-500 hover:bg-blue-600 text-white font-semibold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">
-                  🔍 Buscar
-                </button>
-                <input id="wiz-ref-url-input" type="text"
-                       placeholder="...o pega aquí el link de la imagen oficial (Google, Sony, Walmart...)"
-                       class="flex-1 text-xs border border-blue-200 bg-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"/>
-                <button onclick="window._wizSetRefImageFromInput(document.getElementById('wiz-ref-url-input').value)"
-                        class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 font-semibold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">
-                  Usar
-                </button>
+            <!-- Reference photos — hasta 8 fotos reales del producto -->
+            <div class="bg-blue-50 border border-blue-100 rounded-lg p-2.5 mb-2">
+              <div class="flex items-center justify-between mb-2">
+                <div class="text-[10px] text-blue-700 font-semibold">📸 Fotos reales del producto — se publican directo en ML</div>
+                <span id="wiz-ref-count" class="text-[10px] text-blue-500 font-medium">0 / 8</span>
               </div>
-              <span id="wiz-ref-searching" class="hidden text-[10px] text-gray-400">Buscando en Google...</span>
-              <!-- Active reference preview -->
-              <div id="wiz-ref-img-wrap" class="hidden flex items-center gap-2">
-                <img id="wiz-ref-img-thumb" src="" alt="ref"
-                     class="w-12 h-12 object-contain rounded-lg border border-blue-300 bg-white flex-shrink-0"/>
-                <div class="flex-1 min-w-0">
-                  <div class="text-[10px] text-blue-700 font-semibold">✅ Referencia activa</div>
-                  <div class="text-[9px] text-blue-500">Las 7 imágenes lifestyle usarán esta foto como base visual</div>
+              <!-- Grid de 8 slots -->
+              <div id="wiz-ref-grid" class="grid grid-cols-4 gap-1.5"></div>
+              <!-- Input para agregar URL (se muestra al hacer click en "+") -->
+              <div id="wiz-ref-add-wrap" class="hidden mt-2">
+                <div class="flex gap-1.5">
+                  <input id="wiz-ref-url-input" type="text"
+                         placeholder="Pega el link de la imagen (Google, fabricante, Walmart...)"
+                         onkeydown="if(event.key==='Enter') window._wizConfirmRefAdd()"
+                         class="flex-1 text-xs border border-blue-200 bg-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"/>
+                  <button onclick="window._wizConfirmRefAdd()"
+                          class="text-xs bg-blue-500 hover:bg-blue-600 text-white font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap">
+                    Agregar
+                  </button>
+                  <button onclick="window._wizCancelRefAdd()"
+                          class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1.5 font-bold">✕</button>
                 </div>
-                <button onclick="window._wizClearRefImage()" class="text-[10px] text-red-400 hover:text-red-600 flex-shrink-0 font-bold">✕</button>
               </div>
-              <!-- Search results picker -->
-              <div id="wiz-ref-picker" class="hidden">
-                <div class="text-[10px] text-blue-700 font-medium mb-1">Selecciona la imagen oficial:</div>
-                <div id="wiz-ref-results" class="grid grid-cols-4 gap-1.5"></div>
-              </div>
+              <div class="mt-1.5 text-[9px] text-blue-400">La primera foto = base para imágenes IA · Todas se publican en ML</div>
             </div>
 
             <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
@@ -1090,7 +1082,7 @@
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_images: [],  // ai_images = all generated; selected_images = chosen for listing
-    video_url: '', reference_image_url: '',
+    video_url: '', reference_images: [],
     sku: '', model: '', brand: '', gtin: '', family_name: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
@@ -1103,13 +1095,12 @@
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
     _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1;
-    _wiz.video_url = ''; _wiz.reference_image_url = '';
+    _wiz.video_url = ''; _wiz.reference_images = [];
     document.getElementById('wiz-video-wrap').classList.add('hidden');
     document.getElementById('wiz-video-gen-err').classList.add('hidden');
-    document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
-    document.getElementById('wiz-ref-picker').classList.add('hidden');
-    document.getElementById('wiz-ref-url-input').value = '';
+    document.getElementById('wiz-ref-add-wrap').classList.add('hidden');
     document.getElementById('wiz-video-script-wrap').classList.add('hidden');
+    _renderRefGrid();
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.family_name = _guessFamilyName(gap.brand || '', gap.model || '', gap.product_title || '');
@@ -1596,86 +1587,100 @@
     grid.innerHTML = _wiz.ai_images.map(function(img, i) {
       var sel = _wiz.selected_images.indexOf(img.url) >= 0;
       var selIdx = _wiz.selected_images.indexOf(img.url);
+      var chLabels = ['Hero','Penthouse','Familia','Deporte','Cine','Smart','Diseño','Exterior'];
+      var chLabel = img.chapter || chLabels[i] || (i + 1);
       if (img.loading) {
-        return '<div class="aspect-square bg-gray-100 rounded-lg border-2 border-dashed border-gray-200 flex items-center justify-center">' +
+        return '<div class="aspect-square bg-gray-100 rounded-lg border-2 border-dashed border-gray-200 flex flex-col items-center justify-center gap-1">' +
           '<svg class="animate-spin w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>' +
+          '<span class="text-[8px] text-purple-300">' + chLabel + '</span>' +
           '</div>';
       }
       if (img.error) {
-        return '<div class="aspect-square bg-red-50 rounded-lg border border-red-200 flex items-center justify-center text-[9px] text-red-400 text-center px-1 cursor-pointer" onclick="window._wizRegenAIImage(' + i + ')">' +
-          'Error<br>Reintentar</div>';
+        return '<div class="aspect-square bg-red-50 rounded-lg border border-red-200 flex flex-col items-center justify-center text-[9px] text-red-400 text-center px-1 cursor-pointer gap-1" onclick="window._wizRegenAIImage(' + i + ')">' +
+          '<span class="font-medium">' + chLabel + '</span><span>Error · Reintentar</span></div>';
       }
-      return '<div class="relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 ' + (sel ? 'border-purple-500' : 'border-gray-200') + ' transition"' +
+      return '<div class="relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 ' + (sel ? 'border-purple-500' : 'border-gray-200') + ' transition group"' +
         ' onclick="window._openLightbox(' + i + ')">' +
         '<img src="' + img.url + '" class="w-full h-full object-cover"/>' +
         (sel ? '<div class="absolute top-0.5 left-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center text-[8px] text-white font-bold">' + (selIdx + 1) + '</div>' : '') +
-        '<div class="absolute inset-0 bg-black bg-opacity-0 hover:bg-opacity-20 transition flex items-end justify-center pb-1">' +
-          '<span class="text-[8px] text-white bg-black bg-opacity-50 rounded px-1 opacity-0 hover:opacity-100">' + (i + 1) + '</span>' +
+        '<div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent px-1 py-1">' +
+          '<span class="text-[8px] text-white font-semibold">' + chLabel + '</span>' +
         '</div>' +
         '</div>';
     }).join('');
   }
 
-  // ── Reference image search (DuckDuckGo)
-  window._wizSearchRefImage = async function() {
-    var gap       = _wiz.gap || {};
-    var btnSearch = document.getElementById('wiz-btn-search-ref');
-    var searching = document.getElementById('wiz-ref-searching');
-    var picker    = document.getElementById('wiz-ref-picker');
-    var results   = document.getElementById('wiz-ref-results');
-
-    btnSearch.disabled = true; searching.classList.remove('hidden');
-    picker.classList.add('hidden');
-
-    try {
-      var qs = new URLSearchParams({
-        brand: gap.brand || '', model: gap.model || '', title: gap.product_title || ''
-      });
-      var r = await fetch('/api/lanzar/search-product-image?' + qs);
-      var d = await r.json();
-      var imgs = d.images || [];
-      if (!imgs.length) {
-        alert('No se encontraron imágenes. Puedes pegar una URL directamente en el campo de referencia.');
+  // ── Reference image grid (8 slots)
+  function _renderRefGrid() {
+    var grid    = document.getElementById('wiz-ref-grid');
+    var countEl = document.getElementById('wiz-ref-count');
+    if (!grid) return;
+    var refs = _wiz.reference_images || [];
+    if (countEl) countEl.textContent = refs.length + ' / 8';
+    var html = '';
+    for (var i = 0; i < 8; i++) {
+      if (i < refs.length) {
+        // Filled slot — show image + remove button
+        var escapedUrl = refs[i].replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        html += '<div class="relative aspect-square rounded-lg overflow-hidden border-2 border-blue-300 bg-white group">' +
+          '<img src="' + escapedUrl + '" class="w-full h-full object-contain" loading="lazy">' +
+          '<button onclick="window._wizRemoveRefImage(' + i + ')" ' +
+          'class="absolute top-0 right-0 bg-red-500 text-white text-[9px] w-4 h-4 rounded-bl flex items-center justify-center opacity-0 group-hover:opacity-100 transition font-bold leading-none">✕</button>' +
+          (i === 0 ? '<div class="absolute bottom-0 left-0 right-0 bg-blue-500 bg-opacity-90 text-white text-[8px] text-center py-0.5 leading-none">base IA</div>' : '') +
+          '</div>';
+      } else if (i === refs.length && refs.length < 8) {
+        // Next empty slot — "+" button to add
+        html += '<div onclick="window._wizOpenRefAdd()" ' +
+          'class="aspect-square rounded-lg border-2 border-dashed border-blue-200 hover:border-blue-400 bg-white flex items-center justify-center cursor-pointer transition group">' +
+          '<span class="text-xl text-blue-200 group-hover:text-blue-400 transition font-light">+</span>' +
+          '</div>';
       } else {
-        results.innerHTML = imgs.map(function(img, i) {
-          return '<div class="cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-400 transition aspect-square bg-white" onclick="window._wizSetRefImage(\'' + img.url.replace(/'/g,"&#39;") + '\')">' +
-            '<img src="' + (img.thumbnail || img.url) + '" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
-            '</div>';
-        }).join('');
-        picker.classList.remove('hidden');
+        // Remaining locked empty slots
+        html += '<div class="aspect-square rounded-lg border border-dashed border-gray-100 bg-gray-50"></div>';
       }
-    } catch(e) {
-      alert('Error buscando imagen: ' + e.message);
-    } finally {
-      btnSearch.disabled = false; searching.classList.add('hidden');
     }
+    grid.innerHTML = html;
+  }
+
+  window._wizOpenRefAdd = function() {
+    document.getElementById('wiz-ref-add-wrap').classList.remove('hidden');
+    setTimeout(function() { document.getElementById('wiz-ref-url-input').focus(); }, 50);
   };
 
-  window._wizSetRefImage = function(url) {
+  window._wizCancelRefAdd = function() {
+    document.getElementById('wiz-ref-add-wrap').classList.add('hidden');
+    document.getElementById('wiz-ref-url-input').value = '';
+  };
+
+  window._wizConfirmRefAdd = function() {
+    var url = (document.getElementById('wiz-ref-url-input').value || '').trim();
+    if (!url || !url.startsWith('http')) { alert('Pega una URL válida que comience con http'); return; }
+    window._wizAddRefImage(url);
+    window._wizCancelRefAdd();
+  };
+
+  window._wizAddRefImage = function(url) {
     if (!url || !url.startsWith('http')) return;
-    _wiz.reference_image_url = url;
-    document.getElementById('wiz-ref-img-thumb').src = url;
-    document.getElementById('wiz-ref-img-wrap').classList.remove('hidden');
-    document.getElementById('wiz-ref-picker').classList.add('hidden');
+    _wiz.reference_images = _wiz.reference_images || [];
+    if (_wiz.reference_images.length >= 8) return;
+    _wiz.reference_images.push(url);
+    // Add directly to selected_images — published to ML as-is
+    if (_wiz.selected_images.indexOf(url) < 0 && _wiz.selected_images.length < 12)
+      _wiz.selected_images.push(url);
+    _renderRefGrid();
+    _wizRefreshBMGrid();
   };
 
-  window._wizSetRefImageFromInput = function(url) {
-    url = (url || '').trim();
-    if (!url || !url.startsWith('http')) {
-      alert('Pega una URL válida que comience con http...');
-      return;
-    }
-    _wiz.reference_image_url = url;
-    document.getElementById('wiz-ref-img-thumb').src = url;
-    document.getElementById('wiz-ref-img-wrap').classList.remove('hidden');
-    document.getElementById('wiz-ref-url-input').value = '';
-  };
-
-  window._wizClearRefImage = function() {
-    _wiz.reference_image_url = '';
-    document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
-    document.getElementById('wiz-ref-img-thumb').src = '';
-    document.getElementById('wiz-ref-url-input').value = '';
+  window._wizRemoveRefImage = function(idx) {
+    var refs = _wiz.reference_images || [];
+    if (idx < 0 || idx >= refs.length) return;
+    var url = refs[idx];
+    // Remove from selected_images too
+    var si = _wiz.selected_images.indexOf(url);
+    if (si >= 0) _wiz.selected_images.splice(si, 1);
+    _wiz.reference_images.splice(idx, 1);
+    _renderRefGrid();
+    _wizRefreshBMGrid();
   };
 
   // ── Generate 8 images — Claude genera prompts únicos → FLUX/Kontext los ejecuta
@@ -1686,7 +1691,7 @@
 
     var gap   = _wiz.gap || {};
     var total = 8;
-    var ref   = _wiz.reference_image_url || '';
+    var ref   = (_wiz.reference_images || [])[0] || '';
 
     // Reset: remove old AI images from selection, show 8 spinners
     var oldUrls = (_wiz.ai_images || []).map(function(img) { return img && img.url; }).filter(Boolean);
@@ -1704,11 +1709,12 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          brand:    gap.brand         || '',
-          model:    gap.model         || '',
-          title:    gap.product_title || '',
-          category: gap.category      || '',
-          size:     gap.size ? String(gap.size) : '',
+          brand:         gap.brand         || '',
+          model:         gap.model         || '',
+          title:         gap.product_title || '',
+          category:      gap.category      || '',
+          size:          gap.size ? String(gap.size) : '',
+          has_reference: !!ref,
         }),
       });
       var pd = await pr.json();
@@ -1719,9 +1725,10 @@
     }
 
     // ── Paso 2: Generar cada imagen con su prompt específico (1 por 1)
+    var chapterNames = ['Hero', 'Penthouse', 'Familia', 'Deporte', 'Cine', 'Smart', 'Diseño', 'Exterior'];
     var modeLabel = ref ? 'Kontext' : 'FLUX';
     for (var i = 0; i < total; i++) {
-      btn.textContent = modeLabel + ' · Imagen ' + (i + 1) + ' de ' + total + '...';
+      btn.textContent = modeLabel + ' · ' + (chapterNames[i] || ('Imagen ' + (i+1))) + ' (' + (i+1) + '/' + total + ')...';
       var customPrompt = claudePrompts[i] || '';
       try {
         var resp = await fetch('/api/lanzar/generate-image', {
@@ -1742,7 +1749,7 @@
         if (d.error) {
           _wiz.ai_images[i] = { error: d.error };
         } else {
-          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt, mode: d.mode };
+          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt, mode: d.mode, chapter: chapterNames[i] || '' };
           if (i === 0 && _wiz.selected_images.indexOf(d.image_url) < 0 && _wiz.selected_images.length < 12) {
             _wiz.selected_images.unshift(d.image_url);
           }
@@ -1767,7 +1774,7 @@
     wrap.classList.add('hidden');
 
     var gap        = _wiz.gap || {};
-    var firstFrame = _wiz.reference_image_url || (_wiz.selected_images && _wiz.selected_images[0]) || '';
+    var firstFrame = (_wiz.reference_images || [])[0] || (_wiz.selected_images && _wiz.selected_images[0]) || '';
 
     btn.disabled = true;
 
