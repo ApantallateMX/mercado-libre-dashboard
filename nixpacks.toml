@@ -1,0 +1,4 @@
+# nixpacks.toml — Railway build configuration
+# Instala ffmpeg para combinar audio + video en el pipeline comercial
+[phases.setup]
+nixPkgs = ["ffmpeg"]

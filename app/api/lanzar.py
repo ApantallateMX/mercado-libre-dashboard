@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/lanzar", tags=["lanzar"])
 
+# In-memory video cache — videos combinados (audio+video) listos para servir
+# Ephemeral: se pierde al reiniciar Railway (ok, el usuario descarga inmediatamente)
+_video_cache: dict[str, bytes] = {}
+
 # BM endpoints (same as sku_inventory.py)
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
 _BM_USER = __import__("os").getenv("BM_USER", "jovan.rodriguez@mitechnologiesinc.com")
@@ -1737,6 +1741,236 @@ async def generate_video_endpoint(request: Request):
     except Exception as e:
         logger.error(f"generate-video error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/generate-product-prompts")
+async def generate_product_prompts_endpoint(request: Request):
+    """Usa Claude para generar 8 prompts únicos de fotografía comercial para el producto.
+    Cada prompt cuenta una historia diferente y es específico al producto real.
+    """
+    import json as _json
+    from app.services import replicate_client
+
+    body     = await request.json()
+    brand    = body.get("brand", "")
+    model    = body.get("model", "")
+    title    = body.get("title", "") or body.get("product_title", "")
+    category = body.get("category", "")
+    size     = str(body.get("size", "") or "").strip()
+
+    system = (
+        "Eres un fotógrafo comercial experto y especialista en marketing digital para Mercado Libre México.\n\n"
+        "Genera exactamente 8 prompts en inglés para FLUX AI (text-to-image) para fotografías de producto.\n"
+        "Cada prompt debe generar una foto comercial diferente que motive la compra.\n\n"
+        "REGLAS ESTRICTAS:\n"
+        "- Prompt 1 (índice 0): Hero shot limpio. Fondo blanco seamless, producto de frente, perfectamente centrado. "
+        "Para Smart TVs: muestra la interfaz del sistema operativo integrado en pantalla (nunca dispositivo externo).\n"
+        "- Prompts 2-7 (índices 1-6): Fotografía lifestyle hermosa. Hogares modernos mexicanos de lujo, "
+        "iluminación cinematográfica cálida, escenas aspiracionales. Sin fondos blancos. "
+        "Cada imagen cuenta una historia diferente: familia, noche de cine, sala elegante, etc.\n"
+        "- Prompt 8 (índice 7): Close-up macro del panel trasero de conectividad. "
+        "Fondo oscuro, todos los puertos HDMI/USB/LAN claramente visibles y etiquetados.\n\n"
+        "CRÍTICO para Smart TVs con OS integrado (Roku TV, Google TV, Android TV, Fire TV, webOS, Tizen, VIDAA, SmartCast):\n"
+        "NUNCA mostrar un dispositivo externo de streaming (stick, dongle, caja, Chromecast, etc.).\n"
+        "El sistema operativo ES PARTE DEL TV — solo muestra el TV con su interfaz en pantalla.\n\n"
+        "- Sin texto visible en las imágenes lifestyle\n"
+        "- Calidad cinematográfica profesional: 8K, fotorrealista, editorial de revista\n"
+        "- Prompts específicos a este producto exacto — usa el nombre de marca y características reales\n\n"
+        "Responde ÚNICAMENTE con un JSON array válido de exactamente 8 strings. "
+        "Sin markdown, sin explicaciones, sin backticks."
+    )
+
+    user = (
+        f"Producto: {title}\n"
+        f"Marca: {brand}\n"
+        f"Modelo: {model}\n"
+        f"Categoría: {category}\n"
+        f"Tamaño de pantalla: {size}\"\n\n"
+        "Genera 8 prompts únicos de fotografía comercial que cuenten la historia de este producto "
+        "y motiven la compra en Mercado Libre México."
+    )
+
+    try:
+        raw = await claude_client.generate(prompt=user, system=system, max_tokens=3000)
+        raw = raw.strip()
+        # Strip markdown code fences if present
+        if "```" in raw:
+            parts = raw.split("```")
+            for p in parts:
+                p = p.strip()
+                if p.startswith("json"):
+                    p = p[4:].strip()
+                try:
+                    prompts = _json.loads(p)
+                    if isinstance(prompts, list):
+                        break
+                except Exception:
+                    continue
+            else:
+                prompts = _json.loads(raw)
+        else:
+            prompts = _json.loads(raw)
+
+        if not isinstance(prompts, list) or not prompts:
+            raise ValueError("Respuesta no es una lista")
+        while len(prompts) < 8:
+            prompts.append(prompts[-1])
+        logger.info(f"Claude generó {len(prompts)} prompts para '{title}'")
+        return {"prompts": prompts[:8], "source": "claude"}
+
+    except Exception as e:
+        logger.warning(f"generate-product-prompts Claude error — usando fallback: {e}")
+        prompts = replicate_client.build_batch_prompts(
+            brand=brand, model=model, title=title, category=category, size=size, count=8
+        )
+        return {"prompts": prompts, "source": "fallback"}
+
+
+@router.post("/generate-video-commercial")
+async def generate_video_commercial_endpoint(request: Request):
+    """Pipeline completo de comercial en español:
+    1. Claude genera guion en español de México (30-40 palabras)
+    2. ElevenLabs convierte guion a voz profesional en español
+    3. minimax/video-01 genera el video visual del producto
+    4. ffmpeg combina audio + video en un solo MP4
+    Retorna URL del video combinado + el guion generado.
+    """
+    import json as _json
+    import subprocess as _sp
+    import tempfile as _tf
+    import uuid as _uuid
+    import os as _os
+    from app.services import replicate_client, elevenlabs_client
+
+    if not replicate_client.is_available():
+        return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
+
+    body        = await request.json()
+    brand       = body.get("brand", "")
+    model       = body.get("model", "")
+    title       = body.get("title", "") or body.get("product_title", "")
+    category    = body.get("category", "")
+    size        = str(body.get("size", "") or "").strip()
+    first_frame = (body.get("first_frame_image") or "").strip()
+
+    # ── Step 1: Generar guion en español con Claude ─────────────────────────
+    script = ""
+    script_system = (
+        "Eres un locutor profesional de comerciales de televisión en México.\n"
+        "Crea un guion comercial de exactamente 30-40 palabras en español de México, "
+        "emocionante y convincente.\n"
+        "El guion debe:\n"
+        "- Mencionar el nombre del producto y sus características principales\n"
+        "- Crear deseo de compra y urgencia emocional\n"
+        "- Sonar natural, profesional, como anuncio de TV mexicana\n"
+        "- Terminar EXACTAMENTE con: Disponible ahora en Mercado Libre.\n"
+        "Responde SOLO con el texto del guion, sin comillas ni explicaciones."
+    )
+    script_user = (
+        f"Producto: {title}\n"
+        f"Marca: {brand}\n"
+        f"Modelo: {model}\n"
+        f"Tamaño: {size}\"\n"
+        f"Categoría: {category}\n"
+        "Genera el guion del comercial de 30 segundos."
+    )
+    try:
+        script = (await claude_client.generate(prompt=script_user, system=script_system, max_tokens=200)).strip()
+        script = script.strip('"').strip("'").strip()
+    except Exception as e:
+        logger.warning(f"Script generation failed: {e}")
+        size_txt = f"{size} pulgadas " if size else ""
+        script = (
+            f"El {brand} {size_txt}{model} — imagen brillante, sonido envolvente y "
+            f"entretenimiento sin límites. Todo lo que tu familia merece, integrado en un solo televisor. "
+            f"Disponible ahora en Mercado Libre."
+        )
+
+    logger.info(f"Script generado ({len(script)} chars): {script[:80]}...")
+
+    # ── Step 2 & 3: TTS + video en paralelo ────────────────────────────────
+    video_prompt = replicate_client.build_video_prompt(
+        brand=brand, model=model, title=title, category=category, size=size
+    )
+
+    has_tts = elevenlabs_client.is_available()
+
+    if has_tts:
+        tts_coro   = elevenlabs_client.generate_audio(script)
+        video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
+        results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
+        audio_result, video_result = results
+    else:
+        video_result = await replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
+        audio_result = None
+
+    if isinstance(video_result, Exception):
+        logger.error(f"Video generation failed: {video_result}")
+        return JSONResponse({"error": str(video_result)}, status_code=500)
+
+    video_url = video_result  # URL pública de minimax
+
+    # ── Step 4: Descargar video y combinar con ffmpeg ───────────────────────
+    if isinstance(audio_result, bytes) and audio_result:
+        vid_id = str(_uuid.uuid4())
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                vid_resp  = await client.get(video_url)
+                vid_bytes = vid_resp.content
+
+            with _tf.TemporaryDirectory() as tmpdir:
+                vid_path = _os.path.join(tmpdir, "video.mp4")
+                aud_path = _os.path.join(tmpdir, "audio.mp3")
+                out_path = _os.path.join(tmpdir, "output.mp4")
+
+                with open(vid_path, "wb") as f: f.write(vid_bytes)
+                with open(aud_path, "wb") as f: f.write(audio_result)
+
+                proc = _sp.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", vid_path,
+                        "-i", aud_path,
+                        "-c:v", "copy",
+                        "-c:a", "aac",
+                        "-shortest",
+                        out_path,
+                    ],
+                    capture_output=True, timeout=120,
+                )
+                if proc.returncode == 0:
+                    with open(out_path, "rb") as f:
+                        _video_cache[vid_id] = f.read()
+                    serve_url = f"/api/lanzar/video-file/{vid_id}"
+                    logger.info(f"Video comercial generado con audio: {vid_id}")
+                    return {"video_url": serve_url, "script": script, "has_audio": True}
+                else:
+                    logger.warning(f"ffmpeg error: {proc.stderr.decode()[:300]}")
+
+        except FileNotFoundError:
+            logger.warning("ffmpeg no instalado — retornando video sin audio")
+        except Exception as e:
+            logger.warning(f"Combine error: {e}")
+
+    # Fallback: retornar video de minimax sin audio
+    return {"video_url": video_url, "script": script, "has_audio": False}
+
+
+@router.get("/video-file/{vid_id}")
+async def serve_video_file(vid_id: str):
+    """Sirve el video comercial combinado (audio + video) desde la caché en memoria."""
+    from fastapi.responses import Response
+    data = _video_cache.get(vid_id)
+    if not data:
+        return JSONResponse({"error": "Video no encontrado o expirado"}, status_code=404)
+    return Response(
+        content=data,
+        media_type="video/mp4",
+        headers={
+            "Content-Disposition": f'inline; filename="comercial_{vid_id[:8]}.mp4"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/ignore/{sku}")

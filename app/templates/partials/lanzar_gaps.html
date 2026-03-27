@@ -662,24 +662,38 @@
               <span id="wiz-ai-sel-count" class="text-[10px] text-purple-600 font-semibold hidden"></span>
             </div>
 
-            <!-- Reference image row -->
-            <div class="flex gap-2 items-center mb-1.5">
-              <button onclick="window._wizSearchRefImage()" id="wiz-btn-search-ref"
-                      class="text-xs bg-blue-500 hover:bg-blue-600 text-white font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap">
-                🔍 Buscar imagen real
-              </button>
-              <div id="wiz-ref-img-wrap" class="hidden flex items-center gap-2 flex-1 min-w-0">
-                <img id="wiz-ref-img-thumb" src="" alt="ref"
-                     class="w-10 h-10 object-contain rounded border border-blue-200 bg-white flex-shrink-0"/>
-                <span class="text-[10px] text-blue-600 font-medium truncate">Imagen de referencia activa — Kontext usará esta foto para lifestyle</span>
-                <button onclick="window._wizClearRefImage()" class="text-[10px] text-gray-400 hover:text-red-500 ml-auto flex-shrink-0">✕</button>
+            <!-- Reference image — buscar o pegar URL -->
+            <div class="bg-blue-50 border border-blue-100 rounded-lg p-2.5 mb-2 space-y-2">
+              <div class="text-[10px] text-blue-700 font-semibold">📌 Imagen de referencia del producto real (opcional pero recomendado)</div>
+              <div class="flex gap-1.5">
+                <button onclick="window._wizSearchRefImage()" id="wiz-btn-search-ref"
+                        class="text-xs bg-blue-500 hover:bg-blue-600 text-white font-semibold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">
+                  🔍 Buscar
+                </button>
+                <input id="wiz-ref-url-input" type="text"
+                       placeholder="...o pega aquí el link de la imagen oficial (Google, Sony, Walmart...)"
+                       class="flex-1 text-xs border border-blue-200 bg-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-400"/>
+                <button onclick="window._wizSetRefImageFromInput(document.getElementById('wiz-ref-url-input').value)"
+                        class="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 font-semibold px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">
+                  Usar
+                </button>
               </div>
-              <span id="wiz-ref-searching" class="hidden text-[10px] text-gray-400">Buscando...</span>
-            </div>
-            <!-- Reference image picker (hidden until search results) -->
-            <div id="wiz-ref-picker" class="hidden bg-blue-50 border border-blue-100 rounded-lg p-2 mb-1.5">
-              <p class="text-[10px] text-blue-700 font-medium mb-1.5">Selecciona la imagen oficial del producto:</p>
-              <div id="wiz-ref-results" class="grid grid-cols-4 gap-1.5"></div>
+              <span id="wiz-ref-searching" class="hidden text-[10px] text-gray-400">Buscando en Google...</span>
+              <!-- Active reference preview -->
+              <div id="wiz-ref-img-wrap" class="hidden flex items-center gap-2">
+                <img id="wiz-ref-img-thumb" src="" alt="ref"
+                     class="w-12 h-12 object-contain rounded-lg border border-blue-300 bg-white flex-shrink-0"/>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[10px] text-blue-700 font-semibold">✅ Referencia activa</div>
+                  <div class="text-[9px] text-blue-500">Las 7 imágenes lifestyle usarán esta foto como base visual</div>
+                </div>
+                <button onclick="window._wizClearRefImage()" class="text-[10px] text-red-400 hover:text-red-600 flex-shrink-0 font-bold">✕</button>
+              </div>
+              <!-- Search results picker -->
+              <div id="wiz-ref-picker" class="hidden">
+                <div class="text-[10px] text-blue-700 font-medium mb-1">Selecciona la imagen oficial:</div>
+                <div id="wiz-ref-results" class="grid grid-cols-4 gap-1.5"></div>
+              </div>
             </div>
 
             <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
@@ -698,14 +712,18 @@
             <div id="wiz-ai-grid" class="grid grid-cols-4 gap-1.5"></div>
             <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
             <!-- Video preview -->
-            <div id="wiz-video-wrap" class="hidden mt-2">
+            <div id="wiz-video-wrap" class="hidden mt-2 space-y-2">
               <video id="wiz-video-preview" controls class="w-full rounded-lg border border-indigo-200 bg-black"></video>
-              <div class="flex items-center justify-between mt-1">
-                <span class="text-[10px] text-indigo-600 font-medium">Video generado con IA</span>
-                <label class="flex items-center gap-1 cursor-pointer">
-                  <input type="checkbox" id="wiz-video-include" checked class="accent-indigo-500"/>
-                  <span class="text-[10px] text-gray-500">Incluir en publicación</span>
-                </label>
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="text-[10px] text-indigo-600 font-medium" id="wiz-video-mode-label">Video generado con IA</span>
+                  <a id="wiz-video-download" href="#" download class="text-[10px] text-indigo-400 hover:text-indigo-600 ml-2">⬇ Descargar</a>
+                </div>
+              </div>
+              <!-- Guion del comercial -->
+              <div id="wiz-video-script-wrap" class="hidden bg-indigo-50 border border-indigo-200 rounded-lg p-2.5">
+                <div class="text-[10px] text-indigo-700 font-semibold mb-1">🎙 Guion del comercial (español de México)</div>
+                <p id="wiz-video-script-text" class="text-xs text-indigo-800 leading-relaxed italic"></p>
               </div>
             </div>
             <div id="wiz-video-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
@@ -1090,7 +1108,8 @@
     document.getElementById('wiz-video-gen-err').classList.add('hidden');
     document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
     document.getElementById('wiz-ref-picker').classList.add('hidden');
-    document.getElementById('wiz-btn-search-ref').classList.remove('hidden');
+    document.getElementById('wiz-ref-url-input').value = '';
+    document.getElementById('wiz-video-script-wrap').classList.add('hidden');
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.family_name = _guessFamilyName(gap.brand || '', gap.model || '', gap.product_title || '');
@@ -1633,21 +1652,33 @@
   };
 
   window._wizSetRefImage = function(url) {
+    if (!url || !url.startsWith('http')) return;
     _wiz.reference_image_url = url;
     document.getElementById('wiz-ref-img-thumb').src = url;
     document.getElementById('wiz-ref-img-wrap').classList.remove('hidden');
     document.getElementById('wiz-ref-picker').classList.add('hidden');
-    document.getElementById('wiz-btn-search-ref').classList.add('hidden');
+  };
+
+  window._wizSetRefImageFromInput = function(url) {
+    url = (url || '').trim();
+    if (!url || !url.startsWith('http')) {
+      alert('Pega una URL válida que comience con http...');
+      return;
+    }
+    _wiz.reference_image_url = url;
+    document.getElementById('wiz-ref-img-thumb').src = url;
+    document.getElementById('wiz-ref-img-wrap').classList.remove('hidden');
+    document.getElementById('wiz-ref-url-input').value = '';
   };
 
   window._wizClearRefImage = function() {
     _wiz.reference_image_url = '';
     document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
     document.getElementById('wiz-ref-img-thumb').src = '';
-    document.getElementById('wiz-btn-search-ref').classList.remove('hidden');
+    document.getElementById('wiz-ref-url-input').value = '';
   };
 
-  // ── Generate 8 images sequentially — Kontext (lifestyle) if reference available
+  // ── Generate 8 images — Claude genera prompts únicos → FLUX/Kontext los ejecuta
   window._wizGenImages = async function() {
     var btn   = document.getElementById('wiz-btn-gen-img');
     var errEl = document.getElementById('wiz-img-gen-err');
@@ -1656,7 +1687,6 @@
     var gap   = _wiz.gap || {};
     var total = 8;
     var ref   = _wiz.reference_image_url || '';
-    var mode  = ref ? 'Kontext lifestyle' : 'FLUX';
 
     // Reset: remove old AI images from selection, show 8 spinners
     var oldUrls = (_wiz.ai_images || []).map(function(img) { return img && img.url; }).filter(Boolean);
@@ -1664,16 +1694,41 @@
     _wiz.ai_images = [];
     for (var k = 0; k < total; k++) _wiz.ai_images.push({loading: true});
     _wizRenderAIGrid();
-
     btn.disabled = true;
 
+    // ── Paso 1: Claude genera 8 prompts únicos para este producto específico
+    var claudePrompts = [];
+    try {
+      btn.textContent = '🧠 Claude creando prompts del producto...';
+      var pr = await fetch('/api/lanzar/generate-product-prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand:    gap.brand         || '',
+          model:    gap.model         || '',
+          title:    gap.product_title || '',
+          category: gap.category      || '',
+          size:     gap.size ? String(gap.size) : '',
+        }),
+      });
+      var pd = await pr.json();
+      claudePrompts = pd.prompts || [];
+    } catch(e) {
+      errEl.textContent = '⚠ Claude no disponible, usando prompts genéricos.';
+      errEl.classList.remove('hidden');
+    }
+
+    // ── Paso 2: Generar cada imagen con su prompt específico (1 por 1)
+    var modeLabel = ref ? 'Kontext' : 'FLUX';
     for (var i = 0; i < total; i++) {
-      btn.textContent = mode + ' · Imagen ' + (i + 1) + ' de ' + total + '...';
+      btn.textContent = modeLabel + ' · Imagen ' + (i + 1) + ' de ' + total + '...';
+      var customPrompt = claudePrompts[i] || '';
       try {
         var resp = await fetch('/api/lanzar/generate-image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            custom_prompt:       customPrompt,
             prompt_index:        i,
             brand:               gap.brand         || '',
             model:               gap.model         || '',
@@ -1703,43 +1758,88 @@
     btn.innerHTML = '✨ Generar 8 imágenes con IA';
   };
 
-  // ── Generate video with minimax/video-01
-  window._wizGenVideo = function() {
-    var btn = document.getElementById('wiz-btn-gen-video');
+  // ── Generar comercial completo: guion español (Claude) + voz (ElevenLabs) + video (minimax) + ffmpeg
+  window._wizGenVideo = async function() {
+    var btn   = document.getElementById('wiz-btn-gen-video');
     var errEl = document.getElementById('wiz-video-gen-err');
-    var wrap = document.getElementById('wiz-video-wrap');
+    var wrap  = document.getElementById('wiz-video-wrap');
     errEl.classList.add('hidden');
     wrap.classList.add('hidden');
 
-    var gap = _wiz.gap || {};
-    // Use first selected/AI image as first_frame for better coherence
-    var firstFrame = (_wiz.selected_images && _wiz.selected_images[0]) || '';
+    var gap        = _wiz.gap || {};
+    var firstFrame = _wiz.reference_image_url || (_wiz.selected_images && _wiz.selected_images[0]) || '';
 
-    btn.disabled = true; btn.textContent = '⏳ Generando video (~3min)...';
+    btn.disabled = true;
 
-    fetch('/api/lanzar/generate-video', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        brand: gap.brand || '', model: gap.model || '',
-        title: gap.product_title || '', category: gap.category || '',
-        size: gap.size ? String(gap.size) : '',
-        first_frame_image: firstFrame,
-      }),
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
+    // Mostrar progreso del pipeline
+    var steps = [
+      '📝 Escribiendo guion en español...',
+      '🎙 Generando voz en español...',
+      '🎬 Generando video visual (~3 min)...',
+      '🔧 Combinando audio + video...',
+    ];
+    var stepIdx = 0;
+    btn.textContent = steps[0];
+    var stepTimer = setInterval(function() {
+      stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+      if (!btn.disabled) { clearInterval(stepTimer); return; }
+      btn.textContent = steps[stepIdx];
+    }, 8000);  // Cambiar paso cada 8s aprox
+
+    try {
+      var resp = await fetch('/api/lanzar/generate-video-commercial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand:             gap.brand         || '',
+          model:             gap.model         || '',
+          title:             gap.product_title || '',
+          category:          gap.category      || '',
+          size:              gap.size ? String(gap.size) : '',
+          first_frame_image: firstFrame,
+        }),
+      });
+      var d = await resp.json();
+      clearInterval(stepTimer);
       btn.disabled = false; btn.innerHTML = '🎬 Video';
-      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); return; }
+
+      if (d.error) {
+        errEl.textContent = '❌ ' + d.error;
+        errEl.classList.remove('hidden');
+        return;
+      }
+
       _wiz.video_url = d.video_url;
+
+      // Reproducir video
       var vid = document.getElementById('wiz-video-preview');
       vid.src = d.video_url;
+      vid.load();
+
+      // Download link
+      var dlLink = document.getElementById('wiz-video-download');
+      dlLink.href = d.video_url;
+
+      // Modo label
+      var modeEl = document.getElementById('wiz-video-mode-label');
+      modeEl.textContent = d.has_audio
+        ? '✅ Comercial con voz en español'
+        : '📹 Video visual (sin voz — agrega ELEVENLABS_API_KEY para activar voz)';
+
+      // Mostrar guion
+      if (d.script) {
+        document.getElementById('wiz-video-script-text').textContent = d.script;
+        document.getElementById('wiz-video-script-wrap').classList.remove('hidden');
+      }
+
       wrap.classList.remove('hidden');
-    })
-    .catch(function(e) {
+
+    } catch(e) {
+      clearInterval(stepTimer);
       btn.disabled = false; btn.innerHTML = '🎬 Video';
-      errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
-    });
+      errEl.textContent = '❌ ' + e.message;
+      errEl.classList.remove('hidden');
+    }
   };
 
   // ── Regenerate a single AI image (from lightbox or error tile)
