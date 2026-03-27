@@ -658,13 +658,31 @@
             </div>
             <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
                    class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300 mb-1.5"/>
-            <button onclick="window._wizGenImages()" id="wiz-btn-gen-img"
-                    class="w-full text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition mb-2">
-              ✨ Generar 4 imágenes con IA
-            </button>
+            <div class="flex gap-1.5 mb-2">
+              <button onclick="window._wizGenImages()" id="wiz-btn-gen-img"
+                      class="flex-1 text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition">
+                ✨ Generar 8 imágenes con IA
+              </button>
+              <button onclick="window._wizGenVideo()" id="wiz-btn-gen-video"
+                      class="text-xs bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 text-white font-semibold px-3 py-2 rounded-lg transition whitespace-nowrap">
+                🎬 Video
+              </button>
+            </div>
             <!-- AI image grid — thumbnails render here -->
             <div id="wiz-ai-grid" class="grid grid-cols-4 gap-1.5"></div>
             <div id="wiz-img-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
+            <!-- Video preview -->
+            <div id="wiz-video-wrap" class="hidden mt-2">
+              <video id="wiz-video-preview" controls class="w-full rounded-lg border border-indigo-200 bg-black"></video>
+              <div class="flex items-center justify-between mt-1">
+                <span class="text-[10px] text-indigo-600 font-medium">Video generado con IA</span>
+                <label class="flex items-center gap-1 cursor-pointer">
+                  <input type="checkbox" id="wiz-video-include" checked class="accent-indigo-500"/>
+                  <span class="text-[10px] text-gray-500">Incluir en publicación</span>
+                </label>
+              </div>
+            </div>
+            <div id="wiz-video-gen-err" class="hidden text-xs text-red-500 mt-1"></div>
           </div>
 
           <div class="text-xs text-gray-400 bg-blue-50 rounded-lg px-3 py-2">
@@ -995,6 +1013,7 @@
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_images: [],  // ai_images = all generated; selected_images = chosen for listing
+    video_url: '',
     sku: '', model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
@@ -1006,7 +1025,9 @@
     _wiz.price = gap.suggested_price_mxn || 0;
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
-    _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1;
+    _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1; _wiz.video_url = '';
+    document.getElementById('wiz-video-wrap').classList.add('hidden');
+    document.getElementById('wiz-video-gen-err').classList.add('hidden');
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
@@ -1510,7 +1531,7 @@
     }).join('');
   }
 
-  // ── Generate 4 images with FLUX (batch)
+  // ── Generate 8 images with FLUX (batch)
   window._wizGenImages = function() {
     var btn = document.getElementById('wiz-btn-gen-img');
     var errEl = document.getElementById('wiz-img-gen-err');
@@ -1518,17 +1539,17 @@
     if (!prompt) { errEl.textContent = 'Escribe un prompt primero.'; errEl.classList.remove('hidden'); return; }
     errEl.classList.add('hidden');
 
-    // Show 4 loading spinners
-    _wiz.ai_images = [{loading:true},{loading:true},{loading:true},{loading:true}];
+    // Show 8 loading spinners
+    _wiz.ai_images = [{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true}];
     _wizRenderAIGrid();
-    btn.disabled = true; btn.textContent = 'Generando 4 imágenes (~30s)...';
+    btn.disabled = true; btn.textContent = 'Generando 8 imágenes (~90s)...';
 
     var gap = _wiz.gap || {};
     fetch('/api/lanzar/generate-images-batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        custom_prompt: prompt, count: 4,
+        count: 8,
         brand: gap.brand || '', model: gap.model || '',
         title: gap.product_title || '', category: gap.category || '',
         size: gap.size ? String(gap.size) : '',
@@ -1536,7 +1557,7 @@
     })
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      btn.disabled = false; btn.innerHTML = '✨ Generar 4 imágenes con IA';
+      btn.disabled = false; btn.innerHTML = '✨ Generar 8 imágenes con IA';
       if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); _wiz.ai_images = []; _wizRenderAIGrid(); return; }
       // Remove any previously generated AI images from selection
       var oldUrls = (_wiz.ai_images || []).map(function(img) { return img.url; }).filter(Boolean);
@@ -1553,9 +1574,48 @@
       _wizRefreshBMGrid();
     })
     .catch(function(e) {
-      btn.disabled = false; btn.innerHTML = '✨ Generar 4 imágenes con IA';
+      btn.disabled = false; btn.innerHTML = '✨ Generar 8 imágenes con IA';
       errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
       _wiz.ai_images = []; _wizRenderAIGrid();
+    });
+  };
+
+  // ── Generate video with minimax/video-01
+  window._wizGenVideo = function() {
+    var btn = document.getElementById('wiz-btn-gen-video');
+    var errEl = document.getElementById('wiz-video-gen-err');
+    var wrap = document.getElementById('wiz-video-wrap');
+    errEl.classList.add('hidden');
+    wrap.classList.add('hidden');
+
+    var gap = _wiz.gap || {};
+    // Use first selected/AI image as first_frame for better coherence
+    var firstFrame = (_wiz.selected_images && _wiz.selected_images[0]) || '';
+
+    btn.disabled = true; btn.textContent = '⏳ Generando video (~3min)...';
+
+    fetch('/api/lanzar/generate-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        brand: gap.brand || '', model: gap.model || '',
+        title: gap.product_title || '', category: gap.category || '',
+        size: gap.size ? String(gap.size) : '',
+        first_frame_image: firstFrame,
+      }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false; btn.innerHTML = '🎬 Video';
+      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); return; }
+      _wiz.video_url = d.video_url;
+      var vid = document.getElementById('wiz-video-preview');
+      vid.src = d.video_url;
+      wrap.classList.remove('hidden');
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.innerHTML = '🎬 Video';
+      errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
     });
   };
 

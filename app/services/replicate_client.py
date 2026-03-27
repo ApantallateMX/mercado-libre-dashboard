@@ -1,10 +1,13 @@
 """
-Replicate Client — FLUX Image Generation
-=========================================
+Replicate Client — FLUX Image + Video Generation
+=================================================
 Genera imágenes de producto usando FLUX 1.1 Pro via Replicate API.
+Genera video de producto usando minimax/video-01 via Replicate API.
 Usa Prefer: wait para respuesta síncrona (evita polling).
 
-Modelo: black-forest-labs/flux-1.1-pro  (~$0.04/imagen, calidad superior)
+Modelos:
+  - black-forest-labs/flux-1.1-pro  (~$0.04/imagen, calidad superior)
+  - minimax/video-01                 (~$0.50/video, 6s HD)
 """
 import logging
 import os
@@ -15,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _REPLICATE_KEY    = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_TOKEN", "")
 _FLUX_PRO_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions"
+_MINIMAX_URL      = "https://api.replicate.com/v1/models/minimax/video-01/predictions"
 
 _HEADERS = {
     "Authorization": f"Bearer {_REPLICATE_KEY}",
@@ -30,7 +34,7 @@ def is_available() -> bool:
 # ─── Category-specific prompt builders ─────────────────────────────────────────
 
 def _build_tv_prompts(brand: str, model: str, size: str, title: str) -> list[str]:
-    """4 prompts de fotografía comercial para televisores.
+    """8 prompts de fotografía comercial para televisores.
     Diseñados para generar imágenes de calidad marketing que conviertan ventas en ML.
     """
     brand   = (brand or "Premium").strip()
@@ -83,11 +87,48 @@ def _build_tv_prompts(brand: str, model: str, size: str, title: str) -> list[str
             "port labels crisp and readable. "
             "Product detail photography, 8K, photorealistic, tech review quality."
         ),
+        # 5. Vista cenital / overhead — ángulo superior premium
+        (
+            f"Commercial product photograph of a {product} from a dramatic overhead top-down angle, "
+            "centered on pure white seamless background. "
+            "The screen glows with deep blue cosmic nebula 4K content, creating beautiful upward light. "
+            "Premium brushed aluminum stand perfectly centered, ultra-thin bezel from above. "
+            "Soft studio lighting from all four sides, no harsh shadows. "
+            "8K advertising photography, razor-sharp, photorealistic, award-winning composition."
+        ),
+        # 6. Close-up panel OLED — calidad de imagen extrema
+        (
+            f"Extreme close-up macro photograph of a {brand} {size_s}4K Smart TV screen surface. "
+            "Showing micro-pixel precision: individual OLED sub-pixels visible in a gradient from "
+            "deep rich black to brilliant white, demonstrating perfect contrast ratio. "
+            "A section displays vibrant HDR10+ content — deep ocean blue and vivid coral orange. "
+            "Ultra-shallow depth of field, soft bokeh background, studio macro lighting. "
+            "8K resolution, photorealistic, premium technology feel."
+        ),
+        # 7. Lifestyle — dormitorio o home office moderno
+        (
+            f"Photorealistic lifestyle photograph of a {product} mounted on a clean white bedroom wall, "
+            "serving as both TV and monitor in a modern minimalist home office. "
+            "Scandinavian interior design: light oak desk, ergonomic chair, warm Edison pendant light. "
+            "The screen shows a colorful productivity workspace with multiple windows. "
+            "Daylight through sheer white curtains, plants on windowsill, award-winning interior photography. "
+            "8K photorealistic, magazine editorial quality."
+        ),
+        # 8. Setup completo — TV con accesorios y control remoto
+        (
+            f"Professional product photography of a complete {product} home entertainment setup. "
+            "TV centered on pure white background with: premium soundbar below, "
+            f"sleek {brand} voice remote control placed elegantly in front, "
+            "HDMI cable neatly connected, streaming device visible. "
+            "The screen displays a vibrant movie title card in brilliant 4K HDR. "
+            "Soft diffused studio lighting, slight 3/4 angle, all accessories in sharp focus. "
+            "8K commercial photography, photorealistic, retail-ready image."
+        ),
     ]
 
 
 def _build_generic_prompts(brand: str, model: str, category: str, title: str) -> list[str]:
-    """Prompts genéricos para productos no-TV."""
+    """8 prompts genéricos para productos no-TV."""
     product = " ".join(filter(None, [brand, model])).strip() or title or "electronic product"
     cat     = category or "consumer electronics"
 
@@ -111,6 +152,30 @@ def _build_generic_prompts(brand: str, model: str, category: str, title: str) ->
             f"Professional close-up detail photography of {product} showing ports, buttons and build quality. "
             "Soft macro studio lighting, dark matte background, shallow depth of field. "
             "8K photorealistic, tech review quality."
+        ),
+        (
+            f"Top-down overhead commercial product photograph of {product}, {cat}. "
+            "Pure white seamless background, centered perfectly, all edges and surfaces visible. "
+            "Soft even studio lighting from all sides, no harsh shadows. "
+            "8K advertising photography, razor-sharp focus, photorealistic."
+        ),
+        (
+            f"Professional product photograph of {product} from rear 3/4 angle showing back panel, "
+            "ports, vents and build quality details. Dark charcoal matte background, "
+            "directional studio lighting, shallow depth of field. "
+            "8K photorealistic, tech review quality."
+        ),
+        (
+            f"Minimalist editorial photograph of {product} on a clean marble surface. "
+            "Sleek modern composition, natural daylight from left side window, "
+            "soft long shadows, premium lifestyle brand aesthetic. "
+            "8K photorealistic, Wallpaper magazine style."
+        ),
+        (
+            f"Complete product setup photograph of {product} with all included accessories laid out flat. "
+            "Pure white background, knolling-style top-down arrangement, "
+            "all cables, manuals, remotes, and parts neatly organized. "
+            "Studio lighting, 8K photorealistic, e-commerce product photography."
         ),
     ]
 
@@ -141,7 +206,7 @@ def build_batch_prompts(
     title: str = "",
     category: str = "",
     size: str = "",
-    count: int = 4,
+    count: int = 8,
 ) -> list[str]:
     """Retorna `count` prompts para generación por lote, adaptados a la categoría."""
     cat_lower = (category or "").lower()
@@ -150,6 +215,43 @@ def build_batch_prompts(
     else:
         prompts = _build_generic_prompts(brand, model, category, title)
     return prompts[:count]
+
+
+def build_video_prompt(
+    brand: str = "",
+    model: str = "",
+    title: str = "",
+    category: str = "",
+    size: str = "",
+) -> str:
+    """Construye prompt de video de producto según la categoría."""
+    brand   = (brand or "Premium").strip()
+    size_s  = f"{size}-inch " if size else ""
+    model_s = (model or "").strip()
+    cat_lower = (category or "").lower()
+
+    if "television" in cat_lower or "tv" in cat_lower or "televisor" in cat_lower:
+        product = f"{brand} {size_s}4K Smart TV" + (f" {model_s}" if model_s else "")
+        return (
+            f"Cinematic product showcase video of a {product}. "
+            "The camera slowly orbits 180 degrees around the TV starting from a dramatic 3/4 left angle, "
+            "moving to front-facing center, then to a 3/4 right angle. "
+            "The screen displays stunning 4K HDR content: first a vibrant tropical ocean scene, "
+            "then transitions to a space nebula, then a city skyline at night — "
+            "showing perfect OLED contrast and color accuracy throughout. "
+            "Pure white studio background with subtle floor reflection, "
+            "professional broadcast-quality lighting that catches the ultra-thin bezels. "
+            "Smooth, slow cinematic camera movement, photorealistic, commercial advertisement quality."
+        )
+    product = " ".join(filter(None, [brand, model_s])).strip() or title or "electronic product"
+    return (
+        f"Cinematic product showcase video of {product}. "
+        "The camera slowly orbits around the product, starting from front, moving to 3/4 angle, "
+        "then behind and back to front. "
+        "Pure white studio background, professional diffused lighting, "
+        "smooth cinematic camera movement. "
+        "Commercial advertising quality, photorealistic."
+    )
 
 
 async def generate_image(
@@ -208,3 +310,65 @@ async def generate_image(
                 raise RuntimeError(f"Replicate falló: {pd.get('error', 'unknown')}")
 
         raise RuntimeError("Replicate timeout — imagen no generada en 180s")
+
+
+async def generate_video(
+    prompt: str,
+    first_frame_image: str = "",   # optional URL of first frame
+) -> str:
+    """
+    Genera un video de producto con minimax/video-01 y retorna la URL pública.
+    Duración: ~6s, HD 720p. Tiempo estimado: 2-4 min.
+    Lanza RuntimeError si falla.
+    """
+    import asyncio
+
+    inp: dict = {
+        "prompt": prompt,
+        "prompt_optimizer": True,
+    }
+    if first_frame_image:
+        inp["first_frame_image"] = first_frame_image
+
+    payload = {"input": inp}
+
+    # Video no soporta Prefer:wait — siempre async con polling
+    headers_no_wait = {
+        "Authorization": f"Bearer {_REPLICATE_KEY}",
+        "Content-Type":  "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_MINIMAX_URL, json=payload, headers=headers_no_wait)
+
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Replicate video error {resp.status_code}: {resp.text[:300]}")
+
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Replicate video no retornó ID: {data}")
+
+        logger.info(f"Replicate video prediction {pred_id} — polling...")
+
+    # Polling con cliente nuevo (timeout más largo por request)
+    poll_url     = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_headers = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(80):          # máx 80 × 6s = 480s (8 min)
+            await asyncio.sleep(6)
+            pr = await client.get(poll_url, headers=poll_headers)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                output = pd.get("output")
+                if isinstance(output, list):
+                    return output[0]
+                if isinstance(output, str):
+                    return output
+                raise RuntimeError(f"Replicate video output inesperado: {output}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"Replicate video falló: {pd.get('error', 'unknown')}")
+
+    raise RuntimeError("Replicate video timeout — video no generado en 8 min")

@@ -1622,7 +1622,7 @@ async def generate_images_batch_endpoint(request: Request):
     title   = body.get("title", "") or body.get("product_title", "")
     category= body.get("category", "")
     size    = str(body.get("size", "") or "").strip()
-    n       = min(int(body.get("count", 4)), 6)
+    n       = min(int(body.get("count", 8)), 8)
     custom  = (body.get("custom_prompt") or "").strip()
 
     if custom:
@@ -1644,6 +1644,38 @@ async def generate_images_batch_endpoint(request: Request):
             images.append({"image_url": r, "prompt": p, "index": i})
 
     return {"images": images}
+
+
+@router.post("/generate-video")
+async def generate_video_endpoint(request: Request):
+    """Genera video de producto con minimax/video-01 via Replicate (~2-4 min)."""
+    from app.services import replicate_client
+
+    if not replicate_client.is_available():
+        return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
+
+    body            = await request.json()
+    brand           = body.get("brand", "")
+    model           = body.get("model", "")
+    title           = body.get("title", "") or body.get("product_title", "")
+    category        = body.get("category", "")
+    size            = str(body.get("size", "") or "").strip()
+    first_frame_url = (body.get("first_frame_image") or "").strip()
+    custom_prompt   = (body.get("custom_prompt") or "").strip()
+
+    prompt = custom_prompt or replicate_client.build_video_prompt(
+        brand=brand, model=model, title=title, category=category, size=size
+    )
+
+    try:
+        video_url = await replicate_client.generate_video(
+            prompt=prompt,
+            first_frame_image=first_frame_url,
+        )
+        return {"video_url": video_url, "prompt": prompt}
+    except Exception as e:
+        logger.error(f"generate-video error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/ignore/{sku}")
