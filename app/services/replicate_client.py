@@ -364,25 +364,22 @@ async def submit_image_job(
 
     if input_image:
         url = _KONTEXT_URL
+        # Kontext Pro: solo los campos documentados — output_format/quality/safety no son soportados
         payload = {
             "input": {
-                "prompt":           prompt,
-                "input_image":      input_image,
-                "aspect_ratio":     aspect_ratio,
-                "output_format":    "webp",
-                "output_quality":   90,
-                "safety_tolerance": 5,
+                "prompt":       prompt,
+                "input_image":  input_image,
+                "aspect_ratio": aspect_ratio,
             }
         }
     else:
         url = _FLUX_PRO_URL
+        # FLUX 1.1 Pro: solo prompt + aspect_ratio — los campos opcionales varían por versión
+        # y suelen causar 422 si el schema cambió
         payload = {
             "input": {
-                "prompt":           prompt,
-                "aspect_ratio":     aspect_ratio,
-                "output_format":    "webp",
-                "output_quality":   90,
-                "safety_tolerance": 5,
+                "prompt":       prompt,
+                "aspect_ratio": aspect_ratio,
             }
         }
 

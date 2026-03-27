@@ -2015,11 +2015,15 @@ async def generate_video_commercial_endpoint(request: Request):
             brand=brand, model=model, title=title, category=category, size=size
         )
 
-    # TTS (Bark via Replicate, siempre disponible) + video en paralelo
+    # TTS + video en paralelo
+    logger.info(f"=== TTS START: edge-tts es-MX-JorgeNeural, script={len(script)} chars ===")
+    logger.info(f"=== VIDEO START: prompt={video_prompt[:80]}... ===")
     tts_coro   = elevenlabs_client.generate_audio(script)
     video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
     results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
     audio_result, video_result = results
+    logger.info(f"=== TTS result: {type(audio_result).__name__} {len(audio_result) if isinstance(audio_result, bytes) else audio_result} ===")
+    logger.info(f"=== VIDEO result: {type(video_result).__name__} {str(video_result)[:80]} ===")
 
     if isinstance(video_result, Exception):
         logger.error(f"Video generation failed: {video_result}")
@@ -2041,32 +2045,37 @@ async def generate_video_commercial_endpoint(request: Request):
                 vid_bytes = vid_resp.content
 
             with _tf.TemporaryDirectory() as tmpdir:
-                raw_path  = _os.path.join(tmpdir, "raw.mp4")
-                loop_path = _os.path.join(tmpdir, "loop.mp4")
-                aud_path  = _os.path.join(tmpdir, "audio.mp3")
-                out_path  = _os.path.join(tmpdir, "output.mp4")
+                raw_path    = _os.path.join(tmpdir, "raw.mp4")
+                concat_path = _os.path.join(tmpdir, "concat.txt")
+                loop_path   = _os.path.join(tmpdir, "loop.mp4")
+                aud_path    = _os.path.join(tmpdir, "audio.mp3")
+                out_path    = _os.path.join(tmpdir, "output.mp4")
 
                 with open(raw_path, "wb") as f: f.write(vid_bytes)
                 with open(aud_path, "wb") as f: f.write(audio_result)
 
-                # Step A: Loop the 6-second clip to ~24 seconds (4 loops)
+                # Step A: Loop the clip to ~24s using concat demuxer (reliable for all MP4)
                 # ML spec: 10-60 seconds, max 280MB
+                with open(concat_path, "w") as f:
+                    for _ in range(4):   # 4 repetitions × ~6s = ~24s
+                        f.write(f"file '{raw_path}'\n")
+
                 loop_proc = _sp.run(
                     [
                         "ffmpeg", "-y",
-                        "-stream_loop", "3",   # repeat 3 more times = 4× total = ~24s
-                        "-i", raw_path,
-                        "-c:v", "copy",
+                        "-f", "concat", "-safe", "0",
+                        "-i", concat_path,
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-t", "24",
                         loop_path,
                     ],
-                    capture_output=True, timeout=60,
+                    capture_output=True, timeout=90,
                 )
                 if loop_proc.returncode != 0:
-                    logger.warning(f"ffmpeg loop error: {loop_proc.stderr.decode()[:200]} — using raw")
+                    logger.warning(f"ffmpeg concat error: {loop_proc.stderr.decode()[:300]} — using raw")
                     loop_path = raw_path
 
-                # Step B: Combine looped video + audio
+                # Step B: Combine looped video + audio (-shortest: stops at audio end)
                 proc = _sp.run(
                     [
                         "ffmpeg", "-y",
