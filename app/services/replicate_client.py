@@ -1,10 +1,10 @@
 """
 Replicate Client — FLUX Image Generation
 =========================================
-Genera imágenes de producto usando FLUX.1 Schnell via Replicate API.
+Genera imágenes de producto usando FLUX 1.1 Pro via Replicate API.
 Usa Prefer: wait para respuesta síncrona (evita polling).
 
-Modelo: black-forest-labs/flux-schnell  (~$0.003/imagen, ~5s)
+Modelo: black-forest-labs/flux-1.1-pro  (~$0.04/imagen, calidad superior)
 """
 import logging
 import os
@@ -13,14 +13,13 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_REPLICATE_KEY   = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_TOKEN", "")
-_FLUX_SCHNELL_URL = "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions"
-_FLUX_DEV_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-dev/predictions"
+_REPLICATE_KEY    = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_TOKEN", "")
+_FLUX_PRO_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions"
 
 _HEADERS = {
-    "Authorization":  f"Bearer {_REPLICATE_KEY}",
-    "Content-Type":   "application/json",
-    "Prefer":         "wait",          # Respuesta síncrona (hasta 60s)
+    "Authorization": f"Bearer {_REPLICATE_KEY}",
+    "Content-Type":  "application/json",
+    "Prefer":        "wait",   # Respuesta síncrona (hasta 60s)
 }
 
 
@@ -49,38 +48,37 @@ async def generate_image(
     prompt: str,
     aspect_ratio: str = "1:1",
     quality: int = 90,
-    use_dev: bool = False,
+    use_dev: bool = False,   # kept for backwards compat, ignored
 ) -> str:
     """
-    Genera una imagen con FLUX Schnell y retorna la URL pública.
+    Genera una imagen con FLUX 1.1 Pro y retorna la URL pública.
     Lanza RuntimeError si falla.
     """
-    url = _FLUX_DEV_URL if use_dev else _FLUX_SCHNELL_URL
     payload = {
         "input": {
             "prompt":        prompt,
-            "num_outputs":   1,
             "aspect_ratio":  aspect_ratio,
             "output_format": "webp",
             "output_quality": quality,
+            "prompt_upsampling": True,   # FLUX 1.1 Pro feature — mejora coherencia
         }
     }
 
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        resp = await client.post(url, json=payload, headers=_HEADERS)
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(_FLUX_PRO_URL, json=payload, headers=_HEADERS)
 
         if resp.status_code not in (200, 201):
             raise RuntimeError(f"Replicate error {resp.status_code}: {resp.text[:300]}")
 
         data = resp.json()
 
-        # Si la respuesta es síncrona (Prefer: wait) viene con output directo
+        # Respuesta síncrona (Prefer: wait)
         if data.get("status") == "succeeded":
             output = data.get("output", [])
             if output:
                 return output[0] if isinstance(output, list) else output
 
-        # Si aún está en proceso — hacer polling manual
+        # Polling si todavía está procesando
         pred_id = data.get("id")
         if not pred_id:
             raise RuntimeError(f"Replicate no retornó ID: {data}")
@@ -90,8 +88,8 @@ async def generate_image(
         poll_headers = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
 
         import asyncio
-        for _ in range(30):           # máx 30 intentos × 2s = 60s
-            await asyncio.sleep(2)
+        for _ in range(40):           # máx 40 intentos × 3s = 120s
+            await asyncio.sleep(3)
             pr = await client.get(poll_url, headers=poll_headers)
             pd = pr.json()
             if pd.get("status") == "succeeded":
@@ -100,4 +98,4 @@ async def generate_image(
             if pd.get("status") in ("failed", "canceled"):
                 raise RuntimeError(f"Replicate falló: {pd.get('error', 'unknown')}")
 
-        raise RuntimeError("Replicate timeout — imagen no generada en 60s")
+        raise RuntimeError("Replicate timeout — imagen no generada en 120s")
