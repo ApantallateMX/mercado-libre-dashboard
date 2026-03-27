@@ -561,6 +561,11 @@
               <input id="wiz-f-brand" type="text"
                      class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
             </div>
+            <div class="col-span-2">
+              <label class="text-[10px] text-gray-400 block mb-0.5">Familia / Serie <span class="text-gray-300">(requerido por ML)</span></label>
+              <input id="wiz-f-family" type="text" placeholder="Ej. BRAVIA 8, Neo QLED, OLED evo, ULED..."
+                     class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
+            </div>
           </div>
           <!-- Warranty -->
           <div class="grid grid-cols-2 gap-2">
@@ -656,6 +661,27 @@
               <div class="text-xs text-gray-500 font-medium">Generar con IA (FLUX)</div>
               <span id="wiz-ai-sel-count" class="text-[10px] text-purple-600 font-semibold hidden"></span>
             </div>
+
+            <!-- Reference image row -->
+            <div class="flex gap-2 items-center mb-1.5">
+              <button onclick="window._wizSearchRefImage()" id="wiz-btn-search-ref"
+                      class="text-xs bg-blue-500 hover:bg-blue-600 text-white font-semibold px-3 py-1.5 rounded-lg transition whitespace-nowrap">
+                🔍 Buscar imagen real
+              </button>
+              <div id="wiz-ref-img-wrap" class="hidden flex items-center gap-2 flex-1 min-w-0">
+                <img id="wiz-ref-img-thumb" src="" alt="ref"
+                     class="w-10 h-10 object-contain rounded border border-blue-200 bg-white flex-shrink-0"/>
+                <span class="text-[10px] text-blue-600 font-medium truncate">Imagen de referencia activa — Kontext usará esta foto para lifestyle</span>
+                <button onclick="window._wizClearRefImage()" class="text-[10px] text-gray-400 hover:text-red-500 ml-auto flex-shrink-0">✕</button>
+              </div>
+              <span id="wiz-ref-searching" class="hidden text-[10px] text-gray-400">Buscando...</span>
+            </div>
+            <!-- Reference image picker (hidden until search results) -->
+            <div id="wiz-ref-picker" class="hidden bg-blue-50 border border-blue-100 rounded-lg p-2 mb-1.5">
+              <p class="text-[10px] text-blue-700 font-medium mb-1.5">Selecciona la imagen oficial del producto:</p>
+              <div id="wiz-ref-results" class="grid grid-cols-4 gap-1.5"></div>
+            </div>
+
             <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
                    class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300 mb-1.5"/>
             <div class="flex gap-1.5 mb-2">
@@ -1005,6 +1031,39 @@
     }, 3000);
   }
 
+  // ─── Family name auto-detection ────────────────────────────────────────────
+  function _guessFamilyName(brand, model, title) {
+    var b = (brand  || '').toLowerCase();
+    var t = (title  || '').toLowerCase();
+    var m = (model  || '').toLowerCase();
+    if (b.indexOf('sony') >= 0) {
+      var bm = t.match(/bravia\s*(\d+)/i);
+      return bm ? 'BRAVIA ' + bm[1] : 'BRAVIA';
+    }
+    if (b.indexOf('samsung') >= 0) {
+      if (t.indexOf('neo qled') >= 0) return 'Neo QLED';
+      if (t.indexOf('qled')    >= 0) return 'QLED';
+      if (t.indexOf('frame')   >= 0) return 'The Frame';
+      return 'Crystal UHD';
+    }
+    if (b.indexOf('lg') >= 0) {
+      if (t.indexOf('oled')     >= 0) return 'OLED evo';
+      if (t.indexOf('qned')     >= 0) return 'QNED';
+      if (t.indexOf('nanocell') >= 0) return 'NanoCell';
+      return 'UHD';
+    }
+    if (b.indexOf('hisense') >= 0) {
+      if (t.indexOf('uled')   >= 0) return 'ULED';
+      if (t.indexOf('laser')  >= 0) return 'Laser TV';
+      var sm = m.match(/^([a-z]\d+)/i);
+      return sm ? sm[1].toUpperCase() : 'A-Series';
+    }
+    if (b.indexOf('tcl') >= 0) return t.indexOf('qled') >= 0 ? 'QLED' : 'S-Series';
+    if (b.indexOf('vizio') >= 0) return 'M-Series';
+    if (b.indexOf('philips') >= 0) return 'The One';
+    return '';
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Wizard de Publicación
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1013,8 +1072,8 @@
     step: 1, gap: null,
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_images: [],  // ai_images = all generated; selected_images = chosen for listing
-    video_url: '',
-    sku: '', model: '', brand: '', gtin: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
+    video_url: '', reference_image_url: '',
+    sku: '', model: '', brand: '', gtin: '', family_name: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
     _lightbox_idx: -1,  // index into _wiz.ai_images for lightbox
@@ -1025,17 +1084,23 @@
     _wiz.price = gap.suggested_price_mxn || 0;
     _wiz.qty   = Math.min(gap.stock_total || 1, 999);
     _wiz.category_id = ''; _wiz.category_name = '';
-    _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1; _wiz.video_url = '';
+    _wiz.selected_images = []; _wiz.ai_images = []; _wiz._lightbox_idx = -1;
+    _wiz.video_url = ''; _wiz.reference_image_url = '';
     document.getElementById('wiz-video-wrap').classList.add('hidden');
     document.getElementById('wiz-video-gen-err').classList.add('hidden');
+    document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
+    document.getElementById('wiz-ref-picker').classList.add('hidden');
+    document.getElementById('wiz-btn-search-ref').classList.remove('hidden');
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
+    _wiz.family_name = _guessFamilyName(gap.brand || '', gap.model || '', gap.product_title || '');
     _wiz.draft = { title: gap.product_title || '', description: '', bullet_points: [], keywords: [] };
     // Pre-fill step 2 fields immediately — no dependency on _wizLoadCategories running first
     document.getElementById('wiz-f-sku').value   = gap.sku   || '';
     document.getElementById('wiz-f-model').value = gap.model || '';
     document.getElementById('wiz-f-brand').value = gap.brand || '';
     document.getElementById('wiz-f-gtin').value  = gap.upc   || '';
+    document.getElementById('wiz-f-family').value = _wiz.family_name;
     document.getElementById('wiz-f-warranty-type').value = 'Garantía del vendedor';
     document.getElementById('wiz-f-warranty-time').value = '3 meses';
 
@@ -1120,6 +1185,7 @@
       _wiz.model        = document.getElementById('wiz-f-model').value.trim();
       _wiz.brand        = document.getElementById('wiz-f-brand').value.trim();
       _wiz.gtin         = document.getElementById('wiz-f-gtin').value.trim();
+      _wiz.family_name  = document.getElementById('wiz-f-family').value.trim();
       _wiz.warranty_type = document.getElementById('wiz-f-warranty-type').value;
       _wiz.warranty_time = document.getElementById('wiz-f-warranty-time').value;
       // Collect ML dynamic attributes
@@ -1531,14 +1597,66 @@
     }).join('');
   }
 
-  // ── Generate 8 images sequentially with FLUX (1 by 1, grid updates live)
+  // ── Reference image search (DuckDuckGo)
+  window._wizSearchRefImage = async function() {
+    var gap       = _wiz.gap || {};
+    var btnSearch = document.getElementById('wiz-btn-search-ref');
+    var searching = document.getElementById('wiz-ref-searching');
+    var picker    = document.getElementById('wiz-ref-picker');
+    var results   = document.getElementById('wiz-ref-results');
+
+    btnSearch.disabled = true; searching.classList.remove('hidden');
+    picker.classList.add('hidden');
+
+    try {
+      var qs = new URLSearchParams({
+        brand: gap.brand || '', model: gap.model || '', title: gap.product_title || ''
+      });
+      var r = await fetch('/api/lanzar/search-product-image?' + qs);
+      var d = await r.json();
+      var imgs = d.images || [];
+      if (!imgs.length) {
+        alert('No se encontraron imágenes. Puedes pegar una URL directamente en el campo de referencia.');
+      } else {
+        results.innerHTML = imgs.map(function(img, i) {
+          return '<div class="cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-400 transition aspect-square bg-white" onclick="window._wizSetRefImage(\'' + img.url.replace(/'/g,"&#39;") + '\')">' +
+            '<img src="' + (img.thumbnail || img.url) + '" class="w-full h-full object-contain" loading="lazy" onerror="this.parentElement.style.display=\'none\'">' +
+            '</div>';
+        }).join('');
+        picker.classList.remove('hidden');
+      }
+    } catch(e) {
+      alert('Error buscando imagen: ' + e.message);
+    } finally {
+      btnSearch.disabled = false; searching.classList.add('hidden');
+    }
+  };
+
+  window._wizSetRefImage = function(url) {
+    _wiz.reference_image_url = url;
+    document.getElementById('wiz-ref-img-thumb').src = url;
+    document.getElementById('wiz-ref-img-wrap').classList.remove('hidden');
+    document.getElementById('wiz-ref-picker').classList.add('hidden');
+    document.getElementById('wiz-btn-search-ref').classList.add('hidden');
+  };
+
+  window._wizClearRefImage = function() {
+    _wiz.reference_image_url = '';
+    document.getElementById('wiz-ref-img-wrap').classList.add('hidden');
+    document.getElementById('wiz-ref-img-thumb').src = '';
+    document.getElementById('wiz-btn-search-ref').classList.remove('hidden');
+  };
+
+  // ── Generate 8 images sequentially — Kontext (lifestyle) if reference available
   window._wizGenImages = async function() {
     var btn   = document.getElementById('wiz-btn-gen-img');
     var errEl = document.getElementById('wiz-img-gen-err');
     errEl.classList.add('hidden');
 
-    var gap = _wiz.gap || {};
+    var gap   = _wiz.gap || {};
     var total = 8;
+    var ref   = _wiz.reference_image_url || '';
+    var mode  = ref ? 'Kontext lifestyle' : 'FLUX';
 
     // Reset: remove old AI images from selection, show 8 spinners
     var oldUrls = (_wiz.ai_images || []).map(function(img) { return img && img.url; }).filter(Boolean);
@@ -1550,26 +1668,26 @@
     btn.disabled = true;
 
     for (var i = 0; i < total; i++) {
-      btn.textContent = 'Imagen ' + (i + 1) + ' de ' + total + '...';
+      btn.textContent = mode + ' · Imagen ' + (i + 1) + ' de ' + total + '...';
       try {
         var resp = await fetch('/api/lanzar/generate-image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt_index: i,
-            brand:    gap.brand        || '',
-            model:    gap.model        || '',
-            title:    gap.product_title || '',
-            category: gap.category     || '',
-            size:     gap.size ? String(gap.size) : '',
+            prompt_index:        i,
+            brand:               gap.brand         || '',
+            model:               gap.model         || '',
+            title:               gap.product_title || '',
+            category:            gap.category      || '',
+            size:                gap.size ? String(gap.size) : '',
+            reference_image_url: ref,
           }),
         });
         var d = await resp.json();
         if (d.error) {
           _wiz.ai_images[i] = { error: d.error };
         } else {
-          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt };
-          // Auto-select first successful image as portada
+          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt, mode: d.mode };
           if (i === 0 && _wiz.selected_images.indexOf(d.image_url) < 0 && _wiz.selected_images.length < 12) {
             _wiz.selected_images.unshift(d.image_url);
           }
@@ -1754,11 +1872,12 @@
       if (_wiz.draft.bullet_points && _wiz.draft.bullet_points.length) {
         descText += (descText ? '\n\n' : '') + _wiz.draft.bullet_points.map(function(b) { return '• ' + b; }).join('\n');
       }
-      // Build ML attributes: BRAND, MODEL, GTIN + any dynamic ones
+      // Build ML attributes: BRAND, MODEL, GTIN, FAMILY_NAME + any dynamic ones
       var attrs = [].concat(_wiz.ml_attributes || []);
-      if (_wiz.brand) attrs.push({id: 'BRAND', value_name: _wiz.brand});
-      if (_wiz.model) attrs.push({id: 'MODEL', value_name: _wiz.model});
-      if (_wiz.gtin)  attrs.push({id: 'GTIN',  value_name: _wiz.gtin});
+      if (_wiz.brand)       attrs.push({id: 'BRAND',       value_name: _wiz.brand});
+      if (_wiz.model)       attrs.push({id: 'MODEL',       value_name: _wiz.model});
+      if (_wiz.gtin)        attrs.push({id: 'GTIN',        value_name: _wiz.gtin});
+      if (_wiz.family_name) attrs.push({id: 'FAMILY_NAME', value_name: _wiz.family_name});
 
       var payload = {
         sku:                _wiz.sku || (gap ? gap.sku : ''),

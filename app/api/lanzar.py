@@ -1579,36 +1579,91 @@ async def clear_sku_cache(request: Request):
     return {"ok": True, "deleted": deleted}
 
 
+@router.get("/search-product-image")
+async def search_product_image_endpoint(brand: str = "", model: str = "", title: str = ""):
+    """Busca imagen oficial del producto en DuckDuckGo Images. Retorna hasta 5 URLs."""
+    import re as _re
+
+    query = " ".join(filter(None, [brand, model])).strip() or title or ""
+    if not query:
+        return JSONResponse({"error": "brand/model requerido"}, status_code=400)
+
+    search_q = f"{query} official product image -site:amazon -site:mercadolibre"
+    headers  = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, headers=headers, follow_redirects=True) as client:
+            # Step 1: get vqd token from DuckDuckGo
+            r1   = await client.get("https://duckduckgo.com/", params={"q": search_q, "iax": "images", "ia": "images"})
+            vqd_match = _re.search(r'vqd=([\d-]+)', r1.text)
+            if not vqd_match:
+                return {"images": [], "query": search_q}
+            vqd = vqd_match.group(1)
+
+            # Step 2: fetch image results JSON
+            r2 = await client.get(
+                "https://duckduckgo.com/i.js",
+                params={"q": search_q, "vqd": vqd, "o": "json", "l": "us-en", "p": "1", "f": ",,,,,"},
+                headers={**headers, "Referer": "https://duckduckgo.com/"},
+            )
+            data    = r2.json()
+            results = data.get("results", [])
+            images  = [
+                {"url": r["image"], "thumbnail": r.get("thumbnail", ""), "title": r.get("title", "")}
+                for r in results[:8]
+                if r.get("image") and r["image"].startswith("http")
+            ]
+        return {"images": images, "query": search_q}
+    except Exception as e:
+        logger.warning(f"search-product-image error: {e}")
+        return {"images": [], "query": search_q, "error": str(e)}
+
+
 @router.post("/generate-image")
 async def generate_image_endpoint(request: Request):
-    """Genera imagen de producto con FLUX 1.1 Pro via Replicate.
-    Acepta prompt_index (0-7) para seleccionar el prompt de la categoría correspondiente.
+    """Genera imagen de producto con FLUX 1.1 Pro (texto) o FLUX Kontext (img2img lifestyle).
+    Acepta prompt_index (0-7) y reference_image_url opcional para Kontext.
+    Si prompt_index < 7 y hay reference_image_url → usa Kontext (lifestyle hermoso).
+    Si prompt_index == 7 o no hay referencia → usa FLUX texto puro.
     """
     from app.services import replicate_client
 
     if not replicate_client.is_available():
         return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
 
-    body         = await request.json()
-    brand        = body.get("brand", "")
-    model        = body.get("model", "")
-    title        = body.get("title", "") or body.get("product_title", "")
-    category     = body.get("category", "")
-    size         = str(body.get("size", "") or "").strip()
-    custom       = (body.get("custom_prompt") or "").strip()
-    prompt_index = int(body.get("prompt_index", 0))
+    body          = await request.json()
+    brand         = body.get("brand", "")
+    model         = body.get("model", "")
+    title         = body.get("title", "") or body.get("product_title", "")
+    category      = body.get("category", "")
+    size          = str(body.get("size", "") or "").strip()
+    custom        = (body.get("custom_prompt") or "").strip()
+    prompt_index  = int(body.get("prompt_index", 0))
+    reference_url = (body.get("reference_image_url") or "").strip()
+
+    use_kontext = bool(reference_url) and prompt_index < 7
 
     if custom:
         prompt = custom
     else:
         prompts = replicate_client.build_batch_prompts(
-            brand=brand, model=model, title=title, category=category, size=size, count=8
+            brand=brand, model=model, title=title, category=category, size=size,
+            count=8, use_kontext=use_kontext,
         )
         prompt = prompts[prompt_index] if prompt_index < len(prompts) else prompts[-1]
 
     try:
-        image_url = await replicate_client.generate_image(prompt)
-        return {"image_url": image_url, "prompt": prompt}
+        if use_kontext:
+            image_url = await replicate_client.generate_image_with_reference(prompt, reference_url)
+        else:
+            image_url = await replicate_client.generate_image(prompt)
+        return {"image_url": image_url, "prompt": prompt, "mode": "kontext" if use_kontext else "flux"}
     except Exception as e:
         logger.error(f"generate-image error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)

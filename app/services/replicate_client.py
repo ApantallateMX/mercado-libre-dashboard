@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _REPLICATE_KEY    = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_TOKEN", "")
 _FLUX_PRO_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions"
+_KONTEXT_URL      = "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions"
 _MINIMAX_URL      = "https://api.replicate.com/v1/models/minimax/video-01/predictions"
 
 _HEADERS = {
@@ -198,6 +199,77 @@ def build_product_prompt(
     )
 
 
+def _build_tv_kontext_prompts(size: str) -> list[str]:
+    """7 prompts lifestyle para FLUX Kontext (img2img) — escenas lujosas y hermosas.
+    Se usan cuando hay una imagen de referencia del producto real.
+    El prompt describe la ESCENA; el TV viene de la imagen de referencia.
+    """
+    size_s = f"{size}-inch " if size else ""
+    tv     = f"this {size_s}flat-screen television"
+
+    return [
+        # 1. Penthouse dorado — sala de lujo al atardecer
+        (
+            f"Place {tv} wall-mounted in a breathtaking luxury penthouse living room. "
+            "Golden sunset light pours through panoramic floor-to-ceiling windows overlooking a Mediterranean coastline. "
+            "Floating marble fireplace below the TV, cream bouclé sectional sofa, "
+            "oversized abstract oil painting, fresh white orchids, Murano glass pendant lights. "
+            "The screen glows with stunning 4K HDR content. "
+            "Architectural Digest editorial photography, cinematic wide angle, warm golden hour, 8K photorealistic."
+        ),
+        # 2. Home theater oscuro dramático
+        (
+            f"Show {tv} as the glowing centerpiece of a sophisticated private home theater. "
+            "Deep charcoal acoustic wall panels, three rows of premium dark velvet recliners, "
+            "warm amber LED strip lighting casting a cinematic halo around the screen. "
+            "Popcorn and drinks on side tables, movie credits rolling on screen. "
+            "Dramatic moody cinema atmosphere, professional interior photography, 8K photorealistic."
+        ),
+        # 3. Sala escandinava — mañana luminosa
+        (
+            f"Place {tv} in a serene Scandinavian minimalist living room on a bright morning. "
+            "Pale birch wood floors, warm white walls, a single large fiddle-leaf fig plant, "
+            "natural linen sofa with cream throw, a steaming cup of coffee on oak side table. "
+            "Soft diffused morning light through sheer curtains creates an ethereal glow. "
+            "Kinfolk magazine editorial photography, calm and beautiful, 8K photorealistic."
+        ),
+        # 4. Suite de hotel boutique de lujo
+        (
+            f"Show {tv} wall-mounted in an ultra-luxurious boutique hotel suite bedroom. "
+            "King bed with 1000-thread-count ivory linen, silk throw pillows in champagne gold, "
+            "warm bedside lamps, sheer curtains with a twinkling city skyline at night beyond. "
+            "Fresh roses in crystal vase on the dresser, soft romantic atmosphere. "
+            "Luxury hotel editorial photography, intimate warm glow, 8K photorealistic."
+        ),
+        # 5. Terraza rooftop tropical — sunset
+        (
+            f"Place {tv} in an outdoor luxury rooftop terrace entertainment area at sunset. "
+            "Dramatic fiery orange-pink sky over a tropical ocean panorama in the background. "
+            "Teak outdoor furniture with thick white cushions, woven string lights overhead, "
+            "outdoor fire pit glowing warmly, tropical plants framing the scene. "
+            "The screen shows vivid sports content. "
+            "Luxury resort lifestyle photography, golden sunset, 8K photorealistic."
+        ),
+        # 6. Home office ejecutivo premium
+        (
+            f"Show {tv} as the main display in an exceptional executive home office. "
+            "Floating walnut desk with designer lamp, glass walls revealing rain on a dramatic city skyline. "
+            "Custom built-in shelves with curated books and art objects, "
+            "premium leather ergonomic chair, subtle indoor plants adding life. "
+            "Architectural Digest productivity aesthetic, cool rainy daylight, 8K photorealistic."
+        ),
+        # 7. Sala familiar acogedora — noche mágica
+        (
+            f"Place {tv} in a warm and inviting family living room on a cozy winter evening. "
+            "Crackling fireplace visible to the side casting warm dancing light, "
+            "built-in bookshelves filled with books and framed photos flanking the TV, "
+            "deep navy velvet sectional with colorful knit blankets and throw pillows. "
+            "The screen shows a beloved animated movie, children's laughter implied. "
+            "Cozy warm lifestyle photography, magical family atmosphere, 8K photorealistic."
+        ),
+    ]
+
+
 def build_batch_prompts(
     brand: str = "",
     model: str = "",
@@ -205,10 +277,30 @@ def build_batch_prompts(
     category: str = "",
     size: str = "",
     count: int = 8,
+    use_kontext: bool = False,
 ) -> list[str]:
-    """Retorna `count` prompts para generación por lote, adaptados a la categoría."""
+    """Retorna `count` prompts para generación por lote, adaptados a la categoría.
+    Si use_kontext=True y es TV: retorna 7 prompts lifestyle Kontext + 1 técnico texto puro.
+    """
     cat_lower = (category or "").lower()
-    if "television" in cat_lower or "tv" in cat_lower or "televisor" in cat_lower:
+    is_tv = "television" in cat_lower or "tv" in cat_lower or "televisor" in cat_lower
+
+    if is_tv and use_kontext:
+        # 7 lifestyle (Kontext img2img) + 1 técnico (texto puro)
+        brand_s = (brand or "Premium").strip()
+        model_s = (model or "").strip()
+        lifestyle = _build_tv_kontext_prompts(size)
+        tech_ports = (
+            f"Professional close-up macro photography of the rear connectivity panel of a {brand_s} flat-screen television"
+            + (f" {model_s}" if model_s else "") + ". "
+            "Clearly labeled ports: 4x HDMI 2.1 (one eARC), 3x USB-A, optical audio, ethernet LAN, RF coaxial. "
+            "Dark charcoal matte background, directional studio lighting, all ports in sharp focus. "
+            "8K photorealistic, tech review quality."
+        )
+        prompts = lifestyle[:7] + [tech_ports]
+        return prompts[:count]
+
+    if is_tv:
         prompts = _build_tv_prompts(brand, model, size, title)
     else:
         prompts = _build_generic_prompts(brand, model, category, title)
@@ -309,6 +401,63 @@ async def generate_image(
                 raise RuntimeError(f"Replicate falló: {pd.get('error', 'unknown')}")
 
         raise RuntimeError("Replicate timeout — imagen no generada en 180s")
+
+
+async def generate_image_with_reference(
+    prompt: str,
+    input_image: str,
+    aspect_ratio: str = "1:1",
+) -> str:
+    """
+    Genera una imagen de lifestyle usando FLUX Kontext Pro (img2img).
+    Mantiene la apariencia visual del producto en input_image mientras aplica el prompt de escena.
+    Lanza RuntimeError si falla.
+    """
+    import asyncio
+
+    payload = {
+        "input": {
+            "prompt":          prompt,
+            "input_image":     input_image,
+            "aspect_ratio":    aspect_ratio,
+            "output_format":   "webp",
+            "output_quality":  90,
+            "safety_tolerance": 5,
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(_KONTEXT_URL, json=payload, headers=_HEADERS)
+
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Kontext error {resp.status_code}: {resp.text[:300]}")
+
+        data = resp.json()
+
+        if data.get("status") == "succeeded":
+            output = data.get("output", [])
+            if output:
+                return output[0] if isinstance(output, list) else output
+
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Kontext no retornó ID: {data}")
+
+        logger.info(f"Kontext prediction {pred_id} — polling...")
+        poll_url     = f"https://api.replicate.com/v1/predictions/{pred_id}"
+        poll_headers = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+
+        for _ in range(60):
+            await asyncio.sleep(3)
+            pr = await client.get(poll_url, headers=poll_headers)
+            pd = pr.json()
+            if pd.get("status") == "succeeded":
+                output = pd.get("output", [])
+                return output[0] if isinstance(output, list) else output
+            if pd.get("status") in ("failed", "canceled"):
+                raise RuntimeError(f"Kontext falló: {pd.get('error', 'unknown')}")
+
+    raise RuntimeError("Kontext timeout — imagen no generada en 180s")
 
 
 async def generate_video(
