@@ -36,93 +36,91 @@ def is_available() -> bool:
 def _build_tv_prompts(brand: str, model: str, size: str, title: str) -> list[str]:
     """8 prompts de fotografía comercial para televisores.
     Diseñados para generar imágenes de calidad marketing que conviertan ventas en ML.
+    Cada prompt inicia con descripción visual inequívoca: pantalla plana rectangular grande.
     """
     brand   = (brand or "Premium").strip()
     size_s  = f"{size}-inch " if size else ""
     model_s = model.strip() if model else ""
-    product = f"{brand} {size_s}4K Smart TV" + (f" {model_s}" if model_s else "")
+    # Descripción base inequívoca — siempre incluye "flat-screen television" para que FLUX
+    # nunca confunda el producto con una cámara, monitor, o cualquier otro dispositivo Sony/LG/Samsung
+    base    = f"{brand} {size_s}flat-screen television" + (f" {model_s}" if model_s else "")
 
     return [
-        # 1. Hero shot — portada principal: TV frontal sobre fondo blanco con contenido 4K vibrante
+        # 1. Hero shot — portada principal
         (
-            f"Hyper-realistic commercial product photograph of a {product}. "
-            "Ultra-thin bezels, premium brushed aluminum stand, pristine condition. "
-            f"The {size_s}screen displays a breathtaking 4K HDR scene: vibrant aerial view of a "
-            "tropical turquoise ocean coastline with deep blacks and brilliant highlights, "
-            "showcasing perfect OLED contrast. "
-            "Pure white seamless background, centered front-facing composition, "
-            "soft diffused professional studio lighting from both sides and top, "
-            "slight downward camera angle. No reflections on background. "
+            f"Hyper-realistic commercial product photograph of a {base}. "
+            f"Large {size_s}rectangular flat panel TV display facing forward, ultra-thin bezels, "
+            "premium aluminum stand, pristine new condition. "
+            "The screen shows a stunning 4K HDR scene: vibrant tropical turquoise ocean coastline, "
+            "deep blacks and brilliant highlights. "
+            "Pure white seamless studio background, centered front-facing composition, "
+            "soft diffused professional lighting from both sides. "
             "8K commercial advertising photography, razor-sharp focus, photorealistic."
         ),
-        # 2. Lifestyle — TV en sala moderna y elegante
+        # 2. Lifestyle — sala de lujo al anochecer
         (
-            f"Photorealistic interior design photograph of a luxury modern living room at dusk "
-            f"with a large {product} as the centerpiece, mounted on a minimalist floating wood media console. "
-            "Warm amber ambient lighting, floor-to-ceiling windows showing city skyline at night, "
+            f"Photorealistic interior design photograph of a luxury modern living room at dusk, "
+            f"with a large {base} as the centerpiece, wall-mounted on a minimalist floating media console. "
+            "Warm amber ambient lighting, floor-to-ceiling windows, city skyline at night, "
             "premium light gray sectional sofa, designer coffee table, indoor plants. "
-            f"The TV displays a stunning 4K nature documentary — lush emerald rainforest with "
-            "golden sunlight filtering through canopy. "
-            "Cinematic wide-angle architectural photography, f/8 aperture, golden hour interior, "
-            "8K photorealistic render, magazine-quality."
+            f"The flat-screen TV displays a stunning 4K nature documentary — lush emerald rainforest. "
+            "Wide-angle architectural photography, f/8 aperture, 8K photorealistic, magazine-quality."
         ),
-        # 3. Perfil ultra-delgado — diseño premium
+        # 3. Perfil 3/4 — grosor ultra-delgado
         (
-            f"Professional product photography of a {product} from a dramatic 3/4 front-left angle, "
-            "revealing its impossibly thin OLED panel profile — less than 5mm thick. "
-            "The screen displays vivid red and orange abstract 4K art with deep black borders. "
+            f"Professional product photography of a {base} from a dramatic 3/4 front-left angle. "
+            f"Large flat-panel television screen, {size_s}rectangular display, ultra-thin side profile. "
+            "Screen shows vivid red and orange abstract 4K art with deep black borders. "
             "Pure white background with subtle gradient, precision studio lighting casting soft shadow "
-            "on the left to emphasize the ultra-slim depth. "
-            "The premium stand and cable management system clearly visible. "
+            "on the left to emphasize the ultra-slim panel depth. "
             "8K commercial photography, tack-sharp, photorealistic, luxury product feel."
         ),
-        # 4. Panel de conectividad — puertos y características técnicas
+        # 4. Panel trasero — puertos de conectividad
         (
-            f"Professional close-up macro photography of {brand} {model_s} TV rear connectivity panel. "
-            "Clearly visible and labeled: 4x HDMI 2.1 ports (one with eARC label), "
-            "3x USB-A ports, 1x optical digital audio S/PDIF output, "
-            "1x LAN ethernet port, RF coaxial antenna input, headphone jack. "
+            f"Professional close-up macro photography of the rear connectivity panel of a {base}. "
+            "Flat television back panel showing clearly labeled ports: "
+            "4x HDMI 2.1 ports (one with eARC label), 3x USB-A ports, "
+            "1x optical audio output, 1x LAN ethernet, RF coaxial antenna input. "
             "Soft directional studio lighting on dark charcoal matte background, "
-            "shallow depth of field with all ports in sharp focus, "
-            "port labels crisp and readable. "
+            "shallow depth of field, all ports in sharp focus. "
             "Product detail photography, 8K, photorealistic, tech review quality."
         ),
-        # 5. Vista cenital / overhead — ángulo superior premium
+        # 5. Vista cenital / overhead
         (
-            f"Commercial product photograph of a {product} from a dramatic overhead top-down angle, "
-            "centered on pure white seamless background. "
-            "The screen glows with deep blue cosmic nebula 4K content, creating beautiful upward light. "
-            "Premium brushed aluminum stand perfectly centered, ultra-thin bezel from above. "
-            "Soft studio lighting from all four sides, no harsh shadows. "
+            f"Commercial product photograph of a {base} from a dramatic overhead top-down angle. "
+            f"Large rectangular flat-panel TV screen visible from above, {size_s}display glowing "
+            "with deep blue cosmic nebula 4K content. "
+            "Premium aluminum stand centered, ultra-thin bezel from above view. "
+            "Pure white seamless background, soft studio lighting from all sides. "
             "8K advertising photography, razor-sharp, photorealistic, award-winning composition."
         ),
-        # 6. Close-up panel OLED — calidad de imagen extrema
+        # 6. Close-up pantalla — calidad de imagen OLED/QLED
         (
-            f"Extreme close-up macro photograph of a {brand} {size_s}4K Smart TV screen surface. "
-            "Showing micro-pixel precision: individual OLED sub-pixels visible in a gradient from "
-            "deep rich black to brilliant white, demonstrating perfect contrast ratio. "
-            "A section displays vibrant HDR10+ content — deep ocean blue and vivid coral orange. "
+            f"Extreme close-up macro photograph of the {base} screen surface. "
+            f"Large flat television display showing micro-pixel precision: "
+            "vibrant HDR10+ content — deep ocean blue transitioning to vivid coral orange, "
+            "perfect contrast from deep black to brilliant white. "
             "Ultra-shallow depth of field, soft bokeh background, studio macro lighting. "
-            "8K resolution, photorealistic, premium technology feel."
+            "8K resolution, photorealistic, premium display technology."
         ),
-        # 7. Lifestyle — dormitorio o home office moderno
+        # 7. Lifestyle — dormitorio/home office escandinavo
         (
-            f"Photorealistic lifestyle photograph of a {product} mounted on a clean white bedroom wall, "
-            "serving as both TV and monitor in a modern minimalist home office. "
-            "Scandinavian interior design: light oak desk, ergonomic chair, warm Edison pendant light. "
-            "The screen shows a colorful productivity workspace with multiple windows. "
-            "Daylight through sheer white curtains, plants on windowsill, award-winning interior photography. "
-            "8K photorealistic, magazine editorial quality."
+            f"Photorealistic lifestyle photograph of a {base} mounted on a clean white bedroom wall. "
+            f"Large flat-screen television as the focal point of a modern minimalist Scandinavian home office. "
+            "Light oak desk, ergonomic chair, warm Edison pendant light, plants on windowsill. "
+            "The TV screen shows a colorful 4K movie scene. "
+            "Daylight through sheer white curtains, 8K photorealistic, magazine editorial quality."
         ),
-        # 8. Setup completo — TV con accesorios y control remoto
+        # 8. Setup completo — TV con soundbar y accesorios
         (
-            f"Professional product photography of a complete {product} home entertainment setup. "
-            "TV centered on pure white background with: premium soundbar below, "
-            f"sleek {brand} voice remote control placed elegantly in front, "
-            "HDMI cable neatly connected, streaming device visible. "
-            "The screen displays a vibrant movie title card in brilliant 4K HDR. "
+            f"Professional product photography of a complete {base} home theater setup. "
+            f"Large flat-screen television centered on pure white background, "
+            f"premium soundbar positioned below the TV, "
+            f"sleek {brand} remote control placed elegantly in front, "
+            "HDMI cable connected at the back. "
+            "Screen displays a vibrant 4K movie scene. "
             "Soft diffused studio lighting, slight 3/4 angle, all accessories in sharp focus. "
-            "8K commercial photography, photorealistic, retail-ready image."
+            "8K commercial photography, photorealistic, retail-ready."
         ),
     ]
 
@@ -231,25 +229,26 @@ def build_video_prompt(
     cat_lower = (category or "").lower()
 
     if "television" in cat_lower or "tv" in cat_lower or "televisor" in cat_lower:
-        product = f"{brand} {size_s}4K Smart TV" + (f" {model_s}" if model_s else "")
+        base = f"{brand} {size_s}flat-screen television" + (f" {model_s}" if model_s else "")
         return (
-            f"Cinematic product showcase video of a {product}. "
-            "The camera slowly orbits 180 degrees around the TV starting from a dramatic 3/4 left angle, "
-            "moving to front-facing center, then to a 3/4 right angle. "
-            "The screen displays stunning 4K HDR content: first a vibrant tropical ocean scene, "
-            "then transitions to a space nebula, then a city skyline at night — "
-            "showing perfect OLED contrast and color accuracy throughout. "
+            f"Cinematic commercial product video of a {base}. "
+            f"A large {size_s}rectangular flat-panel TV display on a premium aluminum stand. "
+            "The camera starts at a dramatic 3/4 left angle and slowly orbits 180 degrees "
+            "to front-facing center, then continues to a 3/4 right angle, "
+            "revealing the ultra-thin side profile of the flat television panel. "
+            "The screen displays stunning 4K HDR content throughout: "
+            "vibrant tropical ocean coastline transitioning to a glowing space nebula. "
             "Pure white studio background with subtle floor reflection, "
-            "professional broadcast-quality lighting that catches the ultra-thin bezels. "
-            "Smooth, slow cinematic camera movement, photorealistic, commercial advertisement quality."
+            "professional broadcast-quality lighting. "
+            "Smooth slow-motion cinematic camera movement, photorealistic, TV commercial quality."
         )
-    product = " ".join(filter(None, [brand, model_s])).strip() or title or "electronic product"
+    product = " ".join(filter(None, [brand, model_s])).strip() or title or "consumer electronics product"
     return (
-        f"Cinematic product showcase video of {product}. "
-        "The camera slowly orbits around the product, starting from front, moving to 3/4 angle, "
-        "then behind and back to front. "
+        f"Cinematic commercial product video of {product}, consumer electronics. "
+        "The camera slowly orbits 180 degrees around the product, "
+        "starting from front-facing center, moving to 3/4 angle, revealing depth and build quality. "
         "Pure white studio background, professional diffused lighting, "
-        "smooth cinematic camera movement. "
+        "smooth slow cinematic movement. "
         "Commercial advertising quality, photorealistic."
     )
 

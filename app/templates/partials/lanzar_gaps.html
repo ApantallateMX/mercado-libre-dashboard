@@ -1531,53 +1531,58 @@
     }).join('');
   }
 
-  // ── Generate 8 images with FLUX (batch)
-  window._wizGenImages = function() {
-    var btn = document.getElementById('wiz-btn-gen-img');
+  // ── Generate 8 images sequentially with FLUX (1 by 1, grid updates live)
+  window._wizGenImages = async function() {
+    var btn   = document.getElementById('wiz-btn-gen-img');
     var errEl = document.getElementById('wiz-img-gen-err');
-    var prompt = document.getElementById('wiz-img-prompt').value.trim();
-    if (!prompt) { errEl.textContent = 'Escribe un prompt primero.'; errEl.classList.remove('hidden'); return; }
     errEl.classList.add('hidden');
 
-    // Show 8 loading spinners
-    _wiz.ai_images = [{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true},{loading:true}];
-    _wizRenderAIGrid();
-    btn.disabled = true; btn.textContent = 'Generando 8 imágenes (~90s)...';
-
     var gap = _wiz.gap || {};
-    fetch('/api/lanzar/generate-images-batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        count: 8,
-        brand: gap.brand || '', model: gap.model || '',
-        title: gap.product_title || '', category: gap.category || '',
-        size: gap.size ? String(gap.size) : '',
-      }),
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      btn.disabled = false; btn.innerHTML = '✨ Generar 8 imágenes con IA';
-      if (d.error) { errEl.textContent = '❌ ' + d.error; errEl.classList.remove('hidden'); _wiz.ai_images = []; _wizRenderAIGrid(); return; }
-      // Remove any previously generated AI images from selection
-      var oldUrls = (_wiz.ai_images || []).map(function(img) { return img.url; }).filter(Boolean);
-      _wiz.selected_images = _wiz.selected_images.filter(function(u) { return oldUrls.indexOf(u) < 0; });
-      _wiz.ai_images = (d.images || []).map(function(img) {
-        return img.error ? {error: img.error} : {url: img.url, prompt: img.prompt};
-      });
-      // Auto-select first successful image
-      var first = _wiz.ai_images.find(function(img) { return img.url; });
-      if (first && _wiz.selected_images.length < 12) {
-        _wiz.selected_images.unshift(first.url);
+    var total = 8;
+
+    // Reset: remove old AI images from selection, show 8 spinners
+    var oldUrls = (_wiz.ai_images || []).map(function(img) { return img && img.url; }).filter(Boolean);
+    _wiz.selected_images = _wiz.selected_images.filter(function(u) { return oldUrls.indexOf(u) < 0; });
+    _wiz.ai_images = [];
+    for (var k = 0; k < total; k++) _wiz.ai_images.push({loading: true});
+    _wizRenderAIGrid();
+
+    btn.disabled = true;
+
+    for (var i = 0; i < total; i++) {
+      btn.textContent = 'Imagen ' + (i + 1) + ' de ' + total + '...';
+      try {
+        var resp = await fetch('/api/lanzar/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt_index: i,
+            brand:    gap.brand        || '',
+            model:    gap.model        || '',
+            title:    gap.product_title || '',
+            category: gap.category     || '',
+            size:     gap.size ? String(gap.size) : '',
+          }),
+        });
+        var d = await resp.json();
+        if (d.error) {
+          _wiz.ai_images[i] = { error: d.error };
+        } else {
+          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt };
+          // Auto-select first successful image as portada
+          if (i === 0 && _wiz.selected_images.indexOf(d.image_url) < 0 && _wiz.selected_images.length < 12) {
+            _wiz.selected_images.unshift(d.image_url);
+          }
+        }
+      } catch(e) {
+        _wiz.ai_images[i] = { error: e.message };
       }
       _wizRenderAIGrid();
       _wizRefreshBMGrid();
-    })
-    .catch(function(e) {
-      btn.disabled = false; btn.innerHTML = '✨ Generar 8 imágenes con IA';
-      errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
-      _wiz.ai_images = []; _wizRenderAIGrid();
-    });
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = '✨ Generar 8 imágenes con IA';
   };
 
   // ── Generate video with minimax/video-01

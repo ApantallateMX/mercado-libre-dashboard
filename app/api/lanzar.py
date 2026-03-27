@@ -1581,24 +1581,30 @@ async def clear_sku_cache(request: Request):
 
 @router.post("/generate-image")
 async def generate_image_endpoint(request: Request):
-    """Genera imagen de producto con FLUX Schnell via Replicate."""
+    """Genera imagen de producto con FLUX 1.1 Pro via Replicate.
+    Acepta prompt_index (0-7) para seleccionar el prompt de la categoría correspondiente.
+    """
     from app.services import replicate_client
 
     if not replicate_client.is_available():
         return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
 
-    body = await request.json()
-    prompt = replicate_client.build_product_prompt(
-        brand    = body.get("brand", ""),
-        model    = body.get("model", ""),
-        title    = body.get("title", "") or body.get("product_title", ""),
-        category = body.get("category", ""),
-    )
+    body         = await request.json()
+    brand        = body.get("brand", "")
+    model        = body.get("model", "")
+    title        = body.get("title", "") or body.get("product_title", "")
+    category     = body.get("category", "")
+    size         = str(body.get("size", "") or "").strip()
+    custom       = (body.get("custom_prompt") or "").strip()
+    prompt_index = int(body.get("prompt_index", 0))
 
-    # Permitir prompt personalizado desde el frontend
-    custom_prompt = (body.get("custom_prompt") or "").strip()
-    if custom_prompt:
-        prompt = custom_prompt
+    if custom:
+        prompt = custom
+    else:
+        prompts = replicate_client.build_batch_prompts(
+            brand=brand, model=model, title=title, category=category, size=size, count=8
+        )
+        prompt = prompts[prompt_index] if prompt_index < len(prompts) else prompts[-1]
 
     try:
         image_url = await replicate_client.generate_image(prompt)
