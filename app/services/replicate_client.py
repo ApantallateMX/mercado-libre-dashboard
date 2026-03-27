@@ -345,6 +345,89 @@ def build_video_prompt(
     )
 
 
+async def submit_image_job(
+    prompt: str,
+    aspect_ratio: str = "1:1",
+    input_image: str = "",   # si se provee → Kontext img2img
+) -> dict:
+    """Envía un job de generación de imagen a Replicate y retorna pred_id inmediatamente.
+    Nunca usa Prefer:wait — siempre async para evitar timeout de Railway (60s Nginx).
+    Retorna {"pred_id": str, "image_url": None} o {"pred_id": None, "image_url": str} si ya resolvió.
+    """
+    headers_async = {
+        "Authorization": f"Bearer {_REPLICATE_KEY}",
+        "Content-Type":  "application/json",
+    }
+
+    if input_image:
+        url = _KONTEXT_URL
+        payload = {
+            "input": {
+                "prompt":           prompt,
+                "input_image":      input_image,
+                "aspect_ratio":     aspect_ratio,
+                "output_format":    "webp",
+                "output_quality":   90,
+                "safety_tolerance": 5,
+            }
+        }
+    else:
+        url = _FLUX_PRO_URL
+        payload = {
+            "input": {
+                "prompt":           prompt,
+                "aspect_ratio":     aspect_ratio,
+                "output_format":    "webp",
+                "output_quality":   90,
+                "safety_tolerance": 5,
+            }
+        }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(url, json=payload, headers=headers_async)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Replicate submit {resp.status_code}: {resp.text[:300]}"
+            )
+        data = resp.json()
+        logger.info(f"Replicate submit → id={data.get('id')} status={data.get('status')}")
+
+        # Si ya resolvió de forma síncrona (raro sin Prefer:wait, pero puede pasar)
+        if data.get("status") == "succeeded":
+            output = data.get("output", [])
+            image_url = output[0] if isinstance(output, list) else output
+            return {"pred_id": None, "image_url": image_url}
+
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Replicate no retornó ID: {data}")
+
+        return {"pred_id": pred_id, "image_url": None}
+
+
+async def check_prediction(pred_id: str) -> dict:
+    """Consulta el estado de una predicción de Replicate.
+    Retorna {"status": "processing"|"succeeded"|"failed", "image_url": str|None, "error": str|None}.
+    """
+    poll_url = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    headers  = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(poll_url, headers=headers)
+        data   = resp.json()
+        status = data.get("status", "processing")
+
+        if status == "succeeded":
+            output    = data.get("output", [])
+            image_url = output[0] if isinstance(output, list) else output
+            return {"status": "succeeded", "image_url": image_url, "error": None}
+
+        if status in ("failed", "canceled"):
+            return {"status": "failed", "image_url": None, "error": data.get("error", "Prediction failed")}
+
+        return {"status": status, "image_url": None, "error": None}
+
+
 async def generate_image(
     prompt: str,
     aspect_ratio: str = "1:1",

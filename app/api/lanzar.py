@@ -1629,6 +1629,67 @@ async def search_product_image_endpoint(brand: str = "", model: str = "", title:
         return {"images": [], "query": search_q, "error": str(e)}
 
 
+@router.post("/submit-image")
+async def submit_image_endpoint(request: Request):
+    """Envía job de imagen a Replicate y retorna pred_id inmediatamente (< 5s).
+    Evita timeout de Railway (60s Nginx). El frontend hace polling a /prediction/{pred_id}.
+    """
+    from app.services import replicate_client
+
+    if not replicate_client.is_available():
+        return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
+
+    body          = await request.json()
+    custom        = (body.get("custom_prompt") or "").strip()
+    prompt_index  = int(body.get("prompt_index", 0))
+    reference_url = (body.get("reference_image_url") or "").strip()
+    brand         = body.get("brand", "")
+    model         = body.get("model", "")
+    title         = body.get("title", "") or body.get("product_title", "")
+    category      = body.get("category", "")
+    size          = str(body.get("size", "") or "").strip()
+
+    use_kontext = bool(reference_url) and prompt_index < 7
+
+    if custom:
+        prompt = custom
+    else:
+        prompts = replicate_client.build_batch_prompts(
+            brand=brand, model=model, title=title, category=category, size=size,
+            count=8, use_kontext=use_kontext,
+        )
+        prompt = prompts[prompt_index] if prompt_index < len(prompts) else prompts[-1]
+
+    try:
+        result = await replicate_client.submit_image_job(
+            prompt=prompt,
+            input_image=reference_url if use_kontext else "",
+        )
+        return {
+            "pred_id":   result["pred_id"],
+            "image_url": result["image_url"],
+            "prompt":    prompt,
+            "mode":      "kontext" if use_kontext else "flux",
+        }
+    except Exception as e:
+        logger.error(f"submit-image error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/prediction/{pred_id}")
+async def check_prediction_endpoint(pred_id: str):
+    """Consulta el estado de una predicción de Replicate (imagen).
+    Retorna {status, image_url, error}.
+    """
+    from app.services import replicate_client
+    try:
+        result = await replicate_client.check_prediction(pred_id)
+        return result
+    except Exception as e:
+        logger.error(f"check-prediction error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/generate-image")
 async def generate_image_endpoint(request: Request):
     """Genera imagen de producto con FLUX 1.1 Pro (texto) o FLUX Kontext (img2img lifestyle).
@@ -1782,35 +1843,51 @@ async def generate_product_prompts_endpoint(request: Request):
         )
 
     system = (
-        "Eres un director creativo de fotografía comercial para Mercado Libre México.\n"
-        "Tu trabajo: generar 8 prompts en inglés para FLUX AI que cuenten una historia visual "
-        "aspiracional y hermosa del producto, capítulo por capítulo.\n\n"
+        "You are a creative director of commercial photography for Mercado Libre México.\n"
+        "Generate 8 FLUX AI image prompts in ENGLISH ONLY that tell a visual story of the product.\n\n"
         + mode_instruction +
-        "\nLOS 8 CAPÍTULOS (en este orden exacto):\n"
-        "0. HERO — Fondo blanco seamless, producto centrado, iluminación de estudio perfecta.\n"
-        "1. PENTHOUSE — Sala de lujo moderna, golden hour, vista de ciudad, aspiracional máximo.\n"
-        "2. FAMILIA — Noche de película, familia reunida, palomitas, luz cálida y cómoda.\n"
-        "3. DEPORTE — Partido de fútbol en pantalla, sala con energía de estadio, colores vibrantes.\n"
-        "4. CINE OSCURO — Sala completamente oscura, solo la luz del TV ilumina la habitación, 4K dramático.\n"
-        "5. SMART / APPS — Pantalla mostrando interfaz de apps (Netflix/YouTube), sala minimalista moderna.\n"
-        "6. DISEÑO PREMIUM — Close-up angular del bezel ultra delgado, materiales premium, fondo oscuro elegante.\n"
-        "7. EXTERIOR NOCHE — Casa moderna de noche, TV visible desde ventana, exterior aspiracional.\n\n"
-        "REGLAS ABSOLUTAS:\n"
-        "- Sin texto visible en las imágenes\n"
-        "- Sin dispositivos externos (no sticks, no dongles, no cajas de streaming)\n"
-        "- Calidad: 'cinematic photography, 8K ultra-realistic, professional commercial'\n"
-        "- Cada prompt: mínimo 40 palabras, máximo 80 palabras\n\n"
-        "Responde ÚNICAMENTE con un JSON array válido de exactamente 8 strings. "
-        "Sin markdown, sin backticks, sin explicaciones."
+        "\nTHE 8 CHAPTERS (generate in this exact order):\n"
+        "0. HERO — Pure white seamless studio background. Product perfectly centered facing forward. "
+        "Beautiful vivid 4K content on screen (nature, ocean, or cinematic scene). "
+        "Professional studio lighting from both sides. Ultra-clean retail-quality shot.\n"
+        "1. PENTHOUSE — Breathtaking luxury penthouse living room at golden hour. "
+        "Floor-to-ceiling panoramic windows with city skyline. Cream bouclé sofa, marble fireplace, "
+        "orchids, Murano pendant lights. TV wall-mounted, screen glowing with 4K HDR content.\n"
+        "2. FAMILY MOVIE NIGHT — Cozy warm family living room at night. "
+        "Family of 4 on plush velvet sofa, popcorn bowls, warm amber lighting. "
+        "TV screen showing a beloved animated film. Blankets, family joy, magical atmosphere.\n"
+        "3. SPORT — Modern living room transformed into a stadium experience. "
+        "Soccer match on screen, vivid green pitch, crowd energy, friends cheering with snacks. "
+        "Vibrant colors, electric atmosphere, dynamic lifestyle.\n"
+        "4. DARK CINEMA — Completely dark room, only the TV screen illuminates the space. "
+        "Deep cinematic shadows, dramatic 4K movie on screen, couple on sofa silhouetted. "
+        "Premium home theater atmosphere, IMAX-quality light.\n"
+        "5. SMART TV UI — Minimalist modern living room, daytime. "
+        "TV screen showing the smart interface with streaming apps grid (Netflix, YouTube icons visible). "
+        "Clean architectural space, natural light, premium feel.\n"
+        "6. PREMIUM DESIGN — Dramatic close-up angular shot of the TV from a 45-degree low angle. "
+        "Ultra-thin bezel profile, premium brushed aluminum stand, dark elegant background. "
+        "Macro detail of screen edge and materials. Luxury product aesthetic.\n"
+        "7. NIGHT EXTERIOR — Exterior view of a modern luxury home at night. "
+        "Through the floor-to-ceiling window, the TV is clearly visible glowing in a beautiful living room. "
+        "Architectural exterior photography, warm interior light contrasting with dark garden.\n\n"
+        "ABSOLUTE RULES:\n"
+        "- ALL prompts MUST be written in ENGLISH only — no Spanish words at all\n"
+        "- No visible text or logos in images\n"
+        "- No external streaming devices (no sticks, dongles, external boxes)\n"
+        "- Quality suffix for every prompt: 'cinematic photography, 8K ultra-realistic, professional commercial'\n"
+        "- Each prompt: minimum 50 words, maximum 90 words\n"
+        "- Describe REAL rooms with specific details (herringbone floor, built-in shelves, marble, etc.)\n\n"
+        "Respond ONLY with a valid JSON array of exactly 8 strings. No markdown, no backticks, no explanations."
     )
 
     user = (
-        f"Producto: {title}\n"
-        f"Marca: {brand}\n"
-        f"Modelo: {model}\n"
-        f"Categoría: {category}\n"
-        f"Tamaño: {size}\"\n\n"
-        "Genera los 8 prompts narrativos para este producto exacto."
+        f"Product: {title}\n"
+        f"Brand: {brand}\n"
+        f"Model: {model}\n"
+        f"Category: {category}\n"
+        f"Screen size: {size} inches\n\n"
+        "Generate 8 lifestyle commercial photography prompts for this exact product."
     )
 
     try:
@@ -1881,25 +1958,26 @@ async def generate_video_commercial_endpoint(request: Request):
     video_prompt = ""
 
     claude_system = (
-        "Eres el director creativo de un comercial de televisión para Mercado Libre México.\n"
-        "Tu tarea: crear dos cosas relacionadas para el mismo comercial de 6 segundos.\n\n"
-        "Responde ÚNICAMENTE con este JSON (sin markdown, sin backticks):\n"
+        "You are the creative director of a TV commercial for Mercado Libre México.\n"
+        "Create two related pieces for the same 20-second commercial.\n\n"
+        "Respond ONLY with this JSON (no markdown, no backticks, no explanations):\n"
         '{"script": "...", "video_prompt": "..."}\n\n'
-        "SCRIPT (campo 'script'):\n"
-        "- Texto de locución en español de México, exactamente 25-35 palabras\n"
-        "- Tono emocionante, aspiracional, como comercial de TV premium\n"
-        "- Menciona el producto y una característica clave que lo hace único\n"
-        "- Termina EXACTAMENTE con: Disponible ahora en Mercado Libre.\n\n"
-        "VIDEO PROMPT (campo 'video_prompt'):\n"
-        "- Descripción en inglés de los MOVIMIENTOS CINEMATOGRÁFICOS del video (6 segundos)\n"
-        "- Debe COINCIDIR visualmente con lo que dice el script\n"
-        "- Describe: ángulo inicial → movimiento de cámara → qué se ve en pantalla → cómo termina\n"
-        "- Ejemplo: 'Cinematic slow push-in toward a large flat-screen television in a luxury penthouse "
-        "living room. Warm golden hour light. Camera glides right revealing slim bezels. "
-        "Screen displays vivid 4K nature scene. Premium lifestyle commercial, 8K.'\n"
-        "- NUNCA uses 'camera' como un sustantivo de equipo fotográfico — describe movimientos de escena\n"
-        "- SIEMPRE describe el TV como: 'large flat-screen television', 'big screen display'\n"
-        "- Máximo 60 palabras"
+        "SCRIPT field rules:\n"
+        "- Narration text in Mexican Spanish (español de México), exactly 45-60 words\n"
+        "- Exciting, aspirational tone — like a premium Mexican TV commercial\n"
+        "- Mention the product name and its 2-3 key features that make it special\n"
+        "- Build emotional desire: family moments, cinema, technology, beauty\n"
+        "- End EXACTLY with: Disponible ahora en Mercado Libre.\n\n"
+        "VIDEO PROMPT field rules:\n"
+        "- English description of CINEMATIC MOVEMENTS for a 6-second clip (will be looped to 20s)\n"
+        "- Must visually MATCH what the script says\n"
+        "- Describe: starting angle → camera movement → what's on screen → how it ends\n"
+        "- Example: 'Slow cinematic push-in toward a large flat-screen television in a breathtaking "
+        "luxury penthouse living room at golden hour. Warm light, panoramic windows with city skyline. "
+        "Screen shows vivid 4K tropical ocean. Smooth orbit revealing ultra-thin bezel design. "
+        "Premium lifestyle commercial quality, 8K.'\n"
+        "- ALWAYS describe the TV as: 'large flat-screen television', 'big screen display'\n"
+        "- Maximum 70 words"
     )
     claude_user = (
         f"Producto: {title}\n"
@@ -1963,21 +2041,44 @@ async def generate_video_commercial_endpoint(request: Request):
                 vid_bytes = vid_resp.content
 
             with _tf.TemporaryDirectory() as tmpdir:
-                vid_path = _os.path.join(tmpdir, "video.mp4")
-                aud_path = _os.path.join(tmpdir, "audio.mp3")
-                out_path = _os.path.join(tmpdir, "output.mp4")
+                raw_path  = _os.path.join(tmpdir, "raw.mp4")
+                loop_path = _os.path.join(tmpdir, "loop.mp4")
+                aud_path  = _os.path.join(tmpdir, "audio.mp3")
+                out_path  = _os.path.join(tmpdir, "output.mp4")
 
-                with open(vid_path, "wb") as f: f.write(vid_bytes)
+                with open(raw_path, "wb") as f: f.write(vid_bytes)
                 with open(aud_path, "wb") as f: f.write(audio_result)
 
+                # Step A: Loop the 6-second clip to ~24 seconds (4 loops)
+                # ML spec: 10-60 seconds, max 280MB
+                loop_proc = _sp.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-stream_loop", "3",   # repeat 3 more times = 4× total = ~24s
+                        "-i", raw_path,
+                        "-c:v", "copy",
+                        "-t", "24",
+                        loop_path,
+                    ],
+                    capture_output=True, timeout=60,
+                )
+                if loop_proc.returncode != 0:
+                    logger.warning(f"ffmpeg loop error: {loop_proc.stderr.decode()[:200]} — using raw")
+                    loop_path = raw_path
+
+                # Step B: Combine looped video + audio
                 proc = _sp.run(
                     [
                         "ffmpeg", "-y",
-                        "-i", vid_path,
+                        "-i", loop_path,
                         "-i", aud_path,
-                        "-c:v", "copy",
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
                         "-c:a", "aac",
+                        "-b:a", "128k",
                         "-shortest",
+                        "-movflags", "+faststart",
                         out_path,
                     ],
                     capture_output=True, timeout=120,
@@ -1985,11 +2086,12 @@ async def generate_video_commercial_endpoint(request: Request):
                 if proc.returncode == 0:
                     with open(out_path, "rb") as f:
                         _video_cache[vid_id] = f.read()
+                    out_size_mb = len(_video_cache[vid_id]) / 1_048_576
                     serve_url = f"/api/lanzar/video-file/{vid_id}"
-                    logger.info(f"Video comercial generado con audio: {vid_id}")
+                    logger.info(f"Video comercial: {vid_id} ({out_size_mb:.1f} MB)")
                     return {"video_url": serve_url, "script": script, "has_audio": True}
                 else:
-                    logger.warning(f"ffmpeg error: {proc.stderr.decode()[:300]}")
+                    logger.warning(f"ffmpeg combine error: {proc.stderr.decode()[:300]}")
 
         except FileNotFoundError:
             logger.warning("ffmpeg no instalado — retornando video sin audio")

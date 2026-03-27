@@ -688,8 +688,19 @@
               <div class="mt-1.5 text-[9px] text-blue-400">La primera foto = base para imágenes IA · Todas se publican en ML</div>
             </div>
 
-            <input id="wiz-img-prompt" type="text" placeholder="Prompt (editable)..."
-                   class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-purple-300 mb-1.5"/>
+            <!-- Selected images strip — drag to reorder, first = portada -->
+            <div class="mb-2">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-[10px] text-gray-500 font-medium">Seleccionadas para ML <span class="text-gray-300 font-normal">(arrastra para ordenar)</span></span>
+                <span id="wiz-sel-count" class="text-[10px] text-purple-600 font-semibold">0/12</span>
+              </div>
+              <div id="wiz-selected-list"
+                   class="flex gap-1.5 overflow-x-auto pb-1 min-h-[56px] bg-gray-50 rounded-lg border border-dashed border-gray-200 p-1.5 items-center"
+                   ondragover="event.preventDefault()"
+                   ondrop="window._wizDropToSelected(event)">
+                <span id="wiz-selected-empty" class="text-[10px] text-gray-300 mx-auto select-none">Agrega fotos o selecciona imágenes IA</span>
+              </div>
+            </div>
             <div class="flex gap-1.5 mb-2">
               <button onclick="window._wizGenImages()" id="wiz-btn-gen-img"
                       class="flex-1 text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition">
@@ -1101,6 +1112,7 @@
     document.getElementById('wiz-ref-add-wrap').classList.add('hidden');
     document.getElementById('wiz-video-script-wrap').classList.add('hidden');
     _renderRefGrid();
+    _renderSelectedStrip();
     _wiz.sku = gap.sku || ''; _wiz.model = gap.model || ''; _wiz.brand = gap.brand || ''; _wiz.gtin = gap.upc || '';
     _wiz.warranty_type = 'Garantía del vendedor'; _wiz.warranty_time = '3 meses'; _wiz.ml_attributes = [];
     _wiz.family_name = _guessFamilyName(gap.brand || '', gap.model || '', gap.product_title || '');
@@ -1557,18 +1569,20 @@
 
   function _wizRefreshBMGrid() {
     var grid = document.getElementById('wiz-bm-grid');
-    Array.from(grid.children).forEach(function(wrapper) {
-      var url = wrapper.dataset.url;
-      if (!url) return;
-      var idx = _wiz.selected_images.indexOf(url);
-      var isSelected = idx >= 0;
-      wrapper.style.borderColor = isSelected ? '#facc15' : '';
-      // badge and check are always the last two absolute-positioned children
-      var badge = wrapper.querySelector('div.absolute.top-0\\.5.left-0\\.5');
-      var check = wrapper.querySelector('div.absolute.top-0\\.5.right-0\\.5');
-      if (badge) { badge.textContent = isSelected ? (idx + 1) : ''; badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ' + (isSelected ? 'bg-yellow-400 text-gray-800' : 'bg-gray-300 text-white'); }
-      if (check) check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
-    });
+    if (grid) {
+      Array.from(grid.children).forEach(function(wrapper) {
+        var url = wrapper.dataset.url;
+        if (!url) return;
+        var idx = _wiz.selected_images.indexOf(url);
+        var isSelected = idx >= 0;
+        wrapper.style.borderColor = isSelected ? '#facc15' : '';
+        var badge = wrapper.querySelector('div.absolute.top-0\\.5.left-0\\.5');
+        var check = wrapper.querySelector('div.absolute.top-0\\.5.right-0\\.5');
+        if (badge) { badge.textContent = isSelected ? (idx + 1) : ''; badge.className = 'absolute top-0.5 left-0.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center ' + (isSelected ? 'bg-yellow-400 text-gray-800' : 'bg-gray-300 text-white'); }
+        if (check) check.className = 'absolute top-0.5 right-0.5 w-4 h-4 rounded-full flex items-center justify-center ' + (isSelected ? 'bg-yellow-400' : 'hidden');
+      });
+    }
+    _renderSelectedStrip();
   }
 
   // ── Render AI image grid (called after generation or on step 3 load)
@@ -1596,10 +1610,14 @@
           '</div>';
       }
       if (img.error) {
-        return '<div class="aspect-square bg-red-50 rounded-lg border border-red-200 flex flex-col items-center justify-center text-[9px] text-red-400 text-center px-1 cursor-pointer gap-1" onclick="window._wizRegenAIImage(' + i + ')">' +
-          '<span class="font-medium">' + chLabel + '</span><span>Error · Reintentar</span></div>';
+        var shortErr = (img.error || '').replace(/"/g, '').substring(0, 60);
+        return '<div class="aspect-square bg-red-50 rounded-lg border border-red-200 flex flex-col items-center justify-center text-[9px] text-red-400 text-center px-1 cursor-pointer gap-0.5" onclick="window._wizRegenAIImage(' + i + ')">' +
+          '<span class="font-medium text-red-500">' + chLabel + '</span>' +
+          '<span class="text-[8px] text-red-300 leading-tight px-1">' + shortErr + '</span>' +
+          '<span class="text-[9px] font-semibold underline mt-0.5">Reintentar</span></div>';
       }
       return '<div class="relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 ' + (sel ? 'border-purple-500' : 'border-gray-200') + ' transition group"' +
+        ' draggable="true" ondragstart="window._wizDragAI(event, \'' + img.url.replace(/'/g,'&#39;') + '\')"' +
         ' onclick="window._openLightbox(' + i + ')">' +
         '<img src="' + img.url + '" class="w-full h-full object-cover"/>' +
         (sel ? '<div class="absolute top-0.5 left-0.5 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center text-[8px] text-white font-bold">' + (selIdx + 1) + '</div>' : '') +
@@ -1668,6 +1686,7 @@
     if (_wiz.selected_images.indexOf(url) < 0 && _wiz.selected_images.length < 12)
       _wiz.selected_images.push(url);
     _renderRefGrid();
+    _renderSelectedStrip();
     _wizRefreshBMGrid();
   };
 
@@ -1681,6 +1700,72 @@
     _wiz.reference_images.splice(idx, 1);
     _renderRefGrid();
     _wizRefreshBMGrid();
+  };
+
+  // ── Selected images strip — con drag-to-reorder via SortableJS ──────────────
+  var _selSortable = null;
+
+  function _renderSelectedStrip() {
+    var list    = document.getElementById('wiz-selected-list');
+    var empty   = document.getElementById('wiz-selected-empty');
+    var countEl = document.getElementById('wiz-sel-count');
+    if (!list) return;
+    var sel = _wiz.selected_images || [];
+    if (countEl) countEl.textContent = sel.length + '/12';
+    if (sel.length === 0) {
+      list.innerHTML = '<span id="wiz-selected-empty" class="text-[10px] text-gray-300 mx-auto select-none">Agrega fotos o selecciona imágenes IA</span>';
+      if (_selSortable) { _selSortable.destroy(); _selSortable = null; }
+      return;
+    }
+    list.innerHTML = sel.map(function(url, i) {
+      var esc = url.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      return '<div data-url="' + esc + '" class="flex-shrink-0 relative w-12 h-12 rounded-lg overflow-hidden border-2 ' +
+        (i === 0 ? 'border-yellow-400' : 'border-purple-300') + ' bg-white cursor-grab group">' +
+        '<img src="' + esc + '" class="w-full h-full object-contain">' +
+        (i === 0 ? '<div class="absolute bottom-0 left-0 right-0 bg-yellow-400 text-[7px] text-center font-bold leading-none py-0.5">★</div>' : '') +
+        '<button onclick="window._wizDeselect(\'' + esc + '\')" ' +
+        'class="absolute top-0 right-0 bg-red-500 text-white text-[9px] w-3.5 h-3.5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition font-bold leading-none">✕</button>' +
+        '</div>';
+    }).join('');
+    // Init or refresh SortableJS for drag-to-reorder
+    if (_selSortable) _selSortable.destroy();
+    _selSortable = new Sortable(list, {
+      animation: 150,
+      ghostClass: 'opacity-40',
+      onEnd: function() {
+        var items = list.querySelectorAll('[data-url]');
+        _wiz.selected_images = Array.from(items).map(function(el) { return el.getAttribute('data-url'); });
+        _renderSelectedStrip();
+        _wizRenderAIGrid();
+        _wizRefreshBMGrid();
+      }
+    });
+  }
+
+  window._wizDeselect = function(url) {
+    var si = _wiz.selected_images.indexOf(url);
+    if (si >= 0) _wiz.selected_images.splice(si, 1);
+    _renderSelectedStrip();
+    _wizRenderAIGrid();
+    _wizRefreshBMGrid();
+  };
+
+  // Drag AI image tile → selected strip
+  window._wizDragAI = function(ev, url) {
+    ev.dataTransfer.setData('text/plain', url);
+    ev.dataTransfer.effectAllowed = 'copy';
+  };
+
+  window._wizDropToSelected = function(ev) {
+    ev.preventDefault();
+    var url = ev.dataTransfer.getData('text/plain');
+    if (!url || !url.startsWith('http')) return;
+    if (_wiz.selected_images.indexOf(url) < 0 && _wiz.selected_images.length < 12) {
+      _wiz.selected_images.push(url);
+      _renderSelectedStrip();
+      _wizRenderAIGrid();
+      _wizRefreshBMGrid();
+    }
   };
 
   // ── Generate 8 images — Claude genera prompts únicos → FLUX/Kontext los ejecuta
@@ -1724,14 +1809,18 @@
       errEl.classList.remove('hidden');
     }
 
-    // ── Paso 2: Generar cada imagen con su prompt específico (1 por 1)
+    // ── Paso 2: Submit → poll para cada imagen (evita timeout 60s de Railway)
     var chapterNames = ['Hero', 'Penthouse', 'Familia', 'Deporte', 'Cine', 'Smart', 'Diseño', 'Exterior'];
     var modeLabel = ref ? 'Kontext' : 'FLUX';
+
+    async function _sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
     for (var i = 0; i < total; i++) {
-      btn.textContent = modeLabel + ' · ' + (chapterNames[i] || ('Imagen ' + (i+1))) + ' (' + (i+1) + '/' + total + ')...';
+      btn.textContent = modeLabel + ' · ' + (chapterNames[i] || ('Img ' + (i+1))) + ' (' + (i+1) + '/' + total + ')...';
       var customPrompt = claudePrompts[i] || '';
       try {
-        var resp = await fetch('/api/lanzar/generate-image', {
+        // ── Submit job (rápido < 5s) ──────────────────────────────
+        var submitResp = await fetch('/api/lanzar/submit-image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1745,25 +1834,53 @@
             reference_image_url: ref,
           }),
         });
-        var d = await resp.json();
-        if (d.error) {
-          _wiz.ai_images[i] = { error: d.error };
-        } else {
-          _wiz.ai_images[i] = { url: d.image_url, prompt: d.prompt, mode: d.mode, chapter: chapterNames[i] || '' };
-          if (i === 0 && _wiz.selected_images.indexOf(d.image_url) < 0 && _wiz.selected_images.length < 12) {
-            _wiz.selected_images.unshift(d.image_url);
-          }
+        var sd = await submitResp.json();
+        if (sd.error) { _wiz.ai_images[i] = { error: sd.error }; _wizRenderAIGrid(); continue; }
+
+        // Immediate result (very fast model response)
+        if (sd.image_url) {
+          _wiz.ai_images[i] = { url: sd.image_url, prompt: sd.prompt, mode: sd.mode, chapter: chapterNames[i] };
+          _wizAddImageToSelected(sd.image_url, i);
+          _wizRenderAIGrid(); _renderSelectedStrip(); continue;
+        }
+
+        // ── Poll prediction status (each call < 3s) ───────────────
+        var predId = sd.pred_id;
+        var imageUrl = null;
+        var pollErr  = null;
+        for (var attempt = 0; attempt < 80; attempt++) {
+          await _sleep(3000);
+          try {
+            var pr = await fetch('/api/lanzar/prediction/' + predId);
+            var prd = await pr.json();
+            if (prd.status === 'succeeded') { imageUrl = prd.image_url; break; }
+            if (prd.status === 'failed')    { pollErr = prd.error || 'Generation failed'; break; }
+          } catch(pe) { pollErr = pe.message; break; }
+        }
+        if (pollErr) { _wiz.ai_images[i] = { error: pollErr }; }
+        else if (!imageUrl) { _wiz.ai_images[i] = { error: 'Timeout — reintenta' }; }
+        else {
+          _wiz.ai_images[i] = { url: imageUrl, prompt: sd.prompt, mode: sd.mode, chapter: chapterNames[i] };
+          _wizAddImageToSelected(imageUrl, i);
         }
       } catch(e) {
         _wiz.ai_images[i] = { error: e.message };
       }
       _wizRenderAIGrid();
-      _wizRefreshBMGrid();
+      _renderSelectedStrip();
     }
 
     btn.disabled = false;
     btn.innerHTML = '✨ Generar 8 imágenes con IA';
   };
+
+  function _wizAddImageToSelected(url, idx) {
+    // Agrega imagen al inicio de selected_images si es Hero (0) o si es la primera
+    if (_wiz.selected_images.indexOf(url) < 0 && _wiz.selected_images.length < 12) {
+      if (idx === 0) _wiz.selected_images.unshift(url);
+      else _wiz.selected_images.push(url);
+    }
+  }
 
   // ── Generar comercial completo: guion español (Claude) + voz (ElevenLabs) + video (minimax) + ffmpeg
   window._wizGenVideo = async function() {
@@ -1849,31 +1966,53 @@
     }
   };
 
-  // ── Regenerate a single AI image (from lightbox or error tile)
-  window._wizRegenAIImage = function(idx) {
-    var gap = _wiz.gap || {};
-    var prompt = document.getElementById('wiz-img-prompt').value.trim() ||
-      'Professional product photography of ' + ((gap.brand || '') + ' ' + (gap.model || '')).trim() + '. Studio lighting, pure white background.';
+  // ── Regenerate a single AI image — usa submit→poll para evitar timeout
+  window._wizRegenAIImage = async function(idx) {
+    var gap  = _wiz.gap || {};
+    var ref  = (_wiz.reference_images || [])[0] || '';
+    var chapterNames = ['Hero','Penthouse','Familia','Deporte','Cine','Smart','Diseño','Exterior'];
     var old = _wiz.ai_images[idx];
     if (old && old.url) {
       var si = _wiz.selected_images.indexOf(old.url);
       if (si >= 0) _wiz.selected_images.splice(si, 1);
     }
-    _wiz.ai_images[idx] = {loading: true};
+    _wiz.ai_images[idx] = {loading: true, chapter: chapterNames[idx]};
     _wizRenderAIGrid();
-    fetch('/api/lanzar/generate-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ custom_prompt: prompt, brand: gap.brand || '', model: gap.model || '', title: gap.product_title || '', category: gap.category || '' }),
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.error) { _wiz.ai_images[idx] = {error: d.error}; }
-      else { _wiz.ai_images[idx] = {url: d.image_url, prompt: d.prompt}; }
-      _wizRenderAIGrid();
-      _wizRefreshBMGrid();
-    })
-    .catch(function(e) { _wiz.ai_images[idx] = {error: e.message}; _wizRenderAIGrid(); });
+    try {
+      var submitResp = await fetch('/api/lanzar/submit-image', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          prompt_index: idx, brand: gap.brand || '', model: gap.model || '',
+          title: gap.product_title || '', category: gap.category || '',
+          reference_image_url: ref,
+        }),
+      });
+      var sd = await submitResp.json();
+      if (sd.error) { _wiz.ai_images[idx] = {error: sd.error, chapter: chapterNames[idx]}; _wizRenderAIGrid(); return; }
+      if (sd.image_url) {
+        _wiz.ai_images[idx] = {url: sd.image_url, prompt: sd.prompt, chapter: chapterNames[idx]};
+        _wizRenderAIGrid(); _renderSelectedStrip(); return;
+      }
+      // Poll
+      for (var attempt = 0; attempt < 80; attempt++) {
+        await new Promise(function(r) { setTimeout(r, 3000); });
+        var pr = await fetch('/api/lanzar/prediction/' + sd.pred_id);
+        var prd = await pr.json();
+        if (prd.status === 'succeeded') {
+          _wiz.ai_images[idx] = {url: prd.image_url, prompt: sd.prompt, chapter: chapterNames[idx]};
+          _wizRenderAIGrid(); _renderSelectedStrip(); return;
+        }
+        if (prd.status === 'failed') {
+          _wiz.ai_images[idx] = {error: prd.error || 'Error', chapter: chapterNames[idx]};
+          _wizRenderAIGrid(); return;
+        }
+      }
+      _wiz.ai_images[idx] = {error: 'Timeout', chapter: chapterNames[idx]};
+    } catch(e) {
+      _wiz.ai_images[idx] = {error: e.message, chapter: chapterNames[idx]};
+    }
+    _wizRenderAIGrid();
   };
 
   // ── Lightbox

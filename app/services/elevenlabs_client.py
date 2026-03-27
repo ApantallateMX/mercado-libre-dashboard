@@ -1,11 +1,10 @@
 """
 TTS Client — Voz en español de México
 ======================================
-Genera audio en español usando:
-  1. ElevenLabs (si ELEVENLABS_API_KEY disponible) — calidad premium
-  2. Replicate Bark como fallback (usa REPLICATE_API_KEY existente, siempre disponible)
-
-No requiere ninguna clave adicional — Bark usa el REPLICATE_API_KEY ya configurado.
+Cadena de fallbacks (mejor a peor calidad):
+  1. ElevenLabs  — requiere ELEVENLABS_API_KEY (calidad premium)
+  2. edge-tts    — Microsoft Edge TTS, gratis, sin key, voz MX natural (~2s)
+  3. Replicate Bark — lento (~5 min) pero usa REPLICATE_API_KEY existente
 """
 import asyncio
 import logging
@@ -16,18 +15,20 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ─── ElevenLabs (opcional, calidad superior) ────────────────────────────────
-_VOICE_ID_ES = "pNInz6obpgDQGcFmaJgB"   # Adam — multilingual, excelente en español
+_VOICE_ID_ES = "pNInz6obpgDQGcFmaJgB"   # Adam — multilingual v2
 _EL_MODEL    = "eleven_multilingual_v2"
 
-# ─── Replicate Bark ──────────────────────────────────────────────────────────
+# ─── edge-tts (Microsoft, gratis, sin API key) ──────────────────────────────
+_EDGE_VOICE  = "es-MX-JorgeNeural"   # Voz masculina mexicana, profesional y clara
+
+# ─── Replicate Bark (fallback final) ─────────────────────────────────────────
 _BARK_URL   = "https://api.replicate.com/v1/models/suno-ai/bark/predictions"
-_BARK_VOICE = "es_speaker_3"   # Voz masculina española, clara y profesional
+_BARK_VOICE = "es_speaker_3"
 
 
 def is_available() -> bool:
-    """Siempre True — Bark usa el REPLICATE_API_KEY que ya está configurado."""
-    from app.services.replicate_client import is_available as _repl_ok
-    return _repl_ok()
+    """Siempre True — edge-tts no requiere keys."""
+    return True
 
 
 def _el_key() -> str:
@@ -60,17 +61,33 @@ async def _generate_elevenlabs(text: str) -> bytes:
         return resp.content
 
 
+async def _generate_edge_tts(text: str) -> bytes:
+    """TTS con Microsoft Edge TTS (gratis, sin API key, voz mexicana natural).
+    Genera MP3 de alta calidad en ~1-3 segundos.
+    """
+    import edge_tts
+
+    audio_data = b""
+    communicate = edge_tts.Communicate(text, _EDGE_VOICE)
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_data += chunk["data"]
+
+    if not audio_data:
+        raise RuntimeError("edge-tts no generó audio")
+
+    logger.info(f"edge-tts OK: {len(audio_data)} bytes")
+    return audio_data
+
+
 def _extract_audio_url(output) -> str | None:
-    """Extrae URL de audio del output de Bark — maneja todos los formatos posibles."""
+    """Extrae URL de audio del output de Bark — maneja todos los formatos."""
     if not output:
         return None
-    # Dict con clave "audio_out" (formato más común de Bark en Replicate)
     if isinstance(output, dict):
         return output.get("audio_out") or output.get("audio") or output.get("url")
-    # String directo (URL)
     if isinstance(output, str) and output.startswith("http"):
         return output
-    # Lista — tomar primer elemento
     if isinstance(output, list) and output:
         first = output[0]
         if isinstance(first, str) and first.startswith("http"):
@@ -81,7 +98,7 @@ def _extract_audio_url(output) -> str | None:
 
 
 async def _generate_bark(text: str) -> bytes:
-    """TTS en español con Replicate Bark (usa REPLICATE_API_KEY existente)."""
+    """TTS fallback con Replicate Bark (usa REPLICATE_API_KEY existente)."""
     from app.services.replicate_client import _REPLICATE_KEY
 
     if not _REPLICATE_KEY:
@@ -102,56 +119,60 @@ async def _generate_bark(text: str) -> bytes:
         resp = await client.post(_BARK_URL, json=payload, headers=headers)
         logger.info(f"Bark submit: status={resp.status_code}")
         if resp.status_code not in (200, 201):
-            raise RuntimeError(f"Bark submit {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Bark {resp.status_code}: {resp.text[:300]}")
         data    = resp.json()
         pred_id = data.get("id")
-        logger.info(f"Bark prediction id={pred_id} status={data.get('status')}")
         if not pred_id:
             raise RuntimeError(f"Bark no retornó ID: {data}")
 
-    # Polling — máx 72 × 5s = 360s (6 min) — Bark puede tardar bastante
     poll_url     = f"https://api.replicate.com/v1/predictions/{pred_id}"
     poll_headers = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for attempt in range(72):
+        for attempt in range(72):   # máx 360s
             await asyncio.sleep(5)
             pr = await client.get(poll_url, headers=poll_headers)
             pd = pr.json()
             st = pd.get("status")
-            logger.debug(f"Bark poll #{attempt+1}: status={st}")
-
+            logger.debug(f"Bark poll #{attempt+1}: {st}")
             if st == "succeeded":
                 output    = pd.get("output")
-                logger.info(f"Bark succeeded — output type={type(output).__name__} raw={str(output)[:200]}")
+                logger.info(f"Bark output type={type(output).__name__} raw={str(output)[:200]}")
                 audio_url = _extract_audio_url(output)
                 if not audio_url:
-                    raise RuntimeError(f"Bark output formato desconocido: {output}")
-                logger.info(f"Bark audio_url={audio_url[:80]}")
+                    raise RuntimeError(f"Bark output desconocido: {output}")
                 dl = await client.get(audio_url, timeout=60.0)
                 dl.raise_for_status()
-                logger.info(f"Bark audio descargado: {len(dl.content)} bytes")
                 return dl.content
-
             if st in ("failed", "canceled"):
-                raise RuntimeError(f"Bark falló (status={st}): {pd.get('error', 'unknown')}")
+                raise RuntimeError(f"Bark falló: {pd.get('error', 'unknown')}")
 
-    raise RuntimeError("Bark timeout — audio no generado en 360s")
+    raise RuntimeError("Bark timeout — 360s sin resultado")
 
 
 async def generate_audio(text: str) -> bytes:
     """
     Genera audio en español de México.
-    Intenta ElevenLabs primero (si ELEVENLABS_API_KEY disponible),
-    luego cae a Replicate Bark (usa REPLICATE_API_KEY existente).
-    Retorna bytes de audio (MP3 o WAV).
+    Orden de preferencia:
+    1. ElevenLabs (si ELEVENLABS_API_KEY disponible)
+    2. edge-tts Microsoft (gratis, sin key, ~2s)
+    3. Replicate Bark (lento, como último recurso)
     """
+    # 1. ElevenLabs
     if _el_key():
         try:
-            logger.info("TTS: usando ElevenLabs")
+            logger.info("TTS: intentando ElevenLabs")
             return await _generate_elevenlabs(text)
         except Exception as e:
-            logger.warning(f"ElevenLabs falló, usando Bark: {e}")
+            logger.warning(f"ElevenLabs falló: {e}")
 
-    logger.info("TTS: usando Replicate Bark (español)")
+    # 2. edge-tts (primario gratuito)
+    try:
+        logger.info("TTS: usando edge-tts (es-MX-JorgeNeural)")
+        return await _generate_edge_tts(text)
+    except Exception as e:
+        logger.warning(f"edge-tts falló: {e}")
+
+    # 3. Bark (último recurso)
+    logger.info("TTS: último recurso — Replicate Bark")
     return await _generate_bark(text)
