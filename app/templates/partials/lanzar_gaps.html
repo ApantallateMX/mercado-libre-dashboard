@@ -1816,10 +1816,15 @@
     async function _sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
     for (var i = 0; i < total; i++) {
+      // Pausa entre imágenes para no saturar el rate limit de Replicate
+      if (i > 0) {
+        btn.textContent = '⏳ Esperando 5s (rate limit)...';
+        await _sleep(5000);
+      }
       btn.textContent = modeLabel + ' · ' + (chapterNames[i] || ('Img ' + (i+1))) + ' (' + (i+1) + '/' + total + ')...';
       var customPrompt = claudePrompts[i] || '';
       try {
-        // ── Submit job (rápido < 5s) ──────────────────────────────
+        // ── Submit job (rápido < 5s, con retry automático en 429) ─
         var submitResp = await fetch('/api/lanzar/submit-image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

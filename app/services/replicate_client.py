@@ -352,8 +352,11 @@ async def submit_image_job(
 ) -> dict:
     """Envía un job de generación de imagen a Replicate y retorna pred_id inmediatamente.
     Nunca usa Prefer:wait — siempre async para evitar timeout de Railway (60s Nginx).
+    Retry automático con backoff exponencial en caso de 429 (rate limit).
     Retorna {"pred_id": str, "image_url": None} o {"pred_id": None, "image_url": str} si ya resolvió.
     """
+    import asyncio
+
     headers_async = {
         "Authorization": f"Bearer {_REPLICATE_KEY}",
         "Content-Type":  "application/json",
@@ -383,12 +386,21 @@ async def submit_image_job(
             }
         }
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(url, json=payload, headers=headers_async)
+    # Retry con backoff exponencial para 429 (rate limit de Replicate)
+    max_retries = 6
+    for attempt in range(max_retries):
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload, headers=headers_async)
+
+        if resp.status_code == 429:
+            wait = min(10 * (2 ** attempt), 120)   # 10s, 20s, 40s, 80s, 120s max
+            logger.warning(f"Replicate 429 rate limit — esperando {wait}s (intento {attempt+1}/{max_retries})")
+            await asyncio.sleep(wait)
+            continue
+
         if resp.status_code not in (200, 201):
-            raise RuntimeError(
-                f"Replicate submit {resp.status_code}: {resp.text[:300]}"
-            )
+            raise RuntimeError(f"Replicate submit {resp.status_code}: {resp.text[:300]}")
+
         data = resp.json()
         logger.info(f"Replicate submit → id={data.get('id')} status={data.get('status')}")
 
@@ -403,6 +415,8 @@ async def submit_image_job(
             raise RuntimeError(f"Replicate no retornó ID: {data}")
 
         return {"pred_id": pred_id, "image_url": None}
+
+    raise RuntimeError("Replicate rate limit — demasiadas solicitudes. Espera 2 minutos y reintenta.")
 
 
 async def check_prediction(pred_id: str) -> dict:
