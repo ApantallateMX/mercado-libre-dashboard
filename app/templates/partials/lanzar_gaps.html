@@ -1015,6 +1015,8 @@
     document.getElementById('wiz-f-model').value = gap.model || '';
     document.getElementById('wiz-f-brand').value = gap.brand || '';
     document.getElementById('wiz-f-gtin').value  = gap.upc   || '';
+    document.getElementById('wiz-f-warranty-type').value = 'Garantía del vendedor';
+    document.getElementById('wiz-f-warranty-time').value = '3 meses';
 
     document.getElementById('wiz-title').textContent = (gap.brand ? gap.brand + ' ' : '') + (gap.model || gap.sku);
     document.getElementById('wiz-subtitle').textContent = 'SKU: ' + gap.sku + (gap.category ? ' · ' + gap.category : '');
@@ -1529,6 +1531,7 @@
         custom_prompt: prompt, count: 4,
         brand: gap.brand || '', model: gap.model || '',
         title: gap.product_title || '', category: gap.category || '',
+        size: gap.size ? String(gap.size) : '',
       }),
     })
     .then(function(r) { return r.json(); })
@@ -2403,7 +2406,8 @@
     if (!price || !_wiz.gap) { breakdown.classList.add('hidden'); return; }
     breakdown.classList.remove('hidden');
     var gap = _wiz.gap;
-    var costMxn = gap.cost_price_mxn || 0;
+    // Costo BM = retail_price_usd × 18 (retail BM es nuestro precio de adquisición)
+    var costMxn = (gap.retail_price_usd || 0) * 18;
     var listingTypeEl = document.getElementById('wiz-f-listing-type');
     var listingType = listingTypeEl ? listingTypeEl.value : 'gold_special';
     var commPct = listingType === 'gold_special' ? 12.5 : listingType === 'gold_premium' ? 12.5 : 8.0;

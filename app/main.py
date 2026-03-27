@@ -309,15 +309,15 @@ async def lifespan(app: FastAPI):
         updated = 0
         async with aiosqlite.connect(DATABASE_PATH) as _db:
             _rows = await (await _db.execute(
-                "SELECT rowid, retail_price_usd, cost_usd FROM bm_sku_gaps"
+                "SELECT rowid, retail_price_usd FROM bm_sku_gaps"
             )).fetchall()
             for _row in _rows:
-                _rowid, _retail, _cost = _row[0], float(_row[1] or 0), float(_row[2] or 0)
+                _rowid, _retail = _row[0], float(_row[1] or 0)
                 _new_sug  = round(_retail * 18 * 1.20, 0) if _retail > 0 else 0
-                _new_cost = round(_cost * 18, 0) if (0 < _cost < 9000) else 0
+                _new_cost = round(_retail * 18, 0) if _retail > 0 else 0  # retail IS our acquisition cost
                 await _db.execute(
-                    "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=? WHERE rowid=?",
-                    (_new_sug, _new_cost, _rowid)
+                    "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=?, cost_usd=? WHERE rowid=?",
+                    (_new_sug, _new_cost, _retail, _rowid)
                 )
                 updated += 1
             await _db.commit()

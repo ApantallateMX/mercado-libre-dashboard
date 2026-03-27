@@ -625,15 +625,12 @@ async def _run_gap_scan():
                 if base_sku in global_meli_skus:
                     continue  # publicado en alguna cuenta → no es gap
                 retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                cost      = float(prod.get("AvgCostQTY", 0) or 0)
-                # BM uses 9999.99 as sentinel when avg cost is unknown — discard it
-                if cost >= 9000:
-                    cost = 0
                 stock     = _bm_qty(prod)
-                score     = _priority_score(stock, retail, cost)
-                # Formula: retail_usd × 18 (FX) × 1.20 (20% margen)
+                score     = _priority_score(stock, retail, 0)
+                # Precio sugerido: retail_usd × 18 (FX) × 1.20 (20% margen)
                 suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
-                cost_mxn  = round(cost * 18, 0) if cost > 0 else 0
+                # Costo BM en MXN = retail_usd × 18 (el retail de BM ES nuestro costo de adquisición)
+                cost_mxn  = round(retail * 18, 0) if retail > 0 else 0
                 global_gaps_base.append({
                     "sku":               base_sku,
                     "product_title":     prod.get("Title", "") or "",
@@ -647,7 +644,7 @@ async def _run_gap_scan():
                     "stock_mty":         0,
                     "stock_cdmx":        0,
                     "retail_price_usd":  retail,
-                    "cost_usd":          cost,
+                    "cost_usd":          retail,   # costo = retail BM (nuestro precio de adquisición)
                     "priority_score":    score,
                     "suggested_price_mxn": suggested,
                     "cost_price_mxn":    cost_mxn,
@@ -1142,9 +1139,13 @@ async def get_gaps(
     items = []
     for r in rows:
         d = dict(r)
-        # Sanitize BM sentinel cost value (9999.99 = "cost unknown")
-        if (d.get("cost_usd") or 0) >= 9000:
-            d["cost_usd"] = 0
+        # Ensure cost = retail (costo de adquisición = precio retail BM)
+        retail = float(d.get("retail_price_usd") or 0)
+        if retail > 0:
+            d["cost_usd"]       = retail
+            d["cost_price_mxn"] = round(retail * 18)
+        else:
+            d["cost_usd"]       = 0
             d["cost_price_mxn"] = 0
         items.append(d)
 
@@ -1615,29 +1616,23 @@ async def generate_images_batch_endpoint(request: Request):
     if not replicate_client.is_available():
         return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
 
-    body = await request.json()
-    base_prompt = replicate_client.build_product_prompt(
-        brand    = body.get("brand", ""),
-        model    = body.get("model", ""),
-        title    = body.get("title", "") or body.get("product_title", ""),
-        category = body.get("category", ""),
-    )
-    custom = (body.get("custom_prompt") or "").strip()
+    body    = await request.json()
+    brand   = body.get("brand", "")
+    model   = body.get("model", "")
+    title   = body.get("title", "") or body.get("product_title", "")
+    category= body.get("category", "")
+    size    = str(body.get("size", "") or "").strip()
+    n       = min(int(body.get("count", 4)), 6)
+    custom  = (body.get("custom_prompt") or "").strip()
+
     if custom:
-        base_prompt = custom
+        # If user typed a custom prompt, use it as base and generate N identical requests
+        prompts = [custom] * n
+    else:
+        prompts = replicate_client.build_batch_prompts(
+            brand=brand, model=model, title=title, category=category, size=size, count=n
+        )
 
-    n = min(int(body.get("count", 4)), 6)
-
-    _ANGLE_SUFFIXES = [
-        "",
-        " Slight 3/4 angle view.",
-        " Side profile view.",
-        " Top-front angled view.",
-        " Close-up of screen showing vibrant 4K content.",
-        " Product in modern living room, natural lighting.",
-    ]
-
-    prompts = [(base_prompt + _ANGLE_SUFFIXES[i]).strip() for i in range(n)]
     tasks   = [replicate_client.generate_image(p) for p in prompts]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
