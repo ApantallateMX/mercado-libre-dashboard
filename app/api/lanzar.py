@@ -626,10 +626,14 @@ async def _run_gap_scan():
                     continue  # publicado en alguna cuenta → no es gap
                 retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                 cost      = float(prod.get("AvgCostQTY", 0) or 0)
+                # BM uses 9999.99 as sentinel when avg cost is unknown — discard it
+                if cost >= 9000:
+                    cost = 0
                 stock     = _bm_qty(prod)
                 score     = _priority_score(stock, retail, cost)
-                suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
-                cost_mxn  = round(cost * fx, 0) if cost > 0 else 0
+                # Formula: retail_usd × 18 (FX) × 1.20 (20% margen)
+                suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
+                cost_mxn  = round(cost * 18, 0) if cost > 0 else 0
                 global_gaps_base.append({
                     "sku":               base_sku,
                     "product_title":     prod.get("Title", "") or "",
@@ -817,7 +821,7 @@ async def _run_gap_scan():
                         if stock <= 0:
                             continue
                         retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                        suggested = round(retail * fx * 1.3, 0) if retail > 0 else 0
+                        suggested = round(retail * 18 * 1.20, 0) if retail > 0 else 0
                         title     = prod.get("Title", "") or ""
                         for iid in item_ids_list:
                             await db.execute("""
@@ -839,7 +843,7 @@ async def _run_gap_scan():
                         if not prod:
                             continue
                         retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
-                        suggested = round(retail * fx * 1.3, 0)
+                        suggested = round(retail * 18 * 1.20, 0)
                         if retail <= 0 or suggested <= 0:
                             continue
                         for item_info in item_list:

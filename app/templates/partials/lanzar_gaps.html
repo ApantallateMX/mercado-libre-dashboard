@@ -1272,6 +1272,25 @@
         }
         return '<div><label class="text-[10px] text-gray-400 block mb-0.5">' + a.name + (a.tags && a.tags.required ? ' <span class="text-red-400">*</span>' : '') + '</label>' + inputHtml + '</div>';
       }).join('');
+      // Auto-fill attributes from BM data
+      var bmGap = _wiz.gap || {};
+      var bmSize = bmGap.size ? String(bmGap.size) : '';
+      var SIZE_ATTR_IDS = ['SCREEN_SIZE','VIDEO_SCREEN_SIZE','DISPLAY_SIZE','SCREEN_SIZE_MODEL','SCREENSIZE'];
+      if (bmSize) {
+        SIZE_ATTR_IDS.forEach(function(attrId) {
+          var el = container.querySelector('[data-attr-id="' + attrId + '"]');
+          if (!el) return;
+          if (el.tagName === 'SELECT') {
+            for (var i = 0; i < el.options.length; i++) {
+              if (el.options[i].text.indexOf(bmSize) >= 0 || el.options[i].value.indexOf(bmSize) >= 0) {
+                el.value = el.options[i].value; break;
+              }
+            }
+          } else {
+            el.value = bmSize + '"';
+          }
+        });
+      }
       wrap.classList.remove('hidden');
     })
     .catch(function() { loading.classList.add('hidden'); });
