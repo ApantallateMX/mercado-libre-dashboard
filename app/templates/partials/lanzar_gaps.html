@@ -1118,9 +1118,11 @@
       return bm ? 'BRAVIA ' + bm[1] : 'BRAVIA';
     }
     if (b.indexOf('samsung') >= 0) {
-      if (t.indexOf('neo qled') >= 0) return 'Neo QLED';
+      if (t.indexOf('neo qled') >= 0 || m.indexOf('neo') >= 0) return 'Neo QLED';
       if (t.indexOf('qled')    >= 0) return 'QLED';
       if (t.indexOf('frame')   >= 0) return 'The Frame';
+      // QN + número + Q = QLED (ej. QN43Q7FAAFXZA)
+      if (/^qn\d+q/i.test(m))        return 'QLED';
       return 'Crystal UHD';
     }
     if (b.indexOf('lg') >= 0) {
@@ -2097,6 +2099,7 @@
           category:          gap.category      || '',
           size:              gap.size ? String(gap.size) : '',
           first_frame_image: firstFrame,
+          ai_image_urls:     (_wiz.ai_images || []).filter(function(img) { return img && img.url; }).map(function(img) { return img.url; }),
         }),
       });
       var d = await resp.json();
@@ -2251,6 +2254,31 @@
     var gap = _wiz.gap;
     var skuToPublish = _wiz.sku || (gap ? gap.sku : '');
     var imagesToUpload = _wiz.selected_images.slice(0, 12);
+
+    // ── Validación de campos requeridos por Mercado Libre ──────────────────
+    // Auto-detectar family_name si está vacío
+    if (!_wiz.family_name && (_wiz.brand || _wiz.model || _wiz.draft.title)) {
+      _wiz.family_name = _guessFamilyName(_wiz.brand, _wiz.model, _wiz.draft.title);
+    }
+    var _valErrors = [];
+    if (!_wiz.draft.title || _wiz.draft.title.trim().length < 10)
+      _valErrors.push('Título muy corto o vacío (mínimo 10 caracteres)');
+    if (!_wiz.category_id)
+      _valErrors.push('Categoría de Mercado Libre requerida');
+    if (!_wiz.price || Number(_wiz.price) <= 0)
+      _valErrors.push('Precio requerido (mayor a $0)');
+    if (!imagesToUpload.length)
+      _valErrors.push('Al menos una imagen seleccionada es requerida');
+    if (!_wiz.family_name)
+      _valErrors.push('Familia del producto requerida (FAMILY_NAME) — revisa la pestaña Atributos');
+
+    if (_valErrors.length > 0) {
+      status.classList.add('hidden');
+      btn.disabled = false; btn.classList.remove('opacity-50');
+      alert('❌ No se puede publicar — campos requeridos por Mercado Libre:\n\n' +
+        _valErrors.map(function(e) { return '• ' + e; }).join('\n'));
+      return;
+    }
 
     // ── Pre-check: warn if this SKU is already published in ML
     function _doPublish() {

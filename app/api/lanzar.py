@@ -1978,12 +1978,100 @@ async def generate_product_prompts_endpoint(request: Request):
         return {"prompts": prompts, "source": "fallback"}
 
 
+async def _create_slideshow_from_images(
+    image_urls: list,
+    audio_bytes,
+    ffmpeg_bin: str,
+    tmpdir: str,
+) -> str:
+    """Download images, create a slideshow MP4 (4s per image), combine with audio using -shortest."""
+    import os as _os2
+    import subprocess as _sp2
+
+    clip_paths: list = []
+    async with httpx.AsyncClient(timeout=30.0) as dl_client:
+        for i, url in enumerate(image_urls[:8]):
+            try:
+                r = await dl_client.get(url, follow_redirects=True)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    img_path  = _os2.path.join(tmpdir, f"slide_img_{i}.jpg")
+                    clip_path = _os2.path.join(tmpdir, f"slide_clip_{i}.mp4")
+                    with open(img_path, "wb") as fh:
+                        fh.write(r.content)
+                    proc = _sp2.run(
+                        [
+                            ffmpeg_bin, "-y",
+                            "-loop", "1", "-i", img_path,
+                            "-t", "4",
+                            "-vf", (
+                                "scale=1280:720:force_original_aspect_ratio=decrease,"
+                                "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black"
+                            ),
+                            "-c:v", "libx264", "-preset", "ultrafast", "-r", "24",
+                            clip_path,
+                        ],
+                        capture_output=True, timeout=60,
+                    )
+                    if proc.returncode == 0:
+                        clip_paths.append(clip_path)
+                        logger.info(f"Slideshow clip {i+1} OK")
+                    else:
+                        logger.warning(f"Slideshow clip {i} ffmpeg error: {proc.stderr.decode(errors='replace')[:200]}")
+            except Exception as exc:
+                logger.warning(f"Slideshow image {i} failed: {exc}")
+
+    if not clip_paths:
+        raise RuntimeError("No se pudieron crear clips de imagen para el slideshow")
+
+    # Concat clips
+    concat_path   = _os2.path.join(tmpdir, "slide_concat.txt")
+    slideshow_raw = _os2.path.join(tmpdir, "slideshow_raw.mp4")
+    with open(concat_path, "w") as fh:
+        for p in clip_paths:
+            fh.write(f"file '{p}'\n")
+
+    proc = _sp2.run(
+        [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", concat_path, "-c", "copy", slideshow_raw],
+        capture_output=True, timeout=120,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Slideshow concat failed: {proc.stderr.decode(errors='replace')[:300]}")
+    logger.info(f"Slideshow concat OK: {len(clip_paths)} clips")
+
+    if not audio_bytes:
+        return slideshow_raw
+
+    # Combine with audio, cut at audio end
+    aud_path = _os2.path.join(tmpdir, "slide_audio.mp3")
+    out_path = _os2.path.join(tmpdir, "slideshow_final.mp4")
+    with open(aud_path, "wb") as fh:
+        fh.write(audio_bytes)
+    proc = _sp2.run(
+        [
+            ffmpeg_bin, "-y",
+            "-i", slideshow_raw,
+            "-i", aud_path,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-shortest",
+            "-movflags", "+faststart",
+            out_path,
+        ],
+        capture_output=True, timeout=120,
+    )
+    if proc.returncode == 0:
+        logger.info("Slideshow+audio combined OK")
+        return out_path
+    logger.warning(f"Slideshow+audio failed: {proc.stderr.decode(errors='replace')[:300]}, returning no-audio version")
+    return slideshow_raw
+
+
 @router.post("/generate-video-commercial")
 async def generate_video_commercial_endpoint(request: Request):
     """Pipeline completo de comercial en español:
     1. Claude genera guion en español de México (30-40 palabras)
     2. ElevenLabs convierte guion a voz profesional en español
-    3. minimax/video-01 genera el video visual del producto
+    3. Si hay imágenes AI: slideshow con ffmpeg; si no: minimax/video-01
     4. ffmpeg combina audio + video en un solo MP4
     Retorna URL del video combinado + el guion generado.
     """
@@ -1997,13 +2085,14 @@ async def generate_video_commercial_endpoint(request: Request):
     if not replicate_client.is_available():
         return JSONResponse({"error": "REPLICATE_API_KEY no configurada"}, status_code=503)
 
-    body        = await request.json()
-    brand       = body.get("brand", "")
-    model       = body.get("model", "")
-    title       = body.get("title", "") or body.get("product_title", "")
-    category    = body.get("category", "")
-    size        = str(body.get("size", "") or "").strip()
-    first_frame = (body.get("first_frame_image") or "").strip()
+    body           = await request.json()
+    brand          = body.get("brand", "")
+    model          = body.get("model", "")
+    title          = body.get("title", "") or body.get("product_title", "")
+    category       = body.get("category", "")
+    size           = str(body.get("size", "") or "").strip()
+    first_frame    = (body.get("first_frame_image") or "").strip()
+    ai_image_urls  = [u for u in (body.get("ai_image_urls") or []) if isinstance(u, str) and u.startswith("http")]
 
     # ── Step 1: Claude genera guion + video_prompt juntos (coherencia visual) ──
     script       = ""
@@ -2017,7 +2106,9 @@ async def generate_video_commercial_endpoint(request: Request):
         "SCRIPT field rules:\n"
         "- Narration text in Mexican Spanish (español de México), exactly 45-60 words\n"
         "- Exciting, aspirational tone — like a premium Mexican TV commercial\n"
-        "- Mention the product name and its 2-3 key features that make it special\n"
+        "- NEVER mention model numbers, SKU codes, or alphanumeric product codes (e.g. QN43Q7FAAFXZA)\n"
+        "- ONLY mention the brand name and screen size in inches (e.g. 'Samsung de 43 pulgadas')\n"
+        "- Talk beautifully about 2-3 emotional features: image quality, sound, design, family moments\n"
         "- Build emotional desire: family moments, cinema, technology, beauty\n"
         "- End EXACTLY with: Disponible ahora en Mercado Libre.\n\n"
         "VIDEO PROMPT field rules:\n"
@@ -2057,7 +2148,7 @@ async def generate_video_commercial_endpoint(request: Request):
         logger.warning(f"Claude script+video_prompt failed: {e}")
         size_txt = f"{size} pulgadas " if size else ""
         script = (
-            f"El {brand} {size_txt}{model} — imagen brillante, sonido envolvente y "
+            f"El {brand} {size_txt}— imagen brillante, sonido envolvente y "
             f"entretenimiento sin límites. Todo lo que tu familia merece en un solo televisor. "
             f"Disponible ahora en Mercado Libre."
         )
@@ -2067,9 +2158,48 @@ async def generate_video_commercial_endpoint(request: Request):
             brand=brand, model=model, title=title, category=category, size=size
         )
 
-    # TTS + video en paralelo
-    logger.info(f"=== TTS START: script={len(script)} chars ===")
-    logger.info(f"=== VIDEO START: prompt={video_prompt[:80]}... ===")
+    # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffmpeg_bin = get_ffmpeg_exe()
+        logger.info(f"ffmpeg bin: {ffmpeg_bin}")
+    except Exception as _e:
+        ffmpeg_bin = "ffmpeg"
+        logger.warning(f"imageio-ffmpeg no disponible ({_e}), usando 'ffmpeg' del PATH")
+
+    vid_id = str(_uuid.uuid4())
+
+    # ── Path A: Slideshow de imágenes AI (sin minimax) ──────────────────────
+    if len(ai_image_urls) >= 2:
+        logger.info(f"=== SLIDESHOW PATH: {len(ai_image_urls)} imágenes AI ===")
+        logger.info(f"=== TTS START: script={len(script)} chars ===")
+        try:
+            audio_result = await elevenlabs_client.generate_audio(script)
+        except Exception as tts_err:
+            logger.warning(f"TTS falló en slideshow path: {tts_err}")
+            audio_result = None
+
+        has_audio = isinstance(audio_result, bytes) and bool(audio_result)
+        try:
+            with _tf.TemporaryDirectory() as tmpdir:
+                final_path = await _create_slideshow_from_images(
+                    image_urls=ai_image_urls,
+                    audio_bytes=audio_result if has_audio else None,
+                    ffmpeg_bin=ffmpeg_bin,
+                    tmpdir=tmpdir,
+                )
+                with open(final_path, "rb") as fh:
+                    _video_cache[vid_id] = fh.read()
+            out_size_mb = len(_video_cache[vid_id]) / 1_048_576
+            serve_url = f"/api/lanzar/video-file/{vid_id}"
+            logger.info(f"Slideshow listo: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
+            return {"video_url": serve_url, "script": script, "has_audio": has_audio}
+        except Exception as exc:
+            logger.error(f"Slideshow falló, cayendo a minimax: {exc}", exc_info=True)
+            # Fall through to minimax path below
+
+    # ── Path B: minimax video-01 + ffmpeg loop ───────────────────────────────
+    logger.info(f"=== TTS + VIDEO START (minimax path) ===")
     tts_coro   = elevenlabs_client.generate_audio(script)
     video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
     results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
@@ -2083,25 +2213,13 @@ async def generate_video_commercial_endpoint(request: Request):
 
     video_url = video_result  # URL pública de minimax (~5s)
 
-    # ── Step 4: Descargar video + procesar con ffmpeg ───────────────────────
     has_audio = isinstance(audio_result, bytes) and bool(audio_result)
     if isinstance(audio_result, Exception):
         logger.warning(f"TTS falló — video sin audio: {audio_result}")
     elif has_audio:
         logger.info(f"TTS exitoso: {len(audio_result)} bytes de audio")
 
-    # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
     try:
-        from imageio_ffmpeg import get_ffmpeg_exe
-        ffmpeg_bin = get_ffmpeg_exe()
-        logger.info(f"ffmpeg bin: {ffmpeg_bin}")
-    except Exception as _e:
-        ffmpeg_bin = "ffmpeg"   # fallback a PATH del sistema
-        logger.warning(f"imageio-ffmpeg no disponible ({_e}), usando 'ffmpeg' del PATH")
-
-    vid_id = str(_uuid.uuid4())
-    try:
-        # Descargar el clip de minimax
         async with httpx.AsyncClient(timeout=120.0) as client:
             vid_resp = await client.get(video_url, follow_redirects=True)
             if vid_resp.status_code != 200:
@@ -2119,8 +2237,7 @@ async def generate_video_commercial_endpoint(request: Request):
             with open(raw_path, "wb") as f:
                 f.write(vid_bytes)
 
-            # Step A: Loop a 40s (buffer máximo) — -shortest en Step B corta
-            # exactamente cuando termina el audio, logrando duración = guion
+            # Loop minimax clip to 40s buffer — -shortest cuts at audio end
             with open(concat_path, "w") as f:
                 for _ in range(8):   # 8 × ~5s = ~40s buffer
                     f.write(f"file '{raw_path}'\n")
@@ -2131,7 +2248,7 @@ async def generate_video_commercial_endpoint(request: Request):
                     "-f", "concat", "-safe", "0",
                     "-i", concat_path,
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-t", "40",      # máximo 40s
+                    "-t", "40",
                     loop_path,
                 ],
                 capture_output=True, timeout=180,
@@ -2139,12 +2256,11 @@ async def generate_video_commercial_endpoint(request: Request):
             if loop_proc.returncode != 0:
                 err = loop_proc.stderr.decode(errors="replace")[:500]
                 logger.warning(f"ffmpeg concat failed (rc={loop_proc.returncode}): {err}")
-                loop_path = raw_path   # usar clip original si falla concat
+                loop_path = raw_path
             else:
-                logger.info("ffmpeg concat OK — video loopeado a 20s")
+                logger.info("ffmpeg concat OK — video loopeado a 40s")
 
             if has_audio:
-                # Step B: Combinar video loopeado + audio
                 with open(aud_path, "wb") as f:
                     f.write(audio_result)
                 proc = _sp.run(
@@ -2166,9 +2282,9 @@ async def generate_video_commercial_endpoint(request: Request):
                 else:
                     err = proc.stderr.decode(errors="replace")[:500]
                     logger.warning(f"ffmpeg combine failed (rc={proc.returncode}): {err}")
-                    final_path = loop_path  # 20s sin audio
+                    final_path = loop_path
             else:
-                final_path = loop_path  # 20s sin audio
+                final_path = loop_path
 
             with open(final_path, "rb") as f:
                 _video_cache[vid_id] = f.read()
