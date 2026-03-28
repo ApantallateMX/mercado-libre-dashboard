@@ -2119,10 +2119,10 @@ async def generate_video_commercial_endpoint(request: Request):
             with open(raw_path, "wb") as f:
                 f.write(vid_bytes)
 
-            # Step A: SIEMPRE loop a 20s (ML spec: 10-60s mínimo)
-            # 4 repeticiones × ~5s = ~20s
+            # Step A: Loop a 40s (buffer máximo) — -shortest en Step B corta
+            # exactamente cuando termina el audio, logrando duración = guion
             with open(concat_path, "w") as f:
-                for _ in range(4):
+                for _ in range(8):   # 8 × ~5s = ~40s buffer
                     f.write(f"file '{raw_path}'\n")
 
             loop_proc = _sp.run(
@@ -2131,10 +2131,10 @@ async def generate_video_commercial_endpoint(request: Request):
                     "-f", "concat", "-safe", "0",
                     "-i", concat_path,
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-t", "20",
+                    "-t", "40",      # máximo 40s
                     loop_path,
                 ],
-                capture_output=True, timeout=120,
+                capture_output=True, timeout=180,
             )
             if loop_proc.returncode != 0:
                 err = loop_proc.stderr.decode(errors="replace")[:500]

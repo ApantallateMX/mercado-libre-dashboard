@@ -408,6 +408,13 @@
       <button onclick="window._closeWizard()" class="ml-3 flex-shrink-0 text-gray-400 hover:text-gray-600 transition text-lg leading-none">✕</button>
     </div>
 
+    <!-- Draft restored banner -->
+    <div id="wiz-draft-banner" class="hidden px-5 py-2 bg-amber-50 border-b border-amber-100 flex items-center justify-between">
+      <span class="text-xs text-amber-700">📋 Borrador restaurado — tus imágenes, video y texto están guardados</span>
+      <button onclick="var s=_wiz.sku;_wizClearDraft(s);document.getElementById('wiz-draft-banner').classList.add('hidden');"
+              class="text-[10px] text-amber-500 hover:text-amber-700 underline ml-2 flex-shrink-0">Limpiar</button>
+    </div>
+
     <!-- Stepper -->
     <div class="px-5 py-3 border-b border-gray-100 flex-shrink-0">
       <div class="flex items-center">
@@ -1183,6 +1190,13 @@
     _wizKeywords([]);
     window._wizTitleLen();
 
+    // Intentar restaurar borrador guardado para este SKU
+    var hasDraft = _wizLoadDraft(gap.sku);
+    if (hasDraft) {
+      var draftBanner = document.getElementById('wiz-draft-banner');
+      if (draftBanner) draftBanner.classList.remove('hidden');
+    }
+
     _wizGoStep(1);
     document.getElementById('wizard-modal').classList.remove('hidden');
   };
@@ -1191,6 +1205,111 @@
     document.getElementById('wizard-modal').classList.add('hidden');
     _wiz.gap = null;
   };
+
+  // ── Draft persistence — guarda/carga por SKU en localStorage ───────────────
+  function _wizSaveDraft() {
+    var sku = _wiz.sku;
+    if (!sku) return;
+    try {
+      localStorage.setItem('wiz_draft_' + sku, JSON.stringify({
+        draft:            _wiz.draft,
+        selected_images:  _wiz.selected_images,
+        ai_images:        _wiz.ai_images,
+        reference_images: _wiz.reference_images,
+        video_url:        _wiz.video_url,
+        category_id:      _wiz.category_id,
+        category_name:    _wiz.category_name,
+        price:            _wiz.price,
+        listing_type:     _wiz.listing_type,
+        condition:        _wiz.condition,
+        qty:              _wiz.qty,
+        warranty_type:    _wiz.warranty_type,
+        warranty_time:    _wiz.warranty_time,
+        family_name:      _wiz.family_name,
+        gtin:             _wiz.gtin,
+      }));
+    } catch(e) {}
+  }
+
+  function _wizLoadDraft(sku) {
+    try {
+      var raw = localStorage.getItem('wiz_draft_' + sku);
+      if (!raw) return false;
+      var d = JSON.parse(raw);
+
+      // Restaurar estado
+      if (d.draft)            _wiz.draft            = d.draft;
+      if (d.selected_images)  _wiz.selected_images  = d.selected_images;
+      if (d.ai_images)        _wiz.ai_images        = d.ai_images;
+      if (d.reference_images) _wiz.reference_images = d.reference_images;
+      if (d.video_url)        _wiz.video_url        = d.video_url;
+      if (d.category_id)      { _wiz.category_id = d.category_id; _wiz.category_name = d.category_name || ''; }
+      if (d.price)            _wiz.price            = d.price;
+      if (d.listing_type)     _wiz.listing_type     = d.listing_type;
+      if (d.condition)        _wiz.condition        = d.condition;
+      if (d.qty)              _wiz.qty              = d.qty;
+      if (d.warranty_type)    _wiz.warranty_type    = d.warranty_type;
+      if (d.warranty_time)    _wiz.warranty_time    = d.warranty_time;
+      if (d.family_name)      _wiz.family_name      = d.family_name;
+      if (d.gtin)             _wiz.gtin             = d.gtin;
+
+      // Restaurar UI — campos de texto
+      if (d.draft) {
+        var tf = document.getElementById('wiz-f-title');
+        if (tf) tf.value = d.draft.title || '';
+        var df = document.getElementById('wiz-f-desc');
+        if (df) df.value = d.draft.description || '';
+        if (d.draft.bullet_points) _wizBullets(d.draft.bullet_points);
+        if (d.draft.keywords)      _wizKeywords(d.draft.keywords);
+      }
+      if (d.family_name) {
+        var ff = document.getElementById('wiz-f-family');
+        if (ff) ff.value = d.family_name;
+      }
+      if (d.gtin) {
+        var gf = document.getElementById('wiz-f-gtin');
+        if (gf) gf.value = d.gtin;
+      }
+      if (d.warranty_type) {
+        var wt = document.getElementById('wiz-f-warranty-type');
+        if (wt) wt.value = d.warranty_type;
+      }
+      if (d.warranty_time) {
+        var wm = document.getElementById('wiz-f-warranty-time');
+        if (wm) wm.value = d.warranty_time;
+      }
+      if (d.price) {
+        var pf = document.getElementById('wiz-f-price');
+        if (pf) pf.value = d.price;
+      }
+      if (d.qty) {
+        var qf = document.getElementById('wiz-f-qty');
+        if (qf) qf.value = d.qty;
+      }
+
+      // Restaurar grids de imágenes
+      _renderRefGrid();
+      _renderSelectedStrip();
+      if (_wiz.ai_images && _wiz.ai_images.length) _wizRenderAIGrid();
+
+      // Restaurar video si existe
+      if (d.video_url) {
+        var vid  = document.getElementById('wiz-video-preview');
+        var wrap = document.getElementById('wiz-video-wrap');
+        var dl   = document.getElementById('wiz-video-download');
+        if (vid)  { vid.src = d.video_url; vid.load(); }
+        if (dl)   dl.href = d.video_url;
+        if (wrap) wrap.classList.remove('hidden');
+      }
+
+      window._wizTitleLen && window._wizTitleLen();
+      return true;
+    } catch(e) { return false; }
+  }
+
+  function _wizClearDraft(sku) {
+    try { localStorage.removeItem('wiz_draft_' + sku); } catch(e) {}
+  }
 
   function _wizGoStep(step) {
     _wiz.step = step;
@@ -1240,6 +1359,7 @@
       _wiz.draft.title = t;
       _wiz.draft.description = document.getElementById('wiz-f-desc').value.trim();
       _wiz.draft.bullet_points = Array.from(document.querySelectorAll('#wiz-bullets input')).map(function(i) { return i.value.trim(); }).filter(Boolean);
+      _wizSaveDraft();
       _wizGoStep(2);
     } else if (_wiz.step === 2) {
       // Read selected category
@@ -1734,6 +1854,7 @@
     // Add directly to selected_images — published to ML as-is
     if (_wiz.selected_images.indexOf(url) < 0 && _wiz.selected_images.length < 12)
       _wiz.selected_images.push(url);
+    _wizSaveDraft();
     _renderRefGrid();
     _renderSelectedStrip();
     _wizRefreshBMGrid();
@@ -1916,6 +2037,7 @@
         else {
           _wiz.ai_images[i] = { url: imageUrl, prompt: sd.prompt, mode: sd.mode, chapter: chapterNames[i] };
           _wizAddImageToSelected(imageUrl, i);
+          _wizSaveDraft();
         }
       } catch(e) {
         _wiz.ai_images[i] = { error: e.message };
@@ -1988,6 +2110,7 @@
       }
 
       _wiz.video_url = d.video_url;
+      _wizSaveDraft();
 
       // Reproducir video
       var vid = document.getElementById('wiz-video-preview');
@@ -2216,6 +2339,7 @@
           : '';
         status.innerHTML = '✅ Publicado exitosamente!' + link;
         status.className = 'text-center text-xs py-1 text-green-600';
+        _wizClearDraft(_wiz.sku);   // borrar draft al publicar exitosamente
         setTimeout(function() { _loadGaps(); _loadFilters(); }, 2000);
       })
       .catch(function(e) {
