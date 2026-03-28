@@ -19,13 +19,28 @@
     </div>
   </div>
 
-  <!-- ── Scan status bar ────────────────────────────────────────────────────── -->
-  <div id="scan-status-bar" class="hidden px-4 py-2 bg-blue-50 border-b border-blue-100 text-xs text-blue-700 flex items-center gap-2">
-    <svg class="animate-spin w-3.5 h-3.5 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-    </svg>
-    <span id="scan-status-text">Escaneando BinManager vs MeLi — esto puede tomar 2-3 min...</span>
+  <!-- ── Scan progress bar ────────────────────────────────────────────────── -->
+  <div id="scan-status-bar" class="hidden px-4 pt-2 pb-3 bg-blue-50 border-b border-blue-100">
+    <div class="flex items-center justify-between mb-1.5">
+      <div class="flex items-center gap-2">
+        <svg class="animate-spin w-3.5 h-3.5 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+        </svg>
+        <span id="scan-status-text" class="text-xs font-semibold text-blue-800">Escaneando...</span>
+      </div>
+      <div class="flex items-center gap-3 text-xs text-blue-600">
+        <span id="scan-pct-label" class="font-bold text-blue-700">0%</span>
+        <span id="scan-elapsed" class="font-mono text-blue-500">0:00</span>
+      </div>
+    </div>
+    <!-- progress bar -->
+    <div class="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+      <div id="scan-progress-fill"
+           class="h-2 rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-700"
+           style="width:0%"></div>
+    </div>
+    <div id="scan-detail-text" class="mt-1 text-[10px] text-blue-500"></div>
   </div>
 
   <!-- ── Catalog health dashboard ──────────────────────────────────────────── -->
@@ -1032,24 +1047,58 @@
     fetch('/api/lanzar/scan-now', { method: 'POST' }).then(function() { _startScanPolling(); });
   };
 
+  var _scanStartTime = null;
+  var _elapsedTimer  = null;
+
+  function _updateElapsed() {
+    if (!_scanStartTime) return;
+    var secs = Math.floor((Date.now() - _scanStartTime) / 1000);
+    var m = Math.floor(secs / 60), s = secs % 60;
+    var el = document.getElementById('scan-elapsed');
+    if (el) el.textContent = m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
   function _startScanPolling() {
-    var bar = document.getElementById('scan-status-bar'), txt = document.getElementById('scan-status-text');
+    var bar  = document.getElementById('scan-status-bar');
+    var txt  = document.getElementById('scan-status-text');
+    var fill = document.getElementById('scan-progress-fill');
+    var pctL = document.getElementById('scan-pct-label');
+    var det  = document.getElementById('scan-detail-text');
+
     if (bar) bar.classList.remove('hidden');
+    _scanStartTime = Date.now();
+
+    // Elapsed timer — updates every second
+    if (_elapsedTimer) clearInterval(_elapsedTimer);
+    _elapsedTimer = setInterval(_updateElapsed, 1000);
+
     if (_scanPolling) clearInterval(_scanPolling);
     _scanPolling = setInterval(function() {
       fetch('/api/lanzar/scan-status').then(function(r) { return r.json(); }).then(function(s) {
+        var prog = s.progress || {};
+        var pct  = prog.pct || 0;
+        var label = prog.label || (s.status === 'running' ? 'Escaneando...' : s.status);
+        var detail = prog.detail || '';
+
         if (s.status === 'running') {
-          if (txt) txt.textContent = 'Escaneando BinManager vs MeLi... (' + (s.total_skus || 0) + ' SKUs procesados)';
+          if (txt)  txt.textContent  = label;
+          if (fill) fill.style.width = pct + '%';
+          if (pctL) pctL.textContent = pct + '%';
+          if (det)  det.textContent  = detail;
         } else {
+          // Done or error
           clearInterval(_scanPolling);
+          clearInterval(_elapsedTimer);
           if (bar) bar.classList.add('hidden');
           var btn = document.getElementById('btn-scan-now');
           if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
           if (s.status === 'done') { _loadGaps(); _loadFilters(); }
           else if (s.status === 'error') { alert('Error en el scan: ' + (s.error || 'desconocido')); }
         }
+      }).catch(function() {
+        // Network error during polling — keep trying
       });
-    }, 3000);
+    }, 2500);
   }
 
   // ─── Family name auto-detection ────────────────────────────────────────────

@@ -44,6 +44,14 @@ _BM_LOCATIONS = "47,62,68"
 # ─── Background scan state ────────────────────────────────────────────────────
 _scan_lock = asyncio.Lock()
 
+# In-memory progress — updated during scan, read by /scan-status
+_scan_progress: dict = {
+    "pct":   0,
+    "phase": "idle",
+    "label": "",
+    "detail": "",
+}
+
 
 async def _bm_login(http: httpx.AsyncClient) -> bool:
     """Login to BinManager and return True on success."""
@@ -512,12 +520,18 @@ def _priority_score(stock_total: int, retail_usd: float, cost_usd: float) -> int
     return int(stock_score + price_score + margin_score)
 
 
+def _prog(pct: int, phase: str, label: str, detail: str = "") -> None:
+    """Actualiza progreso in-memory del scan."""
+    _scan_progress.update({"pct": pct, "phase": phase, "label": label, "detail": detail})
+
+
 async def _run_gap_scan():
     """Core scan: compare BM inventory vs MeLi per account, store gaps."""
     if _scan_lock.locked():
         return
     async with _scan_lock:
         logger.info("BM gap scan iniciando...")
+        _prog(0, "starting", "Iniciando scan...", "")
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
                 "UPDATE bm_gap_scan_status SET status='running', started_at=?, finished_at=NULL, error=NULL WHERE id=1",
@@ -527,11 +541,13 @@ async def _run_gap_scan():
 
         try:
             # 1. Get all MeLi accounts
+            _prog(3, "accounts", "Cargando cuentas MeLi...", "")
             accounts = await token_store.get_all_tokens()
             if not accounts:
                 raise Exception("No MeLi accounts configured")
 
             # 2a. Get real USD→MXN FX rate from first MeLi account
+            _prog(6, "fx", "Obteniendo tipo de cambio USD→MXN...", "")
             fx = 17.5  # fallback
             if accounts:
                 from app.services.meli_client import _active_user_id as _ctx_fx
@@ -552,13 +568,16 @@ async def _run_gap_scan():
                     _ctx_fx.reset(token_fx)
 
             # 2b. Fetch all BM SKUs with stock — must login first
+            _prog(10, "bm_login", "Conectando a BinManager...", "")
             async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
                 bm_logged_in = await _bm_login(bm_http)
                 if not bm_logged_in:
                     raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
+                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "Página 1...")
                 bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
+            _prog(28, "bm_done", "Inventario BM cargado", f"{len(bm_products)} SKUs con stock")
 
             # Build BM map: base_sku → product info
             _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -601,9 +620,12 @@ async def _run_gap_scan():
             account_ml_data: dict = {}  # user_id → {meli_skus, inactive_map, active_prices, nickname}
             global_meli_skus: set = set()  # union de TODAS las cuentas
 
-            for account in accounts:
+            for _ai, account in enumerate(accounts):
                 user_id  = account["user_id"]
                 nickname = account.get("nickname") or user_id
+                _pct_ml = 30 + int(_ai / max(len(accounts), 1) * 15)
+                _prog(_pct_ml, "ml_fetch", f"Leyendo publicaciones ML — {nickname}...",
+                      f"Cuenta {_ai+1} de {len(accounts)}")
                 logger.info(f"[Fase1] Obteniendo items ML de {nickname} ({user_id})...")
                 skus, inactive_map, active_prices = await _get_meli_sku_set(user_id, nickname)
                 account_ml_data[user_id] = {
@@ -619,6 +641,8 @@ async def _run_gap_scan():
                 f"[Fase1] Completo — {len(global_meli_skus)} SKUs publicados en total "
                 f"({len(accounts)} cuentas). BM tiene {len(bm_map)} SKUs con stock."
             )
+            _prog(45, "gaps_calc", "Calculando gaps de inventario...",
+                  f"{len(global_meli_skus)} SKUs en ML, {len(bm_map)} en BM")
 
             # ── FASE 2: Calcular gaps globales y guardar por cuenta ────────────
             # Gap = SKU en BM con stock que NO está publicado en NINGUNA cuenta.
@@ -719,6 +743,22 @@ async def _run_gap_scan():
                 f"[Fase2b] Verificando {len(gap_skus_list)} candidates via seller_sku "
                 f"en {len(accounts)} cuentas..."
             )
+            _verify_total = max(len(gap_skus_list) * len(accounts), 1)
+            _verify_done  = 0
+
+            async def _sku_exists_tracked(sku, uid, cli):
+                nonlocal _verify_done
+                result = await _sku_exists_in_account(sku, uid, cli)
+                _verify_done += 1
+                _pct_v = 50 + int((_verify_done / _verify_total) * 38)
+                _prog(_pct_v, "verifying",
+                      f"Verificando SKUs en MeLi ({_verify_done}/{_verify_total})...",
+                      f"{_verify_done} verificados de {_verify_total}")
+                return result
+
+            _prog(50, "verifying",
+                  f"Verificando {len(gap_skus_list)} SKUs en MeLi...",
+                  f"0/{_verify_total} verificados")
             for _acct in accounts:
                 _uid = _acct["user_id"]
                 _nick = _acct.get("nickname") or _uid
@@ -726,7 +766,7 @@ async def _run_gap_scan():
                 if not _cli:
                     continue
                 try:
-                    _tasks = [_sku_exists_in_account(sku, _uid, _cli) for sku in gap_skus_list]
+                    _tasks = [_sku_exists_tracked(sku, _uid, _cli) for sku in gap_skus_list]
                     _flags = await asyncio.gather(*_tasks, return_exceptions=True)
                     for sku, flag in zip(gap_skus_list, _flags):
                         if flag is True:
@@ -745,6 +785,8 @@ async def _run_gap_scan():
 
             total_gaps = len(global_gaps_base)
             logger.info(f"[Fase2] {total_gaps} gaps reales confirmados (de {total_gaps_before_verify} candidates)")
+            _prog(88, "saving", "Guardando resultados en base de datos...",
+                  f"{total_gaps} gaps confirmados")
 
             # Guardar los mismos gaps para cada cuenta (el lanzamiento va a la cuenta activa)
             # + datos per-cuenta: reactivaciones, precios, calidad, competencia
@@ -921,12 +963,14 @@ async def _run_gap_scan():
                     (datetime.utcnow().isoformat(), len(bm_map), total_gaps)
                 )
                 await db.commit()
+            _prog(100, "done", "Scan completado", f"{total_gaps} gaps encontrados")
             logger.info(f"BM gap scan completado: {total_gaps} gaps en {len(accounts)} cuentas")
 
         except BaseException as e:
             tb = traceback.format_exc()
             err_msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             logger.error(f"BM gap scan error: {tb}")
+            _prog(_scan_progress["pct"], "error", f"Error: {err_msg[:80]}", "")
             async with aiosqlite.connect(DATABASE_PATH) as db:
                 await db.execute(
                     "UPDATE bm_gap_scan_status SET status='error', finished_at=?, error=? WHERE id=1",
@@ -1175,12 +1219,20 @@ async def trigger_scan():
 
 @router.get("/scan-status")
 async def get_scan_status():
-    """Estado del último scan."""
+    """Estado del último scan, incluyendo progreso en tiempo real."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
-    return dict(row) if row else {"status": "idle"}
+    base = dict(row) if row else {"status": "idle"}
+    # Merge in-memory progress when running
+    if base.get("status") == "running":
+        base["progress"] = _scan_progress
+    else:
+        base["progress"] = {"pct": 100 if base.get("status") == "done" else 0,
+                            "phase": base.get("status", "idle"),
+                            "label": "", "detail": ""}
+    return base
 
 
 @router.get("/reactivations")
