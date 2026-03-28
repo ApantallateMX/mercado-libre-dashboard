@@ -2016,7 +2016,7 @@ async def generate_video_commercial_endpoint(request: Request):
         )
 
     # TTS + video en paralelo
-    logger.info(f"=== TTS START: edge-tts es-MX-JorgeNeural, script={len(script)} chars ===")
+    logger.info(f"=== TTS START: script={len(script)} chars ===")
     logger.info(f"=== VIDEO START: prompt={video_prompt[:80]}... ===")
     tts_coro   = elevenlabs_client.generate_audio(script)
     video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
@@ -2029,20 +2029,33 @@ async def generate_video_commercial_endpoint(request: Request):
         logger.error(f"Video generation failed: {video_result}")
         return JSONResponse({"error": str(video_result)}, status_code=500)
 
-    video_url = video_result  # URL pública de minimax
+    video_url = video_result  # URL pública de minimax (~5s)
 
-    # ── Step 4: Descargar video y procesar con ffmpeg ───────────────────────
+    # ── Step 4: Descargar video + procesar con ffmpeg ───────────────────────
     has_audio = isinstance(audio_result, bytes) and bool(audio_result)
     if isinstance(audio_result, Exception):
         logger.warning(f"TTS falló — video sin audio: {audio_result}")
     elif has_audio:
         logger.info(f"TTS exitoso: {len(audio_result)} bytes de audio")
 
+    # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffmpeg_bin = get_ffmpeg_exe()
+        logger.info(f"ffmpeg bin: {ffmpeg_bin}")
+    except Exception as _e:
+        ffmpeg_bin = "ffmpeg"   # fallback a PATH del sistema
+        logger.warning(f"imageio-ffmpeg no disponible ({_e}), usando 'ffmpeg' del PATH")
+
     vid_id = str(_uuid.uuid4())
     try:
+        # Descargar el clip de minimax
         async with httpx.AsyncClient(timeout=120.0) as client:
-            vid_resp  = await client.get(video_url)
+            vid_resp = await client.get(video_url, follow_redirects=True)
+            if vid_resp.status_code != 200:
+                raise RuntimeError(f"No se pudo descargar video: HTTP {vid_resp.status_code}")
             vid_bytes = vid_resp.content
+        logger.info(f"Video descargado: {len(vid_bytes)} bytes")
 
         with _tf.TemporaryDirectory() as tmpdir:
             raw_path    = _os.path.join(tmpdir, "raw.mp4")
@@ -2051,41 +2064,44 @@ async def generate_video_commercial_endpoint(request: Request):
             aud_path    = _os.path.join(tmpdir, "audio.mp3")
             out_path    = _os.path.join(tmpdir, "output.mp4")
 
-            with open(raw_path, "wb") as f: f.write(vid_bytes)
+            with open(raw_path, "wb") as f:
+                f.write(vid_bytes)
 
-            # Step A: ALWAYS loop the clip to ~24s (ML spec: 10-60s)
+            # Step A: SIEMPRE loop a 20s (ML spec: 10-60s mínimo)
+            # 4 repeticiones × ~5s = ~20s
             with open(concat_path, "w") as f:
-                for _ in range(4):   # 4 repetitions × ~6s = ~24s
+                for _ in range(4):
                     f.write(f"file '{raw_path}'\n")
 
             loop_proc = _sp.run(
                 [
-                    "ffmpeg", "-y",
+                    ffmpeg_bin, "-y",
                     "-f", "concat", "-safe", "0",
                     "-i", concat_path,
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-t", "24",
+                    "-t", "20",
                     loop_path,
                 ],
-                capture_output=True, timeout=90,
+                capture_output=True, timeout=120,
             )
             if loop_proc.returncode != 0:
-                logger.warning(f"ffmpeg concat error: {loop_proc.stderr.decode()[:300]} — using raw")
-                loop_path = raw_path
+                err = loop_proc.stderr.decode(errors="replace")[:500]
+                logger.warning(f"ffmpeg concat failed (rc={loop_proc.returncode}): {err}")
+                loop_path = raw_path   # usar clip original si falla concat
+            else:
+                logger.info("ffmpeg concat OK — video loopeado a 20s")
 
             if has_audio:
-                # Step B: Combine looped video + audio
-                with open(aud_path, "wb") as f: f.write(audio_result)
+                # Step B: Combinar video loopeado + audio
+                with open(aud_path, "wb") as f:
+                    f.write(audio_result)
                 proc = _sp.run(
                     [
-                        "ffmpeg", "-y",
+                        ffmpeg_bin, "-y",
                         "-i", loop_path,
                         "-i", aud_path,
-                        "-c:v", "libx264",
-                        "-preset", "fast",
-                        "-crf", "23",
-                        "-c:a", "aac",
-                        "-b:a", "128k",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                        "-c:a", "aac", "-b:a", "128k",
                         "-shortest",
                         "-movflags", "+faststart",
                         out_path,
@@ -2094,25 +2110,26 @@ async def generate_video_commercial_endpoint(request: Request):
                 )
                 if proc.returncode == 0:
                     final_path = out_path
+                    logger.info("ffmpeg combine OK — audio+video listos")
                 else:
-                    logger.warning(f"ffmpeg combine error: {proc.stderr.decode()[:300]} — using loop without audio")
-                    final_path = loop_path
+                    err = proc.stderr.decode(errors="replace")[:500]
+                    logger.warning(f"ffmpeg combine failed (rc={proc.returncode}): {err}")
+                    final_path = loop_path  # 20s sin audio
             else:
-                final_path = loop_path
+                final_path = loop_path  # 20s sin audio
 
             with open(final_path, "rb") as f:
                 _video_cache[vid_id] = f.read()
             out_size_mb = len(_video_cache[vid_id]) / 1_048_576
             serve_url = f"/api/lanzar/video-file/{vid_id}"
-            logger.info(f"Video comercial: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
+            logger.info(f"Video listo: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
             return {"video_url": serve_url, "script": script, "has_audio": has_audio}
 
-    except FileNotFoundError:
-        logger.warning("ffmpeg no instalado — retornando video sin audio")
     except Exception as e:
-        logger.warning(f"ffmpeg error: {e}")
+        logger.error(f"Pipeline de video falló: {e}", exc_info=True)
 
-    # Fallback: retornar video de minimax sin procesar
+    # Fallback final: retornar clip original de minimax (5s, sin procesar)
+    logger.warning("Retornando clip sin procesar de minimax (5s)")
     return {"video_url": video_url, "script": script, "has_audio": False}
 
 
@@ -2131,6 +2148,64 @@ async def serve_video_file(vid_id: str):
             "Cache-Control": "no-store",
         },
     )
+
+
+@router.get("/test-pipeline")
+async def test_pipeline():
+    """Diagnóstico: verifica que TTS y ffmpeg funcionan en este entorno."""
+    import subprocess as _sp2
+    results: dict = {}
+
+    # 1. imageio-ffmpeg
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffbin = get_ffmpeg_exe()
+        proc  = _sp2.run([ffbin, "-version"], capture_output=True, timeout=10)
+        first_line = proc.stdout.decode(errors="replace").split("\n")[0]
+        results["ffmpeg"] = {"ok": proc.returncode == 0, "version": first_line, "path": ffbin}
+    except Exception as e:
+        results["ffmpeg"] = {"ok": False, "error": str(e)}
+
+    # 2. gTTS
+    try:
+        import io
+        from gtts import gTTS
+        buf = io.BytesIO()
+        gTTS(text="prueba", lang="es", tld="com.mx").write_to_fp(buf)
+        results["gtts"] = {"ok": True, "bytes": len(buf.getvalue())}
+    except Exception as e:
+        results["gtts"] = {"ok": False, "error": str(e)}
+
+    # 3. Google TTS directo
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://translate.google.com/translate_tts",
+                params={"ie": "UTF-8", "q": "prueba", "tl": "es", "tld": "com.mx", "client": "tw-ob"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                follow_redirects=True,
+            )
+        results["google_tts_direct"] = {"ok": r.status_code == 200 and len(r.content) > 100, "status": r.status_code, "bytes": len(r.content)}
+    except Exception as e:
+        results["google_tts_direct"] = {"ok": False, "error": str(e)}
+
+    # 4. edge-tts
+    try:
+        import edge_tts
+        data = b""
+        async for chunk in edge_tts.Communicate("prueba", "es-MX-JorgeNeural").stream():
+            if chunk["type"] == "audio":
+                data += chunk["data"]
+        results["edge_tts"] = {"ok": len(data) > 0, "bytes": len(data)}
+    except Exception as e:
+        results["edge_tts"] = {"ok": False, "error": str(e)}
+
+    all_ok = results.get("ffmpeg", {}).get("ok") and (
+        results.get("gtts", {}).get("ok") or
+        results.get("google_tts_direct", {}).get("ok") or
+        results.get("edge_tts", {}).get("ok")
+    )
+    return {"status": "ok" if all_ok else "degraded", "components": results}
 
 
 @router.post("/ignore/{sku}")
