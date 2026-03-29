@@ -1152,7 +1152,7 @@
     draft: { title: '', description: '', bullet_points: [], keywords: [] },
     selected_images: [], ai_images: [],  // ai_images = all generated; selected_images = chosen for listing
     video_url: '', reference_images: [],
-    sku: '', model: '', brand: '', gtin: '', family_name: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
+    sku: '', model: '', brand: '', gtin: '', family_name: '', family_name_id: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
     listing_type: 'gold_special', condition: 'new', qty: 1,
     _lightbox_idx: -1,  // index into _wiz.ai_images for lightbox
@@ -1388,6 +1388,27 @@
         if (val) _wiz.ml_attributes.push({id: el.dataset.attrId, value_name: val});
       });
       if (!_wiz.price) { alert('Ingresa el precio.'); return; }
+      // Resolver family_name_id desde catálogo ML (no bloqueante)
+      _wiz.family_name_id = '';
+      if (_wiz.category_id && _wiz.family_name) {
+        fetch('/api/lanzar/category-attributes/' + encodeURIComponent(_wiz.category_id))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          var fnAttr = (d.attributes || []).find(function(a) { return a.id === 'FAMILY_NAME'; });
+          if (!fnAttr || !fnAttr.allowed_values) return;
+          var wanted = _wiz.family_name.toLowerCase();
+          // Exact match
+          var match = fnAttr.allowed_values.find(function(v) { return v.name && v.name.toLowerCase() === wanted; });
+          // Partial match fallback
+          if (!match) match = fnAttr.allowed_values.find(function(v) {
+            return v.name && (v.name.toLowerCase().indexOf(wanted) >= 0 || wanted.indexOf(v.name.toLowerCase()) >= 0);
+          });
+          if (match) {
+            _wiz.family_name_id = match.id || '';
+            _wiz.family_name    = match.name;   // usar nombre exacto de ML
+          }
+        }).catch(function() {});
+      }
       _wizGoStep(3);
     }
   };
@@ -2328,7 +2349,11 @@
       if (_wiz.brand)       attrs.push({id: 'BRAND',       value_name: _wiz.brand});
       if (_wiz.model)       attrs.push({id: 'MODEL',       value_name: _wiz.model});
       if (_wiz.gtin)        attrs.push({id: 'GTIN',        value_name: _wiz.gtin});
-      if (_wiz.family_name) attrs.push({id: 'FAMILY_NAME', value_name: _wiz.family_name});
+      if (_wiz.family_name) {
+        var fnEntry = {id: 'FAMILY_NAME', value_name: _wiz.family_name};
+        if (_wiz.family_name_id) fnEntry.value_id = _wiz.family_name_id;
+        attrs.push(fnEntry);
+      }
 
       var payload = {
         sku:                _wiz.sku || (gap ? gap.sku : ''),

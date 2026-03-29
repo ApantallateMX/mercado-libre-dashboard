@@ -1984,46 +1984,84 @@ async def _create_slideshow_from_images(
     ffmpeg_bin: str,
     tmpdir: str,
 ) -> str:
-    """Download images, create a slideshow MP4 (4s per image), combine with audio using -shortest."""
+    """Slideshow con múltiples crop-positions por imagen — no loop visible incluso con 2 imágenes.
+
+    Genera clips ciclando imágenes con 8 posiciones de encuadre distintas (simula cambios de
+    ángulo de cámara). Con 2 imágenes produce 16 clips × 5s = 80s de contenido único.
+    -shortest corta exactamente al terminar el audio.
+    """
     import os as _os2
     import subprocess as _sp2
 
-    clip_paths: list = []
+    # 8 posiciones de crop sobre imagen escalada a 1664×936 → ventana 1280×720
+    # (1664-1280=384, 936-720=216 → margen disponible para desplazar el encuadre)
+    CROP_POSITIONS = [
+        (192, 108, "center"),        # centro exacto
+        (0,   0,   "top-left"),      # esquina superior izquierda
+        (384, 216, "bot-right"),     # esquina inferior derecha
+        (384, 0,   "top-right"),     # esquina superior derecha
+        (0,   216, "bot-left"),      # esquina inferior izquierda
+        (96,  54,  "near-center-tl"),
+        (288, 162, "near-center-br"),
+        (192, 0,   "top-center"),
+    ]
+    CLIP_DUR  = 5     # segundos por clip
+    TARGET_S  = 50    # buffer total (superior a cualquier audio razonable)
+
+    # ── Descargar imágenes ───────────────────────────────────────────────────
+    img_paths: list = []
     async with httpx.AsyncClient(timeout=30.0) as dl_client:
         for i, url in enumerate(image_urls[:8]):
             try:
                 r = await dl_client.get(url, follow_redirects=True)
                 if r.status_code == 200 and len(r.content) > 1000:
-                    img_path  = _os2.path.join(tmpdir, f"slide_img_{i}.jpg")
-                    clip_path = _os2.path.join(tmpdir, f"slide_clip_{i}.mp4")
-                    with open(img_path, "wb") as fh:
+                    p = _os2.path.join(tmpdir, f"img_{i}.jpg")
+                    with open(p, "wb") as fh:
                         fh.write(r.content)
-                    proc = _sp2.run(
-                        [
-                            ffmpeg_bin, "-y",
-                            "-loop", "1", "-i", img_path,
-                            "-t", "4",
-                            "-vf", (
-                                "scale=1280:720:force_original_aspect_ratio=decrease,"
-                                "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black"
-                            ),
-                            "-c:v", "libx264", "-preset", "ultrafast", "-r", "24",
-                            clip_path,
-                        ],
-                        capture_output=True, timeout=60,
-                    )
-                    if proc.returncode == 0:
-                        clip_paths.append(clip_path)
-                        logger.info(f"Slideshow clip {i+1} OK")
-                    else:
-                        logger.warning(f"Slideshow clip {i} ffmpeg error: {proc.stderr.decode(errors='replace')[:200]}")
+                    img_paths.append(p)
             except Exception as exc:
-                logger.warning(f"Slideshow image {i} failed: {exc}")
+                logger.warning(f"Slideshow image {i} download failed: {exc}")
+
+    if not img_paths:
+        raise RuntimeError("No se pudieron descargar imágenes para el slideshow")
+
+    # ── Generar clips suficientes para cubrir TARGET_S ───────────────────────
+    clip_paths: list = []
+    clip_idx = 0
+    while clip_idx * CLIP_DUR < TARGET_S:
+        img_path   = img_paths[clip_idx % len(img_paths)]
+        cx, cy, _  = CROP_POSITIONS[clip_idx % len(CROP_POSITIONS)]
+        clip_path  = _os2.path.join(tmpdir, f"clip_{clip_idx:03d}.mp4")
+        # Scale to 1664×936, then crop a 1280×720 window at position (cx, cy)
+        vf = (
+            f"scale=1664:936:force_original_aspect_ratio=increase,"
+            f"crop=1664:936,"
+            f"crop=1280:720:{cx}:{cy},"
+            f"setsar=1"
+        )
+        proc = _sp2.run(
+            [
+                ffmpeg_bin, "-y",
+                "-loop", "1", "-i", img_path,
+                "-t", str(CLIP_DUR),
+                "-vf", vf,
+                "-c:v", "libx264", "-preset", "ultrafast", "-r", "25",
+                clip_path,
+            ],
+            capture_output=True, timeout=30,
+        )
+        if proc.returncode == 0:
+            clip_paths.append(clip_path)
+        else:
+            logger.warning(f"Clip {clip_idx} error: {proc.stderr.decode(errors='replace')[:200]}")
+        clip_idx += 1
 
     if not clip_paths:
-        raise RuntimeError("No se pudieron crear clips de imagen para el slideshow")
+        raise RuntimeError("No se generaron clips para el slideshow")
 
-    # Concat clips
+    logger.info(f"Slideshow: {len(clip_paths)} clips ({len(img_paths)} imgs × posiciones)")
+
+    # ── Concat clips ─────────────────────────────────────────────────────────
     concat_path   = _os2.path.join(tmpdir, "slide_concat.txt")
     slideshow_raw = _os2.path.join(tmpdir, "slideshow_raw.mp4")
     with open(concat_path, "w") as fh:
@@ -2031,8 +2069,9 @@ async def _create_slideshow_from_images(
             fh.write(f"file '{p}'\n")
 
     proc = _sp2.run(
-        [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", concat_path, "-c", "copy", slideshow_raw],
-        capture_output=True, timeout=120,
+        [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", concat_path,
+         "-c", "copy", slideshow_raw],
+        capture_output=True, timeout=180,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"Slideshow concat failed: {proc.stderr.decode(errors='replace')[:300]}")
@@ -2772,6 +2811,42 @@ async def upload_picture_endpoint(request: Request):
         await client.close()
 
 
+@router.get("/category-attributes/{category_id}")
+async def get_category_attributes(category_id: str):
+    """Atributos de la categoría ML con sus valores permitidos — para resolver value_id."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+    try:
+        raw = await client.get(f"/categories/{category_id}/attributes")
+        if not isinstance(raw, list):
+            return {"attributes": []}
+        result = []
+        for attr in raw:
+            if not isinstance(attr, dict):
+                continue
+            tags = attr.get("tags") or {}
+            is_req = bool(tags.get("required") or tags.get("catalog_required"))
+            allowed = [
+                {"id": v.get("id"), "name": v.get("name")}
+                for v in (attr.get("allowed_values") or [])
+                if isinstance(v, dict) and v.get("id")
+            ]
+            result.append({
+                "id":             attr.get("id"),
+                "name":           attr.get("name"),
+                "type":           attr.get("value_type"),
+                "required":       is_req,
+                "allowed_values": allowed[:80],
+            })
+        return {"attributes": result}
+    except Exception as e:
+        logger.warning(f"category-attributes error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @router.post("/create-listing")
 async def create_listing_endpoint(request: Request):
     """Crea el listing en Mercado Libre y marca el gap como lanzado."""
@@ -2822,12 +2897,58 @@ async def create_listing_endpoint(request: Request):
     if not client:
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
+    # ── Resolver value_id de FAMILY_NAME desde el catálogo de ML ─────────────
+    # ML requiere value_id para atributos de catálogo (no solo value_name)
+    if attrs:
+        fn_attr = next((a for a in attrs if isinstance(a, dict) and a.get("id") == "FAMILY_NAME"), None)
+        if fn_attr and fn_attr.get("value_name") and not fn_attr.get("value_id"):
+            try:
+                cat_attrs = await client.get(f"/categories/{category_id}/attributes")
+                if isinstance(cat_attrs, list):
+                    for ca in cat_attrs:
+                        if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
+                            wanted = fn_attr["value_name"].lower()
+                            for av in (ca.get("allowed_values") or []):
+                                if isinstance(av, dict) and av.get("name", "").lower() == wanted:
+                                    fn_attr["value_id"] = av["id"]
+                                    logger.info(f"FAMILY_NAME value_id resolved: {av['id']} ({av['name']})")
+                                    break
+                            if not fn_attr.get("value_id"):
+                                # Partial match fallback
+                                for av in (ca.get("allowed_values") or []):
+                                    if isinstance(av, dict) and av.get("name"):
+                                        av_l = av["name"].lower()
+                                        if av_l in wanted or wanted in av_l:
+                                            fn_attr["value_id"] = av["id"]
+                                            fn_attr["value_name"] = av["name"]
+                                            logger.info(f"FAMILY_NAME partial match: {av['id']} ({av['name']})")
+                                            break
+                            break
+            except Exception as _fn_err:
+                logger.warning(f"FAMILY_NAME value_id lookup failed: {_fn_err}")
+
     try:
         result = await client.post("/items", json=item_payload)
         item_id = result.get("id")
         if not item_id:
-            err = result.get("message") or result.get("error") or str(result)
-            return JSONResponse({"error": err}, status_code=400)
+            err_msg = result.get("message") or result.get("error") or str(result)
+            # ── Retry sin FAMILY_NAME si es el atributo que falla ─────────────
+            causes = result.get("cause") or []
+            fn_failed = any(
+                "family_name" in str(c).lower()
+                for c in (causes if isinstance(causes, list) else [result])
+            ) or "family_name" in err_msg.lower()
+            if fn_failed and "attributes" in item_payload:
+                logger.warning("FAMILY_NAME causó error — reintentando sin este atributo")
+                item_payload["attributes"] = [
+                    a for a in item_payload["attributes"]
+                    if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")
+                ]
+                result  = await client.post("/items", json=item_payload)
+                item_id = result.get("id")
+            if not item_id:
+                err = result.get("message") or result.get("error") or str(result)
+                return JSONResponse({"error": err}, status_code=400)
 
         # Add description separately (ML doesn't accept it in the initial POST)
         if description:
