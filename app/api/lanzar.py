@@ -2267,24 +2267,42 @@ async def generate_video_commercial_endpoint(request: Request):
             aud_path    = _os.path.join(tmpdir, "audio.mp3")
             out_path    = _os.path.join(tmpdir, "output.mp4")
 
-            # Concat clips (re-encode para normalizar resolución/codec)
+            # Normalizar cada clip a 1280x720 h264 antes de concat
+            norm_paths = []
+            for ci, cp in enumerate(clip_paths):
+                np_ = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
+                n_proc = _sp.run(
+                    [
+                        ffmpeg_bin, "-y", "-i", cp,
+                        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
+                               "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-r", "25",
+                        np_,
+                    ],
+                    capture_output=True, timeout=60,
+                )
+                if n_proc.returncode == 0:
+                    norm_paths.append(np_)
+                else:
+                    logger.warning(f"Norm clip {ci} failed: {n_proc.stderr.decode(errors='replace')[:200]}")
+                    norm_paths.append(cp)   # usar original si falla normalización
+
+            if not norm_paths:
+                norm_paths = clip_paths
+
+            # Concat con -c copy (todos mismos codec/resolución tras normalización)
             with open(concat_path, "w") as f:
-                for p in clip_paths:
+                for p in norm_paths:
                     f.write(f"file '{p}'\n")
 
             cat_proc = _sp.run(
-                [
-                    ffmpeg_bin, "-y",
-                    "-f", "concat", "-safe", "0", "-i", concat_path,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1",
-                    raw_cat,
-                ],
+                [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", concat_path,
+                 "-c", "copy", raw_cat],
                 capture_output=True, timeout=180,
             )
             if cat_proc.returncode != 0:
                 logger.warning(f"Concat error: {cat_proc.stderr.decode(errors='replace')[:300]}")
-                raw_cat = clip_paths[0]   # usar primer clip como fallback
+                raw_cat = norm_paths[0]   # fallback a primer clip normalizado
 
             if has_audio:
                 with open(aud_path, "wb") as f:
@@ -2908,28 +2926,36 @@ async def create_listing_endpoint(request: Request):
             except Exception as _fn_err:
                 logger.warning(f"FAMILY_NAME value_id lookup failed: {_fn_err}")
 
+    from app.services.meli_client import MeliApiError as _MeliErr
+
+    async def _post_item(payload: dict) -> dict:
+        """Wrapper que captura MeliApiError y la convierte a dict de error."""
+        try:
+            return await client.post("/items", json=payload)
+        except _MeliErr as exc:
+            return {"_meli_error": str(exc), "_meli_body": exc.body if hasattr(exc, "body") else {}}
+
     try:
-        result = await client.post("/items", json=item_payload)
-        item_id = result.get("id")
-        if not item_id:
-            err_msg = result.get("message") or result.get("error") or str(result)
-            # ── Retry sin FAMILY_NAME si es el atributo que falla ─────────────
-            causes = result.get("cause") or []
-            fn_failed = any(
-                "family_name" in str(c).lower()
-                for c in (causes if isinstance(causes, list) else [result])
-            ) or "family_name" in err_msg.lower()
-            if fn_failed and "attributes" in item_payload:
-                logger.warning("FAMILY_NAME causó error — reintentando sin este atributo")
+        result = await _post_item(item_payload)
+
+        # Si ML rechazó con error de FAMILY_NAME → reintentar sin ese atributo
+        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
+            logger.warning(f"FAMILY_NAME causó error ML — reintentando sin él: {result['_meli_error']}")
+            if "attributes" in item_payload:
                 item_payload["attributes"] = [
                     a for a in item_payload["attributes"]
                     if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")
                 ]
-                result  = await client.post("/items", json=item_payload)
-                item_id = result.get("id")
-            if not item_id:
-                err = result.get("message") or result.get("error") or str(result)
-                return JSONResponse({"error": err}, status_code=400)
+            result = await _post_item(item_payload)
+
+        # Si sigue siendo error, devolverlo
+        if result.get("_meli_error"):
+            return JSONResponse({"error": result["_meli_error"]}, status_code=400)
+
+        item_id = result.get("id")
+        if not item_id:
+            err = result.get("message") or result.get("error") or str(result)
+            return JSONResponse({"error": err}, status_code=400)
 
         # Add description separately (ML doesn't accept it in the initial POST)
         if description:
