@@ -1378,14 +1378,30 @@
       _wiz.model        = document.getElementById('wiz-f-model').value.trim();
       _wiz.brand        = document.getElementById('wiz-f-brand').value.trim();
       _wiz.gtin         = document.getElementById('wiz-f-gtin').value.trim();
-      _wiz.family_name  = document.getElementById('wiz-f-family').value.trim();
+      var _ffEl = document.getElementById('wiz-f-family');
+      if (_ffEl && _ffEl.tagName === 'SELECT' && _ffEl.selectedIndex > 0) {
+        _wiz.family_name_id = _ffEl.value;                             // ML value_id
+        _wiz.family_name    = _ffEl.options[_ffEl.selectedIndex].text; // ML display name
+      } else if (_ffEl) {
+        _wiz.family_name    = _ffEl.value.trim();
+        _wiz.family_name_id = '';
+      }
       _wiz.warranty_type = document.getElementById('wiz-f-warranty-type').value;
       _wiz.warranty_time = document.getElementById('wiz-f-warranty-time').value;
-      // Collect ML dynamic attributes
+      // Collect ML dynamic attributes — for SELECTs, option.value is value_id, option.text is value_name
       _wiz.ml_attributes = [];
       document.querySelectorAll('#wiz-ml-attrs [data-attr-id]').forEach(function(el) {
         var val = el.value.trim();
-        if (val) _wiz.ml_attributes.push({id: el.dataset.attrId, value_name: val});
+        if (!val) return;
+        var entry = {id: el.dataset.attrId};
+        if (el.tagName === 'SELECT') {
+          var opt = el.options[el.selectedIndex];
+          entry.value_id   = val;               // ML value_id (option.value)
+          entry.value_name = opt ? opt.text : val; // display name (option.text)
+        } else {
+          entry.value_name = val;
+        }
+        _wiz.ml_attributes.push(entry);
       });
       if (!_wiz.price) { alert('Ingresa el precio.'); return; }
       // Resolver family_name_id desde catálogo ML (no bloqueante)
@@ -1565,12 +1581,45 @@
     loading.classList.remove('hidden');
 
     // Skip these — already have dedicated fields
-    var SKIP_IDS = ['BRAND','MODEL','GTIN','SELLER_SKU'];
+    var SKIP_IDS = ['BRAND','MODEL','GTIN','SELLER_SKU','FAMILY_NAME'];
 
     fetch('/api/lanzar/category-attrs/' + catId)
     .then(function(r) { return r.json(); })
     .then(function(d) {
       loading.classList.add('hidden');
+
+      // ── Populate FAMILY_NAME dropdown from ML catalog ──────────────────
+      var fnRaw = (d.required || []).find(function(a) { return a.id === 'FAMILY_NAME'; })
+               || (d.optional || []).find(function(a) { return a.id === 'FAMILY_NAME'; });
+      if (fnRaw && fnRaw.values && fnRaw.values.length > 0) {
+        var ffEl = document.getElementById('wiz-f-family');
+        if (ffEl) {
+          var curName = (ffEl.value || _wiz.family_name || '').toLowerCase();
+          var opts = '<option value="">— selecciona familia —</option>' +
+            fnRaw.values.map(function(v) {
+              return '<option value="' + (v.id || '') + '" data-name="' + v.name + '">' + v.name + '</option>';
+            }).join('');
+          // Replace text input with SELECT
+          var sel = document.createElement('select');
+          sel.id = 'wiz-f-family';
+          sel.className = ffEl.className;
+          sel.innerHTML = opts;
+          ffEl.parentNode.replaceChild(sel, ffEl);
+          // Auto-select best match
+          var bestIdx = 0;
+          for (var i = 1; i < sel.options.length; i++) {
+            var oName = sel.options[i].text.toLowerCase();
+            if (oName === curName) { bestIdx = i; break; }
+            if (!bestIdx && (oName.indexOf(curName) >= 0 || (curName && curName.indexOf(oName) >= 0))) bestIdx = i;
+          }
+          sel.selectedIndex = bestIdx;
+          if (bestIdx > 0) {
+            _wiz.family_name    = sel.options[bestIdx].text;
+            _wiz.family_name_id = sel.options[bestIdx].value;
+          }
+        }
+      }
+
       var attrs = (d.required || []).filter(function(a) { return SKIP_IDS.indexOf(a.id) < 0; });
       if (!attrs.length) return;
       var gap = _wiz.gap || {};
@@ -2346,10 +2395,12 @@
       }
       // Build ML attributes: BRAND, MODEL, GTIN, FAMILY_NAME + any dynamic ones
       var attrs = [].concat(_wiz.ml_attributes || []);
-      if (_wiz.brand)       attrs.push({id: 'BRAND',       value_name: _wiz.brand});
-      if (_wiz.model)       attrs.push({id: 'MODEL',       value_name: _wiz.model});
-      if (_wiz.gtin)        attrs.push({id: 'GTIN',        value_name: _wiz.gtin});
-      if (_wiz.family_name) {
+      if (_wiz.brand) attrs.push({id: 'BRAND', value_name: _wiz.brand});
+      if (_wiz.model) attrs.push({id: 'MODEL', value_name: _wiz.model});
+      if (_wiz.gtin)  attrs.push({id: 'GTIN',  value_name: _wiz.gtin});
+      // Add FAMILY_NAME only if NOT already in attrs (from ml_attributes), always with value_id
+      var hasFN = attrs.some(function(a) { return a.id === 'FAMILY_NAME'; });
+      if (!hasFN && _wiz.family_name) {
         var fnEntry = {id: 'FAMILY_NAME', value_name: _wiz.family_name};
         if (_wiz.family_name_id) fnEntry.value_id = _wiz.family_name_id;
         attrs.push(fnEntry);

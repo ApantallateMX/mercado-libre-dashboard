@@ -2139,63 +2139,70 @@ async def generate_video_commercial_endpoint(request: Request):
 
     claude_system = (
         "You are the creative director of a TV commercial for Mercado Libre México.\n"
-        "Create two related pieces for the same 20-second commercial.\n\n"
+        "Create a narration script AND 5 distinct cinematic scene descriptions for the same commercial.\n\n"
         "Respond ONLY with this JSON (no markdown, no backticks, no explanations):\n"
-        '{"script": "...", "video_prompt": "..."}\n\n'
+        '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
         "SCRIPT field rules:\n"
         "- Narration text in Mexican Spanish (español de México), exactly 45-60 words\n"
         "- Exciting, aspirational tone — like a premium Mexican TV commercial\n"
-        "- NEVER mention model numbers, SKU codes, or alphanumeric product codes (e.g. QN43Q7FAAFXZA)\n"
+        "- NEVER mention model numbers, SKU codes, or alphanumeric product codes\n"
         "- ONLY mention the brand name and screen size in inches (e.g. 'Samsung de 43 pulgadas')\n"
         "- Talk beautifully about 2-3 emotional features: image quality, sound, design, family moments\n"
-        "- Build emotional desire: family moments, cinema, technology, beauty\n"
         "- End EXACTLY with: Disponible ahora en Mercado Libre.\n\n"
-        "VIDEO PROMPT field rules:\n"
-        "- English description of CINEMATIC MOVEMENTS for a 6-second clip (will be looped to 20s)\n"
-        "- Must visually MATCH what the script says\n"
-        "- Describe: starting angle → camera movement → what's on screen → how it ends\n"
-        "- Example: 'Slow cinematic push-in toward a large flat-screen television in a breathtaking "
-        "luxury penthouse living room at golden hour. Warm light, panoramic windows with city skyline. "
-        "Screen shows vivid 4K tropical ocean. Smooth orbit revealing ultra-thin bezel design. "
-        "Premium lifestyle commercial quality, 8K.'\n"
-        "- ALWAYS describe the TV as: 'large flat-screen television', 'big screen display'\n"
-        "- Maximum 70 words"
+        "SCENES array rules (5 items, each a 6-second AI video clip description):\n"
+        "- Each scene is an ENGLISH visual description, maximum 50 words\n"
+        "- Each scene must be VISUALLY DIFFERENT from the others\n"
+        "- Scene 1: dramatic opening shot of the TV in a luxury room, golden hour\n"
+        "- Scene 2: close-up of the vivid screen showing beautiful content\n"
+        "- Scene 3: family or couple enjoying the TV, lifestyle shot\n"
+        "- Scene 4: cinematic detail of the TV design, ultra-thin bezel, premium feel\n"
+        "- Scene 5: wide shot of perfect evening atmosphere with TV as centerpiece\n"
+        "- Describe: camera movement + what's visible + lighting + mood\n"
+        "- ALWAYS include 'large flat-screen television' or 'big screen TV'\n"
+        "- Premium commercial quality, 8K cinematic"
     )
     claude_user = (
         f"Producto: {title}\n"
         f"Marca: {brand}\n"
-        f"Modelo: {model}\n"
-        f"Tamaño: {size}\"\n"
+        f"Tamaño: {size} pulgadas\n"
         f"Categoría: {category}\n"
         f"Imagen de referencia disponible: {'sí' if first_frame else 'no'}\n\n"
-        "Genera el script en español y el video_prompt en inglés para el comercial."
+        "Genera el script en español y los 5 scenes en inglés para el comercial."
     )
     try:
         import json as _json_inner
-        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=400)).strip()
-        # Strip markdown fences if present
+        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=600)).strip()
         if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed   = _json_inner.loads(raw.strip())
-        script   = parsed.get("script", "").strip().strip('"').strip("'")
-        video_prompt = parsed.get("video_prompt", "").strip()
+        parsed = _json_inner.loads(raw.strip())
+        script = parsed.get("script", "").strip().strip('"').strip("'")
+        scenes: list = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
         logger.info(f"Script: {script[:80]}...")
-        logger.info(f"Video prompt: {video_prompt[:80]}...")
+        logger.info(f"Scenes: {len(scenes)} generadas")
     except Exception as e:
-        logger.warning(f"Claude script+video_prompt failed: {e}")
+        logger.warning(f"Claude script+scenes failed: {e}")
         size_txt = f"{size} pulgadas " if size else ""
         script = (
             f"El {brand} {size_txt}— imagen brillante, sonido envolvente y "
             f"entretenimiento sin límites. Todo lo que tu familia merece en un solo televisor. "
             f"Disponible ahora en Mercado Libre."
         )
+        scenes = []
 
-    if not video_prompt:
-        video_prompt = replicate_client.build_video_prompt(
+    # Fallback scenes if Claude didn't generate them
+    if len(scenes) < 3:
+        base_prompt = replicate_client.build_video_prompt(
             brand=brand, model=model, title=title, category=category, size=size
         )
+        scenes = [
+            base_prompt,
+            f"Close-up of large flat-screen {brand} TV displaying vivid 4K ocean scenery, brilliant colors, cinematic quality",
+            f"Family laughing together watching {brand} large screen TV in cozy living room, warm evening light",
+            f"Elegant ultra-thin bezel {brand} television profile shot, premium design, architectural beauty, dark background",
+            f"Couple embracing on sofa with large flat-screen TV showing Netflix interface, perfect cinematic evening mood",
+        ]
 
     # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
     try:
@@ -2208,96 +2215,76 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # ── Path A: Slideshow de imágenes AI (sin minimax) ──────────────────────
-    if len(ai_image_urls) >= 2:
-        logger.info(f"=== SLIDESHOW PATH: {len(ai_image_urls)} imágenes AI ===")
-        logger.info(f"=== TTS START: script={len(script)} chars ===")
-        try:
-            audio_result = await elevenlabs_client.generate_audio(script)
-        except Exception as tts_err:
-            logger.warning(f"TTS falló en slideshow path: {tts_err}")
-            audio_result = None
+    # ── Generar TTS + 5 clips minimax EN PARALELO ────────────────────────────
+    # Cada escena genera un clip distinto → sin loop visible, duración = audio
+    logger.info(f"=== MULTI-SCENE VIDEO: {len(scenes)} escenas + TTS en paralelo ===")
 
-        has_audio = isinstance(audio_result, bytes) and bool(audio_result)
-        try:
-            with _tf.TemporaryDirectory() as tmpdir:
-                final_path = await _create_slideshow_from_images(
-                    image_urls=ai_image_urls,
-                    audio_bytes=audio_result if has_audio else None,
-                    ffmpeg_bin=ffmpeg_bin,
-                    tmpdir=tmpdir,
-                )
-                with open(final_path, "rb") as fh:
-                    _video_cache[vid_id] = fh.read()
-            out_size_mb = len(_video_cache[vid_id]) / 1_048_576
-            serve_url = f"/api/lanzar/video-file/{vid_id}"
-            logger.info(f"Slideshow listo: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
-            return {"video_url": serve_url, "script": script, "has_audio": has_audio}
-        except Exception as exc:
-            logger.error(f"Slideshow falló, cayendo a minimax: {exc}", exc_info=True)
-            # Fall through to minimax path below
+    async def _gen_clip(scene_prompt: str, idx: int):
+        ff = first_frame if idx == 0 else ""
+        return await replicate_client.generate_video(prompt=scene_prompt, first_frame_image=ff)
 
-    # ── Path B: minimax video-01 + ffmpeg loop ───────────────────────────────
-    logger.info(f"=== TTS + VIDEO START (minimax path) ===")
     tts_coro   = elevenlabs_client.generate_audio(script)
-    video_coro = replicate_client.generate_video(prompt=video_prompt, first_frame_image=first_frame)
-    results    = await asyncio.gather(tts_coro, video_coro, return_exceptions=True)
-    audio_result, video_result = results
-    logger.info(f"=== TTS result: {type(audio_result).__name__} {len(audio_result) if isinstance(audio_result, bytes) else audio_result} ===")
-    logger.info(f"=== VIDEO result: {type(video_result).__name__} {str(video_result)[:80]} ===")
+    clip_coros = [_gen_clip(scenes[i], i) for i in range(min(len(scenes), 6))]
 
-    if isinstance(video_result, Exception):
-        logger.error(f"Video generation failed: {video_result}")
-        return JSONResponse({"error": str(video_result)}, status_code=500)
-
-    video_url = video_result  # URL pública de minimax (~5s)
+    all_results = await asyncio.gather(tts_coro, *clip_coros, return_exceptions=True)
+    audio_result  = all_results[0]
+    clip_url_results = list(all_results[1:])
 
     has_audio = isinstance(audio_result, bytes) and bool(audio_result)
-    if isinstance(audio_result, Exception):
-        logger.warning(f"TTS falló — video sin audio: {audio_result}")
-    elif has_audio:
-        logger.info(f"TTS exitoso: {len(audio_result)} bytes de audio")
+    logger.info(f"TTS: {type(audio_result).__name__}, clips: {[type(r).__name__ for r in clip_url_results]}")
+
+    # Filtrar clips exitosos
+    clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
+    logger.info(f"Clips exitosos: {len(clip_urls)}/{len(clip_url_results)}")
+
+    if not clip_urls:
+        return JSONResponse({"error": "No se pudo generar ningún clip de video"}, status_code=500)
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            vid_resp = await client.get(video_url, follow_redirects=True)
-            if vid_resp.status_code != 200:
-                raise RuntimeError(f"No se pudo descargar video: HTTP {vid_resp.status_code}")
-            vid_bytes = vid_resp.content
-        logger.info(f"Video descargado: {len(vid_bytes)} bytes")
+        # ── Descargar clips ──────────────────────────────────────────────────
+        async with httpx.AsyncClient(timeout=120.0) as dl:
+            async def _dl(url):
+                r = await dl.get(url, follow_redirects=True)
+                return r.content if r.status_code == 200 and len(r.content) > 1000 else None
+            downloaded = await asyncio.gather(*[_dl(u) for u in clip_urls], return_exceptions=True)
 
         with _tf.TemporaryDirectory() as tmpdir:
-            raw_path    = _os.path.join(tmpdir, "raw.mp4")
+            clip_paths = []
+            for i, data in enumerate(downloaded):
+                if isinstance(data, bytes) and data:
+                    p = _os.path.join(tmpdir, f"clip_{i:02d}.mp4")
+                    with open(p, "wb") as f:
+                        f.write(data)
+                    clip_paths.append(p)
+
+            if not clip_paths:
+                raise RuntimeError("Todos los clips fallaron al descargar")
+
+            logger.info(f"Clips descargados: {len(clip_paths)}")
+
             concat_path = _os.path.join(tmpdir, "concat.txt")
-            loop_path   = _os.path.join(tmpdir, "loop.mp4")
+            raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
             aud_path    = _os.path.join(tmpdir, "audio.mp3")
             out_path    = _os.path.join(tmpdir, "output.mp4")
 
-            with open(raw_path, "wb") as f:
-                f.write(vid_bytes)
-
-            # Loop minimax clip to 40s buffer — -shortest cuts at audio end
+            # Concat clips (re-encode para normalizar resolución/codec)
             with open(concat_path, "w") as f:
-                for _ in range(8):   # 8 × ~5s = ~40s buffer
-                    f.write(f"file '{raw_path}'\n")
+                for p in clip_paths:
+                    f.write(f"file '{p}'\n")
 
-            loop_proc = _sp.run(
+            cat_proc = _sp.run(
                 [
                     ffmpeg_bin, "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", concat_path,
+                    "-f", "concat", "-safe", "0", "-i", concat_path,
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                    "-t", "40",
-                    loop_path,
+                    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1",
+                    raw_cat,
                 ],
                 capture_output=True, timeout=180,
             )
-            if loop_proc.returncode != 0:
-                err = loop_proc.stderr.decode(errors="replace")[:500]
-                logger.warning(f"ffmpeg concat failed (rc={loop_proc.returncode}): {err}")
-                loop_path = raw_path
-            else:
-                logger.info("ffmpeg concat OK — video loopeado a 40s")
+            if cat_proc.returncode != 0:
+                logger.warning(f"Concat error: {cat_proc.stderr.decode(errors='replace')[:300]}")
+                raw_cat = clip_paths[0]   # usar primer clip como fallback
 
             if has_audio:
                 with open(aud_path, "wb") as f:
@@ -2305,7 +2292,7 @@ async def generate_video_commercial_endpoint(request: Request):
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
-                        "-i", loop_path,
+                        "-i", raw_cat,
                         "-i", aud_path,
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
@@ -2315,29 +2302,23 @@ async def generate_video_commercial_endpoint(request: Request):
                     ],
                     capture_output=True, timeout=120,
                 )
-                if proc.returncode == 0:
-                    final_path = out_path
-                    logger.info("ffmpeg combine OK — audio+video listos")
-                else:
-                    err = proc.stderr.decode(errors="replace")[:500]
-                    logger.warning(f"ffmpeg combine failed (rc={proc.returncode}): {err}")
-                    final_path = loop_path
+                final_path = out_path if proc.returncode == 0 else raw_cat
+                if proc.returncode != 0:
+                    logger.warning(f"Audio combine error: {proc.stderr.decode(errors='replace')[:300]}")
             else:
-                final_path = loop_path
+                final_path = raw_cat
 
             with open(final_path, "rb") as f:
                 _video_cache[vid_id] = f.read()
-            out_size_mb = len(_video_cache[vid_id]) / 1_048_576
-            serve_url = f"/api/lanzar/video-file/{vid_id}"
-            logger.info(f"Video listo: {vid_id} ({out_size_mb:.1f} MB) has_audio={has_audio}")
-            return {"video_url": serve_url, "script": script, "has_audio": has_audio}
+
+        out_mb = len(_video_cache[vid_id]) / 1_048_576
+        serve_url = f"/api/lanzar/video-file/{vid_id}"
+        logger.info(f"Video multi-escena listo: {vid_id} ({out_mb:.1f} MB) clips={len(clip_paths)} audio={has_audio}")
+        return {"video_url": serve_url, "script": script, "has_audio": has_audio}
 
     except Exception as e:
-        logger.error(f"Pipeline de video falló: {e}", exc_info=True)
-
-    # Fallback final: retornar clip original de minimax (5s, sin procesar)
-    logger.warning("Retornando clip sin procesar de minimax (5s)")
-    return {"video_url": video_url, "script": script, "has_audio": False}
+        logger.error(f"Pipeline multi-escena falló: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/video-file/{vid_id}")
