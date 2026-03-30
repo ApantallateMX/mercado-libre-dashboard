@@ -2143,11 +2143,12 @@ async def generate_video_commercial_endpoint(request: Request):
         "Respond ONLY with this JSON (no markdown, no backticks, no explanations):\n"
         '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
         "SCRIPT field rules:\n"
-        "- Narration text in Mexican Spanish (español de México), exactly 45-60 words\n"
+        "- Narration text in Mexican Spanish (español de México), exactly 70-85 words (enough for 25-30 seconds of speech)\n"
         "- Exciting, aspirational tone — like a premium Mexican TV commercial\n"
         "- NEVER mention model numbers, SKU codes, or alphanumeric product codes\n"
         "- ONLY mention the brand name and screen size in inches (e.g. 'Samsung de 43 pulgadas')\n"
-        "- Talk beautifully about 2-3 emotional features: image quality, sound, design, family moments\n"
+        "- Describe in detail: image quality, color vibrancy, sound experience, design elegance, smart features, family moments\n"
+        "- Make the listener FEEL the experience — use sensory language\n"
         "- End EXACTLY with: Disponible ahora en Mercado Libre.\n\n"
         "SCENES array rules (5 items, each a 6-second AI video clip description):\n"
         "- Each scene is an ENGLISH visual description, maximum 50 words\n"
@@ -2171,11 +2172,13 @@ async def generate_video_commercial_endpoint(request: Request):
     )
     try:
         import json as _json_inner
-        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=600)).strip()
+        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=900)).strip()
+        # Strip markdown fences
         if "```" in raw:
-            raw = raw.split("```")[1]
+            raw = raw[raw.index("```") + 3:]
             if raw.startswith("json"):
                 raw = raw[4:]
+            raw = raw[:raw.index("```")] if "```" in raw else raw
         parsed = _json_inner.loads(raw.strip())
         script = parsed.get("script", "").strip().strip('"').strip("'")
         scenes: list = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
@@ -2267,42 +2270,37 @@ async def generate_video_commercial_endpoint(request: Request):
             aud_path    = _os.path.join(tmpdir, "audio.mp3")
             out_path    = _os.path.join(tmpdir, "output.mp4")
 
-            # Normalizar cada clip a 1280x720 h264 antes de concat
-            norm_paths = []
-            for ci, cp in enumerate(clip_paths):
-                np_ = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
-                n_proc = _sp.run(
-                    [
-                        ffmpeg_bin, "-y", "-i", cp,
-                        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
-                               "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
-                        "-c:v", "libx264", "-preset", "ultrafast", "-r", "25",
-                        np_,
-                    ],
-                    capture_output=True, timeout=60,
-                )
-                if n_proc.returncode == 0:
-                    norm_paths.append(np_)
-                else:
-                    logger.warning(f"Norm clip {ci} failed: {n_proc.stderr.decode(errors='replace')[:200]}")
-                    norm_paths.append(cp)   # usar original si falla normalización
-
-            if not norm_paths:
-                norm_paths = clip_paths
-
-            # Concat con -c copy (todos mismos codec/resolución tras normalización)
-            with open(concat_path, "w") as f:
-                for p in norm_paths:
-                    f.write(f"file '{p}'\n")
-
-            cat_proc = _sp.run(
-                [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", concat_path,
-                 "-c", "copy", raw_cat],
-                capture_output=True, timeout=180,
+            # ── Concat con filter_complex (garantizado, cualquier formato de entrada) ──
+            # Usar -filter_complex concat en lugar de demuxer para evitar incompatibilidades
+            n = len(clip_paths)
+            filter_inputs = "".join(
+                f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25,format=yuv420p[v{i}];"
+                for i in range(n)
             )
+            filter_concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
+            filter_complex = filter_inputs + filter_concat
+
+            cmd_concat = [ffmpeg_bin, "-y"]
+            for cp in clip_paths:
+                cmd_concat.extend(["-i", cp])
+            cmd_concat.extend([
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                raw_cat,
+            ])
+            cat_proc = _sp.run(cmd_concat, capture_output=True, timeout=300)
             if cat_proc.returncode != 0:
-                logger.warning(f"Concat error: {cat_proc.stderr.decode(errors='replace')[:300]}")
-                raw_cat = norm_paths[0]   # fallback a primer clip normalizado
+                err_out = cat_proc.stderr.decode(errors="replace")[:400]
+                logger.error(f"Concat filter_complex error: {err_out}")
+                # Fallback: usar solo el primer clip (mejor que nada)
+                _sp.run([ffmpeg_bin, "-y", "-i", clip_paths[0],
+                         "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
+                         "-c:v", "libx264", "-preset", "fast", "-crf", "23", raw_cat],
+                        capture_output=True, timeout=60)
+            else:
+                logger.info(f"Concat filter_complex OK: {n} clips → raw_cat")
 
             if has_audio:
                 with open(aud_path, "wb") as f:
@@ -2896,59 +2894,83 @@ async def create_listing_endpoint(request: Request):
     if not client:
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
-    # ── Resolver value_id de FAMILY_NAME desde el catálogo de ML ─────────────
-    # ML requiere value_id para atributos de catálogo (no solo value_name)
-    if attrs:
-        fn_attr = next((a for a in attrs if isinstance(a, dict) and a.get("id") == "FAMILY_NAME"), None)
-        if fn_attr and fn_attr.get("value_name") and not fn_attr.get("value_id"):
-            try:
-                cat_attrs = await client.get(f"/categories/{category_id}/attributes")
-                if isinstance(cat_attrs, list):
-                    for ca in cat_attrs:
-                        if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
-                            wanted = fn_attr["value_name"].lower()
-                            for av in (ca.get("allowed_values") or []):
-                                if isinstance(av, dict) and av.get("name", "").lower() == wanted:
-                                    fn_attr["value_id"] = av["id"]
-                                    logger.info(f"FAMILY_NAME value_id resolved: {av['id']} ({av['name']})")
-                                    break
-                            if not fn_attr.get("value_id"):
-                                # Partial match fallback
-                                for av in (ca.get("allowed_values") or []):
-                                    if isinstance(av, dict) and av.get("name"):
-                                        av_l = av["name"].lower()
-                                        if av_l in wanted or wanted in av_l:
-                                            fn_attr["value_id"] = av["id"]
-                                            fn_attr["value_name"] = av["name"]
-                                            logger.info(f"FAMILY_NAME partial match: {av['id']} ({av['name']})")
-                                            break
-                            break
-            except Exception as _fn_err:
-                logger.warning(f"FAMILY_NAME value_id lookup failed: {_fn_err}")
-
     from app.services.meli_client import MeliApiError as _MeliErr
 
     async def _post_item(payload: dict) -> dict:
-        """Wrapper que captura MeliApiError y la convierte a dict de error."""
+        """POST /items capturando MeliApiError como dict."""
         try:
             return await client.post("/items", json=payload)
         except _MeliErr as exc:
-            return {"_meli_error": str(exc), "_meli_body": exc.body if hasattr(exc, "body") else {}}
+            return {"_meli_error": str(exc), "_meli_body": getattr(exc, "body", {})}
+
+    def _attrs_without_fn(payload: dict) -> dict:
+        """Retorna copia de payload sin FAMILY_NAME en attributes."""
+        import copy as _copy
+        p = _copy.deepcopy(payload)
+        if "attributes" in p:
+            p["attributes"] = [a for a in p["attributes"] if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")]
+        return p
+
+    # ── Resolver value_id de FAMILY_NAME desde catálogo ML ───────────────────
+    fn_allowed_values: list = []
+    fn_attr = next((a for a in attrs if isinstance(a, dict) and a.get("id") == "FAMILY_NAME"), None)
+    if fn_attr:
+        try:
+            cat_attrs = await client.get(f"/categories/{category_id}/attributes")
+            if isinstance(cat_attrs, list):
+                for ca in cat_attrs:
+                    if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
+                        fn_allowed_values = [av for av in (ca.get("allowed_values") or []) if isinstance(av, dict) and av.get("id")]
+                        wanted = (fn_attr.get("value_name") or "").lower()
+                        # Exact match
+                        for av in fn_allowed_values:
+                            if av.get("name", "").lower() == wanted:
+                                fn_attr["value_id"] = av["id"]
+                                fn_attr["value_name"] = av["name"]
+                                logger.info(f"FAMILY_NAME exact: {av['id']} ({av['name']})")
+                                break
+                        # Partial match
+                        if not fn_attr.get("value_id") and wanted:
+                            for av in fn_allowed_values:
+                                av_l = av.get("name", "").lower()
+                                if av_l and (av_l in wanted or wanted in av_l):
+                                    fn_attr["value_id"] = av["id"]
+                                    fn_attr["value_name"] = av["name"]
+                                    logger.info(f"FAMILY_NAME partial: {av['id']} ({av['name']})")
+                                    break
+                        break
+        except Exception as _fn_err:
+            logger.warning(f"FAMILY_NAME lookup failed: {_fn_err}")
+
+    logger.info(f"ML attrs being sent: {[a.get('id') for a in attrs]}")
+    if fn_attr:
+        logger.info(f"FAMILY_NAME: value_id={fn_attr.get('value_id')!r} value_name={fn_attr.get('value_name')!r}")
 
     try:
+        # ── Intento 1: con FAMILY_NAME + value_id ────────────────────────────
         result = await _post_item(item_payload)
+        logger.info(f"ML attempt 1: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
 
-        # Si ML rechazó con error de FAMILY_NAME → reintentar sin ese atributo
+        # ── Intento 2: sin FAMILY_NAME ────────────────────────────────────────
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            logger.warning(f"FAMILY_NAME causó error ML — reintentando sin él: {result['_meli_error']}")
-            if "attributes" in item_payload:
-                item_payload["attributes"] = [
-                    a for a in item_payload["attributes"]
-                    if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")
-                ]
-            result = await _post_item(item_payload)
+            logger.warning("Intento 2: publicando SIN FAMILY_NAME")
+            result = await _post_item(_attrs_without_fn(item_payload))
+            logger.info(f"ML attempt 2: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
 
-        # Si sigue siendo error, devolverlo
+        # ── Intento 3: FAMILY_NAME con primer valor del catálogo ──────────────
+        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower() and fn_allowed_values:
+            first_val = fn_allowed_values[0]
+            logger.warning(f"Intento 3: FAMILY_NAME forzado a primer valor: {first_val['id']} ({first_val.get('name')})")
+            import copy as _copy3
+            p3 = _copy3.deepcopy(item_payload)
+            if "attributes" in p3:
+                for a in p3["attributes"]:
+                    if isinstance(a, dict) and a.get("id") == "FAMILY_NAME":
+                        a["value_id"]   = first_val["id"]
+                        a["value_name"] = first_val.get("name", "")
+            result = await _post_item(p3)
+            logger.info(f"ML attempt 3: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
 
