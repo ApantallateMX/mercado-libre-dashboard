@@ -864,7 +864,15 @@ async def optimize_item(item_id: str, body: dict):
             try:
                 results["title"] = await client.update_item_title(item_id, body["title"])
             except Exception as e:
-                errors.append(f"Titulo: {e}")
+                err_str = str(e)
+                if "family_name" in err_str:
+                    errors.append(
+                        f"Titulo bloqueado por catalogo: este item esta vinculado a un producto de familia. "
+                        f"Modifica el titulo directamente en Mercado Libre → "
+                        f"https://www.mercadolibre.com.mx/ventas/{item_id}/modificar"
+                    )
+                else:
+                    errors.append(f"Titulo: {err_str}")
 
         # Update description
         if "description" in body and body["description"]:

@@ -2370,7 +2370,14 @@
                 resultEl.innerHTML = '<span class="text-red-600 font-semibold">Error ML: ' + escapeHtml(data.error) + '</span>';
             } else if (data.errors && data.errors.length > 0) {
                 var errHtml = '<div class="text-red-700 bg-red-50 border border-red-200 rounded p-2 text-xs"><p class="font-semibold mb-1">Errores al guardar:</p><ul class="list-disc pl-4 space-y-0.5">';
-                data.errors.forEach(function(e) { errHtml += '<li>' + escapeHtml(e) + '</li>'; });
+                data.errors.forEach(function(e) {
+                    // Convert URLs in error messages to clickable links
+                    var rendered = escapeHtml(e).replace(
+                        /(https?:\/\/[^\s]+)/g,
+                        '<a href="$1" target="_blank" class="underline text-blue-600 hover:text-blue-800">Editar en ML →</a>'
+                    );
+                    errHtml += '<li>' + rendered + '</li>';
+                });
                 errHtml += '</ul>';
                 if (data.new_score) errHtml += '<p class="mt-1 text-green-700">Score actualizado: ' + data.new_score + '%</p>';
                 errHtml += '</div>';
