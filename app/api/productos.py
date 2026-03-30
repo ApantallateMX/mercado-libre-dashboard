@@ -164,7 +164,7 @@ def _item_row(body: dict, video_rec=None, bm=None) -> dict:
 
 @router.get("/stats")
 async def get_stats():
-    """Conteo rápido de activos / pausados / candidatos."""
+    """Conteo rápido de activos / pausados / críticos / candidatos."""
     user_id = _ctx.get()
     client = await get_meli_client()
     if not client:
@@ -192,6 +192,7 @@ async def get_stats():
         return {
             "active":     active_total,
             "paused":     paused_total,
+            "criticos":   None,   # computed client-side from score_category filter
             "candidates": candidates,
             "total":      active_total + paused_total,
         }
@@ -258,10 +259,12 @@ async def get_candidates(
 
 @router.get("")
 async def list_productos(
-    status: str = Query("all"),
-    q:      str = Query(""),
-    offset: int = Query(0, ge=0),
-    limit:  int = Query(50, ge=1, le=100),
+    status:         str = Query("all"),
+    q:              str = Query(""),
+    offset:         int = Query(0, ge=0),
+    limit:          int = Query(50, ge=1, le=100),
+    score_category: str = Query(""),
+    sort_by:        str = Query(""),
 ):
     """Lista paginada de publicaciones ML + BM stock + health score.
     status: all | active | paused
@@ -350,7 +353,23 @@ async def list_productos(
                         or ql in row["sku"].lower()
                         or ql in row["item_id"].lower()):
                     continue
+            if score_category and row.get("score_category") != score_category:
+                continue
             items.append(row)
+
+        # Apply sort_by
+        if sort_by == "score_asc":
+            items.sort(key=lambda x: x.get("score", 0))
+        elif sort_by == "score_desc":
+            items.sort(key=lambda x: x.get("score", 0), reverse=True)
+        elif sort_by == "stock_asc":
+            items.sort(key=lambda x: x.get("bm_total", 0))
+        elif sort_by == "stock_desc":
+            items.sort(key=lambda x: x.get("bm_total", 0), reverse=True)
+        elif sort_by == "ventas_asc":
+            items.sort(key=lambda x: x.get("sold_quantity", 0))
+        elif sort_by == "ventas_desc":
+            items.sort(key=lambda x: x.get("sold_quantity", 0), reverse=True)
 
         return {"items": items, "total": grand_total, "offset": offset, "limit": limit, "totals": totals}
 

@@ -1026,16 +1026,9 @@ async def sku_compare_page(request: Request):
     })
 
 
-@app.get("/sku-inventory", response_class=HTMLResponse)
+@app.get("/sku-inventory")
 async def sku_inventory_page(request: Request):
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse(request, "no_session.html", {})
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "sku_inventory.html", {        "user": user,
-        "active": "sku_inventory",
-        **ctx
-    })
+    return RedirectResponse("/productos", status_code=301)
 
 
 @app.get("/productos", response_class=HTMLResponse)
@@ -1256,16 +1249,9 @@ async def health_page(request: Request):
     })
 
 
-@app.get("/items-health", response_class=HTMLResponse)
+@app.get("/items-health")
 async def items_health_page(request: Request):
-    user = await get_current_user()
-    if not user:
-        return templates.TemplateResponse(request, "no_session.html", {})
-    ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "items_health.html", {        "user": user,
-        "active": "items_health",
-        **ctx
-    })
+    return RedirectResponse("/productos", status_code=301)
 
 
 # === Partials para HTMX ===

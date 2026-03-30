@@ -1,25 +1,23 @@
 /**
  * productos.js — Ciclo de vida unificado de publicaciones MeLi
- * ─────────────────────────────────────────────────────────────
- * Gestiona la tabla principal, tabs, búsqueda, panel lateral
- * y todas las acciones (editar, stock, video clip, imágenes).
  */
 (function () {
   'use strict';
 
   // ── Estado global ──────────────────────────────────────────────────────────
   const state = {
-    tab:        'all',       // all | active | paused | candidates
-    q:          '',
-    offset:     0,
-    limit:      50,
-    total:      0,
-    items:      [],
-    loading:    false,
+    tab:            'all',       // all | active | paused | critico | candidates
+    q:              '',
+    offset:         0,
+    limit:          50,
+    total:          0,
+    items:          [],
+    loading:        false,
+    sort_by:        '',          // '' | score_asc | score_desc | stock_asc | stock_desc | ventas_asc | ventas_desc
     // Panel
-    panelItem:  null,        // item detail loaded for panel
-    panelTab:   'editar',
-    panelDirty: {},          // cambios pendientes {field: value}
+    panelItem:      null,
+    panelTab:       'editar',
+    panelDirty:     {},
     // Video
     currentVideoId: null,
   };
@@ -28,6 +26,14 @@
   document.addEventListener('DOMContentLoaded', function () {
     loadStats();
     loadItems();
+    // Close sort dropdown on outside click
+    document.addEventListener('click', function (e) {
+      const dd = document.getElementById('sort-dropdown');
+      const btn = document.getElementById('sort-btn');
+      if (dd && !dd.classList.contains('hidden') && !dd.contains(e.target) && !btn.contains(e.target)) {
+        dd.classList.add('hidden');
+      }
+    });
   });
 
   // ── Stats ──────────────────────────────────────────────────────────────────
@@ -36,11 +42,12 @@
       const d = await apiFetch('/api/productos/stats');
       setText('stat-active',     d.active     ?? '—');
       setText('stat-paused',     d.paused     ?? '—');
+      setText('stat-criticos',   d.criticos   ?? '—');
       setText('stat-candidates', d.candidates ?? '—');
-      setText('stat-total',      d.total      ?? '—');
       setText('cnt-all',         d.total      ?? '—');
       setText('cnt-active',      d.active     ?? '—');
       setText('cnt-paused',      d.paused     ?? '—');
+      setText('cnt-critico',     d.criticos   ?? '—');
       setText('cnt-candidates',  d.candidates ?? '—');
     } catch (e) { console.warn('stats error', e); }
   }
@@ -58,9 +65,12 @@
           `/api/productos/candidates?q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}`
         );
       } else {
-        const st = state.tab === 'all' ? 'all' : state.tab;
+        const st = state.tab === 'all' ? 'all'
+                 : state.tab === 'critico' ? 'all'
+                 : state.tab;
+        const sc = state.tab === 'critico' ? 'critico' : '';
         data = await apiFetch(
-          `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}`
+          `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}&score_category=${sc}&sort_by=${encodeURIComponent(state.sort_by)}`
         );
       }
       state.items = data.items || [];
@@ -194,7 +204,7 @@
 
   function actionBtns(item) {
     if (item.status === 'candidate') {
-      return `<button onclick="launchSku('${escHtml(item.sku)}')"
+      return `<button onclick="openCreateModal('${escHtml(item.sku)}', ${item.bm_total || 0})"
                 class="bg-blue-500 hover:bg-blue-600 text-white text-xs px-2.5 py-1.5 rounded-lg font-medium transition">
                 🚀 Lanzar</button>`;
     }
@@ -208,6 +218,8 @@
            class="text-xs px-2 py-1 rounded-lg border text-blue-600 border-blue-200 hover:bg-blue-50 transition" title="Video listo para subir">
            📹 Subir</button>`
       : '';
+    const optimizeBtn = `<button onclick="openOptimizeModal('${itemId}', '${escHtml(item.sku || '')}')"
+         class="text-xs px-2 py-1 rounded-lg border text-yellow-700 border-yellow-200 hover:bg-yellow-50 transition">✨ Opt</button>`;
     const toggleBtn = item.status === 'paused'
       ? `<button onclick="toggleStatus('${itemId}', 'active')"
            class="text-xs px-2 py-1 rounded-lg border text-green-600 border-green-200 hover:bg-green-50 transition">▶ Activar</button>`
@@ -216,6 +228,7 @@
     return `<div class="flex flex-col gap-1">
       <button onclick="openPanel('${itemId}')"
         class="text-xs px-2 py-1 rounded-lg bg-yellow-100 hover:bg-yellow-200 text-yellow-800 font-medium transition">✏ Editar</button>
+      ${optimizeBtn}
       ${toggleBtn}
       ${videoBtn}
     </div>`;
@@ -242,6 +255,33 @@
       btn.classList.toggle('text-gray-500', !active);
       btn.classList.toggle('bg-white', !active);
     });
+    // Show/hide compare section for candidates tab
+    const compareSection = document.getElementById('lanzar-compare-section');
+    if (compareSection) {
+      compareSection.classList.toggle('hidden', tab !== 'candidates');
+    }
+    loadItems();
+  };
+
+  // ── Sort dropdown ──────────────────────────────────────────────────────────
+  window.toggleSortDropdown = function () {
+    document.getElementById('sort-dropdown')?.classList.toggle('hidden');
+  };
+
+  window.setSort = function (sortBy) {
+    state.sort_by  = sortBy;
+    state.offset   = 0;
+    const labels = {
+      '':           'Ordenar',
+      'score_desc': 'Score ↓',
+      'score_asc':  'Score ↑',
+      'stock_desc': 'Stock ↓',
+      'stock_asc':  'Stock ↑',
+      'ventas_desc':'Ventas ↓',
+      'ventas_asc': 'Ventas ↑',
+    };
+    setText('sort-label', labels[sortBy] || 'Ordenar');
+    document.getElementById('sort-dropdown')?.classList.add('hidden');
     loadItems();
   };
 
@@ -277,7 +317,6 @@
     state.panelTab  = 'editar';
     state.panelDirty = {};
 
-    // Show panel immediately with preloaded data
     showPanel();
     renderPanelHeader(preloaded || {});
     renderPanelSkeleton();
@@ -286,7 +325,7 @@
       const detail = await apiFetch(`/api/productos/${itemId}`);
       state.panelItem = detail;
       renderPanelHeader(detail);
-      renderPanelTab('editar');
+      renderPanelTab(state.panelTab);
       show('panel-footer');
     } catch (e) {
       document.getElementById('panel-content').innerHTML =
@@ -387,8 +426,13 @@
               ${item.problems.map(p => `<li>${escHtml(p)}</li>`).join('')}
             </ul>
           </div>` : ''}
+          <div class="pt-2">
+            <button onclick="openOptimizeModal('${item.item_id}', '${escHtml(item.sku || '')}')"
+              class="w-full border border-yellow-300 bg-yellow-50 hover:bg-yellow-100 text-yellow-800 text-sm font-medium py-2 rounded-lg transition">
+              ✨ Optimizar con IA (título, descripción, atributos)
+            </button>
+          </div>
         </div>`;
-      // Title counter
       const ta = document.getElementById('edit-title');
       if (ta) ta.addEventListener('input', () => {
         const el = document.getElementById('title-len');
@@ -452,10 +496,11 @@
 
           <div>
             <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Generar nuevo video</p>
-            <a href="/sku-inventory" class="block text-center bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm py-2.5 rounded-xl transition">
-              🚀 Ir a Lanzar → generar video
-            </a>
-            <p class="text-xs text-gray-400 mt-2 text-center">Genera el video en Lanzar y luego regresa aquí para subirlo.</p>
+            <button onclick="openCreateModal('${escHtml(item.sku || '')}', 0)"
+              class="block w-full text-center bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm py-2.5 rounded-xl transition">
+              🚀 Abrir Lanzar → generar video
+            </button>
+            <p class="text-xs text-gray-400 mt-2 text-center">Genera el video en el wizard y luego regresa aquí para subirlo.</p>
           </div>
 
           <div class="bg-gray-50 rounded-xl p-3 text-xs text-gray-500 space-y-1">
@@ -520,19 +565,16 @@
     const errs = [];
 
     try {
-      // Title
       if (dirty.title !== undefined) {
         try {
           await apiFetch(`/api/items/${itemId}/title`, { method: 'PUT', body: { title: dirty.title } });
         } catch (e) { errs.push(`Título: ${e.message}`); }
       }
-      // Price
       if (dirty.price !== undefined) {
         try {
           await apiFetch(`/api/items/${itemId}/price`, { method: 'PUT', body: { price: dirty.price } });
         } catch (e) { errs.push(`Precio: ${e.message}`); }
       }
-      // Description
       if (dirty.description !== undefined) {
         try {
           await apiFetch(`/api/items/${itemId}/description`, { method: 'PUT', body: { description: dirty.description } });
@@ -559,7 +601,6 @@
     try {
       await apiFetch(`/api/items/${itemId}/stock`, { method: 'PUT', body: { quantity: qty } });
       toast(`Stock actualizado a ${qty} ✓`, 'green');
-      // Reload panel
       const detail = await apiFetch(`/api/productos/${itemId}`);
       state.panelItem = detail;
       renderPanelTab('stock');
@@ -596,7 +637,6 @@
           </div>`;
         }
         toast('Clip subido ✓', 'green');
-        // Reload panel
         const detail = await apiFetch(`/api/productos/${itemId}`);
         state.panelItem = detail;
         renderPanelTab('video');
@@ -611,19 +651,6 @@
       }
       btn.disabled = false; btn.textContent = '📤 Subir Clip a ML';
     }
-  };
-
-  // ── Launch SKU ─────────────────────────────────────────────────────────────
-  window.launchSku = function (sku) {
-    window.location.href = `/sku-inventory?sku=${encodeURIComponent(sku)}`;
-  };
-
-  // ── Lanzar wizard modal ────────────────────────────────────────────────────
-  window.openLanzarWizard = function () {
-    show('lanzar-overlay');
-  };
-  window.closeLanzarWizard = function () {
-    hide('lanzar-overlay');
   };
 
   // ── Utils ──────────────────────────────────────────────────────────────────
