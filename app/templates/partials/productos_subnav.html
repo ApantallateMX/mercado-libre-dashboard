@@ -1,16 +1,24 @@
-<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0">
+<div class="flex gap-1 mb-5 border-b border-gray-200 pb-0 overflow-x-auto">
+    <a href="/productos"
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition whitespace-nowrap flex items-center gap-1
+              {% if active == 'productos' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
+        ⚡ Productos
+        {% if active != 'productos' %}
+        <span class="text-xs bg-yellow-400 text-gray-700 rounded-full px-1 font-bold">Nuevo</span>
+        {% endif %}
+    </a>
     <a href="/items"
-       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition whitespace-nowrap
               {% if active == 'items' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
         Inventario
     </a>
     <a href="/items-health"
-       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition whitespace-nowrap
               {% if active == 'items_health' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
         Optimizar
     </a>
     <a href="/sku-inventory"
-       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition
+       class="px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition whitespace-nowrap
               {% if active == 'sku_inventory' %}bg-white border-gray-200 text-yellow-700 font-semibold -mb-px{% else %}bg-gray-50 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100{% endif %}">
         Lanzar
     </a>

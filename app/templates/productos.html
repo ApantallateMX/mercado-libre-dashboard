@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Productos{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-3 py-4">
+  {% include "partials/productos_subnav.html" %}
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Productos</h1>
+      <p class="text-xs text-gray-500">Ciclo de vida completo: lanza, edita, optimiza y sube clips</p>
+    </div>
+    <button onclick="openLanzarWizard()"
+            class="flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-4 py-2 rounded-lg transition shadow-sm">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      </svg>
+      Lanzar Nuevo
+    </button>
+  </div>
+
+  <!-- ── Stats cards ─────────────────────────────────────────────────────── -->
+  <div id="stats-row" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+    <div class="bg-white rounded-xl border p-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-green-100 flex items-center justify-center">
+        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+      </div>
+      <div>
+        <p class="text-xs text-gray-500">Activos</p>
+        <p class="font-bold text-lg text-gray-800" id="stat-active">—</p>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl border p-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-orange-100 flex items-center justify-center">
+        <svg class="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="text-xs text-gray-500">Pausados</p>
+        <p class="font-bold text-lg text-gray-800" id="stat-paused">—</p>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl border p-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
+        <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </div>
+      <div>
+        <p class="text-xs text-gray-500">Candidatos</p>
+        <p class="font-bold text-lg text-gray-800" id="stat-candidates">—</p>
+      </div>
+    </div>
+    <div class="bg-white rounded-xl border p-3 flex items-center gap-3">
+      <div class="w-9 h-9 rounded-lg bg-gray-100 flex items-center justify-center">
+        <svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+        </svg>
+      </div>
+      <div>
+        <p class="text-xs text-gray-500">Total Listings</p>
+        <p class="font-bold text-lg text-gray-800" id="stat-total">—</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Search + Tabs ───────────────────────────────────────────────────── -->
+  <div class="bg-white rounded-xl border mb-4 overflow-hidden">
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-0 border-b">
+      <div class="flex-1 flex items-center gap-2 px-4 py-2.5">
+        <svg class="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0"/>
+        </svg>
+        <input id="search-input" type="text" placeholder="Busca por SKU, título o ID de MeLi..."
+               class="flex-1 text-sm outline-none placeholder-gray-400"
+               oninput="onSearchInput()">
+        <button id="search-clear" class="hidden text-gray-400 hover:text-gray-600" onclick="clearSearch()">✕</button>
+      </div>
+    </div>
+    <!-- Tab bar -->
+    <div class="flex overflow-x-auto">
+      <button class="tab-btn active-tab px-5 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-yellow-500 text-yellow-700 bg-yellow-50" data-tab="all" onclick="setTab('all')">
+        Todo <span id="cnt-all" class="ml-1 text-xs bg-gray-200 text-gray-600 rounded-full px-1.5 py-0.5">—</span>
+      </button>
+      <button class="tab-btn px-5 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50" data-tab="active" onclick="setTab('active')">
+        Activos <span id="cnt-active" class="ml-1 text-xs bg-gray-200 text-gray-600 rounded-full px-1.5 py-0.5">—</span>
+      </button>
+      <button class="tab-btn px-5 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50" data-tab="paused" onclick="setTab('paused')">
+        Pausados <span id="cnt-paused" class="ml-1 text-xs bg-gray-200 text-gray-600 rounded-full px-1.5 py-0.5">—</span>
+      </button>
+      <button class="tab-btn px-5 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50" data-tab="candidates" onclick="setTab('candidates')">
+        Candidatos <span id="cnt-candidates" class="ml-1 text-xs bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5">—</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Table area ──────────────────────────────────────────────────────── -->
+  <div id="table-loading" class="text-center py-16 text-gray-400">
+    <svg class="w-8 h-8 animate-spin mx-auto mb-3 text-yellow-400" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    Cargando productos...
+  </div>
+
+  <div id="table-wrap" class="hidden">
+    <!-- Desktop table -->
+    <div class="hidden md:block bg-white rounded-xl border overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+          <tr>
+            <th class="px-4 py-3 text-left w-10"></th>
+            <th class="px-3 py-3 text-left">Producto</th>
+            <th class="px-3 py-3 text-left">SKU</th>
+            <th class="px-3 py-3 text-center">Estado</th>
+            <th class="px-3 py-3 text-center">Score</th>
+            <th class="px-3 py-3 text-right">Stock BM</th>
+            <th class="px-3 py-3 text-right">Stock ML</th>
+            <th class="px-3 py-3 text-right">Precio</th>
+            <th class="px-3 py-3 text-center w-28">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="productos-tbody" class="divide-y divide-gray-100"></tbody>
+      </table>
+    </div>
+
+    <!-- Mobile cards -->
+    <div id="mobile-cards" class="md:hidden space-y-2"></div>
+
+    <!-- Paginación -->
+    <div id="pagination" class="mt-4 flex items-center justify-between text-sm text-gray-500">
+      <span id="page-info"></span>
+      <div class="flex gap-2">
+        <button id="btn-prev" onclick="prevPage()" class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">← Anterior</button>
+        <button id="btn-next" onclick="nextPage()" class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">Siguiente →</button>
+      </div>
+    </div>
+
+    <p id="empty-msg" class="hidden text-center py-12 text-gray-400 text-sm">No se encontraron productos con ese filtro.</p>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PANEL LATERAL — slide from right
+     ══════════════════════════════════════════════════════════════ -->
+<div id="panel-overlay" class="hidden fixed inset-0 bg-black/40 z-40 transition-opacity" onclick="closePanel()"></div>
+
+<div id="side-panel" class="hidden fixed top-0 right-0 h-full w-full max-w-xl bg-white shadow-2xl z-50 flex flex-col transform translate-x-full transition-transform duration-300">
+  <!-- Panel Header -->
+  <div class="flex items-start justify-between p-4 border-b bg-gray-50">
+    <div class="flex-1 min-w-0">
+      <p id="panel-item-id" class="text-xs text-gray-400 font-mono mb-0.5"></p>
+      <h2 id="panel-title" class="font-semibold text-gray-800 text-sm leading-snug line-clamp-2"></h2>
+      <div class="flex items-center gap-2 mt-1.5">
+        <span id="panel-status-badge" class="text-xs px-2 py-0.5 rounded-full font-medium"></span>
+        <span id="panel-score-badge" class="text-xs px-2 py-0.5 rounded-full font-medium"></span>
+        <a id="panel-permalink" href="#" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center gap-0.5">
+          Ver en ML <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+        </a>
+      </div>
+    </div>
+    <button onclick="closePanel()" class="ml-3 p-2 hover:bg-gray-200 rounded-lg text-gray-500 shrink-0">✕</button>
+  </div>
+
+  <!-- Panel Tabs -->
+  <div class="flex border-b bg-white text-xs font-medium overflow-x-auto shrink-0">
+    <button class="panel-tab active-panel-tab px-4 py-2.5 border-b-2 border-yellow-500 text-yellow-700 whitespace-nowrap" data-ptab="editar" onclick="setPanelTab('editar')">✏ Editar</button>
+    <button class="panel-tab px-4 py-2.5 border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap" data-ptab="stock" onclick="setPanelTab('stock')">📦 Stock</button>
+    <button class="panel-tab px-4 py-2.5 border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap" data-ptab="video" onclick="setPanelTab('video')">🎬 Video Clip</button>
+    <button class="panel-tab px-4 py-2.5 border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap" data-ptab="imagenes" onclick="setPanelTab('imagenes')">🖼 Imágenes</button>
+  </div>
+
+  <!-- Panel Content -->
+  <div id="panel-content" class="flex-1 overflow-y-auto">
+    <div class="flex items-center justify-center h-32 text-gray-400 text-sm">
+      <svg class="w-5 h-5 animate-spin mr-2 text-yellow-400" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+      </svg>
+      Cargando...
+    </div>
+  </div>
+
+  <!-- Panel Footer -->
+  <div id="panel-footer" class="hidden p-4 border-t bg-gray-50 flex gap-2 shrink-0">
+    <button id="panel-save-btn" onclick="savePanel()" class="flex-1 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm py-2 rounded-lg transition">Guardar</button>
+    <button onclick="closePanel()" class="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition border">Cancelar</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     LANZAR WIZARD MODAL (embed from sku_inventory logic)
+     ══════════════════════════════════════════════════════════════ -->
+<div id="lanzar-overlay" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+    <div class="flex items-center justify-between p-5 border-b">
+      <h2 class="font-bold text-gray-800">Lanzar Nuevo Producto</h2>
+      <button onclick="closeLanzarWizard()" class="p-2 hover:bg-gray-100 rounded-lg text-gray-500">✕</button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-5">
+      <p class="text-sm text-gray-600 mb-4">Usa la sección <strong>Lanzar</strong> para el wizard completo con BM, IA y video.</p>
+      <a href="/sku-inventory" class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-5 py-3 rounded-xl transition w-fit">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+        Ir a Lanzar
+      </a>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/productos.js"></script>
+{% endblock %}

@@ -27,8 +27,31 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/lanzar", tags=["lanzar"])
 
 # In-memory video cache — videos combinados (audio+video) listos para servir
-# Ephemeral: se pierde al reiniciar Railway (ok, el usuario descarga inmediatamente)
 _video_cache: dict[str, bytes] = {}
+
+# Directorio de persistencia en disco (sobrevive múltiples requests en mismo container)
+_VIDEO_DIR = __import__("pathlib").Path("/tmp/lanzar_videos")
+
+
+def _persist_video(vid_id: str, data: bytes) -> None:
+    """Guarda video en disco para sobrevivir múltiples requests."""
+    try:
+        _VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+        (_VIDEO_DIR / f"{vid_id}.mp4").write_bytes(data)
+    except Exception as e:
+        logger.warning(f"No se pudo persistir video {vid_id}: {e}")
+
+
+def _load_video(vid_id: str) -> bytes | None:
+    """Carga video desde memoria o disco."""
+    if vid_id in _video_cache:
+        return _video_cache[vid_id]
+    disk_path = _VIDEO_DIR / f"{vid_id}.mp4"
+    if disk_path.exists():
+        data = disk_path.read_bytes()
+        _video_cache[vid_id] = data  # re-cargar en memoria
+        return data
+    return None
 
 # BM endpoints (same as sku_inventory.py)
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
@@ -2340,6 +2363,9 @@ async def generate_video_commercial_endpoint(request: Request):
                 with open(final_path, "rb") as fh:
                     _video_cache[vid_id] = fh.read()
 
+                # Persistir a disco para sobrevivir múltiples requests
+                _persist_video(vid_id, _video_cache[vid_id])
+
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
                 logger.info(f"Slideshow listo: {vid_id} ({out_mb:.1f} MB) segs={len(seg_paths)} audio={has_audio}")
                 return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
@@ -2474,6 +2500,9 @@ async def generate_video_commercial_endpoint(request: Request):
             with open(final_path, "rb") as f:
                 _video_cache[vid_id] = f.read()
 
+        # Persistir a disco para sobrevivir múltiples requests
+        _persist_video(vid_id, _video_cache[vid_id])
+
         out_mb = len(_video_cache[vid_id]) / 1_048_576
         serve_url = f"/api/lanzar/video-file/{vid_id}"
         logger.info(f"Video multi-escena listo: {vid_id} ({out_mb:.1f} MB) clips={len(clip_paths)} audio={has_audio}")
@@ -2486,9 +2515,9 @@ async def generate_video_commercial_endpoint(request: Request):
 
 @router.get("/video-file/{vid_id}")
 async def serve_video_file(vid_id: str):
-    """Sirve el video comercial combinado (audio + video) desde la caché en memoria."""
+    """Sirve el video comercial combinado (audio + video) desde caché o disco."""
     from fastapi.responses import Response
-    data = _video_cache.get(vid_id)
+    data = _load_video(vid_id)
     if not data:
         return JSONResponse({"error": "Video no encontrado o expirado"}, status_code=404)
     return Response(
@@ -2972,9 +3001,9 @@ async def upload_clip_endpoint(item_id: str, request: Request):
     if not video_id:
         return JSONResponse({"error": "video_id requerido"}, status_code=400)
 
-    video_bytes = _video_cache.get(video_id)
+    video_bytes = _load_video(video_id)
     if not video_bytes:
-        return JSONResponse({"error": "video_id no encontrado en cache — regenera el video"}, status_code=404)
+        return JSONResponse({"error": "video_id no encontrado — regenera el video"}, status_code=404)
 
     client = await get_meli_client()
     if not client:
@@ -3116,7 +3145,9 @@ async def create_listing_endpoint(request: Request):
     title              = body.get("title", "").strip()
     price              = body.get("price", 0)
     catalog_product_id = body.get("catalog_product_id", "").strip()
-    family_name_body = body.get("family_name", "").strip()
+    family_name_body   = body.get("family_name", "").strip()
+    # video_id opcional — si presente, se asocia al listing creado
+    video_id_to_link   = body.get("video_id", "").strip()
     if not price:
         return JSONResponse({"error": "price es requerido"}, status_code=400)
     if not category_id:
@@ -3260,6 +3291,15 @@ async def create_listing_endpoint(request: Request):
                 (user_id, sku.upper()),
             )
             await db.commit()
+
+        # Si había un video generado, asociarlo al listing en DB
+        if video_id_to_link and video_id_to_link in _video_cache:
+            try:
+                from app.services.token_store import save_product_video
+                await save_product_video(item_id, user_id, sku, video_id_to_link)
+                logger.info(f"Video {video_id_to_link} asociado a {item_id}")
+            except Exception as ve:
+                logger.warning(f"No se pudo asociar video: {ve}")
 
         logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
         return {"ok": True, "item_id": item_id, "permalink": result.get("permalink", ""), "status": result.get("status", "")}

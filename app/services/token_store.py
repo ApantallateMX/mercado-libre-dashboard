@@ -254,6 +254,25 @@ async def init_db():
                 synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: product_videos — asocia videos generados con listings ML
+        # Permite mostrar botón "Subir Clip" en cada listing donde hay video
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS product_videos (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id     TEXT NOT NULL,
+                user_id     TEXT NOT NULL DEFAULT '',
+                sku         TEXT NOT NULL DEFAULT '',
+                video_id    TEXT NOT NULL,
+                clip_status TEXT NOT NULL DEFAULT 'pending',
+                clip_uuid   TEXT DEFAULT NULL,
+                clip_error  TEXT DEFAULT NULL,
+                created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(item_id, user_id)
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amazon_vel_cache (
                 days         INTEGER PRIMARY KEY,
@@ -733,3 +752,62 @@ async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
                 updated_at = CURRENT_TIMESTAMP
         """, (seller_id, threshold))
         await db.commit()
+
+
+# ─── PRODUCT VIDEOS — asocia videos generados con listings ML ─────────────────
+
+async def save_product_video(item_id: str, user_id: str, sku: str, video_id: str) -> None:
+    """Guarda o actualiza la asociación video_id ↔ item_id para un usuario."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO product_videos (item_id, user_id, sku, video_id, clip_status)
+            VALUES (?, ?, ?, ?, 'pending')
+            ON CONFLICT(item_id, user_id) DO UPDATE SET
+                video_id   = excluded.video_id,
+                sku        = CASE WHEN excluded.sku != '' THEN excluded.sku ELSE product_videos.sku END,
+                clip_status = 'pending',
+                clip_uuid  = NULL,
+                clip_error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+        """, (item_id, user_id, sku, video_id))
+        await db.commit()
+
+
+async def get_product_video(item_id: str, user_id: str) -> Optional[dict]:
+    """Retorna el registro de video para un item, o None si no existe."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM product_videos WHERE item_id=? AND user_id=?",
+            (item_id, user_id)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def update_clip_status(
+    item_id: str, user_id: str, status: str,
+    clip_uuid: str = None, error: str = None
+) -> None:
+    """Actualiza el estado del clip tras upload a ML."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            UPDATE product_videos
+            SET clip_status=?, clip_uuid=?, clip_error=?, updated_at=CURRENT_TIMESTAMP
+            WHERE item_id=? AND user_id=?
+        """, (status, clip_uuid, error, item_id, user_id))
+        await db.commit()
+
+
+async def get_videos_for_items(item_ids: list, user_id: str) -> dict:
+    """Retorna {item_id: record} para una lista de item_ids."""
+    if not item_ids:
+        return {}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        placeholders = ",".join("?" * len(item_ids))
+        rows = await (await db.execute(
+            f"SELECT * FROM product_videos WHERE item_id IN ({placeholders}) AND user_id=?",
+            item_ids + [user_id]
+        )).fetchall()
+        return {r["item_id"]: dict(r) for r in rows}
