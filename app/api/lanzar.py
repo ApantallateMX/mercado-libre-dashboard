@@ -2221,8 +2221,8 @@ async def generate_video_commercial_endpoint(request: Request):
     # ── Ken Burns slideshow desde imágenes AI (SIEMPRE funciona, 30s) ────────
     if len(ai_image_urls) >= 3:
         logger.info(f"=== SLIDESHOW desde {len(ai_image_urls)} imágenes AI ===")
-        n_images  = min(len(ai_image_urls), 6)
-        per_img_s = 5.0  # 6 imágenes × 5s = 30s
+        n_images  = min(len(ai_image_urls), 8)
+        per_img_s = 4.0  # hasta 8 imágenes × 4s = 32s > 30s de audio
 
         # TTS en paralelo mientras preparamos imágenes
         tts_task = asyncio.ensure_future(elevenlabs_client.generate_audio(script))
@@ -2255,7 +2255,7 @@ async def generate_video_commercial_endpoint(request: Request):
                         "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
                     ),
                     "-t", str(per_img_s),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
                     "-pix_fmt", "yuv420p",
                     seg_path,
                 ]
@@ -2267,7 +2267,8 @@ async def generate_video_commercial_endpoint(request: Request):
                     logger.error(f"Segmento {idx} falló (rc={sr.returncode}): {sr.stderr.decode(errors='replace')[:200]}")
 
             if not seg_paths:
-                logger.error("Slideshow: ningún segmento generado, cayendo a minimax")
+                logger.error("Slideshow: ningún segmento generado (URLs expiradas o error de descarga)")
+                return JSONResponse({"error": "No se pudieron descargar las imágenes AI. Regenera las imágenes y vuelve a intentar."}, status_code=500)
             else:
                 concat_path = _os.path.join(tmpdir, "concat.txt")
                 raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
