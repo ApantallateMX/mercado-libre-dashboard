@@ -438,6 +438,42 @@ Atributos obligatorios para MLM1002 (Televisores):
 - `GTIN` — código de barras del producto
 - Package dims: `SELLER_PACKAGE_HEIGHT/WIDTH/LENGTH` en `cm`, `SELLER_PACKAGE_WEIGHT` en `g` (solo enteros)
 
+### ML Clips (Video comercial en listings) — API documentada
+
+**Endpoint para subir un clip a un item:**
+```
+POST https://api.mercadolibre.com/marketplace/items/{item_id}/clips/upload
+Authorization: Bearer $ACCESS_TOKEN
+Content-Type: multipart/form-data
+```
+Body (multipart):
+- `file`: el archivo de video (MP4 recomendado)
+- `sites` (opcional): `[{"site_id":"MLM","logistic_type":"remote"}]` — si se omite sube a todos los sites del item
+
+Respuesta exitosa:
+```json
+{"status": "accepted", "clip_uuid": "550e8400-..."}
+```
+
+**Otros endpoints:**
+- `GET /marketplace/items/{item_id}/clips` — lista clips del item
+- `DELETE /marketplace/items/{item_id}/clips/{clip_uuid}` — elimina clip
+
+**Requisitos del video:**
+- Duración: **10 a 60 segundos**
+- Formatos: MP4, MOV, MPEG, AVI
+- Tamaño máximo: 280 MB
+- Resolución mínima: 360×640 px
+- Orientación: **vertical (9:16)** — ML Clips es formato Stories/Reels
+- Sin marcas de agua externas, sin precios, sin datos de contacto
+- Moderación: 24-48h → estados: `UNDER_REVIEW` → `PUBLISHED` / `REJECTED`
+
+**En la app Apantallate:**
+`POST /api/lanzar/upload-clip/{item_id}` — sube el video en cache al clip de ML
+Body: `{"video_id": "uuid-del-video-generado"}`
+
+**Nota importante:** El video se genera en 16:9 (horizontal). Para ML Clips que exige 9:16 (vertical), hay que reorientar el video o generarlo en vertical desde el principio. Si se sube en 16:9, ML puede rechazarlo.
+
 ### seller_custom_field / SELLER_SKU — solo visible con token del dueño
 
 **Descubierto:** 2026-03-24

@@ -2232,10 +2232,9 @@ async def generate_video_commercial_endpoint(request: Request):
     # ── Ken Burns slideshow desde imágenes AI (SIEMPRE funciona, 30s) ────────
     if len(ai_image_urls) >= 3:
         logger.info(f"=== SLIDESHOW desde {len(ai_image_urls)} imágenes AI ===")
-        n_images  = min(len(ai_image_urls), 8)
-        per_img_s = 4.0  # hasta 8 imágenes × 4s = 32s > 30s de audio
+        n_images = min(len(ai_image_urls), 8)
 
-        # TTS en paralelo mientras preparamos imágenes
+        # TTS en paralelo mientras descargamos imágenes
         tts_task = asyncio.ensure_future(elevenlabs_client.generate_audio(script))
 
         async def _dl_img(url: str):
@@ -2247,6 +2246,18 @@ async def generate_video_commercial_endpoint(request: Request):
             *[_dl_img(u) for u in ai_image_urls[:n_images]], return_exceptions=True
         )
         audio_result = await tts_task
+
+        # ── Calcular per_img_s dinámicamente para que video >= audio ─────────
+        # Estimamos duración del audio por tamaño (128 kbps MP3 ≈ 16 KB/s)
+        # Garantizamos que incluso con solo 3 imágenes el video cubre el audio.
+        n_valid = sum(1 for d in img_results if isinstance(d, bytes) and d)
+        if isinstance(audio_result, bytes) and audio_result:
+            audio_dur_s = len(audio_result) / 16000  # estimado
+            # +4s buffer para que el video no se corte antes del último word
+            per_img_s = max(5.0, (audio_dur_s + 4) / max(1, n_valid))
+        else:
+            per_img_s = 6.0  # sin audio: 6s por imagen es suficiente
+        logger.info(f"per_img_s={per_img_s:.1f}s (n_valid={n_valid}, audio_est={audio_result and len(audio_result) or 0}B)")
 
         with _tf.TemporaryDirectory() as tmpdir:
             seg_paths = []
@@ -2933,6 +2944,47 @@ async def upload_picture_endpoint(request: Request):
         return {"picture_id": pic_id, "secure_url": result.get("secure_url") or result.get("url", "")}
     except Exception as e:
         logger.error(f"upload-picture error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.post("/upload-clip/{item_id}")
+async def upload_clip_endpoint(item_id: str, request: Request):
+    """Sube un video comercial como Clip de ML al item indicado.
+    Body: {"video_id": "uuid-from-video-cache"}  ← usa el video_url generado
+    Endpoint ML: POST /marketplace/items/{item_id}/clips/upload (multipart)
+    Requisitos: 10-60s, formato MP4/MOV, máx 280MB, orientación vertical.
+    """
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body = await request.json()
+    video_id = body.get("video_id", "").strip()
+    if not video_id:
+        return JSONResponse({"error": "video_id requerido"}, status_code=400)
+
+    video_bytes = _video_cache.get(video_id)
+    if not video_bytes:
+        return JSONResponse({"error": "video_id no encontrado en cache — regenera el video"}, status_code=404)
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+
+    try:
+        result = await client.post(
+            f"/marketplace/items/{item_id}/clips/upload",
+            files={"file": ("commercial.mp4", video_bytes, "video/mp4")},
+        )
+        clip_uuid = result.get("clip_uuid") or result.get("id") or result.get("uuid")
+        status    = result.get("status", "")
+        logger.info(f"Clip upload {item_id}: clip_uuid={clip_uuid} status={status}")
+        return {"ok": True, "clip_uuid": clip_uuid, "status": status, "raw": result}
+    except Exception as e:
+        logger.error(f"upload-clip error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()
