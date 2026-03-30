@@ -393,7 +393,75 @@ Acción: revisar notificación en Seller Central, corregir el issue específico,
 apelar si la pausa fue incorrecta (tiene > 90% de éxito con evidencia)
 ```
 
-## 11. FRAMEWORK DE DECISIÓN
+## 11. GOTCHAS CRITICOS DE LA API MELI
+
+### User Products API (nuevo sistema 2024-2026) — family_name como campo raíz
+
+**Activo en las cuentas de Apantallate desde 2025.**
+
+ML migró a "User Products" (UP) como sistema principal de publicación. En este sistema:
+
+- `family_name` es un campo **raíz** del payload de `POST /items`, NO un atributo dentro de `attributes[]`
+- `family_name` agrupa variantes del mismo producto (como nombre de familia). Lo elige el vendedor — suele ser `"Marca Modelo"` (ej: `"Samsung QN43Q7FAAFXZA"`)
+- Para categorías con catálogo (Televisores MLM1002, Celulares, etc.), ML EXIGE `family_name` en el payload raíz
+- Si la cuenta NO es User Products, ML ignora `family_name` en el raíz (no da error)
+- En UP mode, el `title` puede ser **rechazado** para productos en catálogo (ML lo autogenera desde los atributos). Si ML responde "The fields [title] are invalid", reintentar sin `title`
+
+Payload mínimo para publicar en ML1002 (Televisores) con User Products:
+```json
+{
+  "category_id": "MLM1002",
+  "family_name": "Samsung QN43Q7FAAFXZA",
+  "price": 7517,
+  "currency_id": "MXN",
+  "available_quantity": 3,
+  "listing_type_id": "gold_special",
+  "condition": "new",
+  "buying_mode": "buy_it_now",
+  "pictures": [{"id": "ML_PICTURE_ID"}],
+  "attributes": [
+    {"id": "BRAND", "value_name": "Samsung"},
+    {"id": "MODEL", "value_name": "QN43Q7FAAFXZA"},
+    {"id": "DISPLAY_SIZE", "value_name": "43 \""},
+    {"id": "GTIN", "value_name": "887276559049"},
+    {"id": "SELLER_PACKAGE_HEIGHT", "value_name": "60 cm"},
+    {"id": "SELLER_PACKAGE_WIDTH", "value_name": "100 cm"},
+    {"id": "SELLER_PACKAGE_LENGTH", "value_name": "15 cm"},
+    {"id": "SELLER_PACKAGE_WEIGHT", "value_name": "14000 g"}
+  ]
+}
+```
+
+Atributos obligatorios para MLM1002 (Televisores):
+- `BRAND`, `MODEL` — siempre
+- `DISPLAY_SIZE` con unidad: `"43 \""` o `"43 pulgadas"` — NO solo `"43"`
+- `GTIN` — código de barras del producto
+- Package dims: `SELLER_PACKAGE_HEIGHT/WIDTH/LENGTH` en `cm`, `SELLER_PACKAGE_WEIGHT` en `g` (solo enteros)
+
+### seller_custom_field / SELLER_SKU — solo visible con token del dueño
+
+**Descubierto:** 2026-03-24
+
+El campo `seller_custom_field` en `GET /items?ids=...` y el atributo `SELLER_SKU` en el array de atributos del item **SOLO se devuelven cuando el request usa el token OAuth de la cuenta que creó esa publicación.**
+
+Usar el token de una cuenta diferente devuelve `null` en ambos campos, sin error ni advertencia — el bug es silencioso.
+
+```
+Cuentas del sistema:
+  APANTALLATEMX     → UserID 523916436
+  AUTOBOT MEXICO    → UserID 292395685
+  BLOWTECHNOLOGIES  → UserID 391393176
+  LUTEMAMEXICO      → UserID 515061615
+
+Regla: agrupar item IDs por seller_id → fetch de cada grupo con el token correcto.
+Nunca usar token de cuenta A para leer campos privados de publicaciones de cuenta B.
+```
+
+Impacto operativo: si el SKU no se lee correctamente, el item queda sin mapeo en BinManager → stock y costos no se sincronizan → margen calculado incorrecto.
+
+---
+
+## 12. FRAMEWORK DE DECISIÓN
 
 Antes de cualquier recomendación:
 1. **Rentabilidad**: ¿genera dinero después de TODOS los costos?
