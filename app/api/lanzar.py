@@ -2974,6 +2974,43 @@ async def get_category_attributes(category_id: str):
         await client.close()
 
 
+@router.get("/catalog-product/{product_id}")
+async def catalog_product_endpoint(product_id: str):
+    """Obtiene detalles de un producto del catálogo ML — incluye FAMILY_NAME allowed_values."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+    try:
+        raw = await client.get(f"/products/{product_id}")
+        if not isinstance(raw, dict):
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        # Extract FAMILY_NAME allowed values if present
+        fn_values = []
+        for attr in (raw.get("attributes") or []):
+            if isinstance(attr, dict) and attr.get("id") == "FAMILY_NAME":
+                fn_values = [
+                    {"id": v.get("id"), "name": v.get("name")}
+                    for v in (attr.get("allowed_values") or [])
+                    if isinstance(v, dict) and v.get("id")
+                ]
+                break
+        return {
+            "id":         raw.get("id"),
+            "name":       raw.get("name"),
+            "status":     raw.get("status"),
+            "attributes": {
+                a["id"]: a.get("value_name") or (a.get("values") or [{}])[0].get("name", "")
+                for a in (raw.get("attributes") or [])
+                if isinstance(a, dict) and a.get("id")
+            },
+            "family_name_values": fn_values,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @router.get("/catalog-search")
 async def catalog_search_endpoint(q: str = "", category: str = ""):
     """Busca productos en el catálogo de ML — retorna catalog_product_id."""
