@@ -483,9 +483,34 @@
         </div>`;
     }
 
+    else if (tab === 'atributos') {
+      c.innerHTML = `
+        <div class="p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Atributos del producto</p>
+            <div class="flex gap-2">
+              <button onclick="panelAiAttrs('${item.item_id}')"
+                class="px-2 py-1 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1">
+                ✦ Rellenar con IA
+              </button>
+              <button onclick="panelSaveAttrs('${item.item_id}')"
+                class="px-3 py-1 bg-yellow-400 text-gray-800 text-xs font-semibold rounded hover:bg-yellow-500 transition">
+                Guardar
+              </button>
+            </div>
+          </div>
+          <p id="attrs-msg" class="text-xs hidden"></p>
+          <div id="attrs-loading" class="text-xs text-gray-400 text-center py-4">Cargando atributos de categoría...</div>
+          <div id="attrs-list" class="space-y-2 hidden"></div>
+        </div>`;
+      // Load category attributes
+      panelLoadAttrs(item);
+    }
+
     else if (tab === 'video') {
       const hasVideo  = item.has_clip_video;
       const clipReady = item.video_id;
+      const titleEsc  = escHtml(item.title || '');
       c.innerHTML = `
         <div class="p-4 space-y-4">
           ${hasVideo ? `
@@ -504,24 +529,46 @@
             </button>
           </div>` : ''}
 
-          <div>
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Generar nuevo video</p>
+          <!-- Guion con IA -->
+          <div class="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-purple-700 uppercase tracking-wide">1. Guion con IA</p>
+              <button id="btn-gen-script" onclick="panelGenScript('${item.item_id}', '${titleEsc}')"
+                class="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
+                ✦ Generar Guion
+              </button>
+            </div>
+            <p class="text-xs text-gray-500">La IA genera un guion de 30-45 segundos para tu clip de ML.</p>
+            <textarea id="video-script" rows="8" placeholder="El guion aparecerá aquí... puedes editarlo antes de grabar."
+              class="w-full border border-purple-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-purple-400 bg-white resize-none">${item._video_script || ''}</textarea>
+            <p id="script-status" class="text-xs text-purple-600 hidden"></p>
+          </div>
+
+          <!-- Subir clip -->
+          <div class="space-y-2">
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">2. Subir Clip a ML</p>
+            <p class="text-xs text-gray-400">Una vez grabado el video, sube el UUID aquí o usa Lanzar para generarlo con IA.</p>
+            <div class="flex gap-2">
+              <input id="clip-uuid-input" type="text" placeholder="UUID del video generado"
+                class="flex-1 border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-purple-300">
+              <button onclick="uploadClipFromInput('${item.item_id}', '${escHtml(item.sku)}')"
+                class="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition whitespace-nowrap">
+                📤 Subir
+              </button>
+            </div>
             <button onclick="openCreateModal('${escHtml(item.sku || '')}', 0)"
-              class="block w-full text-center bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm py-2.5 rounded-xl transition">
-              🚀 Abrir Lanzar → generar video
+              class="w-full border border-yellow-400 bg-yellow-50 hover:bg-yellow-100 text-yellow-800 text-xs font-medium py-2 rounded-lg transition">
+              🚀 Abrir Lanzar para generar video con IA completo
             </button>
-            <p class="text-xs text-gray-400 mt-2 text-center">Genera el video en el wizard y luego regresa aquí para subirlo.</p>
+            <p id="clip-upload-msg" class="text-xs hidden"></p>
           </div>
 
           <div class="bg-gray-50 rounded-xl p-3 text-xs text-gray-500 space-y-1">
             <p class="font-semibold text-gray-600">Requisitos ML Clips</p>
             <p>• Formato: 9:16 vertical (720×1280)</p>
             <p>• Duración: 10 – 60 segundos</p>
-            <p>• Máximo: 280 MB</p>
-            <p>• Moderación: 24–48 horas</p>
+            <p>• Máximo: 280 MB  •  Moderación: 24–48 h</p>
           </div>
-
-          <div id="clip-upload-result" class="hidden"></div>
         </div>`;
     }
 
@@ -660,6 +707,210 @@
         result.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-600">⚠ Error: ${e.message}</div>`;
       }
       btn.disabled = false; btn.textContent = '📤 Subir Clip a ML';
+    }
+  };
+
+  // ── Upload clip from input field ───────────────────────────────────────────
+  window.uploadClipFromInput = async function (itemId, sku) {
+    const input = document.getElementById('clip-uuid-input');
+    const msgEl = document.getElementById('clip-upload-msg');
+    const videoId = input?.value.trim();
+    if (!videoId) { if (msgEl) { msgEl.textContent = 'Ingresa el UUID del video'; msgEl.className = 'text-xs text-red-500'; msgEl.classList.remove('hidden'); } return; }
+    if (msgEl) { msgEl.textContent = 'Subiendo clip...'; msgEl.className = 'text-xs text-gray-500'; msgEl.classList.remove('hidden'); }
+    try {
+      const res = await apiFetch(`/api/productos/${itemId}/clip`, { method: 'POST', body: { video_id: videoId, sku: sku } });
+      if (res.ok) {
+        toast('Clip subido ✓', 'green');
+        if (msgEl) { msgEl.textContent = `✓ Clip subido. Estado: ${res.status}`; msgEl.className = 'text-xs text-green-600'; }
+        const detail = await apiFetch(`/api/productos/${itemId}`);
+        state.panelItem = detail;
+        renderPanelTab('video');
+        loadItems();
+      } else {
+        throw new Error(res.error || 'Error');
+      }
+    } catch (e) {
+      if (msgEl) { msgEl.textContent = '⚠ Error: ' + e.message; msgEl.className = 'text-xs text-red-500'; }
+    }
+  };
+
+  // ── Video script generation ─────────────────────────────────────────────────
+  window.panelGenScript = async function (itemId, title) {
+    const btn = document.getElementById('btn-gen-script');
+    const scriptEl = document.getElementById('video-script');
+    const statusEl = document.getElementById('script-status');
+    if (!btn || !scriptEl) return;
+
+    const item = state.panelItem;
+    const brand = (item?.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
+    const model = (item?.attributes || []).find(a => a.id === 'MODEL')?.value_name || '';
+
+    btn.disabled = true; btn.textContent = 'Generando...';
+    if (statusEl) { statusEl.textContent = 'La IA está escribiendo el guion...'; statusEl.classList.remove('hidden'); }
+    scriptEl.value = '';
+
+    try {
+      const resp = await fetch('/api/sku-inventory/ai-improve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ field: 'video_script', current_value: title, context: { brand, model, title } })
+      });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '', result = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n'); buffer = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') break;
+            if (!data.startsWith('[ERROR]')) { result += data; scriptEl.value = result; }
+          }
+        }
+      }
+      if (statusEl) { statusEl.textContent = '✓ Guion generado — puedes editarlo antes de grabar'; statusEl.className = 'text-xs text-green-600'; }
+    } catch (e) {
+      if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.className = 'text-xs text-red-500'; }
+    }
+    btn.disabled = false; btn.textContent = '✦ Generar Guion';
+  };
+
+  // ── Atributos: load all category attrs ─────────────────────────────────────
+  async function panelLoadAttrs(item) {
+    const listEl = document.getElementById('attrs-list');
+    const loadEl = document.getElementById('attrs-loading');
+    const catId  = item.category_id;
+    if (!catId) {
+      if (loadEl) loadEl.textContent = 'No se encontró categoria del producto.';
+      return;
+    }
+    // Build a map of existing attr values
+    const existingMap = {};
+    (item.attributes || []).forEach(a => { if (a.id) existingMap[a.id] = a; });
+
+    try {
+      const data = await apiFetch(`/api/sku-inventory/category-attributes/${catId}`);
+      const all = [...(data.required || []), ...(data.recommended || []), ...(data.optional || [])];
+      if (!all.length) { if (loadEl) loadEl.textContent = 'Sin atributos de categoría.'; return; }
+
+      let html = '';
+      let missingCount = 0;
+
+      all.forEach(attr => {
+        const existing = existingMap[attr.id];
+        const val = existing?.value_name || '';
+        const isMissing = !val;
+        if (isMissing) missingCount++;
+        const labelClass = isMissing ? 'text-red-500 font-medium' : 'text-gray-500';
+        const inputClass = isMissing ? 'border-red-200 bg-red-50' : 'border-gray-200';
+        const badge = isMissing
+          ? (attr.required ? '<span class="text-[9px] bg-red-100 text-red-600 rounded px-1 py-0.5 ml-1">req</span>' : '')
+          : '';
+
+        html += `<div class="flex items-center gap-2">
+          <label class="text-xs ${labelClass} w-32 shrink-0 truncate" title="${escHtml(attr.name || attr.id)}">${escHtml(attr.name || attr.id)}${badge}</label>`;
+
+        if (attr.values && attr.values.length > 0) {
+          html += `<select data-panel-attr-id="${escHtml(attr.id)}" class="panel-attr-input flex-1 border ${inputClass} rounded px-2 py-1.5 text-xs">
+            <option value="">Seleccionar...</option>`;
+          attr.values.forEach(v => {
+            const sel = (existing?.value_id === v.id || val === v.name) ? 'selected' : '';
+            html += `<option value="${escHtml(v.id)}" data-name="${escHtml(v.name)}" ${sel}>${escHtml(v.name)}</option>`;
+          });
+          html += `</select>`;
+        } else {
+          html += `<input type="text" data-panel-attr-id="${escHtml(attr.id)}" value="${escHtml(val)}"
+            placeholder="${isMissing ? 'Vacío' : ''}"
+            class="panel-attr-input flex-1 border ${inputClass} rounded px-2 py-1.5 text-xs">`;
+        }
+        html += `</div>`;
+      });
+
+      if (loadEl) loadEl.classList.add('hidden');
+      if (listEl) {
+        listEl.innerHTML = `<p class="text-xs text-gray-400 mb-2">${all.length} atributos — <span class="text-red-500 font-medium">${missingCount} vacíos</span></p>` + html;
+        listEl.classList.remove('hidden');
+      }
+    } catch (e) {
+      if (loadEl) loadEl.textContent = 'Error cargando atributos: ' + e.message;
+    }
+  }
+
+  // ── Atributos: AI fill ──────────────────────────────────────────────────────
+  window.panelAiAttrs = async function (itemId) {
+    const item = state.panelItem;
+    const msgEl = document.getElementById('attrs-msg');
+    const emptyInputs = Array.from(document.querySelectorAll('.panel-attr-input')).filter(el => !el.value.trim());
+    const emptyIds = emptyInputs.map(el => el.getAttribute('data-panel-attr-id')).filter(Boolean);
+    if (!emptyIds.length) { if (msgEl) { msgEl.textContent = 'Todos los atributos tienen valor'; msgEl.className = 'text-xs text-gray-500'; msgEl.classList.remove('hidden'); } return; }
+
+    const brand = (item?.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
+    const model = (item?.attributes || []).find(a => a.id === 'MODEL')?.value_name || '';
+    const title = item?.title || '';
+
+    if (msgEl) { msgEl.textContent = `Consultando IA para ${emptyIds.length} atributos vacíos...`; msgEl.className = 'text-xs text-purple-600'; msgEl.classList.remove('hidden'); }
+
+    try {
+      const resp = await apiFetch('/api/sku-inventory/ai-improve', {
+        method: 'POST',
+        body: { field: 'attributes', current_value: emptyIds.join(', '), context: { brand, model, title } }
+      });
+      if (resp.result) {
+        const match = resp.result.trim().match(/\[[\s\S]*\]/);
+        if (match) {
+          const suggestions = JSON.parse(match[0]);
+          let filled = 0;
+          suggestions.forEach(s => {
+            const inp = document.querySelector(`.panel-attr-input[data-panel-attr-id="${s.id}"]`);
+            if (inp && !inp.value.trim() && s.value_name) {
+              inp.value = s.value_name;
+              inp.classList.add('border-purple-300', 'bg-purple-50');
+              filled++;
+            }
+          });
+          if (msgEl) { msgEl.textContent = `✓ ${filled} atributos rellenados con IA — revisa y guarda`; msgEl.className = 'text-xs text-purple-600'; }
+        } else {
+          if (msgEl) { msgEl.textContent = 'No se pudieron parsear sugerencias'; msgEl.className = 'text-xs text-red-500'; }
+        }
+      } else {
+        if (msgEl) { msgEl.textContent = resp.error || 'Error'; msgEl.className = 'text-xs text-red-500'; }
+      }
+    } catch (e) {
+      if (msgEl) { msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-500'; }
+    }
+  };
+
+  // ── Atributos: save ─────────────────────────────────────────────────────────
+  window.panelSaveAttrs = async function (itemId) {
+    const msgEl = document.getElementById('attrs-msg');
+    const inputs = document.querySelectorAll('.panel-attr-input');
+    const attrs = [];
+    inputs.forEach(el => {
+      const id = el.getAttribute('data-panel-attr-id');
+      const val = el.value.trim();
+      if (id && val) {
+        if (el.tagName === 'SELECT') {
+          const opt = el.options[el.selectedIndex];
+          attrs.push({ id, value_id: val, value_name: opt?.getAttribute('data-name') || opt?.textContent?.trim() || val });
+        } else {
+          attrs.push({ id, value_name: val });
+        }
+      }
+    });
+    if (!attrs.length) { if (msgEl) { msgEl.textContent = 'Sin atributos para guardar'; msgEl.className = 'text-xs text-gray-500'; msgEl.classList.remove('hidden'); } return; }
+    if (msgEl) { msgEl.textContent = 'Guardando...'; msgEl.className = 'text-xs text-gray-500'; msgEl.classList.remove('hidden'); }
+    try {
+      await apiFetch(`/api/items/${itemId}/attributes`, { method: 'PUT', body: { attributes: attrs } });
+      toast(`${attrs.length} atributos guardados ✓`, 'green');
+      if (msgEl) { msgEl.textContent = `✓ ${attrs.length} atributos guardados`; msgEl.className = 'text-xs text-green-600'; }
+      const detail = await apiFetch(`/api/productos/${itemId}`);
+      state.panelItem = detail;
+      loadItems();
+    } catch (e) {
+      if (msgEl) { msgEl.textContent = '⚠ Error: ' + e.message; msgEl.className = 'text-xs text-red-500'; }
     }
   };
 

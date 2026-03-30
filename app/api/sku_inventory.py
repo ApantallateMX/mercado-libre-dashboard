@@ -1062,5 +1062,36 @@ async def ai_improve(body: dict):
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    elif field == "video_script":
+        title = context.get("title", current_value)
+        prompt = (
+            f"Eres un experto en marketing digital para Mercado Libre Mexico. "
+            f"Crea un guion profesional para un video clip comercial de 30-45 segundos.\n\n"
+            f"Producto: {title}\n"
+            f"Marca: {brand}\nModelo: {model}\n\n"
+            f"ESTRUCTURA DEL GUION:\n"
+            f"1. HOOK (0-5s): Frase de impacto que enganche al espectador\n"
+            f"2. PROBLEMA/NECESIDAD (5-10s): El dolor que resuelve el producto\n"
+            f"3. SOLUCION (10-20s): Como el producto lo resuelve (2-3 beneficios clave)\n"
+            f"4. CARACTERISTICAS (20-30s): Specs o detalles diferenciadores\n"
+            f"5. CTA (30-45s): Llamada a la accion (compra ahora, envia hoy, etc.)\n\n"
+            f"REGLAS:\n"
+            f"- Tono energico, directo, para audiencia mexicana\n"
+            f"- Maximo 120 palabras en total (video corto)\n"
+            f"- Incluye indicaciones de escena entre [corchetes]\n"
+            f"- Texto hablado en MAYUSCULAS\n"
+            f"- Formato legible con secciones claras"
+        )
+
+        async def script_stream():
+            try:
+                async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=600):
+                    yield f"data: {chunk}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                yield f"data: [ERROR] {str(e)}\n\n"
+
+        return StreamingResponse(script_stream(), media_type="text/event-stream")
+
     else:
         return JSONResponse({"error": f"Unknown field: {field}"}, status_code=400)
