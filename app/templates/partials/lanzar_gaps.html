@@ -535,8 +535,8 @@
             <select id="wiz-f-listing-type"
                     onchange="window._wizUpdatePriceBreakdown()"
                     class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-yellow-400">
-              <option value="gold_special">Gold Special</option>
-              <option value="gold_pro">Gold Pro (premium)</option>
+              <option value="gold_pro" selected>Premium — Máxima exposición + MSI</option>
+              <option value="gold_special">Clásica — Exposición alta</option>
               <option value="silver">Silver</option>
               <option value="free">Gratis (1 unidad)</option>
             </select>
@@ -1154,7 +1154,7 @@
     video_url: '', reference_images: [],
     sku: '', model: '', brand: '', gtin: '', family_name: '', family_name_id: '', warranty_type: 'Garantía del vendedor', warranty_time: '3 meses', ml_attributes: [],
     category_id: '', category_name: '', price: 0,
-    listing_type: 'gold_special', condition: 'new', qty: 1,
+    listing_type: 'gold_pro', condition: 'new', qty: 1,
     _lightbox_idx: -1,  // index into _wiz.ai_images for lightbox
   };
 
@@ -1197,6 +1197,9 @@
     if (hasDraft) {
       var draftBanner = document.getElementById('wiz-draft-banner');
       if (draftBanner) draftBanner.classList.remove('hidden');
+    } else {
+      // Sin borrador previo → auto-generar título/descripción con IA en background
+      setTimeout(function() { window._wizGenDraft(); }, 400);
     }
 
     _wizGoStep(1);
@@ -2393,11 +2396,14 @@
       if (_wiz.draft.bullet_points && _wiz.draft.bullet_points.length) {
         descText += (descText ? '\n\n' : '') + _wiz.draft.bullet_points.map(function(b) { return '• ' + b; }).join('\n');
       }
-      // Build ML attributes: BRAND, MODEL, GTIN, FAMILY_NAME + any dynamic ones
+      // Build ML attributes: BRAND, MODEL, GTIN, FAMILY_NAME, SELLER_SKU + any dynamic ones
       var attrs = [].concat(_wiz.ml_attributes || []);
       if (_wiz.brand) attrs.push({id: 'BRAND', value_name: _wiz.brand});
       if (_wiz.model) attrs.push({id: 'MODEL', value_name: _wiz.model});
       if (_wiz.gtin)  attrs.push({id: 'GTIN',  value_name: _wiz.gtin});
+      // SELLER_SKU — código de identificación del vendedor (visible en panel de vendedor)
+      var skuVal = _wiz.sku || (gap ? gap.sku : '');
+      if (skuVal) attrs.push({id: 'SELLER_SKU', value_name: skuVal});
       // Add FAMILY_NAME only if NOT already in attrs (from ml_attributes), always with value_id
       var hasFN = attrs.some(function(a) { return a.id === 'FAMILY_NAME'; });
       if (!hasFN && _wiz.family_name) {
@@ -2444,6 +2450,32 @@
         status.innerHTML = '✅ Publicado exitosamente!' + link;
         status.className = 'text-center text-xs py-1 text-green-600';
         _wizClearDraft(_wiz.sku);   // borrar draft al publicar exitosamente
+
+        // Auto-upload clip si hay video generado
+        var newItemId = d.item_id;
+        if (newItemId && _wiz.video_url) {
+          var videoId = _wiz.video_url.split('/').pop();
+          if (videoId) {
+            status.innerHTML = '✅ Publicado! Subiendo clip...' + link;
+            fetch('/api/lanzar/upload-clip/' + newItemId, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ video_id: videoId }),
+            })
+            .then(function(cr) { return cr.json(); })
+            .then(function(cd) {
+              if (cd.ok) {
+                status.innerHTML = '✅ Publicado + Clip enviado a revisión!' + link;
+              } else {
+                status.innerHTML = '✅ Publicado (clip: ' + (cd.error || 'error') + ')' + link;
+              }
+            })
+            .catch(function() {
+              status.innerHTML = '✅ Publicado (clip: no se pudo subir)' + link;
+            });
+          }
+        }
+
         setTimeout(function() { _loadGaps(); _loadFilters(); }, 2000);
       })
       .catch(function(e) {

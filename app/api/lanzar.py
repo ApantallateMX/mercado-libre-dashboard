@@ -3207,6 +3207,11 @@ async def create_listing_endpoint(request: Request):
             ]
     # Merge attributes from body
     attrs = list(body.get("attributes") or [])
+    # Ensure SELLER_SKU is always in attributes (visible como "Código de identificación" en ML)
+    if sku and not catalog_product_id:
+        has_seller_sku = any(a.get("id") == "SELLER_SKU" for a in attrs)
+        if not has_seller_sku:
+            attrs.append({"id": "SELLER_SKU", "value_name": sku})
     if not catalog_product_id and attrs:
         item_payload["attributes"] = attrs
 
@@ -3310,17 +3315,37 @@ async def create_listing_endpoint(request: Request):
             )
             await db.commit()
 
-        # Si había un video generado, asociarlo al listing en DB
-        if video_id_to_link and video_id_to_link in _video_cache:
-            try:
-                from app.services.token_store import save_product_video
-                await save_product_video(item_id, user_id, sku, video_id_to_link)
-                logger.info(f"Video {video_id_to_link} asociado a {item_id}")
-            except Exception as ve:
-                logger.warning(f"No se pudo asociar video: {ve}")
+        clip_status = None
+        # Si había un video generado: guardar en DB + subir a ML como Clip
+        if video_id_to_link:
+            video_bytes = _load_video(video_id_to_link)
+            if video_bytes:
+                try:
+                    from app.services.token_store import save_product_video
+                    await save_product_video(item_id, user_id, sku, video_id_to_link)
+                    logger.info(f"Video {video_id_to_link} asociado a {item_id} en DB")
+                except Exception as ve:
+                    logger.warning(f"No se pudo asociar video en DB: {ve}")
+                # Subir clip a ML
+                try:
+                    clip_result = await client.post(
+                        f"/marketplace/items/{item_id}/clips/upload",
+                        files={"file": ("commercial.mp4", video_bytes, "video/mp4")},
+                    )
+                    clip_status = clip_result.get("status", "sent")
+                    logger.info(f"Clip auto-uploaded para {item_id}: {clip_status}")
+                except Exception as ce:
+                    clip_status = f"error: {ce}"
+                    logger.warning(f"Clip upload fallido para {item_id}: {ce}")
 
         logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
-        return {"ok": True, "item_id": item_id, "permalink": result.get("permalink", ""), "status": result.get("status", "")}
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "permalink": result.get("permalink", ""),
+            "status": result.get("status", ""),
+            "clip_status": clip_status,
+        }
 
     except Exception as e:
         logger.error(f"create-listing error: {e}")

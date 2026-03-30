@@ -567,17 +567,50 @@
     }
 
     function prefillFromResearch(data) {
-        // Title
+        // Title — set from BM data first, then upgrade with AI in background
         if (data.title && data.title.length > 3) {
             document.getElementById('item-title').value = data.title;
             markAutoFilled('item-title');
-            // Update counter
             var counterEl = document.getElementById('title-char-count');
             if (counterEl) {
                 var len = data.title.length;
                 counterEl.textContent = len + '/60';
                 counterEl.className = 'text-xs ml-2 ' + (len > 60 ? 'text-red-500 font-bold' : len >= 40 ? 'text-green-600' : 'text-gray-400');
             }
+        }
+        // Auto-improve title with AI (async, non-blocking)
+        if (aiAvailable) {
+            var titleCtx = {
+                current_value: data.title || selectedSku,
+                brand: data.brand || '',
+                model: data.model || '',
+                category: data.category_name || ''
+            };
+            fetch('/api/sku-inventory/ai-improve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({field: 'title', current_value: titleCtx.current_value,
+                                      context: {brand: titleCtx.brand, model: titleCtx.model, category: titleCtx.category, sku: selectedSku}})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.result) {
+                    var suggestions = d.result.trim().split('\n').filter(function(l) { return l.trim().length > 10; });
+                    if (suggestions.length > 0) {
+                        var best = suggestions[0].trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
+                        if (best.length >= 40) {
+                            document.getElementById('item-title').value = best;
+                            markAutoFilled('item-title');
+                            var ce = document.getElementById('title-char-count');
+                            if (ce) {
+                                ce.textContent = best.length + '/60';
+                                ce.className = 'text-xs ml-2 ' + (best.length >= 55 ? 'text-green-600 font-semibold' : 'text-green-600');
+                            }
+                        }
+                    }
+                }
+            })
+            .catch(function() {}); // silent fail — BM title remains
         }
 
         // Category - auto-select if found
@@ -1346,9 +1379,14 @@
                 optionalContainer.innerHTML = optHtml;
             }
 
-            // Auto-fill attributes from research
+            // Auto-fill attributes from research data
             if (researchData && researchData.attributes) {
                 prefillAttributes(researchData.attributes);
+            }
+
+            // Auto-trigger AI fill for remaining empty attributes
+            if (aiAvailable) {
+                setTimeout(function() { window.aiAutoFillAttributes(); }, 300);
             }
 
         } catch (err) {
