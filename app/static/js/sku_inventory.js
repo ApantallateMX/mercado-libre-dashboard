@@ -2280,6 +2280,8 @@
             }
         } else if (input.tagName === 'INPUT' || input.tagName === 'SELECT') {
             input.value = valueName || valueId;
+            if (valueId) input.setAttribute('data-value-id', valueId);
+            if (valueName) input.setAttribute('data-value-name', valueName);
         }
 
         input.classList.add('bg-green-50', 'border-green-300');
@@ -2295,7 +2297,8 @@
         var input = document.querySelector('.opt-attr-input[data-opt-attr-id="' + attrId + '"]');
         if (input) {
             input.value = valueId || valueName;
-            input.setAttribute('data-value-name', valueName);
+            input.setAttribute('data-value-name', valueName || '');
+            if (valueId) input.setAttribute('data-value-id', valueId);
         }
         if (btn) {
             btn.textContent = 'Aceptado';
@@ -2309,6 +2312,7 @@
 
         var payload = {};
         var item = optimizeItemData.item;
+        var resultEl = document.getElementById('opt-result');
 
         var newTitle = document.getElementById('opt-title').value.trim();
         var isCatalogItem = !!(item.family_name || item.catalog_product_id);
@@ -2336,9 +2340,17 @@
             var attrId = el.getAttribute('data-opt-attr-id');
             var value = el.value;
             if (value && value !== '') {
-                var valueName = el.getAttribute('data-value-name');
+                var valueName = el.getAttribute('data-value-name') || null;
+                var valueId = el.getAttribute('data-value-id') || null;
                 if (el.tagName === 'SELECT') {
-                    newAttrs.push({id: attrId, value_id: value});
+                    // Send value_id + value_name from selected option
+                    var selectedOpt = el.options[el.selectedIndex];
+                    var selName = selectedOpt ? selectedOpt.textContent.trim() : '';
+                    var entry = {id: attrId, value_id: value};
+                    if (selName) entry.value_name = selName;
+                    newAttrs.push(entry);
+                } else if (valueId && valueName) {
+                    newAttrs.push({id: attrId, value_id: valueId, value_name: valueName});
                 } else if (valueName) {
                     newAttrs.push({id: attrId, value_name: valueName});
                 } else {
@@ -2350,14 +2362,16 @@
             payload.attributes = newAttrs;
         }
 
+        console.log('[Opt] Payload a enviar:', JSON.stringify(payload, null, 2));
+
         if (Object.keys(payload).length === 0) {
-            alert('No hay cambios para guardar');
+            resultEl.innerHTML = '<span class="text-amber-600 font-medium">Sin cambios detectados. Modifica el título, descripción o atributos antes de guardar.</span>';
             return;
         }
 
         document.getElementById('btn-save-optimize').disabled = true;
         document.getElementById('btn-save-optimize').textContent = 'Guardando...';
-        document.getElementById('opt-result').innerHTML = '';
+        resultEl.innerHTML = '<span class="text-gray-400 text-xs">Enviando a Mercado Libre...</span>';
 
         try {
             var resp = await fetch('/api/sku-inventory/optimize/' + optimizeItemId, {
@@ -2366,15 +2380,17 @@
                 body: JSON.stringify(payload)
             });
             var data = await resp.json();
+            console.log('[Opt] Respuesta ML:', JSON.stringify(data, null, 2));
 
             if (data.error) {
-                document.getElementById('opt-result').innerHTML = '<span class="text-red-600">' + escapeHtml(data.error) + '</span>';
+                resultEl.innerHTML = '<span class="text-red-600 font-semibold">Error ML: ' + escapeHtml(data.error) + '</span>';
             } else if (data.errors && data.errors.length > 0) {
-                var errHtml = '<div class="text-yellow-700"><span class="font-semibold">Guardado parcial.</span> Errores:<ul class="list-disc pl-4 mt-1 text-xs">';
+                var errHtml = '<div class="text-red-700 bg-red-50 border border-red-200 rounded p-2 text-xs"><p class="font-semibold mb-1">Errores al guardar:</p><ul class="list-disc pl-4 space-y-0.5">';
                 data.errors.forEach(function(e) { errHtml += '<li>' + escapeHtml(e) + '</li>'; });
-                errHtml += '</ul></div>';
-                if (data.new_score) errHtml += '<span class="text-green-600 text-xs">Score: ' + data.new_score + '%</span>';
-                document.getElementById('opt-result').innerHTML = errHtml;
+                errHtml += '</ul>';
+                if (data.new_score) errHtml += '<p class="mt-1 text-green-700">Score actualizado: ' + data.new_score + '%</p>';
+                errHtml += '</div>';
+                resultEl.innerHTML = errHtml;
             } else {
                 var newScore = data.new_score || 0;
 
@@ -2400,7 +2416,8 @@
                 }, 1500);
             }
         } catch (err) {
-            document.getElementById('opt-result').innerHTML = '<span class="text-red-600">Error: ' + err.message + '</span>';
+            console.error('[Opt] Error:', err);
+            resultEl.innerHTML = '<span class="text-red-600 font-semibold">Error de red: ' + escapeHtml(err.message) + '</span>';
         }
 
         document.getElementById('btn-save-optimize').disabled = false;
