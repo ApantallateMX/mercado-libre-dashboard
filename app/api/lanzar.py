@@ -2269,12 +2269,13 @@ async def generate_video_commercial_endpoint(request: Request):
                 with open(img_path, "wb") as fh:
                     fh.write(img_data)
                 seg_path = _os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
+                # Formato vertical 9:16 (720×1280) — requerimiento ML Clips
                 seg_cmd = [
                     ffmpeg_bin, "-y",
                     "-loop", "1", "-framerate", "25", "-i", img_path,
                     "-vf", (
-                        "scale=1280:720:force_original_aspect_ratio=decrease,"
-                        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+                        "scale=720:1280:force_original_aspect_ratio=decrease,"
+                        "pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
                     ),
                     "-t", str(per_img_s),
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
@@ -2318,11 +2319,16 @@ async def generate_video_commercial_endpoint(request: Request):
                 if has_audio:
                     with open(aud_path, "wb") as fh:
                         fh.write(audio_result)
+                    # ML Clips: duración mínima 10s, máxima 60s
+                    audio_dur_est = len(audio_result) / 16000
+                    t_args = []
+                    if audio_dur_est > 58:   # cap a 58s para dejar margen
+                        t_args = ["-t", "58"]
                     mix_r = _sp.run([
                         ffmpeg_bin, "-y",
                         "-i", raw_cat, "-i", aud_path,
                         "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                        "-shortest", "-movflags", "+faststart",
+                        "-shortest", *t_args, "-movflags", "+faststart",
                         out_path,
                     ], capture_output=True, timeout=120)
                     final_path = out_path if mix_r.returncode == 0 else raw_cat
