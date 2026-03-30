@@ -2284,6 +2284,10 @@ async def generate_video_commercial_endpoint(request: Request):
                 ], capture_output=True, timeout=120)
                 if cat_r.returncode != 0:
                     logger.error(f"Concat slideshow error: {cat_r.stderr.decode(errors='replace')[:300]}")
+                    # Fallback: usar primer segmento
+                    import shutil as _shutil
+                    _shutil.copy(seg_paths[0], raw_cat)
+                    logger.warning("Concat falló, usando primer segmento como fallback")
                 else:
                     logger.info(f"Concat slideshow OK: {len(seg_paths)} segs → {_os.path.getsize(raw_cat)} bytes")
 
