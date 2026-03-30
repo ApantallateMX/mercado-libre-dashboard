@@ -2974,6 +2974,40 @@ async def get_category_attributes(category_id: str):
         await client.close()
 
 
+@router.get("/catalog-search")
+async def catalog_search_endpoint(q: str = "", category: str = ""):
+    """Busca productos en el catálogo de ML — retorna catalog_product_id."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_meli_client"}, status_code=500)
+    try:
+        params: dict = {"site_id": "MLM", "q": q, "limit": 10}
+        if category:
+            params["category"] = category
+        raw = await client.get("/products/search", params=params)
+        results = raw.get("results") or [] if isinstance(raw, dict) else []
+        simplified = [
+            {
+                "id":         r.get("id"),
+                "name":       r.get("name"),
+                "status":     r.get("status"),
+                "attributes": {
+                    a["id"]: a.get("value_name") or a.get("values", [{}])[0].get("name", "")
+                    for a in (r.get("attributes") or [])
+                    if isinstance(a, dict) and a.get("id")
+                } if r.get("attributes") else {},
+            }
+            for r in results
+            if isinstance(r, dict)
+        ]
+        return {"results": simplified, "total": len(simplified)}
+    except Exception as e:
+        logger.warning(f"catalog-search error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
 @router.post("/create-listing")
 async def create_listing_endpoint(request: Request):
     """Crea el listing en Mercado Libre y marca el gap como lanzado."""
@@ -2983,9 +3017,10 @@ async def create_listing_endpoint(request: Request):
         return JSONResponse({"error": "no_account"}, status_code=401)
 
     body = await request.json()
-    category_id = body.get("category_id", "").strip()
-    title       = body.get("title", "").strip()
-    price       = body.get("price", 0)
+    category_id        = body.get("category_id", "").strip()
+    title              = body.get("title", "").strip()
+    price              = body.get("price", 0)
+    catalog_product_id = body.get("catalog_product_id", "").strip()
     if not category_id or not title or not price:
         return JSONResponse({"error": "category_id, title y price son requeridos"}, status_code=400)
 
@@ -3006,6 +3041,9 @@ async def create_listing_endpoint(request: Request):
         "condition":          body.get("condition", "new"),
         "buying_mode":        "buy_it_now",
     }
+    if catalog_product_id:
+        item_payload["catalog_product_id"] = catalog_product_id
+        logger.info(f"Using catalog_product_id: {catalog_product_id}")
     if pictures:
         item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
     if sku:
