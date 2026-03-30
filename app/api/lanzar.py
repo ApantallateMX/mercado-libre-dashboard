@@ -2111,11 +2111,12 @@ async def _create_slideshow_from_images(
     proc = _sp2.run(
         [
             ffmpeg_bin, "-y",
+            "-stream_loop", "-1",  # loop slideshow hasta que termine el audio
             "-i", slideshow_raw,
             "-i", aud_path,
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
-            "-shortest",
+            "-shortest",            # corta cuando termina el audio
             "-movflags", "+faststart",
             out_path,
         ],
@@ -2349,8 +2350,10 @@ async def generate_video_commercial_endpoint(request: Request):
                         t_args = ["-t", "58"]
                     mix_r = _sp.run([
                         ffmpeg_bin, "-y",
+                        "-stream_loop", "-1",  # loop video si el audio es más largo
                         "-i", raw_cat, "-i", aud_path,
-                        "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                        "-c:a", "aac", "-b:a", "128k",
                         "-shortest", *t_args, "-movflags", "+faststart",
                         out_path,
                     ], capture_output=True, timeout=120)
@@ -2481,11 +2484,12 @@ async def generate_video_commercial_endpoint(request: Request):
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
+                        "-stream_loop", "-1",  # loop video hasta que termine el audio
                         "-i", raw_cat,
                         "-i", aud_path,
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",
+                        "-shortest",            # corta cuando termina el audio
                         "-movflags", "+faststart",
                         out_path,
                     ],
@@ -3233,12 +3237,15 @@ async def create_listing_endpoint(request: Request):
             (a.get("value_name", "") for a in attrs if isinstance(a, dict) and a.get("id") == "MODEL"),
             body.get("model", ""),
         )
-        # Usar brand + model, truncado a 60 chars
         family_name = f"{brand_val} {model_val}".strip()[:60]
 
-    if family_name:
-        item_payload["family_name"] = family_name
-        logger.info(f"family_name: {family_name!r}")
+    # Fallback final: usar título para no enviar family_name vacío
+    # (ML rechaza con validation_error si la categoría lo requiere y está ausente)
+    if not family_name:
+        family_name = title[:60]
+
+    item_payload["family_name"] = family_name  # siempre incluir
+    logger.info(f"family_name: {family_name!r}")
 
     logger.info(f"ML payload keys: {list(item_payload.keys())}")
     logger.info(f"ML attrs: {[a.get('id') for a in attrs]}")
@@ -3258,12 +3265,23 @@ async def create_listing_endpoint(request: Request):
             result = await _post_item(payload_no_title)
             logger.info(f"ML intento 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # Intento 3: sin family_name (por si la cuenta no está en User Products)
+        # Intento 3: error de family_name — dos casos distintos:
+        # a) "not contain" / "required" → ML lo requiere pero algo falló → reintentar sin él
+        # b) "invalid" / "not_allowed" → ML rechaza el campo → quitar family_name
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            payload_no_fn = _copy.deepcopy(item_payload)
-            payload_no_fn.pop("family_name", None)
-            logger.warning("ML intento 3: sin family_name")
-            result = await _post_item(payload_no_fn)
+            err_lower = result["_meli_error"].lower()
+            if any(w in err_lower for w in ("not_allowed", "invalid", "not allowed", "unexpected")):
+                # family_name no es aceptado en esta categoría → quitarlo
+                payload_no_fn = _copy.deepcopy(item_payload)
+                payload_no_fn.pop("family_name", None)
+                logger.warning("ML intento 3a: family_name no permitido, quitando")
+                result = await _post_item(payload_no_fn)
+            else:
+                # family_name requerido pero el valor que pusimos falló → probar solo con título
+                payload_fn_title = _copy.deepcopy(item_payload)
+                payload_fn_title["family_name"] = title[:60]
+                logger.warning(f"ML intento 3b: family_name con título: {title[:60]!r}")
+                result = await _post_item(payload_fn_title)
             logger.info(f"ML intento 3: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
         if result.get("_meli_error"):
