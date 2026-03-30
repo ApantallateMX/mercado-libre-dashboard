@@ -300,31 +300,22 @@ async def list_productos(
         grand_total = len(all_ids)
 
         # 2. Determinar qué IDs fetchear
-        if q:
-            # Con búsqueda: usar ML Search API (seller_sku + q params) para encontrar ítems
-            # por SKU/título sin importar la paginación ni el límite de 500.
-            # El endpoint /users/{id}/items/search es indexado por ML y devuelve seller_custom_field
-            # correctamente vía búsqueda, evitando el bug del bulk endpoint.
-            direct_ids: list[str] = []
-            seen: set[str] = set()
+        #    ml_search_ids  = IDs encontrados por ML Search API (pasan filtro automáticamente)
+        #    pool_ids       = IDs del pool paginado (solo pasan si coinciden texto)
+        ml_search_ids: set[str] = set()
 
-            async def _ml_search(params: dict) -> None:
+        if q:
+            # ML Search API: seller_sku (exacto por SKU) + q (por título/keyword)
+            for params in [{"seller_sku": q, "limit": 50}, {"q": q, "limit": 50}]:
                 try:
                     r = await client.get(
                         f"/users/{client.user_id}/items/search", params=params
                     )
-                    for iid in r.get("results", []):
-                        if iid not in seen:
-                            seen.add(iid); direct_ids.append(iid)
+                    ml_search_ids.update(r.get("results", []))
                 except Exception:
                     pass
 
-            # seller_sku: busca exactamente por el SKU registrado en ML (más confiable)
-            await _ml_search({"seller_sku": q, "limit": 50})
-            # keyword q: busca en título (útil para búsquedas parciales de nombre)
-            await _ml_search({"q": q, "limit": 50})
-
-            # Fallback: item_sku_cache en DB (ítems sincronizados localmente)
+            # item_sku_cache local (fallback para SKUs sincronizados)
             try:
                 async with aiosqlite.connect(DATABASE_PATH) as db:
                     cur = await db.execute(
@@ -333,18 +324,15 @@ async def list_productos(
                         (user_id, f"%{q.upper()}%")
                     )
                     for row in await cur.fetchall():
-                        if row[0] not in seen:
-                            seen.add(row[0]); direct_ids.append(row[0])
+                        ml_search_ids.add(row[0])
             except Exception:
                 pass
 
-            # Completar con los primeros 200 IDs del pool paginado para cubrir
-            # búsquedas de item_id o títulos que ML search no devuelva
-            for iid in all_ids[:200]:
-                if iid not in seen:
-                    seen.add(iid); direct_ids.append(iid)
-
-            fetch_ids = direct_ids
+            # fetch_ids = ML search results + primeros 200 del pool (para text match en título/id)
+            # IMPORTANTE: los 200 del pool NO son "trusted" — pasan solo si coinciden texto
+            fetch_ids = list(ml_search_ids) + [
+                iid for iid in all_ids[:200] if iid not in ml_search_ids
+            ]
         else:
             fetch_ids = all_ids[offset: offset + limit]
 
@@ -352,37 +340,32 @@ async def list_productos(
             return {"items": [], "total": grand_total, "offset": offset, "limit": limit, "totals": totals}
 
         # 3. Fetch detalles en batches de 20
-        # Para ítems encontrados vía ML Search API, usar GET /items/{id} individual
-        # (más confiable que el bulk para seller_custom_field)
         all_items_raw: list = []
-        ml_search_set = set(direct_ids[:len(direct_ids)]) if q else set()
-
         for i in range(0, len(fetch_ids), 20):
-            batch = fetch_ids[i:i+20]
             try:
-                details = await client.get_items_details(batch)
+                details = await client.get_items_details(fetch_ids[i:i+20])
                 all_items_raw.extend(details)
             except Exception:
                 pass
 
-        # Para ítems donde el bulk no devolvió seller_custom_field, intentar individual
-        if q:
+        # Para ítems del ML search que llegaron sin SKU (bug del bulk endpoint),
+        # reintentar con GET /items/{id} individual
+        if q and ml_search_ids:
             extracted_iids = {
                 d.get("body", d).get("id", "")
                 for d in all_items_raw
                 if _extract_sku(d.get("body", d))
             }
-            # Solo recuperar individualmente los del ML search (los importantes)
-            no_sku_priority = [iid for iid in direct_ids[:50] if iid not in extracted_iids]
-            for iid in no_sku_priority:
-                try:
-                    body = await client.get(f"/items/{iid}")
-                    if isinstance(body, dict) and body.get("id"):
-                        all_items_raw.append(body)
-                except Exception:
-                    pass
+            for iid in ml_search_ids:
+                if iid not in extracted_iids:
+                    try:
+                        body = await client.get(f"/items/{iid}")
+                        if isinstance(body, dict) and body.get("id"):
+                            all_items_raw.append(body)
+                    except Exception:
+                        pass
 
-        # 4. Extraer SKUs para consulta BM
+        # 4. Deduplicar y extraer SKUs
         seen_bodies: set[str] = set()
         deduped_raw: list = []
         for d in all_items_raw:
@@ -414,7 +397,7 @@ async def list_productos(
         # 6. Video records desde DB
         video_recs = await get_videos_for_items(list(seen_bodies), user_id)
 
-        # 7. Construir respuesta + filtro de búsqueda
+        # 7. Construir respuesta + filtro
         items = []
         for d in all_items_raw:
             body = d.get("body", d)
@@ -427,13 +410,13 @@ async def list_productos(
 
             if q:
                 ql = q.lower()
-                # Aceptar si el ítem vino del ML search (confiable) o si coincide por texto
-                came_from_ml_search = iid in (set(direct_ids[:100]) if q else set())
-                text_match = (ql in row["title"].lower()
-                              or ql in row["sku"].lower()
-                              or ql in row["item_id"].lower())
-                if not (came_from_ml_search or text_match):
-                    continue
+                # Ítems de ML Search API: pasan directamente (ML ya los verificó)
+                # Ítems del pool paginado: solo si coinciden por texto
+                if iid not in ml_search_ids:
+                    if not (ql in row["title"].lower()
+                            or ql in row["sku"].lower()
+                            or ql in row["item_id"].lower()):
+                        continue
             if score_category and row.get("score_category") != score_category:
                 continue
             items.append(row)
@@ -452,7 +435,6 @@ async def list_productos(
         elif sort_by == "ventas_desc":
             items.sort(key=lambda x: x.get("sold_quantity", 0), reverse=True)
 
-        # Con búsqueda: el total refleja matches encontrados; paginar sobre ellos
         total_filtered = len(items) if q else grand_total
         if q:
             items = items[offset: offset + limit]
