@@ -2171,25 +2171,36 @@ async def generate_video_commercial_endpoint(request: Request):
         "Genera el script en español y los 5 scenes en inglés para el comercial."
     )
     try:
-        import json as _json_inner
+        import json as _json_inner, re as _re
         raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=900)).strip()
-        # Strip markdown fences
+        logger.info(f"Claude raw response: {raw[:100]}...")
+        # Strip markdown fences if present
         if "```" in raw:
             raw = raw[raw.index("```") + 3:]
             if raw.startswith("json"):
                 raw = raw[4:]
             raw = raw[:raw.index("```")] if "```" in raw else raw
-        parsed = _json_inner.loads(raw.strip())
+        # Try to extract JSON object if surrounded by text
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            m = _re.search(r'\{[\s\S]*\}', raw)
+            if m:
+                raw = m.group(0)
+        parsed = _json_inner.loads(raw)
         script = parsed.get("script", "").strip().strip('"').strip("'")
         scenes: list = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
-        logger.info(f"Script: {script[:80]}...")
+        logger.info(f"Script ({len(script.split())} words): {script[:80]}...")
         logger.info(f"Scenes: {len(scenes)} generadas")
     except Exception as e:
         logger.warning(f"Claude script+scenes failed: {e}")
-        size_txt = f"{size} pulgadas " if size else ""
+        size_txt = f"de {size} pulgadas " if size else ""
         script = (
-            f"El {brand} {size_txt}— imagen brillante, sonido envolvente y "
-            f"entretenimiento sin límites. Todo lo que tu familia merece en un solo televisor. "
+            f"El {brand} {size_txt}es más que un televisor — es una puerta a mundos "
+            f"de color vibrante y sonido envolvente. Con tecnología de última generación, "
+            f"cada imagen cobra vida con claridad y brillo extraordinarios. "
+            f"Su diseño elegante y delgado transforma cualquier espacio. "
+            f"Vive momentos inolvidables con quienes más quieres, "
+            f"en la pantalla que mereces. "
             f"Disponible ahora en Mercado Libre."
         )
         scenes = []
