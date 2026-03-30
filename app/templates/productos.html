@@ -114,10 +114,7 @@
         🔴 Críticos <span id="cnt-critico" class="ml-1 text-xs bg-red-100 text-red-600 rounded-full px-1.5 py-0.5">—</span>
       </button>
       <button class="tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50" data-tab="candidates" onclick="setTab('candidates')">
-        🚀 Candidatos <span id="cnt-candidates" class="ml-1 text-xs bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5">—</span>
-      </button>
-      <button class="tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50" data-tab="comparar" onclick="setTab('comparar')">
-        🔍 Comparar SKUs
+        🚀 Sin Lanzar <span id="cnt-candidates" class="ml-1 text-xs bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5">—</span>
       </button>
     </div>
   </div>
@@ -167,23 +164,39 @@
     <p id="empty-msg" class="hidden text-center py-12 text-gray-400 text-sm">No se encontraron productos con ese filtro.</p>
   </div>
 
-  <!-- ── Comparar SKUs (visible en tab Comparar) ────────────────────────── -->
+  <!-- ── Sin Lanzar (visible en tab Candidatos) ─────────────────────────── -->
   <div id="compare-wrap" class="hidden">
 
     <!-- Lanzador Inteligente -->
-    <div class="bg-white rounded-lg shadow mb-6 overflow-hidden">
+    <div class="bg-white rounded-lg shadow mb-4 overflow-hidden">
       <div class="px-4 py-3 bg-gradient-to-r from-yellow-50 to-white border-b border-yellow-100 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
           </svg>
-          <span class="font-bold text-gray-800 text-sm">Lanzador Inteligente</span>
-          <span class="text-xs text-gray-400">— SKUs con stock en BinManager sin publicar</span>
+          <span class="font-bold text-gray-800 text-sm">SKUs sin publicar en MercadoLibre</span>
+          <span class="text-xs text-gray-400">— detectados automáticamente desde BinManager</span>
         </div>
         <span class="text-xs text-gray-400" id="gaps-last-scan-label"></span>
       </div>
       {% include "partials/lanzar_gaps.html" %}
     </div>
+
+    <!-- Comparar lista personalizada (colapsable) -->
+    <div class="bg-white rounded-lg shadow overflow-hidden mb-4">
+      <button onclick="toggleComparadorManual()" class="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition">
+        <div class="flex items-center gap-2">
+          <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+          </svg>
+          <span class="text-sm font-semibold text-gray-700">Comparar lista personalizada de SKUs</span>
+          <span class="text-xs text-gray-400">— sube un CSV o pega SKUs manualmente</span>
+        </div>
+        <svg id="comparador-chevron" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="comparador-manual-body" class="hidden border-t">
 
     <!-- Sección de carga de SKUs -->
     <div class="bg-white p-6 rounded-lg shadow mb-6">
@@ -292,6 +305,9 @@
         <p class="text-sm mt-1">Sube un archivo CSV/Excel o pega los SKUs directamente</p>
       </div>
     </div>
+
+      </div><!-- /comparador-manual-body -->
+    </div><!-- /comparador-manual card -->
 
   </div><!-- /compare-wrap -->
 

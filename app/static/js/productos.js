@@ -6,7 +6,7 @@
 
   // ── Estado global ──────────────────────────────────────────────────────────
   const state = {
-    tab:            'all',       // all | active | paused | critico | candidates
+    tab:            'all',       // all | active | paused | critico | candidates (candidates = Lanzador Inteligente)
     q:              '',
     offset:         0,
     limit:          50,
@@ -55,25 +55,18 @@
   // ── Items list ─────────────────────────────────────────────────────────────
   async function loadItems() {
     if (state.loading) return;
-    if (state.tab === 'comparar') return;
+    if (state.tab === 'candidates') return; // handled by Lanzador Inteligente
     state.loading = true;
     show('table-loading'); hide('table-wrap');
 
     try {
-      let data;
-      if (state.tab === 'candidates') {
-        data = await apiFetch(
-          `/api/productos/candidates?q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}`
-        );
-      } else {
-        const st = state.tab === 'all' ? 'all'
-                 : state.tab === 'critico' ? 'all'
-                 : state.tab;
-        const sc = state.tab === 'critico' ? 'critico' : '';
-        data = await apiFetch(
-          `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}&score_category=${sc}&sort_by=${encodeURIComponent(state.sort_by)}`
-        );
-      }
+      const st = state.tab === 'all' ? 'all'
+               : state.tab === 'critico' ? 'all'
+               : state.tab;
+      const sc = state.tab === 'critico' ? 'critico' : '';
+      const data = await apiFetch(
+        `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}&score_category=${sc}&sort_by=${encodeURIComponent(state.sort_by)}`
+      );
       state.items = data.items || [];
       state.total = data.total || 0;
       renderTable();
@@ -90,7 +83,6 @@
   // ── Tabla ──────────────────────────────────────────────────────────────────
   function renderTable() {
     hide('table-loading');
-    if (state.tab === 'comparar') return;
     show('table-wrap');
 
     const tbody  = document.getElementById('productos-tbody');
@@ -258,16 +250,16 @@
       btn.classList.toggle('bg-white', !active);
     });
 
-    const isComparar = tab === 'comparar';
-    // Show compare-wrap OR table area
+    const isCandidates = tab === 'candidates';
+    // Show compare-wrap (Lanzador Inteligente) OR products table
     const compareWrap = document.getElementById('compare-wrap');
-    if (compareWrap) compareWrap.classList.toggle('hidden', !isComparar);
+    if (compareWrap) compareWrap.classList.toggle('hidden', !isCandidates);
 
-    // When switching to compare tab, hide table loading/wrap; otherwise restore
-    if (isComparar) {
+    // When switching to candidates tab, hide table; otherwise restore
+    if (isCandidates) {
       hide('table-loading');
       hide('table-wrap');
-      return; // don't call loadItems
+      return; // Lanzador Inteligente handles its own data
     }
     loadItems();
   };
@@ -292,6 +284,15 @@
     setText('sort-label', labels[sortBy] || 'Ordenar');
     document.getElementById('sort-dropdown')?.classList.add('hidden');
     loadItems();
+  };
+
+  // ── Comparador manual (colapsable dentro de Candidatos) ────────────────────
+  window.toggleComparadorManual = function () {
+    const body    = document.getElementById('comparador-manual-body');
+    const chevron = document.getElementById('comparador-chevron');
+    if (!body) return;
+    const open = body.classList.toggle('hidden');
+    if (chevron) chevron.style.transform = open ? '' : 'rotate(180deg)';
   };
 
   // ── Search ─────────────────────────────────────────────────────────────────
