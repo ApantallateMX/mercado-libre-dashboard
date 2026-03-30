@@ -3058,8 +3058,10 @@ async def create_listing_endpoint(request: Request):
     title              = body.get("title", "").strip()
     price              = body.get("price", 0)
     catalog_product_id = body.get("catalog_product_id", "").strip()
-    if not category_id or not title or not price:
-        return JSONResponse({"error": "category_id, title y price son requeridos"}, status_code=400)
+    if not price:
+        return JSONResponse({"error": "price es requerido"}, status_code=400)
+    if not catalog_product_id and (not category_id or not title):
+        return JSONResponse({"error": "category_id y title son requeridos cuando no hay catalog_product_id"}, status_code=400)
 
     description = body.get("description", "")
     sku         = body.get("sku", "")
@@ -3068,31 +3070,49 @@ async def create_listing_endpoint(request: Request):
     warranty_type = body.get("warranty_type", "")
     warranty_time = body.get("warranty_time", "")
 
-    item_payload: dict = {
-        "title":              title,
-        "category_id":        category_id,
-        "price":              float(price),
-        "currency_id":        "MXN",
-        "available_quantity": int(body.get("available_quantity", 1)),
-        "listing_type_id":    body.get("listing_type_id", "gold_special"),
-        "condition":          body.get("condition", "new"),
-        "buying_mode":        "buy_it_now",
-    }
+    # ── Catalog offer (oferta de catálogo) ───────────────────────────────────
     if catalog_product_id:
-        item_payload["catalog_product_id"] = catalog_product_id
-        logger.info(f"Using catalog_product_id: {catalog_product_id}")
-    if pictures:
-        item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
-    if sku:
-        item_payload["seller_custom_field"] = sku
-    # Merge attributes from body + auto-build from known fields
+        logger.info(f"Creating CATALOG OFFER for {catalog_product_id}")
+        item_payload: dict = {
+            "catalog_product_id": catalog_product_id,
+            "price":              float(price),
+            "currency_id":        "MXN",
+            "available_quantity": int(body.get("available_quantity", 1)),
+            "listing_type_id":    body.get("listing_type_id", "gold_special"),
+            "condition":          body.get("condition", "new"),
+            "buying_mode":        "buy_it_now",
+        }
+        if sku:
+            item_payload["seller_custom_field"] = sku
+        if warranty_type and warranty_time:
+            item_payload["sale_terms"] = [
+                {"id": "WARRANTY_TYPE", "value_name": warranty_type},
+                {"id": "WARRANTY_TIME", "value_name": warranty_time},
+            ]
+    else:
+        # ── Standard listing ──────────────────────────────────────────────────
+        item_payload = {
+            "title":              title,
+            "category_id":        category_id,
+            "price":              float(price),
+            "currency_id":        "MXN",
+            "available_quantity": int(body.get("available_quantity", 1)),
+            "listing_type_id":    body.get("listing_type_id", "gold_special"),
+            "condition":          body.get("condition", "new"),
+            "buying_mode":        "buy_it_now",
+        }
+        if pictures:
+            item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
+        if sku:
+            item_payload["seller_custom_field"] = sku
+        if warranty_type and warranty_time:
+            item_payload["sale_terms"] = [
+                {"id": "WARRANTY_TYPE", "value_name": warranty_type},
+                {"id": "WARRANTY_TIME", "value_name": warranty_time},
+            ]
+    # Standard listing: merge attributes from body
     attrs = list(body.get("attributes") or [])
-    if warranty_type and warranty_time:
-        item_payload["sale_terms"] = [
-            {"id": "WARRANTY_TYPE", "value_name": warranty_type},
-            {"id": "WARRANTY_TIME", "value_name": warranty_time},
-        ]
-    if attrs:
+    if not catalog_product_id and attrs:
         item_payload["attributes"] = attrs
 
     client = await get_meli_client()
