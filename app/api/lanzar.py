@@ -2270,37 +2270,58 @@ async def generate_video_commercial_endpoint(request: Request):
             aud_path    = _os.path.join(tmpdir, "audio.mp3")
             out_path    = _os.path.join(tmpdir, "output.mp4")
 
-            # ── Concat con filter_complex (garantizado, cualquier formato de entrada) ──
-            # Usar -filter_complex concat en lugar de demuxer para evitar incompatibilidades
-            n = len(clip_paths)
-            filter_inputs = "".join(
-                f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25,format=yuv420p[v{i}];"
-                for i in range(n)
-            )
-            filter_concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[outv]"
-            filter_complex = filter_inputs + filter_concat
+            # ── Paso 1: Normalizar cada clip individualmente ───────────────────
+            # Elimina audio, fuerza resolución/fps/codec idénticos → concat seguro
+            norm_paths = []
+            for ci, cp in enumerate(clip_paths):
+                norm_path = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
+                norm_cmd = [
+                    ffmpeg_bin, "-y", "-i", cp,
+                    "-an",  # eliminar pista de audio del clip
+                    "-vf", (
+                        "scale=1280:720:force_original_aspect_ratio=decrease,"
+                        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+                    ),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-r", "25", "-pix_fmt", "yuv420p",
+                    norm_path,
+                ]
+                nr = _sp.run(norm_cmd, capture_output=True, timeout=120)
+                if nr.returncode == 0 and _os.path.exists(norm_path) and _os.path.getsize(norm_path) > 1000:
+                    norm_paths.append(norm_path)
+                    logger.info(f"Clip {ci} normalizado OK: {_os.path.getsize(norm_path)} bytes")
+                else:
+                    logger.error(f"Clip {ci} normalización falló (rc={nr.returncode}): "
+                                 f"{nr.stderr.decode(errors='replace')[:200]}")
 
-            cmd_concat = [ffmpeg_bin, "-y"]
-            for cp in clip_paths:
-                cmd_concat.extend(["-i", cp])
-            cmd_concat.extend([
-                "-filter_complex", filter_complex,
-                "-map", "[outv]",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            if not norm_paths:
+                raise RuntimeError("Todos los clips fallaron al normalizar")
+
+            logger.info(f"Clips normalizados: {len(norm_paths)}/{len(clip_paths)}")
+
+            # ── Paso 2: Concat demuxer (todos idénticos → -c copy sin re-encode) ─
+            with open(concat_path, "w") as cf:
+                for np in norm_paths:
+                    cf.write(f"file '{np}'\n")
+
+            cat_proc = _sp.run([
+                ffmpeg_bin, "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_path,
+                "-c", "copy",
                 raw_cat,
-            ])
-            cat_proc = _sp.run(cmd_concat, capture_output=True, timeout=300)
+            ], capture_output=True, timeout=300)
+
             if cat_proc.returncode != 0:
-                err_out = cat_proc.stderr.decode(errors="replace")[:400]
-                logger.error(f"Concat filter_complex error: {err_out}")
-                # Fallback: usar solo el primer clip (mejor que nada)
-                _sp.run([ffmpeg_bin, "-y", "-i", clip_paths[0],
-                         "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1",
-                         "-c:v", "libx264", "-preset", "fast", "-crf", "23", raw_cat],
-                        capture_output=True, timeout=60)
+                cat_err = cat_proc.stderr.decode(errors="replace")[:400]
+                logger.error(f"Concat demuxer error: {cat_err}")
+                # Fallback: usar solo el primer clip normalizado
+                import shutil as _shutil
+                _shutil.copy(norm_paths[0], raw_cat)
+                logger.warning("Fallback: raw_cat = primer clip normalizado")
             else:
-                logger.info(f"Concat filter_complex OK: {n} clips → raw_cat")
+                cat_size = _os.path.getsize(raw_cat)
+                logger.info(f"Concat demuxer OK: {len(norm_paths)} clips → raw_cat ({cat_size} bytes)")
 
             if has_audio:
                 with open(aud_path, "wb") as f:
@@ -2942,34 +2963,56 @@ async def create_listing_endpoint(request: Request):
         except Exception as _fn_err:
             logger.warning(f"FAMILY_NAME lookup failed: {_fn_err}")
 
+    # Si fn_attr existe pero no tiene value_id aún, forzar al primer valor del catálogo
+    if fn_attr and not fn_attr.get("value_id") and fn_allowed_values:
+        fn_attr["value_id"]   = fn_allowed_values[0]["id"]
+        fn_attr["value_name"] = fn_allowed_values[0].get("name", "")
+        logger.info(f"FAMILY_NAME value_id forzado a primer valor: {fn_allowed_values[0]['id']}")
+
     logger.info(f"ML attrs being sent: {[a.get('id') for a in attrs]}")
     if fn_attr:
         logger.info(f"FAMILY_NAME: value_id={fn_attr.get('value_id')!r} value_name={fn_attr.get('value_name')!r}")
+    logger.info(f"fn_allowed_values count: {len(fn_allowed_values)}")
+
+    import copy as _copy
+
+    def _with_fn(payload: dict, val: dict) -> dict:
+        """Copia de payload con FAMILY_NAME forzado al valor dado."""
+        p = _copy.deepcopy(payload)
+        if "attributes" in p:
+            for a in p["attributes"]:
+                if isinstance(a, dict) and a.get("id") == "FAMILY_NAME":
+                    a["value_id"]   = val["id"]
+                    a["value_name"] = val.get("name", "")
+        return p
 
     try:
-        # ── Intento 1: con FAMILY_NAME + value_id ────────────────────────────
+        # ── Intento 1: payload completo con FAMILY_NAME tal como viene ────────
         result = await _post_item(item_payload)
-        logger.info(f"ML attempt 1: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+        logger.info(f"ML attempt 1: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # ── Intento 2: sin FAMILY_NAME ────────────────────────────────────────
+        # ── Intento 2: sin FAMILY_NAME (non-catalog listings no lo requieren) ─
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
             logger.warning("Intento 2: publicando SIN FAMILY_NAME")
             result = await _post_item(_attrs_without_fn(item_payload))
-            logger.info(f"ML attempt 2: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+            logger.info(f"ML attempt 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # ── Intento 3: FAMILY_NAME con primer valor del catálogo ──────────────
-        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower() and fn_allowed_values:
-            first_val = fn_allowed_values[0]
-            logger.warning(f"Intento 3: FAMILY_NAME forzado a primer valor: {first_val['id']} ({first_val.get('name')})")
-            import copy as _copy3
-            p3 = _copy3.deepcopy(item_payload)
-            if "attributes" in p3:
-                for a in p3["attributes"]:
-                    if isinstance(a, dict) and a.get("id") == "FAMILY_NAME":
-                        a["value_id"]   = first_val["id"]
-                        a["value_name"] = first_val.get("name", "")
-            result = await _post_item(p3)
-            logger.info(f"ML attempt 3: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+        # ── Intentos 3..N: FAMILY_NAME con cada valor del catálogo ───────────
+        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
+            for idx, fv in enumerate(fn_allowed_values[:10]):  # máx 10 valores
+                logger.warning(f"Intento {3+idx}: FAMILY_NAME={fv['id']} ({fv.get('name')})")
+                result = await _post_item(_with_fn(item_payload, fv))
+                logger.info(f"ML attempt {3+idx}: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+                if not result.get("_meli_error"):
+                    break
+
+        # ── Último recurso: sin ningún attribute ─────────────────────────────
+        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
+            logger.warning("Último recurso: publicando SIN attributes")
+            bare = _copy.deepcopy(item_payload)
+            bare.pop("attributes", None)
+            result = await _post_item(bare)
+            logger.info(f"ML último recurso: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
