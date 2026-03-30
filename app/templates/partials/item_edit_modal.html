@@ -1,209 +1,271 @@
-<!-- Modal de edicion completa de item -->
-<div class="space-y-6">
-    <!-- Header -->
+<!-- Modal de edicion completa de item — v2 con IA, diagnóstico y video -->
+<div class="space-y-5">
+
+    <!-- ── Header ── -->
     <div class="flex justify-between items-start">
-        <div>
-            <h2 class="text-lg font-bold text-gray-800">Editar Listado</h2>
-            <p class="text-sm text-gray-500">{{ item.id }}</p>
+        <div class="flex items-start gap-3">
+            {% if item.thumbnail %}
+            <img src="{{ item.thumbnail }}" class="w-16 h-16 rounded-lg object-cover flex-shrink-0" alt="">
+            {% endif %}
+            <div>
+                <p class="font-semibold text-gray-800 text-sm leading-snug">{{ item.title[:80] }}</p>
+                <p class="text-xs text-gray-500 mt-0.5">{{ item.id }}</p>
+                <div class="flex flex-wrap gap-1.5 mt-1.5">
+                    <span class="px-2 py-0.5 text-xs rounded-full {% if item.status == 'active' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                        {{ item.status }}
+                    </span>
+                    <span class="px-2 py-0.5 text-xs rounded-full font-bold
+                        {% if score >= 80 %}bg-green-100 text-green-800
+                        {% elif score >= 55 %}bg-yellow-100 text-yellow-800
+                        {% else %}bg-red-100 text-red-800{% endif %}">
+                        Score: {{ score }}/100
+                    </span>
+                    {% if item.permalink %}
+                    <a href="{{ item.permalink }}" target="_blank" class="px-2 py-0.5 text-xs rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100">Ver en MeLi ↗</a>
+                    {% endif %}
+                </div>
+            </div>
         </div>
-        <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600 flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
             </svg>
         </button>
     </div>
 
-    <!-- Thumbnail + Info -->
-    <div class="flex items-start gap-4">
-        {% if item.thumbnail %}
-        <img src="{{ item.thumbnail }}" class="w-20 h-20 rounded-lg object-cover" alt="">
-        {% endif %}
-        <div>
-            <p class="font-medium text-gray-800">{{ item.title[:80] }}</p>
-            <p class="text-sm text-gray-500">
-                {% if item.original_price and item.original_price > (item.price or 0) %}
-                <span class="line-through text-gray-400">${{ "{:,.0f}".format(item.original_price) }}</span>
-                <span class="text-green-600 font-medium">${{ "{:,.0f}".format(item.price or 0) }}</span>
-                <span class="text-green-600 text-xs">(-{{ "%.0f"|format((1 - (item.price or 0) / item.original_price) * 100) }}%)</span>
-                {% else %}
-                ${{ "{:,.0f}".format(item.price or 0) }}
-                {% endif %}
-                | Stock: {{ item.available_quantity }} | Vendidos: {{ item.sold_quantity }}
-            </p>
-            <div class="flex gap-2 mt-1">
-                <span class="px-2 py-0.5 text-xs rounded-full {% if item.status == 'active' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
-                    {{ item.status }}
-                </span>
-                {% set score_class = "bg-green-100 text-green-800" if score >= 70 else ("bg-yellow-100 text-yellow-800" if score >= 40 else "bg-red-100 text-red-800") %}
-                <span class="px-2 py-0.5 text-xs rounded-full font-bold {{ score_class }}">Score: {{ score }}</span>
-            </div>
-            {% if item.permalink %}
-            <a href="{{ item.permalink }}" target="_blank" class="text-xs text-blue-500 hover:underline mt-1 inline-block">Ver en MeLi</a>
-            {% endif %}
+    <!-- ── Barra de score ── -->
+    <div>
+        <div class="flex justify-between text-xs text-gray-500 mb-1">
+            <span>Score de calidad</span><span class="font-semibold">{{ score }}/100</span>
+        </div>
+        <div class="w-full bg-gray-100 rounded-full h-2">
+            <div class="h-2 rounded-full transition-all
+                {% if score >= 80 %}bg-green-500{% elif score >= 55 %}bg-yellow-400{% else %}bg-red-400{% endif %}"
+                style="width: {{ score }}%"></div>
         </div>
     </div>
 
-    <!-- Pending changes counter -->
+    <!-- ── Panel diagnóstico ── -->
+    <div class="bg-gray-50 rounded-xl border border-gray-200 p-3">
+        <p class="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Diagnóstico</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">
+            {% for item_b in breakdown %}
+            <div class="flex items-start gap-1.5 text-xs py-0.5">
+                <span class="flex-shrink-0 mt-0.5 {% if item_b.ok %}text-green-500{% elif item_b.impact <= -20 %}text-red-500{% else %}text-yellow-500{% endif %}">
+                    {% if item_b.ok %}✓{% else %}✗{% endif %}
+                </span>
+                <div>
+                    <span class="{% if item_b.ok %}text-gray-600{% else %}text-gray-800 font-medium{% endif %}">{{ item_b.label }}</span>
+                    {% if not item_b.ok and item_b.impact != 0 %}
+                    <span class="text-red-400 ml-1">({{ item_b.impact }}pts)</span>
+                    {% endif %}
+                    {% if item_b.tip %}
+                    <p class="text-gray-400 text-xs">{{ item_b.tip }}</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ── Pending changes counter ── -->
     <div id="changes-banner" class="hidden bg-yellow-50 border border-yellow-300 rounded-lg p-3 flex items-center justify-between">
-        <span class="text-sm text-yellow-800">
-            <strong id="changes-count">0</strong> campo(s) modificado(s)
-        </span>
+        <span class="text-sm text-yellow-800"><strong id="changes-count">0</strong> campo(s) modificado(s)</span>
         <button onclick="saveBatch('{{ item.id }}')"
                 class="bg-yellow-500 text-white font-semibold px-4 py-1.5 rounded-lg hover:bg-yellow-600 text-sm">
-            Guardar Todos los Cambios
+            Guardar Todos
         </button>
     </div>
 
     <hr class="border-gray-200">
 
-    <!-- Titulo -->
+    <!-- ══════════ TIPO DE PUBLICACIÓN ══════════ -->
     <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Titulo</label>
+        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tipo de Publicación</p>
+        <div class="flex gap-2 items-center">
+            <select id="edit-listing-type"
+                    class="flex-1 border rounded px-3 py-2 text-sm tracked-field"
+                    data-field="listing_type_id" data-original="{{ listing_type }}"
+                    onchange="checkModified(this)">
+                <option value="gold_pro" {% if listing_type == 'gold_pro' %}selected{% endif %}>Premium (gold_pro) — Máxima exposición + MSI</option>
+                <option value="gold_special" {% if listing_type == 'gold_special' %}selected{% endif %}>Clásica (gold_special) — Exposición alta</option>
+            </select>
+            <button id="btn-save-lt"
+                    onclick="saveField('{{ item.id }}', 'listing_type', {listing_type_id: document.getElementById('edit-listing-type').value}, 'btn-save-lt', 'msg-lt')"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm whitespace-nowrap">
+                Guardar
+            </button>
+        </div>
+        <span id="msg-lt" class="text-xs"></span>
+        {% if listing_type == 'gold_special' %}
+        <p class="text-xs text-amber-600 mt-1">⚠ Tipo Clásica — cambiar a Premium mejora visibilidad, MSI y score (+5pts)</p>
+        {% endif %}
+    </div>
+
+    <!-- ══════════ TÍTULO ══════════ -->
+    <div>
+        <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Título</label>
+            <div class="flex items-center gap-2">
+                <span id="title-len" class="text-xs text-gray-400">{{ item.title|length }} chars</span>
+                <button id="btn-ai-title" onclick="editModalAiTitle()"
+                        class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1">
+                    ✦ IA
+                </button>
+            </div>
+        </div>
+        <div id="ai-title-suggestions" class="hidden space-y-1 mb-2"></div>
         <div class="flex gap-2">
             <input type="text" id="edit-title" value="{{ item.title }}" maxlength="60"
-                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field" data-field="title" data-original="{{ item.title }}"
-                   oninput="checkModified(this)">
-            <button id="btn-save-title" onclick="saveField('{{ item.id }}', 'title', {title: document.getElementById('edit-title').value}, 'btn-save-title', 'msg-title')"
+                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field"
+                   data-field="title" data-original="{{ item.title }}"
+                   oninput="checkModified(this); document.getElementById('title-len').textContent = this.value.length + ' chars'">
+            <button id="btn-save-title"
+                    onclick="saveField('{{ item.id }}', 'title', {title: document.getElementById('edit-title').value}, 'btn-save-title', 'msg-title')"
                     class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
         </div>
         <span id="msg-title" class="text-xs"></span>
     </div>
 
-    <!-- Precio -->
+    <!-- ══════════ DESCRIPCIÓN ══════════ -->
     <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Precio</label>
-        <div class="flex gap-2">
-            <div class="relative flex-1">
-                <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                <input type="number" id="edit-price" value="{{ item.price or 0 }}" min="0" step="0.01"
-                       class="w-full pl-7 pr-3 py-2 border rounded text-sm tracked-field" data-field="price" data-original="{{ item.price or 0 }}"
-                       oninput="checkModified(this)">
-            </div>
-            <button id="btn-save-price" onclick="saveField('{{ item.id }}', 'price', {price: parseFloat(document.getElementById('edit-price').value)}, 'btn-save-price', 'msg-price')"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
-        </div>
-        <span id="msg-price" class="text-xs"></span>
-    </div>
-
-    <!-- Stock -->
-    <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Stock disponible</label>
-        <div class="flex gap-2">
-            <input type="number" id="edit-stock" value="{{ item.available_quantity }}" min="0" step="1"
-                   class="flex-1 border rounded px-3 py-2 text-sm tracked-field" data-field="quantity" data-original="{{ item.available_quantity }}"
-                   oninput="checkModified(this)">
-            <button id="btn-save-stock" onclick="saveField('{{ item.id }}', 'stock', {quantity: parseInt(document.getElementById('edit-stock').value)}, 'btn-save-stock', 'msg-stock')"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
-        </div>
-        <span id="msg-stock" class="text-xs"></span>
-    </div>
-
-    <!-- Inventario Real (BinManager) -->
-    {% if seller_sku %}
-    <div id="inventory-section" class="bg-gray-50 rounded-lg p-4">
-        <label class="block text-sm font-medium text-gray-700 mb-2">Inventario Real (BinManager)</label>
-        <p class="text-xs text-gray-500 mb-2">SKU: <span class="font-mono font-medium">{{ seller_sku }}</span></p>
-        <div id="inventory-loading" class="text-xs text-gray-400">Consultando inventario...</div>
-        <div id="inventory-table" class="hidden">
-            <table class="w-full text-sm mb-2">
-                <thead>
-                    <tr class="text-xs text-gray-500 border-b">
-                        <th class="text-left py-1">Locacion</th>
-                        <th class="text-right py-1">Cantidad</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr class="border-b border-gray-100">
-                        <td class="py-1">CDMX</td>
-                        <td id="inv-cdmx" class="text-right py-1 font-medium">-</td>
-                    </tr>
-                    <tr class="border-b border-gray-100">
-                        <td class="py-1">Tijuana</td>
-                        <td id="inv-tj" class="text-right py-1 font-medium">-</td>
-                    </tr>
-                    <tr class="border-b border-gray-100">
-                        <td class="py-1">Monterrey</td>
-                        <td id="inv-mty" class="text-right py-1 font-medium">-</td>
-                    </tr>
-                    <tr class="font-bold">
-                        <td class="py-1">Total</td>
-                        <td id="inv-total" class="text-right py-1">-</td>
-                    </tr>
-                </tbody>
-            </table>
-            <button id="btn-use-inventory" onclick="useInventoryAsStock()"
-                    class="w-full bg-purple-500 text-white font-semibold px-3 py-2 rounded hover:bg-purple-600 text-sm">
-                Usar total como stock
+        <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Descripción</label>
+            <button id="btn-ai-desc" onclick="editModalAiDesc()"
+                    class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1">
+                ✦ IA
             </button>
         </div>
-        <div id="inventory-error" class="hidden text-xs text-red-500"></div>
-    </div>
-    {% endif %}
-
-    <!-- Descripcion -->
-    <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Descripcion</label>
-        <textarea id="edit-description" rows="4"
-                  class="w-full border rounded px-3 py-2 text-sm tracked-field" data-field="plain_text" data-original="{{ description }}"
+        <textarea id="edit-description" rows="5"
+                  class="w-full border rounded px-3 py-2 text-sm tracked-field font-mono text-xs"
+                  data-field="plain_text" data-original="{{ description }}"
                   oninput="checkModified(this)">{{ description }}</textarea>
         <div class="flex items-center gap-2 mt-1">
-            <button id="btn-save-desc" onclick="saveField('{{ item.id }}', 'description', {plain_text: document.getElementById('edit-description').value}, 'btn-save-desc', 'msg-desc')"
+            <button id="btn-save-desc"
+                    onclick="saveField('{{ item.id }}', 'description', {plain_text: document.getElementById('edit-description').value}, 'btn-save-desc', 'msg-desc')"
                     class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
             <span id="msg-desc" class="text-xs"></span>
         </div>
     </div>
 
-    <!-- Estado -->
+    <!-- ══════════ ATRIBUTOS ══════════ -->
     <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-        <div class="flex gap-2">
-            <select id="edit-status" class="border rounded px-3 py-2 text-sm tracked-field" data-field="status" data-original="{{ item.status }}"
-                    onchange="checkModified(this)">
-                <option value="active" {% if item.status == 'active' %}selected{% endif %}>Activo</option>
-                <option value="paused" {% if item.status == 'paused' %}selected{% endif %}>Pausado</option>
-            </select>
-            <button id="btn-save-status" onclick="saveField('{{ item.id }}', 'status', {status: document.getElementById('edit-status').value}, 'btn-save-status', 'msg-status')"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
-            <span id="msg-status" class="text-xs"></span>
+        <div class="flex items-center justify-between mb-2">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Atributos</label>
+            <div class="flex gap-2">
+                <button id="btn-ai-attrs" onclick="editModalAiAttrs('{{ item.id }}')"
+                        class="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-medium rounded-full hover:bg-purple-200 transition flex items-center gap-1">
+                    ✦ Rellenar con IA
+                </button>
+                <button id="btn-save-attrs" onclick="saveAttributes('{{ item.id }}')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-3 py-1.5 rounded hover:bg-yellow-500 text-xs">Guardar Atributos</button>
+            </div>
+        </div>
+        <p id="msg-attrs" class="text-xs mb-2"></p>
+
+        <!-- Atributos críticos primero (GTIN, SELLER_SKU, BRAND, MODEL) -->
+        <div class="space-y-2" id="attributes-list">
+            {% set critical_ids = ['GTIN', 'SELLER_SKU', 'BRAND', 'MODEL'] %}
+            {% set shown_ids = [] %}
+
+            <!-- Críticos primero -->
+            {% for crit in critical_ids %}
+                {% set found = namespace(attr=none) %}
+                {% for attr in item.get('attributes', []) %}
+                    {% if attr.get('id') == crit %}{% set found.attr = attr %}{% endif %}
+                {% endfor %}
+                {% set _ = shown_ids.append(crit) %}
+                <div class="flex flex-col md:flex-row gap-1 md:gap-2 md:items-center text-sm">
+                    <div class="flex items-center gap-1 w-full md:w-44 flex-shrink-0">
+                        <span class="text-xs {% if found.attr and found.attr.get('value_name') %}text-gray-500{% else %}text-red-500 font-medium{% endif %} truncate" title="{{ crit }}">
+                            {% if not (found.attr and found.attr.get('value_name')) %}⚠ {% endif %}{{ crit }}:
+                        </span>
+                    </div>
+                    <input type="text" data-attr-id="{{ crit }}"
+                           value="{{ found.attr.get('value_name', '') if found.attr else '' }}"
+                           placeholder="{% if not (found.attr and found.attr.get('value_name')) %}Requerido{% endif %}"
+                           class="attr-input flex-1 border rounded px-2 py-1.5 text-sm {% if not (found.attr and found.attr.get('value_name')) %}border-red-300 bg-red-50{% endif %}">
+                </div>
+            {% endfor %}
+
+            <!-- Resto de atributos -->
+            {% for attr in item.get('attributes', []) %}
+                {% if attr.get('id') not in critical_ids %}
+                <div class="flex flex-col md:flex-row gap-1 md:gap-2 md:items-center text-sm">
+                    <span class="text-gray-500 w-full md:w-44 flex-shrink-0 text-xs truncate" title="{{ attr.get('name', attr.get('id', '')) }}">{{ attr.get('name', attr.get('id', '')) }}:</span>
+                    <input type="text" data-attr-id="{{ attr.get('id', '') }}"
+                           value="{{ attr.get('value_name', '') }}"
+                           class="attr-input flex-1 border rounded px-2 py-1.5 text-sm">
+                </div>
+                {% endif %}
+            {% endfor %}
         </div>
     </div>
 
-    <!-- Envio -->
+    <hr class="border-gray-200">
+
+    <!-- ══════════ VIDEO / CLIP ══════════ -->
     <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Envio</label>
-        <div class="flex items-center gap-4">
-            <label class="flex items-center gap-2 text-sm">
-                <input type="checkbox" id="edit-free-shipping" {% if item.shipping.free_shipping %}checked{% endif %}
-                       class="tracked-field" data-field="free_shipping" data-original="{{ 'true' if item.shipping.free_shipping else 'false' }}"
-                       onchange="checkModified(this)">
-                Envio gratis
-            </label>
-            <button id="btn-save-shipping" onclick="saveField('{{ item.id }}', 'shipping', {free_shipping: document.getElementById('edit-free-shipping').checked}, 'btn-save-shipping', 'msg-shipping')"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
-            <span id="msg-shipping" class="text-xs"></span>
+        <div class="flex items-center justify-between mb-2">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide">Video / Clip ML</label>
+            {% if item.video_id %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">✓ Clip activo</span>
+            {% else %}
+            <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Sin clip (-10pts)</span>
+            {% endif %}
         </div>
-        <p class="text-xs text-gray-400 mt-1">Logistica: {{ item.shipping.get('logistic_type', '-') }}</p>
+
+        {% if item.video_id %}
+        <p class="text-xs text-gray-500 mb-2">Video ID: <code class="font-mono bg-gray-100 px-1 rounded">{{ item.video_id }}</code></p>
+        {% endif %}
+
+        <!-- Generar nuevo clip con IA -->
+        <div class="bg-purple-50 rounded-lg p-3 border border-purple-200 space-y-2">
+            <p class="text-xs font-medium text-purple-700">Generar clip comercial con IA</p>
+            <div class="flex gap-2">
+                <button id="btn-gen-clip" onclick="editModalGenVideo('{{ item.id }}')"
+                        class="flex-1 bg-purple-600 text-white font-semibold px-3 py-2 rounded-lg hover:bg-purple-700 text-sm flex items-center justify-center gap-2">
+                    <span>✦</span> Generar Video con IA
+                </button>
+            </div>
+            <div id="clip-gen-status" class="hidden text-xs text-purple-600 text-center py-1">Generando video...</div>
+        </div>
+
+        <!-- Subir video_id existente -->
+        <div class="mt-2">
+            <p class="text-xs text-gray-500 mb-1">O ingresar ID de video ya generado:</p>
+            <div class="flex gap-2">
+                <input type="text" id="clip-video-id" placeholder="UUID del video generado"
+                       class="flex-1 border rounded px-3 py-2 text-sm font-mono text-xs">
+                <button id="btn-upload-clip" onclick="editModalUploadClip('{{ item.id }}')"
+                        class="bg-gray-600 text-white font-semibold px-3 py-2 rounded hover:bg-gray-700 text-sm whitespace-nowrap">
+                    Subir Clip
+                </button>
+            </div>
+            <span id="msg-clip" class="text-xs"></span>
+        </div>
     </div>
 
-    <!-- Fotos -->
+    <hr class="border-gray-200">
+
+    <!-- ══════════ FOTOS ══════════ -->
     <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Fotos (<span id="photos-count">{{ item.pictures|length }}</span>)</label>
+        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Fotos (<span id="photos-count">{{ item.pictures|length }}</span>/12)</label>
         <div id="photos-grid" class="flex flex-wrap gap-2 mb-2">
             {% for pic in item.pictures %}
             <div class="relative group" data-photo-index="{{ loop.index0 }}">
                 <img src="{{ pic.get('secure_url', pic.get('url', '')) }}" class="w-16 h-16 rounded object-cover border" alt="Foto {{ loop.index }}">
-                <button onclick="removePhoto({{ loop.index0 }})" title="Eliminar foto"
+                <button onclick="removePhoto({{ loop.index0 }})" title="Eliminar"
                         class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity hover:bg-red-600">
-                    X
+                    ×
                 </button>
             </div>
             {% endfor %}
         </div>
-        <p class="text-xs text-gray-400">Para agregar fotos, usa la URL de la imagen:</p>
-        <div class="flex gap-2 mt-1">
+        <p class="text-xs text-gray-400 mb-1">Agregar foto por URL:</p>
+        <div class="flex gap-2">
             <input type="text" id="edit-new-photo" placeholder="https://..." class="flex-1 border rounded px-3 py-2 text-sm">
-            <button id="btn-add-photo" onclick="addPhotoToList()"
-                    class="bg-gray-200 text-gray-700 font-semibold px-3 py-2 rounded hover:bg-gray-300 text-sm">Agregar</button>
+            <button onclick="addPhotoToList()" class="bg-gray-200 text-gray-700 font-semibold px-3 py-2 rounded hover:bg-gray-300 text-sm">+</button>
         </div>
         <div class="flex items-center gap-2 mt-2">
             <button id="btn-save-photos" onclick="savePhotos('{{ item.id }}')"
@@ -212,28 +274,106 @@
         </div>
     </div>
 
-    <!-- Atributos -->
-    <div>
-        <label class="block text-sm font-medium text-gray-700 mb-2">Atributos principales</label>
-        <div class="space-y-2" id="attributes-list">
-            {% for attr in item.get('attributes', [])[:10] %}
-            <div class="flex flex-col md:flex-row gap-1 md:gap-2 md:items-center text-sm">
-                <span class="text-gray-500 w-full md:w-40 truncate text-xs md:text-sm" title="{{ attr.get('name', attr.get('id', '')) }}">{{ attr.get('name', attr.get('id', '')) }}:</span>
-                <input type="text" data-attr-id="{{ attr.get('id', '') }}"
-                       value="{{ attr.get('value_name', '') }}" class="attr-input flex-1 border rounded px-2 py-2 text-sm min-h-[44px] md:min-h-0 md:py-1">
+    <hr class="border-gray-200">
+
+    <!-- ══════════ COMERCIAL ══════════ -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <!-- Precio -->
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Precio</label>
+            <div class="flex gap-2">
+                <div class="relative flex-1">
+                    <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                    <input type="number" id="edit-price" value="{{ item.price or 0 }}" min="0" step="0.01"
+                           class="w-full pl-7 pr-3 py-2 border rounded text-sm tracked-field"
+                           data-field="price" data-original="{{ item.price or 0 }}"
+                           oninput="checkModified(this)">
+                </div>
+                <button id="btn-save-price"
+                        onclick="saveField('{{ item.id }}', 'price', {price: parseFloat(document.getElementById('edit-price').value)}, 'btn-save-price', 'msg-price')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
             </div>
-            {% endfor %}
+            <span id="msg-price" class="text-xs"></span>
         </div>
-        <div class="flex items-center gap-2 mt-2">
-            <button id="btn-save-attrs" onclick="saveAttributes('{{ item.id }}')"
-                    class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar Atributos</button>
-            <span id="msg-attrs" class="text-xs"></span>
+
+        <!-- Stock -->
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Stock</label>
+            <div class="flex gap-2">
+                <input type="number" id="edit-stock" value="{{ item.available_quantity }}" min="0" step="1"
+                       class="flex-1 border rounded px-3 py-2 text-sm tracked-field"
+                       data-field="quantity" data-original="{{ item.available_quantity }}"
+                       oninput="checkModified(this)">
+                <button id="btn-save-stock"
+                        onclick="saveField('{{ item.id }}', 'stock', {quantity: parseInt(document.getElementById('edit-stock').value)}, 'btn-save-stock', 'msg-stock')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            </div>
+            <span id="msg-stock" class="text-xs"></span>
+        </div>
+    </div>
+
+    <!-- Inventario BinManager -->
+    {% if seller_sku %}
+    <div id="inventory-section" class="bg-gray-50 rounded-lg p-3">
+        <p class="text-xs font-medium text-gray-600 mb-1">Inventario BinManager — SKU: <span class="font-mono font-semibold text-gray-800">{{ seller_sku }}</span></p>
+        <div id="inventory-loading" class="text-xs text-gray-400">Consultando...</div>
+        <div id="inventory-table" class="hidden">
+            <div class="flex gap-4 text-xs mb-2">
+                <span>CDMX: <strong id="inv-cdmx">-</strong></span>
+                <span>MTY: <strong id="inv-mty">-</strong></span>
+                <span>TJ: <strong id="inv-tj">-</strong></span>
+                <span class="font-bold">Total: <strong id="inv-total">-</strong></span>
+            </div>
+            <button onclick="useInventoryAsStock()"
+                    class="w-full bg-purple-500 text-white font-semibold px-3 py-1.5 rounded hover:bg-purple-600 text-xs">
+                Usar total como stock ML
+            </button>
+        </div>
+        <div id="inventory-error" class="hidden text-xs text-red-500"></div>
+    </div>
+    {% endif %}
+
+    <!-- Estado y Envío -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Estado</label>
+            <div class="flex gap-2">
+                <select id="edit-status" class="flex-1 border rounded px-3 py-2 text-sm tracked-field"
+                        data-field="status" data-original="{{ item.status }}"
+                        onchange="checkModified(this)">
+                    <option value="active" {% if item.status == 'active' %}selected{% endif %}>Activo</option>
+                    <option value="paused" {% if item.status == 'paused' %}selected{% endif %}>Pausado</option>
+                </select>
+                <button id="btn-save-status"
+                        onclick="saveField('{{ item.id }}', 'status', {status: document.getElementById('edit-status').value}, 'btn-save-status', 'msg-status')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            </div>
+            <span id="msg-status" class="text-xs"></span>
+        </div>
+
+        <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Envío</label>
+            <div class="flex items-center gap-3 py-2">
+                <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" id="edit-free-shipping"
+                           {% if item.shipping.free_shipping %}checked{% endif %}
+                           class="tracked-field" data-field="free_shipping"
+                           data-original="{{ 'true' if item.shipping.free_shipping else 'false' }}"
+                           onchange="checkModified(this)">
+                    Envío gratis
+                </label>
+                <button id="btn-save-shipping"
+                        onclick="saveField('{{ item.id }}', 'shipping', {free_shipping: document.getElementById('edit-free-shipping').checked}, 'btn-save-shipping', 'msg-shipping')"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            </div>
+            <p class="text-xs text-gray-400">Logística: {{ item.shipping.get('logistic_type', '-') }}</p>
+            <span id="msg-shipping" class="text-xs"></span>
         </div>
     </div>
 
     <hr class="border-gray-200">
 
-    <!-- Guardar Todo -->
+    <!-- ── Guardar Todo ── -->
     <div class="flex items-center justify-between">
         <p id="batch-summary" class="text-sm text-gray-500">Sin cambios pendientes</p>
         <button id="btn-save-all" onclick="saveBatch('{{ item.id }}')"
@@ -246,7 +386,7 @@
 </div>
 
 <script>
-// --- Photo management ---
+// ─── Photo management ───────────────────────────────────────────
 var _currentPhotos = [];
 {% for pic in item.pictures %}
 _currentPhotos.push({source: "{{ pic.get('secure_url', pic.get('url', '')) }}"});
@@ -276,9 +416,9 @@ function refreshPhotosGrid() {
     var html = '';
     _currentPhotos.forEach(function(pic, idx) {
         html += '<div class="relative group" data-photo-index="' + idx + '">';
-        html += '<img src="' + pic.source + '" class="w-16 h-16 rounded object-cover border" alt="Foto ' + (idx + 1) + '">';
-        html += '<button onclick="removePhoto(' + idx + ')" title="Eliminar foto"';
-        html += ' class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity hover:bg-red-600">X</button>';
+        html += '<img src="' + pic.source + '" class="w-16 h-16 rounded object-cover border" alt="Foto ' + (idx+1) + '">';
+        html += '<button onclick="removePhoto(' + idx + ')" title="Eliminar"';
+        html += ' class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity hover:bg-red-600">×</button>';
         html += '</div>';
     });
     grid.innerHTML = html;
@@ -289,15 +429,10 @@ window.savePhotos = function(itemId) {
     saveField(itemId, 'pictures', {pictures: _currentPhotos}, 'btn-save-photos', 'msg-photos');
 };
 
-// --- Change tracking ---
+// ─── Change tracking ────────────────────────────────────────────
 window.checkModified = function(el) {
     var original = el.getAttribute('data-original');
-    var current;
-    if (el.type === 'checkbox') {
-        current = el.checked ? 'true' : 'false';
-    } else {
-        current = el.value;
-    }
+    var current = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
     if (current !== original) {
         el.classList.add('border-yellow-400', 'ring-1', 'ring-yellow-300');
         el.classList.remove('border-gray-300');
@@ -309,31 +444,18 @@ window.checkModified = function(el) {
 
 function getModifiedFields() {
     var changes = {};
-    var fields = document.querySelectorAll('.tracked-field');
-    fields.forEach(function(el) {
+    document.querySelectorAll('.tracked-field').forEach(function(el) {
         var field = el.getAttribute('data-field');
         var original = el.getAttribute('data-original');
-        var current;
-        if (el.type === 'checkbox') {
-            current = el.checked ? 'true' : 'false';
-        } else {
-            current = el.value;
-        }
+        var current = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
         if (current !== original) {
-            if (field === 'price') {
-                changes[field] = parseFloat(current);
-            } else if (field === 'quantity') {
-                changes[field] = parseInt(current);
-            } else if (field === 'free_shipping') {
-                changes[field] = current === 'true';
-            } else {
-                changes[field] = current;
-            }
+            if (field === 'price') changes[field] = parseFloat(current);
+            else if (field === 'quantity') changes[field] = parseInt(current);
+            else if (field === 'free_shipping') changes[field] = current === 'true';
+            else changes[field] = current;
         }
     });
-    if (_photosModified) {
-        changes['pictures'] = _currentPhotos;
-    }
+    if (_photosModified) changes['pictures'] = _currentPhotos;
     return changes;
 }
 
@@ -343,11 +465,9 @@ function updateChangeCounter() {
     var banner = document.getElementById('changes-banner');
     var summary = document.getElementById('batch-summary');
     var btnAll = document.getElementById('btn-save-all');
-    var countEl = document.getElementById('changes-count');
-
+    document.getElementById('changes-count').textContent = count;
     if (count > 0) {
         banner.classList.remove('hidden');
-        countEl.textContent = count;
         summary.textContent = count + ' campo(s) modificado(s)';
         btnAll.disabled = false;
     } else {
@@ -357,46 +477,30 @@ function updateChangeCounter() {
     }
 }
 
-// --- Batch save ---
+// ─── Batch save ─────────────────────────────────────────────────
 window.saveBatch = function(itemId) {
     var changes = getModifiedFields();
-    var count = Object.keys(changes).length;
-    if (count === 0) return;
-
-    // Build details list for confirmation
-    var labels = {
-        title: 'Titulo', plain_text: 'Descripcion', price: 'Precio',
-        quantity: 'Stock', status: 'Estado', free_shipping: 'Envio gratis',
-        pictures: 'Fotos', attributes: 'Atributos'
-    };
+    if (Object.keys(changes).length === 0) return;
+    var labels = {title:'Titulo', plain_text:'Descripcion', price:'Precio', quantity:'Stock',
+                  status:'Estado', free_shipping:'Envio gratis', pictures:'Fotos',
+                  attributes:'Atributos', listing_type_id:'Tipo publicacion'};
     var detailsHtml = '<ul class="space-y-1">';
     for (var key in changes) {
         var label = labels[key] || key;
         var val = changes[key];
-        if (key === 'pictures') {
-            val = val.length + ' imagenes';
-        } else if (key === 'free_shipping') {
-            val = val ? 'Si' : 'No';
-        } else if (key === 'price') {
-            val = '$' + val;
-        } else if (typeof val === 'string' && val.length > 60) {
-            val = val.substring(0, 60) + '...';
-        }
-        detailsHtml += '<li class="flex gap-2"><span class="font-medium text-gray-700">' + label + ':</span> <span class="text-gray-500">' + val + '</span></li>';
+        if (key === 'pictures') val = val.length + ' imagenes';
+        else if (key === 'free_shipping') val = val ? 'Si' : 'No';
+        else if (key === 'price') val = '$' + val;
+        else if (typeof val === 'string' && val.length > 60) val = val.substring(0, 60) + '...';
+        detailsHtml += '<li class="flex gap-2"><span class="font-medium text-gray-700">' + label + ':</span><span class="text-gray-500">' + val + '</span></li>';
     }
     detailsHtml += '</ul>';
-
-    confirmAction(
-        'Guardar ' + count + ' cambio(s)',
-        '<p class="mb-3">Se enviaran los siguientes cambios a MeLi:</p>' + detailsHtml +
-        '<p class="text-gray-400 text-xs mt-3">Item: ' + itemId + '</p>',
+    confirmAction('Guardar ' + Object.keys(changes).length + ' cambio(s)',
+        '<p class="mb-3">Se enviaran los siguientes cambios a MeLi:</p>' + detailsHtml,
         function() {
             var btnAll = document.getElementById('btn-save-all');
             var msgBatch = document.getElementById('msg-batch');
-            btnAll.disabled = true;
-            btnAll.textContent = 'Guardando...';
-            msgBatch.textContent = '';
-
+            btnAll.disabled = true; btnAll.textContent = 'Guardando...'; msgBatch.textContent = '';
             fetch('/api/items/' + itemId + '/batch', {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
@@ -405,16 +509,10 @@ window.saveBatch = function(itemId) {
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.ok) {
-                    msgBatch.textContent = 'Todos los cambios guardados correctamente';
+                    msgBatch.textContent = 'Todos los cambios guardados';
                     msgBatch.className = 'text-xs text-green-600';
-                    // Reset tracked fields
                     document.querySelectorAll('.tracked-field').forEach(function(el) {
-                        var current;
-                        if (el.type === 'checkbox') {
-                            current = el.checked ? 'true' : 'false';
-                        } else {
-                            current = el.value;
-                        }
+                        var current = el.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el.value;
                         el.setAttribute('data-original', current);
                         el.classList.remove('border-yellow-400', 'ring-1', 'ring-yellow-300');
                     });
@@ -422,16 +520,10 @@ window.saveBatch = function(itemId) {
                     updateChangeCounter();
                     if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
                 } else {
-                    // Partial success
-                    var errors = [];
-                    var successes = [];
+                    var errors = [], successes = [];
                     for (var key in data.results) {
                         var r = data.results[key];
-                        if (r.ok) {
-                            successes.push(key);
-                        } else {
-                            errors.push(key + ': ' + (r.error || 'Error'));
-                        }
+                        if (r.ok) successes.push(key); else errors.push(key + ': ' + (r.error || 'Error'));
                     }
                     var msg = '';
                     if (successes.length) msg += 'OK: ' + successes.join(', ') + '. ';
@@ -453,70 +545,307 @@ window.saveBatch = function(itemId) {
     );
 };
 
-// --- Legacy functions kept for individual saves ---
-window.addPhoto = function(itemId) {
-    var url = document.getElementById('edit-new-photo').value.trim();
-    if (!url) return;
-    _currentPhotos.push({source: url});
-    _photosModified = true;
-    document.getElementById('edit-new-photo').value = '';
-    refreshPhotosGrid();
-    updateChangeCounter();
-    saveField(itemId, 'pictures', {pictures: _currentPhotos}, 'btn-add-photo', 'msg-photos');
-};
-
+// ─── Save attributes ────────────────────────────────────────────
 window.saveAttributes = function(itemId) {
     var inputs = document.querySelectorAll('.attr-input');
     var attrs = [];
     inputs.forEach(function(input) {
         var attrId = input.getAttribute('data-attr-id');
         var val = input.value.trim();
-        if (attrId && val) {
-            attrs.push({id: attrId, value_name: val});
-        }
+        if (attrId && val) attrs.push({id: attrId, value_name: val});
     });
     saveField(itemId, 'attributes', {attributes: attrs}, 'btn-save-attrs', 'msg-attrs');
 };
 
-// Initialize counter
-updateChangeCounter();
+// ─── AI: Título ─────────────────────────────────────────────────
+window.editModalAiTitle = async function() {
+    var titleInput = document.getElementById('edit-title');
+    var btn = document.getElementById('btn-ai-title');
+    var suggestionsDiv = document.getElementById('ai-title-suggestions');
+    var brand = '', model = '';
+    document.querySelectorAll('.attr-input').forEach(function(inp) {
+        var id = inp.getAttribute('data-attr-id');
+        if (id === 'BRAND') brand = inp.value;
+        if (id === 'MODEL') model = inp.value;
+    });
+    btn.disabled = true; btn.textContent = '...';
+    suggestionsDiv.innerHTML = '<p class="text-xs text-purple-500 animate-pulse">Generando títulos con IA...</p>';
+    suggestionsDiv.classList.remove('hidden');
+    try {
+        var resp = await fetch('/api/sku-inventory/ai-improve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({field: 'title', current_value: titleInput.value, context: {brand: brand, model: model}})
+        });
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '', result = '';
+        while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, {stream: true});
+            var lines = buffer.split('\n'); buffer = lines.pop();
+            for (var line of lines) {
+                if (line.startsWith('data: ')) {
+                    var data = line.slice(6);
+                    if (data === '[DONE]') break;
+                    if (!data.startsWith('[ERROR]')) result += data;
+                }
+            }
+        }
+        var titles = result.trim().split('\n').filter(function(t) { return t.trim().length >= 40; });
+        if (titles.length > 0) {
+            suggestionsDiv.innerHTML = titles.map(function(t, i) {
+                var clean = t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
+                return '<button onclick="applyAiTitle(\'' + clean.replace(/'/g, "\\'") + '\')" ' +
+                    'class="w-full text-left text-xs px-2 py-1.5 bg-white border border-purple-200 rounded hover:bg-purple-50 transition">' +
+                    '<span class="font-mono">' + clean + '</span>' +
+                    ' <span class="text-gray-400">(' + clean.length + ' chars)</span></button>';
+            }).join('');
+        } else {
+            suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">No se generaron títulos. Intenta de nuevo.</p>';
+        }
+    } catch(e) {
+        suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">Error: ' + e.message + '</p>';
+    }
+    btn.disabled = false; btn.textContent = '✦ IA';
+};
 
-// --- Inventory (BinManager) ---
+window.applyAiTitle = function(title) {
+    var titleInput = document.getElementById('edit-title');
+    titleInput.value = title;
+    document.getElementById('title-len').textContent = title.length + ' chars';
+    checkModified(titleInput);
+    document.getElementById('ai-title-suggestions').classList.add('hidden');
+};
+
+// ─── AI: Descripción ────────────────────────────────────────────
+window.editModalAiDesc = async function() {
+    var descInput = document.getElementById('edit-description');
+    var btn = document.getElementById('btn-ai-desc');
+    var brand = '', model = '';
+    document.querySelectorAll('.attr-input').forEach(function(inp) {
+        var id = inp.getAttribute('data-attr-id');
+        if (id === 'BRAND') brand = inp.value;
+        if (id === 'MODEL') model = inp.value;
+    });
+    btn.disabled = true; btn.textContent = '...';
+    var titleVal = document.getElementById('edit-title').value;
+    try {
+        var resp = await fetch('/api/sku-inventory/ai-improve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({field: 'description', current_value: titleVal,
+                                  context: {brand: brand, model: model, title: titleVal}})
+        });
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '', result = '';
+        descInput.value = '';
+        while (true) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, {stream: true});
+            var lines = buffer.split('\n'); buffer = lines.pop();
+            for (var line of lines) {
+                if (line.startsWith('data: ')) {
+                    var data = line.slice(6);
+                    if (data === '[DONE]') break;
+                    if (!data.startsWith('[ERROR]')) { result += data; descInput.value = result; }
+                }
+            }
+        }
+        if (result.trim()) checkModified(descInput);
+    } catch(e) {
+        document.getElementById('msg-desc').textContent = 'Error: ' + e.message;
+    }
+    btn.disabled = false; btn.textContent = '✦ IA';
+};
+
+// ─── AI: Atributos ──────────────────────────────────────────────
+window.editModalAiAttrs = async function(itemId) {
+    var btn = document.getElementById('btn-ai-attrs');
+    var msgEl = document.getElementById('msg-attrs');
+    var brand = '', model = '', title = document.getElementById('edit-title').value;
+    document.querySelectorAll('.attr-input').forEach(function(inp) {
+        var id = inp.getAttribute('data-attr-id');
+        if (id === 'BRAND') brand = inp.value;
+        if (id === 'MODEL') model = inp.value;
+    });
+
+    // Collect empty attributes
+    var emptyAttrs = [];
+    document.querySelectorAll('.attr-input').forEach(function(inp) {
+        if (!inp.value.trim()) {
+            emptyAttrs.push(inp.getAttribute('data-attr-id'));
+        }
+    });
+
+    if (emptyAttrs.length === 0) {
+        msgEl.textContent = 'Todos los atributos ya tienen valor';
+        msgEl.className = 'text-xs text-gray-500';
+        return;
+    }
+
+    btn.disabled = true; btn.textContent = '...';
+    msgEl.textContent = 'Consultando IA...';
+    msgEl.className = 'text-xs text-purple-600';
+
+    try {
+        var resp = await fetch('/api/sku-inventory/ai-improve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                field: 'attributes',
+                current_value: emptyAttrs.join(', '),
+                context: {brand: brand, model: model, title: title}
+            })
+        });
+        var data = await resp.json();
+        if (data.result) {
+            var jsonStr = data.result.trim();
+            // Extract JSON array from response
+            var match = jsonStr.match(/\[[\s\S]*\]/);
+            if (match) {
+                var suggestions = JSON.parse(match[0]);
+                var filled = 0;
+                suggestions.forEach(function(s) {
+                    var inp = document.querySelector('.attr-input[data-attr-id="' + s.id + '"]');
+                    if (inp && !inp.value.trim() && s.value_name) {
+                        inp.value = s.value_name;
+                        inp.classList.add('border-purple-300', 'bg-purple-50');
+                        filled++;
+                    }
+                });
+                msgEl.textContent = filled + ' atributos rellenados con IA — revisa y guarda';
+                msgEl.className = 'text-xs text-purple-600';
+            } else {
+                msgEl.textContent = 'No se pudieron parsear sugerencias';
+                msgEl.className = 'text-xs text-red-500';
+            }
+        } else {
+            msgEl.textContent = data.error || 'Error al generar atributos';
+            msgEl.className = 'text-xs text-red-500';
+        }
+    } catch(e) {
+        msgEl.textContent = 'Error: ' + e.message;
+        msgEl.className = 'text-xs text-red-500';
+    }
+    btn.disabled = false; btn.textContent = '✦ Rellenar con IA';
+};
+
+// ─── Video: Generar con IA ───────────────────────────────────────
+window.editModalGenVideo = async function(itemId) {
+    var btn = document.getElementById('btn-gen-clip');
+    var statusDiv = document.getElementById('clip-gen-status');
+    var msgEl = document.getElementById('msg-clip');
+    var titleVal = document.getElementById('edit-title').value;
+
+    btn.disabled = true;
+    btn.textContent = 'Generando...';
+    statusDiv.textContent = 'Generando video comercial (puede tomar 1-2 min)...';
+    statusDiv.classList.remove('hidden');
+    msgEl.textContent = '';
+
+    try {
+        var resp = await fetch('/api/lanzar/generate-video-commercial', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({title: titleVal, item_id: itemId})
+        });
+        var data = await resp.json();
+        if (data.video_url) {
+            var vidId = data.video_url.split('/').pop();
+            statusDiv.textContent = 'Video generado. Subiendo a ML como clip...';
+            // Auto-upload
+            var upResp = await fetch('/api/lanzar/upload-clip/' + itemId, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({video_id: vidId})
+            });
+            var upData = await upResp.json();
+            if (upData.ok || upData.status) {
+                statusDiv.textContent = '';
+                statusDiv.classList.add('hidden');
+                msgEl.textContent = 'Clip subido a ML. Estado: ' + (upData.status || 'enviado');
+                msgEl.className = 'text-xs text-green-600';
+                if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
+            } else {
+                statusDiv.classList.add('hidden');
+                msgEl.textContent = 'Video generado (ID: ' + vidId + ') pero error al subir: ' + (upData.error || 'ver log');
+                msgEl.className = 'text-xs text-yellow-600';
+                document.getElementById('clip-video-id').value = vidId;
+            }
+        } else {
+            statusDiv.classList.add('hidden');
+            msgEl.textContent = 'Error generando video: ' + (data.error || 'sin respuesta');
+            msgEl.className = 'text-xs text-red-500';
+        }
+    } catch(e) {
+        statusDiv.classList.add('hidden');
+        msgEl.textContent = 'Error: ' + e.message;
+        msgEl.className = 'text-xs text-red-500';
+    }
+    btn.disabled = false; btn.textContent = '✦ Generar Video con IA';
+};
+
+// ─── Video: Subir clip existente ─────────────────────────────────
+window.editModalUploadClip = async function(itemId) {
+    var videoId = document.getElementById('clip-video-id').value.trim();
+    var msgEl = document.getElementById('msg-clip');
+    var btn = document.getElementById('btn-upload-clip');
+    if (!videoId) { msgEl.textContent = 'Ingresa un video ID'; msgEl.className = 'text-xs text-red-500'; return; }
+    btn.disabled = true; btn.textContent = 'Subiendo...';
+    msgEl.textContent = 'Subiendo clip...'; msgEl.className = 'text-xs text-gray-500';
+    try {
+        var resp = await fetch('/api/lanzar/upload-clip/' + itemId, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({video_id: videoId})
+        });
+        var data = await resp.json();
+        if (data.ok || data.status) {
+            msgEl.textContent = 'Clip subido. Estado: ' + (data.status || 'enviado');
+            msgEl.className = 'text-xs text-green-600';
+            if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
+        } else {
+            msgEl.textContent = 'Error: ' + (data.error || 'respuesta inesperada');
+            msgEl.className = 'text-xs text-red-500';
+        }
+    } catch(e) {
+        msgEl.textContent = 'Error: ' + e.message;
+        msgEl.className = 'text-xs text-red-500';
+    }
+    btn.disabled = false; btn.textContent = 'Subir Clip';
+};
+
+// ─── BinManager inventory ────────────────────────────────────────
 {% if seller_sku %}
 (function() {
     fetch('/api/items/inventory/{{ seller_sku }}')
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            var loading = document.getElementById('inventory-loading');
-            var table = document.getElementById('inventory-table');
-            var errorEl = document.getElementById('inventory-error');
+            document.getElementById('inventory-loading').classList.add('hidden');
             if (data.error) {
-                loading.classList.add('hidden');
-                errorEl.textContent = data.error;
-                errorEl.classList.remove('hidden');
+                var errEl = document.getElementById('inventory-error');
+                errEl.textContent = data.error; errEl.classList.remove('hidden');
                 return;
             }
             var tj = data.MainQtyTJ || 0;
             var cdmx = data.MainQtyCDMX || 0;
             var mty = data.MainQtyMTY || 0;
-            // TJ informativo, total vendible = solo MTY + CDMX
             var total = cdmx + mty;
             document.getElementById('inv-cdmx').textContent = cdmx;
             document.getElementById('inv-tj').textContent = tj;
             document.getElementById('inv-mty').textContent = mty;
             document.getElementById('inv-total').textContent = total;
-            loading.classList.add('hidden');
-            table.classList.remove('hidden');
+            document.getElementById('inventory-table').classList.remove('hidden');
             window._inventoryTotal = total;
         })
         .catch(function() {
-            var loading = document.getElementById('inventory-loading');
-            var errorEl = document.getElementById('inventory-error');
-            if (loading) loading.classList.add('hidden');
-            if (errorEl) {
-                errorEl.textContent = 'Error consultando inventario';
-                errorEl.classList.remove('hidden');
-            }
+            document.getElementById('inventory-loading').classList.add('hidden');
+            var errEl = document.getElementById('inventory-error');
+            if (errEl) { errEl.textContent = 'Error consultando inventario'; errEl.classList.remove('hidden'); }
         });
 })();
 
@@ -527,4 +856,9 @@ window.useInventoryAsStock = function() {
     checkModified(stockInput);
 };
 {% endif %}
+
+// ─── Legacy compat ───────────────────────────────────────────────
+window.addPhoto = window.addPhotoToList;
+
+updateChangeCounter();
 </script>

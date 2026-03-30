@@ -4312,7 +4312,7 @@ async def item_edit_partial(request: Request, item_id: str):
         except Exception:
             description = ""
 
-        score, problems = _calculate_health_score(item)
+        score, problems, breakdown = _calculate_health_score(item, description)
 
         # Extract seller_sku
         seller_sku = item.get("seller_custom_field") or ""
@@ -4327,11 +4327,16 @@ async def item_edit_partial(request: Request, item_id: str):
                     seller_sku = var["seller_custom_field"]
                     break
 
-        return templates.TemplateResponse(request, "partials/item_edit_modal.html", {            "item": item,
+        listing_type = item.get("listing_type_id", "")
+
+        return templates.TemplateResponse(request, "partials/item_edit_modal.html", {
+            "item": item,
             "description": description,
             "score": score,
             "problems": problems,
+            "breakdown": breakdown,
             "seller_sku": seller_sku,
+            "listing_type": listing_type,
         })
     finally:
         await client.close()

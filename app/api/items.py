@@ -153,6 +153,7 @@ class BatchUpdate(BaseModel):
     free_shipping: Optional[bool] = None
     pictures: Optional[list] = None
     attributes: Optional[list] = None
+    listing_type_id: Optional[str] = None
 
 
 @router.get("")
@@ -224,7 +225,7 @@ async def get_items_needs_work():
                 body = item.get("body", item)
                 if not body or not body.get("id"):
                     continue
-                score, problems = _calculate_health_score(body)
+                score, problems, _ = _calculate_health_score(body)
                 # Extract SELLER_SKU
                 seller_sku = body.get("seller_custom_field") or ""
                 if not seller_sku and body.get("attributes"):
@@ -665,52 +666,123 @@ async def batch_update_item(item_id: str, data: BatchUpdate):
             except Exception as e:
                 results["attributes"] = {"ok": False, "error": str(e)}
 
+        # Listing type
+        if data.listing_type_id is not None:
+            valid_types = ("gold_pro", "gold_special", "gold_premium", "free")
+            if data.listing_type_id not in valid_types:
+                results["listing_type"] = {"ok": False, "error": f"Tipo invalido: {data.listing_type_id}"}
+            else:
+                try:
+                    await client.update_item(item_id, {"listing_type_id": data.listing_type_id})
+                    results["listing_type"] = {"ok": True}
+                except Exception as e:
+                    results["listing_type"] = {"ok": False, "error": str(e)}
+
         all_ok = all(r["ok"] for r in results.values())
         return {"ok": all_ok, "results": results}
     finally:
         await client.close()
 
 
-def _calculate_health_score(body: dict) -> tuple:
-    """Calcula health score (0-100) y lista de problemas."""
+def _calculate_health_score(body: dict, description: str = "") -> tuple:
+    """Calcula health score (0-100), lista de problemas y breakdown detallado."""
     score = 100
     problems = []
+    breakdown = []  # list of {label, impact, ok, tip}
 
+    # Fotos
     pictures = body.get("pictures", [])
-    if len(pictures) == 0:
-        score -= 50
-        problems.append("Sin fotos")
-    elif len(pictures) < 5:
-        score -= 30
-        problems.append(f"Solo {len(pictures)} fotos (min 5)")
-    elif len(pictures) < 8:
-        score -= 15
-        problems.append(f"Solo {len(pictures)} fotos (ideal 8+)")
+    n_pics = len(pictures)
+    if n_pics == 0:
+        score -= 50; problems.append("Sin fotos")
+        breakdown.append({"label": "Fotos (0)", "impact": -50, "ok": False, "tip": "Agrega minimo 5 fotos"})
+    elif n_pics < 5:
+        score -= 30; problems.append(f"Solo {n_pics} fotos (min 5)")
+        breakdown.append({"label": f"Fotos ({n_pics}/5)", "impact": -30, "ok": False, "tip": f"Faltan {5-n_pics} fotos"})
+    elif n_pics < 8:
+        score -= 15; problems.append(f"Solo {n_pics} fotos (ideal 8+)")
+        breakdown.append({"label": f"Fotos ({n_pics}/8+)", "impact": -15, "ok": False, "tip": f"Agrega {8-n_pics} fotos mas"})
+    else:
+        breakdown.append({"label": f"Fotos ({n_pics})", "impact": 0, "ok": True, "tip": ""})
 
-    if not body.get("video_id"):
-        score -= 10
-        problems.append("Sin video")
+    # Video
+    has_video = bool(body.get("video_id"))
+    if not has_video:
+        score -= 10; problems.append("Sin video clip")
+    breakdown.append({"label": "Video/Clip ML", "impact": -10 if not has_video else 0, "ok": has_video,
+                       "tip": "" if has_video else "Genera y sube un clip comercial"})
 
+    # Envio
     shipping = body.get("shipping", {})
     free = shipping.get("free_shipping", False) or shipping.get("logistic_type") == "fulfillment"
     if not free:
-        score -= 15
-        problems.append("Sin envio gratis")
+        score -= 15; problems.append("Sin envio gratis")
+    breakdown.append({"label": "Envio gratis", "impact": -15 if not free else 0, "ok": free,
+                       "tip": "" if free else "Activa envio gratis para mejor ranking"})
 
-    if body.get("status") == "paused":
-        score -= 40
-        problems.append("Pausado")
+    # Estado
+    is_paused = body.get("status") == "paused"
+    if is_paused:
+        score -= 40; problems.append("Publicacion pausada")
+    breakdown.append({"label": "Estado activo", "impact": -40 if is_paused else 0, "ok": not is_paused,
+                       "tip": "" if not is_paused else "Reactiva la publicacion"})
 
-    if body.get("available_quantity", 0) == 0:
-        score -= 30
-        problems.append("Sin stock")
+    # Stock
+    qty = body.get("available_quantity", 0)
+    if qty == 0:
+        score -= 30; problems.append("Sin stock")
+    breakdown.append({"label": f"Stock ({qty})", "impact": -30 if qty == 0 else 0, "ok": qty > 0,
+                       "tip": "" if qty > 0 else "Agrega stock para reactivar"})
 
+    # Titulo
     title = body.get("title", "")
-    if len(title) < 30:
-        score -= 20
-        problems.append(f"Titulo corto ({len(title)} chars)")
+    tlen = len(title)
+    if tlen < 30:
+        score -= 20; problems.append(f"Titulo muy corto ({tlen} chars)")
+        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -20, "ok": False, "tip": "Usa el boton IA para generar un titulo SEO de 55-60 chars"})
+    elif tlen < 45:
+        score -= 10; problems.append(f"Titulo corto ({tlen} chars)")
+        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -10, "ok": False, "tip": "Extiende el titulo a 55-60 chars con IA"})
+    else:
+        breakdown.append({"label": f"Titulo ({tlen} chars)", "impact": 0, "ok": True, "tip": ""})
 
-    return max(score, 0), problems
+    # Descripcion
+    desc_words = len(description.split()) if description and description.strip() else 0
+    if desc_words < 50:
+        score -= 10; problems.append(f"Descripcion muy corta ({desc_words} palabras)")
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -10, "ok": False, "tip": "Genera descripcion con IA (min 200 palabras)"})
+    elif desc_words < 150:
+        score -= 5; problems.append(f"Descripcion corta ({desc_words} palabras)")
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -5, "ok": False, "tip": "Ampliar descripcion a 200+ palabras mejora visibilidad"})
+    else:
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": 0, "ok": True, "tip": ""})
+
+    # GTIN
+    attrs = body.get("attributes", [])
+    has_gtin = any(a.get("id") == "GTIN" and a.get("value_name") for a in attrs)
+    if not has_gtin:
+        score -= 10; problems.append("Sin GTIN (codigo de barras)")
+    breakdown.append({"label": "GTIN (codigo barras)", "impact": -10 if not has_gtin else 0, "ok": has_gtin,
+                       "tip": "" if has_gtin else "Agrega el codigo de barras EAN/UPC del producto"})
+
+    # SELLER_SKU
+    has_sku = (bool(body.get("seller_custom_field")) or
+               any(a.get("id") == "SELLER_SKU" and a.get("value_name") for a in attrs))
+    if not has_sku:
+        score -= 5; problems.append("Sin SELLER_SKU")
+    breakdown.append({"label": "SELLER_SKU", "impact": -5 if not has_sku else 0, "ok": has_sku,
+                       "tip": "" if has_sku else "Agrega el SKU interno para sincronizacion con BinManager"})
+
+    # Tipo de publicacion
+    lt = body.get("listing_type_id", "")
+    is_clasica = lt == "gold_special"
+    if is_clasica:
+        score -= 5; problems.append("Tipo Clasica (cambiar a Premium)")
+    breakdown.append({"label": f"Tipo: {'Premium' if lt == 'gold_pro' else ('Clasica' if lt == 'gold_special' else lt)}",
+                       "impact": -5 if is_clasica else 0, "ok": not is_clasica,
+                       "tip": "" if not is_clasica else "Actualizar a gold_pro (Premium) para mejor exposicion y MSI"})
+
+    return max(score, 0), problems, breakdown
 
 
 def _classify_score(score: int) -> str:

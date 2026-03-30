@@ -91,6 +91,19 @@ Mayor control pero menor ranking que FULL/Flex
 Usar solo cuando FULL/Flex no aplican (productos muy grandes, zonas remotas)
 ```
 
+### FULL + Flex coexistencia (nuevo 2024-2026)
+```
+Un mismo item puede tener stock en FULL Y stock propio (Flex) simultáneamente.
+ML prioriza FULL para compradores en zonas con cobertura.
+Flex actúa como respaldo cuando FULL sin stock.
+
+Configuración:
+  - Stock FULL: enviado físicamente al centro de distribución ML
+  - Stock Flex: en tu almacén, colectado por ML
+
+Beneficio: cobertura 100% — sin pausas por stock FULL = 0 si tienes Flex activo.
+```
+
 ## 3. PRICING & PROFITABILIDAD
 
 ### La fórmula que SIEMPRE aplicas
@@ -344,29 +357,134 @@ Post-evento: analizar sell-through, identificar ganadores para siguiente evento
 
 ## 9. DEALS Y PROMOCIONES MELI 2026
 
+### 11 tipos de promoción disponibles en MLM (México)
+
 ```
-PRICE_DISCOUNT (descuento directo en el precio):
-  POST /seller-promotions/items/{id}?app_version=v2
-  Body: {deal_price, promotion_type: "PRICE_DISCOUNT", start_date, finish_date}
-  Aparece con precio tachado y precio de oferta → mejor CTR
-  Descuento mínimo recomendado: 10% (menos no genera urgencia)
+1. PRICE_DISCOUNT          — descuento directo sobre el precio del item
+2. CROSS_SELLING           — pack/combo de 2+ productos
+3. LOYALTY_DISCOUNT        — descuento exclusivo para compradores frecuentes
+4. CAMPAIGN                — campaña tradicional (requiere invitación de ML)
+5. DOD (Deal of the Day)   — oferta del día (requiere invitación de ML)
+6. FLASH_SALE              — venta flash por horas, stock limitado
+7. MELI_PLUS_DISCOUNT      — descuento para suscriptores de Meli+
+8. DIGITAL_COUPON          — cupón digital redimible en checkout
+9. COUPON_CAMPAIGN         — cupón de campaña para todos los compradores
+10. BUNDLE                 — conjunto de productos con precio especial
+11. CO_FUNDED              — co-financiado ML+vendedor (ML pone parte del descuento)
 
-CROSS_SELLING (paquetes/combos):
-  Agrupa 2+ publicaciones en una oferta de pack
-  Aumenta AOV y puede mejorar margen vs vender por separado
+SELLER_COUPON_CAMPAIGN     ← NO disponible en MLM (solo Brasil)
 
-HOT SALE / BUEN FIN listings oficiales:
-  Registrar en Seller Central → Herramientas de marketing → Eventos
-  Requiere: descuento ≥ 20% vs precio histórico verificado por MeLi
-  Ventaja: badge oficial del evento → mayor visibilidad
-
-Coupons MeLi (nuevo feature 2024-2026):
-  Similar a Amazon Coupons — badge visible en resultados de búsqueda
-  Descuento tomado al momento del checkout
-  Ideal para: liquidar stock lento sin bajar el precio base permanente
+Descuento máximo: 80% sobre el precio base
+Descuento mínimo recomendado: 10% (menos no genera badge visible)
 ```
 
-## 10. DIAGNÓSTICO DE PROBLEMAS
+### API de Promociones
+
+```
+Crear descuento en un item:
+  POST /seller-promotions/items/{item_id}?app_version=v2
+  Body:
+  {
+    "deal_price": 5999,
+    "promotion_type": "PRICE_DISCOUNT",
+    "start_date": "2026-05-01T00:00:00Z",
+    "finish_date": "2026-05-03T23:59:59Z"
+  }
+
+Listar promociones activas de un item:
+  GET /seller-promotions/items/{item_id}?app_version=v2
+
+Eliminar descuento:
+  DELETE /seller-promotions/items/{item_id}/{promotion_id}?app_version=v2
+```
+
+### Campañas que requieren invitación de ML
+
+```
+DOD (Deal of the Day) — Deal del Día:
+  - ML invita al vendedor vía Seller Central
+  - Requiere: descuento ≥ 30% + stock garantizado para 24h
+  - Posición prominente en la home de ML
+
+Traditional Campaign (ej: Hot Sale, Buen Fin):
+  - Seller Central → Herramientas de marketing → Eventos
+  - Requiere: descuento ≥ 20% vs precio histórico verificado por ML
+  - Badge oficial del evento → visibilidad premium
+```
+
+### Co-funded campaigns
+
+```
+ML aporta parte del descuento (típicamente 5-10%)
+Vendedor aporta el resto
+Ejemplo: descuento total 20% → ML cubre 8%, vendedor cubre 12%
+
+Cómo activar: Seller Central → Promociones → Co-financiadas
+Requiere: historial de ventas sólido + reputación verde
+```
+
+### Estrategia de promociones según caso
+
+```
+Liquidar stock lento sin bajar precio base:  → DIGITAL_COUPON
+Evento estacional (Hot Sale, Buen Fin):       → CAMPAIGN oficial
+Generar urgencia de compra:                   → FLASH_SALE (horas limitadas)
+Incentivar compra recurrente:                 → LOYALTY_DISCOUNT
+Aumentar ticket promedio:                     → CROSS_SELLING/BUNDLE
+Máxima visibilidad en categoría:              → DOD (si ML invita)
+```
+
+## 10. RECLAMOS Y DEVOLUCIONES — API 2024+
+
+### Claims API (endpoint actualizado)
+
+```
+NUEVO (usar desde mayo 2024):
+  GET  /post-purchase/v1/claims/                   ← lista reclamos
+  GET  /post-purchase/v1/claims/{claim_id}         ← detalle de reclamo
+  POST /post-purchase/v1/claims/{claim_id}/messages ← enviar mensaje al comprador
+
+DEPRECADO (mayo 2024) — NO usar:
+  GET /v1/claims/                                  ← deprecado
+  POST /v1/claims/{claim_id}/messages             ← deprecado
+
+Filtros de búsqueda:
+  GET /post-purchase/v1/claims/?seller_id={id}&status=opened&limit=50
+  Status posibles: opened, closed
+
+Resolver un reclamo:
+  POST /post-purchase/v1/claims/{claim_id}/resolution
+  Body: {"action": "AGREED", "message": "Resolución acordada con el comprador"}
+
+Acciones posibles:
+  AGREED         — acuerdo con el comprador (se cierra favorablemente)
+  REFUND         — reembolso al comprador
+  RETURN_AGREED  — acordar devolución del producto
+```
+
+### Returns API (endpoint actualizado)
+
+```
+NUEVO (usar desde 2024):
+  GET  /post-purchase/v2/claims/{claim_id}/returns           ← detalle de devolución
+  POST /post-purchase/v2/claims/{claim_id}/returns/actions   ← ejecutar acción
+
+DEPRECADO — NO usar:
+  GET /v2/claims/{claim_id}/returns          ← deprecado
+  POST /v2/claims/{claim_id}/returns/actions ← deprecado
+
+Acciones de devolución:
+  APPROVE_RETURN  — aprobar devolución (ML genera etiqueta de envío gratis al comprador)
+  REJECT_RETURN   — rechazar (solo si producto no aplica a política de devoluciones)
+  CONFIRM_REFUND  — confirmar que el producto fue recibido y emitir reembolso
+
+Regla crítica de reputación:
+  Reclamo resuelto en < 48 horas hábiles → NO afecta el health score
+  Reclamo resuelto después de 48h → SÍ afecta (cuenta como reclamo negativo)
+  Meta: 100% de reclamos resueltos en < 24 horas
+```
+
+## 11. DIAGNÓSTICO DE PROBLEMAS
 
 ### "Las ventas bajaron"
 ```
@@ -393,7 +511,7 @@ Acción: revisar notificación en Seller Central, corregir el issue específico,
 apelar si la pausa fue incorrecta (tiene > 90% de éxito con evidencia)
 ```
 
-## 11. GOTCHAS CRITICOS DE LA API MELI
+## 12. GOTCHAS CRITICOS DE LA API MELI
 
 ### User Products API (nuevo sistema 2024-2026) — family_name como campo raíz
 
@@ -415,7 +533,7 @@ Payload mínimo para publicar en ML1002 (Televisores) con User Products:
   "price": 7517,
   "currency_id": "MXN",
   "available_quantity": 3,
-  "listing_type_id": "gold_special",
+  "listing_type_id": "gold_pro",
   "condition": "new",
   "buying_mode": "buy_it_now",
   "pictures": [{"id": "ML_PICTURE_ID"}],
@@ -437,6 +555,171 @@ Atributos obligatorios para MLM1002 (Televisores):
 - `DISPLAY_SIZE` con unidad: `"43 \""` o `"43 pulgadas"` — NO solo `"43"`
 - `GTIN` — código de barras del producto
 - Package dims: `SELLER_PACKAGE_HEIGHT/WIDTH/LENGTH` en `cm`, `SELLER_PACKAGE_WEIGHT` en `g` (solo enteros)
+
+### Listing Types — CRÍTICO (no confundir)
+
+```
+gold_pro     = PREMIUM  — máxima exposición + MSI (meses sin intereses)
+gold_special = CLÁSICA  — exposición alta, sin MSI
+gold_premium = LEGACY/DEPRECADO — NO usar en creación de items nuevos
+
+Regla: SIEMPRE crear con gold_pro para productos de volumen.
+El payload de creación de item:
+  "listing_type_id": "gold_pro"   ← CORRECTO (Premium)
+  "listing_type_id": "gold_special" ← Clásica (solo si margen no soporta Premium)
+  "listing_type_id": "gold_premium" ← INCORRECTO (deprecado, puede fallar)
+```
+
+### Prices API — Actualización 2024
+
+**Endpoints correctos (no deprecados):**
+```
+GET  /items/{id}/prices                    ← precios actuales del item
+PUT  /items/{id}/prices                    ← actualizar precio base
+POST /items/{id}/sale_price               ← activar precio de oferta temporal
+```
+
+**Campos deprecados — NO usar en PATCH /items:**
+```
+"price"       ← deprecado, ML puede ignorarlo o retornar error
+"base_price"  ← deprecado
+```
+
+**Payload correcto para actualizar precio:**
+```json
+PUT /items/{id}/prices
+{
+  "prices": [
+    {
+      "id": "standard",
+      "type": "standard",
+      "amount": 7999,
+      "currency_id": "MXN"
+    }
+  ]
+}
+```
+
+**Payload para precio de oferta (sale_price):**
+```json
+POST /items/{id}/sale_price
+{
+  "price_id": "standard",
+  "type": "promotion",
+  "amount": 6999,
+  "currency_id": "MXN",
+  "start_time": "2026-05-01T00:00:00Z",
+  "end_time": "2026-05-03T23:59:59Z"
+}
+```
+
+**Consultar fees de publicación:**
+```
+GET /sites/MLM/listing_prices?price={price}&listing_type_id={type}&category_id={cat}
+```
+
+### Variations — Reglas críticas
+
+```
+Máximo de variaciones: 100 por item (200 con permiso especial de ML)
+El precio debe ser IDÉNTICO en todas las variaciones de un mismo item
+Para precios distintos por variante: crear items separados
+
+Variaciones típicas: COLOR, STORAGE_CAPACITY, SIZE
+Cada variación tiene su propio:
+  - available_quantity (stock individual)
+  - picture_ids (fotos de esa variante)
+  - seller_custom_field (SKU de variante)
+  - attributes[] (solo los atributos que varían + SELLER_SKU)
+
+Regla de stock multi-origen con variaciones:
+  Usar user_product_id + header x-version para evitar race conditions
+  x-version: valor del campo "version" en la respuesta GET del item
+```
+
+### Stock y Auto-pausa
+
+```
+Auto-pausa al llegar a 0:
+  PUT /items/{id} con "available_quantity": 0 → ML pausa el item automáticamente
+  Para reactivar: PUT /items/{id} con "available_quantity": N (N > 0)
+  El item recupera su historial de ventas (no se pierde al pausar)
+
+Multi-origen stock (warehouses):
+  Los warehouses se crean desde el panel de vendedor (NO por API)
+  Para actualizar stock multi-origen: incluir "user_product_id" en el payload
+  Header obligatorio para evitar conflictos: x-version: {version_del_item}
+
+  Endpoint: PUT /items/{id}
+  Headers: Authorization: Bearer {token}, x-version: {version}
+  Body: {"available_quantity": N, "user_product_id": "USAML..."}
+
+Tiempo de fabricación (manufacturing_time):
+  Soportado en Products sync listings
+  Máximo: 45 días
+  Útil para productos bajo pedido o importados
+```
+
+### Pictures — Reglas técnicas
+
+```
+Mínimo: 500×500 px (recomendado 1200×1200 px para zoom)
+Fondo blanco obligatorio en primera imagen
+Formatos: JPEG, PNG
+Máximo: 12 imágenes por listing
+
+IPs de ML para imágenes (whitelist si usas servidor propio):
+  Usar subdomain de ML para subir: upload.mercadolibre.com
+  POST /pictures  con multipart/form-data
+  Respuesta: {"id": "ML_PICTURE_ID", "url": "..."}
+
+  Luego incluir en item:
+  "pictures": [{"id": "ML_PICTURE_ID"}]
+
+El ID de imagen es reutilizable entre publicaciones del mismo vendedor.
+```
+
+### Relist (relanzar publicaciones)
+
+```
+Un item cerrado puede relanzarse dentro de los 60 días posteriores al cierre.
+Beneficio: el historial de visitas se transfiere al nuevo item (ranking boost).
+
+Proceso:
+  1. POST /items/{id}/relist
+  Body: {"listing_type_id": "gold_pro", "price": X, "quantity": N}
+
+  2. El item relanzado hereda:
+     ✓ Historial de visitas (hasta 60 días)
+     ✓ Posición de ranking asociada
+
+  3. NO hereda:
+     ✗ Ventas históricas (empiezan desde 0 en el nuevo item)
+     ✗ Calificaciones de compradores
+
+Regla: si el item tiene > 50 visitas acumuladas, siempre relanzar en lugar de crear nuevo.
+```
+
+### Questions & Answers API
+
+```
+Listar preguntas de un item:
+  GET /questions/search?item={item_id}&status=UNANSWERED
+
+Responder una pregunta:
+  POST /answers
+  Body: {"question_id": 123456, "text": "El producto incluye garantía de 1 año..."}
+
+Reglas críticas:
+  - Preguntas sin responder > 48h penalizan la conversión (visible para compradores)
+  - NO se pueden editar respuestas una vez enviadas
+  - Tono: siempre amable, mencionar garantía, tiempo de envío, o especificaciones
+  - Prohibido incluir datos de contacto (WhatsApp, email) en respuestas
+
+Métricas impacto:
+  Tiempo de respuesta < 1h → badge "Responde rápido"
+  Tiempo > 48h → penalización visible en perfil del vendedor
+```
 
 ### ML Clips (Video comercial en listings) — API documentada
 
@@ -497,7 +780,7 @@ Impacto operativo: si el SKU no se lee correctamente, el item queda sin mapeo en
 
 ---
 
-## 12. FRAMEWORK DE DECISIÓN
+## 13. FRAMEWORK DE DECISIÓN
 
 Antes de cualquier recomendación:
 1. **Rentabilidad**: ¿genera dinero después de TODOS los costos?
