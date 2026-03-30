@@ -2218,6 +2218,99 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
+    # ── Ken Burns slideshow desde imágenes AI (SIEMPRE funciona, 30s) ────────
+    if len(ai_image_urls) >= 3:
+        logger.info(f"=== SLIDESHOW desde {len(ai_image_urls)} imágenes AI ===")
+        n_images  = min(len(ai_image_urls), 6)
+        per_img_s = 5.0  # 6 imágenes × 5s = 30s
+
+        # TTS en paralelo mientras preparamos imágenes
+        tts_task = asyncio.ensure_future(elevenlabs_client.generate_audio(script))
+
+        async def _dl_img(url: str):
+            async with httpx.AsyncClient(timeout=60.0) as _c:
+                r = await _c.get(url, follow_redirects=True)
+                return r.content if r.status_code == 200 and len(r.content) > 500 else None
+
+        img_results = await asyncio.gather(
+            *[_dl_img(u) for u in ai_image_urls[:n_images]], return_exceptions=True
+        )
+        audio_result = await tts_task
+
+        with _tf.TemporaryDirectory() as tmpdir:
+            seg_paths = []
+            for idx, img_data in enumerate(img_results):
+                if not isinstance(img_data, bytes) or not img_data:
+                    logger.warning(f"Imagen {idx} no descargada, saltando")
+                    continue
+                img_path = _os.path.join(tmpdir, f"img_{idx:02d}.jpg")
+                with open(img_path, "wb") as fh:
+                    fh.write(img_data)
+                seg_path = _os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
+                seg_cmd = [
+                    ffmpeg_bin, "-y",
+                    "-loop", "1", "-framerate", "25", "-i", img_path,
+                    "-vf", (
+                        "scale=1280:720:force_original_aspect_ratio=decrease,"
+                        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+                    ),
+                    "-t", str(per_img_s),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-pix_fmt", "yuv420p",
+                    seg_path,
+                ]
+                sr = _sp.run(seg_cmd, capture_output=True, timeout=60)
+                if sr.returncode == 0 and _os.path.exists(seg_path) and _os.path.getsize(seg_path) > 1000:
+                    seg_paths.append(seg_path)
+                    logger.info(f"Segmento {idx} OK ({_os.path.getsize(seg_path)} bytes)")
+                else:
+                    logger.error(f"Segmento {idx} falló (rc={sr.returncode}): {sr.stderr.decode(errors='replace')[:200]}")
+
+            if not seg_paths:
+                logger.error("Slideshow: ningún segmento generado, cayendo a minimax")
+            else:
+                concat_path = _os.path.join(tmpdir, "concat.txt")
+                raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
+                aud_path    = _os.path.join(tmpdir, "audio.mp3")
+                out_path    = _os.path.join(tmpdir, "output.mp4")
+
+                with open(concat_path, "w") as cf:
+                    for sp_path in seg_paths:
+                        cf.write(f"file '{sp_path}'\n")
+
+                cat_r = _sp.run([
+                    ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
+                    "-i", concat_path, "-c", "copy", raw_cat,
+                ], capture_output=True, timeout=120)
+                if cat_r.returncode != 0:
+                    logger.error(f"Concat slideshow error: {cat_r.stderr.decode(errors='replace')[:300]}")
+                else:
+                    logger.info(f"Concat slideshow OK: {len(seg_paths)} segs → {_os.path.getsize(raw_cat)} bytes")
+
+                has_audio = isinstance(audio_result, bytes) and bool(audio_result)
+                if has_audio:
+                    with open(aud_path, "wb") as fh:
+                        fh.write(audio_result)
+                    mix_r = _sp.run([
+                        ffmpeg_bin, "-y",
+                        "-i", raw_cat, "-i", aud_path,
+                        "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                        "-shortest", "-movflags", "+faststart",
+                        out_path,
+                    ], capture_output=True, timeout=120)
+                    final_path = out_path if mix_r.returncode == 0 else raw_cat
+                    if mix_r.returncode != 0:
+                        logger.warning(f"Audio mix error: {mix_r.stderr.decode(errors='replace')[:300]}")
+                else:
+                    final_path = raw_cat
+
+                with open(final_path, "rb") as fh:
+                    _video_cache[vid_id] = fh.read()
+
+                out_mb = len(_video_cache[vid_id]) / 1_048_576
+                logger.info(f"Slideshow listo: {vid_id} ({out_mb:.1f} MB) segs={len(seg_paths)} audio={has_audio}")
+                return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
+
     # ── Generar TTS + 5 clips minimax EN PARALELO ────────────────────────────
     # Cada escena genera un clip distinto → sin loop visible, duración = audio
     logger.info(f"=== MULTI-SCENE VIDEO: {len(scenes)} escenas + TTS en paralelo ===")
@@ -2932,83 +3025,77 @@ async def create_listing_endpoint(request: Request):
             p["attributes"] = [a for a in p["attributes"] if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")]
         return p
 
-    # ── Resolver value_id de FAMILY_NAME desde catálogo ML ───────────────────
-    fn_allowed_values: list = []
+    # ── FAMILY_NAME: siempre buscar valores permitidos del catálogo ──────────
     fn_attr = next((a for a in attrs if isinstance(a, dict) and a.get("id") == "FAMILY_NAME"), None)
-    if fn_attr:
-        try:
-            cat_attrs = await client.get(f"/categories/{category_id}/attributes")
-            if isinstance(cat_attrs, list):
-                for ca in cat_attrs:
-                    if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
-                        fn_allowed_values = [av for av in (ca.get("allowed_values") or []) if isinstance(av, dict) and av.get("id")]
-                        wanted = (fn_attr.get("value_name") or "").lower()
-                        # Exact match
-                        for av in fn_allowed_values:
-                            if av.get("name", "").lower() == wanted:
-                                fn_attr["value_id"] = av["id"]
-                                fn_attr["value_name"] = av["name"]
-                                logger.info(f"FAMILY_NAME exact: {av['id']} ({av['name']})")
-                                break
-                        # Partial match
-                        if not fn_attr.get("value_id") and wanted:
-                            for av in fn_allowed_values:
-                                av_l = av.get("name", "").lower()
-                                if av_l and (av_l in wanted or wanted in av_l):
-                                    fn_attr["value_id"] = av["id"]
-                                    fn_attr["value_name"] = av["name"]
-                                    logger.info(f"FAMILY_NAME partial: {av['id']} ({av['name']})")
-                                    break
-                        break
-        except Exception as _fn_err:
-            logger.warning(f"FAMILY_NAME lookup failed: {_fn_err}")
+    fn_allowed_values: list = []
+    try:
+        cat_attrs = await client.get(f"/categories/{category_id}/attributes")
+        if isinstance(cat_attrs, list):
+            for ca in cat_attrs:
+                if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
+                    fn_allowed_values = [
+                        av for av in (ca.get("allowed_values") or [])
+                        if isinstance(av, dict) and av.get("id")
+                    ]
+                    logger.info(f"FAMILY_NAME catalog: {len(fn_allowed_values)} valores")
+                    break
+    except Exception as _fn_err:
+        logger.warning(f"FAMILY_NAME catalog lookup failed: {_fn_err}")
 
-    # Si fn_attr existe pero no tiene value_id aún, forzar al primer valor del catálogo
-    if fn_attr and not fn_attr.get("value_id") and fn_allowed_values:
-        fn_attr["value_id"]   = fn_allowed_values[0]["id"]
-        fn_attr["value_name"] = fn_allowed_values[0].get("name", "")
-        logger.info(f"FAMILY_NAME value_id forzado a primer valor: {fn_allowed_values[0]['id']}")
+    # Resolver value_id si fn_attr existe en los attrs del body
+    if fn_attr and fn_allowed_values:
+        wanted = (fn_attr.get("value_name") or "").lower()
+        for av in fn_allowed_values:
+            if av.get("name", "").lower() == wanted:
+                fn_attr["value_id"] = av["id"]
+                fn_attr["value_name"] = av["name"]
+                logger.info(f"FAMILY_NAME exact: {av['id']} ({av['name']})")
+                break
+        if not fn_attr.get("value_id") and wanted:
+            for av in fn_allowed_values:
+                av_l = av.get("name", "").lower()
+                if av_l and (av_l in wanted or wanted in av_l):
+                    fn_attr["value_id"] = av["id"]
+                    fn_attr["value_name"] = av["name"]
+                    logger.info(f"FAMILY_NAME partial: {av['id']} ({av['name']})")
+                    break
+        if not fn_attr.get("value_id") and fn_allowed_values:
+            fn_attr["value_id"] = fn_allowed_values[0]["id"]
+            fn_attr["value_name"] = fn_allowed_values[0].get("name", "")
+            logger.info(f"FAMILY_NAME forzado primer valor: {fn_allowed_values[0]['id']}")
 
     logger.info(f"ML attrs being sent: {[a.get('id') for a in attrs]}")
     if fn_attr:
         logger.info(f"FAMILY_NAME: value_id={fn_attr.get('value_id')!r} value_name={fn_attr.get('value_name')!r}")
-    logger.info(f"fn_allowed_values count: {len(fn_allowed_values)}")
+    logger.info(f"fn_allowed_values: {len(fn_allowed_values)} valores del catálogo")
 
     import copy as _copy
 
-    def _with_fn(payload: dict, val: dict) -> dict:
-        """Copia de payload con FAMILY_NAME forzado al valor dado."""
-        p = _copy.deepcopy(payload)
-        if "attributes" in p:
-            for a in p["attributes"]:
-                if isinstance(a, dict) and a.get("id") == "FAMILY_NAME":
-                    a["value_id"]   = val["id"]
-                    a["value_name"] = val.get("name", "")
+    def _payload_add_fn(base: dict, val: dict) -> dict:
+        """Copia con FAMILY_NAME añadido o reemplazado."""
+        p = _copy.deepcopy(base)
+        a_list = [a for a in (p.get("attributes") or []) if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")]
+        a_list.append({"id": "FAMILY_NAME", "value_id": val["id"], "value_name": val.get("name", "")})
+        p["attributes"] = a_list
         return p
 
     try:
-        # ── Intento 1: payload completo con FAMILY_NAME tal como viene ────────
+        # Intento 1: payload tal como viene
         result = await _post_item(item_payload)
-        logger.info(f"ML attempt 1: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+        logger.info(f"ML intento 1: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # ── Intento 2: sin FAMILY_NAME (non-catalog listings no lo requieren) ─
+        # Intentos 2..N: probar cada valor del catálogo para FAMILY_NAME
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            logger.warning("Intento 2: publicando SIN FAMILY_NAME")
-            result = await _post_item(_attrs_without_fn(item_payload))
-            logger.info(f"ML attempt 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
-
-        # ── Intentos 3..N: FAMILY_NAME con cada valor del catálogo ───────────
-        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            for idx, fv in enumerate(fn_allowed_values[:10]):  # máx 10 valores
-                logger.warning(f"Intento {3+idx}: FAMILY_NAME={fv['id']} ({fv.get('name')})")
-                result = await _post_item(_with_fn(item_payload, fv))
-                logger.info(f"ML attempt {3+idx}: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+            for idx, fv in enumerate(fn_allowed_values[:15]):
+                logger.warning(f"ML intento {2+idx}: FAMILY_NAME={fv['id']} ({fv.get('name')})")
+                result = await _post_item(_payload_add_fn(item_payload, fv))
+                logger.info(f"ML intento {2+idx}: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
                 if not result.get("_meli_error"):
                     break
 
-        # ── Último recurso: sin ningún attribute ─────────────────────────────
+        # Último recurso: sin attributes
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            logger.warning("Último recurso: publicando SIN attributes")
+            logger.warning("ML último recurso: sin attributes")
             bare = _copy.deepcopy(item_payload)
             bare.pop("attributes", None)
             result = await _post_item(bare)
