@@ -55,6 +55,7 @@
   // ── Items list ─────────────────────────────────────────────────────────────
   async function loadItems() {
     if (state.loading) return;
+    if (state.tab === 'comparar') return;
     state.loading = true;
     show('table-loading'); hide('table-wrap');
 
@@ -89,6 +90,7 @@
   // ── Tabla ──────────────────────────────────────────────────────────────────
   function renderTable() {
     hide('table-loading');
+    if (state.tab === 'comparar') return;
     show('table-wrap');
 
     const tbody  = document.getElementById('productos-tbody');
@@ -255,10 +257,17 @@
       btn.classList.toggle('text-gray-500', !active);
       btn.classList.toggle('bg-white', !active);
     });
-    // Show/hide compare section for candidates tab
-    const compareSection = document.getElementById('lanzar-compare-section');
-    if (compareSection) {
-      compareSection.classList.toggle('hidden', tab !== 'candidates');
+
+    const isComparar = tab === 'comparar';
+    // Show compare-wrap OR table area
+    const compareWrap = document.getElementById('compare-wrap');
+    if (compareWrap) compareWrap.classList.toggle('hidden', !isComparar);
+
+    // When switching to compare tab, hide table loading/wrap; otherwise restore
+    if (isComparar) {
+      hide('table-loading');
+      hide('table-wrap');
+      return; // don't call loadItems
     }
     loadItems();
   };

@@ -963,14 +963,19 @@ async def ai_improve(body: dict):
 
     if field == "title":
         prompt = (
-            f"Genera exactamente 3 titulos SEO optimizados para Mercado Libre Mexico.\n"
+            f"Genera exactamente 3 titulos SEO para Mercado Libre Mexico.\n"
             f"Producto: {current_value}\n"
             f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n\n"
-            f"Reglas:\n"
-            f"- Max 60 caracteres cada uno\n"
-            f"- Formato: Marca + Tipo de Producto + Specs descriptivas\n"
+            f"REGLAS CRITICAS:\n"
+            f"- OBLIGATORIO: cada titulo debe tener entre 55 y 60 caracteres EXACTOS\n"
+            f"- Usa TODOS los caracteres disponibles — un titulo de 44 chars es INACEPTABLE\n"
+            f"- Formato base: Marca + Tipo Producto + Especificacion principal + Detalle\n"
+            f"- Incluye tamaño/capacidad, tecnologia, voltaje (127V) si el espacio lo permite\n"
+            f"- Si sobran caracteres agrega: Smart, WiFi, para Casa, Negro, Blanco, etc.\n"
             f"- NO incluir numeros de parte ni codigos de modelo\n"
-            f"- Palabras clave que buscan compradores en Mexico\n\n"
+            f"- Palabras clave de alto volumen de busqueda en Mexico\n\n"
+            f"EJEMPLO MALO (44 chars): 'Samsung Televisor QLED 4K Smart 55 Pulgadas'\n"
+            f"EJEMPLO BUENO (59 chars): 'Samsung Televisor QLED 4K Smart 55 Pulgadas WiFi 127V'\n\n"
             f"Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."
         )
 
