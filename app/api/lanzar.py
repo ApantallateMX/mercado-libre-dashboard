@@ -3058,10 +3058,11 @@ async def create_listing_endpoint(request: Request):
     title              = body.get("title", "").strip()
     price              = body.get("price", 0)
     catalog_product_id = body.get("catalog_product_id", "").strip()
+    family_name_body = body.get("family_name", "").strip()
     if not price:
         return JSONResponse({"error": "price es requerido"}, status_code=400)
-    if not catalog_product_id and (not category_id or not title):
-        return JSONResponse({"error": "category_id y title son requeridos cuando no hay catalog_product_id"}, status_code=400)
+    if not category_id:
+        return JSONResponse({"error": "category_id es requerido"}, status_code=400)
 
     description = body.get("description", "")
     sku         = body.get("sku", "")
@@ -3090,9 +3091,8 @@ async def create_listing_endpoint(request: Request):
                 {"id": "WARRANTY_TIME", "value_name": warranty_time},
             ]
     else:
-        # ── Standard listing ──────────────────────────────────────────────────
+        # ── Standard / User Products listing ─────────────────────────────────
         item_payload = {
-            "title":              title,
             "category_id":        category_id,
             "price":              float(price),
             "currency_id":        "MXN",
@@ -3101,6 +3101,8 @@ async def create_listing_endpoint(request: Request):
             "condition":          body.get("condition", "new"),
             "buying_mode":        "buy_it_now",
         }
+        if title:
+            item_payload["title"] = title
         if pictures:
             item_payload["pictures"] = [{"id": p} if isinstance(p, str) else p for p in pictures]
         if sku:
@@ -3110,7 +3112,7 @@ async def create_listing_endpoint(request: Request):
                 {"id": "WARRANTY_TYPE", "value_name": warranty_type},
                 {"id": "WARRANTY_TIME", "value_name": warranty_time},
             ]
-    # Standard listing: merge attributes from body
+    # Merge attributes from body
     attrs = list(body.get("attributes") or [])
     if not catalog_product_id and attrs:
         item_payload["attributes"] = attrs
@@ -3131,7 +3133,7 @@ async def create_listing_endpoint(request: Request):
     # ── family_name (User Products API) — campo raíz, no un atributo ─────────
     # ML lo exige para categorías con catálogo (ej. Televisores MLM1002).
     # El vendedor elige el nombre; agrupa variantes del mismo producto.
-    family_name = (body.get("family_name") or "").strip()
+    family_name = family_name_body
     if not family_name and not catalog_product_id:
         # Auto-generar desde los atributos más importantes del producto
         brand_val = next(
@@ -3153,18 +3155,27 @@ async def create_listing_endpoint(request: Request):
     logger.info(f"ML attrs: {[a.get('id') for a in attrs]}")
 
     try:
+        import copy as _copy
+
         # Intento 1: payload completo con family_name
         result = await _post_item(item_payload)
         logger.info(f"ML intento 1: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # Intento 2: sin family_name (por si la cuenta no está en User Products)
+        # Intento 2: "title invalid" → quitar title (User Products catalog auto-genera el titulo)
+        if result.get("_meli_error") and "title" in result["_meli_error"].lower() and "invalid" in result["_meli_error"].lower():
+            payload_no_title = _copy.deepcopy(item_payload)
+            payload_no_title.pop("title", None)
+            logger.warning("ML intento 2: sin title (User Products mode)")
+            result = await _post_item(payload_no_title)
+            logger.info(f"ML intento 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+
+        # Intento 3: sin family_name (por si la cuenta no está en User Products)
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            import copy as _copy
             payload_no_fn = _copy.deepcopy(item_payload)
             payload_no_fn.pop("family_name", None)
-            logger.warning("ML intento 2: sin family_name")
+            logger.warning("ML intento 3: sin family_name")
             result = await _post_item(payload_no_fn)
-            logger.info(f"ML intento 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+            logger.info(f"ML intento 3: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
