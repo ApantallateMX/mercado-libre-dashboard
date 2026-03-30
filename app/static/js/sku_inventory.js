@@ -2046,31 +2046,16 @@
             if (!tipsHtml) tipsHtml = '<p class="text-green-600 text-xs font-semibold">Publicacion optimizada!</p>';
             document.getElementById('opt-tips').innerHTML = tipsHtml;
 
-            // Detect catalog item (family_name blocks title edits)
-            var isCatalog = !!(item.family_name || item.catalog_product_id);
             var titleInput = document.getElementById('opt-title');
             var currentTitle = item.title || '';
             titleInput.value = currentTitle;
+            titleInput.disabled = false;
+            titleInput.classList.remove('bg-gray-100', 'text-gray-500');
+            titleInput.title = '';
             document.getElementById('opt-title-len').textContent = '(' + currentTitle.length + '/60)';
-            if (isCatalog) {
-                titleInput.disabled = true;
-                titleInput.classList.add('bg-gray-100', 'text-gray-500');
-                titleInput.title = 'Titulo bloqueado por MeLi (item de catalogo)';
-                var lockNotice = document.getElementById('opt-catalog-notice');
-                if (!lockNotice) {
-                    titleInput.parentElement.insertAdjacentHTML('afterbegin',
-                        '<div id="opt-catalog-notice" class="mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 flex items-center gap-2">' +
-                        '<svg class="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>' +
-                        '<span>Item de catalogo: el titulo no se puede modificar desde la API. Puedes editar descripcion, fotos y atributos.</span>' +
-                        '</div>');
-                }
-            } else {
-                titleInput.disabled = false;
-                titleInput.classList.remove('bg-gray-100', 'text-gray-500');
-                titleInput.title = '';
-                var lockNotice = document.getElementById('opt-catalog-notice');
-                if (lockNotice) lockNotice.remove();
-            }
+            // Remove any old catalog notice
+            var lockNotice = document.getElementById('opt-catalog-notice');
+            if (lockNotice) lockNotice.remove();
 
             var titleSugEl = document.getElementById('opt-title-suggestion');
             if (titleSugEl) titleSugEl.remove();
@@ -2315,8 +2300,7 @@
         var resultEl = document.getElementById('opt-result');
 
         var newTitle = document.getElementById('opt-title').value.trim();
-        var isCatalogItem = !!(item.family_name || item.catalog_product_id);
-        if (newTitle && newTitle !== item.title && !isCatalogItem) {
+        if (newTitle && newTitle !== item.title) {
             payload.title = newTitle;
         }
 
