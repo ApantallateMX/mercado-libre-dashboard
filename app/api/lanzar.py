@@ -3128,87 +3128,43 @@ async def create_listing_endpoint(request: Request):
         except _MeliErr as exc:
             return {"_meli_error": str(exc), "_meli_body": getattr(exc, "body", {})}
 
-    def _attrs_without_fn(payload: dict) -> dict:
-        """Retorna copia de payload sin FAMILY_NAME en attributes."""
-        import copy as _copy
-        p = _copy.deepcopy(payload)
-        if "attributes" in p:
-            p["attributes"] = [a for a in p["attributes"] if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")]
-        return p
+    # ── family_name (User Products API) — campo raíz, no un atributo ─────────
+    # ML lo exige para categorías con catálogo (ej. Televisores MLM1002).
+    # El vendedor elige el nombre; agrupa variantes del mismo producto.
+    family_name = (body.get("family_name") or "").strip()
+    if not family_name and not catalog_product_id:
+        # Auto-generar desde los atributos más importantes del producto
+        brand_val = next(
+            (a.get("value_name", "") for a in attrs if isinstance(a, dict) and a.get("id") == "BRAND"),
+            body.get("brand", ""),
+        )
+        model_val = next(
+            (a.get("value_name", "") for a in attrs if isinstance(a, dict) and a.get("id") == "MODEL"),
+            body.get("model", ""),
+        )
+        # Usar brand + model, truncado a 60 chars
+        family_name = f"{brand_val} {model_val}".strip()[:60]
 
-    # ── FAMILY_NAME: siempre buscar valores permitidos del catálogo ──────────
-    fn_attr = next((a for a in attrs if isinstance(a, dict) and a.get("id") == "FAMILY_NAME"), None)
-    fn_allowed_values: list = []
-    try:
-        cat_attrs = await client.get(f"/categories/{category_id}/attributes")
-        if isinstance(cat_attrs, list):
-            for ca in cat_attrs:
-                if isinstance(ca, dict) and ca.get("id") == "FAMILY_NAME":
-                    fn_allowed_values = [
-                        av for av in (ca.get("allowed_values") or [])
-                        if isinstance(av, dict) and av.get("id")
-                    ]
-                    logger.info(f"FAMILY_NAME catalog: {len(fn_allowed_values)} valores")
-                    break
-    except Exception as _fn_err:
-        logger.warning(f"FAMILY_NAME catalog lookup failed: {_fn_err}")
+    if family_name:
+        item_payload["family_name"] = family_name
+        logger.info(f"family_name: {family_name!r}")
 
-    # Resolver value_id si fn_attr existe en los attrs del body
-    if fn_attr and fn_allowed_values:
-        wanted = (fn_attr.get("value_name") or "").lower()
-        for av in fn_allowed_values:
-            if av.get("name", "").lower() == wanted:
-                fn_attr["value_id"] = av["id"]
-                fn_attr["value_name"] = av["name"]
-                logger.info(f"FAMILY_NAME exact: {av['id']} ({av['name']})")
-                break
-        if not fn_attr.get("value_id") and wanted:
-            for av in fn_allowed_values:
-                av_l = av.get("name", "").lower()
-                if av_l and (av_l in wanted or wanted in av_l):
-                    fn_attr["value_id"] = av["id"]
-                    fn_attr["value_name"] = av["name"]
-                    logger.info(f"FAMILY_NAME partial: {av['id']} ({av['name']})")
-                    break
-        if not fn_attr.get("value_id") and fn_allowed_values:
-            fn_attr["value_id"] = fn_allowed_values[0]["id"]
-            fn_attr["value_name"] = fn_allowed_values[0].get("name", "")
-            logger.info(f"FAMILY_NAME forzado primer valor: {fn_allowed_values[0]['id']}")
-
-    logger.info(f"ML attrs being sent: {[a.get('id') for a in attrs]}")
-    if fn_attr:
-        logger.info(f"FAMILY_NAME: value_id={fn_attr.get('value_id')!r} value_name={fn_attr.get('value_name')!r}")
-    logger.info(f"fn_allowed_values: {len(fn_allowed_values)} valores del catálogo")
-
-    import copy as _copy
-
-    def _payload_add_fn(base: dict, val: dict) -> dict:
-        """Copia con FAMILY_NAME añadido o reemplazado."""
-        p = _copy.deepcopy(base)
-        a_list = [a for a in (p.get("attributes") or []) if not (isinstance(a, dict) and a.get("id") == "FAMILY_NAME")]
-        a_list.append({"id": "FAMILY_NAME", "value_id": val["id"], "value_name": val.get("name", "")})
-        p["attributes"] = a_list
-        return p
+    logger.info(f"ML payload keys: {list(item_payload.keys())}")
+    logger.info(f"ML attrs: {[a.get('id') for a in attrs]}")
 
     try:
-        # Intento 1: payload tal como viene
+        # Intento 1: payload completo con family_name
         result = await _post_item(item_payload)
         logger.info(f"ML intento 1: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
-        # Intentos 2..N: probar cada valor del catálogo para FAMILY_NAME
+        # Intento 2: sin family_name (por si la cuenta no está en User Products)
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            for idx, fv in enumerate(fn_allowed_values[:15]):
-                logger.warning(f"ML intento {2+idx}: FAMILY_NAME={fv['id']} ({fv.get('name')})")
-                result = await _post_item(_payload_add_fn(item_payload, fv))
-                logger.info(f"ML intento {2+idx}: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
-                if not result.get("_meli_error"):
-                    break
-
-        # Último recurso: publicar SIN FAMILY_NAME (mantener todos los demás attributes)
-        if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            logger.warning("ML último recurso: publicando SIN FAMILY_NAME")
-            result = await _post_item(_attrs_without_fn(item_payload))
-            logger.info(f"ML último recurso: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
+            import copy as _copy
+            payload_no_fn = _copy.deepcopy(item_payload)
+            payload_no_fn.pop("family_name", None)
+            logger.warning("ML intento 2: sin family_name")
+            result = await _post_item(payload_no_fn)
+            logger.info(f"ML intento 2: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
