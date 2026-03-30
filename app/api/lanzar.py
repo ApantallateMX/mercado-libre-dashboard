@@ -3097,12 +3097,10 @@ async def create_listing_endpoint(request: Request):
                 if not result.get("_meli_error"):
                     break
 
-        # Último recurso: sin attributes
+        # Último recurso: publicar SIN FAMILY_NAME (mantener todos los demás attributes)
         if result.get("_meli_error") and "family_name" in result["_meli_error"].lower():
-            logger.warning("ML último recurso: sin attributes")
-            bare = _copy.deepcopy(item_payload)
-            bare.pop("attributes", None)
-            result = await _post_item(bare)
+            logger.warning("ML último recurso: publicando SIN FAMILY_NAME")
+            result = await _post_item(_attrs_without_fn(item_payload))
             logger.info(f"ML último recurso: {'ok' if not result.get('_meli_error') else result['_meli_error']}")
 
         if result.get("_meli_error"):
