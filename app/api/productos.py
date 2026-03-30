@@ -299,16 +299,21 @@ async def list_productos(
 
         grand_total = len(all_ids)
 
-        # 2. Aplicar paginación sobre la lista completa de IDs
-        page_ids = all_ids[offset: offset + limit]
-        if not page_ids:
+        # 2. Con búsqueda: escanear todos los IDs para no perder ítems fuera de la página actual.
+        #    Sin búsqueda: paginar primero para eficiencia (solo fetch de 50 detalles).
+        if q:
+            fetch_ids = all_ids          # buscar en todos
+        else:
+            fetch_ids = all_ids[offset: offset + limit]
+
+        if not fetch_ids:
             return {"items": [], "total": grand_total, "offset": offset, "limit": limit, "totals": totals}
 
         # 3. Fetch detalles en batches de 20
         all_items_raw: list = []
-        for i in range(0, len(page_ids), 20):
+        for i in range(0, len(fetch_ids), 20):
             try:
-                details = await client.get_items_details(page_ids[i:i+20])
+                details = await client.get_items_details(fetch_ids[i:i+20])
                 all_items_raw.extend(details)
             except Exception:
                 pass
@@ -334,7 +339,7 @@ async def list_productos(
                         bm_results[sku] = res
 
         # 6. Video records desde DB
-        video_recs = await get_videos_for_items(page_ids, user_id)
+        video_recs = await get_videos_for_items(fetch_ids, user_id)
 
         # 7. Construir respuesta + filtro de búsqueda
         items = []
@@ -371,7 +376,12 @@ async def list_productos(
         elif sort_by == "ventas_desc":
             items.sort(key=lambda x: x.get("sold_quantity", 0), reverse=True)
 
-        return {"items": items, "total": grand_total, "offset": offset, "limit": limit, "totals": totals}
+        # Con búsqueda: paginar sobre los resultados filtrados
+        total_filtered = len(items) if q else grand_total
+        if q:
+            items = items[offset: offset + limit]
+
+        return {"items": items, "total": total_filtered, "offset": offset, "limit": limit, "totals": totals}
 
     finally:
         await client.close()
