@@ -2377,13 +2377,6 @@
                 document.getElementById('opt-result').innerHTML = errHtml;
             } else {
                 var newScore = data.new_score || 0;
-                document.getElementById('opt-result').innerHTML = '<span class="text-green-600 font-semibold">Guardado! Nuevo score: ' + newScore + '%</span>';
-
-                var badge = document.getElementById('opt-score-badge');
-                badge.textContent = newScore + '%';
-                if (newScore >= 75) badge.className = 'text-2xl font-bold text-green-600';
-                else if (newScore >= 50) badge.className = 'text-2xl font-bold text-yellow-600';
-                else badge.className = 'text-2xl font-bold text-red-600';
 
                 var idx = allResults.findIndex(function(r) { return r.item_id === optimizeItemId; });
                 if (idx !== -1) {
@@ -2391,6 +2384,20 @@
                     if (payload.title) allResults[idx].item_title = payload.title;
                     renderTable();
                 }
+
+                // Show toast and close modal
+                var toast = document.createElement('div');
+                toast.className = 'fixed top-4 right-4 z-[9999] bg-green-600 text-white px-5 py-3 rounded-lg shadow-lg text-sm font-semibold flex items-center gap-2 transition-opacity duration-500';
+                toast.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg> Cambios guardados &nbsp;·&nbsp; Score: ' + newScore + '%';
+                document.body.appendChild(toast);
+
+                setTimeout(function() {
+                    closeOptimizeModal();
+                    setTimeout(function() {
+                        toast.style.opacity = '0';
+                        setTimeout(function() { toast.remove(); }, 500);
+                    }, 500);
+                }, 1500);
             }
         } catch (err) {
             document.getElementById('opt-result').innerHTML = '<span class="text-red-600">Error: ' + err.message + '</span>';
