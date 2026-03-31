@@ -2267,216 +2267,288 @@ async def generate_video_commercial_endpoint(request: Request):
         "smooth slow camera zoom-in to product details, product sharp and unchanged, editorial lighting",
     ]
 
+    # ────────────────────────────────────────────────────────────────────────────
+    # Helpers comunes a ambos paths
+    # ────────────────────────────────────────────────────────────────────────────
+    import re as _re_dur
+
+    def _probe_dur(path: str) -> float:
+        r = _sp.run([ffmpeg_bin, "-i", path], capture_output=True, timeout=15)
+        m = _re_dur.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",
+                           r.stderr.decode(errors="replace"))
+        if m:
+            return int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
+        return 5.0
+
+    def _xfade_and_combine(norm_paths, clip_durs, audio_bytes, has_audio, tmpdir):
+        """xfade + tpad/audio combine. Devuelve bytes del video final."""
+        FADE       = 0.5
+        concat_txt = _os.path.join(tmpdir, "concat.txt")
+        xfade_path = _os.path.join(tmpdir, "xfaded.mp4")
+        aud_path   = _os.path.join(tmpdir, "audio.mp3")
+        out_path   = _os.path.join(tmpdir, "output.mp4")
+
+        if len(norm_paths) == 1:
+            xfade_path = norm_paths[0]
+        else:
+            inputs_args = []
+            for p in norm_paths:
+                inputs_args += ["-i", p]
+            fc_parts = []
+            prev   = "[0:v]"
+            offset = 0.0
+            for i in range(1, len(norm_paths)):
+                offset += max(clip_durs[i - 1] - FADE, 0.1)
+                lbl = f"[v{i}]" if i < len(norm_paths) - 1 else "[vout]"
+                fc_parts.append(f"{prev}[{i}:v]xfade=transition=fade:duration={FADE}:offset={offset:.3f}{lbl}")
+                prev = lbl
+            xr = _sp.run(
+                [ffmpeg_bin, "-y"] + inputs_args + [
+                    "-filter_complex", ";".join(fc_parts), "-map", "[vout]",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                    "-r", "25", "-pix_fmt", "yuv420p", xfade_path,
+                ],
+                capture_output=True, timeout=300,
+            )
+            if xr.returncode != 0:
+                logger.warning(f"xfade falló, concat simple: {xr.stderr.decode(errors='replace')[:150]}")
+                with open(concat_txt, "w") as cf:
+                    for p in norm_paths:
+                        cf.write(f"file '{p}'\n")
+                _sp.run([ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
+                         "-i", concat_txt, "-c", "copy", xfade_path],
+                        capture_output=True, timeout=300)
+            else:
+                logger.info(f"xfade OK: {len(norm_paths)} clips → {_os.path.getsize(xfade_path)//1024} KB")
+
+        if has_audio and audio_bytes:
+            with open(aud_path, "wb") as af:
+                af.write(audio_bytes)
+            proc = _sp.run(
+                [
+                    ffmpeg_bin, "-y",
+                    "-i", xfade_path, "-i", aud_path,
+                    # tpad congela el último frame si el video es más corto que el audio
+                    "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
+                    "-map", "[vpad]", "-map", "1:a",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-shortest", "-movflags", "+faststart",
+                    out_path,
+                ],
+                capture_output=True, timeout=180,
+            )
+            final = out_path if proc.returncode == 0 else xfade_path
+            if proc.returncode != 0:
+                logger.warning(f"Audio combine err: {proc.stderr.decode(errors='replace')[:150]}")
+        else:
+            final = xfade_path
+
+        with open(final, "rb") as vf:
+            return vf.read()
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # PATH A: ZOOMPAN desde fotos reales del producto
+    # Sin IA generativa → sin productos inventados, sin idiomas raros, sin fantasmas
+    # ────────────────────────────────────────────────────────────────────────────
     if ai_image_urls:
-        # ── Minimax video-01-live: genera 8 clips desde fotos reales del producto ──
-        # Suficientes clips para cubrir ~45s de audio sin loop (8 × 5.5s = 44s)
-        # Semáforo de 4 para evitar rate-limiting en Replicate con 10 solicitudes simultáneas
-        # 10 clips × ~5.5s - 9 × 0.5s xfade = ~50.5s — cubre audios de hasta ~50s
-        n_total  = 10
-        img_pool = ai_image_urls[:4] if ai_image_urls else []
-        logger.info(f"=== MINIMAX LIVE IMG2VID: {n_total} clips desde {len(img_pool)} fotos ===")
-        _sem = asyncio.Semaphore(4)
+        logger.info(f"=== ZOOMPAN PROFESIONAL: {len(ai_image_urls)} fotos reales del producto ===")
 
-        async def _gen_img_clip(idx: int):
-            async with _sem:
-                img_url = img_pool[idx % len(img_pool)]
-                motion  = _motion_prompts[idx % len(_motion_prompts)]
-                return await replicate_client.generate_video_minimax_live(img_url, motion)
+        FPS   = 25
+        DUR_S = 5.0   # segundos por clip
 
-        tts_coro   = elevenlabs_client.generate_audio(script)
-        clip_coros = [_gen_img_clip(i) for i in range(n_total)]
+        # 10 efectos de cámara: solo movimiento, el producto real siempre visible
+        _ZP = [
+            # Lento zoom in, centrado
+            "zoompan=z='zoom+0.0006':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            # Pan lento izquierda → derecha
+            "zoompan=z='1.05':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            # Pan lento derecha → izquierda
+            "zoompan=z='1.05':x='(iw-iw/zoom)*(1-on/124)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            # Pan lento arriba → abajo
+            "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
+            # Pan lento abajo → arriba
+            "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
+            # Zoom in suave (más lento)
+            "zoompan=z='zoom+0.0004':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            # Diagonal sup-izq → inf-der
+            "zoompan=z='1.07':x='(iw-iw/zoom)*on/124':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
+            # Zoom in + deriva suave derecha
+            "zoompan=z='zoom+0.0005':x='min((iw-iw/zoom)*on/124,iw-iw/zoom)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            # Diagonal inf-der → sup-izq
+            "zoompan=z='1.07':x='(iw-iw/zoom)*(1-on/124)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
+            # Zoom in desde parte superior (revela producto de arriba)
+            "zoompan=z='zoom+0.0007':x='iw/2-(iw/zoom/2)':y='max(ih*0.05-(ih/zoom/2),0)':fps=25,scale=720:1280,setsar=1",
+        ]
+
+        # Filtro portrait: fondo desenfocado 9:16 + producto centrado nítido
+        _PFC = (
+            "[0:v]split=2[bg][fg];"
+            "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+            "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
+            "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
+            "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[norm];"
+        )
+
+        async def _dl_photo(url: str):
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _c:
+                    r = await _c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                    return r.content if r.status_code == 200 and len(r.content) > 100 else None
+            except Exception as _e:
+                logger.warning(f"Photo DL error: {_e}")
+                return None
+
+        # Descargar TTS + fotos en paralelo
+        _all_dl = await asyncio.gather(
+            elevenlabs_client.generate_audio(script),
+            *[_dl_photo(u) for u in ai_image_urls[:5]],
+            return_exceptions=True,
+        )
+        audio_result = _all_dl[0]
+        photos       = [p for p in _all_dl[1:] if isinstance(p, bytes) and len(p) > 100]
+        has_audio    = isinstance(audio_result, bytes) and bool(audio_result)
+        logger.info(f"TTS: {'OK' if has_audio else 'X'}, fotos: {len(photos)}")
+
+        if not photos:
+            return JSONResponse({"error": "No se pudieron descargar fotos del producto"}, status_code=500)
+
+        _ev_loop = asyncio.get_event_loop()
+
+        def _make_zp_clip(pbytes: bytes, eff_idx: int, ci: int, tdir: str):
+            ph  = _os.path.join(tdir, f"ph_{ci:02d}.jpg")
+            out = _os.path.join(tdir, f"norm_{ci:02d}.mp4")
+            with open(ph, "wb") as _f:
+                _f.write(pbytes)
+            fc = _PFC + f"[norm]{_ZP[eff_idx % len(_ZP)]}[out]"
+            cmd = [
+                ffmpeg_bin, "-y",
+                "-loop", "1", "-i", ph, "-t", str(DUR_S),
+                "-filter_complex", fc, "-map", "[out]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-pix_fmt", "yuv420p", out,
+            ]
+            r = _sp.run(cmd, capture_output=True, timeout=90)
+            if r.returncode == 0 and _os.path.exists(out) and _os.path.getsize(out) > 1000:
+                logger.info(f"ZP clip {ci} (eff {eff_idx}): {_os.path.getsize(out)//1024} KB")
+                return out
+            logger.error(f"ZP clip {ci} falló: {r.stderr.decode(errors='replace')[:200]}")
+            return None
+
+        try:
+            with _tf.TemporaryDirectory() as tmpdir:
+                # 2 efectos distintos por foto → hasta 10 clips de 5s = 50s de video
+                zp_tasks = [
+                    _ev_loop.run_in_executor(
+                        None, _make_zp_clip,
+                        photos[(ci // 2) % len(photos)],  # photo 0→clips 0-1, photo 1→clips 2-3…
+                        ci,                                # índice de efecto
+                        ci,                                # índice de clip
+                        tmpdir,
+                    )
+                    for ci in range(10)
+                ]
+                zp_results = await asyncio.gather(*zp_tasks, return_exceptions=True)
+                norm_paths = [p for p in zp_results if isinstance(p, str)]
+
+                if not norm_paths:
+                    raise RuntimeError("Todos los clips zoompan fallaron")
+
+                logger.info(f"Clips zoompan OK: {len(norm_paths)}/10")
+                clip_durs = [DUR_S] * len(norm_paths)
+
+                video_bytes = _xfade_and_combine(norm_paths, clip_durs, audio_result, has_audio, tmpdir)
+                _video_cache[vid_id] = video_bytes
+
+            _persist_video(vid_id, _video_cache[vid_id])
+            out_mb = len(_video_cache[vid_id]) / 1_048_576
+            logger.info(f"Zoompan video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
+            return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
+
+        except Exception as e:
+            logger.error(f"Zoompan pipeline falló: {e}", exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # ────────────────────────────────────────────────────────────────────────────
+    # PATH B: T2V text-to-video (sin fotos del producto — fallback)
+    # ────────────────────────────────────────────────────────────────────────────
     else:
-        # ── Fallback: text-to-video cuando no hay imágenes del producto ──────────
-        logger.info(f"=== T2V FALLBACK: sin imágenes del producto ===")
+        logger.info("=== T2V FALLBACK: sin imágenes del producto ===")
 
         async def _gen_t2v_clip(idx: int):
             return await replicate_client.generate_video_t2v(_motion_prompts[idx % len(_motion_prompts)])
 
-        tts_coro   = elevenlabs_client.generate_audio(script)
-        clip_coros = [_gen_t2v_clip(i) for i in range(10)]
+        _all_t2v = await asyncio.gather(
+            elevenlabs_client.generate_audio(script),
+            *[_gen_t2v_clip(i) for i in range(10)],
+            return_exceptions=True,
+        )
+        audio_result     = _all_t2v[0]
+        clip_url_results = list(_all_t2v[1:])
+        has_audio        = isinstance(audio_result, bytes) and bool(audio_result)
 
-    all_results = await asyncio.gather(tts_coro, *clip_coros, return_exceptions=True)
-    audio_result  = all_results[0]
-    clip_url_results = list(all_results[1:])
+        clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
+        logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
 
-    has_audio = isinstance(audio_result, bytes) and bool(audio_result)
-    logger.info(f"TTS: {type(audio_result).__name__}, clips: {[type(r).__name__ for r in clip_url_results]}")
+        if not clip_urls:
+            return JSONResponse({"error": "T2V: no se generó ningún clip"}, status_code=500)
 
-    # Filtrar clips exitosos
-    clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
-    logger.info(f"Clips exitosos: {len(clip_urls)}/{len(clip_url_results)}")
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as dl:
+                async def _dl(url):
+                    r = await dl.get(url, follow_redirects=True)
+                    return r.content if r.status_code == 200 and len(r.content) > 1000 else None
+                downloaded = await asyncio.gather(*[_dl(u) for u in clip_urls], return_exceptions=True)
 
-    if not clip_urls:
-        return JSONResponse({"error": "No se pudo generar ningún clip de video"}, status_code=500)
+            with _tf.TemporaryDirectory() as tmpdir:
+                clip_paths = []
+                for i, data in enumerate(downloaded):
+                    if isinstance(data, bytes) and data:
+                        p = _os.path.join(tmpdir, f"clip_{i:02d}.mp4")
+                        with open(p, "wb") as f:
+                            f.write(data)
+                        clip_paths.append(p)
 
-    try:
-        # ── Descargar clips ──────────────────────────────────────────────────
-        async with httpx.AsyncClient(timeout=120.0) as dl:
-            async def _dl(url):
-                r = await dl.get(url, follow_redirects=True)
-                return r.content if r.status_code == 200 and len(r.content) > 1000 else None
-            downloaded = await asyncio.gather(*[_dl(u) for u in clip_urls], return_exceptions=True)
+                if not clip_paths:
+                    raise RuntimeError("T2V: todos los clips fallaron al descargar")
 
-        with _tf.TemporaryDirectory() as tmpdir:
-            clip_paths = []
-            for i, data in enumerate(downloaded):
-                if isinstance(data, bytes) and data:
-                    p = _os.path.join(tmpdir, f"clip_{i:02d}.mp4")
-                    with open(p, "wb") as f:
-                        f.write(data)
-                    clip_paths.append(p)
-
-            if not clip_paths:
-                raise RuntimeError("Todos los clips fallaron al descargar")
-
-            logger.info(f"Clips descargados: {len(clip_paths)}")
-
-            concat_path = _os.path.join(tmpdir, "concat.txt")
-            raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
-            aud_path    = _os.path.join(tmpdir, "audio.mp3")
-            out_path    = _os.path.join(tmpdir, "output.mp4")
-
-            # ── Paso 1: Normalizar cada clip individualmente ───────────────────
-            # Elimina audio, fuerza resolución/fps/codec idénticos → concat seguro
-            norm_paths = []
-            for ci, cp in enumerate(clip_paths):
-                norm_path = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
-                norm_cmd = [
-                    ffmpeg_bin, "-y", "-i", cp,
-                    "-an",  # eliminar pista de audio del clip
-                    "-filter_complex", (
-                        "[0:v]split=2[bg][fg];"
-                        "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
-                        "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
-                        "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
-                        "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[out]"
-                    ),
-                    "-map", "[out]",
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                    "-r", "25", "-pix_fmt", "yuv420p",
-                    norm_path,
-                ]
-                nr = _sp.run(norm_cmd, capture_output=True, timeout=120)
-                if nr.returncode == 0 and _os.path.exists(norm_path) and _os.path.getsize(norm_path) > 1000:
-                    norm_paths.append(norm_path)
-                    logger.info(f"Clip {ci} normalizado OK: {_os.path.getsize(norm_path)} bytes")
-                else:
-                    logger.error(f"Clip {ci} normalización falló (rc={nr.returncode}): "
-                                 f"{nr.stderr.decode(errors='replace')[:200]}")
-
-            if not norm_paths:
-                raise RuntimeError("Todos los clips fallaron al normalizar")
-
-            logger.info(f"Clips normalizados: {len(norm_paths)}/{len(clip_paths)}")
-
-            # ── Paso 2: Obtener duración real de cada clip ────────────────────
-            import re as _re_dur
-            def _probe_duration(path: str) -> float:
-                r = _sp.run([ffmpeg_bin, "-i", path], capture_output=True, timeout=15)
-                m = _re_dur.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",
-                                   r.stderr.decode(errors="replace"))
-                if m:
-                    return int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
-                return 5.5
-
-            clip_durations = []
-            for np in norm_paths:
-                dur = _probe_duration(np)
-                clip_durations.append(dur)
-                logger.debug(f"  Clip duración: {dur:.2f}s")
-
-            total_clip_dur = sum(clip_durations)
-            logger.info(f"Duración total clips: {total_clip_dur:.1f}s")
-
-            # ── Paso 3: Unir clips con xfade (0.5s fade) — SIN stream_loop ────
-            # xfade encadena pares: [0][1]xfade→[v1]; [v1][2]xfade→[v2]; ...
-            FADE = 0.5
-            xfade_path = _os.path.join(tmpdir, "xfaded.mp4")
-
-            if len(norm_paths) == 1:
-                xfade_path = norm_paths[0]
-                logger.info("Un solo clip, sin xfade")
-            else:
-                # Construir filter_complex con xfade encadenado
-                inputs_args = []
-                for np in norm_paths:
-                    inputs_args += ["-i", np]
-
-                fc_parts = []
-                prev   = "[0:v]"
-                offset = 0.0
-                for i in range(1, len(norm_paths)):
-                    offset += max(clip_durations[i - 1] - FADE, 0.1)
-                    out_lbl = f"[v{i}]" if i < len(norm_paths) - 1 else "[vout]"
-                    fc_parts.append(
-                        f"{prev}[{i}:v]xfade=transition=fade:duration={FADE}:offset={offset:.3f}{out_lbl}"
+                norm_paths = []
+                for ci, cp in enumerate(clip_paths):
+                    norm_path = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
+                    nr = _sp.run(
+                        [
+                            ffmpeg_bin, "-y", "-i", cp, "-an",
+                            "-filter_complex", (
+                                "[0:v]split=2[bg][fg];"
+                                "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+                                "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
+                                "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
+                                "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[out]"
+                            ),
+                            "-map", "[out]",
+                            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                            "-r", "25", "-pix_fmt", "yuv420p", norm_path,
+                        ],
+                        capture_output=True, timeout=120,
                     )
-                    prev = out_lbl
+                    if nr.returncode == 0 and _os.path.exists(norm_path) and _os.path.getsize(norm_path) > 1000:
+                        norm_paths.append(norm_path)
 
-                xfade_cmd = [ffmpeg_bin, "-y"] + inputs_args + [
-                    "-filter_complex", ";".join(fc_parts),
-                    "-map", "[vout]",
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                    "-r", "25", "-pix_fmt", "yuv420p",
-                    xfade_path,
-                ]
-                xr = _sp.run(xfade_cmd, capture_output=True, timeout=300)
-                if xr.returncode != 0:
-                    logger.error(f"xfade falló: {xr.stderr.decode(errors='replace')[:300]}")
-                    # Fallback: concat simple
-                    with open(concat_path, "w") as cf:
-                        for np in norm_paths:
-                            cf.write(f"file '{np}'\n")
-                    _sp.run([ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
-                              "-i", concat_path, "-c", "copy", xfade_path],
-                             capture_output=True, timeout=300)
-                    logger.warning("xfade falló, usando concat simple")
-                else:
-                    logger.info(f"xfade OK: {len(norm_paths)} clips → {_os.path.getsize(xfade_path)//1024} KB")
+                if not norm_paths:
+                    raise RuntimeError("T2V: todos los clips fallaron al normalizar")
 
-            raw_cat = xfade_path
+                clip_durs  = [_probe_dur(p) for p in norm_paths]
+                video_bytes = _xfade_and_combine(norm_paths, clip_durs, audio_result, has_audio, tmpdir)
+                _video_cache[vid_id] = video_bytes
 
-            if has_audio:
-                with open(aud_path, "wb") as f:
-                    f.write(audio_result)
-                proc = _sp.run(
-                    [
-                        ffmpeg_bin, "-y",
-                        "-i", raw_cat,
-                        "-i", aud_path,
-                        # tpad extiende el último frame indefinidamente → -shortest corta
-                        # al final del audio, sin importar si el video es más corto
-                        "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
-                        "-map", "[vpad]",
-                        "-map", "1:a",
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",
-                        "-movflags", "+faststart",
-                        out_path,
-                    ],
-                    capture_output=True, timeout=180,
-                )
-                final_path = out_path if proc.returncode == 0 else raw_cat
-                if proc.returncode != 0:
-                    logger.warning(f"Audio combine error: {proc.stderr.decode(errors='replace')[:300]}")
-            else:
-                final_path = raw_cat
+            _persist_video(vid_id, _video_cache[vid_id])
+            out_mb = len(_video_cache[vid_id]) / 1_048_576
+            logger.info(f"T2V video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
+            return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
 
-            with open(final_path, "rb") as f:
-                _video_cache[vid_id] = f.read()
-
-        # Persistir a disco para sobrevivir múltiples requests
-        _persist_video(vid_id, _video_cache[vid_id])
-
-        out_mb = len(_video_cache[vid_id]) / 1_048_576
-        serve_url = f"/api/lanzar/video-file/{vid_id}"
-        logger.info(f"Video multi-escena listo: {vid_id} ({out_mb:.1f} MB) clips={len(clip_paths)} audio={has_audio}")
-        return {"video_url": serve_url, "script": script, "has_audio": has_audio}
-
-    except Exception as e:
-        logger.error(f"Pipeline multi-escena falló: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        except Exception as e:
+            logger.error(f"T2V pipeline falló: {e}", exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/video-file/{vid_id}")
