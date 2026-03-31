@@ -2156,91 +2156,66 @@ async def generate_video_commercial_endpoint(request: Request):
     size           = str(body.get("size", "") or "").strip()
     first_frame    = (body.get("first_frame_image") or "").strip()
     ai_image_urls  = [u for u in (body.get("ai_image_urls") or []) if isinstance(u, str) and u.startswith("http")]
+    script_override = (body.get("script_override") or "").strip()
 
-    # ── Step 1: Claude genera guion + video_prompt juntos (coherencia visual) ──
-    script       = ""
-    video_prompt = ""
+    # ── Step 1: Script — use override if provided, else generate with Claude ──
+    script = ""
+    scenes: list = []
 
-    claude_system = (
-        "You are the creative director of a TV commercial for Mercado Libre México.\n"
-        "Create a narration script AND 5 distinct cinematic scene descriptions for the same commercial.\n\n"
-        "Respond ONLY with this JSON (no markdown, no backticks, no explanations):\n"
-        '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
-        "SCRIPT field rules:\n"
-        "- Narration text in Mexican Spanish (español de México), exactly 70-85 words (enough for 25-30 seconds of speech)\n"
-        "- Exciting, aspirational tone — like a premium Mexican TV commercial\n"
-        "- NEVER mention model numbers, SKU codes, or alphanumeric product codes\n"
-        "- ONLY mention the brand name and screen size in inches (e.g. 'Samsung de 43 pulgadas')\n"
-        "- Describe in detail: image quality, color vibrancy, sound experience, design elegance, smart features, family moments\n"
-        "- Make the listener FEEL the experience — use sensory language\n"
-        "- End EXACTLY with: Disponible ahora en Mercado Libre.\n\n"
-        "SCENES array rules (5 items, each a 6-second AI video clip description):\n"
-        "- Each scene is an ENGLISH visual description, maximum 50 words\n"
-        "- Each scene must be VISUALLY DIFFERENT from the others\n"
-        "- Scene 1: dramatic opening shot of the TV in a luxury room, golden hour\n"
-        "- Scene 2: close-up of the vivid screen showing beautiful content\n"
-        "- Scene 3: family or couple enjoying the TV, lifestyle shot\n"
-        "- Scene 4: cinematic detail of the TV design, ultra-thin bezel, premium feel\n"
-        "- Scene 5: wide shot of perfect evening atmosphere with TV as centerpiece\n"
-        "- Describe: camera movement + what's visible + lighting + mood\n"
-        "- ALWAYS include 'large flat-screen television' or 'big screen TV'\n"
-        "- Premium commercial quality, 8K cinematic"
-    )
-    claude_user = (
-        f"Producto: {title}\n"
-        f"Marca: {brand}\n"
-        f"Tamaño: {size} pulgadas\n"
-        f"Categoría: {category}\n"
-        f"Imagen de referencia disponible: {'sí' if first_frame else 'no'}\n\n"
-        "Genera el script en español y los 5 scenes en inglés para el comercial."
-    )
-    try:
-        import json as _json_inner, re as _re
-        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=900)).strip()
-        logger.info(f"Claude raw response: {raw[:100]}...")
-        # Strip markdown fences if present
-        if "```" in raw:
-            raw = raw[raw.index("```") + 3:]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw[:raw.index("```")] if "```" in raw else raw
-        # Try to extract JSON object if surrounded by text
-        raw = raw.strip()
-        if not raw.startswith("{"):
-            m = _re.search(r'\{[\s\S]*\}', raw)
-            if m:
-                raw = m.group(0)
-        parsed = _json_inner.loads(raw)
-        script = parsed.get("script", "").strip().strip('"').strip("'")
-        scenes: list = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
-        logger.info(f"Script ({len(script.split())} words): {script[:80]}...")
-        logger.info(f"Scenes: {len(scenes)} generadas")
-    except Exception as e:
-        logger.warning(f"Claude script+scenes failed: {e}")
-        size_txt = f"de {size} pulgadas " if size else ""
-        script = (
-            f"El {brand} {size_txt}es más que un televisor — es una puerta a mundos "
-            f"de color vibrante y sonido envolvente. Con tecnología de última generación, "
-            f"cada imagen cobra vida con claridad y brillo extraordinarios. "
-            f"Su diseño elegante y delgado transforma cualquier espacio. "
-            f"Vive momentos inolvidables con quienes más quieres, "
-            f"en la pantalla que mereces. "
-            f"Disponible ahora en Mercado Libre."
+    if script_override:
+        # User already has a script from section 1 — use it directly
+        script = script_override
+        logger.info(f"Using script_override ({len(script.split())} words): {script[:80]}...")
+    else:
+        product_desc = " ".join(filter(None, [brand, model])).strip() or title
+        claude_system = (
+            "You are a creative director making a 30-second commercial for Mercado Libre México.\n"
+            "The product can be ANYTHING (electronics, kitchen, clothing, sports, etc.) — adapt accordingly.\n\n"
+            "Respond ONLY with valid JSON (no markdown, no backticks):\n"
+            '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
+            "SCRIPT rules:\n"
+            "- Mexican Spanish, 70-90 words, exciting aspirational tone\n"
+            "- Focus on benefits and emotions the product creates\n"
+            "- Never mention model numbers or SKU codes\n"
+            "- End with: Disponible ahora en Mercado Libre.\n\n"
+            "SCENES rules (5 items, English visual descriptions, max 40 words each):\n"
+            "- Each scene describes a DIFFERENT visual moment related to the product\n"
+            "- Include: camera movement, what's visible, lighting, mood\n"
+            "- Show the product being USED or enjoyed in real life\n"
+            "- Cinematic quality, premium commercial look"
         )
-        scenes = []
-
-    # Fallback scenes if Claude didn't generate them
-    if len(scenes) < 3:
-        base_prompt = replicate_client.build_video_prompt(
-            brand=brand, model=model, title=title, category=category, size=size
+        claude_user = (
+            f"Producto: {title}\n"
+            f"Marca: {brand}\n"
+            f"Modelo: {model}\n"
+            f"Categoria: {category}\n\n"
+            "Genera el guion en español y las 5 escenas en inglés para el comercial."
         )
-        scenes = [
-            base_prompt,
-            f"Close-up of large flat-screen {brand} TV displaying vivid 4K ocean scenery, brilliant colors, cinematic quality",
-            f"Family laughing together watching {brand} large screen TV in cozy living room, warm evening light",
-            f"Elegant ultra-thin bezel {brand} television profile shot, premium design, architectural beauty, dark background",
-            f"Couple embracing on sofa with large flat-screen TV showing Netflix interface, perfect cinematic evening mood",
-        ]
+        try:
+            import json as _json_inner, re as _re
+            raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=700)).strip()
+            if "```" in raw:
+                raw = raw[raw.index("```") + 3:]
+                if raw.startswith("json"): raw = raw[4:]
+                raw = raw[:raw.index("```")] if "```" in raw else raw
+            raw = raw.strip()
+            if not raw.startswith("{"):
+                m = _re.search(r'\{[\s\S]*\}', raw)
+                if m: raw = m.group(0)
+            parsed = _json_inner.loads(raw)
+            script = parsed.get("script", "").strip().strip('"').strip("'")
+            scenes = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
+            logger.info(f"Claude script ({len(script.split())} words): {script[:80]}...")
+        except Exception as e:
+            logger.warning(f"Claude script+scenes failed: {e}")
+            product_line = " ".join(filter(None, [brand, model, title])).strip()
+            script = (
+                f"{product_line} — la mejor opcion para ti. "
+                f"Calidad, diseno y funcionalidad en un solo producto. "
+                f"Perfecto para tu hogar, tu familia, tu estilo de vida. "
+                f"Disponible ahora en Mercado Libre."
+            )
+            scenes = []
 
     # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
     try:
@@ -2294,15 +2269,24 @@ async def generate_video_commercial_endpoint(request: Request):
                     fh.write(img_data)
                 seg_path = _os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
                 # Formato vertical 9:16 (720×1280) — requerimiento ML Clips
+                # Crop-to-fill: escalar para cubrir todo el frame y recortar el exceso
+                # (sin barras negras). Zoom lento (Ken Burns) de 1.0 → 1.15 durante el clip.
+                n_frames  = max(1, int(per_img_s * 25))
+                zoom_step = round(0.15 / max(1, n_frames), 6)
+                vf = (
+                    f"scale=1440:2560:force_original_aspect_ratio=increase,"
+                    f"crop=1440:2560,"
+                    f"zoompan=z='min(zoom+{zoom_step},1.15)'"
+                    f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+                    f":d={n_frames}:s=720x1280:fps=25,"
+                    f"setsar=1"
+                )
                 seg_cmd = [
                     ffmpeg_bin, "-y",
                     "-loop", "1", "-framerate", "25", "-i", img_path,
-                    "-vf", (
-                        "scale=720:1280:force_original_aspect_ratio=decrease,"
-                        "pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
-                    ),
+                    "-vf", vf,
                     "-t", str(per_img_s),
-                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "26",
                     "-pix_fmt", "yuv420p",
                     seg_path,
                 ]

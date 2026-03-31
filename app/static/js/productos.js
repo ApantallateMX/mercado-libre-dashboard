@@ -874,6 +874,8 @@
           size:              size,
           first_frame_image: pics[0] || '',
           ai_image_urls:     pics,
+          // Always pass the user's script — backend will skip its own Claude call
+          ...(script ? { script_override: script } : {}),
         }),
       });
       clearInterval(stepTimer);
