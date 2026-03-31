@@ -544,22 +544,39 @@
             <p id="script-status" class="text-xs text-purple-600 hidden"></p>
           </div>
 
-          <!-- Subir clip -->
+          <!-- Generar video completo con IA -->
+          <div class="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <p class="text-xs font-semibold text-blue-700 uppercase tracking-wide">2. Generar Video con IA</p>
+              <button id="btn-gen-video" onclick="panelGenVideoFull('${item.item_id}')"
+                class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
+                🎬 Generar y Subir
+              </button>
+            </div>
+            <p class="text-xs text-gray-500">Genera el video completo con voz en español y lo sube directamente a ML Clips.</p>
+            <div id="video-gen-progress" class="hidden">
+              <div class="flex items-center gap-2 py-1">
+                <div class="w-3 h-3 rounded-full bg-blue-500 animate-pulse shrink-0"></div>
+                <p id="video-gen-step" class="text-xs text-blue-700 font-medium"></p>
+              </div>
+              <div class="w-full bg-blue-100 rounded-full h-1.5 mt-1">
+                <div id="video-gen-bar" class="bg-blue-500 h-1.5 rounded-full transition-all duration-700" style="width:0%"></div>
+              </div>
+            </div>
+            <p id="video-gen-result" class="text-xs hidden"></p>
+          </div>
+
+          <!-- Subir clip manualmente -->
           <div class="space-y-2">
-            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">2. Subir Clip a ML</p>
-            <p class="text-xs text-gray-400">Una vez grabado el video, sube el UUID aquí o usa Lanzar para generarlo con IA.</p>
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">3. Subir UUID manual</p>
             <div class="flex gap-2">
-              <input id="clip-uuid-input" type="text" placeholder="UUID del video generado"
+              <input id="clip-uuid-input" type="text" placeholder="UUID del video (opcional)"
                 class="flex-1 border rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-purple-300">
               <button onclick="uploadClipFromInput('${item.item_id}', '${escHtml(item.sku)}')"
                 class="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-2 rounded-lg transition whitespace-nowrap">
                 📤 Subir
               </button>
             </div>
-            <button onclick="openCreateModal('${escHtml(item.sku || '')}', 0)"
-              class="w-full border border-yellow-400 bg-yellow-50 hover:bg-yellow-100 text-yellow-800 text-xs font-medium py-2 rounded-lg transition">
-              🚀 Abrir Lanzar para generar video con IA completo
-            </button>
             <p id="clip-upload-msg" class="text-xs hidden"></p>
           </div>
 
@@ -776,6 +793,123 @@
       if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.className = 'text-xs text-red-500'; }
     }
     btn.disabled = false; btn.textContent = '✦ Generar Guion';
+  };
+
+  // ── Full video generation pipeline ─────────────────────────────────────────
+  window.panelGenVideoFull = async function (itemId) {
+    const item    = state.panelItem;
+    const btn     = document.getElementById('btn-gen-video');
+    const progEl  = document.getElementById('video-gen-progress');
+    const stepEl  = document.getElementById('video-gen-step');
+    const barEl   = document.getElementById('video-gen-bar');
+    const resEl   = document.getElementById('video-gen-result');
+    if (!btn || !item) return;
+
+    const brand  = (item.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
+    const model  = (item.attributes || []).find(a => a.id === 'MODEL')?.value_name || '';
+    const size   = (item.attributes || []).find(a => a.id === 'WEIGHT' || a.id === 'VIDEO_SCREEN_SIZE' || a.id === 'SCREEN_SIZE')?.value_name || '';
+    const pics   = (item.pictures || []).map(p => p.secure_url || p.url || '').filter(Boolean);
+    const script = document.getElementById('video-script')?.value?.trim() || '';
+
+    btn.disabled = true; btn.textContent = '⏳ Generando...';
+    if (progEl) progEl.classList.remove('hidden');
+    if (resEl)  { resEl.classList.add('hidden'); resEl.textContent = ''; }
+
+    const setStep = (text, pct) => {
+      if (stepEl) stepEl.textContent = text;
+      if (barEl)  barEl.style.width  = pct + '%';
+    };
+
+    // Simulate progress steps while server-side pipeline runs (~60-90s)
+    const steps = [
+      ['Generando guion con IA...', 10],
+      ['Generando escenas cinematicas...', 25],
+      ['Generando voz con ElevenLabs...', 40],
+      ['Creando video con imagenes del producto...', 60],
+      ['Combinando audio y video...', 75],
+      ['Finalizando video...', 85],
+    ];
+    let stepIdx = 0;
+    setStep(steps[0][0], steps[0][1]);
+    const stepTimer = setInterval(() => {
+      stepIdx = Math.min(stepIdx + 1, steps.length - 1);
+      setStep(steps[stepIdx][0], steps[stepIdx][1]);
+    }, 12000);
+
+    try {
+      const resp = await fetch('/api/lanzar/generate-video-commercial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand,
+          model,
+          title:            item.title || '',
+          category:         item.category_id || '',
+          size:             size,
+          first_frame_image: pics[0] || '',
+          ai_image_urls:    pics.slice(0, 5),
+          ...(script ? { script_override: script } : {}),
+        }),
+      });
+      clearInterval(stepTimer);
+
+      const d = await resp.json();
+
+      if (d.error) {
+        if (resEl) { resEl.textContent = '❌ ' + d.error; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
+        if (progEl) progEl.classList.add('hidden');
+        btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
+        return;
+      }
+
+      setStep('Video generado — subiendo a Mercado Libre...', 75);
+
+      // Extract vid_id from video_url: "/api/lanzar/video-file/{vid_id}"
+      const vidId = d.video_url ? d.video_url.split('/').pop() : null;
+
+      if (!vidId) {
+        if (resEl) { resEl.textContent = '❌ No se obtuvo ID del video'; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
+        if (progEl) progEl.classList.add('hidden');
+        btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
+        return;
+      }
+
+      // Show generated script in the textarea
+      if (d.script) {
+        const scriptEl = document.getElementById('video-script');
+        if (scriptEl && !scriptEl.value.trim()) scriptEl.value = d.script;
+      }
+
+      // Upload to ML
+      const upRes = await apiFetch(`/api/productos/${itemId}/clip`, {
+        method: 'POST',
+        body: { video_id: vidId, sku: item.sku || '' },
+      });
+
+      setStep('¡Listo!', 100);
+
+      if (upRes.ok || upRes.clip_uuid || upRes.status) {
+        toast('Video subido a ML Clips ✓', 'green');
+        if (resEl) {
+          resEl.textContent = `✓ Video subido${d.has_audio ? ' con audio' : ''}. ${upRes.status ? 'Estado: ' + upRes.status : ''}`;
+          resEl.className = 'text-xs text-green-600';
+          resEl.classList.remove('hidden');
+        }
+        // Refresh panel
+        const detail = await apiFetch(`/api/productos/${itemId}`);
+        state.panelItem = detail;
+        renderPanelTab('video');
+        loadItems();
+      } else {
+        throw new Error(upRes.error || 'Error al subir clip');
+      }
+
+    } catch (e) {
+      clearInterval(stepTimer);
+      if (resEl) { resEl.textContent = '❌ ' + e.message; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
+      if (progEl) progEl.classList.add('hidden');
+      btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
+    }
   };
 
   // ── Atributos: load all category attrs ─────────────────────────────────────

@@ -1073,22 +1073,18 @@ async def ai_improve(body: dict):
     elif field == "video_script":
         title = context.get("title", current_value)
         prompt = (
-            f"Eres un experto en marketing digital para Mercado Libre Mexico. "
-            f"Crea un guion profesional para un video clip comercial de 30-45 segundos.\n\n"
+            f"Crea el texto de narracion para un video comercial de 20-30 segundos.\n\n"
             f"Producto: {title}\n"
-            f"Marca: {brand}\nModelo: {model}\n\n"
-            f"ESTRUCTURA DEL GUION:\n"
-            f"1. HOOK (0-5s): Frase de impacto que enganche al espectador\n"
-            f"2. PROBLEMA/NECESIDAD (5-10s): El dolor que resuelve el producto\n"
-            f"3. SOLUCION (10-20s): Como el producto lo resuelve (2-3 beneficios clave)\n"
-            f"4. CARACTERISTICAS (20-30s): Specs o detalles diferenciadores\n"
-            f"5. CTA (30-45s): Llamada a la accion (compra ahora, envia hoy, etc.)\n\n"
-            f"REGLAS:\n"
-            f"- Tono energico, directo, para audiencia mexicana\n"
-            f"- Maximo 120 palabras en total (video corto)\n"
-            f"- Incluye indicaciones de escena entre [corchetes]\n"
-            f"- Texto hablado en MAYUSCULAS\n"
-            f"- Formato legible con secciones claras"
+            f"Marca: {brand}\n"
+            f"Modelo: {model}\n\n"
+            f"REQUISITOS:\n"
+            f"- Entre 70 y 90 palabras exactamente (para 25-30 segundos hablados)\n"
+            f"- Espanol de Mexico, tono energico y aspiracional\n"
+            f"- Sin corchetes, sin asteriscos, sin guiones, sin marcadores de escena\n"
+            f"- Solo el texto que se va a leer en voz alta, en oraciones normales\n"
+            f"- Menciona la marca y el beneficio principal de forma natural\n"
+            f"- Termina con: Disponible ahora en Mercado Libre.\n\n"
+            f"Responde UNICAMENTE con el texto de narracion. Sin titulos, sin numeracion, sin formato adicional."
         )
 
         async def script_stream():
