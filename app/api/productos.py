@@ -524,9 +524,14 @@ async def upload_clip(item_id: str, request: Request):
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
     try:
+        import json as _json
+        # sites vacío = sube a todos los sitios disponibles del vendedor (MLM por defecto)
         result = await client.post(
             f"/marketplace/items/{item_id}/clips/upload",
-            files={"file": ("commercial.mp4", video_bytes, "video/mp4")},
+            files={
+                "file":  ("commercial.mp4", video_bytes, "video/mp4"),
+                "sites": (None, _json.dumps([{"site_id": "MLM", "logistic_type": "not_specified"}]), "application/json"),
+            },
         )
         clip_uuid   = result.get("clip_uuid") or result.get("id") or result.get("uuid")
         clip_status = result.get("status", "uploaded")
@@ -540,13 +545,6 @@ async def upload_clip(item_id: str, request: Request):
     except Exception as e:
         err_str = str(e)
         logger.error(f"upload-clip error: {err_str}")
-        # PolicyAgent error = la App no tiene permiso de Clips en ML Developer Portal
-        if "PolicyAgent" in err_str or "UNAUTHORIZED" in err_str:
-            err_str = (
-                "La App no tiene permiso para subir clips. "
-                "Ve a developers.mercadolibre.com.mx → tu App → Características → activa 'Video clips', "
-                "luego vuelve a iniciar sesión en el dashboard."
-            )
         await update_clip_status(item_id, user_id, "error", error=err_str)
         return JSONResponse({"error": err_str}, status_code=500)
     finally:
