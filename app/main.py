@@ -2015,9 +2015,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     Usa Warehouse endpoint para desglose MTY/CDMX/TJ y InventoryBySKUAndCondicion_Quantity
     para stock verdaderamente disponible (Available, excluyendo reservados).
     """
-    import httpx
-    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-    BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
+    import httpx, json as _json
+    BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+    # InventoryBySKUAndCondicion_Quantity está roto (SQL error "Invalid column name 'binid'")
+    # Usar GlobalStock_InventoryBySKU_Condition que devuelve status "Producto Vendible" / "Otro"
+    BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 
     result_map = {}
     to_fetch = []
@@ -2067,24 +2069,46 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, avail_rows=None):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y Condition endpoint (Available/Required) y cachea.
-        BM calcula: Available = TotalQty - Required (ya es neto, excluye reservados).
-        avail_total = suma directa de Available; NO restar Required de nuevo (doble substracción).
+    def _store_wh(sku, rows_wh, cond_rows=None):
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y GlobalStock_InventoryBySKU_Condition.
+        GlobalStock_InventoryBySKU_Condition devuelve Conditions_JSON (JSON embebido) con registros
+        por bin que tienen status "Producto Vendible" o "Otro".
+        avail_total = suma de TotalQty donde status == "Producto Vendible".
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
-        # avail_rows es de InventoryBySKUAndCondicion_Quantity
-        avail_sum = sum(row.get("Available", 0) or 0 for row in (avail_rows or []))
-        required_sum = sum(row.get("Required", 0) or 0 for row in (avail_rows or []))
-        # Available en BM YA excluye reservados (Available = TotalQty - Required)
-        # Usar directamente avail_sum sin restar required_sum de nuevo
-        avail_total = avail_sum
+
+        avail_total = reserved_total = 0
+        for row in (cond_rows if isinstance(cond_rows, list) else []):
+            # La respuesta puede tener Conditions_JSON (string JSON embebido)
+            cj = row.get("Conditions_JSON")
+            if cj is not None:
+                if isinstance(cj, str):
+                    try:
+                        cj = _json.loads(cj)
+                    except Exception:
+                        cj = []
+                for cond in (cj if isinstance(cj, list) else []):
+                    for item in (cond.get("SKUCondition_JSON") or []):
+                        qty = item.get("TotalQty", 0) or 0
+                        if item.get("status") == "Producto Vendible":
+                            avail_total += qty
+                        else:
+                            reserved_total += qty
+            else:
+                # Formato plano: el row mismo tiene status y TotalQty
+                qty = row.get("TotalQty", 0) or 0
+                if row.get("status") == "Producto Vendible":
+                    avail_total += qty
+                else:
+                    reserved_total += qty
+
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx,
-               "avail_total": avail_total, "reserved_total": required_sum}
+               "avail_total": avail_total, "reserved_total": reserved_total}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)
-        if inv["total"] > 0:
+        # Agregar a result_map si hay stock físico O disponible vendible
+        if inv["total"] > 0 or avail_total > 0:
             result_map[sku] = inv
-        return inv["total"] > 0
+        return inv["total"] > 0 or avail_total > 0
 
     def _store_empty(sku):
         _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
@@ -2108,22 +2132,25 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "LocationID": "47,62,68", "BINID": None,
             "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
         }
-        avail_payload = {
-            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+        # GlobalStock_InventoryBySKU_Condition: endpoint funcional que retorna
+        # status "Producto Vendible" / "Otro" por bin — reemplaza el endpoint roto
+        cond_payload = {
+            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
             "LOCATIONID": "47,62,68", "BINID": None,
-            "PRODUCTSKU": base, "CONDITION": conditions,
-            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
+            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
         }
         async with wh_sem:
             try:
-                r_wh, r_avail = await asyncio.gather(
-                    http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
-                    http.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
+                r_wh, r_cond = await asyncio.gather(
+                    http.post(BM_WH_URL,   json=wh_payload,   timeout=15.0),
+                    http.post(BM_COND_URL, json=cond_payload, timeout=15.0),
                     return_exceptions=True,
                 )
-                rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-                avail_rows = r_avail.json() if not isinstance(r_avail, Exception) and r_avail.status_code == 200 else []
-                _store_wh(sku, rows_wh, avail_rows)
+                rows_wh   = r_wh.json()   if not isinstance(r_wh,   Exception) and r_wh.status_code   == 200 else []
+                cond_rows = r_cond.json() if not isinstance(r_cond, Exception) and r_cond.status_code == 200 else []
+                if not isinstance(rows_wh,   list): rows_wh   = []
+                if not isinstance(cond_rows, list): cond_rows = []
+                _store_wh(sku, rows_wh, cond_rows)
                 return
             except Exception:
                 pass
