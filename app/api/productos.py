@@ -538,8 +538,16 @@ async def upload_clip(item_id: str, request: Request):
 
         return {"ok": True, "clip_uuid": clip_uuid, "status": clip_status, "raw": result}
     except Exception as e:
-        logger.error(f"upload-clip error: {e}")
-        await update_clip_status(item_id, user_id, "error", error=str(e))
-        return JSONResponse({"error": str(e)}, status_code=500)
+        err_str = str(e)
+        logger.error(f"upload-clip error: {err_str}")
+        # PolicyAgent error = la App no tiene permiso de Clips en ML Developer Portal
+        if "PolicyAgent" in err_str or "UNAUTHORIZED" in err_str:
+            err_str = (
+                "La App no tiene permiso para subir clips. "
+                "Ve a developers.mercadolibre.com.mx → tu App → Características → activa 'Video clips', "
+                "luego vuelve a iniciar sesión en el dashboard."
+            )
+        await update_clip_status(item_id, user_id, "error", error=err_str)
+        return JSONResponse({"error": err_str}, status_code=500)
     finally:
         await client.close()
