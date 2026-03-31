@@ -523,29 +523,46 @@ async def upload_clip(item_id: str, request: Request):
     if not client:
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
-    try:
-        import json as _json
-        # sites vacío = sube a todos los sitios disponibles del vendedor (MLM por defecto)
-        result = await client.post(
-            f"/marketplace/items/{item_id}/clips/upload",
-            files={
-                "file":  ("commercial.mp4", video_bytes, "video/mp4"),
-                "sites": (None, _json.dumps([{"site_id": "MLM", "logistic_type": "not_specified"}]), "application/json"),
-            },
-        )
-        clip_uuid   = result.get("clip_uuid") or result.get("id") or result.get("uuid")
-        clip_status = result.get("status", "uploaded")
-        logger.info(f"Clip upload {item_id}: uuid={clip_uuid} status={clip_status}")
+    # Intentar upload con distintas variantes de sites hasta que una funcione
+    last_error = None
+    sites_variants = [
+        [],                                                              # vacío = todos los sitios
+        [{"site_id": "MLM", "logistic_type": "default"}],
+        [{"site_id": "MLM", "logistic_type": "not_specified"}],
+        [{"site_id": "MLM", "logistic_type": "fulfillment"}],
+    ]
 
-        # Guardar en DB
-        await save_product_video(item_id, user_id, sku, video_id)
-        await update_clip_status(item_id, user_id, clip_status, clip_uuid=clip_uuid)
+    for sites_val in sites_variants:
+        try:
+            import json as _json
+            files: dict = {"file": ("commercial.mp4", video_bytes, "video/mp4")}
+            if sites_val is not None:
+                files["sites"] = (None, _json.dumps(sites_val), "application/json")
 
-        return {"ok": True, "clip_uuid": clip_uuid, "status": clip_status, "raw": result}
-    except Exception as e:
-        err_str = str(e)
-        logger.error(f"upload-clip error: {err_str}")
-        await update_clip_status(item_id, user_id, "error", error=err_str)
-        return JSONResponse({"error": err_str}, status_code=500)
-    finally:
-        await client.close()
+            result = await client.post(
+                f"/marketplace/items/{item_id}/clips/upload",
+                files=files,
+            )
+            clip_uuid   = result.get("clip_uuid") or result.get("id") or result.get("uuid")
+            clip_status = result.get("status", "uploaded")
+            logger.info(f"Clip upload {item_id}: uuid={clip_uuid} status={clip_status} sites={sites_val}")
+
+            await save_product_video(item_id, user_id, sku, video_id)
+            await update_clip_status(item_id, user_id, clip_status, clip_uuid=clip_uuid)
+            await client.close()
+            return {"ok": True, "clip_uuid": clip_uuid, "status": clip_status, "raw": result}
+
+        except Exception as e:
+            last_error = e
+            err_body = getattr(e, "body", str(e))
+            logger.warning(f"upload-clip sites={sites_val} → {err_body}")
+            # Si no es PolicyAgent/UNAUTHORIZED, no tiene sentido reintentar
+            if "PolicyAgent" not in str(e) and "UNAUTHORIZED" not in str(e):
+                break
+
+    err_str = str(last_error)
+    err_body = getattr(last_error, "body", {})
+    logger.error(f"upload-clip todos los intentos fallaron: {err_body}")
+    await update_clip_status(item_id, user_id, "error", error=err_str)
+    await client.close()
+    return JSONResponse({"error": err_str, "detail": err_body}, status_code=500)

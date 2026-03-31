@@ -2253,38 +2253,43 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # Prompts de movimiento para cada imagen del producto (guían la animación)
+    # 8 prompts de movimiento distintos — cada clip se ve diferente al anterior
     _motion_prompts = [
-        "smooth slow cinematic camera orbit around the product, warm studio lighting, premium commercial quality",
-        "elegant hands interact with the product, lifestyle scene, warm kitchen lighting, slow cinematic movement",
-        "product in a beautiful modern home setting, natural morning light, slow pull-back camera, authentic lifestyle",
-        "close-up detail of the product, soft bokeh background, warm light, macro slow zoom, premium quality",
+        "smooth slow cinematic camera pull-back revealing the product on a modern kitchen counter, warm morning light, premium commercial quality",
+        "elegant close-up zoom into the product details, soft warm bokeh background, slow macro push-in, professional commercial style",
+        "product in use, hands gently opening the container, fresh food inside, warm kitchen lighting, authentic lifestyle slow pan",
+        "slow side-to-side camera drift past the product, warm studio lighting, cinematic depth of field, premium quality",
+        "top-down birds-eye view slowly rotating around the product, clean white surface, natural light, editorial style",
+        "product on a beautiful wooden table, golden hour sunlight streaming in, slow romantic camera orbit, aspirational lifestyle",
+        "multiple sizes of the product arranged together, smooth slow zoom-out to reveal the full set, warm commercial lighting",
+        "hands organizing food inside the container, cheerful kitchen scene, natural warm light, authentic and aspirational",
     ]
 
     if ai_image_urls:
-        # ── Minimax video-01-live: fotos REALES del producto → video sin distorsión ──
-        n_imgs = min(len(ai_image_urls), 4)
-        logger.info(f"=== MINIMAX LIVE IMG2VID: {n_imgs} fotos reales del producto ===")
+        # ── Minimax video-01-live: genera 8 clips desde fotos reales del producto ──
+        # Suficientes clips para cubrir ~45s de audio sin loop (8 × 5.5s = 44s)
+        n_total = 8
+        img_pool = ai_image_urls[:4] if ai_image_urls else []
+        logger.info(f"=== MINIMAX LIVE IMG2VID: {n_total} clips desde {len(img_pool)} fotos ===")
 
-        async def _gen_img_clip(img_url: str, idx: int):
-            motion = _motion_prompts[idx % len(_motion_prompts)]
+        async def _gen_img_clip(idx: int):
+            img_url = img_pool[idx % len(img_pool)]
+            motion  = _motion_prompts[idx % len(_motion_prompts)]
             return await replicate_client.generate_video_minimax_live(img_url, motion)
 
         tts_coro   = elevenlabs_client.generate_audio(script)
-        clip_coros = [_gen_img_clip(ai_image_urls[i], i) for i in range(n_imgs)]
+        clip_coros = [_gen_img_clip(i) for i in range(n_total)]
     else:
         # ── Fallback: text-to-video cuando no hay imágenes del producto ──────────
-        logger.info(f"=== T2V FALLBACK: {len(scenes)} escenas (sin imágenes del producto) ===")
+        logger.info(f"=== T2V FALLBACK: sin imágenes del producto ===")
 
-        async def _gen_t2v_clip(scene_prompt: str, idx: int):
-            return await replicate_client.generate_video_t2v(scene_prompt)
+        async def _gen_t2v_clip(idx: int):
+            return await replicate_client.generate_video_t2v(_motion_prompts[idx % len(_motion_prompts)])
 
         tts_coro   = elevenlabs_client.generate_audio(script)
-        clip_coros = [_gen_t2v_clip(scenes[i], i) for i in range(min(len(scenes), 3))]
+        clip_coros = [_gen_t2v_clip(i) for i in range(8)]
 
-    clip_coros_final = clip_coros
-
-    all_results = await asyncio.gather(tts_coro, *clip_coros_final, return_exceptions=True)
+    all_results = await asyncio.gather(tts_coro, *clip_coros, return_exceptions=True)
     audio_result  = all_results[0]
     clip_url_results = list(all_results[1:])
 
@@ -2358,29 +2363,72 @@ async def generate_video_commercial_endpoint(request: Request):
 
             logger.info(f"Clips normalizados: {len(norm_paths)}/{len(clip_paths)}")
 
-            # ── Paso 2: Concat demuxer (todos idénticos → -c copy sin re-encode) ─
-            with open(concat_path, "w") as cf:
-                for np in norm_paths:
-                    cf.write(f"file '{np}'\n")
+            # ── Paso 2: Obtener duración real de cada clip ────────────────────
+            import re as _re_dur
+            def _probe_duration(path: str) -> float:
+                r = _sp.run([ffmpeg_bin, "-i", path], capture_output=True, timeout=15)
+                m = _re_dur.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)",
+                                   r.stderr.decode(errors="replace"))
+                if m:
+                    return int(m.group(1))*3600 + int(m.group(2))*60 + float(m.group(3))
+                return 5.5
 
-            cat_proc = _sp.run([
-                ffmpeg_bin, "-y",
-                "-f", "concat", "-safe", "0",
-                "-i", concat_path,
-                "-c", "copy",
-                raw_cat,
-            ], capture_output=True, timeout=300)
+            clip_durations = []
+            for np in norm_paths:
+                dur = _probe_duration(np)
+                clip_durations.append(dur)
+                logger.debug(f"  Clip duración: {dur:.2f}s")
 
-            if cat_proc.returncode != 0:
-                cat_err = cat_proc.stderr.decode(errors="replace")[:400]
-                logger.error(f"Concat demuxer error: {cat_err}")
-                # Fallback: usar solo el primer clip normalizado
-                import shutil as _shutil
-                _shutil.copy(norm_paths[0], raw_cat)
-                logger.warning("Fallback: raw_cat = primer clip normalizado")
+            total_clip_dur = sum(clip_durations)
+            logger.info(f"Duración total clips: {total_clip_dur:.1f}s")
+
+            # ── Paso 3: Unir clips con xfade (0.5s fade) — SIN stream_loop ────
+            # xfade encadena pares: [0][1]xfade→[v1]; [v1][2]xfade→[v2]; ...
+            FADE = 0.5
+            xfade_path = _os.path.join(tmpdir, "xfaded.mp4")
+
+            if len(norm_paths) == 1:
+                xfade_path = norm_paths[0]
+                logger.info("Un solo clip, sin xfade")
             else:
-                cat_size = _os.path.getsize(raw_cat)
-                logger.info(f"Concat demuxer OK: {len(norm_paths)} clips → raw_cat ({cat_size} bytes)")
+                # Construir filter_complex con xfade encadenado
+                inputs_args = []
+                for np in norm_paths:
+                    inputs_args += ["-i", np]
+
+                fc_parts = []
+                prev   = "[0:v]"
+                offset = 0.0
+                for i in range(1, len(norm_paths)):
+                    offset += max(clip_durations[i - 1] - FADE, 0.1)
+                    out_lbl = f"[v{i}]" if i < len(norm_paths) - 1 else "[vout]"
+                    fc_parts.append(
+                        f"{prev}[{i}:v]xfade=transition=fade:duration={FADE}:offset={offset:.3f}{out_lbl}"
+                    )
+                    prev = out_lbl
+
+                xfade_cmd = [ffmpeg_bin, "-y"] + inputs_args + [
+                    "-filter_complex", ";".join(fc_parts),
+                    "-map", "[vout]",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                    "-r", "25", "-pix_fmt", "yuv420p",
+                    xfade_path,
+                ]
+                xr = _sp.run(xfade_cmd, capture_output=True, timeout=300)
+                if xr.returncode != 0:
+                    logger.error(f"xfade falló: {xr.stderr.decode(errors='replace')[:300]}")
+                    # Fallback: concat simple
+                    with open(concat_path, "w") as cf:
+                        for np in norm_paths:
+                            cf.write(f"file '{np}'\n")
+                    _sp.run([ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
+                              "-i", concat_path, "-c", "copy", xfade_path],
+                             capture_output=True, timeout=300)
+                    logger.warning("xfade falló, usando concat simple")
+                else:
+                    logger.info(f"xfade OK: {len(norm_paths)} clips → {_os.path.getsize(xfade_path)//1024} KB")
+
+            raw_cat = xfade_path
 
             if has_audio:
                 with open(aud_path, "wb") as f:
@@ -2388,16 +2436,15 @@ async def generate_video_commercial_endpoint(request: Request):
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
-                        "-stream_loop", "-1",  # loop video hasta que termine el audio
-                        "-i", raw_cat,
+                        "-i", raw_cat,           # sin stream_loop — tenemos suficientes clips
                         "-i", aud_path,
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",            # corta cuando termina el audio
+                        "-shortest",             # corta al terminar el más corto
                         "-movflags", "+faststart",
                         out_path,
                     ],
-                    capture_output=True, timeout=120,
+                    capture_output=True, timeout=180,
                 )
                 final_path = out_path if proc.returncode == 0 else raw_cat
                 if proc.returncode != 0:
