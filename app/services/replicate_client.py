@@ -736,3 +736,123 @@ async def _img2vid_svd(image_url: str) -> str:
             if status in ("failed", "canceled"):
                 raise RuntimeError(f"SVD falló: {pd.get('error', 'unknown')}")
     raise RuntimeError("SVD timeout — 300s sin resultado")
+
+
+# ─── Text → Video (sin imágenes — evita distorsiones) ─────────────────────────
+
+_LTX_URL     = "https://api.replicate.com/v1/models/lightricks/ltx-video/predictions"
+_WAN_T2V_URL = "https://api.replicate.com/v1/models/wavespeedai/wan-2.1-t2v-480p/predictions"
+
+
+async def generate_video_t2v(prompt: str) -> str:
+    """
+    Text-to-video profesional. No usa imágenes del producto (evita distorsiones).
+    Pipeline: LTX-Video (9:16 nativo) → Wan2.1 t2v fallback.
+    Retorna URL del video generado.
+    """
+    import asyncio
+
+    # Intento 1: LTX-Video de Lightricks — genera 9:16 nativo, alta calidad
+    try:
+        logger.info(f"t2v: LTX-Video — '{prompt[:60]}...'")
+        return await _t2v_ltx(prompt)
+    except Exception as e:
+        logger.warning(f"LTX-Video falló ({e.__class__.__name__}: {str(e)[:120]}), usando Wan2.1...")
+
+    # Intento 2: Wan2.1 text-to-video
+    logger.info(f"t2v: Wan2.1 — '{prompt[:60]}...'")
+    return await _t2v_wan(prompt)
+
+
+async def _t2v_ltx(prompt: str) -> str:
+    """LTX-Video — alta calidad, genera video vertical 9:16 nativo."""
+    import asyncio
+    payload = {
+        "input": {
+            "prompt":               prompt,
+            "negative_prompt":      "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
+            "width":                480,
+            "height":               848,
+            "num_frames":           97,
+            "frame_rate":           24,
+            "guidance_scale":       3.5,
+            "num_inference_steps":  40,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_LTX_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"LTX-Video submit {resp.status_code}: {resp.text[:200]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"LTX-Video no pred_id: {data}")
+
+    logger.info(f"LTX-Video prediction {pred_id} — polling...")
+    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(60):   # max 60 × 5s = 300s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    first = out[0]
+                    return first if isinstance(first, str) else first.get("url", "")
+                raise RuntimeError(f"LTX-Video output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"LTX-Video falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("LTX-Video timeout — 300s sin resultado")
+
+
+async def _t2v_wan(prompt: str) -> str:
+    """Wan 2.1 text-to-video fallback."""
+    import asyncio
+    payload = {
+        "input": {
+            "prompt":          prompt,
+            "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, amateur",
+            "num_frames":      81,
+            "fps":             16,
+            "guide_scale":     5.0,
+            "sample_steps":    25,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_WAN_T2V_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Wan2.1 t2v submit {resp.status_code}: {resp.text[:200]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Wan2.1 t2v no pred_id: {data}")
+
+    logger.info(f"Wan2.1 t2v prediction {pred_id} — polling...")
+    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(80):   # max 80 × 5s = 400s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    first = out[0]
+                    return first if isinstance(first, str) else first.get("url", "")
+                raise RuntimeError(f"Wan2.1 t2v output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"Wan2.1 t2v falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("Wan2.1 t2v timeout — 400s sin resultado")

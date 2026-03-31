@@ -2163,59 +2163,84 @@ async def generate_video_commercial_endpoint(request: Request):
     scenes: list = []
 
     if script_override:
-        # User already has a script from section 1 — use it directly
         script = script_override
         logger.info(f"Using script_override ({len(script.split())} words): {script[:80]}...")
     else:
-        product_desc = " ".join(filter(None, [brand, model])).strip() or title
-        claude_system = (
-            "You are a creative director making a 30-second commercial for Mercado Libre México.\n"
-            "The product can be ANYTHING (electronics, kitchen, clothing, sports, etc.) — adapt accordingly.\n\n"
-            "Respond ONLY with valid JSON (no markdown, no backticks):\n"
-            '{"script": "...", "scenes": ["scene1", "scene2", "scene3", "scene4", "scene5"]}\n\n'
-            "SCRIPT rules:\n"
-            "- Mexican Spanish, 70-90 words, exciting aspirational tone\n"
-            "- Focus on benefits and emotions the product creates\n"
-            "- Never mention model numbers or SKU codes\n"
-            "- End with: Disponible ahora en Mercado Libre.\n\n"
-            "SCENES rules (5 items, English visual descriptions, max 40 words each):\n"
-            "- Each scene describes a DIFFERENT visual moment related to the product\n"
-            "- Include: camera movement, what's visible, lighting, mood\n"
-            "- Show the product being USED or enjoyed in real life\n"
-            "- Cinematic quality, premium commercial look"
-        )
-        claude_user = (
-            f"Producto: {title}\n"
-            f"Marca: {brand}\n"
-            f"Modelo: {model}\n"
-            f"Categoria: {category}\n\n"
-            "Genera el guion en español y las 5 escenas en inglés para el comercial."
-        )
-        try:
-            import json as _json_inner, re as _re
-            raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=700)).strip()
-            if "```" in raw:
-                raw = raw[raw.index("```") + 3:]
-                if raw.startswith("json"): raw = raw[4:]
-                raw = raw[:raw.index("```")] if "```" in raw else raw
-            raw = raw.strip()
-            if not raw.startswith("{"):
-                m = _re.search(r'\{[\s\S]*\}', raw)
-                if m: raw = m.group(0)
-            parsed = _json_inner.loads(raw)
+        script = ""
+
+    # Always generate cinematic scene descriptions with Claude for text-to-video
+    # (scenes are visual prompts — separate from the narration script)
+    import json as _json_inner, re as _re
+    product_desc = " ".join(filter(None, [brand, model])).strip() or title
+    claude_system = (
+        "You are a world-class TV commercial director creating a premium 30-second ad for Mercado Libre México.\n"
+        "The product can be ANYTHING — adapt every scene specifically to THIS product and its actual use case.\n\n"
+        "Respond ONLY with valid JSON (no markdown, no backticks, no extra text):\n"
+        '{"script": "...", "scenes": ["scene1", "scene2", "scene3"]}\n\n'
+        "SCRIPT rules (if empty, generate one):\n"
+        "- Mexican Spanish, 70-90 words, exciting aspirational tone\n"
+        "- Describe benefits and lifestyle — never mention model numbers or SKU codes\n"
+        "- End with: Disponible ahora en Mercado Libre.\n\n"
+        "SCENES rules — 3 items, each max 55 words, in English:\n"
+        "- Each scene is a TEXT PROMPT for an AI video model — describe ONLY what the camera sees\n"
+        "- Show the product being USED in REAL LIFE by real people — NOT product photography\n"
+        "- Be extremely specific to this product category and its use case\n"
+        "- Each scene must be VISUALLY DIFFERENT (location, action, lighting, camera angle)\n"
+        "- Include: camera movement (slow push-in / orbit / pan), lighting (golden hour / soft natural / dramatic), mood\n"
+        "- Make it aspirational: beautiful settings, happy people, satisfying moments\n"
+        "- NO product logos, NO text overlays, NO watermarks in scene descriptions\n"
+        "- Premium cinematic quality, 4K photorealistic commercial look\n"
+        "Example for food containers: 'Slow push-in on a woman's hands elegantly organizing vibrant colorful salads "
+        "into clear glass containers on white marble countertop, warm morning kitchen light, shallow depth of field, "
+        "satisfying and clean aesthetic'\n"
+        "Example for TV mount: 'Smiling family sitting on cozy modern sofa watching a large mounted TV together, "
+        "golden evening light through large windows, slow wide-angle pull-back revealing organized living room'"
+    )
+    claude_user = (
+        f"Producto: {title}\n"
+        f"Marca: {brand}\n"
+        f"Modelo: {model}\n"
+        f"Categoria: {category}\n"
+        f"Guion existente: {script or 'generar uno nuevo'}\n\n"
+        "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL."
+    )
+    try:
+        raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=800)).strip()
+        if "```" in raw:
+            raw = raw[raw.index("```") + 3:]
+            if raw.startswith("json"): raw = raw[4:]
+            raw = raw[:raw.index("```")] if "```" in raw else raw
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            m = _re.search(r'\{[\s\S]*\}', raw)
+            if m: raw = m.group(0)
+        parsed  = _json_inner.loads(raw)
+        scenes  = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
+        if not script:
             script = parsed.get("script", "").strip().strip('"').strip("'")
-            scenes = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
-            logger.info(f"Claude script ({len(script.split())} words): {script[:80]}...")
-        except Exception as e:
-            logger.warning(f"Claude script+scenes failed: {e}")
-            product_line = " ".join(filter(None, [brand, model, title])).strip()
-            script = (
-                f"{product_line} — la mejor opcion para ti. "
-                f"Calidad, diseno y funcionalidad en un solo producto. "
-                f"Perfecto para tu hogar, tu familia, tu estilo de vida. "
-                f"Disponible ahora en Mercado Libre."
-            )
-            scenes = []
+        logger.info(f"Claude scenes: {len(scenes)} | script: {len(script.split())} words")
+    except Exception as e:
+        logger.warning(f"Claude scenes failed: {e}")
+        scenes = []
+
+    # Fallback scenes if Claude failed — generic but product-focused
+    if len(scenes) < 3:
+        prod = product_desc or title or "product"
+        scenes = [
+            f"Professional lifestyle scene showing {prod} being used in a modern home, warm natural lighting, "
+            f"slow cinematic push-in, beautiful and satisfying, premium commercial quality",
+            f"Close-up detail shot of {prod} in use, soft bokeh background, warm studio lighting, "
+            f"elegant hands interacting with it, macro photography style, aspirational",
+            f"Happy family or person enjoying the benefits of {prod}, cozy modern home setting, "
+            f"golden hour light through windows, slow pull-back wide shot, authentic and aspirational",
+        ]
+    if not script:
+        product_line = " ".join(filter(None, [brand, model, title])).strip()
+        script = (
+            f"{product_line} — calidad y funcionalidad para tu vida diaria. "
+            f"Disenado para hacer tu vida mas facil, mas organizada, mas feliz. "
+            f"Disponible ahora en Mercado Libre."
+        )
 
     # Obtener ruta absoluta del binario ffmpeg (imageio-ffmpeg lo bundlea)
     try:
@@ -2228,141 +2253,12 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # ── AI Video desde imágenes del producto (Wan2.1 → SVD → Minimax fallback) ─
-    if ai_image_urls:
-        n_imgs = min(len(ai_image_urls), 4)
-        logger.info(f"=== AI IMG2VID: {n_imgs} imágenes → Wan2.1/SVD ===")
-
-        product_label = " ".join(filter(None, [brand, model])).strip() or title or "product"
-        vid_prompts = [
-            f"professional commercial for {product_label}, smooth slow camera orbit, warm studio lighting, premium cinematic quality",
-            f"close-up macro detail of {product_label}, soft bokeh background, warm light, sharp focus",
-            f"{product_label} being used in a modern home, natural movement, lifestyle photography, authentic",
-            f"hero beauty shot of {product_label}, dramatic side lighting, deep shadows, commercial quality",
-        ]
-
-        async def _gen_i2v(img_url: str, idx: int):
-            return await replicate_client.generate_video_img2vid(
-                img_url, vid_prompts[idx % len(vid_prompts)]
-            )
-
-        all_results = await asyncio.gather(
-            elevenlabs_client.generate_audio(script),
-            *[_gen_i2v(ai_image_urls[i], i) for i in range(n_imgs)],
-            return_exceptions=True,
-        )
-        audio_result     = all_results[0]
-        clip_url_results = list(all_results[1:])
-        clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
-        logger.info(f"AI img2vid clips: {len(clip_urls)}/{n_imgs} OK | audio: {type(audio_result).__name__}")
-
-        if clip_urls:
-            # Descargar clips generados
-            async with httpx.AsyncClient(timeout=180.0) as dl_c:
-                async def _dl_clip(url: str):
-                    r = await dl_c.get(url, follow_redirects=True)
-                    return r.content if r.status_code == 200 and len(r.content) > 5000 else None
-                downloaded = await asyncio.gather(
-                    *[_dl_clip(u) for u in clip_urls], return_exceptions=True
-                )
-
-            has_audio = isinstance(audio_result, bytes) and bool(audio_result)
-
-            with _tf.TemporaryDirectory() as tmpdir:
-                clip_paths = []
-                for i, data in enumerate(downloaded):
-                    if not (isinstance(data, bytes) and data):
-                        logger.warning(f"Clip {i} no descargado")
-                        continue
-                    raw_p  = _os.path.join(tmpdir, f"raw_{i:02d}.mp4")
-                    port_p = _os.path.join(tmpdir, f"clip_{i:02d}.mp4")
-                    with open(raw_p, "wb") as fh:
-                        fh.write(data)
-
-                    # Convertir a 9:16 portrait con fondo borroso (sin barras negras)
-                    # Técnica: duplicar stream → blur de relleno + video nítido centrado
-                    blur_r = _sp.run([
-                        ffmpeg_bin, "-y", "-i", raw_p,
-                        "-vf",
-                        "[0:v]split=2[bg][fg];"
-                        "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
-                        "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
-                        "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
-                        "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[out]",
-                        "-map", "[out]",
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                        "-pix_fmt", "yuv420p", "-an",
-                        port_p,
-                    ], capture_output=True, timeout=120)
-
-                    if blur_r.returncode == 0 and _os.path.exists(port_p) and _os.path.getsize(port_p) > 1000:
-                        clip_paths.append(port_p)
-                        logger.info(f"Clip {i} → 9:16 OK ({_os.path.getsize(port_p) // 1024} KB)")
-                    else:
-                        logger.error(f"Clip {i} 9:16 conv falló: {blur_r.stderr.decode(errors='replace')[:200]}")
-                        # Fallback: usar raw sin conversión
-                        clip_paths.append(raw_p)
-
-                if not clip_paths:
-                    return JSONResponse({"error": "No se pudieron procesar los clips de video generados"}, status_code=500)
-
-                concat_path = _os.path.join(tmpdir, "concat.txt")
-                raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
-                aud_path    = _os.path.join(tmpdir, "audio.mp3")
-                out_path    = _os.path.join(tmpdir, "output.mp4")
-
-                with open(concat_path, "w") as cf:
-                    for cp in clip_paths:
-                        cf.write(f"file '{cp}'\n")
-
-                cat_r = _sp.run([
-                    ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
-                    "-i", concat_path, "-c", "copy", raw_cat,
-                ], capture_output=True, timeout=120)
-                if cat_r.returncode != 0:
-                    import shutil as _shutil
-                    _shutil.copy(clip_paths[0], raw_cat)
-                    logger.warning("Concat falló, usando primer clip")
-                else:
-                    logger.info(f"Concat OK: {len(clip_paths)} clips → {_os.path.getsize(raw_cat) // 1024} KB")
-
-                if has_audio:
-                    with open(aud_path, "wb") as fh:
-                        fh.write(audio_result)
-                    mix_r = _sp.run([
-                        ffmpeg_bin, "-y",
-                        "-stream_loop", "-1", "-i", raw_cat,
-                        "-i", aud_path,
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                        "-c:a", "aac", "-b:a", "128k",
-                        "-shortest", "-t", "58",
-                        "-movflags", "+faststart",
-                        out_path,
-                    ], capture_output=True, timeout=120)
-                    final_path = out_path if mix_r.returncode == 0 else raw_cat
-                    if mix_r.returncode != 0:
-                        logger.warning(f"Audio mix error: {mix_r.stderr.decode(errors='replace')[:200]}")
-                else:
-                    final_path = raw_cat
-
-                with open(final_path, "rb") as fh:
-                    _video_cache[vid_id] = fh.read()
-                _persist_video(vid_id, _video_cache[vid_id])
-
-                out_mb = len(_video_cache[vid_id]) / 1_048_576
-                logger.info(f"AI video listo: {vid_id} ({out_mb:.1f} MB) clips={len(clip_paths)} audio={has_audio}")
-                return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
-
-        # Todos los clips AI fallaron → caer a Minimax text-to-video
-        logger.warning("Todos los clips img2vid fallaron, intentando Minimax...")
-
-    # ── Generar TTS + 5 clips minimax EN PARALELO ────────────────────────────
+    # ── Generar TTS + clips text-to-video EN PARALELO ────────────────────────
     # Cada escena genera un clip distinto → sin loop visible, duración = audio
     logger.info(f"=== MULTI-SCENE VIDEO: {len(scenes)} escenas + TTS en paralelo ===")
 
     async def _gen_clip(scene_prompt: str, idx: int):
-        ff = first_frame if idx == 0 else ""
-        return await replicate_client.generate_video(prompt=scene_prompt, first_frame_image=ff)
+        return await replicate_client.generate_video_t2v(scene_prompt)
 
     tts_coro   = elevenlabs_client.generate_audio(script)
     clip_coros = [_gen_clip(scenes[i], i) for i in range(min(len(scenes), 6))]
@@ -2417,10 +2313,14 @@ async def generate_video_commercial_endpoint(request: Request):
                     ffmpeg_bin, "-y", "-i", cp,
                     "-an",  # eliminar pista de audio del clip
                     "-vf", (
-                        "scale=1280:720:force_original_aspect_ratio=decrease,"
-                        "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,setsar=1"
+                        "[0:v]split=2[bg][fg];"
+                        "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+                        "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
+                        "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
+                        "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[out]"
                     ),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-map", "[out]",
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                     "-r", "25", "-pix_fmt", "yuv420p",
                     norm_path,
                 ]
