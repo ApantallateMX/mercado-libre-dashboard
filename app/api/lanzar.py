@@ -2312,7 +2312,7 @@ async def generate_video_commercial_endpoint(request: Request):
                 norm_cmd = [
                     ffmpeg_bin, "-y", "-i", cp,
                     "-an",  # eliminar pista de audio del clip
-                    "-vf", (
+                    "-filter_complex", (
                         "[0:v]split=2[bg][fg];"
                         "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
                         "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
