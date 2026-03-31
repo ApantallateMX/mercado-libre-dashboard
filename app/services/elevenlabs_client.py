@@ -225,14 +225,14 @@ async def _generate_bark(text: str) -> bytes:
 async def generate_audio(text: str) -> bytes:
     """
     Genera audio TTS en español de México.
-    Cadena de fallbacks:
+    Cadena de fallbacks (mejor calidad primero):
       1. ElevenLabs (premium, si hay API key)
-      2. gTTS librería (Google, HTTP, ~1s)
-      3. Google TTS directo via httpx (sin librería)
-      4. edge-tts (Microsoft, WebSocket)
+      2. edge-tts Microsoft JorgeNeural es-MX (natural, gratis)
+      3. gTTS librería (Google, HTTP)
+      4. Google TTS directo via httpx (sin librería)
       5. Replicate Bark (lento, último recurso)
     """
-    # 1. ElevenLabs
+    # 1. ElevenLabs (si hay key)
     if _el_key():
         try:
             logger.info("TTS: ElevenLabs")
@@ -240,26 +240,26 @@ async def generate_audio(text: str) -> bytes:
         except Exception as e:
             logger.warning(f"ElevenLabs falló: {e}")
 
-    # 2. gTTS
+    # 2. edge-tts — Microsoft JorgeNeural es-MX, suena humano y natural
+    try:
+        logger.info("TTS: edge-tts (es-MX-JorgeNeural)")
+        return await _generate_edge_tts(text)
+    except Exception as e:
+        logger.warning(f"edge-tts falló: {e}")
+
+    # 3. gTTS
     try:
         logger.info("TTS: gTTS (Google, es-MX)")
         return await _generate_gtts(text)
     except Exception as e:
         logger.warning(f"gTTS falló: {e}")
 
-    # 3. Google TTS directo (httpx, sin librería)
+    # 4. Google TTS directo (httpx, sin librería)
     try:
         logger.info("TTS: Google TTS directo (httpx)")
         return await _generate_google_tts_direct(text)
     except Exception as e:
         logger.warning(f"Google TTS directo falló: {e}")
-
-    # 4. edge-tts
-    try:
-        logger.info("TTS: edge-tts (es-MX-JorgeNeural)")
-        return await _generate_edge_tts(text)
-    except Exception as e:
-        logger.warning(f"edge-tts falló: {e}")
 
     # 5. Bark
     logger.info("TTS: Replicate Bark (último recurso)")

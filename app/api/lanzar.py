@@ -2228,134 +2228,133 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # ── Ken Burns slideshow desde imágenes AI (SIEMPRE funciona, 30s) ────────
-    if len(ai_image_urls) >= 3:
-        logger.info(f"=== SLIDESHOW desde {len(ai_image_urls)} imágenes AI ===")
-        n_images = min(len(ai_image_urls), 8)
+    # ── AI Video desde imágenes del producto (Wan2.1 → SVD → Minimax fallback) ─
+    if ai_image_urls:
+        n_imgs = min(len(ai_image_urls), 4)
+        logger.info(f"=== AI IMG2VID: {n_imgs} imágenes → Wan2.1/SVD ===")
 
-        # TTS en paralelo mientras descargamos imágenes
-        tts_task = asyncio.ensure_future(elevenlabs_client.generate_audio(script))
+        product_label = " ".join(filter(None, [brand, model])).strip() or title or "product"
+        vid_prompts = [
+            f"professional commercial for {product_label}, smooth slow camera orbit, warm studio lighting, premium cinematic quality",
+            f"close-up macro detail of {product_label}, soft bokeh background, warm light, sharp focus",
+            f"{product_label} being used in a modern home, natural movement, lifestyle photography, authentic",
+            f"hero beauty shot of {product_label}, dramatic side lighting, deep shadows, commercial quality",
+        ]
 
-        async def _dl_img(url: str):
-            async with httpx.AsyncClient(timeout=60.0) as _c:
-                r = await _c.get(url, follow_redirects=True)
-                return r.content if r.status_code == 200 and len(r.content) > 500 else None
+        async def _gen_i2v(img_url: str, idx: int):
+            return await replicate_client.generate_video_img2vid(
+                img_url, vid_prompts[idx % len(vid_prompts)]
+            )
 
-        img_results = await asyncio.gather(
-            *[_dl_img(u) for u in ai_image_urls[:n_images]], return_exceptions=True
+        all_results = await asyncio.gather(
+            elevenlabs_client.generate_audio(script),
+            *[_gen_i2v(ai_image_urls[i], i) for i in range(n_imgs)],
+            return_exceptions=True,
         )
-        audio_result = await tts_task
+        audio_result     = all_results[0]
+        clip_url_results = list(all_results[1:])
+        clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
+        logger.info(f"AI img2vid clips: {len(clip_urls)}/{n_imgs} OK | audio: {type(audio_result).__name__}")
 
-        # ── Calcular per_img_s dinámicamente para que video >= audio ─────────
-        # Estimamos duración del audio por tamaño (128 kbps MP3 ≈ 16 KB/s)
-        # Garantizamos que incluso con solo 3 imágenes el video cubre el audio.
-        n_valid = sum(1 for d in img_results if isinstance(d, bytes) and d)
-        if isinstance(audio_result, bytes) and audio_result:
-            audio_dur_s = len(audio_result) / 16000  # estimado
-            # +4s buffer para que el video no se corte antes del último word
-            per_img_s = max(5.0, (audio_dur_s + 4) / max(1, n_valid))
-        else:
-            per_img_s = 6.0  # sin audio: 6s por imagen es suficiente
-        logger.info(f"per_img_s={per_img_s:.1f}s (n_valid={n_valid}, audio_est={audio_result and len(audio_result) or 0}B)")
-
-        with _tf.TemporaryDirectory() as tmpdir:
-            seg_paths = []
-            for idx, img_data in enumerate(img_results):
-                if not isinstance(img_data, bytes) or not img_data:
-                    logger.warning(f"Imagen {idx} no descargada, saltando")
-                    continue
-                img_path = _os.path.join(tmpdir, f"img_{idx:02d}.jpg")
-                with open(img_path, "wb") as fh:
-                    fh.write(img_data)
-                seg_path = _os.path.join(tmpdir, f"seg_{idx:02d}.mp4")
-                # Formato vertical 9:16 (720×1280) — requerimiento ML Clips
-                # Crop-to-fill: escalar para cubrir todo el frame y recortar el exceso
-                # (sin barras negras). Zoom lento (Ken Burns) de 1.0 → 1.15 durante el clip.
-                n_frames  = max(1, int(per_img_s * 25))
-                zoom_step = round(0.15 / max(1, n_frames), 6)
-                vf = (
-                    f"scale=1440:2560:force_original_aspect_ratio=increase,"
-                    f"crop=1440:2560,"
-                    f"zoompan=z='min(zoom+{zoom_step},1.15)'"
-                    f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-                    f":d={n_frames}:s=720x1280:fps=25,"
-                    f"setsar=1"
+        if clip_urls:
+            # Descargar clips generados
+            async with httpx.AsyncClient(timeout=180.0) as dl_c:
+                async def _dl_clip(url: str):
+                    r = await dl_c.get(url, follow_redirects=True)
+                    return r.content if r.status_code == 200 and len(r.content) > 5000 else None
+                downloaded = await asyncio.gather(
+                    *[_dl_clip(u) for u in clip_urls], return_exceptions=True
                 )
-                seg_cmd = [
-                    ffmpeg_bin, "-y",
-                    "-loop", "1", "-framerate", "25", "-i", img_path,
-                    "-vf", vf,
-                    "-t", str(per_img_s),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "26",
-                    "-pix_fmt", "yuv420p",
-                    seg_path,
-                ]
-                sr = _sp.run(seg_cmd, capture_output=True, timeout=60)
-                if sr.returncode == 0 and _os.path.exists(seg_path) and _os.path.getsize(seg_path) > 1000:
-                    seg_paths.append(seg_path)
-                    logger.info(f"Segmento {idx} OK ({_os.path.getsize(seg_path)} bytes)")
-                else:
-                    logger.error(f"Segmento {idx} falló (rc={sr.returncode}): {sr.stderr.decode(errors='replace')[:200]}")
 
-            if not seg_paths:
-                logger.error("Slideshow: ningún segmento generado (URLs expiradas o error de descarga)")
-                return JSONResponse({"error": "No se pudieron descargar las imágenes AI. Regenera las imágenes y vuelve a intentar."}, status_code=500)
-            else:
+            has_audio = isinstance(audio_result, bytes) and bool(audio_result)
+
+            with _tf.TemporaryDirectory() as tmpdir:
+                clip_paths = []
+                for i, data in enumerate(downloaded):
+                    if not (isinstance(data, bytes) and data):
+                        logger.warning(f"Clip {i} no descargado")
+                        continue
+                    raw_p  = _os.path.join(tmpdir, f"raw_{i:02d}.mp4")
+                    port_p = _os.path.join(tmpdir, f"clip_{i:02d}.mp4")
+                    with open(raw_p, "wb") as fh:
+                        fh.write(data)
+
+                    # Convertir a 9:16 portrait con fondo borroso (sin barras negras)
+                    # Técnica: duplicar stream → blur de relleno + video nítido centrado
+                    blur_r = _sp.run([
+                        ffmpeg_bin, "-y", "-i", raw_p,
+                        "-vf",
+                        "[0:v]split=2[bg][fg];"
+                        "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+                        "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
+                        "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
+                        "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[out]",
+                        "-map", "[out]",
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                        "-pix_fmt", "yuv420p", "-an",
+                        port_p,
+                    ], capture_output=True, timeout=120)
+
+                    if blur_r.returncode == 0 and _os.path.exists(port_p) and _os.path.getsize(port_p) > 1000:
+                        clip_paths.append(port_p)
+                        logger.info(f"Clip {i} → 9:16 OK ({_os.path.getsize(port_p) // 1024} KB)")
+                    else:
+                        logger.error(f"Clip {i} 9:16 conv falló: {blur_r.stderr.decode(errors='replace')[:200]}")
+                        # Fallback: usar raw sin conversión
+                        clip_paths.append(raw_p)
+
+                if not clip_paths:
+                    return JSONResponse({"error": "No se pudieron procesar los clips de video generados"}, status_code=500)
+
                 concat_path = _os.path.join(tmpdir, "concat.txt")
                 raw_cat     = _os.path.join(tmpdir, "raw_cat.mp4")
                 aud_path    = _os.path.join(tmpdir, "audio.mp3")
                 out_path    = _os.path.join(tmpdir, "output.mp4")
 
                 with open(concat_path, "w") as cf:
-                    for sp_path in seg_paths:
-                        cf.write(f"file '{sp_path}'\n")
+                    for cp in clip_paths:
+                        cf.write(f"file '{cp}'\n")
 
                 cat_r = _sp.run([
                     ffmpeg_bin, "-y", "-f", "concat", "-safe", "0",
                     "-i", concat_path, "-c", "copy", raw_cat,
                 ], capture_output=True, timeout=120)
                 if cat_r.returncode != 0:
-                    logger.error(f"Concat slideshow error: {cat_r.stderr.decode(errors='replace')[:300]}")
-                    # Fallback: usar primer segmento
                     import shutil as _shutil
-                    _shutil.copy(seg_paths[0], raw_cat)
-                    logger.warning("Concat falló, usando primer segmento como fallback")
+                    _shutil.copy(clip_paths[0], raw_cat)
+                    logger.warning("Concat falló, usando primer clip")
                 else:
-                    logger.info(f"Concat slideshow OK: {len(seg_paths)} segs → {_os.path.getsize(raw_cat)} bytes")
+                    logger.info(f"Concat OK: {len(clip_paths)} clips → {_os.path.getsize(raw_cat) // 1024} KB")
 
-                has_audio = isinstance(audio_result, bytes) and bool(audio_result)
                 if has_audio:
                     with open(aud_path, "wb") as fh:
                         fh.write(audio_result)
-                    # ML Clips: duración mínima 10s, máxima 60s
-                    audio_dur_est = len(audio_result) / 16000
-                    t_args = []
-                    if audio_dur_est > 58:   # cap a 58s para dejar margen
-                        t_args = ["-t", "58"]
                     mix_r = _sp.run([
                         ffmpeg_bin, "-y",
-                        "-stream_loop", "-1",  # loop video si el audio es más largo
-                        "-i", raw_cat, "-i", aud_path,
-                        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                        "-stream_loop", "-1", "-i", raw_cat,
+                        "-i", aud_path,
+                        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest", *t_args, "-movflags", "+faststart",
+                        "-shortest", "-t", "58",
+                        "-movflags", "+faststart",
                         out_path,
                     ], capture_output=True, timeout=120)
                     final_path = out_path if mix_r.returncode == 0 else raw_cat
                     if mix_r.returncode != 0:
-                        logger.warning(f"Audio mix error: {mix_r.stderr.decode(errors='replace')[:300]}")
+                        logger.warning(f"Audio mix error: {mix_r.stderr.decode(errors='replace')[:200]}")
                 else:
                     final_path = raw_cat
 
                 with open(final_path, "rb") as fh:
                     _video_cache[vid_id] = fh.read()
-
-                # Persistir a disco para sobrevivir múltiples requests
                 _persist_video(vid_id, _video_cache[vid_id])
 
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
-                logger.info(f"Slideshow listo: {vid_id} ({out_mb:.1f} MB) segs={len(seg_paths)} audio={has_audio}")
+                logger.info(f"AI video listo: {vid_id} ({out_mb:.1f} MB) clips={len(clip_paths)} audio={has_audio}")
                 return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio}
+
+        # Todos los clips AI fallaron → caer a Minimax text-to-video
+        logger.warning("Todos los clips img2vid fallaron, intentando Minimax...")
 
     # ── Generar TTS + 5 clips minimax EN PARALELO ────────────────────────────
     # Cada escena genera un clip distinto → sin loop visible, duración = audio

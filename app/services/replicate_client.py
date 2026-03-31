@@ -20,6 +20,9 @@ _REPLICATE_KEY    = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_T
 _FLUX_PRO_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions"
 _KONTEXT_URL      = "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions"
 _MINIMAX_URL      = "https://api.replicate.com/v1/models/minimax/video-01/predictions"
+# Image-to-video models (ordered by preference)
+_WAN_I2V_URL      = "https://api.replicate.com/v1/models/wavespeedai/wan-2.1-i2v-480p/predictions"
+_SVD_XT_URL       = "https://api.replicate.com/v1/models/lucataco/stable-video-diffusion-img2vid-xt-1-1/predictions"
 
 _HEADERS = {
     "Authorization": f"Bearer {_REPLICATE_KEY}",
@@ -614,3 +617,122 @@ async def generate_video(
                 raise RuntimeError(f"Replicate video falló: {pd.get('error', 'unknown')}")
 
     raise RuntimeError("Replicate video timeout — video no generado en 8 min")
+
+
+# ─── Image → Video AI (Wan2.1 primero, SVD como fallback) ─────────────────────
+
+async def generate_video_img2vid(image_url: str, prompt: str = "") -> str:
+    """
+    Convierte una imagen de producto en un video AI de 4-5s.
+    Pipeline: Wan2.1 (alta calidad) → SVD XT (fallback confiable).
+    Retorna URL pública del video generado.
+    """
+    import asyncio
+
+    # Intento 1: Wan2.1 image-to-video (alta calidad cinematica, ~60s)
+    try:
+        logger.info(f"img2vid: intentando Wan2.1 para {image_url[:60]}...")
+        return await _img2vid_wan(image_url, prompt)
+    except Exception as e:
+        logger.warning(f"Wan2.1 img2vid falló ({e.__class__.__name__}: {str(e)[:120]}), usando SVD...")
+
+    # Intento 2: Stable Video Diffusion XT (fallback, ~45s)
+    logger.info(f"img2vid: usando SVD XT para {image_url[:60]}...")
+    return await _img2vid_svd(image_url)
+
+
+async def _img2vid_wan(image_url: str, prompt: str) -> str:
+    import asyncio
+    vid_prompt = (
+        prompt or
+        "professional product commercial, smooth slow cinematic camera movement, "
+        "warm studio lighting, premium quality, 4K, no watermark"
+    )
+    payload = {
+        "input": {
+            "image":             image_url,
+            "prompt":            vid_prompt,
+            "negative_prompt":   "blurry, low quality, distorted, watermark, text overlay, logo",
+            "num_frames":        81,
+            "sample_steps":      25,
+            "frames_per_second": 16,
+            "guide_scale":       5.0,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_WAN_I2V_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Wan2.1 submit {resp.status_code}: {resp.text[:200]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Wan2.1 no pred_id: {data}")
+
+    logger.info(f"Wan2.1 prediction {pred_id} — polling...")
+    poll_url = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(80):   # max 80 × 5s = 400s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    first = out[0]
+                    return first if isinstance(first, str) else first.get("url", "")
+                raise RuntimeError(f"Wan2.1 output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"Wan2.1 falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("Wan2.1 timeout — 400s sin resultado")
+
+
+async def _img2vid_svd(image_url: str) -> str:
+    """Stable Video Diffusion XT — fallback confiable."""
+    import asyncio
+    payload = {
+        "input": {
+            "input_image":       image_url,
+            "sizing_strategy":   "maintain_aspect_ratio",
+            "frames_per_second": 6,
+            "num_frames":        25,
+            "motion_bucket_id":  127,
+            "cond_aug":          0.02,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_SVD_XT_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"SVD submit {resp.status_code}: {resp.text[:200]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"SVD no pred_id: {data}")
+
+    logger.info(f"SVD XT prediction {pred_id} — polling...")
+    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(60):   # max 60 × 5s = 300s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    first = out[0]
+                    return first if isinstance(first, str) else ""
+                raise RuntimeError(f"SVD output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"SVD falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("SVD timeout — 300s sin resultado")
