@@ -2252,23 +2252,27 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # 8 prompts de movimiento genéricos — funcionan para cualquier categoría de producto
+    # 10 prompts — SOLO movimiento de cámara, sin describir escenas ni objetos
+    # Esto evita que Minimax "invente" contenido distinto al producto real de la foto
     _motion_prompts = [
-        "smooth slow cinematic camera pull-back revealing the product, warm studio light, premium commercial quality",
-        "elegant close-up zoom into product details, soft warm bokeh background, slow macro push-in, professional commercial style",
-        "slow side-to-side camera drift past the product, warm studio lighting, cinematic depth of field, premium quality",
-        "top-down birds-eye view slowly rotating around the product, clean white surface, natural light, editorial style",
-        "product on a beautiful surface with golden hour sunlight, slow romantic camera orbit, aspirational lifestyle",
-        "smooth zoom-in focusing on product texture and craftsmanship, soft commercial lighting, premium quality reveal",
-        "wide establishing shot with slow pull focus on product, warm ambient light, cinematic depth",
-        "product from a low dramatic angle, commercial studio lighting, slow upward tilt reveal, premium feel",
+        "slow cinematic camera zoom-out, product stays centered and unchanged, studio lighting",
+        "gentle slow camera pan right, product fully visible and sharp, warm studio light",
+        "slow camera push-in toward the product, product remains clear and undistorted, professional lighting",
+        "slow camera pan left to right, product centered and unchanged, clean background, commercial quality",
+        "smooth slow camera orbit around the product, product stays fully visible, warm ambient light",
+        "camera slowly tilts up revealing the product from bottom to top, product unchanged, studio lighting",
+        "slow camera pull back showing product in full, no scene change, premium commercial look",
+        "gentle camera drift forward, product sharp and unchanged in frame, cinematic lighting",
+        "slow camera arc from side to front angle, product stays clear and intact, warm studio light",
+        "smooth slow camera zoom-in to product details, product sharp and unchanged, editorial lighting",
     ]
 
     if ai_image_urls:
         # ── Minimax video-01-live: genera 8 clips desde fotos reales del producto ──
         # Suficientes clips para cubrir ~45s de audio sin loop (8 × 5.5s = 44s)
-        # Semáforo de 4 para evitar rate-limiting en Replicate con 8 solicitudes simultáneas
-        n_total  = 8
+        # Semáforo de 4 para evitar rate-limiting en Replicate con 10 solicitudes simultáneas
+        # 10 clips × ~5.5s - 9 × 0.5s xfade = ~50.5s — cubre audios de hasta ~50s
+        n_total  = 10
         img_pool = ai_image_urls[:4] if ai_image_urls else []
         logger.info(f"=== MINIMAX LIVE IMG2VID: {n_total} clips desde {len(img_pool)} fotos ===")
         _sem = asyncio.Semaphore(4)
@@ -2289,7 +2293,7 @@ async def generate_video_commercial_endpoint(request: Request):
             return await replicate_client.generate_video_t2v(_motion_prompts[idx % len(_motion_prompts)])
 
         tts_coro   = elevenlabs_client.generate_audio(script)
-        clip_coros = [_gen_t2v_clip(i) for i in range(8)]
+        clip_coros = [_gen_t2v_clip(i) for i in range(10)]
 
     all_results = await asyncio.gather(tts_coro, *clip_coros, return_exceptions=True)
     audio_result  = all_results[0]
@@ -2438,11 +2442,16 @@ async def generate_video_commercial_endpoint(request: Request):
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
-                        "-i", raw_cat,           # sin stream_loop — tenemos suficientes clips
+                        "-i", raw_cat,
                         "-i", aud_path,
+                        # tpad extiende el último frame indefinidamente → -shortest corta
+                        # al final del audio, sin importar si el video es más corto
+                        "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
+                        "-map", "[vpad]",
+                        "-map", "1:a",
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest",             # corta al terminar el más corto
+                        "-shortest",
                         "-movflags", "+faststart",
                         out_path,
                     ],

@@ -770,7 +770,7 @@ async def generate_video_minimax_live(image_url: str, prompt: str = "") -> str:
         "input": {
             "first_frame_image": image_data_uri,
             "prompt":            motion_prompt,
-            "prompt_optimizer":  True,
+            "prompt_optimizer":  False,   # False = usa nuestro prompt exacto sin reescritura
         }
     }
     hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
