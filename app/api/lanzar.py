@@ -2253,17 +2253,38 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # ── Generar TTS + clips text-to-video EN PARALELO ────────────────────────
-    # Cada escena genera un clip distinto → sin loop visible, duración = audio
-    logger.info(f"=== MULTI-SCENE VIDEO: {len(scenes)} escenas + TTS en paralelo ===")
+    # Prompts de movimiento para cada imagen del producto (guían la animación)
+    _motion_prompts = [
+        "smooth slow cinematic camera orbit around the product, warm studio lighting, premium commercial quality",
+        "elegant hands interact with the product, lifestyle scene, warm kitchen lighting, slow cinematic movement",
+        "product in a beautiful modern home setting, natural morning light, slow pull-back camera, authentic lifestyle",
+        "close-up detail of the product, soft bokeh background, warm light, macro slow zoom, premium quality",
+    ]
 
-    async def _gen_clip(scene_prompt: str, idx: int):
-        return await replicate_client.generate_video_t2v(scene_prompt)
+    if ai_image_urls:
+        # ── Minimax video-01-live: fotos REALES del producto → video sin distorsión ──
+        n_imgs = min(len(ai_image_urls), 4)
+        logger.info(f"=== MINIMAX LIVE IMG2VID: {n_imgs} fotos reales del producto ===")
 
-    tts_coro   = elevenlabs_client.generate_audio(script)
-    clip_coros = [_gen_clip(scenes[i], i) for i in range(min(len(scenes), 6))]
+        async def _gen_img_clip(img_url: str, idx: int):
+            motion = _motion_prompts[idx % len(_motion_prompts)]
+            return await replicate_client.generate_video_minimax_live(img_url, motion)
 
-    all_results = await asyncio.gather(tts_coro, *clip_coros, return_exceptions=True)
+        tts_coro   = elevenlabs_client.generate_audio(script)
+        clip_coros = [_gen_img_clip(ai_image_urls[i], i) for i in range(n_imgs)]
+    else:
+        # ── Fallback: text-to-video cuando no hay imágenes del producto ──────────
+        logger.info(f"=== T2V FALLBACK: {len(scenes)} escenas (sin imágenes del producto) ===")
+
+        async def _gen_t2v_clip(scene_prompt: str, idx: int):
+            return await replicate_client.generate_video_t2v(scene_prompt)
+
+        tts_coro   = elevenlabs_client.generate_audio(script)
+        clip_coros = [_gen_t2v_clip(scenes[i], i) for i in range(min(len(scenes), 3))]
+
+    clip_coros_final = clip_coros
+
+    all_results = await asyncio.gather(tts_coro, *clip_coros_final, return_exceptions=True)
     audio_result  = all_results[0]
     clip_url_results = list(all_results[1:])
 

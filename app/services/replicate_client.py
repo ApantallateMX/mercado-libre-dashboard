@@ -20,6 +20,7 @@ _REPLICATE_KEY    = os.getenv("REPLICATE_API_KEY") or os.getenv("REPLICATE_API_T
 _FLUX_PRO_URL     = "https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions"
 _KONTEXT_URL      = "https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions"
 _MINIMAX_URL      = "https://api.replicate.com/v1/models/minimax/video-01/predictions"
+_MINIMAX_LIVE_URL = "https://api.replicate.com/v1/models/minimax/video-01-live/predictions"
 # Image-to-video models (ordered by preference)
 _WAN_I2V_URL      = "https://api.replicate.com/v1/models/wavespeedai/wan-2.1-i2v-480p/predictions"
 _SVD_XT_URL       = "https://api.replicate.com/v1/models/lucataco/stable-video-diffusion-img2vid-xt-1-1/predictions"
@@ -736,6 +737,73 @@ async def _img2vid_svd(image_url: str) -> str:
             if status in ("failed", "canceled"):
                 raise RuntimeError(f"SVD falló: {pd.get('error', 'unknown')}")
     raise RuntimeError("SVD timeout — 300s sin resultado")
+
+
+# ─── Minimax video-01-live: imagen real → video (sin distorsión) ─────────────
+
+async def generate_video_minimax_live(image_url: str, prompt: str = "") -> str:
+    """
+    Convierte una foto real del producto en un video de 5-6s usando minimax/video-01-live.
+    Descarga la imagen y la envía como base64 para evitar bloqueos de CDN (ej. ML).
+    Probado: funciona con Replicate key sin UNAUTHORIZED, sin distorsión.
+    Retorna URL pública del video generado.
+    """
+    import asyncio
+    import base64
+
+    motion_prompt = prompt or (
+        "smooth slow cinematic camera movement, warm commercial lighting, "
+        "premium product video quality, elegant natural motion"
+    )
+
+    # Descargar imagen y codificar como base64 (evita bloqueos de CDN externos)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as dl:
+        img_resp = await dl.get(image_url, headers={"User-Agent": "Mozilla/5.0"})
+        if img_resp.status_code != 200 or not img_resp.content:
+            raise RuntimeError(f"No se pudo descargar imagen: {img_resp.status_code}")
+        ctype   = img_resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        img_b64 = base64.b64encode(img_resp.content).decode()
+        image_data_uri = f"data:{ctype};base64,{img_b64}"
+        logger.info(f"Imagen descargada: {len(img_resp.content)} bytes ({ctype})")
+
+    payload = {
+        "input": {
+            "first_frame_image": image_data_uri,
+            "prompt":            motion_prompt,
+            "prompt_optimizer":  True,
+        }
+    }
+    hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(_MINIMAX_LIVE_URL, json=payload, headers=hdrs)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(f"Minimax Live submit {resp.status_code}: {resp.text[:300]}")
+        data    = resp.json()
+        pred_id = data.get("id")
+        if not pred_id:
+            raise RuntimeError(f"Minimax Live no pred_id: {data}")
+        logger.info(f"Minimax Live prediction {pred_id} — polling...")
+
+    poll_url  = f"https://api.replicate.com/v1/predictions/{pred_id}"
+    poll_hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(80):   # max 80 × 5s = 400s
+            await asyncio.sleep(5)
+            pr = await client.get(poll_url, headers=poll_hdrs)
+            pd = pr.json()
+            status = pd.get("status")
+            logger.debug(f"Minimax Live poll: {status}")
+            if status == "succeeded":
+                out = pd.get("output")
+                if isinstance(out, str) and out.startswith("http"):
+                    return out
+                if isinstance(out, list) and out:
+                    return out[0]
+                raise RuntimeError(f"Minimax Live output inesperado: {out}")
+            if status in ("failed", "canceled"):
+                raise RuntimeError(f"Minimax Live falló: {pd.get('error', 'unknown')}")
+    raise RuntimeError("Minimax Live timeout — 400s sin resultado")
 
 
 # ─── Text → Video (sin imágenes — evita distorsiones) ─────────────────────────

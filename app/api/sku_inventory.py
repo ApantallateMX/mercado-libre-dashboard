@@ -1073,17 +1073,20 @@ async def ai_improve(body: dict):
     elif field == "video_script":
         title = context.get("title", current_value)
         prompt = (
-            f"Crea el texto de narracion para un video comercial de 20-30 segundos.\n\n"
+            f"Crea el texto de narracion para un video comercial de 40-50 segundos.\n\n"
             f"Producto: {title}\n"
             f"Marca: {brand}\n"
             f"Modelo: {model}\n\n"
             f"REQUISITOS:\n"
-            f"- Entre 70 y 90 palabras exactamente (para 25-30 segundos hablados)\n"
-            f"- Espanol de Mexico, tono energico y aspiracional\n"
+            f"- Entre 110 y 130 palabras exactamente (para 40-50 segundos hablados)\n"
+            f"- Espanol de Mexico, tono energico, aspiracional y persuasivo — que den ganas de comprarlo\n"
+            f"- Empieza con una pregunta o afirmacion poderosa que enganche al espectador\n"
+            f"- Describe 2 o 3 beneficios concretos y reales del producto\n"
+            f"- Menciona la marca de forma natural\n"
+            f"- Incluye una llamada a la accion clara al final\n"
             f"- Sin corchetes, sin asteriscos, sin guiones, sin marcadores de escena\n"
-            f"- Solo el texto que se va a leer en voz alta, en oraciones normales\n"
-            f"- Menciona la marca y el beneficio principal de forma natural\n"
-            f"- Termina con: Disponible ahora en Mercado Libre.\n\n"
+            f"- Solo el texto que se va a leer en voz alta, en oraciones naturales\n"
+            f"- Termina con: Ordenalo hoy en Mercado Libre.\n\n"
             f"Responde UNICAMENTE con el texto de narracion. Sin titulos, sin numeracion, sin formato adicional."
         )
 
