@@ -526,10 +526,8 @@ async def upload_clip(item_id: str, request: Request):
     # Intentar upload con distintas variantes de sites hasta que una funcione
     last_error = None
     sites_variants = [
-        [],                                                              # vacío = todos los sitios
-        [{"site_id": "MLM", "logistic_type": "default"}],
-        [{"site_id": "MLM", "logistic_type": "not_specified"}],
-        [{"site_id": "MLM", "logistic_type": "fulfillment"}],
+        [{"site_id": "MLM", "logistic_type": "remote"}],  # único valor documentado en Clips API
+        [],                                                # vacío = todos los sitios disponibles
     ]
 
     for sites_val in sites_variants:
