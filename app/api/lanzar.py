@@ -2199,7 +2199,6 @@ async def generate_video_commercial_endpoint(request: Request):
     claude_user = (
         f"Producto: {title}\n"
         f"Marca: {brand}\n"
-        f"Modelo: {model}\n"
         f"Categoria: {category}\n"
         f"Guion existente: {script or 'generar uno nuevo'}\n\n"
         "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL."
@@ -2253,29 +2252,32 @@ async def generate_video_commercial_endpoint(request: Request):
 
     vid_id = str(_uuid.uuid4())
 
-    # 8 prompts de movimiento distintos — cada clip se ve diferente al anterior
+    # 8 prompts de movimiento genéricos — funcionan para cualquier categoría de producto
     _motion_prompts = [
-        "smooth slow cinematic camera pull-back revealing the product on a modern kitchen counter, warm morning light, premium commercial quality",
-        "elegant close-up zoom into the product details, soft warm bokeh background, slow macro push-in, professional commercial style",
-        "product in use, hands gently opening the container, fresh food inside, warm kitchen lighting, authentic lifestyle slow pan",
+        "smooth slow cinematic camera pull-back revealing the product, warm studio light, premium commercial quality",
+        "elegant close-up zoom into product details, soft warm bokeh background, slow macro push-in, professional commercial style",
         "slow side-to-side camera drift past the product, warm studio lighting, cinematic depth of field, premium quality",
         "top-down birds-eye view slowly rotating around the product, clean white surface, natural light, editorial style",
-        "product on a beautiful wooden table, golden hour sunlight streaming in, slow romantic camera orbit, aspirational lifestyle",
-        "multiple sizes of the product arranged together, smooth slow zoom-out to reveal the full set, warm commercial lighting",
-        "hands organizing food inside the container, cheerful kitchen scene, natural warm light, authentic and aspirational",
+        "product on a beautiful surface with golden hour sunlight, slow romantic camera orbit, aspirational lifestyle",
+        "smooth zoom-in focusing on product texture and craftsmanship, soft commercial lighting, premium quality reveal",
+        "wide establishing shot with slow pull focus on product, warm ambient light, cinematic depth",
+        "product from a low dramatic angle, commercial studio lighting, slow upward tilt reveal, premium feel",
     ]
 
     if ai_image_urls:
         # ── Minimax video-01-live: genera 8 clips desde fotos reales del producto ──
         # Suficientes clips para cubrir ~45s de audio sin loop (8 × 5.5s = 44s)
-        n_total = 8
+        # Semáforo de 4 para evitar rate-limiting en Replicate con 8 solicitudes simultáneas
+        n_total  = 8
         img_pool = ai_image_urls[:4] if ai_image_urls else []
         logger.info(f"=== MINIMAX LIVE IMG2VID: {n_total} clips desde {len(img_pool)} fotos ===")
+        _sem = asyncio.Semaphore(4)
 
         async def _gen_img_clip(idx: int):
-            img_url = img_pool[idx % len(img_pool)]
-            motion  = _motion_prompts[idx % len(_motion_prompts)]
-            return await replicate_client.generate_video_minimax_live(img_url, motion)
+            async with _sem:
+                img_url = img_pool[idx % len(img_pool)]
+                motion  = _motion_prompts[idx % len(_motion_prompts)]
+                return await replicate_client.generate_video_minimax_live(img_url, motion)
 
         tts_coro   = elevenlabs_client.generate_audio(script)
         clip_coros = [_gen_img_clip(i) for i in range(n_total)]
