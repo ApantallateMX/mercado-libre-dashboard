@@ -550,10 +550,10 @@
               <p class="text-xs font-semibold text-blue-700 uppercase tracking-wide">2. Generar Video con IA</p>
               <button id="btn-gen-video" onclick="panelGenVideoFull('${item.item_id}')"
                 class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
-                🎬 Generar y Subir
+                🎬 Generar Video
               </button>
             </div>
-            <p class="text-xs text-gray-500">Genera el video completo con voz en español y lo sube directamente a ML Clips.</p>
+            <p class="text-xs text-gray-500">Genera el video con voz en español usando las fotos del producto para revisar antes de subir.</p>
             <div id="video-gen-progress" class="hidden">
               <div class="flex items-center gap-2 py-1">
                 <div class="w-3 h-3 rounded-full bg-blue-500 animate-pulse shrink-0"></div>
@@ -561,6 +561,22 @@
               </div>
               <div class="w-full bg-blue-100 rounded-full h-1.5 mt-1">
                 <div id="video-gen-bar" class="bg-blue-500 h-1.5 rounded-full transition-all duration-700" style="width:0%"></div>
+              </div>
+            </div>
+            <!-- Preview after generation -->
+            <div id="video-preview-wrap" class="hidden space-y-2 pt-1">
+              <video id="video-preview-el" controls playsinline
+                class="w-full rounded-lg bg-black max-h-48"></video>
+              <p id="video-preview-script" class="text-xs text-gray-500 italic hidden"></p>
+              <div class="flex gap-2">
+                <button id="btn-video-upload" onclick="panelUploadVideo('${item.item_id}', '${escHtml(item.sku || '')}')"
+                  class="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold py-2 rounded-lg transition">
+                  📤 Subir a ML Clips
+                </button>
+                <button onclick="panelGenVideoFull('${item.item_id}')"
+                  class="px-3 py-2 border border-blue-300 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-100 transition">
+                  🔄 Regenerar
+                </button>
               </div>
             </div>
             <p id="video-gen-result" class="text-xs hidden"></p>
@@ -796,23 +812,35 @@
   };
 
   // ── Full video generation pipeline ─────────────────────────────────────────
+  // Stores the latest generated vid_id for upload confirmation
+  let _pendingVidId = null;
+
   window.panelGenVideoFull = async function (itemId) {
-    const item    = state.panelItem;
-    const btn     = document.getElementById('btn-gen-video');
-    const progEl  = document.getElementById('video-gen-progress');
-    const stepEl  = document.getElementById('video-gen-step');
-    const barEl   = document.getElementById('video-gen-bar');
-    const resEl   = document.getElementById('video-gen-result');
+    const item      = state.panelItem;
+    const btn       = document.getElementById('btn-gen-video');
+    const progEl    = document.getElementById('video-gen-progress');
+    const stepEl    = document.getElementById('video-gen-step');
+    const barEl     = document.getElementById('video-gen-bar');
+    const resEl     = document.getElementById('video-gen-result');
+    const prevWrap  = document.getElementById('video-preview-wrap');
     if (!btn || !item) return;
+
+    _pendingVidId = null;
 
     const brand  = (item.attributes || []).find(a => a.id === 'BRAND')?.value_name || '';
     const model  = (item.attributes || []).find(a => a.id === 'MODEL')?.value_name || '';
-    const size   = (item.attributes || []).find(a => a.id === 'WEIGHT' || a.id === 'VIDEO_SCREEN_SIZE' || a.id === 'SCREEN_SIZE')?.value_name || '';
-    const pics   = (item.pictures || []).map(p => p.secure_url || p.url || '').filter(Boolean);
+    const size   = (item.attributes || []).find(a => a.id === 'VIDEO_SCREEN_SIZE' || a.id === 'SCREEN_SIZE')?.value_name || '';
     const script = document.getElementById('video-script')?.value?.trim() || '';
+
+    // Always use the item's pictures as slideshow frames.
+    // Pad to >= 3 to force the slideshow path (avoids Minimax/Replicate auth issues).
+    let rawPics = (item.pictures || []).map(p => p.secure_url || p.url || '').filter(Boolean);
+    while (rawPics.length < 3 && rawPics.length > 0) rawPics = [...rawPics, ...rawPics];
+    const pics = rawPics.slice(0, 5);
 
     btn.disabled = true; btn.textContent = '⏳ Generando...';
     if (progEl) progEl.classList.remove('hidden');
+    if (prevWrap) prevWrap.classList.add('hidden');
     if (resEl)  { resEl.classList.add('hidden'); resEl.textContent = ''; }
 
     const setStep = (text, pct) => {
@@ -820,21 +848,19 @@
       if (barEl)  barEl.style.width  = pct + '%';
     };
 
-    // Simulate progress steps while server-side pipeline runs (~60-90s)
     const steps = [
-      ['Generando guion con IA...', 10],
-      ['Generando escenas cinematicas...', 25],
-      ['Generando voz con ElevenLabs...', 40],
-      ['Creando video con imagenes del producto...', 60],
+      ['Generando guion y voz con IA...', 15],
+      ['Descargando fotos del producto...', 35],
+      ['Creando video con las fotos...', 55],
       ['Combinando audio y video...', 75],
-      ['Finalizando video...', 85],
+      ['Finalizando...', 90],
     ];
     let stepIdx = 0;
     setStep(steps[0][0], steps[0][1]);
     const stepTimer = setInterval(() => {
       stepIdx = Math.min(stepIdx + 1, steps.length - 1);
       setStep(steps[stepIdx][0], steps[stepIdx][1]);
-    }, 12000);
+    }, 14000);
 
     try {
       const resp = await fetch('/api/lanzar/generate-video-commercial', {
@@ -843,59 +869,84 @@
         body: JSON.stringify({
           brand,
           model,
-          title:            item.title || '',
-          category:         item.category_id || '',
-          size:             size,
+          title:             item.title || '',
+          category:          item.category_id || '',
+          size:              size,
           first_frame_image: pics[0] || '',
-          ai_image_urls:    pics.slice(0, 5),
-          ...(script ? { script_override: script } : {}),
+          ai_image_urls:     pics,
         }),
       });
       clearInterval(stepTimer);
+      setStep('Video listo — revisa antes de subir', 100);
 
       const d = await resp.json();
 
       if (d.error) {
         if (resEl) { resEl.textContent = '❌ ' + d.error; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
         if (progEl) progEl.classList.add('hidden');
-        btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
+        btn.disabled = false; btn.textContent = '🎬 Generar Video';
         return;
       }
 
-      setStep('Video generado — subiendo a Mercado Libre...', 75);
-
-      // Extract vid_id from video_url: "/api/lanzar/video-file/{vid_id}"
+      // Store vid_id for upload step
       const vidId = d.video_url ? d.video_url.split('/').pop() : null;
+      _pendingVidId = vidId;
 
-      if (!vidId) {
-        if (resEl) { resEl.textContent = '❌ No se obtuvo ID del video'; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
-        if (progEl) progEl.classList.add('hidden');
-        btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
-        return;
-      }
-
-      // Show generated script in the textarea
+      // Fill script textarea if empty
       if (d.script) {
         const scriptEl = document.getElementById('video-script');
         if (scriptEl && !scriptEl.value.trim()) scriptEl.value = d.script;
+        const prevScript = document.getElementById('video-preview-script');
+        if (prevScript) { prevScript.textContent = d.script; prevScript.classList.remove('hidden'); }
       }
 
-      // Upload to ML
+      // Show video preview
+      const vidEl = document.getElementById('video-preview-el');
+      if (vidEl && d.video_url) {
+        vidEl.src = d.video_url;
+        vidEl.load();
+      }
+      if (prevWrap) prevWrap.classList.remove('hidden');
+
+      // Update upload button label
+      const upBtn = document.getElementById('btn-video-upload');
+      if (upBtn) upBtn.textContent = `📤 Subir a ML Clips${d.has_audio ? ' (con voz)' : ''}`;
+
+      btn.disabled = false; btn.textContent = '🎬 Generar Video';
+      if (progEl) progEl.classList.add('hidden');
+
+    } catch (e) {
+      clearInterval(stepTimer);
+      if (resEl) { resEl.textContent = '❌ ' + e.message; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
+      if (progEl) progEl.classList.add('hidden');
+      btn.disabled = false; btn.textContent = '🎬 Generar Video';
+    }
+  };
+
+  // ── Upload confirmed video to ML ────────────────────────────────────────────
+  window.panelUploadVideo = async function (itemId, sku) {
+    const btn  = document.getElementById('btn-video-upload');
+    const resEl = document.getElementById('video-gen-result');
+    if (!_pendingVidId) {
+      if (resEl) { resEl.textContent = '❌ No hay video generado — genera uno primero'; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Subiendo...'; }
+
+    try {
       const upRes = await apiFetch(`/api/productos/${itemId}/clip`, {
         method: 'POST',
-        body: { video_id: vidId, sku: item.sku || '' },
+        body: { video_id: _pendingVidId, sku: sku || state.panelItem?.sku || '' },
       });
-
-      setStep('¡Listo!', 100);
 
       if (upRes.ok || upRes.clip_uuid || upRes.status) {
         toast('Video subido a ML Clips ✓', 'green');
         if (resEl) {
-          resEl.textContent = `✓ Video subido${d.has_audio ? ' con audio' : ''}. ${upRes.status ? 'Estado: ' + upRes.status : ''}`;
+          resEl.textContent = `✓ Video enviado a moderación. ${upRes.status ? 'Estado: ' + upRes.status : ''}`;
           resEl.className = 'text-xs text-green-600';
           resEl.classList.remove('hidden');
         }
-        // Refresh panel
+        _pendingVidId = null;
         const detail = await apiFetch(`/api/productos/${itemId}`);
         state.panelItem = detail;
         renderPanelTab('video');
@@ -903,12 +954,9 @@
       } else {
         throw new Error(upRes.error || 'Error al subir clip');
       }
-
     } catch (e) {
-      clearInterval(stepTimer);
       if (resEl) { resEl.textContent = '❌ ' + e.message; resEl.className = 'text-xs text-red-500'; resEl.classList.remove('hidden'); }
-      if (progEl) progEl.classList.add('hidden');
-      btn.disabled = false; btn.textContent = '🎬 Generar y Subir';
+      if (btn) { btn.disabled = false; btn.textContent = '📤 Subir a ML Clips'; }
     }
   };
 
