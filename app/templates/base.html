@@ -602,7 +602,7 @@ document.addEventListener('click', function(e) {
                         if (!_fixAction) {
                             if (k === 'meli_tokens' || k === 'revenue') _fixAction = {label:'Refrescar tokens', fn: function(){ fetch('/api/system-health/fix-tokens',{method:'POST'}); }};
                             else if (k === 'amazon') _fixAction = {label:'Reconectar Amazon', fn: function(){ window.location.href='/auth/amazon/connect'; }};
-                            else if (k === 'stock_sync') _fixAction = {label:'Sync ahora', fn: function(){ fetch('/api/sync/trigger',{method:'POST'}); }};
+                            else if (k === 'stock_sync') _fixAction = {label:'Sync ahora', fn: function(){ fetch('/api/stock/multi-sync/trigger',{method:'POST'}); }};
                         }
                     }
                 }

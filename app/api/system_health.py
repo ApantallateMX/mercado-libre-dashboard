@@ -158,35 +158,29 @@ async def _check_binmanager() -> dict:
 
 
 async def _check_stock_sync() -> dict:
+    """Verifica el multi-platform stock sync (BM→ML+Amazon cada 5 min)."""
     t0 = time.monotonic()
     try:
-        from app.services import token_store
-        accounts = await token_store.get_all_tokens()
-        if not accounts:
-            return _warn("Sin cuentas para verificar sync", _elapsed_ms(t0))
-        ok_users, stale_users, no_run = [], [], []
-        for acc in accounts:
-            uid = acc.get("user_id", "")
-            nick = acc.get("nickname", uid)
-            status = await token_store.get_sync_status(uid)
-            if not status or not status.get("last_run"):
-                no_run.append(nick)
-                continue
-            # Verificar que corrió en las últimas 6 horas
-            try:
-                last = datetime.fromisoformat(status["last_run"])
-                if datetime.utcnow() - last < timedelta(hours=6):
-                    ok_users.append(nick)
-                else:
-                    stale_users.append(nick)
-            except Exception:
-                stale_users.append(nick)
+        from app.services.stock_sync_multi import get_sync_status
+        status = get_sync_status()
         ms = _elapsed_ms(t0)
-        if no_run and not ok_users:
-            return _warn(f"Sync aún no corrió para: {', '.join(no_run)}", ms)
-        if stale_users:
-            return _warn(f"Sync desactualizado: {', '.join(stale_users)}", ms)
-        return _ok(f"Sync reciente para {len(ok_users)} cuenta(s)", ms)
+        last_ts = status.get("last_sync_ts")
+        if not last_ts:
+            return _warn("Multi-sync aún no ha corrido (arranque reciente)", ms)
+        last_iso = status.get("last_sync_iso", "")
+        try:
+            last_dt = datetime.fromisoformat(last_iso) if last_iso else None
+        except Exception:
+            last_dt = None
+        if last_dt and datetime.utcnow() - last_dt > timedelta(minutes=20):
+            return _warn(f"Multi-sync desactualizado — último: {last_iso[:16]}", ms)
+        result = status.get("last_result") or {}
+        errors = result.get("errors", 0) or 0
+        updates = result.get("updates", 0) or 0
+        if errors > 0:
+            return _warn(f"Multi-sync con {errors} error(es) — {updates} updates OK", ms)
+        interval = status.get("interval_min", 5)
+        return _ok(f"Multi-sync OK — {updates} updates, ciclo cada {interval} min", ms)
     except Exception as e:
         return _err(f"Error: {str(e)[:80]}", _elapsed_ms(t0))
 
@@ -640,7 +634,7 @@ function fixMeliTokens() {{
 function fixStockSync() {{
     var msg = document.getElementById('health-action-msg');
     if (msg) {{ msg.textContent = 'Iniciando sync de stock...'; msg.classList.remove('hidden'); }}
-    fetch('/api/sync/trigger', {{method:'POST'}})
+    fetch('/api/stock/multi-sync/trigger', {{method:'POST'}})
         .then(function(r){{ return r.json(); }})
         .then(function(d){{
             if (msg) msg.textContent = 'Sync iniciado. Verificando en 10s...';

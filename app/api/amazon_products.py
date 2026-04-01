@@ -113,6 +113,7 @@ _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/Invento
 # InventoryBySKUAndCondicion_Quantity está roto (SQL "Invalid column name 'binid'")
 # Usar GlobalStock_InventoryBySKU_Condition → devuelve status "Producto Vendible" / "Otro"
 _BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+_BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 _BM_LOC_IDS  = "47,62,68"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
@@ -1347,7 +1348,8 @@ def _parse_wh_rows_amz(rows: list) -> tuple:
     return mty, cdmx, tj
 
 
-_BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved": 0}
+_BM_EMPTY = {"bm_mty": 0, "bm_cdmx": 0, "bm_tj": 0, "bm_avail": 0, "bm_reserved": 0,
+             "_bm_retail_ph": 0, "_bm_avg_cost": 0}
 
 
 def _bm_from_cache(sku: str) -> dict:
@@ -1418,13 +1420,21 @@ async def _enrich_bm_amz(items: list) -> None:
             "LOCATIONID": _BM_LOC_IDS, "BINID": None,
             "CONDITION": _BM_COND, "FORINVENTORY": 0, "SUPPLIERS": None,
         }
+        # InventoryReport: RetailPH + AvgCost por SKU
+        inv_payload = {
+            "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
+            "NUMBERPAGE": 1, "RECORDSPAGE": 5,
+            "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True, "NEEDAVGCOST": True,
+        }
         wh_rows: list = []
         cond_rows: list = []
+        inv_rows: list = []
         async with sem:
             try:
-                r_wh, r_cond = await asyncio.gather(
-                    http.post(_BM_WH_URL,   json=wh_payload,  timeout=15.0),
+                r_wh, r_cond, r_inv = await asyncio.gather(
+                    http.post(_BM_WH_URL,  json=wh_payload,  timeout=15.0),
                     http.post(_BM_COND_URL, json=cond_payload, timeout=15.0),
+                    http.post(_BM_INV_URL,  json=inv_payload,  timeout=15.0),
                     return_exceptions=True,
                 )
                 if not isinstance(r_wh, Exception):
@@ -1445,6 +1455,13 @@ async def _enrich_bm_amz(items: list) -> None:
                         logger.warning(f"[BM-AMZ] COND HTTP {r_cond.status_code} para base={base}")
                 else:
                     logger.warning(f"[BM-AMZ] COND excepcion para base={base}: {r_cond}")
+                if not isinstance(r_inv, Exception):
+                    if r_inv.status_code == 200:
+                        inv_rows = r_inv.json()
+                        if not isinstance(inv_rows, list):
+                            inv_rows = []
+                else:
+                    logger.warning(f"[BM-AMZ] INV excepcion para base={base}: {r_inv}")
             except Exception as exc:
                 logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
 
@@ -1474,11 +1491,27 @@ async def _enrich_bm_amz(items: list) -> None:
                 else:
                     reserved += qty
 
+        # Extraer RetailPH y AvgCost del InventoryReport
+        retail_ph = avg_cost = 0.0
+        for row in inv_rows:
+            if row.get("SKU", "").upper() == base:
+                retail_ph = float(row.get("LastRetailPricePurchaseHistory") or 0)
+                rp = float(row.get("RetailPrice") or 0)
+                if retail_ph == 0:
+                    retail_ph = rp
+                avg_cost = float(row.get("AvgCostQTY") or 0)
+                break
+        if not retail_ph and inv_rows:
+            row = inv_rows[0]
+            retail_ph = float(row.get("LastRetailPricePurchaseHistory") or row.get("RetailPrice") or 0)
+            avg_cost  = float(row.get("AvgCostQTY") or 0)
+
         inv = {"bm_mty": mty, "bm_cdmx": cdmx, "bm_tj": tj,
-               "bm_avail": avail, "bm_reserved": reserved}
+               "bm_avail": avail, "bm_reserved": reserved,
+               "_bm_retail_ph": retail_ph, "_bm_avg_cost": avg_cost}
         logger.info(
             f"[BM-AMZ] {base} => mty={mty} cdmx={cdmx} tj={tj} "
-            f"avail={avail} reserved={reserved}  (SKUs: {amz_skus})"
+            f"avail={avail} reserved={reserved} retail_ph={retail_ph} avg_cost={avg_cost} (SKUs: {amz_skus})"
         )
         # Cachear y aplicar resultado a TODOS los Amazon SKUs que comparten este base
         ts_now = _time.time()

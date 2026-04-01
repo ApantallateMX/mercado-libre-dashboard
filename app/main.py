@@ -765,6 +765,8 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
                     "NUMBERPAGE": 1,
                     "RECORDSPAGE": 10,
                     "NEEDRETAILPRICEPH": True,
+                    "NEEDRETAILPRICE": True,
+                    "NEEDAVGCOST": True,
                 }, headers={"Content-Type": "application/json"}, timeout=30.0)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -804,13 +806,16 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         base = _extract_base_sku(clean).upper()
         bm = base_map.get(base)
         if bm:
-            p["_bm_retail_price"] = bm.get("RetailPrice", 0) or 0
+            retail_price = bm.get("RetailPrice", 0) or 0
+            retail_ph    = bm.get("LastRetailPricePurchaseHistory", 0) or 0
+            # RetailPrice via SEARCH puede retornar 0 aunque el SKU tenga precio;
+            # usar LastRetailPricePurchaseHistory como fallback confiable.
+            p["_bm_retail_price"] = retail_price if retail_price > 0 else retail_ph
             p["_bm_avg_cost"] = bm.get("AvgCostQTY", 0) or 0
             p["_bm_brand"] = bm.get("Brand", "")
             p["_bm_model"] = bm.get("Model", "")
             p["_bm_title"] = bm.get("Title", "")
-            # RetailPrice PH — último precio sugerido del historial de compras
-            p["_bm_retail_ph"] = bm.get("LastRetailPricePurchaseHistory", 0) or 0
+            p["_bm_retail_ph"] = retail_ph
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
@@ -7128,17 +7133,8 @@ async def _run_stock_sync_for_user(user_id: str):
         await token_store.save_sync_status(user_id, len(alerts), "ok")
         print(f"[STOCK-SYNC] Done user {user_id}: {len(alerts)} alertas de sobreventa")
 
-        # Auto qty=0: poner stock en 0 en items en riesgo si está habilitado
-        if _auto_zero_enabled.get(user_id) and alerts:
-            zeroed_count = 0
-            for alert in alerts:
-                try:
-                    await client.update_item_stock(alert["item_id"], 0)
-                    zeroed_count += 1
-                    print(f"[AUTO-ZERO] qty=0 en {alert['item_id']} ({alert['sku']}) — BM=0, MeLi={alert['meli_stock']}")
-                except Exception as ep:
-                    print(f"[AUTO-ZERO] Error en {alert['item_id']}: {ep}")
-            print(f"[AUTO-ZERO] {zeroed_count}/{len(alerts)} items en qty=0 para {user_id}")
+        # Auto qty=0: delegado al stock_sync_multi (BM→ML+Amazon cada 5 min).
+        # Este sync viejo solo detecta alertas — no modifica stock para evitar conflictos.
     except Exception as e:
         print(f"[STOCK-SYNC] Error en sync para {user_id}: {e}")
         try:
