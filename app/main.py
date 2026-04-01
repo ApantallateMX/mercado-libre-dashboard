@@ -1257,6 +1257,30 @@ async def items_health_page(request: Request):
     return RedirectResponse("/productos", status_code=301)
 
 
+@app.get("/stock-sync", response_class=HTMLResponse)
+async def stock_sync_page(request: Request):
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    from app.services.stock_sync_multi import get_sync_status
+    status = get_sync_status()
+    history = await token_store.get_multi_sync_last_runs(limit=10)
+    rules = await token_store.get_all_sku_platform_rules()
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "stock_sync.html", {
+        "user": user,
+        "active": "stock_sync",
+        "running": status.get("running", False),
+        "last_sync_iso": status.get("last_sync_iso"),
+        "last_result": status.get("last_result") or {},
+        "interval_min": status.get("interval_min", 5),
+        "threshold": status.get("threshold", 10),
+        "history": history,
+        "rules": rules,
+        **ctx
+    })
+
+
 # === Partials para HTMX ===
 
 @app.get("/partials/metrics", response_class=HTMLResponse)
@@ -7430,8 +7454,8 @@ async def multi_sync_status():
 @app.post("/api/stock/multi-sync/trigger")
 async def multi_sync_trigger():
     """Dispara un ciclo inmediato de sync multi-plataforma."""
-    from app.services.stock_sync_multi import run_multi_stock_sync, _sync_running
-    if _sync_running:
+    from app.services.stock_sync_multi import run_multi_stock_sync, get_sync_status
+    if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"}, status_code=202)
     asyncio.create_task(run_multi_stock_sync())
     return {"status": "triggered"}

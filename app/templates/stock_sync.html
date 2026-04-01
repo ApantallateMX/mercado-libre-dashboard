@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Sync Stock Multi-Plataforma{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- ── Header ─────────────────────────────────────────────────── -->
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Sync Stock Multi-Plataforma</h1>
+      <p class="text-xs text-gray-500 mt-0.5">BinManager → MercadoLibre + Amazon · ciclo cada {{ interval_min }} min · umbral={{ threshold }} uds</p>
+    </div>
+    <button id="btn-trigger"
+            onclick="triggerSync()"
+            class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm px-4 py-2 rounded-xl shadow transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+      Sincronizar ahora
+    </button>
+  </div>
+
+  <!-- ── Estado actual ──────────────────────────────────────────── -->
+  <div id="status-card" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-sm font-semibold text-gray-700">Estado del último ciclo</span>
+      <span id="status-badge" class="text-xs px-2.5 py-0.5 rounded-full font-medium
+            {% if running %}bg-blue-100 text-blue-700{% elif last_result.status == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
+        {% if running %}Corriendo...{% elif last_result.status == 'error' %}Error{% elif last_result.status %}Completado{% else %}Pendiente{% endif %}
+      </span>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="text-center">
+        <div id="stat-skus" class="text-2xl font-bold text-gray-800">{{ last_result.skus_processed or 0 }}</div>
+        <div class="text-xs text-gray-500 mt-0.5">SKUs procesados</div>
+      </div>
+      <div class="text-center">
+        <div id="stat-updates" class="text-2xl font-bold text-green-600">{{ last_result.updates or 0 }}</div>
+        <div class="text-xs text-gray-500 mt-0.5">Updates ejecutados</div>
+      </div>
+      <div class="text-center">
+        <div id="stat-errors" class="text-2xl font-bold {% if (last_result.errors or 0) > 0 %}text-red-500{% else %}text-gray-400{% endif %}">
+          {{ last_result.errors or 0 }}
+        </div>
+        <div class="text-xs text-gray-500 mt-0.5">Errores</div>
+      </div>
+      <div class="text-center">
+        <div id="stat-elapsed" class="text-2xl font-bold text-gray-800">
+          {{ last_result.elapsed_s or '—' }}{% if last_result.elapsed_s %}s{% endif %}
+        </div>
+        <div class="text-xs text-gray-500 mt-0.5">Duración</div>
+      </div>
+    </div>
+
+    {% if last_sync_iso %}
+    <p class="text-xs text-gray-400 mt-4 text-center">Último sync: {{ last_sync_iso }}</p>
+    {% else %}
+    <p class="text-xs text-gray-400 mt-4 text-center">Aún no se ha ejecutado un ciclo</p>
+    {% endif %}
+
+    {% if last_result.error %}
+    <div class="mt-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+      <p class="text-xs text-red-700 font-mono">{{ last_result.error }}</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Reglas ──────────────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Reglas por SKU</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Si un SKU no tiene reglas, se distribuye en todas las plataformas habilitadas</p>
+      </div>
+      <button onclick="document.getElementById('add-rule-form').classList.toggle('hidden')"
+              class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-3 py-1.5 rounded-lg transition-colors">
+        + Agregar regla
+      </button>
+    </div>
+
+    <!-- Formulario agregar regla -->
+    <div id="add-rule-form" class="hidden mb-4 bg-gray-50 rounded-xl p-4 border border-gray-200">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div>
+          <label class="text-xs text-gray-500 font-medium mb-1 block">SKU base</label>
+          <input id="rule-sku" type="text" placeholder="ej: SNFN000941"
+                 class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-yellow-400">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 font-medium mb-1 block">Platform ID</label>
+          <input id="rule-platform" type="text" placeholder="ej: ml_123456 o amz_A20NF..."
+                 class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-yellow-400">
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 font-medium mb-1 block">Estado</label>
+          <select id="rule-enabled" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-yellow-400">
+            <option value="1">Habilitado</option>
+            <option value="0">Deshabilitado</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="saveRule()"
+                class="text-sm bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold px-4 py-2 rounded-lg transition-colors">
+          Guardar
+        </button>
+        <button onclick="document.getElementById('add-rule-form').classList.add('hidden')"
+                class="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">
+          Cancelar
+        </button>
+      </div>
+    </div>
+
+    {% if rules %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100">
+            <th class="text-left text-xs text-gray-500 font-medium pb-2">SKU</th>
+            <th class="text-left text-xs text-gray-500 font-medium pb-2">Platform ID</th>
+            <th class="text-left text-xs text-gray-500 font-medium pb-2">Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sku, platforms in rules.items() %}
+          {% for pid in platforms %}
+          <tr class="border-b border-gray-50 hover:bg-gray-50">
+            <td class="py-2 font-mono text-xs text-gray-700">{{ sku }}</td>
+            <td class="py-2 text-xs text-gray-600">{{ pid }}</td>
+            <td class="py-2">
+              <span class="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium">Activo</span>
+            </td>
+          </tr>
+          {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-xs text-gray-400 text-center py-4">Sin reglas — todos los SKUs se distribuyen en todas las plataformas</p>
+    {% endif %}
+  </div>
+
+  <!-- ── Historial ──────────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <h2 class="text-sm font-semibold text-gray-700 mb-4">Historial de ciclos</h2>
+
+    {% if history %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-100">
+            <th class="text-left text-xs text-gray-500 font-medium pb-2 pr-4">Fecha</th>
+            <th class="text-right text-xs text-gray-500 font-medium pb-2 pr-4">SKUs</th>
+            <th class="text-right text-xs text-gray-500 font-medium pb-2 pr-4">Updates</th>
+            <th class="text-right text-xs text-gray-500 font-medium pb-2">Errores</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in history %}
+          <tr class="border-b border-gray-50 hover:bg-gray-50">
+            <td class="py-2 pr-4 text-xs text-gray-600 font-mono">{{ run.created_at[:16] }}</td>
+            <td class="py-2 pr-4 text-right text-xs font-semibold text-gray-800">{{ run.skus_processed }}</td>
+            <td class="py-2 pr-4 text-right text-xs font-semibold text-green-600">{{ run.updates }}</td>
+            <td class="py-2 text-right text-xs font-semibold {% if run.errors > 0 %}text-red-500{% else %}text-gray-400{% endif %}">
+              {{ run.errors }}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-xs text-gray-400 text-center py-4">Sin ciclos registrados todavía</p>
+    {% endif %}
+  </div>
+
+  <!-- ── Info de la regla ───────────────────────────────────────── -->
+  <div class="bg-blue-50 border border-blue-100 rounded-2xl p-5">
+    <h3 class="text-sm font-semibold text-blue-800 mb-2">Lógica de distribución</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-blue-700">
+      <div class="bg-white rounded-xl p-3 border border-blue-100">
+        <div class="font-bold text-blue-900 mb-1">BM &ge; {{ threshold }} uds</div>
+        <div>Todas las plataformas habilitadas muestran el stock completo de BM</div>
+      </div>
+      <div class="bg-white rounded-xl p-3 border border-blue-100">
+        <div class="font-bold text-blue-900 mb-1">0 &lt; BM &lt; {{ threshold }} uds</div>
+        <div>Solo la cuenta <strong>ganadora</strong> recibe el stock. Resto = 0.<br>
+          Ganador: mayor <em>precio_neto &times; ventas_30d</em></div>
+      </div>
+      <div class="bg-white rounded-xl p-3 border border-blue-100">
+        <div class="font-bold text-blue-900 mb-1">BM = 0 uds</div>
+        <div>Todas las plataformas = 0 (listing activo, sin stock disponible)</div>
+      </div>
+    </div>
+    <p class="text-xs text-blue-600 mt-3">
+      FBA no se modifica (Amazon controla ese stock). FLX se monitorea pero no se actualiza automáticamente.
+    </p>
+  </div>
+
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────────────── -->
+<div id="toast" class="fixed bottom-4 right-4 z-50 hidden px-4 py-3 rounded-xl shadow-lg text-sm font-medium
+     bg-green-50 text-green-700 border border-green-200"></div>
+
+<script>
+function showToast(msg, isError) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = t.className.replace(/bg-\S+|text-\S+|border-\S+/g, '');
+  t.classList.add(
+    isError ? 'bg-red-50' : 'bg-green-50',
+    isError ? 'text-red-700' : 'text-green-700',
+    isError ? 'border-red-200' : 'border-green-200'
+  );
+  t.classList.remove('hidden');
+  setTimeout(function() { t.classList.add('hidden'); }, 4000);
+}
+
+function triggerSync() {
+  var btn = document.getElementById('btn-trigger');
+  btn.disabled = true;
+  btn.textContent = 'Iniciando...';
+
+  fetch('/api/stock/multi-sync/trigger', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status === 'already_running') {
+        showToast('Ya hay un ciclo corriendo', false);
+        btn.disabled = false;
+        btn.innerHTML = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Sincronizar ahora';
+        return;
+      }
+      btn.textContent = 'Corriendo...';
+      pollStatus();
+    })
+    .catch(function() {
+      showToast('Error al disparar sync', true);
+      btn.disabled = false;
+      btn.textContent = 'Sincronizar ahora';
+    });
+}
+
+function pollStatus() {
+  var interval = setInterval(function() {
+    fetch('/api/stock/multi-sync/status')
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!d.running) {
+          clearInterval(interval);
+          var r = d.last_result || {};
+          document.getElementById('stat-skus').textContent    = r.skus_processed || 0;
+          document.getElementById('stat-updates').textContent = r.updates || 0;
+          document.getElementById('stat-errors').textContent  = r.errors || 0;
+          document.getElementById('stat-elapsed').textContent = (r.elapsed_s || '—') + (r.elapsed_s ? 's' : '');
+
+          var badge = document.getElementById('status-badge');
+          if (r.status === 'error') {
+            badge.textContent = 'Error';
+            badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-medium bg-red-100 text-red-700';
+            showToast('Sync completado con errores', true);
+          } else {
+            badge.textContent = 'Completado';
+            badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-medium bg-green-100 text-green-700';
+            showToast('\u2713 Sync completado: ' + (r.updates || 0) + ' updates, ' + (r.skus_processed || 0) + ' SKUs', false);
+          }
+
+          var btn = document.getElementById('btn-trigger');
+          btn.disabled = false;
+          btn.innerHTML = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Sincronizar ahora';
+
+          // Recargar historial
+          setTimeout(function() { location.reload(); }, 1500);
+        }
+      });
+  }, 2500);
+
+  // Timeout 3 min
+  setTimeout(function() { clearInterval(interval); }, 180000);
+}
+
+function saveRule() {
+  var sku      = document.getElementById('rule-sku').value.trim().toUpperCase();
+  var platform = document.getElementById('rule-platform').value.trim();
+  var enabled  = document.getElementById('rule-enabled').value === '1';
+
+  if (!sku || !platform) {
+    showToast('SKU y Platform ID son requeridos', true);
+    return;
+  }
+
+  fetch('/api/stock/multi-sync/rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sku: sku, platform_id: platform, enabled: enabled })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok) {
+      showToast('Regla guardada', false);
+      setTimeout(function() { location.reload(); }, 800);
+    } else {
+      showToast(d.error || 'Error', true);
+    }
+  })
+  .catch(function() { showToast('Error al guardar', true); });
+}
+</script>
+{% endblock %}

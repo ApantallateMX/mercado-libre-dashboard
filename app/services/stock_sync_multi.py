@@ -154,17 +154,27 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
             if not item_ids:
                 continue
 
-            # Batch de 20 (límite ML)
+            # Usar get_items_details que ya incluye seller_custom_field explícitamente
             for i in range(0, len(item_ids), 20):
                 batch = item_ids[i : i + 20]
                 try:
-                    resp = await client.get("/items", params={"ids": ",".join(batch)})
-                    entries = resp if isinstance(resp, list) else []
+                    entries = await client.get_items_details(batch)
+                    if not isinstance(entries, list):
+                        continue
                     for entry in entries:
+                        # ML batch retorna [{code:200, body:{...item...}}, ...]
                         item = entry.get("body") if isinstance(entry, dict) and "body" in entry else entry
                         if not isinstance(item, dict):
                             continue
+                        if item.get("status") != "active":
+                            continue
                         sku = (item.get("seller_custom_field") or "").strip()
+                        if not sku:
+                            # Fallback: buscar en attributes SELLER_SKU
+                            for attr in (item.get("attributes") or []):
+                                if attr.get("id") == "SELLER_SKU":
+                                    sku = (attr.get("value_name") or "").strip()
+                                    break
                         if not sku:
                             continue
                         base = _base_sku(sku)
@@ -179,6 +189,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                             "sold_qty":      int(item.get("sold_quantity") or 0),
                             "date_created":  item.get("date_created", ""),
                             "sku":           sku,
+                            "can_update":    True,
                         })
                 except Exception as e:
                     logger.warning(f"[MULTI-SYNC-ML] Batch error uid={uid} i={i}: {e}")
@@ -258,6 +269,11 @@ async def _collect_amz_listings(amz_accounts: list) -> dict[str, list]:
                 qty        = int((fa[0].get("quantity") or 0) if fa else 0)
                 sold_30d   = int((sales_30d.get(sku) or {}).get("units", 0))
 
+                # FLX: Amazon gestiona asignación de stock desde tu bodega.
+                # Actualizar qty via DEFAULT convertiría el listing de FLX a FBM.
+                # Por seguridad solo actualizamos FBM (DEFAULT). FLX se monitorea pero no se toca.
+                can_update = not is_flx
+
                 by_sku.setdefault(base, []).append({
                     "platform":     "amazon",
                     "account_id":   sid,
@@ -266,6 +282,7 @@ async def _collect_amz_listings(amz_accounts: list) -> dict[str, list]:
                     "qty":          qty,
                     "sold_qty_30d": sold_30d,
                     "is_flx":       is_flx,
+                    "can_update":   can_update,
                 })
 
         except Exception as e:
@@ -343,27 +360,32 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
     if not listings:
         return []
 
+    # Separar los que se pueden actualizar de los que solo son informativos (FLX)
+    updatable = [lst for lst in listings if lst.get("can_update", True)]
+    if not updatable:
+        return []
+
     updates = []
 
     if bm_avail == 0:
         # Poner todo en 0
-        for lst in listings:
+        for lst in updatable:
             if lst["qty"] != 0:
                 updates.append({"listing": lst, "new_qty": 0, "reason": "bm_zero"})
 
     elif bm_avail < STOCK_THRESHOLD:
-        # Concentrar en la cuenta ganadora (mayor score)
-        scored  = sorted(listings, key=_score, reverse=True)
+        # Concentrar en la cuenta ganadora (mayor score) entre los updatable
+        scored  = sorted(updatable, key=_score, reverse=True)
         winner  = scored[0]
-        for lst in listings:
+        for lst in updatable:
             new_qty = bm_avail if lst is winner else 0
             if lst["qty"] != new_qty:
                 reason = "concentrate_winner" if lst is winner else "concentrate_loser"
                 updates.append({"listing": lst, "new_qty": new_qty, "reason": reason})
 
     else:
-        # Distribuir: todas las plataformas muestran avail_total completo
-        for lst in listings:
+        # Distribuir: todas las plataformas updatable muestran avail_total completo
+        for lst in updatable:
             if lst["qty"] != bm_avail:
                 updates.append({"listing": lst, "new_qty": bm_avail, "reason": "distribute"})
 
