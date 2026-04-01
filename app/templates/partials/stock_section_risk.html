@@ -19,11 +19,7 @@
         <div class="flex gap-2">
             <button onclick="bulkStockZeroRisk()" id="bulk-zero-btn"
                     class="px-3 py-1.5 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 active:bg-red-700 transition">
-                Stock -> 0 Todos ({{ oversell_risk|length }})
-            </button>
-            <button onclick="bulkPauseRisk()" id="bulk-pause-btn"
-                    class="px-3 py-1.5 bg-yellow-500 text-white text-xs font-bold rounded-lg hover:bg-yellow-600 active:bg-yellow-700 transition">
-                Pausar Todos ({{ oversell_risk|length }})
+                Qty 0 Todos ({{ oversell_risk|length }})
             </button>
         </div>
         {% endif %}
@@ -40,7 +36,10 @@
                 {% endif %}
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
-                    <p class="text-[10px] text-gray-400 font-mono mt-0.5">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span class="font-mono text-[10px] text-gray-400">{{ p.id }}</span>
+                        {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{{ p.sku }}</span>{% endif %}
+                    </div>
                 </div>
             </div>
             <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
@@ -63,11 +62,7 @@
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
                 <button onclick="setStockZero('{{ p.id }}', this)"
                         class="flex-1 py-1.5 text-xs bg-red-500 text-white rounded-lg font-medium active:bg-red-600 min-h-[36px]">
-                    Stock -> 0
-                </button>
-                <button onclick="pauseItem('{{ p.id }}', this)"
-                        class="flex-1 py-1.5 text-xs bg-yellow-500 text-white rounded-lg font-medium active:bg-yellow-600 min-h-[36px]">
-                    Pausar
+                    Qty 0
                 </button>
                 <span id="risk-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
             </div>
@@ -102,9 +97,13 @@
                         </div>
                     </td>
                     <td class="px-3 py-2">
-                        <div class="flex flex-col">
+                        <div class="flex flex-col gap-0.5">
                             <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
-                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                            {% if p.sku %}
+                            <span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded w-fit">{{ p.sku }}</span>
+                            {% else %}
+                            <span class="text-[10px] text-gray-300 font-mono">sin SKU</span>
+                            {% endif %}
                         </div>
                     </td>
                     <td class="px-3 py-2 text-right">
@@ -132,11 +131,7 @@
                         <div class="flex items-center justify-center gap-1">
                             <button onclick="setStockZero('{{ p.id }}', this)"
                                     class="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-xs font-medium transition">
-                                Stock -> 0
-                            </button>
-                            <button onclick="pauseItem('{{ p.id }}', this)"
-                                    class="px-2 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-xs font-medium transition">
-                                Pausar
+                                Qty 0
                             </button>
                             <span id="risk-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
                         </div>
@@ -151,7 +146,7 @@
         No hay productos con riesgo de sobreventa
     </div>
     {% endif %}
-    <span id="bulk-pause-msg" class="text-xs mt-2 block text-center"></span>
+    <span id="bulk-zero-msg" class="text-xs mt-2 block text-center"></span>
 </div>
 
 <script>
@@ -188,36 +183,6 @@ function setStockZero(itemId, btn) {
     });
 }
 
-// --- Risk: pause item ---
-function pauseItem(itemId, btn) {
-    btn.disabled = true;
-    btn.textContent = '...';
-    var msgEl = document.getElementById('risk-msg-' + itemId) || document.getElementById('risk-msg-d-' + itemId);
-    fetch('/api/items/' + itemId + '/status', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-        body: JSON.stringify({status: 'paused'})
-    })
-    .then(function(r) {
-        if (r.ok) {
-            btn.textContent = 'Pausado';
-            btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600').replace('hover:bg-yellow-600', '');
-            var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-            if (row) row.classList.add('opacity-50');
-        } else {
-            return r.text().then(function(t) {
-                try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
-                catch(pe) { if (pe.message && pe.message !== t) throw pe; throw new Error(t || 'Error ' + r.status); }
-            });
-        }
-    })
-    .catch(function(e) {
-        btn.textContent = 'Error';
-        btn.disabled = false;
-        if (msgEl) { msgEl.textContent = e.message; msgEl.className = 'text-[10px] ml-1 text-red-600'; }
-    });
-}
-
 // --- Bulk set stock to 0 for all risk items ---
 function bulkStockZeroRisk() {
     if (!confirm('Poner stock en 0 para TODOS los productos en riesgo de sobreventa?\n\n' + {{ oversell_risk|length }} + ' productos seran afectados.')) return;
@@ -227,7 +192,7 @@ function bulkStockZeroRisk() {
         {% endfor %}
     ];
     var btn = document.getElementById('bulk-zero-btn');
-    var msg = document.getElementById('bulk-pause-msg');
+    var msg = document.getElementById('bulk-zero-msg');
     btn.disabled = true;
     btn.textContent = 'Procesando...';
     var done = 0, errors = 0, total = items.length;
@@ -258,43 +223,4 @@ function bulkStockZeroRisk() {
     });
 }
 
-// --- Bulk pause all risk items ---
-function bulkPauseRisk() {
-    if (!confirm('Pausar todos los productos en riesgo de sobreventa?\n\nEstos productos tienen stock en MeLi pero 0 en BinManager.')) return;
-    var items = [
-        {% for p in oversell_risk %}
-        '{{ p.id }}'{{ ',' if not loop.last else '' }}
-        {% endfor %}
-    ];
-    var btn = document.getElementById('bulk-pause-btn');
-    var msg = document.getElementById('bulk-pause-msg');
-    btn.disabled = true;
-    btn.textContent = 'Pausando...';
-    var done = 0, errors = 0, total = items.length;
-    function updateProgress() {
-        msg.textContent = done + '/' + total + (errors > 0 ? ' (' + errors + ' errores)' : '');
-        msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
-    }
-    items.forEach(function(itemId) {
-        fetch('/api/items/' + itemId + '/status', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-            body: JSON.stringify({status: 'paused'})
-        })
-        .then(function(r) {
-            done++;
-            if (!r.ok) errors++;
-            else {
-                var row = document.getElementById('risk-m-' + itemId) || document.getElementById('risk-d-' + itemId);
-                if (row) row.classList.add('opacity-50');
-            }
-            updateProgress();
-            if (done === total) {
-                btn.textContent = 'Completado';
-                btn.className = btn.className.replace('bg-yellow-500', 'bg-green-600');
-            }
-        })
-        .catch(function() { done++; errors++; updateProgress(); });
-    });
-}
 </script>

@@ -7206,20 +7206,28 @@ async def get_sync_alerts_partial(request: Request):
 
     rows = ""
     for i, a in enumerate(alerts):
+        sku_str = a.get("sku") or ""
+        sku_html = (f'<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded flex-shrink-0">{sku_str}</span>'
+                    if sku_str else "")
         rows += (
             f'<div class="alert-row flex items-center gap-3 px-4 py-2.5 border-b border-gray-100'
-            f' last:border-0 hover:bg-red-50/30 transition-colors" data-idx="{i}" style="display:none">'
-            f'<div class="min-w-0 flex-1 flex items-center gap-2">'
-            f'<span class="font-mono text-[11px] font-semibold text-red-600 flex-shrink-0 hidden sm:inline">{a["item_id"]}</span>'
-            f'<span class="text-xs text-gray-700 truncate" title="{a["title"]}">{a["title"][:65]}</span>'
+            f' last:border-0 hover:bg-red-50/30 transition-colors" data-idx="{i}" data-item-id="{a["item_id"]}" style="display:none">'
+            f'<div class="min-w-0 flex-1">'
+            f'<div class="flex items-center gap-2 mb-0.5">'
+            f'<span class="font-mono text-[11px] font-semibold text-red-600 flex-shrink-0">{a["item_id"]}</span>'
+            f'{sku_html}'
+            f'</div>'
+            f'<span class="text-xs text-gray-700 truncate block" title="{a["title"]}">{a["title"][:65]}</span>'
             f'</div>'
             f'<div class="flex-shrink-0 flex items-center gap-2 text-xs">'
+            f'<span class="text-gray-500 text-[11px]">MeLi:</span>'
             f'<span class="bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full text-[11px]">{a["meli_stock"]}</span>'
-            f'<span class="text-gray-300 text-[11px]">BM: 0</span>'
+            f'<span class="text-gray-400 text-[11px] font-medium">BM: <span class="text-red-500 font-bold">0</span></span>'
             f'</div>'
-            f'<button onclick="closeItem(\'{a["item_id"]}\')"'
+            f'<button onclick="zeroAlertItem(\'{a["item_id"]}\', this)"'
             f' class="flex-shrink-0 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white'
-            f' px-3 py-1 rounded-lg text-[11px] font-medium transition-colors">Pausar</button>'
+            f' px-3 py-1 rounded-lg text-[11px] font-medium transition-colors">Qty 0</button>'
+            f'<span id="alert-msg-{a["item_id"]}" class="text-[10px] text-green-600 hidden">✓</span>'
             f'</div>'
         )
 
@@ -7307,10 +7315,29 @@ async def get_sync_alerts_partial(request: Request):
   }};
   render(1);
 }})();
+window.zeroAlertItem = function(itemId, btn) {{
+  btn.disabled = true; btn.textContent = '...';
+  fetch('/api/items/' + itemId + '/stock', {{
+    method: 'PUT',
+    headers: {{'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}},
+    body: JSON.stringify({{quantity: 0}})
+  }})
+  .then(function(r) {{
+    if (r.ok) {{
+      btn.textContent = '✓ 0';
+      btn.className = btn.className.replace(/bg-red-\d00/g, 'bg-green-600').replace(/hover:bg-red-\d00/g, '').replace(/active:bg-red-\d00/g, '');
+      var row = btn.closest('.alert-row');
+      if (row) row.style.opacity = '0.4';
+    }} else {{
+      btn.textContent = 'Error'; btn.disabled = false;
+    }}
+  }})
+  .catch(function() {{ btn.textContent = 'Error'; btn.disabled = false; }});
+}};
 function triggerStockSync() {{
   var btn = document.getElementById('btn-sync-now');
   if (btn) {{ btn.textContent = 'Iniciando...'; btn.style.pointerEvents = 'none'; }}
-  fetch('/api/sync/trigger', {{method:'POST'}})
+  fetch('/api/stock/multi-sync/trigger', {{method:'POST'}})
     .then(function(r) {{ return r.json(); }})
     .then(function() {{
       var secs = 0;
@@ -7318,18 +7345,16 @@ function triggerStockSync() {{
         secs += 2;
         var b = document.getElementById('btn-sync-now');
         if (b) b.textContent = 'Sincronizando (' + secs + 's)...';
-        fetch('/api/sync/status')
+        fetch('/api/stock/multi-sync/status')
           .then(function(r) {{ return r.json(); }})
           .then(function(s) {{
             if (!s.running) {{
               clearInterval(poll);
-              // Limpiar lista de alertas y confirmar éxito
-              var container = document.getElementById('sync-alerts-container');
-              if (container) container.innerHTML = '';
-              var n = s.alerts_count !== undefined ? s.alerts_count : 0;
+              var b2 = document.getElementById('btn-sync-now');
+              if (b2) {{ b2.textContent = 'Sync ahora'; b2.style.pointerEvents = 'auto'; }}
               var toast = document.createElement('div');
-              toast.innerHTML = '<span style="font-size:1.1em">✓</span> Sync completado exitosamente' +
-                (n > 0 ? ' — ' + n + ' items en revisión' : '');
+              var upd = (s.last_result || {{}}).updates || 0;
+              toast.innerHTML = '<span style="font-size:1.1em">✓</span> Sync completado — ' + upd + ' updates';
               toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium bg-green-50 text-green-700 border border-green-200';
               document.body.appendChild(toast);
               setTimeout(function() {{ toast.remove(); }}, 5000);
@@ -7340,7 +7365,7 @@ function triggerStockSync() {{
       setTimeout(function() {{
         clearInterval(poll);
         var b = document.getElementById('btn-sync-now');
-        if (b) {{ b.textContent = 'Sync'; b.style.pointerEvents = 'auto'; }}
+        if (b) {{ b.textContent = 'Sync ahora'; b.style.pointerEvents = 'auto'; }}
       }}, 90000);
     }})
     .catch(function() {{
