@@ -109,9 +109,11 @@ def _flx_cache_valid(seller_id: str) -> bool:
 
 
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
-_BM_WH_URL    = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-_BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
-_BM_LOC_IDS   = "47,62,68"
+_BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+# InventoryBySKUAndCondicion_Quantity está roto (SQL "Invalid column name 'binid'")
+# Usar GlobalStock_InventoryBySKU_Condition → devuelve status "Producto Vendible" / "Otro"
+_BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+_BM_LOC_IDS  = "47,62,68"
 _bm_amz_cache: dict[str, tuple[float, dict]] = {}
 _BM_AMZ_TTL   = 900   # 15 min
 _bm_all_refreshing:   set   = set()  # "bm_all" cuando BG pre-fetch activo
@@ -1409,46 +1411,74 @@ async def _enrich_bm_amz(items: list) -> None:
             "LocationID": _BM_LOC_IDS, "BINID": None,
             "Condition": _BM_COND, "SUPPLIERS": None, "ForInventory": 0,
         }
-        av_payload = {
-            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+        # GlobalStock_InventoryBySKU_Condition: retorna Conditions_JSON con
+        # status "Producto Vendible" / "Otro" por bin — reemplaza endpoint roto
+        cond_payload = {
+            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
             "LOCATIONID": _BM_LOC_IDS, "BINID": None,
-            "PRODUCTSKU": base, "CONDITION": _BM_COND,
-            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
+            "CONDITION": _BM_COND, "FORINVENTORY": 0, "SUPPLIERS": None,
         }
         wh_rows: list = []
-        av_rows: list = []
+        cond_rows: list = []
         async with sem:
             try:
-                r_wh, r_av = await asyncio.gather(
-                    http.post(_BM_WH_URL,    json=wh_payload, timeout=15.0),
-                    http.post(_BM_AVAIL_URL, json=av_payload, timeout=15.0),
+                r_wh, r_cond = await asyncio.gather(
+                    http.post(_BM_WH_URL,   json=wh_payload,  timeout=15.0),
+                    http.post(_BM_COND_URL, json=cond_payload, timeout=15.0),
                     return_exceptions=True,
                 )
                 if not isinstance(r_wh, Exception):
                     if r_wh.status_code == 200:
                         wh_rows = r_wh.json()
+                        if not isinstance(wh_rows, list):
+                            wh_rows = []
                     else:
                         logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
                 else:
                     logger.warning(f"[BM-AMZ] WH excepcion para base={base}: {r_wh}")
-                if not isinstance(r_av, Exception):
-                    if r_av.status_code == 200:
-                        av_rows = r_av.json()
+                if not isinstance(r_cond, Exception):
+                    if r_cond.status_code == 200:
+                        cond_rows = r_cond.json()
+                        if not isinstance(cond_rows, list):
+                            cond_rows = []
                     else:
-                        logger.warning(f"[BM-AMZ] AV HTTP {r_av.status_code} para base={base}")
+                        logger.warning(f"[BM-AMZ] COND HTTP {r_cond.status_code} para base={base}")
                 else:
-                    logger.warning(f"[BM-AMZ] AV excepcion para base={base}: {r_av}")
+                    logger.warning(f"[BM-AMZ] COND excepcion para base={base}: {r_cond}")
             except Exception as exc:
                 logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
 
         mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
-        avail    = sum(row.get("Available", 0) or 0 for row in av_rows)
-        reserved = sum(row.get("Required",  0) or 0 for row in av_rows)
+
+        # Parsear Conditions_JSON — puede ser string JSON embebido o lista plana
+        avail = reserved = 0
+        for row in cond_rows:
+            cj = row.get("Conditions_JSON")
+            if cj is not None:
+                if isinstance(cj, str):
+                    try:
+                        cj = json.loads(cj)
+                    except Exception:
+                        cj = []
+                for cond in (cj if isinstance(cj, list) else []):
+                    for item in (cond.get("SKUCondition_JSON") or []):
+                        qty = item.get("TotalQty", 0) or 0
+                        if item.get("status") == "Producto Vendible":
+                            avail += qty
+                        else:
+                            reserved += qty
+            else:
+                qty = row.get("TotalQty", 0) or 0
+                if row.get("status") == "Producto Vendible":
+                    avail += qty
+                else:
+                    reserved += qty
+
         inv = {"bm_mty": mty, "bm_cdmx": cdmx, "bm_tj": tj,
                "bm_avail": avail, "bm_reserved": reserved}
         logger.info(
             f"[BM-AMZ] {base} => mty={mty} cdmx={cdmx} tj={tj} "
-            f"avail={avail} res={reserved}  (SKUs: {amz_skus})"
+            f"avail={avail} reserved={reserved}  (SKUs: {amz_skus})"
         )
         # Cachear y aplicar resultado a TODOS los Amazon SKUs que comparten este base
         ts_now = _time.time()
