@@ -1874,7 +1874,7 @@ async def amazon_products_inventario(
                 _e["add_qty"]       = _add_qty
             elif not _no_amz and not _has_bm:
                 if _e["fulfillment_type"] == "FBM":
-                    _e["action_needed"] = "pause_fbm"
+                    _e["action_needed"] = "set_qty_zero"
                 else:
                     _e["action_needed"] = "warn_fba_nobm"
                 _e["add_qty"] = 0
@@ -2261,7 +2261,7 @@ async def asin_inspect(request: Request, asin: str = Query(..., description="ASI
 # ─────────────────────────────────────────────────────────────────────────────
 
 class StockActionBody(BaseModel):
-    action:   str        # "add_fbm" | "pause"
+    action:   str        # "add_fbm" | "set_qty_zero"
     quantity: int = 0
 
 
@@ -2287,11 +2287,11 @@ async def amazon_stock_action(sku: str, body: StockActionBody, request: Request)
 # FULFILLMENT ACTION — gestión universal FBA / FBM / FLX
 # ─────────────────────────────────────────────────────────────────────────────
 
-_VALID_FA = {"pause", "set_merchant", "set_qty", "reactivate_fba"}
+_VALID_FA = {"pause", "set_qty_zero", "set_merchant", "set_qty", "reactivate_fba"}
 
 
 class FulfillmentActionBody(BaseModel):
-    action:   str       # pause | set_merchant | set_qty | reactivate_fba
+    action:   str       # set_qty_zero | set_merchant | set_qty | reactivate_fba
     quantity: int = 0
 
 
@@ -2301,7 +2301,7 @@ async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, reque
     Gestión universal de fulfillment para cualquier tipo de listing (FBA / FBM / FLX).
 
     Acciones:
-      pause          → FBM qty=0. Pausa ventas sin eliminar listing ni perder ranking.
+      set_qty_zero   → FBM qty=0. Deja de vender sin eliminar listing ni perder ranking.
       set_merchant   → Convierte a FBM con quantity indicada (útil FBA/FLX → FBM).
       set_qty        → Actualiza qty en un listing ya FBM.
       reactivate_fba → Devuelve a FBA (AMAZON_NA). Amazon retoma control del stock.
@@ -2331,7 +2331,8 @@ async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, reque
     _flx_stock_cache.pop(sku, None)
 
     labels = {
-        "pause":          "Pausado (qty=0)",
+        "pause":          "qty=0 (sin stock)",
+        "set_qty_zero":   "qty=0 (sin stock)",
         "set_merchant":   f"→ Merchant ({body.quantity} uds)",
         "set_qty":        f"Stock → {body.quantity} uds",
         "reactivate_fba": "Reactivado en FBA",
@@ -2982,7 +2983,7 @@ async def get_amazon_alerts(
     })
 
 
-# ─── Bulk pause / activate ───────────────────────────────────────────────────
+# ─── Bulk set qty=0 / reactivate ─────────────────────────────────────────────
 
 @router.post("/products/bulk-action")
 async def bulk_listing_action(
@@ -2990,8 +2991,9 @@ async def bulk_listing_action(
     seller_id: Optional[str] = Query(None),
 ):
     """
-    Pausa o activa múltiples listings.
-    Body: {"skus": ["SKU1", "SKU2"], "action": "pause" | "reactivate_fba"}
+    Pone qty=0 o reactiva múltiples listings.
+    Body: {"skus": ["SKU1", "SKU2"], "action": "set_qty_zero" | "reactivate_fba"}
+    Acepta también "pause" como alias de "set_qty_zero" para compatibilidad.
     """
     import asyncio as _aio
 
@@ -3001,9 +3003,12 @@ async def bulk_listing_action(
 
     skus   = payload.get("skus", [])
     action = payload.get("action", "")
+    # Normalizar alias
+    if action == "pause":
+        action = "set_qty_zero"
 
-    if action not in ("pause", "reactivate_fba"):
-        return JSONResponse({"error": "action debe ser 'pause' o 'reactivate_fba'"}, status_code=400)
+    if action not in ("set_qty_zero", "reactivate_fba"):
+        return JSONResponse({"error": "action debe ser 'set_qty_zero' o 'reactivate_fba'"}, status_code=400)
     if not skus:
         return JSONResponse({"error": "Lista de SKUs vacía"}, status_code=400)
 

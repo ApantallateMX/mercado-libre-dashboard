@@ -7016,7 +7016,7 @@ async def amazon_orders_page(request: Request):
 
 _STOCK_SYNC_INTERVAL = 4 * 3600   # 4 horas
 _stock_sync_running: dict = {}     # user_id -> bool (lock por cuenta)
-_auto_pause_enabled: dict = {}     # user_id -> bool
+_auto_zero_enabled: dict = {}      # user_id -> bool (poner qty=0 automáticamente al detectar riesgo)
 
 
 async def _run_stock_sync_for_user(user_id: str):
@@ -7101,17 +7101,17 @@ async def _run_stock_sync_for_user(user_id: str):
         await token_store.save_sync_status(user_id, len(alerts), "ok")
         print(f"[STOCK-SYNC] Done user {user_id}: {len(alerts)} alertas de sobreventa")
 
-        # Auto-pause items en riesgo si está habilitado
-        if _auto_pause_enabled.get(user_id) and alerts:
-            paused_count = 0
+        # Auto qty=0: poner stock en 0 en items en riesgo si está habilitado
+        if _auto_zero_enabled.get(user_id) and alerts:
+            zeroed_count = 0
             for alert in alerts:
                 try:
-                    await client.update_item_status(alert["item_id"], "paused")
-                    paused_count += 1
-                    print(f"[AUTO-PAUSE] Pausado {alert['item_id']} ({alert['sku']}) — BM=0, MeLi={alert['meli_stock']}")
+                    await client.update_item_stock(alert["item_id"], 0)
+                    zeroed_count += 1
+                    print(f"[AUTO-ZERO] qty=0 en {alert['item_id']} ({alert['sku']}) — BM=0, MeLi={alert['meli_stock']}")
                 except Exception as ep:
-                    print(f"[AUTO-PAUSE] Error pausando {alert['item_id']}: {ep}")
-            print(f"[AUTO-PAUSE] {paused_count}/{len(alerts)} items pausados para {user_id}")
+                    print(f"[AUTO-ZERO] Error en {alert['item_id']}: {ep}")
+            print(f"[AUTO-ZERO] {zeroed_count}/{len(alerts)} items en qty=0 para {user_id}")
     except Exception as e:
         print(f"[STOCK-SYNC] Error en sync para {user_id}: {e}")
         try:
@@ -7211,12 +7211,12 @@ async def get_sync_alerts_partial(request: Request):
       {f'<span class="text-[10px] text-gray-400 hidden md:inline">— {last_str}</span>' if last_str else ''}
     </div>
     <div class="flex items-center gap-2">
-      <button onclick="bulkPauseAlerts()" id="btn-bulk-pause"
+      <button onclick="bulkZeroAlerts()" id="btn-bulk-zero"
               class="text-[11px] bg-red-100 hover:bg-red-200 text-red-700 font-semibold px-3 py-1 rounded-lg transition-colors">
-        Pausar todos ({total})
+        Poner en 0 ({total})
       </button>
-      <label class="flex items-center gap-1.5 cursor-pointer" title="Pausar autom\u00e1ticamente al detectar riesgo">
-        <span class="text-[11px] text-gray-500">Auto-pausar</span>
+      <label class="flex items-center gap-1.5 cursor-pointer" title="Poner qty=0 autom\u00e1ticamente al detectar riesgo">
+        <span class="text-[11px] text-gray-500">Auto qty=0</span>
         <input type="checkbox" id="chk-auto-pause" onchange="toggleAutoPause(this.checked)"
                class="w-3.5 h-3.5 accent-red-500">
       </label>
@@ -7261,20 +7261,20 @@ async def get_sync_alerts_partial(request: Request):
     pag.innerHTML = html;
   }}
   window._alertsPage = function(p) {{ if (p >= 1 && p <= _pages) render(p); }};
-  window.bulkPauseAlerts = function() {{
+  window.bulkZeroAlerts = function() {{
     var ids = [{all_ids}];
-    if (!confirm('Pausar ' + ids.length + ' productos en riesgo de sobreventa?')) return;
-    var btn = document.getElementById('btn-bulk-pause');
-    if (btn) {{ btn.disabled = true; btn.textContent = 'Pausando...'; }}
+    if (!confirm('Poner en 0 el stock de ' + ids.length + ' productos en riesgo de sobreventa?')) return;
+    var btn = document.getElementById('btn-bulk-zero');
+    if (btn) {{ btn.disabled = true; btn.textContent = 'Procesando...'; }}
     var done = 0;
     ids.forEach(function(id) {{
-      fetch('/api/items/' + id + '/status', {{
+      fetch('/api/items/' + id + '/stock', {{
         method: 'PUT',
         headers: {{'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}},
-        body: JSON.stringify({{status: 'paused'}})
+        body: JSON.stringify({{quantity: 0}})
       }}).finally(function() {{
         done++;
-        if (btn) btn.textContent = 'Pausando ' + done + '/' + ids.length + '...';
+        if (btn) btn.textContent = 'Procesando ' + done + '/' + ids.length + '...';
         if (done === ids.length && btn) {{
           btn.textContent = 'Completado \u2713';
           btn.className = btn.className.replace('bg-red-100 hover:bg-red-200 text-red-700', 'bg-green-100 text-green-700');
@@ -7412,7 +7412,7 @@ async def get_auto_pause():
     client = await get_meli_client()
     if not client:
         return JSONResponse({"error": "no_session"}, status_code=401)
-    return {"enabled": _auto_pause_enabled.get(client.user_id, False)}
+    return {"enabled": _auto_zero_enabled.get(client.user_id, False)}
 
 
 @app.post("/api/config/auto-pause")
@@ -7421,8 +7421,8 @@ async def set_auto_pause(request: Request):
     if not client:
         return JSONResponse({"error": "no_session"}, status_code=401)
     body = await request.json()
-    _auto_pause_enabled[client.user_id] = bool(body.get("enabled", False))
-    return {"enabled": _auto_pause_enabled[client.user_id]}
+    _auto_zero_enabled[client.user_id] = bool(body.get("enabled", False))
+    return {"enabled": _auto_zero_enabled[client.user_id]}
 
 
 @app.get("/api/config/fx-rate")

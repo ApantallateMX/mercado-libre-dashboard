@@ -455,14 +455,15 @@ class AmazonClient:
     async def update_listing_fulfillment(
         self,
         sku: str,
-        action: str,          # "pause" | "set_merchant" | "set_qty" | "reactivate_fba"
+        action: str,          # "set_qty_zero" | "set_merchant" | "set_qty" | "reactivate_fba"
         quantity: int = 0,
     ) -> dict:
         """
         Gestiona el fulfillment y stock de cualquier listing (FBA, FBM, FLX).
 
         Acciones:
-          pause          → DEFAULT, qty=0  — pausa ventas (FBA/FLX/FBM → FBM con 0)
+          set_qty_zero   → DEFAULT, qty=0  — pone stock en 0 (listing activo, sin stock)
+          pause          → alias de set_qty_zero (compatibilidad)
           set_merchant   → DEFAULT, qty=N  — convierte a FBM con ese stock
           set_qty        → DEFAULT, qty=N  — actualiza qty (solo FBM existente)
           reactivate_fba → AMAZON_NA       — devuelve a FBA (Amazon maneja stock)
@@ -471,7 +472,12 @@ class AmazonClient:
           - fulfillment_channel_code "DEFAULT"   = MFN/FBM (vendedor envía)
           - fulfillment_channel_code "AMAZON_NA" = FBA/AFN (Amazon envía, sin qty)
           - Para FBA el campo quantity se ignora; el stock lo controla Amazon
+          - NUNCA pausar listings — siempre qty=0 para dejar de vender
         """
+        # Normalizar alias
+        if action == "pause":
+            action = "set_qty_zero"
+
         listing = await self.get_listing(sku)
         if not listing:
             raise ValueError(f"SKU '{sku}' no encontrado en {self.marketplace_id}")
