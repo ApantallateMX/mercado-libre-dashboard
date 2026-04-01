@@ -293,6 +293,9 @@ async def lifespan(app: FastAPI):
     start_onsite_background_sync()
     # Sync periódico de stock MeLi vs BM (cada 4 horas) — alertas de sobreventa
     start_stock_sync()
+    # Sync multi-plataforma BM → ML + Amazon (cada 5 min) — distribuye stock óptimo
+    from app.services.stock_sync_multi import start_multi_stock_sync
+    start_multi_stock_sync()
     # Auto-refresh de tokens MeLi cada 5 horas — evita expiración silenciosa
     start_token_refresh()
     # Health checker automático (cada 10 min) — verifica que todo el sistema funcione
@@ -7405,6 +7408,64 @@ async def get_sync_alerts_count():
         return {"count": 0}
     alerts = await token_store.get_sync_alerts(client.user_id)
     return {"count": len(alerts)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-PLATFORM STOCK SYNC — estado, trigger, historial, reglas por SKU
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/stock/multi-sync/status")
+async def multi_sync_status():
+    """Estado del último ciclo de sync multi-plataforma."""
+    from app.services.stock_sync_multi import get_sync_status
+    status = get_sync_status()
+    try:
+        history = await token_store.get_multi_sync_last_runs(limit=5)
+        status["recent_runs"] = history
+    except Exception:
+        status["recent_runs"] = []
+    return status
+
+
+@app.post("/api/stock/multi-sync/trigger")
+async def multi_sync_trigger():
+    """Dispara un ciclo inmediato de sync multi-plataforma."""
+    from app.services.stock_sync_multi import run_multi_stock_sync, _sync_running
+    if _sync_running:
+        return JSONResponse({"status": "already_running"}, status_code=202)
+    asyncio.create_task(run_multi_stock_sync())
+    return {"status": "triggered"}
+
+
+@app.get("/api/stock/multi-sync/history")
+async def multi_sync_history(limit: int = Query(20, ge=1, le=100)):
+    """Historial de ciclos de sync (últimos N)."""
+    runs = await token_store.get_multi_sync_last_runs(limit=limit)
+    return {"runs": runs}
+
+
+@app.post("/api/stock/multi-sync/rules")
+async def set_platform_rule(request: Request):
+    """
+    Define si un SKU está habilitado para una plataforma.
+    Body: {"sku": "SNFN000941", "platform_id": "ml_123456", "enabled": true}
+    platform_id: "ml_{user_id}" o "amz_{seller_id}"
+    """
+    body = await request.json()
+    sku         = (body.get("sku") or "").strip().upper()
+    platform_id = (body.get("platform_id") or "").strip()
+    enabled     = bool(body.get("enabled", True))
+    if not sku or not platform_id:
+        return JSONResponse({"error": "sku y platform_id requeridos"}, status_code=400)
+    await token_store.set_sku_platform_rule(sku, platform_id, enabled)
+    return {"ok": True, "sku": sku, "platform_id": platform_id, "enabled": enabled}
+
+
+@app.get("/api/stock/multi-sync/rules")
+async def get_platform_rules():
+    """Lista todas las reglas de plataforma por SKU."""
+    rules = await token_store.get_all_sku_platform_rules()
+    return {"rules": rules}
 
 
 @app.get("/api/config/auto-pause")

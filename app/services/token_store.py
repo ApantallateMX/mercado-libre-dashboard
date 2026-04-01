@@ -280,6 +280,26 @@ async def init_db():
                 computed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ── Multi-platform stock sync ──────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sku_platform_rules (
+                sku         TEXT NOT NULL,
+                platform_id TEXT NOT NULL,
+                enabled     INTEGER DEFAULT 1,
+                PRIMARY KEY (sku, platform_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS multi_stock_sync_log (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts               REAL NOT NULL,
+                skus_processed   INTEGER DEFAULT 0,
+                updates          INTEGER DEFAULT 0,
+                errors           INTEGER DEFAULT 0,
+                results_json     TEXT DEFAULT '[]',
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
 
 
@@ -811,3 +831,71 @@ async def get_videos_for_items(item_ids: list, user_id: str) -> dict:
             item_ids + [user_id]
         )).fetchall()
         return {r["item_id"]: dict(r) for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTI-PLATFORM STOCK SYNC — reglas y log
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def get_all_sku_platform_rules() -> dict:
+    """
+    Retorna {sku_upper: [platform_id, ...]} donde enabled=1.
+    Si un SKU no tiene reglas → no aparece aquí → todas las plataformas habilitadas.
+    platform_id: "ml_{user_id}" o "amz_{seller_id}"
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT sku, platform_id FROM sku_platform_rules WHERE enabled = 1"
+        )).fetchall()
+    result: dict = {}
+    for row in rows:
+        result.setdefault(row["sku"].upper(), []).append(row["platform_id"])
+    return result
+
+
+async def set_sku_platform_rule(sku: str, platform_id: str, enabled: bool) -> None:
+    """Habilita o deshabilita una plataforma para un SKU específico."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO sku_platform_rules (sku, platform_id, enabled)
+               VALUES (?, ?, ?)
+               ON CONFLICT(sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
+            (sku.upper(), platform_id, 1 if enabled else 0),
+        )
+        await db.commit()
+
+
+async def save_multi_sync_log(
+    ts: float,
+    skus_processed: int,
+    updates: int,
+    errors: int,
+    results: list,
+) -> None:
+    """Guarda el resultado de un ciclo de sync en multi_stock_sync_log."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO multi_stock_sync_log
+               (ts, skus_processed, updates, errors, results_json)
+               VALUES (?, ?, ?, ?, ?)""",
+            (ts, skus_processed, updates, errors, json.dumps(results)),
+        )
+        # Mantener solo los últimos 200 registros
+        await db.execute(
+            """DELETE FROM multi_stock_sync_log WHERE id NOT IN (
+               SELECT id FROM multi_stock_sync_log ORDER BY id DESC LIMIT 200)"""
+        )
+        await db.commit()
+
+
+async def get_multi_sync_last_runs(limit: int = 10) -> list:
+    """Retorna los últimos N ciclos de sync con resumen (sin results_json completo)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT id, ts, skus_processed, updates, errors, created_at
+               FROM multi_stock_sync_log ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        )).fetchall()
+    return [dict(r) for r in rows]
