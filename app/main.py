@@ -2120,12 +2120,24 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                     except Exception:
                         cj = []
                 for cond in (cj if isinstance(cj, list) else []):
-                    for item in (cond.get("SKUCondition_JSON") or []):
-                        qty = item.get("TotalQty", 0) or 0
-                        if item.get("status") == "Producto Vendible":
-                            avail_total += qty
-                        else:
-                            reserved_total += qty
+                    sku_cj = cond.get("SKUCondition_JSON") or []
+                    if isinstance(sku_cj, str):
+                        try:
+                            sku_cj = _json.loads(sku_cj)
+                        except Exception:
+                            sku_cj = []
+                    if sku_cj:
+                        # Nivel serial: contar por status individual
+                        for item in sku_cj:
+                            qty = item.get("TotalQty", 0) or 0
+                            if item.get("status") == "Producto Vendible":
+                                avail_total += qty
+                            else:
+                                reserved_total += qty
+                    else:
+                        # Sin detalle serial: usar TotalQty del nivel condición
+                        # (BM omite SKUCondition_JSON en SKUs con muchas unidades)
+                        avail_total += cond.get("TotalQty", 0) or 0
             else:
                 # Formato plano: el row mismo tiene status y TotalQty
                 qty = row.get("TotalQty", 0) or 0
@@ -2178,10 +2190,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                     http.post(BM_COND_URL, json=cond_payload, timeout=15.0),
                     return_exceptions=True,
                 )
-                rows_wh   = r_wh.json()   if not isinstance(r_wh,   Exception) and r_wh.status_code   == 200 else []
-                cond_rows = r_cond.json() if not isinstance(r_cond, Exception) and r_cond.status_code == 200 else []
-                if not isinstance(rows_wh,   list): rows_wh   = []
-                if not isinstance(cond_rows, list): cond_rows = []
+                rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+                if not isinstance(rows_wh, list): rows_wh = []
+
+                # BM Condition puede devolver un objeto {} único o una lista [{}].
+                # Normalizar siempre a lista para iterar correctamente.
+                _raw_cond = r_cond.json() if not isinstance(r_cond, Exception) and r_cond.status_code == 200 else []
+                if isinstance(_raw_cond, dict):
+                    cond_rows = [_raw_cond]
+                elif isinstance(_raw_cond, list):
+                    cond_rows = _raw_cond
+                else:
+                    cond_rows = []
                 _store_wh(sku, rows_wh, cond_rows)
                 return
             except Exception:
