@@ -332,7 +332,7 @@
   <!-- Barra de acciones bulk (aparece al seleccionar) -->
   <div id="amz-bulk-bar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4">
     <span class="text-sm font-medium"><span id="amz-bulk-count">0</span> seleccionados</span>
-    <button onclick="executeBulkAction('pause')" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">⏸ Pausar</button>
+    <button onclick="executeBulkAction('set_qty_zero')" class="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">Qty 0</button>
     <button onclick="executeBulkAction('reactivate_fba')" class="bg-green-500 hover:bg-green-600 text-white text-sm font-medium px-4 py-1.5 rounded-lg transition">▶ Activar FBA</button>
     <button onclick="clearBulkSelection()" class="text-gray-400 hover:text-white text-sm transition">✕ Cancelar</button>
   </div>
@@ -1053,7 +1053,7 @@ function clearBulkSelection() {
 async function executeBulkAction(action) {
   if (amzSelectedSkus.size === 0) return;
   var skuList = Array.from(amzSelectedSkus);
-  var label = action === 'pause' ? 'Pausar' : 'Activar FBA';
+  var label = action === 'set_qty_zero' ? 'Qty 0' : 'Activar FBA';
   if (!confirm('¿' + label + ' ' + skuList.length + ' listing(s) seleccionados?')) return;
 
   var bar = document.getElementById('amz-bulk-bar');

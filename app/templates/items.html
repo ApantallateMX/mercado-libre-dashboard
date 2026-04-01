@@ -256,7 +256,7 @@
     window.triggerSyncNow = function() {
         var btn = document.getElementById('btn-sync-bar');
         if (btn) { btn.textContent = 'Iniciando...'; btn.style.pointerEvents = 'none'; }
-        fetch('/api/sync/trigger', {method: 'POST'})
+        fetch('/api/stock/multi-sync/trigger', {method: 'POST'})
             .then(function(r) { return r.json(); })
             .then(function() {
                 var secs = 0;
@@ -264,7 +264,7 @@
                     secs += 2;
                     var b = document.getElementById('btn-sync-bar');
                     if (b) b.textContent = 'Sincronizando (' + secs + 's)...';
-                    fetch('/api/sync/status')
+                    fetch('/api/stock/multi-sync/status')
                         .then(function(r) { return r.json(); })
                         .then(function(s) {
                             if (!s.running) {

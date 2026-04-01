@@ -327,7 +327,7 @@
                              (item.score >= 40 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800');
             var statusColor = item.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
             var toggleStatus = item.status === 'active' ? 'paused' : 'active';
-            var toggleLabel = item.status === 'active' ? 'Pausar' : 'Activar';
+            var toggleLabel = item.status === 'active' ? 'Qty 0' : 'Activar';
             var toggleColor = item.status === 'active' ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800';
             var stockClass = item.available_quantity === 0 ? 'text-red-600 font-bold' : (item.available_quantity <= 5 ? 'text-yellow-600 font-semibold' : 'text-gray-800');
 
@@ -468,7 +468,7 @@
     window.toggleItemStatus = function(itemId, newStatus, btn) {
         var item = allItems.find(function(i) { return i.id === itemId; });
         var itemTitle = item ? item.title.substring(0, 50) : itemId;
-        var action = newStatus === 'paused' ? 'PAUSAR' : 'ACTIVAR';
+        var action = newStatus === 'paused' ? 'PONER QTY 0' : 'ACTIVAR';
 
         confirmAction(
             'Confirmar cambio de estado',
@@ -478,20 +478,26 @@
             function() {
                 btn.textContent = '...';
                 btn.disabled = true;
-                fetch('/api/items/' + itemId + '/status', {
+                var url = newStatus === 'paused'
+                    ? '/api/items/' + itemId + '/stock'
+                    : '/api/items/' + itemId + '/status';
+                var body = newStatus === 'paused'
+                    ? JSON.stringify({quantity: 0})
+                    : JSON.stringify({status: 'active'});
+                fetch(url, {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({status: newStatus})
+                    body: body
                 })
                 .then(function(r) {
                     if (r.ok) {
                         allItems.forEach(function(item) {
                             if (item.id === itemId) {
-                                item.status = newStatus;
                                 if (newStatus === 'paused') {
-                                    item.score = Math.max(item.score - 40, 0);
-                                    if (item.problems.indexOf('Pausado') === -1) item.problems.push('Pausado');
+                                    item.available_quantity = 0;
+                                    item.score = Math.max(item.score - 20, 0);
                                 } else {
+                                    item.status = 'active';
                                     item.score = Math.min(item.score + 40, 100);
                                     item.problems = item.problems.filter(function(p) { return p !== 'Pausado'; });
                                 }
