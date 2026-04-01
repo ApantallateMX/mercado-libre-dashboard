@@ -66,4 +66,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 - Para Amazon: `update_listing_quantity(sku, 0)`
 - Exception: FULL (fulfillment) — no se puede modificar vía API, ML controla el stock
 
+### BUG — dashboard mostraba BM: 0 para todos los productos
+- **Síntoma:** columna BM stock siempre 0 en inventario, alertas de "riesgo sobreventa" erróneas (65 falsos positivos)
+- **Root cause 1:** `_get_bm_stock_cached` en `main.py` — mismo bug que sync multi:
+  `GlobalStock_InventoryBySKU_Condition` devuelve `{}` (objeto), el código hacía
+  `if not isinstance(cond_rows, list): cond_rows = []` → `avail_total = 0` siempre
+- **Root cause 2:** `_store_wh` — cuando `SKUCondition_JSON` está ausente (BM lo omite en SKUs
+  con muchas unidades), `avail_total = 0` aunque `TotalQty` por condición sí viniera
+- **Fix (commit 7da669d):**
+  - Normalizar `cond_rows`: si es `dict`, envolver en lista antes de iterar
+  - Fallback en `_store_wh`: si `SKUCondition_JSON` vacío → usar `TotalQty` del nivel condición
+
+### OPERACION — Verificación SKU SNTV001764 (Onn 32" HD Roku Smart TV)
+- BM UI muestra: Available=221, Reserve=84 (filtro LocationIDs 47/62/68), RetailPrice PH=$88 USD
+- Dashboard mostraba BM=0 por bug anterior; corregido con commit 7da669d
+
 ---
