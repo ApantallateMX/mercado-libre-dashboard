@@ -2,12 +2,14 @@
 stock_sync_multi.py — Sincronización de stock multi-plataforma BM → ML + Amazon
 
 CICLO (cada 5 minutos):
-  1. Recopilar listings activos: MeLi (todas las cuentas) + Amazon FBM/FLX (todas las cuentas)
+  1. Recopilar listings activos Y pausados: MeLi (todas las cuentas) + Amazon FBM/FLX
   2. Consultar BinManager avail_total por SKU base
   3. Por cada SKU aplicar regla:
        avail >= 10  → todas las plataformas habilitadas muestran avail_total
+                      (los pausados se activan automáticamente)
        0 < avail < 10 → solo la cuenta ganadora muestra avail_total; resto = 0
-       avail == 0   → todas = 0
+                        (ganador pausado → se activa; perdedores pausados → se ignoran)
+       avail == 0   → activos con qty>0 quedan en 0; pausados se ignoran (ya apagados)
   4. Ejecutar solo los updates necesarios (evitar API calls cuando qty ya es correcta)
   5. Registrar log en DB
 
@@ -16,6 +18,7 @@ SCORE (ganador cuando avail < 10):
   Maximiza el Ingreso Neto Proyectado → la cuenta que más ganancia genera.
 
 NOTAS:
+  - FULL (logistic_type=fulfillment): ML controla ese stock. No se toca.
   - FBA puro: Amazon controla ese stock físicamente. No se toca.
   - NUNCA se pausa un listing. Solo se pone qty=0.
   - Si no hay reglas para un SKU → todas las plataformas están habilitadas.
@@ -134,8 +137,11 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
 
 async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
     """
-    Retorna {base_sku: [listing_dict, ...]} para todos los items activos ML.
-    listing_dict: {platform, account_id, item_id, price, qty, sold_qty, date_created, sku}
+    Retorna {base_sku: [listing_dict, ...]} para todos los items activos Y pausados ML.
+    listing_dict: {platform, account_id, item_id, price, qty, sold_qty, date_created, sku, status, can_update}
+
+    can_update=False si el item es FULL (logistic_type=fulfillment) — ML gestiona ese stock.
+    status='paused' permite que _execute active el listing cuando BM tiene stock.
     """
     from app.services.meli_client import get_meli_client
 
@@ -150,11 +156,11 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
             if not client:
                 continue
 
-            item_ids = await client.get_all_item_ids_by_statuses(["active"])
+            # Recopilar activos + pausados
+            item_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
             if not item_ids:
                 continue
 
-            # Usar get_items_details que ya incluye seller_custom_field explícitamente
             for i in range(0, len(item_ids), 20):
                 batch = item_ids[i : i + 20]
                 try:
@@ -162,15 +168,15 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                     if not isinstance(entries, list):
                         continue
                     for entry in entries:
-                        # ML batch retorna [{code:200, body:{...item...}}, ...]
                         item = entry.get("body") if isinstance(entry, dict) and "body" in entry else entry
                         if not isinstance(item, dict):
                             continue
-                        if item.get("status") != "active":
+                        item_status = item.get("status", "")
+                        if item_status not in ("active", "paused"):
                             continue
+
                         sku = (item.get("seller_custom_field") or "").strip()
                         if not sku:
-                            # Fallback: buscar en attributes SELLER_SKU
                             for attr in (item.get("attributes") or []):
                                 if attr.get("id") == "SELLER_SKU":
                                     sku = (attr.get("value_name") or "").strip()
@@ -180,16 +186,22 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                         base = _base_sku(sku)
                         if not base:
                             continue
+
+                        # FULL (fulfillment): ML gestiona stock — no tocar
+                        shipping = item.get("shipping") or {}
+                        is_full  = shipping.get("logistic_type") == "fulfillment"
+
                         by_sku.setdefault(base, []).append({
-                            "platform":      "ml",
-                            "account_id":    uid,
-                            "item_id":       str(item.get("id", "")),
-                            "price":         float(item.get("price") or 0),
-                            "qty":           int(item.get("available_quantity") or 0),
-                            "sold_qty":      int(item.get("sold_quantity") or 0),
-                            "date_created":  item.get("date_created", ""),
-                            "sku":           sku,
-                            "can_update":    True,
+                            "platform":     "ml",
+                            "account_id":   uid,
+                            "item_id":      str(item.get("id", "")),
+                            "price":        float(item.get("price") or 0),
+                            "qty":          int(item.get("available_quantity") or 0),
+                            "sold_qty":     int(item.get("sold_quantity") or 0),
+                            "date_created": item.get("date_created", ""),
+                            "sku":          sku,
+                            "status":       item_status,
+                            "can_update":   not is_full,
                         })
                 except Exception as e:
                     logger.warning(f"[MULTI-SYNC-ML] Batch error uid={uid} i={i}: {e}")
@@ -368,8 +380,11 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
     updates = []
 
     if bm_avail == 0:
-        # Poner todo en 0
+        # Poner todo en 0 — solo los que están activos con qty > 0
+        # Los pausados ya están "apagados", no hace falta tocarlos
         for lst in updatable:
+            if lst.get("status") == "paused":
+                continue
             if lst["qty"] != 0:
                 updates.append({"listing": lst, "new_qty": 0, "reason": "bm_zero"})
 
@@ -379,15 +394,20 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
         winner  = scored[0]
         for lst in updatable:
             new_qty = bm_avail if lst is winner else 0
+            # Pausado con new_qty=0 → ya está apagado, skip
+            if lst.get("status") == "paused" and new_qty == 0:
+                continue
             if lst["qty"] != new_qty:
                 reason = "concentrate_winner" if lst is winner else "concentrate_loser"
                 updates.append({"listing": lst, "new_qty": new_qty, "reason": reason})
 
     else:
         # Distribuir: todas las plataformas updatable muestran avail_total completo
+        # Incluye pausados → _execute los activará antes de setear qty
         for lst in updatable:
             if lst["qty"] != bm_avail:
-                updates.append({"listing": lst, "new_qty": bm_avail, "reason": "distribute"})
+                reason = "activate_and_distribute" if lst.get("status") == "paused" else "distribute"
+                updates.append({"listing": lst, "new_qty": bm_avail, "reason": reason})
 
     return updates
 
@@ -415,6 +435,16 @@ async def _execute(updates: list[dict], ml_clients: dict, amz_clients: dict) -> 
                 client = ml_clients.get(acct)
                 if not client:
                     raise ValueError(f"Sin cliente ML para {acct}")
+                # Si el listing está pausado y vamos a subir stock, activar primero
+                if new_qty > 0 and lst.get("status") == "paused":
+                    try:
+                        await client.update_item_status(lst["item_id"], "active")
+                        logger.info(f"[MULTI-SYNC] Activado listing pausado {lst['item_id']}")
+                        await asyncio.sleep(0.3)
+                    except Exception as exc_act:
+                        logger.warning(
+                            f"[MULTI-SYNC] No se pudo activar {lst['item_id']}: {exc_act}"
+                        )
                 await client.update_item_stock(lst["item_id"], new_qty)
             else:
                 client = amz_clients.get(acct)
@@ -423,31 +453,33 @@ async def _execute(updates: list[dict], ml_clients: dict, amz_clients: dict) -> 
                 await client.update_listing_quantity(lst["sku"], new_qty)
 
             results.append({
-                "sku":       lst.get("sku", ""),
-                "platform":  platform,
+                "sku":        lst.get("sku", ""),
+                "platform":   platform,
                 "account_id": acct,
-                "ref":       lst.get("item_id") or lst.get("sku"),
-                "new_qty":   new_qty,
-                "reason":    entry["reason"],
-                "ok":        True,
-                "error":     None,
+                "ref":        lst.get("item_id") or lst.get("sku"),
+                "new_qty":    new_qty,
+                "reason":     entry["reason"],
+                "prev_status": lst.get("status", "active"),
+                "ok":         True,
+                "error":      None,
             })
             logger.info(
                 f"[MULTI-SYNC] {lst.get('sku')} | {platform}/{acct} "
-                f"→ qty={new_qty} ({entry['reason']})"
+                f"→ qty={new_qty} ({entry['reason']}, prev_status={lst.get('status','active')})"
             )
 
         except Exception as exc:
             err = str(exc)[:120]
             results.append({
-                "sku":       lst.get("sku", ""),
-                "platform":  platform,
+                "sku":        lst.get("sku", ""),
+                "platform":   platform,
                 "account_id": acct,
-                "ref":       lst.get("item_id") or lst.get("sku"),
-                "new_qty":   new_qty,
-                "reason":    entry["reason"],
-                "ok":        False,
-                "error":     err,
+                "ref":        lst.get("item_id") or lst.get("sku"),
+                "new_qty":    new_qty,
+                "reason":     entry["reason"],
+                "prev_status": lst.get("status", "active"),
+                "ok":         False,
+                "error":      err,
             })
             logger.warning(
                 f"[MULTI-SYNC] Error {platform}/{acct} sku={lst.get('sku')}: {err}"
