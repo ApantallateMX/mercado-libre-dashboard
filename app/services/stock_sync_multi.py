@@ -99,8 +99,17 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
         async with sem:
             try:
                 r = await http.post(_BM_COND_URL, json=payload, timeout=15.0)
-                rows = r.json() if r.status_code == 200 else []
-                if not isinstance(rows, list):
+                if r.status_code != 200:
+                    result[base.upper()] = 0
+                    return
+                data = r.json()
+                # BM puede devolver un objeto único {} o una lista [{}].
+                # Normalizamos siempre a lista para iterar de forma uniforme.
+                if isinstance(data, dict):
+                    rows = [data]
+                elif isinstance(data, list):
+                    rows = data
+                else:
                     rows = []
                 avail = 0
                 for row in rows:
@@ -112,7 +121,13 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
                             except Exception:
                                 cj = []
                         for cond in (cj if isinstance(cj, list) else []):
-                            for item in (cond.get("SKUCondition_JSON") or []):
+                            sku_cj = cond.get("SKUCondition_JSON") or []
+                            if isinstance(sku_cj, str):
+                                try:
+                                    sku_cj = json.loads(sku_cj)
+                                except Exception:
+                                    sku_cj = []
+                            for item in sku_cj:
                                 qty = item.get("TotalQty", 0) or 0
                                 if item.get("status") == "Producto Vendible":
                                     avail += qty
@@ -121,6 +136,7 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
                         if row.get("status") == "Producto Vendible":
                             avail += qty
                 result[base.upper()] = avail
+                logger.debug(f"[MULTI-SYNC-BM] {base} → avail={avail}")
             except Exception as exc:
                 logger.warning(f"[MULTI-SYNC-BM] Error {base}: {exc}")
                 result[base.upper()] = 0
