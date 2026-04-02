@@ -647,18 +647,21 @@ def bundle_avail(skus: list, bm_map: dict) -> int:
 - `SNWM000001` → 5,791 disponibles (soporte)
 - Bundle disponible = min(56, 5791) = **56**
 
-**REGLA DE CONDICIONES para bundles con "/":**
-Cuando el SELLER_SKU contiene "/", usar condiciones `GRA,GRB,GRC,ICB,ICC,NEW` para TODOS los SKUs del bundle (no solo GR/NEW). Verificado con MLM843286836 — incluir ICB/ICC suma 3 unidades extra para SNTV002033 (88 vs 85), resultando en avail=59 vs 56.
+**REGLA DE CONDICIONES para SELLER_SKU con "/":**
+Cuando el SELLER_SKU contiene "/", indica un bundle o variante especial. El SKU **después del "/" es solo referencia** — NO se consulta en BM. Solo se consulta el SKU antes del "/", pero con condiciones completas `GRA,GRB,GRC,ICB,ICC,NEW`.
 
 **Resumen de reglas de condiciones BM por tipo de SELLER_SKU:**
 
-| Formato SELLER_SKU | Ejemplo | Condiciones BM |
-|---|---|---|
-| SKU simple | `SNTV002033` | `GRA,GRB,GRC,NEW` |
-| SKU con sufijo -ICB/-ICC | `SNTV002033-ICB` | `GRA,GRB,GRC,ICB,ICC,NEW` |
-| SKU bundle con "/" | `SNTV002033 / SNWM000001` | `GRA,GRB,GRC,ICB,ICC,NEW` para CADA SKU |
+| Formato SELLER_SKU | Ejemplo | SKU a consultar en BM | Condiciones BM |
+|---|---|---|---|
+| SKU simple | `SNTV002033` | `SNTV002033` | `GRA,GRB,GRC,NEW` |
+| Sufijo -ICB/-ICC | `SNTV002033-ICB` | `SNTV002033` (base) | `GRA,GRB,GRC,ICB,ICC,NEW` |
+| Bundle con "/" | `SNTV002033 / SNWM000001` | `SNTV002033` (solo el primero) | `GRA,GRB,GRC,ICB,ICC,NEW` |
 
-**Para bundles, avail = min(avail de cada componente).**
+**Verificado con MLM843286836 (2026-04-03):**
+- VAR "Base de Pared" → `SNTV002033 / SNWM000001` → consulta SNTV002033 con all conditions → físico=88, avail=**59**
+- VAR "Base de Mesa" → `SNTV002033` → consulta SNTV002033 con GR/NEW → físico=85, avail=**56**
+- Diferencia de 3 unidades = 1 ICB + 2 ICC en CDMX que el bundle incluye y el simple no.
 
 
 ## BASE DE CONOCIMIENTO — BINMANAGER SISTEMA COMPLETO
