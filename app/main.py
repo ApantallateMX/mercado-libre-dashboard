@@ -49,16 +49,16 @@ def _extract_base_sku(sku: str) -> str:
 
 
 def _bm_conditions_for_sku(sku: str) -> str:
-    """Retorna la condición BM exacta según el sufijo del SKU.
+    """Retorna condiciones BM segun formato del SELLER_SKU.
 
     Reglas:
-    - SKU simple / -NEW (ej: SNTV002033, SNTV002033-NEW) → solo NEW
-    - SKU con sufijo -GRA/-GRB/-GRC → solo esa condición (no mezclar con NEW)
-    - SKU con sufijo -ICB o -ICC     → todas las condiciones (IC puede vender de cualquier pool)
-    - SKU con "/" (bundle)           → todas las condiciones
-
-    IMPORTANTE: no usar "GRA,GRB,GRC,NEW" para SKUs simples porque eso suma stock de
-    condiciones refurb que pertenecen a otras publicaciones (SHIL000154-GRA ≠ SHIL000154).
+    - SKU simple o -NEW (ej: SNTV002033) → GRA,GRB,GRC,NEW
+      (productos "nuevos" en BM pueden estar bajo cualquier condición física)
+    - SKU con sufijo -GRA               → solo GRA
+    - SKU con sufijo -GRB               → solo GRB
+    - SKU con sufijo -GRC               → solo GRC
+    - SKU con sufijo -ICB o -ICC        → GRA,GRB,GRC,ICB,ICC,NEW
+    - SKU con "/" (bundle)              → GRA,GRB,GRC,ICB,ICC,NEW
     """
     upper = sku.upper()
     if upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper:
@@ -69,8 +69,7 @@ def _bm_conditions_for_sku(sku: str) -> str:
         return "GRB"
     if upper.endswith("-GRC"):
         return "GRC"
-    # Simple SKU o -NEW → solo condición NEW
-    return "NEW"
+    return "GRA,GRB,GRC,NEW"
 
 
 import re as _re

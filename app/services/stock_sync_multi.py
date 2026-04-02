@@ -69,7 +69,9 @@ def _cond_for_key(key: str) -> str:
         return "GRB"
     if upper.endswith("-GRC"):
         return "GRC"
-    return "NEW"  # simple SKU o -NEW
+    # Simple SKU o -NEW: consultar todas las condiciones porque BM puede almacenar
+    # productos "nuevos" bajo cualquier condición (GRA, GRB, GRC o NEW)
+    return "GRA,GRB,GRC,NEW"
 
 
 def _bm_base_for_key(key: str) -> str:
