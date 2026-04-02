@@ -1132,6 +1132,7 @@ window.syncAlertItem = function(itemId, bmQty, btn) {
     .catch(function(e) {
         btn.disabled = false;
         var errMsg = e.message || 'Error';
+        console.error('[syncAlertItem] ' + itemId + ' → ' + errMsg);
         var errLow = errMsg.toLowerCase();
         // ME1: cross_docking sin modo ME1 — detectar ANTES del check de FULL
         var isMe1 = errLow.indexOf('me1_required') >= 0
