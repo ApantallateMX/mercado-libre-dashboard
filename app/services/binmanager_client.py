@@ -328,15 +328,27 @@ class BinManagerClient:
                 if r.status_code == 200:
                     data = r.json()
                     if isinstance(data, list) and data:
-                        # Buscar coincidencia exacta de SKU base
+                        # 1. Coincidencia exacta de SKU base (caso normal: item en condición NEW)
                         match = next(
                             (x for x in data if (x.get("SKU") or "").upper() == base.upper()),
                             None
                         )
-                        if match is None:
-                            return 0  # SKU no encontrado — NO caer al data[0] (puede ser otro SKU)
-                        avail = match.get("AvailableQTY")
-                        return int(avail) if avail is not None else 0
+                        if match is not None:
+                            avail = match.get("AvailableQTY")
+                            return int(avail) if avail is not None else 0
+                        # 2. Sin match exacto: buscar variantes de condición del mismo base SKU.
+                        #    Caso real: SNTV004196 solo existe en GRB → BM retorna "SNTV004196-GRB"
+                        #    en el campo SKU, no "SNTV004196". Sin este fallback retornaría 0
+                        #    aunque hay 14 unidades físicas → falsa alerta de sobreventa.
+                        _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
+                        variants = [
+                            x for x in data
+                            if (x.get("SKU") or "").upper().startswith(base.upper() + "-")
+                            and any((x.get("SKU") or "").upper().endswith(s) for s in _COND_SFXS)
+                        ]
+                        if variants:
+                            return sum(int(x.get("AvailableQTY") or 0) for x in variants)
+                        return 0  # SKU no encontrado — NO caer al data[0] (puede ser otro SKU)
                 return 0
             except httpx.TimeoutException:
                 logger.warning(f"BinManager timeout get_available_qty {sku} (intento {attempt+1})")
