@@ -7281,17 +7281,28 @@ window.zeroAlertItem = function(itemId, btn) {{
     headers: {{'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}},
     body: JSON.stringify({{quantity: 0}})
   }})
-  .then(function(r) {{
-    if (r.ok) {{
+  .then(function(r) {{ return r.json().then(function(d) {{ return {{ok: r.ok, status: r.status, data: d}}; }}); }})
+  .then(function(res) {{
+    if (res.ok) {{
       btn.textContent = '✓ 0';
       btn.className = btn.className.replace(/bg-red-\d00/g, 'bg-green-600').replace(/hover:bg-red-\d00/g, '').replace(/active:bg-red-\d00/g, '');
       var row = btn.closest('.alert-row');
       if (row) row.style.opacity = '0.4';
     }} else {{
-      btn.textContent = 'Error'; btn.disabled = false;
+      var errMsg = (res.data && res.data.detail) || ('HTTP ' + res.status);
+      btn.textContent = 'Error';
+      btn.title = errMsg;
+      btn.disabled = false;
+      var row = btn.closest('.alert-row');
+      if (row && !row.querySelector('.err-detail')) {{
+        var span = document.createElement('span');
+        span.className = 'err-detail text-[10px] text-red-600 block mt-1 truncate max-w-[200px]';
+        span.textContent = errMsg.substring(0, 80);
+        row.querySelector('.min-w-0').appendChild(span);
+      }}
     }}
   }})
-  .catch(function() {{ btn.textContent = 'Error'; btn.disabled = false; }});
+  .catch(function(e) {{ btn.textContent = 'Error'; btn.title = e.message; btn.disabled = false; }});
 }};
 window.triggerStockSync = function() {{
   var btn = document.getElementById('btn-sync-now');
