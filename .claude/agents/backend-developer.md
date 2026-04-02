@@ -145,7 +145,29 @@ async def heavy_endpoint():
 ```
 **Regla:** Nunca bloques el request handler con cómputo que pueda tardar más de 10s.
 
-### 10. Background tasks concurrentes — siempre usar lock/flag
+### 10. Deduplicar SKUs antes de llamadas API en batch
+```python
+# MAL: mismo SKU en 100 productos → 100 llamadas paralelas a BM → rate limit → todos fallan
+to_fetch = []
+for p in products:
+    sku = p.get("sku", "")
+    if sku and sku.upper() not in cache:
+        to_fetch.append(sku)   # SNAC000029 se agrega 100 veces
+
+# BIEN: deduplicar con un set antes de hacer las llamadas
+to_fetch = []
+_seen = set()
+for p in products:
+    sku = p.get("sku", "")
+    upper = sku.upper()
+    if sku and upper not in cache and upper not in _seen:
+        to_fetch.append(sku)
+        _seen.add(upper)       # SNAC000029 se agrega solo 1 vez
+```
+**Regla:** Siempre deduplicar IDs/SKUs antes de llamadas API en batch, especialmente
+cuando el mismo ítem puede aparecer en múltiples productos.
+
+### 11. Background tasks concurrentes — siempre usar lock/flag
 ```python
 # MAL: cada request en cache fría dispara un create_task() sin verificar si ya hay uno
 asyncio.create_task(_prewarm_caches())   # si se llama 5 veces en paralelo → flood a API externa
