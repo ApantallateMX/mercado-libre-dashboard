@@ -318,10 +318,22 @@ async def lifespan(app: FastAPI):
     await price_monitor.start()
     # Pre-warm caches en background (30s delay — dejar que tokens y DB arranquen primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
+    # Después del prewarm, también re-ejecuta el stock alert sync para que las alertas
+    # de sobreventa reflejen el BM real (no el valor viejo cacheado con LOCATIONID incorrecto).
     async def _startup_prewarm():
         await asyncio.sleep(30)
         while True:
             await _prewarm_caches()
+            # Refrescar alertas de sobreventa con datos BM actualizados
+            try:
+                accounts = await token_store.get_all_tokens()
+                for acc in accounts:
+                    uid = acc.get("user_id", "")
+                    if uid:
+                        await _run_stock_sync_for_user(uid)
+                        await asyncio.sleep(2)
+            except Exception:
+                pass
             await asyncio.sleep(600)   # 10 minutos
     asyncio.create_task(_startup_prewarm())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
@@ -7555,11 +7567,24 @@ async def prewarm_status():
 
 @app.post("/api/stock/multi-sync/trigger")
 async def multi_sync_trigger():
-    """Dispara un ciclo inmediato de sync multi-plataforma."""
+    """Dispara un ciclo inmediato de sync multi-plataforma + refresca alertas de sobreventa."""
     from app.services.stock_sync_multi import run_multi_stock_sync, get_sync_status
     if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"}, status_code=202)
-    asyncio.create_task(run_multi_stock_sync())
+
+    async def _run_sync_and_alerts():
+        await run_multi_stock_sync()
+        # Refrescar alertas de sobreventa con BM actualizado
+        try:
+            accounts = await token_store.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                if uid:
+                    await _run_stock_sync_for_user(uid)
+        except Exception:
+            pass
+
+    asyncio.create_task(_run_sync_and_alerts())
     return {"status": "triggered"}
 
 
