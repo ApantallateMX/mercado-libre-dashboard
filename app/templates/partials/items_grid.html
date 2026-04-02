@@ -80,9 +80,9 @@
                 </div>
             </div>
 
-            <!-- Badges almacen BinManager -->
+            <!-- Badges almacen BinManager (disponible real = físico − reservas) -->
             {% if inv %}
-            <div class="flex gap-1.5 mb-3 text-xs">
+            <div class="flex gap-1.5 mb-3 text-xs flex-wrap">
                 <span class="px-2 py-0.5 rounded {{ 'bg-green-100 text-green-700' if inv.MTY > 0 else 'bg-red-50 text-red-500' }}">
                     MTY:<strong>{{ inv.MTY }}</strong>
                 </span>
@@ -92,6 +92,12 @@
                 {% if inv.TJ %}
                 <span class="px-2 py-0.5 rounded {{ 'bg-green-100 text-green-700' if inv.TJ > 0 else 'bg-red-50 text-red-500' }}">
                     TJ:<strong>{{ inv.TJ }}</strong>
+                </span>
+                {% endif %}
+                {% set avail = inv.get('avail', inv.total) if inv is mapping else inv.total %}
+                {% if avail != inv.total %}
+                <span class="px-2 py-0.5 rounded bg-blue-50 text-blue-700" title="Disponible real (físico − reservas BM)">
+                    Disp:<strong>{{ avail }}</strong>
                 </span>
                 {% endif %}
             </div>
@@ -153,11 +159,12 @@
                             class="bg-blue-500 text-white px-3 py-2 min-h-[40px] rounded text-sm hover:bg-blue-600 font-bold flex-shrink-0">
                         #
                     </button>
-                    {% if inv and inv.total > 0 and inv.total != body.available_quantity %}
-                    <button onclick="var inp=document.getElementById('new-stock-{{ iid }}');inp.value={{ inv.total }};inp.focus();inp.select()"
+                    {% set bm_disp = inv.get('avail', inv.total) if inv is mapping else (inv.total if inv else 0) %}
+                    {% if inv and bm_disp > 0 and bm_disp != body.available_quantity %}
+                    <button onclick="var inp=document.getElementById('new-stock-{{ iid }}');inp.value={{ bm_disp }};inp.focus();inp.select()"
                             class="bg-purple-500 text-white px-2 py-2 min-h-[40px] rounded text-xs hover:bg-purple-600 font-bold whitespace-nowrap flex-shrink-0"
-                            title="Pre-llenar con BM total ({{ inv.total }}). Confirma con #">
-                        BM:{{ inv.total }}
+                            title="Pre-llenar con BM disponible ({{ bm_disp }} = físico − reservas). Confirma con #">
+                        BM:{{ bm_disp }}
                     </button>
                     {% endif %}
                 </div>

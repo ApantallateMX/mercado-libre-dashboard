@@ -1596,9 +1596,10 @@ async def items_grid_partial(
                 bodies_for_sp.append(body)
         await _enrich_with_sale_prices(client, bodies_for_sp, id_key="id", price_key="price")
 
-        # Consultar inventario BinManager para cada item (Warehouse endpoint = stock real)
-        BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-        inventory_map = {}  # item_id -> {MTY, CDMX}
+        # Consultar inventario BinManager para cada item (Warehouse + Reserve → disponible real)
+        BM_WH_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
+        BM_INV_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        inventory_map = {}  # item_id -> {MTY, CDMX, TJ, total, avail}
         sku_to_items = {}   # base -> {sku, item_ids}
         for it in items:
             body = it.get("body") or it
@@ -1614,15 +1615,21 @@ async def items_grid_partial(
             async def _fetch_inv(base_sku: str, full_sku: str, http: _httpx.AsyncClient):
                 async with sem:
                     try:
-                        resp = await http.post(BM_WH_URL, json={
-                            "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
-                            "LocationID": "47,62,68", "BINID": None,
-                            "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
-                        }, timeout=15.0)
-                        if resp.status_code == 200:
-                            rows = resp.json() or []
-                            mty = cdmx = tj = 0
-                            for row in rows:
+                        r_wh, r_inv = await asyncio.gather(
+                            http.post(BM_WH_URL, json={
+                                "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
+                                "LocationID": "47,62,68", "BINID": None,
+                                "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
+                            }, timeout=15.0),
+                            http.post(BM_INV_URL, json={
+                                "COMPANYID": 1, "SEARCH": base_sku,
+                                "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 5,
+                            }, timeout=15.0),
+                            return_exceptions=True,
+                        )
+                        mty = cdmx = tj = 0
+                        if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
+                            for row in (r_wh.json() or []):
                                 qty = row.get("QtyTotal", 0) or 0
                                 wname = (row.get("WarehouseName") or "").lower()
                                 if "monterrey" in wname or "maxx" in wname:
@@ -1631,7 +1638,18 @@ async def items_grid_partial(
                                     cdmx += qty
                                 else:
                                     tj += qty
-                            return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": mty + cdmx}
+                        warehouse_total = mty + cdmx
+                        reserve_int = global_int = 0
+                        if not isinstance(r_inv, Exception) and r_inv.status_code == 200:
+                            inv_data = r_inv.json()
+                            row0 = inv_data[0] if isinstance(inv_data, list) and inv_data else (inv_data if isinstance(inv_data, dict) else {})
+                            reserve_int = int(row0.get("Reserve", 0) or 0)
+                            global_int  = int(row0.get("TotalQty", 0) or 0)
+                        # Fórmula híbrida (igual que _store_wh)
+                        old_f = max(0, warehouse_total - reserve_int)
+                        g_avail = max(0, global_int - reserve_int) if global_int > 0 else warehouse_total
+                        avail = min(warehouse_total, g_avail) if old_f == 0 and g_avail > 0 else old_f
+                        return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail}
                     except Exception:
                         pass
                     return base_sku, None
