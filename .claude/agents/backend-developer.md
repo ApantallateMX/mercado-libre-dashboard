@@ -167,6 +167,30 @@ for p in products:
 **Regla:** Siempre deduplicar IDs/SKUs antes de llamadas API en batch, especialmente
 cuando el mismo ítem puede aparecer en múltiples productos.
 
+### 12. Sync multi-plataforma — BM error ≠ stock=0
+```python
+# MAL: cualquier error BM (timeout, 429, 5xx) escribe 0 → sync pone todos los items en qty=0
+async def _fetch_bm_avail(skus):
+    ...
+    except Exception:
+        result[base.upper()] = 0   # INCORRECTO: error ≠ sin stock
+
+# BIEN: skip el SKU si BM falla (no escribir nada al dict)
+async def _fetch_bm_avail(skus):
+    ...
+    except Exception as exc:
+        logger.warning(f"Error {base}: {exc} — skip SKU")
+        # NO escribir al result dict
+
+# En el caller:
+for base in all_bases:
+    if base not in bm_stock:
+        continue   # BM tuvo error → skip, no tocar ML
+    bm_avail = bm_stock[base]
+```
+**Regla:** Distinguir "BM retornó 0" (real falta de stock → poner qty=0 en ML)
+de "BM falló con error" (no sabemos → skip, no tocar ML).
+
 ### 11. Background tasks concurrentes — siempre usar lock/flag
 ```python
 # MAL: cada request en cache fría dispara un create_task() sin verificar si ya hay uno
