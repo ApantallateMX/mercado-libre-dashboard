@@ -588,7 +588,7 @@ document.addEventListener('click', function(e) {
             var msg = document.getElementById('global-health-msg');
             var fixBtn = document.getElementById('global-health-fix-btn');
             if (!banner) return;
-            if (d.overall === 'error' || d.overall === 'warning') {
+            if (d.overall === 'error') {
                 // Construir mensaje con los checks fallidos
                 var failed = [];
                 var checks = d.checks || {};

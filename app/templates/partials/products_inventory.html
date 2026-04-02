@@ -399,7 +399,6 @@
             <!-- BM Disponible + Reservado (siempre visible en mobile) -->
             {% set p_avail_m = p.get('_bm_avail', 0) or 0 %}
             {% set p_res_m = p.get('_bm_reserved', 0) or 0 %}
-            {% if p.get('_bm_total') is not none %}
             <div class="flex gap-2">
                 <div class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-green-100 text-green-700' if p_avail_m > 20 else 'bg-yellow-100 text-yellow-700' if p_avail_m > 4 else 'bg-red-100 text-red-600' }}">
                     Disp: {{ p_avail_m }}
@@ -408,7 +407,6 @@
                     Res: {{ p_res_m }}
                 </div>
             </div>
-            {% endif %}
             <!-- Ventas + Días inventario (mobile) -->
             <div>
                 <span class="text-gray-500">Ventas:</span>
@@ -599,24 +597,16 @@
                 {% set p_avail = p.get('_bm_avail', 0) or 0 %}
                 {% set p_reserved = p.get('_bm_reserved', 0) or 0 %}
                 <td class="px-3 py-2 text-right bg-blue-50/40">
-                    {% if p.get('_bm_total') is not none %}
                     <span class="font-bold text-sm {{ 'text-green-600' if p_avail > 20 else 'text-yellow-600' if p_avail > 4 else 'text-red-600' }}">
                         {{ p_avail }}
                     </span>
-                    {% else %}
-                    <span class="text-gray-300 text-xs">-</span>
-                    {% endif %}
                 </td>
                 <!-- BM Reservado (siempre visible) -->
                 <td class="px-3 py-2 text-right bg-orange-50/40">
-                    {% if p.get('_bm_total') is not none %}
                     {% if p_reserved > 0 %}
                     <span class="font-bold text-sm text-orange-600">{{ p_reserved }}</span>
                     {% else %}
                     <span class="text-gray-300 text-xs">0</span>
-                    {% endif %}
-                    {% else %}
-                    <span class="text-gray-300 text-xs">-</span>
                     {% endif %}
                 </td>
                 <!-- MTY / CDMX / TJ — naranja cuando todo el stock es reservado -->

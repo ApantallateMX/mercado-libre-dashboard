@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — FIX: BM columns show 0 instead of "-" + health banner only on errors
+
+**BM columnas muestran 0 en vez de "-"** (todas las secciones):
+- `products_inventory.html`: eliminado guard `_bm_total is not none` — BM Disp y BM Res siempre muestran valor (0 cuando sin datos). Mobile view también siempre visible.
+- `products_top_sellers.html`: eliminado guard `_bm_avail is not none` — div siempre renderiza con `bm_avail = p.get('_bm_avail', 0) or 0`
+- `products_low_sellers.html`: mismo fix
+- `products_deals.html`: fix en card view (línea 446) y table view (línea 582) — ambos siempre muestran valor
+
+**Health banner solo para errores reales**:
+- `system_health.py`: `_check_stock_sync()` — arranque reciente devuelve `_ok("Primer ciclo pendiente...")` en vez de `_warn`. El sync auto-corre, no hay acción necesaria del usuario.
+- `base.html`: banner global solo se muestra si `overall === 'error'`, no para `warning`. BM 503 y otros warnings temporales van al widget de health pero no al banner persistente.
+
+---
+
+## 2026-04-02 — DECISION: Endpoint BM definitivo para stock vendible
+
+### DECISION — Get_GlobalStock_InventoryBySKU CONCEPTID=1 es el endpoint correcto
+
+- **CONCEPTID=1** devuelve `AvailableQTY = TotalQty - Reserve` calculado server-side — correcto y verificado.
+- **`GlobalStock_InventoryBySKU_Condition`.`status`** siempre retorna "Otro" — campo legacy sin usar. NO usar para filtrar.
+- **`get_available_qty()`** en `binmanager_client.py` ya usa CONCEPTID=1 correctamente.
+- **Condition-variant fallback:** SKUs como SNTV004196 existen solo como SNTV004196-GRB en BM → fallback suma variantes.
+- **Cache EMPTY (total=0, avail=0):** fuerza re-fetch para evitar falsos negativos persistentes.
+- **`_prewarm_queued`:** evita perder llamadas de prewarm cuando ya hay una corriendo.
+- **"Sync ahora":** espera a que prewarm complete antes de recargar UI (no mostraba datos frescos antes).
+
+---
+
 ## 2026-04-02 — PERF CRÍTICO: Stock tab tardaba 130s+ → carga instantánea desde DB
 
 ### BUG — Timeout 130s + loop infinito de reinicios

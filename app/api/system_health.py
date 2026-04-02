@@ -166,7 +166,7 @@ async def _check_stock_sync() -> dict:
         ms = _elapsed_ms(t0)
         last_ts = status.get("last_sync_ts")
         if not last_ts:
-            return _warn("Multi-sync aún no ha corrido (arranque reciente)", ms)
+            return _ok("Primer ciclo pendiente (arranque reciente)", ms)
         last_iso = status.get("last_sync_iso", "")
         try:
             last_dt = datetime.fromisoformat(last_iso) if last_iso else None
