@@ -27,10 +27,15 @@ NOTAS:
 import asyncio
 import json
 import logging
+import re
 import time as _time
 from datetime import datetime
 
 import httpx
+
+# SKU simple: letras + dígitos, sin separadores internos.
+# Se usa para extraer el primer componente de un campo compuesto.
+_FIRST_SKU_RE = re.compile(r'([A-Z]{2,8}\d{3,10})', re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +70,26 @@ _last_sync_result: dict = {}
 def _base_sku(sku: str) -> str:
     """
     Extrae el SKU base para cruzar con BinManager.
-    SNFN000941-FLX01 → SNFN000941
-    SNFN000941       → SNFN000941
-    ML y Amazon usan el mismo SKU base en BM.
+    SNFN000941-FLX01          → SNFN000941   (sufijo por variante física)
+    SNTV001864 + SNPE000180   → SNTV001864   (bundle: primer componente)
+    SNTV001864 / SNWM000001   → SNTV001864   (bundle con slash)
+    SNTV001864                → SNTV001864   (SKU simple, sin cambio)
+
+    Para bundles se usa el primer SKU reconocible. El stock del bundle
+    queda acotado por BM al componente principal (TV, etc.).
     """
     if not sku:
         return ""
-    return sku.upper().split("-")[0]
+    upper = sku.upper().strip()
+    # Primero quitar sufijos de variante física (e.g. -FLX01)
+    base = upper.split("-")[0].strip()
+    # Si el resultado aún contiene separadores de bundle (espacio, +, /),
+    # extraer el primer token que parezca un SKU válido.
+    if re.search(r'[\s+/]', base):
+        m = _FIRST_SKU_RE.search(base)
+        if m:
+            return m.group(1)
+    return base
 
 
 # ─────────────────────────────────────────────────────────────────────────────
