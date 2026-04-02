@@ -203,7 +203,51 @@ POST /InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition
 }
 # Respuesta: {Conditions_JSON: "[{Condition, TotalQty}]"}
 
-# Info de producto (Brand, Model, Title, RetailPrice, AvgCost)
+# ── Stock disponible + reservado (PAYLOAD CORRECTO verificado 2026-04-03) ──
+# Fuente: BM Network tab — payload exacto que BM UI envía al buscar por SKU con
+# filtro de ubicación activo (Monterrey CDMX Apantallate).
+# Campos clave en respuesta: TotalQty, Reserve, AvailableQTY (= TotalQty - Reserve)
+POST /InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU
+{
+  "COMPANYID": 1,
+  "CATEGORYID": null, "WAREHOUSEID": null,
+  "LOCATIONID": "47,62,68",
+  "BINID": null,
+  "SEARCH": "SKU-BASE",
+  "CONDITION": "GRA,GRB,GRC,ICB,ICC,NEW",
+  "FORINVENTORY": 0,
+  "BUSCADOR": false,
+  "BRAND": null, "MODEL": null, "SIZE": null, "LCN": null,
+  "CONCEPTID": 1,
+  "OPENCELL": "", "OCCOMPTABILITY": "",
+  "NEEDRETAILPRICE": false, "NEEDFLOORPRICE": false,
+  "NEEDIPS": false, "NEEDTIER": false, "NEEDFILE": false,
+  "NEEDVIRTUALQTY": false, "NEEDINCOMINGQTY": false,
+  "NEEDAVGCOST": false, "NEEDRETAILPRICEPH": false,
+  "NEEDSALES": false, "NEEDUPC": false, "NEEDPORCENTAGE": false,
+  "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+  "ORDERBYNAME": null, "ORDERBYTYPE": null,
+  "PorcentajeFloor": 20, "StatusConcept": null,
+  "RetailBalance": null, "RetailAvailable": null,
+  "MaxQty": null, "MinQty": null, "NameQty": null, "Tier": null,
+  "TAGS": null, "TVL": false, "TAGSNOTIN": null, "SUPPLIERS": null,
+  "filterUPC": null, "NEEDLASTREPORTEDSALESPRICE": null,
+  "StartDate": null, "EndDate": null,
+  "Jsonfilter": "[]",
+  "Arrayfilters_Condition": null, "Namefilters_Condition": null,
+  "Arrayfilters_Brand": null, "Namefilters_Brand": null,
+  "Arrayfilters_Model": null, "Namefilters_Model": null,
+  "Arrayfilters_Size": null, "Namefilters_Size": null,
+  "Arrayfilters_Category": null, "Namefilters_Category": null,
+  "Arrayfilters_Tags": null, "Namefilters_Tags": null,
+  "Arrayfilters_Tags_Exclude": null, "Namefilters_Tags_Exlude": null,
+  "Arrayfilters_Supplier": null, "Namefilters_Supplier": null
+}
+# Respuesta: [{SKU, TotalQty, Reserve, AvailableQTY, Brand, Model, ...}]
+# AvailableQTY = TotalQty - Reserve (BM lo calcula server-side)
+# SIEMPRE hacer match exacto de SKU — NO caer al primer resultado si no hay match
+
+# Info de producto (Brand, Model, Title, RetailPrice, AvgCost) — sin LOCATIONID
 POST /InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU
 {
   "COMPANYID": 1,
@@ -230,7 +274,8 @@ POST /InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU
 - SKU termina en `-ICB` o `-ICC` → usa condiciones `GRA,GRB,GRC,ICB,ICC,NEW`
 - SKU base o `-NEW/-GRA/-GRB/-GRC` → usa solo `GRA,GRB,GRC,NEW`
 - Stock vendible = MTY + CDMX (TJ excluido)
-- COMPANYID = 1, CONCEPTID = 8
+- Para stock+reserve: CONCEPTID=1, LOCATIONID="47,62,68"
+- Para info de producto (precio/marca): CONCEPTID=8, sin LOCATIONID
 
 ### Bins
 
@@ -433,39 +478,29 @@ if not sku_condition_json_data:
     qty = condition_row.get("TotalQty", 0)
 ```
 
-### 3. Stock disponible — Fórmula Híbrida (versión final, 2026-04-03)
+### 3. Stock disponible — usar AvailableQTY directo (actualizado 2026-04-03)
 
-El campo `Available` en BM UI ya descuenta reservas. En la API hay que calcularlo con **fórmula híbrida** porque el `Reserve` es global (todos los bins) pero el stock que medimos es solo de bins vendibles (LocationIDs 47,62,68).
-
-**Problema:** A veces las reservas están en bins NO-vendibles, por lo que restarlas del físico vendible sería incorrecto.
+**El campo `AvailableQTY` de `Get_GlobalStock_InventoryBySKU` con el payload correcto (CONCEPTID=1, LOCATIONID="47,62,68") ya descuenta reservas correctamente. No se necesita fórmula híbrida.**
 
 ```python
-warehouse_total = mty + cdmx  # físico en LocationIDs 47,62,68
-reserve_int = int(Reserve)    # Reserve de Get_GlobalStock_InventoryBySKU
-global_int  = int(TotalQty)   # TotalQty de Get_GlobalStock_InventoryBySKU
+# CORRECTO — AvailableQTY ya está calculado por BM server-side
+avail   = int(row.get("AvailableQTY") or 0)   # disponible real (excluye reservados)
+reserved = int(row.get("Reserve") or 0)        # unidades reservadas
+total    = int(row.get("TotalQty") or 0)       # total físico
 
-old_formula  = max(0, warehouse_total - reserve_int)
-global_avail = max(0, global_int - reserve_int) if global_int > 0 else warehouse_total
-
-if old_formula == 0 and global_avail > 0:
-    # Reserve > physical_vendible → reservas en bins NO-vendibles
-    # → vendible disponible completo (capped at global_avail)
-    avail = min(warehouse_total, global_avail)
-else:
-    avail = old_formula  # reservas son locales, restar directo
+# Verificado 2026-04-03:
+# SNTV001764: TotalQty=214, Reserve=1, AvailableQTY=213 ✓ (BM UI confirma)
+# SNTV006756: TotalQty=97, Reserve=73, AvailableQTY=24 ✓ (usuario confirmó)
 ```
 
-**Casos verificados:**
+**IMPORTANTE — Match exacto de SKU obligatorio:**
+```python
+match = next((x for x in data if (x.get("SKU") or "").upper() == base.upper()), None)
+if match is None:
+    return 0  # NO caer al data[0] — puede ser otro SKU distinto
+```
 
-| SKU | física_vendible | reserve | global_total | Formula | avail | BM UI |
-|-----|----------------|---------|--------------|---------|-------|-------|
-| SNTV005554 | 2 | 3 | 400 | 0→hybrid | **2** | 2 ✓ |
-| SNTV002033 | 86 | 30 | 863 | 56>0 | **56** | 59 (diff=3 IC units) |
-| SNTV001764 | 301 | 84 | 305 | 217>0 | **217** | 221 ✓ |
-
-**Fuente del Reserve y TotalQty:** `Get_GlobalStock_InventoryBySKU` → campos `Reserve` y `TotalQty`.
-
-**IMPORTANTE:** `Get_GlobalStock_InventoryBySKU_Warehouse` solo devuelve `QtyTotal` (físico). NO existe campo `QtyAvailable` ni `QtyReserve` en ese endpoint — verificado exhaustivamente.
+**IMPORTANTE:** `Get_GlobalStock_InventoryBySKU_Warehouse` solo devuelve `QtyTotal` (físico por almacén). NO tiene campo `QtyAvailable` ni `QtyReserve` — verificado exhaustivamente. Solo sirve para desglose MTY/CDMX/TJ.
 
 ### 4. RetailPrice — campo correcto es `LastRetailPricePurchaseHistory`
 
@@ -508,15 +543,16 @@ Aunque un SKU no tenga sufijo `-ICB`/`-ICC`, puede tener unidades en condición 
 
 **Implicación:** La diferencia de 3 unidades entre `avail=56` (sin IC) y `BM UI=59` se debe a esto. El dashboard NO incluye IC en base SKUs a propósito (IC no se puede vender en listings regulares de ML). Es un delta aceptado de ~3 unidades.
 
-### 7. `Get_GlobalStock_InventoryBySKU` acepta filtro `LOCATIONID`
+### 7. `Get_GlobalStock_InventoryBySKU` — LOCATIONID sí funciona con el payload correcto
 
-Este endpoint acepta `LOCATIONID` en el payload, pero el resultado **NO equivale** al Warehouse endpoint filtrado. Devuelve números mucho mayores porque incluye todos los bins de esa ubicación (no solo bins de venta).
+**Actualizado 2026-04-03 — el comportamiento anterior era incorrecto porque se usaba CONCEPTID=8 sin el payload completo.**
 
-**Ejemplo SNTV005554:**
-- Warehouse endpoint `LocationID=47,62,68` → 2 unidades (bins de venta)
-- `Get_GlobalStock_InventoryBySKU` con `LOCATIONID=47,62,68` → TotalQty=329, AvailableQTY=326
+Con el payload correcto (CONCEPTID=1, LOCATIONID="47,62,68", CONDITION="GRA,GRB,GRC,ICB,ICC,NEW"), el endpoint devuelve `TotalQty`, `Reserve` y `AvailableQTY` correctos filtrados a esas ubicaciones. Verificado en BM Network tab por el usuario:
 
-**Conclusión:** No usar `LOCATIONID` en `Get_GlobalStock_InventoryBySKU` para obtener stock vendible — usar siempre `Get_GlobalStock_InventoryBySKU_Warehouse` para el desglose por bins de venta.
+- SNTV001764: TotalQty=214, Reserve=1, AvailableQTY=213 ✓ (coincide con BM UI)
+- SNTV006756: TotalQty=97, Reserve=73, AvailableQTY=24 ✓ (usuario confirmó)
+
+**Para desglose físico por almacén (MTY/CDMX/TJ por separado):** usar `Get_GlobalStock_InventoryBySKU_Warehouse` que devuelve QtyTotal por warehouse. Este endpoint NO tiene campos de Reserve ni AvailableQTY.
 
 ---
 
