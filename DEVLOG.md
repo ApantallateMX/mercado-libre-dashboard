@@ -77,8 +77,17 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
   - Normalizar `cond_rows`: si es `dict`, envolver en lista antes de iterar
   - Fallback en `_store_wh`: si `SKUCondition_JSON` vacío → usar `TotalQty` del nivel condición
 
+### BUG — _bm_avail contaba reservados como disponibles (301 en lugar de 221)
+- **Síntoma:** SNTV001764 mostraba 301 disponibles, BM UI muestra 221 (Reserve=84 son órdenes pendientes)
+- **Root cause:** `_store_wh` sumaba stock físico total sin restar `Reserve`
+- **Fix (commit 70a9bb9):**
+  - `_wh_phase`: llamada paralela a `Get_GlobalStock_InventoryBySKU` para obtener `Reserve`
+  - `avail_total = max(0, warehouse_physical - reserve_global)`
+  - Eliminado Condition endpoint (redundante); resultado: 301-84=217 ≈ BM UI 221
+- **Regla:** `_bm_avail` = stock vendible SIN reservas. `_bm_total` = stock físico bruto.
+
 ### OPERACION — Verificación SKU SNTV001764 (Onn 32" HD Roku Smart TV)
 - BM UI muestra: Available=221, Reserve=84 (filtro LocationIDs 47/62/68), RetailPrice PH=$88 USD
-- Dashboard mostraba BM=0 por bug anterior; corregido con commit 7da669d
+- Dashboard mostraba BM=0 por bug → corregido 7da669d; luego reservas no restadas → corregido 70a9bb9
 
 ---
