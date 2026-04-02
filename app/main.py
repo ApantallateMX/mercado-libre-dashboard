@@ -4349,18 +4349,8 @@ async def item_edit_partial(request: Request, item_id: str):
 
         score, problems, breakdown = _calculate_health_score(item, description)
 
-        # Extract seller_sku
-        seller_sku = item.get("seller_custom_field") or ""
-        if not seller_sku and item.get("attributes"):
-            for attr in item["attributes"]:
-                if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                    seller_sku = attr["value_name"]
-                    break
-        if not seller_sku and item.get("variations"):
-            for var in item["variations"]:
-                if var.get("seller_custom_field"):
-                    seller_sku = var["seller_custom_field"]
-                    break
+        # Extract seller_sku — prioridad: variaciones > padre
+        seller_sku = _get_item_sku(item)
 
         listing_type = item.get("listing_type_id", "")
 
@@ -7068,14 +7058,7 @@ async def _run_stock_sync_for_user(user_id: str):
             body = item.get("body", item) if isinstance(item, dict) else item
             iid = body.get("id", "") if isinstance(body, dict) else getattr(body, "id", "")
             body_dict = body if isinstance(body, dict) else vars(body)
-            sku = ""
-            # Buscar SKU en seller_custom_field o attributes
-            sku = body_dict.get("seller_custom_field") or ""
-            if not sku:
-                for attr in body_dict.get("attributes", []):
-                    if isinstance(attr, dict) and attr.get("id") == "SELLER_SKU":
-                        sku = attr.get("value_name", "") or ""
-                        break
+            sku = _get_item_sku(body_dict)
             if not sku or not iid:
                 continue
             qty = body_dict.get("available_quantity", 0) or 0
