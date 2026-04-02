@@ -2120,38 +2120,24 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, reserve_global=0, global_total=0):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ).
+    def _store_wh(sku, rows_wh, avail_direct=0):
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail directo de BM_COND_URL.
 
-        Fórmula:
-          Si reserve > vendible_physical:
-              # Reserve excede stock vendible → parte de la reserva DEBE estar en bins
-              # no-vendibles → el stock vendible sigue libre (capped a global_avail)
-              avail = min(vendible_physical, max(0, global_total - reserve))
-          Else:
-              # Reserve ≤ vendible → la reserva PODRÍA ser contra el stock vendible.
-              # Usar fórmula conservadora: vendible - reserve.
-              avail = max(0, vendible_physical - reserve)
+        avail_direct: suma de TotalQty donde status=="Producto Vendible" desde
+        GlobalStock_InventoryBySKU_Condition — la misma fuente que usa el sync multi-plataforma
+        y que ha sido verificada como correcta. Se usa directamente en lugar de la
+        fórmula "warehouse_total - reserve" que era inexacta cuando el Reserve del endpoint
+        Get_GlobalStock_InventoryBySKU difería del real.
 
         Casos verificados:
-          SNTV005554: física=2, reserve=3, global=400 → reserve>física → avail=min(2,397)=2 ✓
-          SNTV002033: física=86, reserve=30, global=863 → reserve≤física → avail=56 (≈BM UI 59) ✓
-          SNTV001764: física=301, reserve=84, global=305 → reserve≤física → avail=217 (≈BM UI 221) ✓
-          SNTV006485: física=1, reserve=1, global=385  → reserve≤física → avail=0 ✓ (unidad reservada)
+          SNAC000029: 2467 unidades en BM → avail_direct=2467 ✓ (antes daba 0 por reserve erróneo)
+          SNTV006485: física=1, reservada=1 → BM_COND devuelve 0 Producto Vendible ✓
+          SNTV002033: BM_COND devuelve ~59 Producto Vendible ✓
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         warehouse_total = mty + cdmx
-        reserve_int     = int(reserve_global or 0)
-        global_int      = int(global_total or 0)
-        if reserve_int > warehouse_total and global_int > 0:
-            # Reserve excede stock vendible → reserva está en bins no-vendibles
-            # → unidades vendibles completamente libres (capped al global disponible)
-            global_avail = max(0, global_int - reserve_int)
-            avail_total  = min(warehouse_total, global_avail)
-        else:
-            # Reserve ≤ vendible → conservador: restar directo
-            avail_total = max(0, warehouse_total - reserve_int)
-        reserved_total = reserve_int
+        avail_total     = int(avail_direct or 0)
+        reserved_total  = max(0, warehouse_total - avail_total)
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total}
@@ -2168,9 +2154,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     async def _wh_phase(sku, http):
         """Consulta en paralelo:
-        1) Warehouse endpoint (ForInventory:0) → MTY/CDMX/TJ breakdown (totales físicos)
-        2) InventoryBySKUAndCondicion_Quantity → stock realmente disponible (Available),
-           excluyendo unidades reservadas para órdenes pendientes.
+        1) Get_GlobalStock_InventoryBySKU_Warehouse → MTY/CDMX/TJ breakdown (totales físicos)
+        2) GlobalStock_InventoryBySKU_Condition    → avail directo (Producto Vendible)
+
+        El avail viene directo de BM_COND_URL — igual que _fetch_bm_avail en stock_sync_multi.
+        Reemplaza la fórmula "warehouse_total - reserve" que era inexacta cuando el endpoint
+        Get_GlobalStock_InventoryBySKU (CONCEPTID=8) devolvía reserve >= total (e.g. SNAC000029).
         """
         clean = _clean_sku_for_bm(sku)
         if not clean:
@@ -2183,33 +2172,46 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "LocationID": "47,62,68", "BINID": None,
             "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
         }
-        # Get_GlobalStock_InventoryBySKU: obtener Reserve del SKU para calcular
-        # avail_total = warehouse_physical - reserve (órdenes pendientes).
-        inv_payload = {
-            "COMPANYID": 1, "SEARCH": base,
-            "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 5,
+        # BM_COND_URL: misma consulta que usa _fetch_bm_avail — devuelve Producto Vendible
+        cond_payload = {
+            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
+            "LOCATIONID": "47,62,68", "BINID": None,
+            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
         }
         async with wh_sem:
             try:
-                r_wh, r_inv = await asyncio.gather(
-                    http.post(BM_WH_URL,  json=wh_payload,  timeout=15.0),
-                    http.post(BM_INV_URL, json=inv_payload, timeout=15.0),
+                r_wh, r_cond = await asyncio.gather(
+                    http.post(BM_WH_URL,   json=wh_payload,   timeout=15.0),
+                    http.post(BM_COND_URL, json=cond_payload, timeout=15.0),
                     return_exceptions=True,
                 )
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
 
-                # Extraer Reserve y TotalQty del inventory endpoint (ambos necesarios para
-                # calcular avail = min(vendible_physical, max(0, global_total - reserve)))
-                reserve_global = 0
-                global_total   = 0
-                if not isinstance(r_inv, Exception) and r_inv.status_code == 200:
-                    inv_data = r_inv.json()
-                    row0 = inv_data[0] if isinstance(inv_data, list) and inv_data else (inv_data if isinstance(inv_data, dict) else {})
-                    reserve_global = row0.get("Reserve", 0) or 0
-                    global_total   = row0.get("TotalQty", 0) or 0
+                # Parsear avail directo desde BM_COND_URL (mismo approach que _fetch_bm_avail)
+                avail_direct = 0
+                if not isinstance(r_cond, Exception) and r_cond.status_code == 200:
+                    cond_data = r_cond.json()
+                    cond_rows = [cond_data] if isinstance(cond_data, dict) else (cond_data if isinstance(cond_data, list) else [])
+                    for row in cond_rows:
+                        cj = row.get("Conditions_JSON")
+                        if cj is not None:
+                            if isinstance(cj, str):
+                                try: cj = _json.loads(cj)
+                                except Exception: cj = []
+                            for cond in (cj if isinstance(cj, list) else []):
+                                sku_cj = cond.get("SKUCondition_JSON") or []
+                                if isinstance(sku_cj, str):
+                                    try: sku_cj = _json.loads(sku_cj)
+                                    except Exception: sku_cj = []
+                                for item in (sku_cj if isinstance(sku_cj, list) else []):
+                                    if item.get("status") == "Producto Vendible":
+                                        avail_direct += int(item.get("TotalQty") or 0)
+                        else:
+                            if row.get("status") == "Producto Vendible":
+                                avail_direct += int(row.get("TotalQty") or 0)
 
-                _store_wh(sku, rows_wh, reserve_global, global_total)
+                _store_wh(sku, rows_wh, avail_direct=avail_direct)
                 return
             except Exception:
                 pass
