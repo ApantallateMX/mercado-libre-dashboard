@@ -2101,32 +2101,34 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     def _store_wh(sku, rows_wh, reserve_global=0, global_total=0):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ).
 
-        Fórmula híbrida:
-          old = max(0, vendible_physical - reserve_global)
-          si old == 0 y global_avail > 0:
-              # Reserve > physical_vendible → reservas están en bins NO-vendibles
-              # → vendible disponible completamente (capped at global_avail)
-              avail = min(vendible_physical, global_avail)
-          else:
-              avail = old  # reservas son locales, restar directo
+        Fórmula:
+          Si reserve > vendible_physical:
+              # Reserve excede stock vendible → parte de la reserva DEBE estar en bins
+              # no-vendibles → el stock vendible sigue libre (capped a global_avail)
+              avail = min(vendible_physical, max(0, global_total - reserve))
+          Else:
+              # Reserve ≤ vendible → la reserva PODRÍA ser contra el stock vendible.
+              # Usar fórmula conservadora: vendible - reserve.
+              avail = max(0, vendible_physical - reserve)
 
         Casos verificados:
-          SNTV005554: física=2, reserve=3, global=400 → old=0, global_avail=397 → avail=min(2,397)=2 ✓
-          SNTV002033: física=86, reserve=30, global=863 → old=56>0 → avail=56 (≈BM UI 59, diff=3 IC units)
-          SNTV001764: física=301, reserve=84, global=305 → old=217>0 → avail=217 (≈BM UI 221) ✓
+          SNTV005554: física=2, reserve=3, global=400 → reserve>física → avail=min(2,397)=2 ✓
+          SNTV002033: física=86, reserve=30, global=863 → reserve≤física → avail=56 (≈BM UI 59) ✓
+          SNTV001764: física=301, reserve=84, global=305 → reserve≤física → avail=217 (≈BM UI 221) ✓
+          SNTV006485: física=1, reserve=1, global=385  → reserve≤física → avail=0 ✓ (unidad reservada)
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         warehouse_total = mty + cdmx
         reserve_int     = int(reserve_global or 0)
         global_int      = int(global_total or 0)
-        old_formula     = max(0, warehouse_total - reserve_int)
-        global_avail    = max(0, global_int - reserve_int) if global_int > 0 else warehouse_total
-        if old_formula == 0 and global_avail > 0:
-            # Reserve excede el stock vendible → reservas están en bins no-vendibles
-            # → el stock vendible está completamente disponible (capped al global disponible)
-            avail_total = min(warehouse_total, global_avail)
+        if reserve_int > warehouse_total and global_int > 0:
+            # Reserve excede stock vendible → reserva está en bins no-vendibles
+            # → unidades vendibles completamente libres (capped al global disponible)
+            global_avail = max(0, global_int - reserve_int)
+            avail_total  = min(warehouse_total, global_avail)
         else:
-            avail_total = old_formula
+            # Reserve ≤ vendible → conservador: restar directo
+            avail_total = max(0, warehouse_total - reserve_int)
         reserved_total = reserve_int
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
