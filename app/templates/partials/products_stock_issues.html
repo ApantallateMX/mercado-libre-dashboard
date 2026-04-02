@@ -1,3 +1,9 @@
+{% if stale %}
+<div class="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3">
+  <svg class="animate-spin h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+  Actualizando datos BM en background&hellip; (mostrando caché anterior)
+</div>
+{% endif %}
 <!-- KPIs -->
 <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"

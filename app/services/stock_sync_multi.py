@@ -170,7 +170,7 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
         # descontar reservados (SNTV001763: 4 físicos, 4 reservados, Available real=0)
         payload = {
             "COMPANYID":   1,        "TYPEINVENTORY": 0,
-            "WAREHOUSEID": None,     "LOCATIONID":    _BM_LOC_IDS,
+            "WAREHOUSEID": None,     "LOCATIONID":    None,
             "BINID":       None,     "PRODUCTSKU":    base,
             "CONDITION":   conditions, "SUPPLIERS":   None,
             "LCN":         None,     "SEARCH":        base,

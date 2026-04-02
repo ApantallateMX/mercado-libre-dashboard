@@ -317,9 +317,12 @@ async def lifespan(app: FastAPI):
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
     # Pre-warm caches en background (30s delay — dejar que tokens y DB arranquen primero)
+    # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     async def _startup_prewarm():
         await asyncio.sleep(30)
-        await _prewarm_caches()
+        while True:
+            await _prewarm_caches()
+            await asyncio.sleep(600)   # 10 minutos
     asyncio.create_task(_startup_prewarm())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
@@ -1781,10 +1784,14 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             # include_paused: traer items pausados para seccion Activar
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
-        # Cache fría o expirada: calcular en background y devolver loading inmediato.
-        # Solo dispara si no hay ya un prewarm corriendo (evita flood a BM API).
-        # Evita el timeout de 30s de Railway (el cálculo tarda 60-90s en frío).
+        # Cache expirada: si hay datos viejos, mostrarlos inmediatamente y refrescar en BG.
+        # Si cache está completamente vacía (primer arranque), mostrar spinner.
         asyncio.create_task(_prewarm_caches())
+        if entry:
+            # Datos stale — mostrar con aviso de actualización en background
+            ctx = entry[1].copy()
+            ctx["stale"] = True
+            return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
         return HTMLResponse("""
 <div id="stock-loading" class="text-center py-16 text-gray-500">
   <svg id="stock-spinner" class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -2181,11 +2188,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
         }
         # BM_AVAIL_URL: InventoryBySKUAndCondicion_Quantity → Available (excluye reservados)
-        # Este es el endpoint correcto — GlobalStock_InventoryBySKU_Condition daba
-        # TotalQty físico sin descontar reservados (SNTV001763: 4 físicos pero 0 disponibles)
+        # LOCATIONID=None: este endpoint requiere None para devolver total disponible global.
+        # Con LOCATIONID="47,62,68" retorna vacío aunque haya stock (diferente a WH endpoint).
+        # Verificado: SNAC000029 Available=2471 con None, Available=0 con "47,62,68".
         avail_payload = {
             "COMPANYID": 1, "TYPEINVENTORY": 0,
-            "WAREHOUSEID": None, "LOCATIONID": "47,62,68", "BINID": None,
+            "WAREHOUSEID": None, "LOCATIONID": None, "BINID": None,
             "PRODUCTSKU": base, "CONDITION": conditions,
             "SUPPLIERS": None, "LCN": None, "SEARCH": base,
         }
