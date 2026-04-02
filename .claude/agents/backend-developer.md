@@ -122,7 +122,54 @@ GET /items?ids=X,Y&attributes=variations
 # granularityTimeZone=US/Pacific requerido con granularity=Day
 ```
 
-### 8. Timezone Amazon vs MeLi
+### 9. Endpoints con cálculo pesado — SIEMPRE background + cache
+```python
+# Railway mata requests que tarden > 30s → HTTP 502
+# El cálculo BM stock (productos × SKUs × API calls) tarda 60-90s en frío
+
+# MAL: hacer el cálculo pesado dentro del request handler
+@app.get("/partials/something-heavy")
+async def heavy_endpoint():
+    data = await compute_heavy_stuff()   # 60-90s → Railway 502
+    return HTMLResponse(render(data))
+
+# BIEN: siempre devolver loading inmediato + calcular en background
+@app.get("/partials/something-heavy")
+async def heavy_endpoint():
+    entry = _cache.get(key)
+    if entry and (time() - entry[0]) < TTL:
+        return HTMLResponse(render(entry[1]))  # cache hit → inmediato
+    # Cache fría o expirada → background + loading state
+    asyncio.create_task(_prewarm_caches())
+    return HTMLResponse("""<spinner> ... auto-retry en 20s""")
+```
+**Regla:** Nunca bloques el request handler con cómputo que pueda tardar más de 10s.
+
+### 10. Background tasks concurrentes — siempre usar lock/flag
+```python
+# MAL: cada request en cache fría dispara un create_task() sin verificar si ya hay uno
+asyncio.create_task(_prewarm_caches())   # si se llama 5 veces en paralelo → flood a API externa
+
+# BIEN: flag global para que solo corra 1 instancia
+_running = False
+
+async def _prewarm_caches():
+    global _running
+    if _running:
+        return   # ya hay uno corriendo, ignorar
+    _running = True
+    try:
+        ...
+    finally:
+        _running = False
+
+# TAMBIÉN: capturar errores explícitamente en lugar de `except Exception: pass`
+# para que sean visibles en un endpoint de status o variable global
+```
+**Regla:** Cualquier background task que acceda a APIs externas DEBE tener un flag/lock
+para prevenir ejecuciones concurrentes. Usar `except Exception: pass` es inviable —
+siempre capturar y exponer el error en alguna variable global o endpoint de status.
+
 ```python
 # Amazon SC usa PST (UTC-8)
 # MeLi usa hora local México (CST = UTC-6 en invierno)

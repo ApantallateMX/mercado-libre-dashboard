@@ -92,6 +92,26 @@ Railway inyecta la variable `$PORT` automáticamente. No usar `--reload` en prod
 
 **Implicación**: después de cada deploy, los usuarios del dashboard necesitan volver a hacer login. Considerar Railway Volumes para persistir `app.db`.
 
+## Railway — Timeout de 30 segundos
+
+Railway mata cualquier request HTTP que no responda en **30 segundos** → devuelve 502 al cliente.
+
+**Implicación crítica**: Ningún endpoint puede hacer cómputo pesado sincrónicamente.
+- El cálculo de stock issues (BM API × todos los SKUs) tarda **60-90s en frío**
+- Siempre usar el patrón: cache hit → respuesta inmediata / cache miss → loading + background task
+
+**Diagnóstico spinner infinito (nunca carga, aunque no hay 502)**:
+1. Probablemente hay múltiples `asyncio.create_task(prewarm)` concurrentes saturando BM API
+2. Verificar que existe un flag `_prewarm_running` que previene duplicados
+3. Si el flag no existe → esa es la causa raíz
+4. Verificar endpoint `/api/stock/prewarm-status` → campo `error` mostrará el traceback
+
+**Diagnóstico 502**:
+1. Si el error aparece en tabs con cálculo BM → seguramente es timeout (no crash)
+2. Revisar si el endpoint devuelve loading state cuando cache está fría
+3. Verificar que `asyncio.create_task(_prewarm_caches())` se dispara correctamente
+4. Para crashes reales: revisar Railway Deployment Logs buscando traceback
+
 ## Flujo de deploy
 
 ```
