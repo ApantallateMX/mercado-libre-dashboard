@@ -37,9 +37,9 @@ from app.services.sku_utils import base_sku as _base_sku, extract_item_sku
 logger = logging.getLogger(__name__)
 
 # ─── BinManager ───────────────────────────────────────────────────────────────
-_BM_COND_URL = (
+_BM_AVAIL_URL = (
     "https://binmanager.mitechnologiesinc.com"
-    "/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+    "/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 )
 _BM_LOC_IDS      = "47,62,68"
 _COND_SUFFIXES   = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -165,15 +165,19 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
 
     async def _one(key: str, conditions: str, http: httpx.AsyncClient) -> None:
         base = _bm_base_for_key(key)
+        # InventoryBySKUAndCondicion_Quantity: devuelve Available (ya excluye reservados)
+        # GlobalStock_InventoryBySKU_Condition era incorrecto: daba TotalQty físico sin
+        # descontar reservados (SNTV001763: 4 físicos, 4 reservados, Available real=0)
         payload = {
-            "COMPANYID":  1,      "SKU":        base,
-            "WAREHOUSEID": None,  "LOCATIONID": _BM_LOC_IDS,
-            "BINID":       None,  "CONDITION":  conditions,
-            "FORINVENTORY": 0,    "SUPPLIERS":  None,
+            "COMPANYID":   1,        "TYPEINVENTORY": 0,
+            "WAREHOUSEID": None,     "LOCATIONID":    _BM_LOC_IDS,
+            "BINID":       None,     "PRODUCTSKU":    base,
+            "CONDITION":   conditions, "SUPPLIERS":   None,
+            "LCN":         None,     "SEARCH":        base,
         }
         async with sem:
             try:
-                r = await http.post(_BM_COND_URL, json=payload, timeout=15.0)
+                r = await http.post(_BM_AVAIL_URL, json=payload, timeout=15.0)
                 if r.status_code != 200 or "User/Index" in str(getattr(r, "url", "")):
                     # BM error (5xx, 429, sesión expirada, etc.) → NO escribir 0.
                     # Skip: el sync no toca este SKU en este ciclo.
@@ -181,37 +185,14 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
                     return
                 data = r.json()
                 # BM puede devolver un objeto único {} o una lista [{}].
-                # Normalizamos siempre a lista para iterar de forma uniforme.
                 if isinstance(data, dict):
                     rows = [data]
                 elif isinstance(data, list):
                     rows = data
                 else:
                     rows = []
-                avail = 0
-                for row in rows:
-                    cj = row.get("Conditions_JSON")
-                    if cj is not None:
-                        if isinstance(cj, str):
-                            try:
-                                cj = json.loads(cj)
-                            except Exception:
-                                cj = []
-                        for cond in (cj if isinstance(cj, list) else []):
-                            sku_cj = cond.get("SKUCondition_JSON") or []
-                            if isinstance(sku_cj, str):
-                                try:
-                                    sku_cj = json.loads(sku_cj)
-                                except Exception:
-                                    sku_cj = []
-                            for item in sku_cj:
-                                qty = item.get("TotalQty", 0) or 0
-                                if item.get("status") == "Producto Vendible":
-                                    avail += qty
-                    else:
-                        qty = row.get("TotalQty", 0) or 0
-                        if row.get("status") == "Producto Vendible":
-                            avail += qty
+                # Available ya excluye reservados — sumar directamente
+                avail = sum(int(row.get("Available", 0) or 0) for row in rows)
                 result[key.upper()] = avail
                 logger.debug(f"[MULTI-SYNC-BM] {key} (cond={conditions}) → avail={avail}")
             except Exception as exc:

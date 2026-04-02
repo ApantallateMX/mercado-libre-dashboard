@@ -2075,8 +2075,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """
     import httpx, json as _json
     BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-    BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
-    BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+    BM_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 
     result_map = {}
     to_fetch = []
@@ -2181,44 +2180,31 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "LocationID": "47,62,68", "BINID": None,
             "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
         }
-        # BM_COND_URL: misma consulta que usa _fetch_bm_avail — devuelve Producto Vendible
-        cond_payload = {
-            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
-            "LOCATIONID": "47,62,68", "BINID": None,
-            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
+        # BM_AVAIL_URL: InventoryBySKUAndCondicion_Quantity → Available (excluye reservados)
+        # Este es el endpoint correcto — GlobalStock_InventoryBySKU_Condition daba
+        # TotalQty físico sin descontar reservados (SNTV001763: 4 físicos pero 0 disponibles)
+        avail_payload = {
+            "COMPANYID": 1, "TYPEINVENTORY": 0,
+            "WAREHOUSEID": None, "LOCATIONID": "47,62,68", "BINID": None,
+            "PRODUCTSKU": base, "CONDITION": conditions,
+            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
         }
         async with wh_sem:
             try:
-                r_wh, r_cond = await asyncio.gather(
+                r_wh, r_avail = await asyncio.gather(
                     http.post(BM_WH_URL,   json=wh_payload,   timeout=15.0),
-                    http.post(BM_COND_URL, json=cond_payload, timeout=15.0),
+                    http.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
                     return_exceptions=True,
                 )
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
 
-                # Parsear avail directo desde BM_COND_URL (mismo approach que _fetch_bm_avail)
+                # Parsear Available directamente (ya excluye reservados)
                 avail_direct = 0
-                if not isinstance(r_cond, Exception) and r_cond.status_code == 200 and "User/Index" not in str(getattr(r_cond, "url", "")):
-                    cond_data = r_cond.json()
-                    cond_rows = [cond_data] if isinstance(cond_data, dict) else (cond_data if isinstance(cond_data, list) else [])
-                    for row in cond_rows:
-                        cj = row.get("Conditions_JSON")
-                        if cj is not None:
-                            if isinstance(cj, str):
-                                try: cj = _json.loads(cj)
-                                except Exception: cj = []
-                            for cond in (cj if isinstance(cj, list) else []):
-                                sku_cj = cond.get("SKUCondition_JSON") or []
-                                if isinstance(sku_cj, str):
-                                    try: sku_cj = _json.loads(sku_cj)
-                                    except Exception: sku_cj = []
-                                for item in (sku_cj if isinstance(sku_cj, list) else []):
-                                    if item.get("status") == "Producto Vendible":
-                                        avail_direct += int(item.get("TotalQty") or 0)
-                        else:
-                            if row.get("status") == "Producto Vendible":
-                                avail_direct += int(row.get("TotalQty") or 0)
+                if not isinstance(r_avail, Exception) and r_avail.status_code == 200 and "User/Index" not in str(getattr(r_avail, "url", "")):
+                    avail_data = r_avail.json()
+                    avail_rows = [avail_data] if isinstance(avail_data, dict) else (avail_data if isinstance(avail_data, list) else [])
+                    avail_direct = sum(int(row.get("Available", 0) or 0) for row in avail_rows)
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct)
                 return
