@@ -303,6 +303,11 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
+    # Pre-warm caches en background (30s delay — dejar que tokens y DB arranquen primero)
+    async def _startup_prewarm():
+        await asyncio.sleep(30)
+        await _prewarm_caches()
+    asyncio.create_task(_startup_prewarm())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
@@ -1741,6 +1746,26 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             ctx = entry[1].copy()
             # include_paused: traer items pausados para seccion Activar
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
+
+        # Si el prewarm está corriendo en background, devolver loading rápido
+        # para no bloquear al usuario 90s esperando BM en frío
+        if _prewarm_task and not _prewarm_task.done():
+            asyncio.create_task(_prewarm_caches())   # asegurar que corra
+            return HTMLResponse("""
+<div class="text-center py-16 text-gray-500">
+  <svg class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+  </svg>
+  <p class="text-sm font-medium text-gray-600">Calculando stock en background...</p>
+  <p class="text-xs text-gray-400 mt-1">Listo en ~30 segundos</p>
+  <button onclick="setTimeout(function(){ window.switchProductTab('stock','/partials/products-stock-issues'); }, 15000); this.textContent='Recargando en 15s...'; this.disabled=true;"
+          class="mt-4 px-4 py-2 text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg hover:bg-yellow-100">
+    Recargar automáticamente
+  </button>
+</div>
+<script>setTimeout(function(){ if(window.switchProductTab) window.switchProductTab('stock','/partials/products-stock-issues'); }, 20000);</script>
+""")
 
         from datetime import datetime, timedelta
         now = datetime.utcnow()
@@ -7060,6 +7085,10 @@ async def _run_stock_sync_for_user(user_id: str):
             body_dict = body if isinstance(body, dict) else vars(body)
             sku = _get_item_sku(body_dict)
             if not sku or not iid:
+                continue
+            # Excluir FULL items — ML controla su stock, no se puede modificar vía API
+            logistic_type = (body_dict.get("shipping") or {}).get("logistic_type", "")
+            if logistic_type == "fulfillment":
                 continue
             qty = body_dict.get("available_quantity", 0) or 0
             title = body_dict.get("title", "") or ""
