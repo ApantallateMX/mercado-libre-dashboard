@@ -77,6 +77,17 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
   - Normalizar `cond_rows`: si es `dict`, envolver en lista antes de iterar
   - Fallback en `_store_wh`: si `SKUCondition_JSON` vacío → usar `TotalQty` del nivel condición
 
+### BUG CRÍTICO — SKU incorrecto en items con variaciones (riesgo de pérdidas)
+- **Síntoma:** MLM1493302754 mostraba SKU=SNTV002695 (padre) pero las variaciones tienen SKU=SNTV005554
+- **Root cause:** `_get_item_sku` y todos los puntos de extracción usaban `seller_custom_field` del
+  padre primero — ML permite que el padre tenga un SKU distinto al de sus variaciones.
+  El SKU del padre puede ser completamente equivocado (otro producto diferente).
+- **Impacto potencial:** BM lookup con SKU incorrecto → stock=0 falso → sync podía poner qty=0 en
+  listings con stock real → pérdidas, reclamos, cierre de cuenta.
+- **Fix (commit 7b7f889):** en 4 lugares: `_get_item_sku`, items grid (x2), `_collect_ml_listings` sync.
+  Lógica: si item tiene variaciones → SKU real en variaciones. `seller_custom_field` del padre ignorado.
+- **Regla:** para items con variaciones SIEMPRE usar SKU de la primera variación, nunca el del padre.
+
 ### BUG — _bm_avail contaba reservados como disponibles (301 en lugar de 221)
 - **Síntoma:** SNTV001764 mostraba 301 disponibles, BM UI muestra 221 (Reserve=84 son órdenes pendientes)
 - **Root cause:** `_store_wh` sumaba stock físico total sin restar `Reserve`
