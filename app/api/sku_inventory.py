@@ -79,18 +79,17 @@ def _wh_name_to_zone(wname: str) -> str:
     return "tj"
 
 
-BINMANAGER_AVAIL_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
-
-
 async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
-    """Consulta stock vendible en BinManager via Warehouse + Avail + Condition endpoints.
+    """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
 
     - Warehouse: totales reales por almacen (MTY/CDMX/TJ)
-    - InventoryBySKUAndCondicion_Quantity: stock disponible neto (excluye reservados)
+    - get_available_qty: AvailableQTY neto (Get_GlobalStock_InventoryBySKU CONCEPTID=8)
     - Condition: desglose GR vs IC por condicion
+    InventoryBySKUAndCondicion_Quantity esta ROTO server-side (SQL binid error).
     Retorna {stock_gr, stock_ic, stock_other, total_stock, avail_total}
     """
     import json as _json
+    from app.services.binmanager_client import get_shared_bm
     base = _extract_base_sku(sku)
     conditions = _bm_conditions_for_sku(sku)
 
@@ -104,18 +103,6 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "ForInventory": 0,
         "SUPPLIERS": None,
     }
-    avail_payload = {
-        "COMPANYID": BINMANAGER_COMPANY_ID,
-        "TYPEINVENTORY": 0,
-        "WAREHOUSEID": None,
-        "LOCATIONID": BM_LOCATION_IDS,
-        "BINID": None,
-        "PRODUCTSKU": base,
-        "CONDITION": conditions,
-        "SUPPLIERS": None,
-        "LCN": None,
-        "SEARCH": base,
-    }
     cond_payload = {
         "COMPANYID": BINMANAGER_COMPANY_ID,
         "SKU": base,
@@ -127,9 +114,10 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
         "SUPPLIERS": None,
     }
 
-    wh_resp, avail_resp, cond_resp = await asyncio.gather(
+    bm_cli = await get_shared_bm()
+    wh_resp, avail_direct, cond_resp = await asyncio.gather(
         http.post(BINMANAGER_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
-        http.post(BINMANAGER_AVAIL_URL, json=avail_payload, timeout=15.0),
+        bm_cli.get_available_qty(base),
         http.post(BINMANAGER_CONDITION_URL, json=cond_payload, timeout=15.0),
         return_exceptions=True,
     )
@@ -150,9 +138,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     grand_total = total_mty + total_cdmx  # TJ excluido
 
     # --- Stock disponible neto (excluye reservados para ordenes pendientes) ---
-    avail_total = 0
-    if not isinstance(avail_resp, Exception) and avail_resp.status_code == 200:
-        avail_total = sum(row.get("Available", 0) or 0 for row in (avail_resp.json() or []))
+    avail_total = int(avail_direct) if not isinstance(avail_direct, Exception) else 0
     avail_total = avail_total or grand_total  # fallback a total fisico si falla
 
     # --- Desglose GR vs IC por condicion ---

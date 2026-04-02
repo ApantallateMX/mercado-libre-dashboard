@@ -2929,7 +2929,7 @@ async def products_deals_partial(request: Request):
 
         # Items + orders en paralelo (ambos cached)
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_all=True),
+            _get_all_products_cached(client, include_paused=True),
             client.fetch_all_orders(date_from=date_from, date_to=date_to),
         )
 
@@ -3059,7 +3059,7 @@ async def products_not_published_partial(request: Request):
 
         # Items (cached) + ordenes (cached) en paralelo
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_all=True),
+            _get_all_products_cached(client, include_paused=True),
             client.fetch_all_orders(date_from=date_from, date_to=date_to),
         )
 
@@ -7010,7 +7010,7 @@ async def stock_concentration_scan_api(request: Request):
 
         # Obtener productos con BM stock ya cargado (usa cache si disponible)
         uid = client.user_id
-        products = await _get_all_products_cached(client, include_all=True)
+        products = await _get_all_products_cached(client, include_paused=True)
         if products:
             bm_map = await _get_bm_stock_cached(products)
             _apply_bm_stock(products, bm_map)

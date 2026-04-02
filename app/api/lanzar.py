@@ -214,8 +214,12 @@ def _wh_name_to_zone(name: str) -> str:
 
 
 async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
-    """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo."""
-    _BM_AVAIL_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
+    """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo.
+    Usa Get_GlobalStock_InventoryBySKU_Warehouse para desglose por almacen y
+    get_available_qty (Get_GlobalStock_InventoryBySKU CONCEPTID=8) para AvailableQTY real.
+    InventoryBySKUAndCondicion_Quantity esta ROTO en el servidor (SQL binid error).
+    """
+    from app.services.binmanager_client import get_shared_bm
     try:
         base = sku.upper()
         for sfx in _ALL_SUFFIXES:
@@ -233,21 +237,10 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
             "ForInventory": 0,
             "SUPPLIERS": None,
         }
-        avail_payload = {
-            "COMPANYID": _BM_COMPANY,
-            "TYPEINVENTORY": 0,
-            "WAREHOUSEID": None,
-            "LOCATIONID": _BM_LOCATIONS,
-            "BINID": None,
-            "PRODUCTSKU": base,
-            "CONDITION": conditions,
-            "SUPPLIERS": None,
-            "LCN": None,
-            "SEARCH": base,
-        }
-        r_wh, r_avail = await asyncio.gather(
+        bm_cli = await get_shared_bm()
+        r_wh, avail = await asyncio.gather(
             http.post(_BM_WAREHOUSE_URL, json=wh_payload, headers=_BM_AJAX, timeout=15),
-            http.post(_BM_AVAIL_URL, json=avail_payload, headers=_BM_AJAX, timeout=15),
+            bm_cli.get_available_qty(base),
             return_exceptions=True,
         )
         mty = cdmx = 0
@@ -259,9 +252,8 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
                     mty += qty
                 elif zone == "cdmx":
                     cdmx += qty
-        avail = 0
-        if not isinstance(r_avail, Exception) and r_avail.status_code == 200:
-            avail = sum(row.get("Available", 0) or 0 for row in (r_avail.json() or []))
+        if isinstance(avail, Exception):
+            avail = 0
         return {"mty": mty, "cdmx": cdmx, "avail": avail or mty + cdmx}
     except Exception:
         return {"mty": 0, "cdmx": 0, "avail": 0}
