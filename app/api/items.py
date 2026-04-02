@@ -77,7 +77,7 @@ async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
         "COMPANYID": BM_COMPANY_ID,
         "TYPEINVENTORY": 0,
         "WAREHOUSEID": None,
-        "LOCATIONID": BM_LOCATION_IDS,
+        "LOCATIONID": None,  # None = total disponible global; "47,62,68" retorna vacío
         "BINID": None,
         "PRODUCTSKU": base,
         "CONDITION": conditions,

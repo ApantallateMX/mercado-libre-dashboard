@@ -6166,7 +6166,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 try:
                     r = await http.post(BM_AVAIL_URL_SYNC, json={
                         "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-                        "LOCATIONID": "47,62,68", "BINID": None,
+                        "LOCATIONID": None, "BINID": None,  # None = global, "47,62,68" retorna vacío
                         "PRODUCTSKU": sku, "CONDITION": conditions,
                         "SUPPLIERS": None, "LCN": None, "SEARCH": sku,
                     }, headers={"Content-Type": "application/json"}, timeout=15.0)
@@ -7567,14 +7567,20 @@ async def prewarm_status():
 
 @app.post("/api/stock/multi-sync/trigger")
 async def multi_sync_trigger():
-    """Dispara un ciclo inmediato de sync multi-plataforma + refresca alertas de sobreventa."""
+    """Dispara sync manual: limpia caché BM + recalcula stock + refresca alertas."""
     from app.services.stock_sync_multi import run_multi_stock_sync, get_sync_status
     if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"}, status_code=202)
 
     async def _run_sync_and_alerts():
+        # 1. Limpiar caché BM y stock issues para forzar datos frescos de BM
+        _bm_stock_cache.clear()
+        _stock_issues_cache.clear()
+        # 2. Sync multi-plataforma (BM → ML + Amazon)
         await run_multi_stock_sync()
-        # Refrescar alertas de sobreventa con BM actualizado
+        # 3. Re-ejecutar prewarm con BM limpio → datos correctos
+        await _prewarm_caches()
+        # 4. Refrescar alertas de sobreventa con datos BM actualizados
         try:
             accounts = await token_store.get_all_tokens()
             for acc in accounts:

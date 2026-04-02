@@ -70,7 +70,7 @@ async def _bm_stock(sku: str, hclient: httpx.AsyncClient) -> dict:
     }
     avail_payload = {
         "COMPANYID": _BM_COMPANY, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-        "LOCATIONID": _BM_LOCS, "BINID": None, "PRODUCTSKU": base,
+        "LOCATIONID": None, "BINID": None, "PRODUCTSKU": base,  # None = global, "47,62,68" retorna vacío
         "CONDITION": cond, "SUPPLIERS": None, "LCN": None, "SEARCH": base,
     }
     try:
