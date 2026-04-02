@@ -896,26 +896,29 @@ def _aggregate_sales_by_item(orders: list) -> dict:
 
 
 def _get_item_sku(body: dict) -> str:
-    """Extrae SKU de un item body (seller_custom_field o SELLER_SKU attribute)."""
-    sku = body.get("seller_custom_field") or ""
-    if not sku or sku == "None":
-        sku = ""
-        for attr in body.get("attributes", []):
-            if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                sku = attr["value_name"]
-                break
-    if not sku and body.get("variations"):
-        for var in body["variations"]:
-            if var.get("seller_custom_field"):
-                sku = var["seller_custom_field"]
-                break
-            for va in var.get("attributes", []):
-                if va.get("id") == "SELLER_SKU" and va.get("value_name"):
-                    sku = va["value_name"]
-                    break
-            if sku:
-                break
-    return sku
+    """Extrae SKU de un item body.
+
+    PRIORIDAD: variaciones > padre.
+    El seller_custom_field del item padre puede ser incorrecto (otro SKU) cuando
+    el item tiene variaciones — ML permite que el padre tenga un campo distinto.
+    El SKU real siempre está en las variaciones para items con variaciones.
+    """
+    # Prioridad 1: SKU de la primera variación con SKU definido
+    for var in (body.get("variations") or []):
+        sku = (var.get("seller_custom_field") or "").strip()
+        if sku and sku not in ("None", "none"):
+            return sku
+        for va in (var.get("attributes") or []):
+            if va.get("id") == "SELLER_SKU" and va.get("value_name"):
+                return va["value_name"].strip()
+    # Prioridad 2: item sin variaciones — campo del padre
+    sku = (body.get("seller_custom_field") or "").strip()
+    if sku and sku not in ("None", "none"):
+        return sku
+    for attr in (body.get("attributes") or []):
+        if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
+            return attr["value_name"].strip()
+    return ""
 
 
 async def get_current_user():
@@ -1594,13 +1597,7 @@ async def items_grid_partial(
         sku_to_items = {}   # base -> {sku, item_ids}
         for it in items:
             body = it.get("body") or it
-            sku = body.get("seller_custom_field") or ""
-            if not sku or sku == "None":
-                sku = ""
-                for attr in body.get("attributes", []):
-                    if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                        sku = attr["value_name"]
-                        break
+            sku = _get_item_sku(body)
             item_id = body.get("id", "")
             if sku and item_id:
                 base = _extract_base_sku(sku)
@@ -1651,13 +1648,7 @@ async def items_grid_partial(
             iid = body.get("id", "")
             if not iid:
                 continue
-            sku = body.get("seller_custom_field") or ""
-            if not sku or sku == "None":
-                sku = ""
-                for attr in body.get("attributes", []):
-                    if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                        sku = attr["value_name"]
-                        break
+            sku = _get_item_sku(body)
             brand = ""
             model = ""
             for attr in body.get("attributes", []):

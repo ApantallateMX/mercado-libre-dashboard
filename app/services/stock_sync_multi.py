@@ -191,11 +191,26 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                         if item_status not in ("active", "paused"):
                             continue
 
-                        sku = (item.get("seller_custom_field") or "").strip()
+                        # Prioridad: variaciones > padre
+                        # El seller_custom_field del padre puede ser incorrecto en items con variaciones
+                        sku = ""
+                        for var in (item.get("variations") or []):
+                            sku = (var.get("seller_custom_field") or "").strip()
+                            if not sku or sku in ("None", "none"):
+                                sku = ""
+                                for va in (var.get("attributes") or []):
+                                    if va.get("id") == "SELLER_SKU" and va.get("value_name"):
+                                        sku = va["value_name"].strip()
+                                        break
+                            if sku and sku not in ("None", "none"):
+                                break
                         if not sku:
+                            sku = (item.get("seller_custom_field") or "").strip()
+                        if not sku or sku in ("None", "none"):
+                            sku = ""
                             for attr in (item.get("attributes") or []):
-                                if attr.get("id") == "SELLER_SKU":
-                                    sku = (attr.get("value_name") or "").strip()
+                                if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
+                                    sku = attr["value_name"].strip()
                                     break
                         if not sku:
                             continue
