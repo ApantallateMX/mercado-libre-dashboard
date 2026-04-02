@@ -316,12 +316,13 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
-    # Pre-warm caches en background (30s delay — dejar que tokens y DB arranquen primero)
+    # Cargar caché BM desde DB inmediatamente (evita refetch completo en BM tras restart)
+    asyncio.create_task(_load_bm_cache_from_db())
+    # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
-    # Después del prewarm, también re-ejecuta el stock alert sync para que las alertas
-    # de sobreventa reflejen el BM real (no el valor viejo cacheado con LOCATIONID incorrecto).
+    # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
     async def _startup_prewarm():
-        await asyncio.sleep(30)
+        await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
         while True:
             await _prewarm_caches()
             # Refrescar alertas de sobreventa con datos BM actualizados
@@ -1837,11 +1838,12 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
           return;
         }
         if (s.error) {
-          // Timeout o error — reintentar automaticamente una vez despues de 3s
+          // Error — mostrar mensaje y botón manual, NO auto-reload (evita loop infinito)
+          var spinner = document.getElementById('stock-spinner');
+          if (spinner) spinner.classList.add('hidden');
           if (err) { err.textContent = s.error; err.classList.remove('hidden'); }
-          if (msg) msg.textContent = 'Error — reintentando...';
-          if (sub) sub.textContent = '';
-          setTimeout(reload, 3000);
+          if (msg) msg.textContent = 'Error al calcular stock';
+          if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar</button>';
           return;
         }
         var secs = attempts * 5;
@@ -1849,9 +1851,11 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         if (attempts < maxAttempts) {
           setTimeout(poll, 5000);
         } else {
-          // Tiempo agotado — forzar recarga para que el endpoint relance el prewarm
-          if (msg) msg.textContent = 'Tomando mas tiempo de lo esperado — recargando...';
-          setTimeout(reload, 2000);
+          // Tiempo agotado — mostrar botón manual, NO auto-reload
+          var spinner2 = document.getElementById('stock-spinner');
+          if (spinner2) spinner2.classList.add('hidden');
+          if (msg) msg.textContent = 'El cálculo está tardando más de lo esperado';
+          if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar</button>';
         }
       })
       .catch(function() {
@@ -1899,10 +1903,13 @@ _synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de al
 
 _ALL_MELI_STATUSES = ["active", "paused", "closed", "inactive", "under_review"]
 
+_DB_PRODUCTS_MAX_AGE = 3600  # 1h — usar DB si el sync tiene < 1h de antigüedad
+
 async def _get_all_products_cached(client, include_paused=False, include_all=False) -> list[dict]:
     """Devuelve todos los items, cacheado 15 min.
-    include_all=True trae TODOS los statuses (active, paused, closed, inactive, under_review).
-    include_paused=True trae active + paused.
+    OPTIMIZACIÓN: lee primero de ml_listings DB (sincronizado en background por ml_listing_sync).
+    Si la DB tiene datos frescos (< 1h), los usa sin llamar ML API — carga instantánea.
+    include_all=True trae TODOS los statuses (no usa DB — solo llamada directa a ML).
     Lock previene doble fetch cuando multiples requests concurrentes."""
     if include_all:
         suffix = ":all_statuses"
@@ -1920,6 +1927,40 @@ async def _get_all_products_cached(client, include_paused=False, include_all=Fal
         if entry and (_time.time() - entry[0]) < _PRODUCTS_CACHE_TTL:
             return entry[1]
 
+        # --- Intentar leer de DB local (rápido, < 100ms) ---
+        # Solo para active/paused — include_all siempre va a ML API (incluye cerrados)
+        if not include_all:
+            try:
+                import json as _json
+                max_synced = await token_store.get_ml_listings_max_synced_at(client.user_id)
+                db_age = _time.time() - max_synced
+                if max_synced > 0 and db_age < _DB_PRODUCTS_MAX_AGE:
+                    statuses = ["active", "paused"] if include_paused else ["active"]
+                    db_rows = await token_store.get_ml_listings(client.user_id, statuses=statuses)
+                    products_from_db = []
+                    for r in db_rows:
+                        dj = r.get("data_json") or ""
+                        if dj:
+                            try:
+                                body = _json.loads(dj)
+                                if body.get("id"):
+                                    products_from_db.append(body)
+                            except Exception:
+                                pass
+                    if products_from_db:
+                        import logging as _log
+                        _log.getLogger(__name__).info(
+                            f"[PRODUCTS-CACHE] DB hit: {len(products_from_db)} items "
+                            f"para uid={client.user_id} (edad DB: {db_age:.0f}s)"
+                        )
+                        _products_cache[key] = (_time.time(), products_from_db)
+                        return products_from_db
+            except Exception as _db_err:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"[PRODUCTS-CACHE] DB fallback error: {_db_err}")
+                # Continúa con fetch de ML API
+
+        # --- Fallback: ML API (lento, solo si DB vacía o muy antigua) ---
         if include_all:
             all_ids = await client.get_all_item_ids_by_statuses(_ALL_MELI_STATUSES)
         elif include_paused:
@@ -1927,7 +1968,7 @@ async def _get_all_products_cached(client, include_paused=False, include_all=Fal
         else:
             all_ids = await client.get_all_active_item_ids()
         all_details = []
-        sem = asyncio.Semaphore(5)
+        sem = asyncio.Semaphore(10)  # aumentado de 5 → 10 para reducir tiempo de fetch
 
         async def _batch(ids):
             async with sem:
@@ -1960,6 +2001,28 @@ async def _get_orders_cached(client, date_from: str, date_to: str) -> list:
     orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
     _orders_cache[key] = (_time.time(), orders)
     return orders
+
+
+async def _load_bm_cache_from_db():
+    """Carga el caché BM desde DB al arrancar — evita refetch completo tras restart.
+    Solo carga entradas con menos de 30 min de antigüedad."""
+    import json as _json, logging as _log
+    logger = _log.getLogger(__name__)
+    try:
+        rows = await token_store.load_bm_stock_cache(max_age_s=1800.0)
+        loaded = 0
+        for row in rows:
+            sku = row["sku"].upper()
+            data = _json.loads(row["data_json"])
+            synced_at = float(row["synced_at"])
+            # Solo cargar si aún no está en memoria (no sobrescribir datos más frescos)
+            if sku not in _bm_stock_cache:
+                _bm_stock_cache[sku] = (synced_at, data)
+                loaded += 1
+        logger.info(f"[BM-DB] Cargados {loaded} SKUs desde DB (de {len(rows)} disponibles)")
+    except Exception as _e:
+        import logging as _log2
+        _log2.getLogger(__name__).warning(f"[BM-DB] Error cargando desde DB: {_e}")
 
 
 async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict]:
@@ -2005,16 +2068,19 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
 # --- Background pre-warm ---
 _prewarm_task = None
 _prewarm_running: bool = False   # flag global — solo 1 prewarm a la vez
+_prewarm_queued: bool = False    # si True, lanzar otro prewarm al terminar el actual
 _prewarm_error: str = ""         # último error para mostrar en UI
 
 async def _prewarm_caches():
     """Pre-carga products + orders + BM stock + stock issues en background.
-    Solo corre una instancia a la vez — retorna si ya hay una en curso.
-    Timeout de 150s para evitar quedar colgado si ML/BM tarda demasiado."""
-    global _prewarm_running, _prewarm_error
+    Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
+    _prewarm_queued=True y el prewarm activo lanza otro al terminar."""
+    global _prewarm_running, _prewarm_queued, _prewarm_error
     if _prewarm_running:
-        return   # ya hay un prewarm corriendo, no lanzar otro
+        _prewarm_queued = True   # encolar: relanzar cuando el activo termine
+        return
     _prewarm_running = True
+    _prewarm_queued = False
     _prewarm_error = ""
     try:
         client = await get_meli_client()
@@ -2040,13 +2106,15 @@ async def _prewarm_caches():
 
                 # SOLO fetchear BM para productos candidatos a stock issues.
                 # Con 6000+ listings, fetchear BM para todos supera el timeout de 150s.
-                # Candidatos: tienen SKU Y (tienen ventas recientes O tienen stock en MeLi).
-                # Esto cubre restock, sobreventa, critico y activar — todos los casos relevantes.
+                # Candidatos: tienen SKU Y (tienen ventas recientes O tienen stock en MeLi O son FULL).
+                # FULL siempre incluidos: ML puede reportar available_quantity=0 aunque tengan stock
+                # en fulfillment; igualmente queremos ver BM stock para todos los FULL sin excepción.
                 bm_candidates = [
                     p for p in products
                     if p.get("sku") and (
                         p.get("units", 0) > 0
                         or p.get("available_quantity", 0) > 0
+                        or p.get("is_full")
                     )
                 ]
                 bm_map = await _get_bm_stock_cached(bm_candidates)
@@ -2089,7 +2157,7 @@ async def _prewarm_caches():
             # Timeout de 150s — si ML o BM tardan demasiado, abortar limpiamente
             await asyncio.wait_for(_do_prewarm(), timeout=150.0)
         except asyncio.TimeoutError:
-            _prewarm_error = "Timeout: el calculo tardo mas de 150s. Reintentando en el proximo ciclo."
+            _prewarm_error = "Timeout: el calculo tardo mas de 150s."
         finally:
             await client.close()
     except Exception as _e:
@@ -2097,6 +2165,10 @@ async def _prewarm_caches():
         _prewarm_error = _tb.format_exc()
     finally:
         _prewarm_running = False
+        # Si hubo un prewarm en cola (p.ej. de "Sync ahora"), lanzarlo ahora
+        if _prewarm_queued:
+            _prewarm_queued = False
+            asyncio.create_task(_prewarm_caches())
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
@@ -2189,7 +2261,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     def _store_empty(sku):
         _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
 
-    wh_sem = asyncio.Semaphore(20)
+    wh_sem = asyncio.Semaphore(50)  # aumentado de 20 → 50 para reducir tiempo BM ~60%
 
     async def _wh_phase(sku, http):
         """Consulta en paralelo:
@@ -2252,6 +2324,23 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         *[_wh_phase(s, http) for s in to_fetch],
         return_exceptions=True
     )
+
+    # Persistir nuevas entradas BM a DB (fire-and-forget — no bloquea la respuesta)
+    if to_fetch:
+        now_ts = _time.time()
+        entries_to_persist = []
+        for _sku in to_fetch:
+            cached = _bm_stock_cache.get(_sku.upper())
+            if cached:
+                entries_to_persist.append((_sku, cached[1], cached[0]))
+        if entries_to_persist:
+            async def _persist_bm():
+                try:
+                    await token_store.upsert_bm_stock_batch(entries_to_persist)
+                except Exception as _e:
+                    import logging as _log
+                    _log.getLogger(__name__).debug(f"[BM-DB] persist error: {_e}")
+            asyncio.create_task(_persist_bm())
 
     return result_map
 
@@ -2752,7 +2841,7 @@ async def products_inventory_partial(
             _bm_stock_cache[_bg_key] = (_time.time(), {})
             _bg_candidates = [
                 p for p in products
-                if p.get("sku") and (p.get("units", 0) > 0 or p.get("available_quantity", 0) > 0)
+                if p.get("sku") and (p.get("units", 0) > 0 or p.get("available_quantity", 0) > 0 or p.get("is_full"))
             ]
             asyncio.ensure_future(_get_bm_stock_cached(_bg_candidates))
 
@@ -7580,20 +7669,20 @@ async def prewarm_status():
 
 @app.post("/api/stock/multi-sync/trigger")
 async def multi_sync_trigger():
-    """Dispara sync manual: limpia caché BM + recalcula stock + refresca alertas."""
+    """Dispara sync manual: sync BM→ML/Amazon + fuerza prewarm fresco."""
     from app.services.stock_sync_multi import run_multi_stock_sync, get_sync_status
     if get_sync_status()["running"]:
         return JSONResponse({"status": "already_running"}, status_code=202)
 
     async def _run_sync_and_alerts():
-        # 1. Limpiar caché BM y stock issues para forzar datos frescos de BM
-        _bm_stock_cache.clear()
-        _stock_issues_cache.clear()
-        # 2. Sync multi-plataforma (BM → ML + Amazon)
+        # 1. Sync multi-plataforma BM → ML + Amazon (actualiza stock en las plataformas)
         await run_multi_stock_sync()
-        # 3. Re-ejecutar prewarm con BM limpio → datos correctos
-        await _prewarm_caches()
-        # 4. Refrescar alertas de sobreventa con datos BM actualizados
+        # 2. Limpiar solo caché BM (para que el prewarm obtenga datos frescos de BM)
+        #    NO limpiar _stock_issues_cache — evita romper un prewarm que ya está corriendo
+        _bm_stock_cache.clear()
+        # 3. Encolar prewarm fresco (si ya hay uno corriendo, se ejecutará al terminar)
+        asyncio.create_task(_prewarm_caches())
+        # 4. Refrescar alertas de sobreventa
         try:
             accounts = await token_store.get_all_tokens()
             for acc in accounts:

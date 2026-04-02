@@ -10,6 +10,7 @@ Beneficio: el tab Stock lee de DB local (instantáneo) en lugar de llamar ML API
 cada vez (60-150s). El spinner desaparece para siempre.
 """
 import asyncio
+import json
 import logging
 import time as _time
 from types import SimpleNamespace
@@ -49,6 +50,7 @@ def _item_to_row(item: dict, account_id: str) -> dict:
         "is_full":        is_full,
         "last_updated":   item.get("last_updated") or item.get("date_created") or "",
         "synced_at":      _time.time(),
+        "data_json":      json.dumps(item, ensure_ascii=False),
     }
 
 

@@ -327,6 +327,22 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_ml_listings_sku ON ml_listings(sku)"
         )
+        # Migration: add data_json column (full item body for fast prewarm from DB)
+        try:
+            await db.execute("ALTER TABLE ml_listings ADD COLUMN data_json TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_stock_cache — persiste el caché de BM entre reinicios
+        # Permite que el prewarm lea BM en <100ms después de un restart
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_stock_cache (
+                sku       TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL DEFAULT '{}',
+                synced_at REAL NOT NULL DEFAULT 0
+            )
+        """)
         await db.commit()
 
 
@@ -940,9 +956,10 @@ async def upsert_ml_listings(rows: list[dict]) -> None:
         await db.executemany(
             """INSERT OR REPLACE INTO ml_listings
                (item_id, account_id, title, status, price, available_qty, sold_qty,
-                sku, logistic_type, catalog_listing, is_full, last_updated, synced_at)
+                sku, logistic_type, catalog_listing, is_full, last_updated, synced_at, data_json)
                VALUES (:item_id,:account_id,:title,:status,:price,:available_qty,:sold_qty,
-                       :sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at)""",
+                       :sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at,
+                       :data_json)""",
             rows,
         )
         await db.commit()
@@ -989,3 +1006,45 @@ async def count_ml_listings_synced(account_id: str) -> int:
             [account_id],
         )).fetchone()
     return row[0] if row else 0
+
+
+async def get_ml_listings_max_synced_at(account_id: str) -> float:
+    """Retorna el timestamp del item más recientemente sincronizado para la cuenta."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT MAX(synced_at) FROM ml_listings WHERE account_id=? AND data_json != ''",
+            [account_id],
+        )).fetchone()
+    return float(row[0]) if row and row[0] else 0.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BM STOCK CACHE — persiste el caché de BinManager entre reinicios del servidor
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def upsert_bm_stock_batch(entries: list[tuple]) -> None:
+    """Persiste entradas de BM stock a DB. entries = [(sku, data_dict, synced_at), ...]"""
+    if not entries:
+        return
+    rows = [{"sku": s.upper(), "data_json": json.dumps(d), "synced_at": t}
+            for s, d, t in entries]
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            "INSERT OR REPLACE INTO bm_stock_cache (sku, data_json, synced_at) "
+            "VALUES (:sku, :data_json, :synced_at)",
+            rows,
+        )
+        await db.commit()
+
+
+async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
+    """Carga entradas de BM stock desde DB. Solo las que tienen menos de max_age_s segundos."""
+    import time as _t
+    min_ts = _t.time() - max_age_s
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT sku, data_json, synced_at FROM bm_stock_cache WHERE synced_at >= ?",
+            [min_ts],
+        )).fetchall()
+    return [dict(r) for r in rows]
