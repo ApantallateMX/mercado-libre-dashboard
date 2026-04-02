@@ -740,9 +740,12 @@ async def _loop():
 
 
 def start_multi_stock_sync():
-    """Inicia el loop en background. Llamar desde lifespan de FastAPI."""
-    asyncio.create_task(_loop())
-    logger.info(f"[MULTI-SYNC] Iniciado — ciclo cada {_SYNC_INTERVAL // 60} min, umbral={STOCK_THRESHOLD}")
+    """
+    NO inicia loop automático — el sync BM→ML solo se ejecuta manualmente
+    (botón 'Sync ahora' en el dashboard). Solo lectura puede ser automática.
+    Esta función se mantiene por compatibilidad con el lifespan de FastAPI.
+    """
+    logger.info("[MULTI-SYNC] Modo manual — sync solo se ejecuta al presionar 'Sync ahora'")
 
 
 def get_sync_status() -> dict:
