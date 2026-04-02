@@ -807,18 +807,38 @@
                                     <th class="text-left py-1 font-medium">Variacion</th>
                                     <th class="text-left py-1 font-medium">ID Variacion</th>
                                     <th class="text-left py-1 font-medium">SKU</th>
-                                    <th class="text-right py-1 font-medium">Stock</th>
+                                    <th class="text-right py-1 font-medium text-green-600">Stock ML</th>
+                                    <th class="text-right py-1 font-medium text-blue-600">BM Disp.</th>
                                     <th class="text-right py-1 font-medium">Precio</th>
+                                    <th class="text-center py-1 font-medium">Accion</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-purple-100">
                                 {% for v in p.variations %}
+                                {% set bm_avail = v.get('_bm_avail', 0) or 0 %}
                                 <tr>
                                     <td class="py-1 text-gray-700">{{ v.combo }}</td>
                                     <td class="py-1 text-blue-600 font-mono text-[10px]">{{ v.id }}</td>
-                                    <td class="py-1 text-gray-500 font-mono">{{ v.sku or '-' }}</td>
-                                    <td class="py-1 text-right {{ 'text-green-600' if v.stock > 0 else 'text-red-500' }}">{{ v.stock }}</td>
+                                    <td class="py-1 font-mono">
+                                        {% if v.sku %}
+                                        <span class="bg-yellow-100 text-yellow-800 px-1 rounded text-[10px] font-bold">{{ v.sku }}</span>
+                                        {% else %}<span class="text-gray-400">-</span>{% endif %}
+                                    </td>
+                                    <td class="py-1 text-right font-bold {{ 'text-green-600' if v.stock > 0 else 'text-red-500' }}">{{ v.stock }}</td>
+                                    <td class="py-1 text-right font-bold {{ 'text-blue-600' if bm_avail > 0 else 'text-gray-400' }}">{{ bm_avail if bm_avail > 0 else '-' }}</td>
                                     <td class="py-1 text-right text-gray-600">${{ "{:,.0f}".format(v.price) }}</td>
+                                    <td class="py-1 text-center">
+                                        {% if bm_avail > 0 and v.sku %}
+                                        <button onclick="syncVariationStock('{{ p.id }}','{{ v.id }}',{{ bm_avail }},this)"
+                                                class="px-2 py-0.5 bg-blue-500 text-white rounded text-[10px] hover:bg-blue-600 font-medium whitespace-nowrap">
+                                            Sync {{ bm_avail }}
+                                        </button>
+                                        {% elif not v.sku %}
+                                        <span class="text-[10px] text-gray-400">Sin SKU</span>
+                                        {% else %}
+                                        <span class="text-[10px] text-gray-400">BM=0</span>
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

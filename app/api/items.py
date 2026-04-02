@@ -96,6 +96,10 @@ class StockUpdate(BaseModel):
     quantity: int
 
 
+class VariationStockUpdate(BaseModel):
+    quantity: int
+
+
 class TitleUpdate(BaseModel):
     title: str
 
@@ -437,6 +441,28 @@ async def update_stock(item_id: str, data: StockUpdate):
             detail = body.get("message") or body.get("error") or str(body)
         else:
             detail = str(body)
+        raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        await client.close()
+
+
+@router.put("/{item_id}/variations/{variation_id}/stock")
+async def update_variation_stock(item_id: str, variation_id: str, data: VariationStockUpdate):
+    """Actualiza el stock de una variacion especifica sin afectar las demas."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        result = await client.update_variation_stocks_directly(
+            item_id, [{"id": int(variation_id), "available_quantity": data.quantity}]
+        )
+        _invalidate_user_products_cache(str(client.user_id))
+        return {"ok": True, "item_id": item_id, "variation_id": variation_id, "quantity": data.quantity, "result": result}
+    except MeliApiError as e:
+        body = e.body
+        detail = body.get("message") or body.get("error") or str(body) if isinstance(body, dict) else str(body)
         raise HTTPException(status_code=e.status_code, detail=f"MeLi: {detail}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

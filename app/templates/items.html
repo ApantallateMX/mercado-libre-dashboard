@@ -732,6 +732,45 @@
             if (e.key === 'Escape') closeEditor();
         };
     };
+
+    // Sync stock of a single variation from BM to MeLi
+    window.syncVariationStock = function(itemId, variationId, bmQty, btn) {
+        var originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '...';
+        fetch('/api/items/' + itemId + '/variations/' + variationId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: bmQty})
+        })
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+        .then(function(res) {
+            if (res.ok) {
+                btn.textContent = 'OK';
+                btn.className = btn.className.replace(/bg-blue-\d00/, 'bg-green-500').replace(/hover:bg-blue-\d00/, 'hover:bg-green-600');
+                setTimeout(function() {
+                    btn.textContent = originalText;
+                    btn.className = btn.className.replace(/bg-green-\d00/, 'bg-blue-500').replace(/hover:bg-green-\d00/, 'hover:bg-blue-600');
+                    btn.disabled = false;
+                }, 2000);
+            } else {
+                var msg = (res.data && res.data.detail) ? res.data.detail : 'Error';
+                btn.textContent = 'Error';
+                btn.title = msg;
+                btn.className = btn.className.replace(/bg-blue-\d00/, 'bg-red-500').replace(/hover:bg-blue-\d00/, 'hover:bg-red-600');
+                setTimeout(function() {
+                    btn.textContent = originalText;
+                    btn.title = '';
+                    btn.className = btn.className.replace(/bg-red-\d00/, 'bg-blue-500').replace(/hover:bg-red-\d00/, 'hover:bg-blue-600');
+                    btn.disabled = false;
+                }, 3000);
+            }
+        })
+        .catch(function(e) {
+            btn.textContent = 'Error';
+            btn.disabled = false;
+        });
+    };
 })();
 </script>
 {% endblock %}
