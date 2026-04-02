@@ -1786,6 +1786,11 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
 <script>
 (function() {
   var attempts = 0;
+  var maxAttempts = 40;  // 40 x 5s = 200s (mas que el timeout de 150s del prewarm)
+  function reload() {
+    if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
+    else location.reload();
+  }
   function poll() {
     attempts++;
     fetch('/api/stock/prewarm-status')
@@ -1797,23 +1802,29 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         if (s.ready) {
           if (msg) msg.textContent = 'Listo — cargando datos...';
           if (sub) sub.textContent = '';
-          if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
+          reload();
           return;
         }
         if (s.error) {
-          if (err) { err.textContent = 'Error: ' + s.error; err.classList.remove('hidden'); }
-          if (msg) msg.textContent = 'Error calculando stock.';
-          if (sub) {
-            sub.innerHTML = '<button onclick="if(window.switchProductTab)window.switchProductTab(\'stock\',\'/partials/products-stock-issues\')" class="underline text-blue-500 cursor-pointer">Reintentar</button>';
-          }
+          // Timeout o error — reintentar automaticamente una vez despues de 3s
+          if (err) { err.textContent = s.error; err.classList.remove('hidden'); }
+          if (msg) msg.textContent = 'Error — reintentando...';
+          if (sub) sub.textContent = '';
+          setTimeout(reload, 3000);
           return;
         }
-        if (sub) sub.textContent = s.running ? ('Calculando... (' + (attempts*5) + 's)') : ('En espera... (' + (attempts*5) + 's)');
-        if (attempts < 36) setTimeout(poll, 5000);  // max 3 min
-        else if (sub) sub.innerHTML = '<button onclick="if(window.switchProductTab)window.switchProductTab(\'stock\',\'/partials/products-stock-issues\')" class="underline text-blue-500 cursor-pointer">Reintentar</button>';
+        var secs = attempts * 5;
+        if (sub) sub.textContent = s.running ? ('Calculando... ' + secs + 's') : ('En espera... ' + secs + 's');
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 5000);
+        } else {
+          // Tiempo agotado — forzar recarga para que el endpoint relance el prewarm
+          if (msg) msg.textContent = 'Tomando mas tiempo de lo esperado — recargando...';
+          setTimeout(reload, 2000);
+        }
       })
       .catch(function() {
-        if (attempts < 36) setTimeout(poll, 5000);
+        if (attempts < maxAttempts) setTimeout(poll, 5000);
       });
   }
   setTimeout(poll, 5000);
@@ -1967,7 +1978,8 @@ _prewarm_error: str = ""         # último error para mostrar en UI
 
 async def _prewarm_caches():
     """Pre-carga products + orders + BM stock + stock issues en background.
-    Solo corre una instancia a la vez — retorna si ya hay una en curso."""
+    Solo corre una instancia a la vez — retorna si ya hay una en curso.
+    Timeout de 150s para evitar quedar colgado si ML/BM tarda demasiado."""
     global _prewarm_running, _prewarm_error
     if _prewarm_running:
         return   # ya hay un prewarm corriendo, no lanzar otro
@@ -1978,56 +1990,63 @@ async def _prewarm_caches():
         if not client:
             _prewarm_error = "No hay cliente ML activo"
             return
-        # prewarm include_paused marker
         try:
-            from datetime import datetime, timedelta
-            now = datetime.utcnow()
-            date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-            date_to = now.strftime("%Y-%m-%d")
+            async def _do_prewarm():
+                from datetime import datetime, timedelta
+                now = datetime.utcnow()
+                date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+                date_to = now.strftime("%Y-%m-%d")
 
-            all_bodies, all_orders = await asyncio.gather(
-                _get_all_products_cached(client, include_all=True),
-                _get_orders_cached(client, date_from, date_to),
-            )
-            sales_map = _aggregate_sales_by_item(all_orders)
-            products = _build_product_list(all_bodies, sales_map)
-            _enrich_sku_from_orders(products, all_orders)
-            bm_map = await _get_bm_stock_cached(products)
-            _apply_bm_stock(products, bm_map)
+                # IMPORTANTE: solo active+paused — cerrados/inactivos no necesitan gestión de stock.
+                # include_all=True podría traer miles de items históricos y colgar el prewarm.
+                all_bodies, all_orders = await asyncio.gather(
+                    _get_all_products_cached(client, include_paused=True),
+                    _get_orders_cached(client, date_from, date_to),
+                )
+                sales_map = _aggregate_sales_by_item(all_orders)
+                products = _build_product_list(all_bodies, sales_map)
+                _enrich_sku_from_orders(products, all_orders)
+                bm_map = await _get_bm_stock_cached(products)
+                _apply_bm_stock(products, bm_map)
 
-            # BM metadata: RetailPrice USD, AvgCost, Brand (necesario para stock_issues)
-            await _enrich_with_bm_product_info(products)
+                # BM metadata: RetailPrice USD, AvgCost, Brand (necesario para stock_issues)
+                await _enrich_with_bm_product_info(products)
 
-            # Pre-computar stock issues result — threshold default=10
-            _DEFAULT_THRESHOLD = 10
-            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
-            restock.sort(key=lambda x: x.get("units", 0), reverse=True)
-            oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
-            oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
-            restock_ids = {p["id"] for p in restock}
-            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
-            activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-            critical = [
-                p for p in products
-                if p.get("available_quantity", 0) > 0
-                and 0 < (p.get("_bm_avail") or 0) <= _DEFAULT_THRESHOLD
-                and not p.get("is_full")
-                and p.get("sku")
-            ]
-            critical.sort(key=lambda x: x.get("_bm_avail", 0))
-            full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
-            full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-            # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
-            _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
-                "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
-                "critical": critical, "full_no_stock": full_no_stock,
-                "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
-                "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
-                "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
-                "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
-                "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
-                "threshold": _DEFAULT_THRESHOLD,
-            })
+                # Pre-computar stock issues result — threshold default=10
+                _DEFAULT_THRESHOLD = 10
+                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
+                restock.sort(key=lambda x: x.get("units", 0), reverse=True)
+                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
+                oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
+                restock_ids = {p["id"] for p in restock}
+                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
+                activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
+                critical = [
+                    p for p in products
+                    if p.get("available_quantity", 0) > 0
+                    and 0 < (p.get("_bm_avail") or 0) <= _DEFAULT_THRESHOLD
+                    and not p.get("is_full")
+                    and p.get("sku")
+                ]
+                critical.sort(key=lambda x: x.get("_bm_avail", 0))
+                full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
+                full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
+                # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
+                _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
+                    "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
+                    "critical": critical, "full_no_stock": full_no_stock,
+                    "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
+                    "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
+                    "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
+                    "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
+                    "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
+                    "threshold": _DEFAULT_THRESHOLD,
+                })
+
+            # Timeout de 150s — si ML o BM tardan demasiado, abortar limpiamente
+            await asyncio.wait_for(_do_prewarm(), timeout=150.0)
+        except asyncio.TimeoutError:
+            _prewarm_error = "Timeout: el calculo tardo mas de 150s. Reintentando en el proximo ciclo."
         finally:
             await client.close()
     except Exception as _e:
