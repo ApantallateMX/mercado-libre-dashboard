@@ -2189,7 +2189,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             continue
         upper = sku.upper()
         cached = _bm_stock_cache.get(upper)
-        if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+        def _cache_is_valid(c):
+            if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
+                return False
+            d = c[1]
+            # Entrada EMPTY (todo 0) = posible error/timeout anterior → re-fetch siempre
+            if not d.get("total") and not d.get("avail_total"):
+                return False
+            return True
+        if _cache_is_valid(cached):
             result_map[sku] = cached[1]
         elif upper not in _seen_to_fetch:
             to_fetch.append(sku)
@@ -2206,7 +2214,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             if not v_sku or v_sku.upper() in seen_skus:
                 continue
             cached = _bm_stock_cache.get(v_sku.upper())
-            if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+            if _cache_is_valid(cached):
                 result_map[v_sku] = cached[1]
             else:
                 to_fetch.append(v_sku)
@@ -2628,11 +2636,13 @@ async def products_inventory_partial(
 
         # --- Apply CACHED BM stock (instant, no API calls) ---
         # Only use whatever is already in the BM cache from prewarm/previous loads
+        # Entries with total=0 AND avail=0 (EMPTY) are skipped — will be re-fetched per page
         for p in products:
             sku = p.get("sku", "")
             if sku:
                 cached = _bm_stock_cache.get(sku.upper())
-                if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
+                _has_data = cached and cached[1].get("total", 0) > 0 or (cached and cached[1].get("avail_total", 0) > 0)
+                if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL and _has_data:
                     data = cached[1]
                     p["_bm_total"] = data.get("total", 0)
                     p["_bm_mty"] = data.get("mty", 0)
