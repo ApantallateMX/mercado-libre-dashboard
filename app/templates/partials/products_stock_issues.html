@@ -169,7 +169,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-restock" class="divide-y divide-gray-100">
                 {% for p in restock %}
                 <tr class="hover:bg-orange-50/30" id="restock-d-{{ p.id }}">
                     <td class="px-3 py-2">
@@ -271,6 +271,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        <div id="pager-restock"></div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
@@ -378,7 +379,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-risk" class="divide-y divide-gray-100">
                 {% for p in oversell_risk %}
                 <tr class="{{ 'bg-indigo-50/40' if p.get('has_variations') else 'hover:bg-yellow-50/30' }}" id="risk-d-{{ p.id }}">
                     <td class="px-3 py-2">
@@ -466,6 +467,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        <div id="pager-risk"></div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
@@ -561,7 +563,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-critical" class="divide-y divide-gray-100">
                 {% for p in critical %}
                 <tr class="hover:bg-red-50/30" id="crit-d-{{ p.id }}">
                     <td class="px-3 py-2">
@@ -619,6 +621,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        <div id="pager-critical"></div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
@@ -712,7 +715,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-activate" class="divide-y divide-gray-100">
                 {% for p in activate %}
                 <tr class="hover:bg-green-50/30" id="act-d-{{ p.id }}">
                     <td class="px-3 py-2">
@@ -774,6 +777,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        <div id="pager-activate"></div>
     </div>
     {% else %}
     <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500 text-sm">
@@ -844,7 +848,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-fullstock" class="divide-y divide-gray-100">
                 {% for p in full_no_stock %}
                 <tr class="hover:bg-cyan-50/30">
                     <td class="px-3 py-2">
@@ -875,6 +879,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        <div id="pager-fullstock"></div>
     </div>
 </div>
 {% endif %}
@@ -1527,4 +1532,50 @@ function bulkActivateAll() {
         .catch(function() { done++; errors++; updateProgress(); });
     });
 }
+
+// ── Paginación de 20 filas por sección ──────────────────────────────────────
+(function() {
+  var PER = 20;
+  function paginateTable(tbodyId, pagerId) {
+    var tbody = document.getElementById(tbodyId);
+    var pager = document.getElementById(pagerId);
+    if (!tbody || !pager) return;
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    if (rows.length <= PER) return; // no paginar si caben todas
+    var page = 1;
+    var pages = Math.ceil(rows.length / PER);
+    function render() {
+      rows.forEach(function(r, i) { r.style.display = (i >= (page-1)*PER && i < page*PER) ? '' : 'none'; });
+      var html = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3">';
+      html += 'Mostrando ' + ((page-1)*PER+1) + '–' + Math.min(page*PER, rows.length) + ' de ' + rows.length;
+      html += ' &nbsp; ';
+      if (page > 1) html += '<button onclick="this.closest(\'[data-pager]\').dataset.page=--arguments[0];_pgRender(\'' + tbodyId + '\',\'' + pagerId + '\')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+      for (var p = 1; p <= pages; p++) {
+        var active = p === page ? 'bg-yellow-400 text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
+        html += '<button class="px-2 py-0.5 rounded ' + active + '" onclick="_pgGo(\'' + tbodyId + '\',\'' + pagerId + '\',' + p + ')">' + p + '</button>';
+      }
+      if (page < pages) html += '<button onclick="_pgGo(\'' + tbodyId + '\',\'' + pagerId + '\',' + (page+1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+      html += '</div>';
+      pager.innerHTML = html;
+    }
+    window['_pgGo'] = window['_pgGo'] || function(tId, pId, p) {
+      document.getElementById(tId)._pgPage = p;
+      var rows2 = Array.from(document.getElementById(tId).querySelectorAll('tr'));
+      var pages2 = Math.ceil(rows2.length / PER);
+      rows2.forEach(function(r,i){ r.style.display=(i>=(p-1)*PER && i<p*PER)?'':'none'; });
+      var pager2 = document.getElementById(pId);
+      var html2 = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3">Mostrando '+((p-1)*PER+1)+'–'+Math.min(p*PER,rows2.length)+' de '+rows2.length+' &nbsp; ';
+      if(p>1) html2+='<button onclick="_pgGo(\''+tId+'\',\''+pId+'\','+(p-1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+      for(var pp=1;pp<=pages2;pp++){var a=pp===p?'bg-yellow-400 text-white font-bold':'bg-gray-100 hover:bg-gray-200';html2+='<button class="px-2 py-0.5 rounded '+a+'" onclick="_pgGo(\''+tId+'\',\''+pId+'\','+pp+')">'+pp+'</button>';}
+      if(p<pages2) html2+='<button onclick="_pgGo(\''+tId+'\',\''+pId+'\','+(p+1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+      html2+='</div>'; pager2.innerHTML=html2;
+    };
+    render();
+  }
+  paginateTable('tbody-restock',   'pager-restock');
+  paginateTable('tbody-risk',      'pager-risk');
+  paginateTable('tbody-activate',  'pager-activate');
+  paginateTable('tbody-critical',  'pager-critical');
+  paginateTable('tbody-fullstock', 'pager-fullstock');
+})();
 </script>
