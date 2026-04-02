@@ -49,12 +49,16 @@ def _extract_base_sku(sku: str) -> str:
 
 
 def _bm_conditions_for_sku(sku: str) -> str:
-    """Retorna condiciones BM segun sufijo del SKU.
-    SKUs publicados como ICB/ICC incluyen todo el stock (producto dañado permitido).
-    SKUs normales (GR o sin sufijo) excluyen ICB/ICC — no son vendibles en listings regulares.
+    """Retorna condiciones BM segun formato del SELLER_SKU.
+
+    Reglas:
+    - SKU simple (ej: SNTV002033)          → GRA,GRB,GRC,NEW
+    - SKU con sufijo -ICB o -ICC            → GRA,GRB,GRC,ICB,ICC,NEW
+    - SKU con "/" (bundle, ej: SNTV002033 / SNWM000001) → GRA,GRB,GRC,ICB,ICC,NEW
+      (el SKU después del "/" es solo referencia, no se consulta en BM)
     """
     upper = sku.upper()
-    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+    if upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper:
         return "GRA,GRB,GRC,ICB,ICC,NEW"
     return "GRA,GRB,GRC,NEW"
 
