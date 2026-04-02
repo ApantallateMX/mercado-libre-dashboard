@@ -7519,6 +7519,7 @@ window.triggerStockSync = function() {{
     .then(function(r) {{ return r.json(); }})
     .then(function() {{
       var secs = 0;
+      // Fase 1: esperar a que multi-sync termine
       var poll = setInterval(function() {{
         secs += 2;
         var b = document.getElementById('btn-sync-now');
@@ -7528,14 +7529,41 @@ window.triggerStockSync = function() {{
           .then(function(s) {{
             if (!s.running) {{
               clearInterval(poll);
+              // Fase 2: esperar prewarm (re-fetcha BM con datos frescos)
               var b2 = document.getElementById('btn-sync-now');
-              if (b2) {{ b2.textContent = 'Sync ahora'; b2.style.pointerEvents = 'auto'; }}
-              var toast = document.createElement('div');
-              var upd = (s.last_result || {{}}).updates || 0;
-              toast.innerHTML = '<span style="font-size:1.1em">✓</span> Sync completado — ' + upd + ' updates';
-              toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium bg-green-50 text-green-700 border border-green-200';
-              document.body.appendChild(toast);
-              setTimeout(function() {{ toast.remove(); }}, 5000);
+              if (b2) b2.textContent = 'Actualizando BM...';
+              setTimeout(function() {{
+                var pw = setInterval(function() {{
+                  secs += 2;
+                  var b3 = document.getElementById('btn-sync-now');
+                  if (b3) b3.textContent = 'Actualizando (' + secs + 's)...';
+                  fetch('/api/stock/prewarm-status')
+                    .then(function(r) {{ return r.json(); }})
+                    .then(function(p) {{
+                      if (!p.running) {{
+                        clearInterval(pw);
+                        var b4 = document.getElementById('btn-sync-now');
+                        if (b4) {{ b4.textContent = 'Sync ahora'; b4.style.pointerEvents = 'auto'; }}
+                        var upd = (s.last_result || {{}}).updates || 0;
+                        var toast = document.createElement('div');
+                        toast.innerHTML = '<span style="font-size:1.1em">✓</span> Sync completado — ' + upd + ' updates';
+                        toast.className = 'fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium bg-green-50 text-green-700 border border-green-200';
+                        document.body.appendChild(toast);
+                        setTimeout(function() {{ toast.remove(); }}, 5000);
+                        // Recargar la seccion con datos frescos
+                        if (window.switchProductTab) {{
+                          window.switchProductTab('inventory', '/partials/products-inventory?preset=accion&enrich=full');
+                        }}
+                      }}
+                    }})
+                    .catch(function() {{ clearInterval(pw); }});
+                }}, 2000);
+                setTimeout(function() {{
+                  clearInterval(pw);
+                  var b5 = document.getElementById('btn-sync-now');
+                  if (b5) {{ b5.textContent = 'Sync ahora'; b5.style.pointerEvents = 'auto'; }}
+                }}, 120000);
+              }}, 3000); // dar 3s para que el prewarm arranque
             }}
           }})
           .catch(function() {{ clearInterval(poll); }});

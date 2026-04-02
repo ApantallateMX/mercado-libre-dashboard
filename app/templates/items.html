@@ -270,6 +270,7 @@
             .then(function(r) { return r.json(); })
             .then(function() {
                 var secs = 0;
+                // Fase 1: esperar multi-sync
                 var poll = setInterval(function() {
                     secs += 2;
                     var b = document.getElementById('btn-sync-bar');
@@ -279,10 +280,34 @@
                         .then(function(s) {
                             if (!s.running) {
                                 clearInterval(poll);
-                                var container = document.getElementById('sync-alerts-container');
-                                if (container) container.innerHTML = '';
-                                loadAlertBar();
-                                showToast('✓ Sync completado', 'success');
+                                var b2 = document.getElementById('btn-sync-bar');
+                                if (b2) b2.textContent = 'Actualizando BM...';
+                                // Fase 2: esperar prewarm (re-fetcha BM con datos frescos)
+                                setTimeout(function() {
+                                    var pw = setInterval(function() {
+                                        fetch('/api/stock/prewarm-status')
+                                            .then(function(r) { return r.json(); })
+                                            .then(function(p) {
+                                                if (!p.running) {
+                                                    clearInterval(pw);
+                                                    var container = document.getElementById('sync-alerts-container');
+                                                    if (container) container.innerHTML = '';
+                                                    loadAlertBar();
+                                                    // Recargar tab activo si es inventory o stock
+                                                    var activeBtn = document.querySelector('#product-tabs .tab-btn.border-yellow-400') ||
+                                                                    document.querySelector('#product-tabs .tab-btn[class*="border-yellow-400"]');
+                                                    var activeTabName = activeBtn ? activeBtn.dataset.tab : '';
+                                                    if (window.switchProductTab && (activeTabName === 'inventory' || activeTabName === 'stock')) {
+                                                        var tabUrl = activeBtn.dataset.url || '/partials/products-inventory?preset=accion&enrich=full';
+                                                        window.switchProductTab(activeTabName, tabUrl);
+                                                    }
+                                                    showToast('✓ Sync completado — datos actualizados', 'success');
+                                                }
+                                            })
+                                            .catch(function() { clearInterval(pw); });
+                                    }, 2000);
+                                    setTimeout(function() { clearInterval(pw); loadAlertBar(); }, 120000);
+                                }, 3000); // dar 3s para que prewarm arranque
                             }
                         })
                         .catch(function() { clearInterval(poll); });
