@@ -1770,22 +1770,55 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
         # Cache fría o expirada: calcular en background y devolver loading inmediato.
+        # Solo dispara si no hay ya un prewarm corriendo (evita flood a BM API).
         # Evita el timeout de 30s de Railway (el cálculo tarda 60-90s en frío).
         asyncio.create_task(_prewarm_caches())
         return HTMLResponse("""
-<div class="text-center py-16 text-gray-500">
-  <svg class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+<div id="stock-loading" class="text-center py-16 text-gray-500">
+  <svg id="stock-spinner" class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
   </svg>
-  <p class="text-sm font-medium text-gray-600">Calculando stock en background...</p>
-  <p class="text-xs text-gray-400 mt-1">Listo en ~30 segundos</p>
-  <button onclick="setTimeout(function(){ window.switchProductTab('stock','/partials/products-stock-issues'); }, 15000); this.textContent='Recargando en 15s...'; this.disabled=true;"
-          class="mt-4 px-4 py-2 text-xs bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg hover:bg-yellow-100">
-    Recargar automáticamente
-  </button>
+  <p id="stock-status-msg" class="text-sm font-medium text-gray-600">Calculando stock en background...</p>
+  <p id="stock-status-sub" class="text-xs text-gray-400 mt-1">Revisando cada 5 segundos...</p>
+  <p id="stock-error-msg" class="text-xs text-red-500 mt-2 hidden"></p>
 </div>
-<script>setTimeout(function(){ if(window.switchProductTab) window.switchProductTab('stock','/partials/products-stock-issues'); }, 20000);</script>
+<script>
+(function() {
+  var attempts = 0;
+  function poll() {
+    attempts++;
+    fetch('/api/stock/prewarm-status')
+      .then(function(r){ return r.json(); })
+      .then(function(s) {
+        var sub = document.getElementById('stock-status-sub');
+        var err = document.getElementById('stock-error-msg');
+        var msg = document.getElementById('stock-status-msg');
+        if (s.ready) {
+          if (msg) msg.textContent = 'Listo — cargando datos...';
+          if (sub) sub.textContent = '';
+          if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
+          return;
+        }
+        if (s.error) {
+          if (err) { err.textContent = 'Error: ' + s.error; err.classList.remove('hidden'); }
+          if (msg) msg.textContent = 'Error calculando stock.';
+          if (sub) {
+            sub.innerHTML = '<button onclick="if(window.switchProductTab)window.switchProductTab(\'stock\',\'/partials/products-stock-issues\')" class="underline text-blue-500 cursor-pointer">Reintentar</button>';
+          }
+          return;
+        }
+        if (sub) sub.textContent = s.running ? ('Calculando... (' + (attempts*5) + 's)') : ('En espera... (' + (attempts*5) + 's)');
+        if (attempts < 36) setTimeout(poll, 5000);  // max 3 min
+        else if (sub) sub.innerHTML = '<button onclick="if(window.switchProductTab)window.switchProductTab(\'stock\',\'/partials/products-stock-issues\')" class="underline text-blue-500 cursor-pointer">Reintentar</button>';
+      })
+      .catch(function() {
+        if (attempts < 36) setTimeout(poll, 5000);
+      });
+  }
+  setTimeout(poll, 5000);
+})();
+</script>
 """)
 
     finally:
@@ -1929,12 +1962,21 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
 
 # --- Background pre-warm ---
 _prewarm_task = None
+_prewarm_running: bool = False   # flag global — solo 1 prewarm a la vez
+_prewarm_error: str = ""         # último error para mostrar en UI
 
 async def _prewarm_caches():
-    """Pre-carga products + orders + BM stock + stock issues en background."""
+    """Pre-carga products + orders + BM stock + stock issues en background.
+    Solo corre una instancia a la vez — retorna si ya hay una en curso."""
+    global _prewarm_running, _prewarm_error
+    if _prewarm_running:
+        return   # ya hay un prewarm corriendo, no lanzar otro
+    _prewarm_running = True
+    _prewarm_error = ""
     try:
         client = await get_meli_client()
         if not client:
+            _prewarm_error = "No hay cliente ML activo"
             return
         # prewarm include_paused marker
         try:
@@ -1988,8 +2030,11 @@ async def _prewarm_caches():
             })
         finally:
             await client.close()
-    except Exception:
-        pass  # Background task — no debe romper nada
+    except Exception as _e:
+        import traceback as _tb
+        _prewarm_error = _tb.format_exc()
+    finally:
+        _prewarm_running = False
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
@@ -7423,6 +7468,23 @@ async def multi_sync_status():
     except Exception:
         status["recent_runs"] = []
     return status
+
+
+@app.get("/api/stock/prewarm-status")
+async def prewarm_status():
+    """Estado del prewarm de stock issues — para polling desde loading page."""
+    client = await get_meli_client()
+    uid = client.user_id if client else None
+    if client:
+        await client.close()
+    key = f"stock_issues:{uid}:t10" if uid else None
+    cache_ready = bool(key and _stock_issues_cache.get(key) and
+                       (_time.time() - _stock_issues_cache[key][0]) < _STOCK_ISSUES_TTL)
+    return JSONResponse({
+        "running": _prewarm_running,
+        "ready": cache_ready,
+        "error": _prewarm_error[:300] if _prewarm_error else "",
+    })
 
 
 @app.post("/api/stock/multi-sync/trigger")
