@@ -121,12 +121,14 @@ Orden de atención: A → B → C
    - Alertar si cross_docking con me1_required
 ```
 
-### Pausar item sin stock
+### Apagar item sin stock (NUNCA pausar)
 ```
 Si BM_available = 0 Y item activo:
-PUT /items/{id} con {"status": "paused"}
-→ Registrar en audit_log
-→ Notificar al operador
+PUT /items/{id} con {"available_quantity": 0}  ← CORRECTO
+NO usar {"status": "paused"}                   ← DAÑA el ranking de ML/Amazon
+
+Excepción: FULL (logistic_type=fulfillment) — no se puede modificar vía API
+→ Ver sección FULL items abajo
 ```
 
 ### Reactivar item
@@ -135,6 +137,25 @@ Si BM_available > 0 Y item pausado por out_of_stock:
 1. PUT /items/{id} con {"available_quantity": N}
 2. MeLi reactiva automáticamente si sub_status = out_of_stock
    (NO usar status: "active" manualmente)
+```
+
+## FULL ITEMS (logistic_type = fulfillment)
+
+```
+FULL = ML gestiona el stock físicamente en sus centros de distribución.
+→ NO se puede modificar available_quantity ni status vía API (ML lo ignora)
+→ catalog_listing=true NO es lo mismo que FULL; FULL se detecta por logistic_type
+
+Regla de negocio FULL:
+- Siempre mantener en FULL (mejor posicionamiento en ML)
+- Si ML=0 y BM>0 → ALERTA Sección E: cambiar manualmente a Merchant para seguir vendiendo
+- NO incluir FULL en secciones Reabastecer (A) ni Activar (C) — son solo para Merchant
+
+Acción cuando FULL queda sin stock en ML:
+1. Alerta aparece en Sección E del dashboard de Stock Issues
+2. Operador entra a ML panel manualmente → cambia a "Envío propio" (Merchant)
+3. Asignar stock BM disponible como available_quantity
+4. Cuando se reponga en FULL, volver a cambiar a FULL
 ```
 
 ## AMAZON ONSITE / SELLER FLEX (Vecktor)
@@ -216,6 +237,51 @@ GET /api/amazon/listing-quality — estado listings + compliance issues
 GET /api/amazon/alerts — alertas críticas consolidadas
 ```
 
+## SKU EXTRACTION — sku_utils.py (módulo canónico)
+
+```python
+from app.services.sku_utils import extract_item_sku, extract_variation_sku, base_sku
+
+# Extraer SKU de item ML completo (prioriza variaciones sobre padre)
+sku = extract_item_sku(item)
+
+# Normalizar a SKU base para cruzar con BM (quita sufijo -FLX01, extrae primer token de bundles)
+# "SNTV001864 + SNPE000180" → "SNTV001864"
+# "SNFN000941-FLX01"        → "SNFN000941"
+base = base_sku(sku)
+```
+
+## SYNC MULTI-PLATAFORMA — Reglas de scoring y umbral
+
+### Tarifas ML por precio (stock_sync_multi._ml_fee)
+```
+≥ $5,000 MXN: 12%   (TVs, laptops)
+$1,500–$5,000: 14%
+$500–$1,500: 16%
+< $500: 18%
+```
+El score = precio_neto × velocidad_30d. La cuenta con mayor score gana cuando bm_avail < umbral.
+
+### Umbral dinámico (_threshold_for)
+```
+Precio medio ≥ $10,000: umbral=3
+$2,000–$10,000: umbral=5
+$500–$2,000: umbral=10 (default)
+< $500: umbral=20
+```
+
+### Detección de canibalización (Fase 3C)
+El sync detecta automáticamente SKUs activos en 2+ cuentas ML donde solo 0 o 1 cuentas tienen ventas.
+Revisar `summary["cannibalization"]` en el resultado del sync o los logs `[MULTI-SYNC] canibalizacion`.
+Acción: desactivar (qty=0) los listings de cuentas sin ventas para concentrar visibilidad.
+
+## ALERTAS — oversell_risk
+
+**Usar siempre _bm_avail (no _bm_total) para oversell_risk:**
+- `_bm_avail`: stock vendible real (excluye reservados)
+- `_bm_total`: stock físico total (incluye reservados para órdenes pendientes)
+- Un item con `_bm_total > 0` pero `_bm_avail == 0` está completamente reservado → es oversell_risk real
+
 ## PRINCIPIOS
 
 1. BM es la fuente de verdad de stock físico — no MeLi, no Amazon
@@ -225,3 +291,5 @@ GET /api/amazon/alerts — alertas críticas consolidadas
 5. Nunca asumir que MeLi y BM están sincronizados
 6. Antes de pausa masiva — confirmar con el operador
 7. Ranking destruido por stockout tarda semanas en recuperarse — prevenir es 10× más barato que recuperar
+8. BM error ≠ stock=0: si BM falla, skip el SKU (no poner en 0 en ML)
+9. SKUs compuestos (bundles "A + B", "A / B"): usar base_sku() para extraer el primer componente

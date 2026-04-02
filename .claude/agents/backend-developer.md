@@ -46,6 +46,12 @@ app/
     metrics.py     # /api/metrics/*
     inventory.py   # /api/inventory/*
     amazon_*.py    # /api/amazon/*
+  services/
+    sku_utils.py         # SKU canónico: extract_item_sku(), base_sku()
+    ml_listing_sync.py   # Sync background ML listings → DB local (cada 10min)
+    stock_sync_multi.py  # Sync multi-plataforma BM→ML+Amazon (cada 5min)
+    token_store.py       # DB SQLite: tokens, ml_listings, sync_logs, etc.
+    binmanager_client.py # BM API client
   templates/
     base.html
     partials/      # HTMX partials
