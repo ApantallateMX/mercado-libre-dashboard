@@ -2119,25 +2119,32 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     def _store_wh(sku, rows_wh, reserve_global=0, global_total=0):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ).
 
-        Fórmula correcta:
-          avail_total = min(vendible_physical, max(0, global_total - reserve_global))
+        Fórmula híbrida:
+          old = max(0, vendible_physical - reserve_global)
+          si old == 0 y global_avail > 0:
+              # Reserve > physical_vendible → reservas están en bins NO-vendibles
+              # → vendible disponible completamente (capped at global_avail)
+              avail = min(vendible_physical, global_avail)
+          else:
+              avail = old  # reservas son locales, restar directo
 
-        Razonamiento: el reserve es global (cubre órdenes de TODAS las ubicaciones).
-        Si global_total >> vendible_physical, las reservas se cubren con stock de otros
-        bins y el vendible local sigue disponible completo.
-        Ejemplo A: física_vendible=2, global=400, reserve=3 → global_avail=397 → avail=min(2,397)=2 ✓
-        Ejemplo B: física_vendible=301, global=305, reserve=84 → global_avail=221 → avail=min(301,221)=221 ✓
+        Casos verificados:
+          SNTV005554: física=2, reserve=3, global=400 → old=0, global_avail=397 → avail=min(2,397)=2 ✓
+          SNTV002033: física=86, reserve=30, global=863 → old=56>0 → avail=56 (≈BM UI 59, diff=3 IC units)
+          SNTV001764: física=301, reserve=84, global=305 → old=217>0 → avail=217 (≈BM UI 221) ✓
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         warehouse_total = mty + cdmx
         reserve_int     = int(reserve_global or 0)
         global_int      = int(global_total or 0)
-        if global_int > 0:
-            global_avail = max(0, global_int - reserve_int)
-            avail_total  = min(warehouse_total, global_avail)
+        old_formula     = max(0, warehouse_total - reserve_int)
+        global_avail    = max(0, global_int - reserve_int) if global_int > 0 else warehouse_total
+        if old_formula == 0 and global_avail > 0:
+            # Reserve excede el stock vendible → reservas están en bins no-vendibles
+            # → el stock vendible está completamente disponible (capped al global disponible)
+            avail_total = min(warehouse_total, global_avail)
         else:
-            # Sin dato global → restar directamente (comportamiento anterior como fallback)
-            avail_total  = max(0, warehouse_total - reserve_int)
+            avail_total = old_formula
         reserved_total = reserve_int
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
