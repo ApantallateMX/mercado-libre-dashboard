@@ -7,6 +7,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — Fix Sync Var. variaciones bundle + 'str' object has no attribute 'get'
+
+### BUG — sync_variation_stocks_api: 'str' object has no attribute 'get'
+- **Síntoma:** Al hacer Sync Var. en items con variaciones, aparecía error "BM error: 'str' object has no attribute 'get'" en cada variación.
+- **Root cause:** `r_avail.json() or []` — si BM devuelve un dict (no lista), el `or []` no aplica porque el dict es truthy. Luego `for row in avail_rows` iteraba sobre chars del dict y `.get()` fallaba. Mismo problema en `r_wh.json() or []`.
+- **Fix:** Agregar `if isinstance(rows, dict): rows = [rows]` + `if not isinstance(rows, list): rows = []` en ambas respuestas.
+
+### FEAT — Sync Var. bundle: stock = mínimo entre componentes (A / B)
+- **Antes:** Para SKU compuesto `SNTV001763 / SNWM000001`, solo se consultaba el primer componente (`SNTV001763`). El segundo se ignoraba.
+- **Ahora:** Se consultan TODOS los componentes del bundle en paralelo. `bm_avail = min(avail_A, avail_B)` — el cuello de botella determina cuántos bundles se pueden armar. Si BM falla para cualquier componente, se reporta error en lugar de usar dato incompleto.
+- **Aplica a:** SKUs separados por `/` o `+` en el SELLER_SKU de la variación.
+
+---
+
 ## 2026-04-02 — Fix regresión _bm_avail=0 (SNAC000029 y 130 productos más)
 
 ### BUG RAÍZ — _bm_avail=0 para todos los productos con stock real en BM (regresión Fase 1A)

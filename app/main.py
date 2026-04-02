@@ -6128,30 +6128,59 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             if not v_sku:
                 result["error"] = "Sin SKU en variacion"
                 return result
-            base_sku = _extract_base_sku(v_sku)
-            clean_sku = _clean_sku_for_bm(base_sku)
-            if not clean_sku:
+            # Para bundles (A / B o A + B): extraer todos los SKUs componentes
+            import re as _re_var
+            raw_parts = _re_var.split(r'\s*[/+]\s*', v_sku)
+            sku_parts = []
+            for part in raw_parts:
+                base = _extract_base_sku(part.strip())
+                clean = _clean_sku_for_bm(base)
+                if clean:
+                    sku_parts.append(clean)
+            if not sku_parts:
                 result["error"] = "SKU no mapeable a BM"
                 return result
-            conditions = _bm_conditions_for_sku(v_sku)
-            try:
-                r_wh, r_avail = await asyncio.gather(
-                    http.post(BM_WH_URL, json={
-                        "COMPANYID": 1, "SKU": clean_sku, "WarehouseID": None,
-                        "LocationID": "47,62,68", "BINID": None,
-                        "Condition": conditions, "ForInventory": 0, "SUPPLIERS": None,
-                    }, headers={"Content-Type": "application/json"}, timeout=15.0),
-                    http.post(BM_AVAIL_URL_SYNC, json={
+
+            async def _query_bm_avail(sku: str) -> int:
+                """Retorna Available - Required para un SKU en BM."""
+                conditions = _bm_conditions_for_sku(sku)
+                try:
+                    r = await http.post(BM_AVAIL_URL_SYNC, json={
                         "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
                         "LOCATIONID": "47,62,68", "BINID": None,
-                        "PRODUCTSKU": clean_sku, "CONDITION": conditions,
-                        "SUPPLIERS": None, "LCN": None, "SEARCH": clean_sku,
+                        "PRODUCTSKU": sku, "CONDITION": conditions,
+                        "SUPPLIERS": None, "LCN": None, "SEARCH": sku,
+                    }, headers={"Content-Type": "application/json"}, timeout=15.0)
+                    if r.status_code != 200:
+                        return -1  # error de BM
+                    rows = r.json()
+                    if isinstance(rows, dict): rows = [rows]
+                    if not isinstance(rows, list): return -1
+                    avail = sum(row.get("Available", 0) or 0 for row in rows)
+                    req   = sum(row.get("Required", 0) or 0 for row in rows)
+                    return max(0, avail - req)
+                except Exception:
+                    return -1  # error
+
+            try:
+                # Warehouse: solo del primer SKU (para breakdown MTY/CDMX)
+                primary_sku = sku_parts[0]
+                conditions_primary = _bm_conditions_for_sku(primary_sku)
+                avail_tasks = [_query_bm_avail(s) for s in sku_parts]
+                r_wh, *avail_results = await asyncio.gather(
+                    http.post(BM_WH_URL, json={
+                        "COMPANYID": 1, "SKU": primary_sku, "WarehouseID": None,
+                        "LocationID": "47,62,68", "BINID": None,
+                        "Condition": conditions_primary, "ForInventory": 0, "SUPPLIERS": None,
                     }, headers={"Content-Type": "application/json"}, timeout=15.0),
+                    *avail_tasks,
                     return_exceptions=True,
                 )
                 if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
-                    rows = r_wh.json() or []
-                    mty = cdmx = tj = 0
+                    rows = r_wh.json()
+                    if isinstance(rows, dict): rows = [rows]
+                    if not isinstance(rows, list): rows = []
+                    mty = cdmx = 0
                     for row in rows:
                         qty = row.get("QtyTotal", 0) or 0
                         wname = (row.get("WarehouseName") or "").lower()
@@ -6159,16 +6188,17 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                             mty += qty
                         elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
                             cdmx += qty
-                        else:
-                            tj += qty
                     result["bm_mty"] = mty
                     result["bm_cdmx"] = cdmx
                     result["bm_total"] = mty + cdmx
-                if not isinstance(r_avail, Exception) and r_avail.status_code == 200:
-                    avail_rows = r_avail.json() or []
-                    avail_sum = sum(row.get("Available", 0) or 0 for row in avail_rows)
-                    required_sum = sum(row.get("Required", 0) or 0 for row in avail_rows)
-                    result["bm_avail"] = max(0, avail_sum - required_sum)  # conservador: excluye reservados
+
+                # Para bundles: stock disponible = mínimo entre todos los componentes
+                # (el cuello de botella determina cuántos bundles se pueden armar)
+                valid_avails = [a for a in avail_results if isinstance(a, int) and a >= 0]
+                if valid_avails:
+                    result["bm_avail"] = min(valid_avails)  # min = bottleneck del bundle
+                elif any(isinstance(a, int) and a == -1 for a in avail_results):
+                    result["error"] = "BM no respondió para uno de los componentes"
             except Exception as ex:
                 result["error"] = f"BM error: {ex}"
             return result
