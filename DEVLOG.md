@@ -9,6 +9,14 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ## 2026-04-03
 
+### FIX — Vista Deals: botón BM usa disponible neto, no físico bruto
+- **Síntoma:** Botón `BM:86` en la vista de items/deals pre-llenaba el campo de stock con el físico total (incluía reservas). Podría causar oversell si se confirmaba sin revisar.
+- **Fix (commit 7980552):**
+  - `_fetch_inv` ahora hace llamada paralela a `Get_GlobalStock_InventoryBySKU` para obtener `Reserve` y `TotalQty`
+  - Aplica fórmula híbrida idéntica a `_store_wh` → campo `avail` en `inventory_map`
+  - Template `items_grid.html`: badge azul `Disp:X` aparece cuando disponible ≠ físico
+  - Botón `BM:X` usa `avail` (neto) en lugar de `total` (bruto)
+
 ### FIX — Fórmula híbrida BM available: resuelve SNTV005554 y SNTV002033
 - **Síntoma:** Dos comportamientos contradictorios en la misma fórmula:
   - SNTV005554: física=2, reserve_global=3 → old formula `max(0, 2-3)=0` ✗ (BM tiene 2, las 3 reservas son de bins no-vendibles)
