@@ -37,6 +37,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — Fix: "Sync ahora" (banner health) sin feedback visual
+
+### FIX — Botón "Sync ahora" no mostraba nada al hacer click
+- **Root cause:** `_globalHealthFix()` en `base.html` disparaba `_fixAction.fn()` sin ningún cambio visual. El usuario veía el botón estático y no sabía si algo pasó.
+- **Fix:** Reescribir `_globalHealthFix()` para:
+  1. Cambiar texto del botón a "Iniciando..." y deshabilitarlo inmediatamente al click
+  2. Actualizar mensaje del banner a "Ejecutando sync..."
+  3. Para `stock_sync`: pollear `/api/stock/multi-sync/status` cada 1s hasta `running=false` (máx 60s), mostrando contador de segundos
+  4. Al terminar: mostrar toast verde "Sync completado ✓" (o rojo si hubo error en `last_result.error`)
+  5. Re-ejecutar `_checkGlobalHealth()` para actualizar el banner con el estado real
+  6. Para otras acciones (tokens, amazon): re-check tras 3s
+
+---
+
 ## 2026-04-02 — Fix CRÍTICO: BM stock falso — Get_GlobalStock_InventoryBySKU devuelve contador contable, no stock físico
 
 ### BUG — get_available_qty() retornaba datos incorrectos (202 vs 2 real)

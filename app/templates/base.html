@@ -625,8 +625,47 @@ document.addEventListener('click', function(e) {
         }).catch(function(){});
     }
     function _globalHealthFix() {
-        if (_fixAction) _fixAction.fn();
-        setTimeout(function(){ fetch('/api/system-health/run',{method:'POST'}); }, 1000);
+        var btn = document.getElementById('global-health-fix-btn');
+        var msg = document.getElementById('global-health-msg');
+        if (!_fixAction) return;
+
+        // Visual feedback inmediato
+        if (btn) { btn.textContent = 'Iniciando...'; btn.disabled = true; btn.style.opacity = '0.7'; }
+        if (msg) msg.textContent = 'Ejecutando sync...';
+
+        _fixAction.fn();
+
+        // Si es stock_sync: pollear hasta que termine y mostrar resultado
+        var isStockSync = (_fixAction.label === 'Sync ahora');
+        if (isStockSync) {
+            var _pollCount = 0;
+            var _poll = setInterval(function() {
+                _pollCount++;
+                fetch('/api/stock/multi-sync/status').then(function(r){ return r.json(); }).then(function(s) {
+                    if (!s.running || _pollCount > 60) {
+                        clearInterval(_poll);
+                        // Mostrar toast de resultado
+                        var toast = document.createElement('div');
+                        var hasErr = s.last_result && s.last_result.error;
+                        toast.textContent = hasErr ? 'Sync terminó con errores' : 'Sync completado ✓';
+                        toast.style.cssText = 'position:fixed;bottom:60px;right:20px;background:#22c55e;color:white;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;z-index:9999;transition:opacity .5s';
+                        if (hasErr) toast.style.background = '#ef4444';
+                        document.body.appendChild(toast);
+                        setTimeout(function(){ toast.style.opacity='0'; setTimeout(function(){ toast.remove(); },600); }, 3000);
+                        // Re-check health para actualizar banner
+                        setTimeout(_checkGlobalHealth, 500);
+                    } else {
+                        if (msg) msg.textContent = 'Sincronizando... (' + _pollCount + 's)';
+                    }
+                }).catch(function(){ clearInterval(_poll); });
+            }, 1000);
+        } else {
+            // Para otras acciones (tokens, amazon): re-check tras 3s
+            setTimeout(function(){
+                if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+                _checkGlobalHealth();
+            }, 3000);
+        }
     }
     window._globalHealthFix = _globalHealthFix;
     // Primer check con 8 segundos de delay — dejar que la página cargue
