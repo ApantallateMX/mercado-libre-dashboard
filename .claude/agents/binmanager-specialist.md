@@ -647,7 +647,18 @@ def bundle_avail(skus: list, bm_map: dict) -> int:
 - `SNWM000001` → 5,791 disponibles (soporte)
 - Bundle disponible = min(56, 5791) = **56**
 
-**IMPORTANTE:** El `/` en SELLER_SKU NO significa condiciones ICB/ICC. Son dos productos distintos. No confundir con sufijos `-ICB` o `-ICC`.
+**REGLA DE CONDICIONES para bundles con "/":**
+Cuando el SELLER_SKU contiene "/", usar condiciones `GRA,GRB,GRC,ICB,ICC,NEW` para TODOS los SKUs del bundle (no solo GR/NEW). Verificado con MLM843286836 — incluir ICB/ICC suma 3 unidades extra para SNTV002033 (88 vs 85), resultando en avail=59 vs 56.
+
+**Resumen de reglas de condiciones BM por tipo de SELLER_SKU:**
+
+| Formato SELLER_SKU | Ejemplo | Condiciones BM |
+|---|---|---|
+| SKU simple | `SNTV002033` | `GRA,GRB,GRC,NEW` |
+| SKU con sufijo -ICB/-ICC | `SNTV002033-ICB` | `GRA,GRB,GRC,ICB,ICC,NEW` |
+| SKU bundle con "/" | `SNTV002033 / SNWM000001` | `GRA,GRB,GRC,ICB,ICC,NEW` para CADA SKU |
+
+**Para bundles, avail = min(avail de cada componente).**
 
 
 ## BASE DE CONOCIMIENTO — BINMANAGER SISTEMA COMPLETO
