@@ -41,8 +41,44 @@ _BM_COND_URL = (
     "https://binmanager.mitechnologiesinc.com"
     "/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 )
-_BM_LOC_IDS = "47,62,68"
-_BM_COND    = "GRA,GRB,GRC,NEW"
+_BM_LOC_IDS      = "47,62,68"
+_COND_SUFFIXES   = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
+
+
+def _listing_key(sku: str) -> str:
+    """Clave de agrupación por SKU. Preserva sufijos de condición conocidos
+    (-GRA, -GRB, -GRC, -ICB, -ICC, -NEW) para no mezclar stock entre condiciones.
+    Sufijos no-condición (-FLX01, etc.) se normalizan usando _base_sku."""
+    if not sku:
+        return ""
+    upper = sku.upper().strip()
+    for sfx in _COND_SUFFIXES:
+        if upper.endswith(sfx):
+            return upper  # e.g. "SHIL000154-GRA"
+    return _base_sku(sku).upper()
+
+
+def _cond_for_key(key: str) -> str:
+    """Condiciones BM para un listing key."""
+    upper = key.upper()
+    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+        return "GRA,GRB,GRC,ICB,ICC,NEW"
+    if upper.endswith("-GRA"):
+        return "GRA"
+    if upper.endswith("-GRB"):
+        return "GRB"
+    if upper.endswith("-GRC"):
+        return "GRC"
+    return "NEW"  # simple SKU o -NEW
+
+
+def _bm_base_for_key(key: str) -> str:
+    """SKU base para BM query (sin sufijo de condición)."""
+    upper = key.upper()
+    for sfx in _COND_SUFFIXES:
+        if upper.endswith(sfx):
+            return key[: -len(sfx)]
+    return key
 
 # ─── Comisiones por plataforma ────────────────────────────────────────────────
 # ML aplica tarifa diferenciada por precio (aprox):
@@ -107,26 +143,30 @@ _last_sync_result: dict = {}
 # BINMANAGER — consulta avail_total por SKU base
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int | None]:
+async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]:
     """
-    Consulta BM para una lista de SKUs base en paralelo (máx 10 concurrentes).
-    Retorna {sku_base_upper: avail_total} donde avail_total = unidades "Producto Vendible".
+    Consulta BM para cada listing key con su condición específica (máx 10 concurrentes).
+    Retorna {listing_key_upper: avail_total} donde avail_total = unidades "Producto Vendible".
+
+    sku_cond_map: {listing_key → conditions_str}
+    Ejemplo: {"SHIL000154": "NEW", "SHIL000154-GRA": "GRA", "SNAC000029": "NEW"}
 
     IMPORTANTE: Si BM retorna error (timeout, 5xx, excepción), el SKU NO aparece en el dict.
     El caller debe distinguir "BM retornó 0" de "BM tuvo error y no sabemos" — solo el primer
     caso debe poner items en 0.  El segundo caso debe ser skip (no tocar ML).
     """
     result: dict[str, int] = {}
-    if not base_skus:
+    if not sku_cond_map:
         return result
 
     sem = asyncio.Semaphore(10)
 
-    async def _one(base: str, http: httpx.AsyncClient) -> None:
+    async def _one(key: str, conditions: str, http: httpx.AsyncClient) -> None:
+        base = _bm_base_for_key(key)
         payload = {
             "COMPANYID":  1,      "SKU":        base,
             "WAREHOUSEID": None,  "LOCATIONID": _BM_LOC_IDS,
-            "BINID":       None,  "CONDITION":  _BM_COND,
+            "BINID":       None,  "CONDITION":  conditions,
             "FORINVENTORY": 0,    "SUPPLIERS":  None,
         }
         async with sem:
@@ -170,14 +210,17 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int | None]:
                         qty = row.get("TotalQty", 0) or 0
                         if row.get("status") == "Producto Vendible":
                             avail += qty
-                result[base.upper()] = avail
-                logger.debug(f"[MULTI-SYNC-BM] {base} → avail={avail}")
+                result[key.upper()] = avail
+                logger.debug(f"[MULTI-SYNC-BM] {key} (cond={conditions}) → avail={avail}")
             except Exception as exc:
                 # Timeout, red caída, etc. → NO escribir 0. Skip para no poner en 0 sin razón.
-                logger.warning(f"[MULTI-SYNC-BM] Error {base}: {exc} — skip SKU")
+                logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
 
     async with httpx.AsyncClient(timeout=20.0) as http:
-        await asyncio.gather(*[_one(b, http) for b in base_skus], return_exceptions=True)
+        await asyncio.gather(
+            *[_one(k, c, http) for k, c in sku_cond_map.items()],
+            return_exceptions=True,
+        )
 
     return result
 
@@ -229,7 +272,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                         sku = extract_item_sku(item)
                         if not sku:
                             continue
-                        base = _base_sku(sku)
+                        base = _listing_key(sku)
                         if not base:
                             continue
 
@@ -311,7 +354,7 @@ async def _collect_amz_listings(amz_accounts: list) -> dict[str, list]:
                 if is_fba_pure:
                     continue
 
-                base = _base_sku(sku)
+                base = _listing_key(sku)
                 if not base:
                     continue
 
@@ -631,8 +674,9 @@ async def run_multi_stock_sync() -> dict:
 
         logger.info(f"[MULTI-SYNC] {len(all_bases)} SKUs base encontrados")
 
-        # Consultar BM para todos los SKUs base
-        bm_stock = await _fetch_bm_avail(list(all_bases))
+        # Consultar BM por SKU+condición específica para no mezclar stock entre condiciones
+        sku_cond_map = {k: _cond_for_key(k) for k in all_bases}
+        bm_stock = await _fetch_bm_avail(sku_cond_map)
 
         # Reglas de plataforma por SKU (tabla sku_platform_rules)
         try:
