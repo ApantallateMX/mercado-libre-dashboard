@@ -7293,7 +7293,7 @@ window.zeroAlertItem = function(itemId, btn) {{
   }})
   .catch(function() {{ btn.textContent = 'Error'; btn.disabled = false; }});
 }};
-function triggerStockSync() {{
+window.triggerStockSync = function() {{
   var btn = document.getElementById('btn-sync-now');
   if (btn) {{ btn.textContent = 'Iniciando...'; btn.style.pointerEvents = 'none'; }}
   fetch('/api/stock/multi-sync/trigger', {{method:'POST'}})
@@ -7337,7 +7337,7 @@ fetch('/api/config/auto-pause').then(function(r){{return r.json();}}).then(funct
   var chk = document.getElementById('chk-auto-pause');
   if (chk) chk.checked = d.enabled || false;
 }}).catch(function(){{}});
-function toggleAutoPause(enabled) {{
+window.toggleAutoPause = function(enabled) {{
   fetch('/api/config/auto-pause', {{
     method: 'POST',
     headers: {{'Content-Type': 'application/json'}},
