@@ -9,6 +9,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ## 2026-04-03
 
+### FEAT — Sección E Stock Issues: FULL Sin Stock → alerta para cambiar a Merchant
+- **Regla:** Los productos FULL se deben dejar en FULL. Solo si se quedan sin stock en ML pero hay disponible en BM → alerta para cambiar a Merchant y seguir vendiendo.
+- **Fix lateral:** Secciones A (Reabastecer) y C (Activar) ahora excluyen FULL — esas secciones son solo para Merchant.
+- **Nueva Sección E (commit 97b964b):** filtro `is_full=True AND ML=0 AND BM>0`
+  - KPI card cyan en el header
+  - Tabla desktop + cards mobile con badge FULL
+  - Botón "Cambiar a Merchant →" abre el listing directamente en ML
+  - No tiene acciones automáticas — requiere acción manual en panel ML
+- **DECISION:** FULL items: mantener en FULL siempre. Si se agotan → cambiar a Merchant temporalmente para no dejar de vender el stock de bodega.
+
+### FEAT — `_bm_conditions_for_sku`: bundle "/" usa GRA,GRB,GRC,ICB,ICC,NEW
+- **Regla:** `SELLER_SKU` con "/" (ej: `SNTV002033 / SNWM000001`) = señal para usar condiciones completas. El SKU después del "/" es solo referencia, NO se consulta en BM.
+- **Verificado MLM843286836:** VAR "Base de Pared" → física=88 (incluye 3 IC), avail=59 vs VAR "Base de Mesa" → física=85, avail=56
+- **Fix (commit 50cb9f1):** `if "/" in upper: return "GRA,GRB,GRC,ICB,ICC,NEW"`
+
 ### FIX — Vista Deals: botón BM usa disponible neto, no físico bruto
 - **Síntoma:** Botón `BM:86` en la vista de items/deals pre-llenaba el campo de stock con el físico total (incluía reservas). Podría causar oversell si se confirmaba sin revisar.
 - **Fix (commit 7980552):**
