@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-03
+
+### FIX — Fórmula híbrida BM available: resuelve SNTV005554 y SNTV002033
+- **Síntoma:** Dos comportamientos contradictorios en la misma fórmula:
+  - SNTV005554: física=2, reserve_global=3 → old formula `max(0, 2-3)=0` ✗ (BM tiene 2, las 3 reservas son de bins no-vendibles)
+  - SNTV002033: física=86, reserve_global=30 → new formula `min(86, 863-30)=86` ✗ (BM UI muestra 59, las 30 reservas son locales en los bins vendibles)
+- **Root cause:** No existe un campo per-location reserve en la API de BM. El `Reserve` del endpoint global no distingue si las reservas están en bins vendibles o no-vendibles.
+- **Fix (commit 753c144):** Fórmula híbrida en `_store_wh`:
+  - `old = max(0, physical - reserve_global)`
+  - Si `old == 0` y `global_avail > 0` → reservas están fuera de vendible → `avail = min(physical, global_avail)`
+  - Si `old > 0` → reservas son locales → `avail = old` (resta directa)
+- **Resultados:**
+  - SNTV005554: `old=0, global_avail=397 > 0 → min(2, 397) = 2` ✓
+  - SNTV002033: `old=56 > 0 → avail=56` (≈59 BM UI, diff de 3 por unidades ICB/ICC no contadas en GR-only)
+  - SNTV001764: `old=217 > 0 → avail=217` (≈221 BM UI) ✓
+- **Regla aprendida:** Cuando reserve_global > physical_vendible, las reservas DEBEN estar en bins no-vendibles (lógica de conservación física). Cuando reserve_global ≤ physical_vendible, asumimos reservas locales y restamos.
+
+---
+
 ## 2026-04-02
 
 ### BUG — SKU incorrecto persistía en alertas Riesgo Sobreventa (dos lugares sin parchear)
