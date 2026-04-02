@@ -300,6 +300,33 @@ async def init_db():
                 created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: ml_listings — caché local de listings ML
+        # Sincronizado en background; permite leer Stock tab sin llamar API
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_listings (
+                item_id        TEXT PRIMARY KEY,
+                account_id     TEXT NOT NULL,
+                title          TEXT DEFAULT '',
+                status         TEXT DEFAULT 'active',
+                price          REAL DEFAULT 0,
+                available_qty  INTEGER DEFAULT 0,
+                sold_qty       INTEGER DEFAULT 0,
+                sku            TEXT DEFAULT '',
+                logistic_type  TEXT DEFAULT '',
+                catalog_listing INTEGER DEFAULT 0,
+                is_full        INTEGER DEFAULT 0,
+                last_updated   TEXT DEFAULT '',
+                synced_at      REAL DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ml_listings_account ON ml_listings(account_id, status)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ml_listings_sku ON ml_listings(sku)"
+        )
         await db.commit()
 
 
@@ -899,3 +926,66 @@ async def get_multi_sync_last_runs(limit: int = 10) -> list:
             (limit,),
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ML LISTINGS CACHE — caché local de listings para evitar llamadas repetidas
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def upsert_ml_listings(rows: list[dict]) -> None:
+    """Inserta o actualiza listings ML en la tabla local."""
+    if not rows:
+        return
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT OR REPLACE INTO ml_listings
+               (item_id, account_id, title, status, price, available_qty, sold_qty,
+                sku, logistic_type, catalog_listing, is_full, last_updated, synced_at)
+               VALUES (:item_id,:account_id,:title,:status,:price,:available_qty,:sold_qty,
+                       :sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at)""",
+            rows,
+        )
+        await db.commit()
+
+
+async def get_ml_listings(account_id: str, statuses: list[str] | None = None) -> list[dict]:
+    """Retorna listings de una cuenta desde la DB local. statuses=None → todos."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            rows = await (await db.execute(
+                f"SELECT * FROM ml_listings WHERE account_id=? AND status IN ({placeholders})",
+                [account_id] + list(statuses),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                "SELECT * FROM ml_listings WHERE account_id=?",
+                [account_id],
+            )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_ml_listings_all_accounts(statuses: list[str] | None = None) -> list[dict]:
+    """Retorna todos los listings de todas las cuentas."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            rows = await (await db.execute(
+                f"SELECT * FROM ml_listings WHERE status IN ({placeholders})",
+                list(statuses),
+            )).fetchall()
+        else:
+            rows = await (await db.execute("SELECT * FROM ml_listings")).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def count_ml_listings_synced(account_id: str) -> int:
+    """Retorna cuántos listings tiene la cuenta en DB (0 si nunca se ha sincronizado)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT COUNT(*) FROM ml_listings WHERE account_id=? AND synced_at > 0",
+            [account_id],
+        )).fetchone()
+    return row[0] if row else 0

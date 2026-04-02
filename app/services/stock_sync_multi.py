@@ -27,15 +27,12 @@ NOTAS:
 import asyncio
 import json
 import logging
-import re
 import time as _time
 from datetime import datetime
 
 import httpx
 
-# SKU simple: letras + dígitos, sin separadores internos.
-# Se usa para extraer el primer componente de un campo compuesto.
-_FIRST_SKU_RE = re.compile(r'([A-Z]{2,8}\d{3,10})', re.IGNORECASE)
+from app.services.sku_utils import base_sku as _base_sku, extract_item_sku
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +45,54 @@ _BM_LOC_IDS = "47,62,68"
 _BM_COND    = "GRA,GRB,GRC,NEW"
 
 # ─── Comisiones por plataforma ────────────────────────────────────────────────
-_ML_FEE  = 0.17   # 17% promedio ML (varía por categoría)
-_AMZ_FEE = 0.15   # 15% promedio Amazon
+# ML aplica tarifa diferenciada por precio (aprox):
+#   < 500 MXN      → 18%   (artículos baratos, mayor costo relativo)
+#   500–1 500 MXN  → 16%
+#   1 500–5 000 MXN→ 14%
+#   > 5 000 MXN    → 12%   (TVs, laptops, etc.)
+_AMZ_FEE = 0.15   # 15% promedio Amazon (sin escalonado)
 
-# ─── Regla de distribución ────────────────────────────────────────────────────
-STOCK_THRESHOLD = 10   # avail < 10 → concentrar en ganadora
+
+def _ml_fee(price: float) -> float:
+    """Tarifa ML estimada según precio. Más precisa que un flat 17%."""
+    if price >= 5000:
+        return 0.12
+    if price >= 1500:
+        return 0.14
+    if price >= 500:
+        return 0.16
+    return 0.18
+
+
+def _threshold_for(listings: list) -> int:
+    """
+    Umbral dinámico de concentración de stock, basado en el precio medio del SKU.
+
+    Lógica: productos caros se venden más despacio → umbral más bajo.
+    Productos baratos rotan rápido → umbral más alto para tener buffer.
+
+      Precio medio < 500 MXN   → 20 unidades
+      500–2 000 MXN             → 10 unidades  (default actual)
+      2 000–10 000 MXN          →  5 unidades
+      > 10 000 MXN              →  3 unidades
+    """
+    if not listings:
+        return 10
+    prices = [float(lst.get("price") or 0) for lst in listings if (lst.get("price") or 0) > 0]
+    if not prices:
+        return 10
+    avg = sum(prices) / len(prices)
+    if avg >= 10_000:
+        return 3
+    if avg >= 2_000:
+        return 5
+    if avg >= 500:
+        return 10
+    return 20
+
+
+# ─── Regla de distribución (fallback para referencia/logs) ────────────────────
+STOCK_THRESHOLD = 10   # valor por defecto — se reemplaza por _threshold_for() en _plan
 
 # ─── Ciclo ────────────────────────────────────────────────────────────────────
 _SYNC_INTERVAL = 5 * 60   # 5 minutos
@@ -61,35 +101,6 @@ _SYNC_INTERVAL = 5 * 60   # 5 minutos
 _sync_running      = False
 _last_sync_ts      = 0.0
 _last_sync_result: dict = {}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS DE SKU
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _base_sku(sku: str) -> str:
-    """
-    Extrae el SKU base para cruzar con BinManager.
-    SNFN000941-FLX01          → SNFN000941   (sufijo por variante física)
-    SNTV001864 + SNPE000180   → SNTV001864   (bundle: primer componente)
-    SNTV001864 / SNWM000001   → SNTV001864   (bundle con slash)
-    SNTV001864                → SNTV001864   (SKU simple, sin cambio)
-
-    Para bundles se usa el primer SKU reconocible. El stock del bundle
-    queda acotado por BM al componente principal (TV, etc.).
-    """
-    if not sku:
-        return ""
-    upper = sku.upper().strip()
-    # Primero quitar sufijos de variante física (e.g. -FLX01)
-    base = upper.split("-")[0].strip()
-    # Si el resultado aún contiene separadores de bundle (espacio, +, /),
-    # extraer el primer token que parezca un SKU válido.
-    if re.search(r'[\s+/]', base):
-        m = _FIRST_SKU_RE.search(base)
-        if m:
-            return m.group(1)
-    return base
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -215,27 +226,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                         if item_status not in ("active", "paused"):
                             continue
 
-                        # Prioridad: variaciones > padre
-                        # El seller_custom_field del padre puede ser incorrecto en items con variaciones
-                        sku = ""
-                        for var in (item.get("variations") or []):
-                            sku = (var.get("seller_custom_field") or "").strip()
-                            if not sku or sku in ("None", "none"):
-                                sku = ""
-                                for va in (var.get("attributes") or []):
-                                    if va.get("id") == "SELLER_SKU" and va.get("value_name"):
-                                        sku = va["value_name"].strip()
-                                        break
-                            if sku and sku not in ("None", "none"):
-                                break
-                        if not sku:
-                            sku = (item.get("seller_custom_field") or "").strip()
-                        if not sku or sku in ("None", "none"):
-                            sku = ""
-                            for attr in (item.get("attributes") or []):
-                                if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
-                                    sku = attr["value_name"].strip()
-                                    break
+                        sku = extract_item_sku(item)
                         if not sku:
                             continue
                         base = _base_sku(sku)
@@ -373,7 +364,7 @@ def _score(listing: dict) -> float:
     platform = listing.get("platform", "ml")
 
     if platform == "ml":
-        net_price = price * (1 - _ML_FEE)
+        net_price = price * (1 - _ml_fee(price))
         sold_qty  = int(listing.get("sold_qty") or 0)
         date_str  = listing.get("date_created", "")
         days_active = 30
@@ -443,7 +434,7 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
             if lst["qty"] != 0:
                 updates.append({"listing": lst, "new_qty": 0, "reason": "bm_zero"})
 
-    elif bm_avail < STOCK_THRESHOLD:
+    elif bm_avail < _threshold_for(updatable):
         # Concentrar en la cuenta ganadora (mayor score) entre los updatable
         scored  = sorted(updatable, key=_score, reverse=True)
         winner  = scored[0]
@@ -465,6 +456,55 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
                 updates.append({"listing": lst, "new_qty": bm_avail, "reason": reason})
 
     return updates
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FASE 3C — DETECCIÓN DE CANIBALIZACIÓN ENTRE CUENTAS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_cannibalization(ml_by_sku: dict[str, list]) -> list[dict]:
+    """
+    Detecta SKUs activos en 2+ cuentas ML donde solo 1 cuenta está vendiendo.
+
+    Señal: mismo SKU, qty > 0 en múltiples cuentas, pero ventas concentradas en
+    1 sola cuenta (o ninguna). Esto indica que las cuentas sin ventas están
+    compitiendo y dividiendo visibilidad sin convertir.
+
+    Retorna lista de {sku, active_accounts, selling_accounts, items} por SKU canibalizador.
+    """
+    cannibals = []
+    for base, listings in ml_by_sku.items():
+        # Solo ML activo con qty > 0
+        active = [
+            lst for lst in listings
+            if lst.get("platform") == "ml"
+            and lst.get("qty", 0) > 0
+            and lst.get("status") == "active"
+        ]
+        if len(active) < 2:
+            continue  # menos de 2 cuentas activas → no hay canibalización
+
+        active_accounts = list({lst["account_id"] for lst in active})
+        # Cuentas que tienen ventas históricas (sold_qty del listing)
+        selling_accounts = list({
+            lst["account_id"] for lst in active if lst.get("sold_qty", 0) > 0
+        })
+
+        # Solo flag si 0 o 1 cuenta están vendiendo mientras 2+ están activas
+        if len(selling_accounts) <= 1:
+            cannibals.append({
+                "sku":              base,
+                "active_accounts":  active_accounts,
+                "selling_accounts": selling_accounts,
+                "active_qty_total": sum(lst["qty"] for lst in active),
+                "items":            [
+                    {"account_id": lst["account_id"], "item_id": lst.get("item_id"), "qty": lst["qty"], "sold_qty": lst.get("sold_qty", 0)}
+                    for lst in active
+                ],
+            })
+
+    cannibals.sort(key=lambda x: x["active_qty_total"], reverse=True)
+    return cannibals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -622,6 +662,15 @@ async def run_multi_stock_sync() -> dict:
                         amz_clients[sid] = c
                 except Exception:
                     pass
+
+        # Fase 3C: detección de canibalización entre cuentas
+        cannibals = _detect_cannibalization(ml_by_sku)
+        if cannibals:
+            logger.warning(
+                f"[MULTI-SYNC] {len(cannibals)} SKUs con canibalización detectada: "
+                + ", ".join(c["sku"] for c in cannibals[:5])
+            )
+            summary["cannibalization"] = cannibals
 
         # Procesar cada SKU base
         all_results: list = []

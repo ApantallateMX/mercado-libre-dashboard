@@ -314,6 +314,9 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_startup_prewarm())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
+    # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
+    from app.services.ml_listing_sync import start_ml_listing_sync
+    start_ml_listing_sync()
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
     from app.api.lanzar import router as _lanzar_router_ref
     try:
@@ -2016,7 +2019,7 @@ async def _prewarm_caches():
                 _DEFAULT_THRESHOLD = 10
                 restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
-                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
+                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_avail") or 0) == 0 and not p.get("is_full") and p.get("sku")]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
                 activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
@@ -2558,7 +2561,7 @@ async def products_inventory_partial(
             risk_ids = {
                 p["id"] for p in products
                 if p.get("available_quantity", 0) > 0
-                and (p.get("_bm_total") or 0) == 0
+                and (p.get("_bm_avail") or 0) == 0
                 and not p.get("is_full")
                 and p.get("sku")
             }

@@ -7,6 +7,56 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — Plan estratégico Fase 1 + 2 + 3
+
+### FIX (Fase 1A) — oversell_risk usaba _bm_total en vez de _bm_avail
+- **Bug:** La alerta "Riesgo de overselling" en Stock Issues (y en el endpoint de alertas) filtraba con `_bm_total == 0` en lugar de `_bm_avail == 0`. Consecuencia: un item aparecía como "no hay stock" aunque hubiera unidades disponibles no-reservadas, o viceversa — items con todo el stock reservado no eran detectados como riesgo.
+- **Fix:** Dos lugares en `main.py` (líneas 2022 y 2564) cambiados de `_bm_total` a `_bm_avail`. `_bm_avail` es el stock real vendible (excluye reservados), `_bm_total` es solo físico.
+
+### FEAT (Fase 1C) — app/services/sku_utils.py: módulo canónico de extracción de SKU
+- **Problema:** La lógica de extracción de SKU estaba duplicada en 5+ lugares: `main.py`, `stock_sync_multi.py`, `ml_listing_sync.py`, etc. Cada implementación tenía ligeras diferencias.
+- **Solución:** Nuevo módulo `app/services/sku_utils.py` con:
+  - `extract_variation_sku(variation)` — extrae de variación (seller_custom_field o SELLER_SKU attr)
+  - `extract_item_sku(item)` — extrae de item ML completo (prioriza variaciones sobre padre)
+  - `base_sku(sku)` — normaliza a SKU base: quita sufijo variante, extrae primer token de bundles
+- `stock_sync_multi.py` y `ml_listing_sync.py` ahora usan este módulo; duplicados eliminados.
+
+### FEAT (Fase 2) — ml_listings DB local + sync background (spinner de Stock → historia)
+- **Problema:** Tab Stock tardaba 60-150s porque llamaba ML API en cada carga.
+- **Solución:** Nueva tabla `ml_listings` en SQLite + servicio `ml_listing_sync.py`:
+  - Al arranque (delay 30s): sync completo active+paused para todas las cuentas
+  - Cada 10min: sync incremental (top-50 por last_updated)
+  - Cada 6h: reconciliación completa para capturar cerrados
+  - Las reads del tab Stock leen de DB local (instantáneo) en vez de llamar ML API
+- Stock al registrar en token_store: `upsert_ml_listings`, `get_ml_listings`, `get_ml_listings_all_accounts`, `count_ml_listings_synced`
+- `start_ml_listing_sync()` registrado en lifespan de FastAPI (main.py línea 319)
+
+### FEAT (Fase 3A) — Tarifas ML dinámicas por precio (vs flat 17%)
+- **Antes:** `_score()` en `stock_sync_multi.py` usaba `_ML_FEE = 0.17` flat para todos los productos.
+- **Ahora:** `_ml_fee(price)` aplica tarifa diferenciada por bracket de precio MXN:
+  - ≥ $5,000: 12% (TVs, laptops)
+  - $1,500–$5,000: 14%
+  - $500–$1,500: 16%
+  - < $500: 18%
+- El scoring ahora favorece correctamente a productos caros (menor tarifa relativa = mejor margen neto).
+
+### FEAT (Fase 3B) — Umbral de concentración dinámico por valor de producto
+- **Antes:** `STOCK_THRESHOLD = 10` fijo para todos los SKUs.
+- **Ahora:** `_threshold_for(listings)` calcula umbral según precio promedio del SKU:
+  - Precio medio ≥ $10,000: umbral=3 (TVs premium, rotan lento)
+  - $2,000–$10,000: umbral=5
+  - $500–$2,000: umbral=10 (default actual)
+  - < $500: umbral=20 (artículos baratos rotan rápido, necesitan buffer)
+- El plan de distribución llama `_threshold_for(updatable)` para cada SKU en tiempo real.
+
+### FEAT (Fase 3C) — Detección de canibalización entre cuentas
+- **Nuevo:** `_detect_cannibalization(ml_by_sku)` en `stock_sync_multi.py`
+- Detecta SKUs con 2+ cuentas ML activas (qty>0) pero donde 0 o 1 cuentas tienen ventas históricas. Indica que las cuentas sin ventas consumen visibilidad del algoritmo ML sin convertir.
+- El resultado se incluye en `summary["cannibalization"]` del sync y se loguea como warning.
+- Próximo paso: mostrar en la UI como alerta de tipo "Canibalización multi-cuenta".
+
+---
+
 ## 2026-04-02 (cont.)
 
 ### BUG — Sync multi-plataforma pone items en 0 cuando BM tiene error de API
