@@ -2211,20 +2211,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         }
         async with wh_sem:
             try:
-                r_wh, r_avail = await asyncio.gather(
-                    http.post(BM_WH_URL,   json=wh_payload,   timeout=15.0),
-                    http.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
+                # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY real (excluye reservados)
+                # Get_GlobalStock_InventoryBySKU retorna Reserve y AvailableQTY correctos.
+                # InventoryBySKUAndCondicion_Quantity está ROTO en el servidor (SQL "Invalid column name 'binid'")
+                r_wh, avail_direct = await asyncio.gather(
+                    http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
+                    bm_cli.get_available_qty(base),
                     return_exceptions=True,
                 )
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
-
-                # Parsear Available directamente (ya excluye reservados)
-                avail_direct = 0
-                if not isinstance(r_avail, Exception) and r_avail.status_code == 200 and "User/Index" not in str(getattr(r_avail, "url", "")):
-                    avail_data = r_avail.json()
-                    avail_rows = [avail_data] if isinstance(avail_data, dict) else (avail_data if isinstance(avail_data, list) else [])
-                    avail_direct = sum(int(row.get("Available", 0) or 0) for row in avail_rows)
+                if isinstance(avail_direct, Exception):
+                    avail_direct = 0
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct)
                 return
@@ -6161,23 +6159,11 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 return result
 
             async def _query_bm_avail(sku: str) -> int:
-                """Retorna Available - Required para un SKU en BM."""
-                conditions = _bm_conditions_for_sku(sku)
+                """Retorna AvailableQTY para un SKU en BM (excluye reservados)."""
+                from app.services.binmanager_client import get_shared_bm
                 try:
-                    r = await http.post(BM_AVAIL_URL_SYNC, json={
-                        "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-                        "LOCATIONID": None, "BINID": None,  # None = global, "47,62,68" retorna vacío
-                        "PRODUCTSKU": sku, "CONDITION": conditions,
-                        "SUPPLIERS": None, "LCN": None, "SEARCH": sku,
-                    }, headers={"Content-Type": "application/json"}, timeout=15.0)
-                    if r.status_code != 200:
-                        return -1  # error de BM
-                    rows = r.json()
-                    if isinstance(rows, dict): rows = [rows]
-                    if not isinstance(rows, list): return -1
-                    avail = sum(row.get("Available", 0) or 0 for row in rows)
-                    req   = sum(row.get("Required", 0) or 0 for row in rows)
-                    return max(0, avail - req)
+                    bm = await get_shared_bm()
+                    return await bm.get_available_qty(sku)
                 except Exception:
                     return -1  # error
 

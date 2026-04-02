@@ -61,28 +61,24 @@ def _parse_wh(rows) -> tuple:
 
 
 async def _bm_stock(sku: str, hclient: httpx.AsyncClient) -> dict:
+    from app.services.binmanager_client import get_shared_bm
     base = _base_sku(sku)
     cond = _bm_conditions(sku)
     wh_payload = {
         "COMPANYID": _BM_COMPANY, "SKU": base, "WarehouseID": None,
-        "LocationID": _BM_LOCS,  "BINID": None, "Condition": cond,
+        "LocationID": _BM_LOCS, "BINID": None, "Condition": cond,
         "SUPPLIERS": None, "ForInventory": 0,
     }
-    avail_payload = {
-        "COMPANYID": _BM_COMPANY, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-        "LOCATIONID": None, "BINID": None, "PRODUCTSKU": base,  # None = global, "47,62,68" retorna vacío
-        "CONDITION": cond, "SUPPLIERS": None, "LCN": None, "SEARCH": base,
-    }
     try:
-        r_wh, r_av = await asyncio.gather(
-            hclient.post(_BM_WH_URL,   json=wh_payload,    timeout=12.0),
-            hclient.post(_BM_AVAIL_URL, json=avail_payload, timeout=12.0),
+        bm_cli = await get_shared_bm()
+        r_wh, avail = await asyncio.gather(
+            hclient.post(_BM_WH_URL, json=wh_payload, timeout=12.0),
+            bm_cli.get_available_qty(base),
             return_exceptions=True,
         )
-        rows_wh = r_wh.json()  if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-        rows_av = r_av.json()  if not isinstance(r_av, Exception) and r_av.status_code == 200 else []
+        rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+        if isinstance(avail, Exception): avail = 0
         mty, cdmx, tj = _parse_wh(rows_wh)
-        avail = sum(r.get("Available", 0) or 0 for r in rows_av)
         return {"mty": mty, "cdmx": cdmx, "tj": tj, "avail": avail, "total": mty + cdmx + tj}
     except Exception:
         return {"mty": 0, "cdmx": 0, "tj": 0, "avail": 0, "total": 0}

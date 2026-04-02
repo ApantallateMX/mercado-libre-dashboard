@@ -56,46 +56,28 @@ def _parse_wh_rows_items(rows):
 
 async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
     """Consulta en paralelo:
-    1) Warehouse endpoint (ForInventory:0) → MTY/CDMX/TJ totales físicos
-    2) InventoryBySKUAndCondicion_Quantity → stock realmente disponible (Available),
-       excluyendo unidades reservadas para órdenes pendientes.
-    Retorna dict con MainQtyMTY/CDMX/TJ y AvailTotal.
+    1) Warehouse endpoint → MTY/CDMX/TJ totales físicos
+    2) get_available_qty → AvailableQTY real (Get_GlobalStock_InventoryBySKU, excluye reservados)
     """
+    from app.services.binmanager_client import get_shared_bm
     base, _ = _get_base_and_type(sku)
     conditions = _bm_conditions(sku)
     wh_payload = {
-        "COMPANYID": BM_COMPANY_ID,
-        "SKU": base,
-        "WarehouseID": None,
-        "LocationID": BM_LOCATION_IDS,
-        "BINID": None,
-        "Condition": conditions,
-        "SUPPLIERS": None,
-        "ForInventory": 0,
-    }
-    avail_payload = {
-        "COMPANYID": BM_COMPANY_ID,
-        "TYPEINVENTORY": 0,
-        "WAREHOUSEID": None,
-        "LOCATIONID": None,  # None = total disponible global; "47,62,68" retorna vacío
-        "BINID": None,
-        "PRODUCTSKU": base,
-        "CONDITION": conditions,
-        "SUPPLIERS": None,
-        "LCN": None,
-        "SEARCH": base,
+        "COMPANYID": BM_COMPANY_ID, "SKU": base, "WarehouseID": None,
+        "LocationID": BM_LOCATION_IDS, "BINID": None,
+        "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
     }
     try:
-        r_wh, r_avail = await asyncio.gather(
+        bm_cli = await get_shared_bm()
+        r_wh, avail_total = await asyncio.gather(
             client.post(BM_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
-            client.post(BM_AVAIL_URL, json=avail_payload, timeout=15.0),
+            bm_cli.get_available_qty(base),
             return_exceptions=True,
         )
         rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-        avail_rows = r_avail.json() if not isinstance(r_avail, Exception) and r_avail.status_code == 200 else []
+        if isinstance(avail_total, Exception): avail_total = 0
         mty, cdmx, tj = _parse_wh_rows_items(rows_wh)
-        avail_total = sum(row.get("Available", 0) or 0 for row in avail_rows)
-        if mty + cdmx + tj > 0:
+        if mty + cdmx + tj > 0 or avail_total > 0:
             return {
                 "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
                 "AvailTotal": avail_total,

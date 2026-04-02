@@ -259,6 +259,41 @@ class BinManagerClient:
                 return {}
         return {}
 
+    async def get_available_qty(self, sku: str) -> int:
+        """Retorna AvailableQTY para un SKU (ya excluye reservados).
+        Usa Get_GlobalStock_InventoryBySKU con SEARCH=sku y CONCEPTID=8.
+        AvailableQTY = TotalQty - Reserve (calculado server-side por BM).
+        Verificado en BM Network: Reserve=80, AvailableQTY=4 para SNTV006850.
+        """
+        if not self._logged_in:
+            if not await self.login():
+                return 0
+        c = self._client()
+        url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        payload = {**_GS_BASE_PAYLOAD, "SEARCH": sku, "RECORDSPAGE": 5, "NEEDRETAILPRICEPH": False}
+        for attempt in range(2):
+            try:
+                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return 0
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and data:
+                        match = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
+                        avail = match.get("AvailableQTY")
+                        return int(avail) if avail is not None else 0
+                return 0
+            except Exception as e:
+                logger.error(f"BinManager get_available_qty error {sku}: {e}")
+                if attempt == 0:
+                    continue
+                return 0
+        return 0
+
     async def post_inventory(self, url: str, payload: dict, timeout: float = 15.0):
         """POST autenticado a un endpoint de inventario BM. Maneja sesión expirada con re-login.
         Retorna response httpx o None si falla."""

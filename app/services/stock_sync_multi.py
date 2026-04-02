@@ -163,40 +163,17 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
 
     sem = asyncio.Semaphore(10)
 
-    async def _one(key: str, conditions: str, http: httpx.AsyncClient) -> None:
+    async def _one(key: str, conditions: str, _http: httpx.AsyncClient) -> None:
         base = _bm_base_for_key(key)
-        # InventoryBySKUAndCondicion_Quantity: devuelve Available (ya excluye reservados)
-        # GlobalStock_InventoryBySKU_Condition era incorrecto: daba TotalQty físico sin
-        # descontar reservados (SNTV001763: 4 físicos, 4 reservados, Available real=0)
-        payload = {
-            "COMPANYID":   1,        "TYPEINVENTORY": 0,
-            "WAREHOUSEID": None,     "LOCATIONID":    None,
-            "BINID":       None,     "PRODUCTSKU":    base,
-            "CONDITION":   conditions, "SUPPLIERS":   None,
-            "LCN":         None,     "SEARCH":        base,
-        }
+        # Usar Get_GlobalStock_InventoryBySKU → AvailableQTY (excluye reservados, calculado server-side)
+        # InventoryBySKUAndCondicion_Quantity está ROTO (SQL "Invalid column name 'binid'")
         async with sem:
             try:
-                r = await http.post(_BM_AVAIL_URL, json=payload, timeout=15.0)
-                if r.status_code != 200 or "User/Index" in str(getattr(r, "url", "")):
-                    # BM error (5xx, 429, sesión expirada, etc.) → NO escribir 0.
-                    # Skip: el sync no toca este SKU en este ciclo.
-                    logger.warning(f"[MULTI-SYNC-BM] HTTP {r.status_code} / sesión? para {key} — skip SKU")
-                    return
-                data = r.json()
-                # BM puede devolver un objeto único {} o una lista [{}].
-                if isinstance(data, dict):
-                    rows = [data]
-                elif isinstance(data, list):
-                    rows = data
-                else:
-                    rows = []
-                # Available ya excluye reservados — sumar directamente
-                avail = sum(int(row.get("Available", 0) or 0) for row in rows)
+                avail = await bm_cli.get_available_qty(base)
                 result[key.upper()] = avail
-                logger.debug(f"[MULTI-SYNC-BM] {key} (cond={conditions}) → avail={avail}")
+                logger.debug(f"[MULTI-SYNC-BM] {key} → AvailableQTY={avail}")
             except Exception as exc:
-                # Timeout, red caída, etc. → NO escribir 0. Skip para no poner en 0 sin razón.
+                # Error → NO escribir 0. Skip para no poner en 0 sin razón.
                 logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
 
     # Usar cliente BM autenticado (sesión persistente con cookies de login)
