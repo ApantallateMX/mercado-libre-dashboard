@@ -589,29 +589,65 @@ for account_id, ids in items_by_account.items():
 
 **CRÍTICO — riesgo de pérdidas y cierre de cuenta.**
 
-Para items con variaciones en ML, el `seller_custom_field` del **padre** puede ser un SKU completamente diferente al de las variaciones.
+Para items con variaciones en ML, el `seller_custom_field` del **padre** puede ser un SKU completamente diferente al de las variaciones. Además, el SKU real puede estar en el atributo `SELLER_SKU` de la variación, no en `seller_custom_field`.
 
 **Ejemplo real:** MLM1493302754
 - Padre `seller_custom_field` = `SNTV002695` ← **INCORRECTO**
-- Variaciones `SELLER_SKU` = `SNTV005554` ← **CORRECTO**
+- Variaciones `SELLER_SKU` (atributo) = `SNTV005554` ← **CORRECTO**
 
 **Consecuencia del bug:** BM lookup con SKU incorrecto → stock=0 falso → sync pone qty=0 en listings con stock real → ventas perdidas / reclamos / cierre de cuenta.
 
-**Regla:** Para items con variaciones, SIEMPRE usar el SKU de la primera variación con SKU definido. Ignorar `seller_custom_field` del padre.
+**Regla:** Para items con variaciones, SIEMPRE usar el SKU del atributo `SELLER_SKU` de la variación. Ignorar `seller_custom_field` del padre.
 
 ```python
-# BIEN — priorizar variaciones:
+# BIEN — priorizar SELLER_SKU en atributos de variación:
 def get_sku(item):
     for var in (item.get("variations") or []):
-        sku = (var.get("seller_custom_field") or "").strip()
-        if sku and sku not in ("None", "none"):
-            return sku
+        # Primero: atributo SELLER_SKU (más confiable)
         for attr in (var.get("attributes") or []):
             if attr.get("id") == "SELLER_SKU" and attr.get("value_name"):
                 return attr["value_name"].strip()
+        # Segundo: seller_custom_field de la variación
+        sku = (var.get("seller_custom_field") or "").strip()
+        if sku and sku not in ("None", "none"):
+            return sku
     # Fallback: item sin variaciones
     return (item.get("seller_custom_field") or "").strip()
 ```
+
+---
+
+## HALLAZGO — SKU con "/" = Bundle/Kit de dos productos (2026-04-03)
+
+**Verificado con MLM843286836 (variación "Base de Pared").**
+
+Cuando el `SELLER_SKU` de una variación contiene `/`, indica un **bundle** compuesto por dos SKUs distintos.
+
+**Ejemplo:** `SNTV002033 / SNWM000001` = TV TCL 32S331 + Soporte de pared LUTEMA MCR-WH02
+
+**Reglas para bundles:**
+1. Separar por `/` → obtener cada SKU individual (trim espacios)
+2. Consultar BM por **cada SKU por separado** con sus condiciones propias
+3. Stock disponible del bundle = **min(avail_sku1, avail_sku2, ...)** — el cuello de botella
+4. Cada SKU mantiene su propia regla de condiciones (GR/NEW o con IC según sufijo)
+
+```python
+def get_bundle_skus(seller_sku: str) -> list:
+    """Retorna lista de SKUs. Si contiene '/', es un bundle."""
+    return [s.strip() for s in seller_sku.split("/") if s.strip()]
+
+def bundle_avail(skus: list, bm_map: dict) -> int:
+    """Disponible del bundle = mínimo de los SKUs componentes."""
+    avails = [bm_map.get(sku, {}).get("avail_total", 0) for sku in skus]
+    return min(avails) if avails else 0
+```
+
+**Ejemplo real (2026-04-03):**
+- `SNTV002033` → 56 disponibles (TV, cuello de botella)
+- `SNWM000001` → 5,791 disponibles (soporte)
+- Bundle disponible = min(56, 5791) = **56**
+
+**IMPORTANTE:** El `/` en SELLER_SKU NO significa condiciones ICB/ICC. Son dos productos distintos. No confundir con sufijos `-ICB` o `-ICC`.
 
 
 ## BASE DE CONOCIMIENTO — BINMANAGER SISTEMA COMPLETO
