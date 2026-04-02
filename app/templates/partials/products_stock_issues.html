@@ -36,9 +36,17 @@
         <p class="text-2xl font-bold text-red-600">{{ critical_count }}</p>
         <p class="text-[10px] text-gray-400">{{ critical_bm_total }} uds. BM disponible</p>
     </div>
+    {% if full_no_stock_count %}
+    <div onclick="document.getElementById('full-nostock-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-cyan-400 cursor-pointer hover:shadow-md hover:bg-cyan-50/30 transition">
+        <p class="text-xs text-gray-500">FULL Sin Stock</p>
+        <p class="text-2xl font-bold text-cyan-600">{{ full_no_stock_count }}</p>
+        <p class="text-[10px] text-gray-400">{{ full_no_stock_bm }} uds BM — cambiar a Merchant</p>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
 </div>
@@ -768,6 +776,102 @@
     {% endif %}
     <span id="bulk-activate-msg" class="text-xs mt-2 block text-center"></span>
 </div>
+
+<!-- ===== Seccion E: FULL Sin Stock ===== -->
+{% if full_no_stock %}
+<div class="mb-8" id="full-nostock-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-cyan-400 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">FULL Sin Stock</h3>
+        <span class="text-xs text-gray-400">(MeLi=0, BM disponible — cambiar a Merchant)</span>
+        <span class="ml-auto text-[10px] bg-cyan-100 text-cyan-700 px-2 py-0.5 rounded-full font-medium">
+            No se puede actualizar vía API — requiere acción manual
+        </span>
+    </div>
+    <div class="bg-cyan-50 border border-cyan-200 rounded-lg px-4 py-2 mb-3 text-xs text-cyan-800">
+        Estos listings están en <strong>logística FULL</strong> — ML controla el stock. Se agotó en ML pero hay unidades en bodega.
+        Para seguir vendiendo: cambiar a <strong>envío propio (Merchant)</strong> desde el panel de ML.
+    </div>
+
+    <!-- Mobile -->
+    <div class="md:hidden space-y-2">
+        {% for p in full_no_stock %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-cyan-400">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span class="font-mono text-[10px] text-gray-400">{{ p.id }}</span>
+                        {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{{ p.sku }}</span>{% endif %}
+                        <span class="text-[10px] bg-cyan-100 text-cyan-700 px-1.5 py-0.5 rounded font-bold">FULL</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-cyan-700">{{ p.get('_bm_avail', 0) }}</span></div>
+            </div>
+            <div class="mt-2 pt-2 border-t border-gray-100">
+                <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"
+                   class="block w-full text-center py-1.5 text-xs bg-cyan-600 text-white rounded-lg font-medium hover:bg-cyan-700">
+                    Ver en MeLi → Cambiar a Merchant
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Desktop -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-cyan-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in full_no_stock %}
+                <tr class="hover:bg-cyan-50/30">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                            <span class="text-[10px] bg-cyan-100 text-cyan-700 px-1 rounded font-bold w-fit">FULL</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
+                    <td class="px-3 py-2 text-right font-bold text-cyan-700">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right text-gray-600">{{ p.get('_bm_mty', 0) }}</td>
+                    <td class="px-3 py-2 text-right text-gray-600">{{ p.get('_bm_cdmx', 0) }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"
+                           class="px-3 py-1.5 bg-cyan-600 text-white text-xs rounded-lg hover:bg-cyan-700 font-medium whitespace-nowrap">
+                            Cambiar a Merchant →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
 
 <script>
 // --- Helpers ---

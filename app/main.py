@@ -1809,18 +1809,18 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         # BM metadata: RetailPrice USD, AvgCost, Brand
         await _enrich_with_bm_product_info(products)
 
-        # Seccion A: Reabastecer (MeLi=0, BM disponible>0, tiene ventas)
-        # Usa _bm_avail (no _bm_total) para excluir stock reservado para órdenes pendientes
+        # Seccion A: Reabastecer (MeLi=0, BM disponible>0, tiene ventas, NO FULL)
+        # FULL se excluye — su stock lo controla ML, no podemos modificarlo vía API
         restock = [
             p for p in products
             if p.get("available_quantity", 0) == 0
             and (p.get("_bm_avail") or 0) > 0
             and p.get("units", 0) > 0
+            and not p.get("is_full")
         ]
         restock.sort(key=lambda x: x.get("units", 0), reverse=True)
 
         # Seccion B: Riesgo Sobreventa (MeLi>0, BM total=0, no FULL)
-        # Usa _bm_total: si hay stock físico (aunque reservado) no es riesgo real
         oversell_risk = [
             p for p in products
             if p.get("available_quantity", 0) > 0
@@ -1830,18 +1830,18 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         ]
         oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
 
-        # Seccion C: Activar (MeLi=0, BM disponible>0, sin ventas)
+        # Seccion C: Activar (MeLi=0, BM disponible>0, sin ventas, NO FULL)
         restock_ids = {p["id"] for p in restock}
         activate = [
             p for p in products
             if p.get("available_quantity", 0) == 0
             and (p.get("_bm_avail") or 0) > 0
             and p["id"] not in restock_ids
+            and not p.get("is_full")
         ]
         activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
 
         # Seccion D: Stock Crítico (MeLi>0, BM disponible bajo, no FULL)
-        # Productos activos con poco stock en BM — riesgo de quedarse sin mercancía pronto
         critical = [
             p for p in products
             if p.get("available_quantity", 0) > 0
@@ -1850,6 +1850,16 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             and p.get("sku")
         ]
         critical.sort(key=lambda x: x.get("units", 0), reverse=True)
+
+        # Seccion E: FULL sin stock — MeLi=0, BM>0, es FULL
+        # No se puede actualizar via API. Alerta para cambiar a Merchant y seguir vendiendo.
+        full_no_stock = [
+            p for p in products
+            if p.get("is_full")
+            and p.get("available_quantity", 0) == 0
+            and (p.get("_bm_avail") or 0) > 0
+        ]
+        full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
 
         # KPIs
         restock_count = len(restock)
@@ -1860,12 +1870,15 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         activate_stock = sum(p.get("_bm_avail", 0) for p in activate)
         critical_count = len(critical)
         critical_bm_total = sum(p.get("_bm_avail", 0) for p in critical)
+        full_no_stock_count = len(full_no_stock)
+        full_no_stock_bm = sum(p.get("_bm_avail", 0) for p in full_no_stock)
 
         ctx = {
             "restock": restock,
             "oversell_risk": oversell_risk,
             "activate": activate,
             "critical": critical,
+            "full_no_stock": full_no_stock,
             "restock_count": restock_count,
             "lost_revenue": lost_revenue,
             "risk_count": risk_count,
@@ -1874,6 +1887,8 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             "activate_stock": activate_stock,
             "critical_count": critical_count,
             "critical_bm_total": critical_bm_total,
+            "full_no_stock_count": full_no_stock_count,
+            "full_no_stock_bm": full_no_stock_bm,
             "threshold": threshold,
         }
         _stock_issues_cache[key] = (_time.time(), ctx)
@@ -2049,12 +2064,12 @@ async def _prewarm_caches():
 
             # Pre-computar stock issues result — threshold default=10
             _DEFAULT_THRESHOLD = 10
-            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0]
+            restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
             restock.sort(key=lambda x: x.get("units", 0), reverse=True)
             oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_total") or 0) == 0 and not p.get("is_full") and p.get("sku")]
             oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
             restock_ids = {p["id"] for p in restock}
-            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids]
+            activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
             activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
             critical = [
                 p for p in products
@@ -2064,14 +2079,17 @@ async def _prewarm_caches():
                 and p.get("sku")
             ]
             critical.sort(key=lambda x: x.get("_bm_avail", 0))
+            full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
+            full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
             # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
             _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
                 "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
-                "critical": critical,
+                "critical": critical, "full_no_stock": full_no_stock,
                 "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
                 "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
                 "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
                 "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
+                "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
                 "threshold": _DEFAULT_THRESHOLD,
             })
         finally:
