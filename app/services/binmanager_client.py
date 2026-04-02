@@ -260,36 +260,61 @@ class BinManagerClient:
         return {}
 
     async def get_available_qty(self, sku: str) -> int:
-        """Retorna stock vendible para un SKU (status 'Producto Vendible') en MTY+CDMX.
-        Usa GlobalStock_InventoryBySKU_Condition con LocationID=47,62,68.
-        Suma TotalQty donde status=='Producto Vendible' en Conditions_JSON.
-
-        NOTA: Get_GlobalStock_InventoryBySKU con CONCEPTID=8 devuelve un contador
-        contable que NO refleja stock físico real (e.g. 202 cuando hay 2 unidades).
+        """Retorna AvailableQTY para un SKU filtrado a LocationID=47,62,68 (MTY+CDMX).
+        Usa Get_GlobalStock_InventoryBySKU con el payload exacto que BM usa en su UI:
+          - CONCEPTID=1, LOCATIONID="47,62,68", CONDITION="GRA,GRB,GRC,ICB,ICC,NEW"
+        El campo AvailableQTY = TotalQty - Reserve (calculado por BM server-side).
+        Verificado: SNTV001764 → TotalQty=214, Reserve=1, AvailableQTY=213.
         """
-        import json as _json
         if not self._logged_in:
             if not await self.login():
                 return 0
         c = self._client()
 
-        # Extraer base SKU y condiciones según sufijo
+        # Extraer base SKU (sin sufijo de condición)
         upper = sku.upper()
         base = sku
         for sfx in ("-ICB", "-ICC", "-NEW", "-GRA", "-GRB", "-GRC"):
             if upper.endswith(sfx):
                 base = sku[:-len(sfx)]
                 break
-        if upper.endswith("-ICB") or upper.endswith("-ICC"):
-            conditions = "GRA,GRB,GRC,ICB,ICC,NEW"
-        else:
-            conditions = "GRA,GRB,GRC,NEW"
 
-        url = f"{_BM_BASE}/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+        url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
         payload = {
-            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
-            "LOCATIONID": "47,62,68", "BINID": None,
-            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
+            "COMPANYID": 1,
+            "CATEGORYID": None, "WAREHOUSEID": None,
+            "LOCATIONID": "47,62,68",
+            "BINID": None,
+            "SEARCH": base,
+            "CONDITION": "GRA,GRB,GRC,ICB,ICC,NEW",
+            "FORINVENTORY": 0,
+            "BUSCADOR": False,
+            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+            "CONCEPTID": 1,
+            "OPENCELL": "", "OCCOMPTABILITY": "",
+            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
+            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDAVGCOST": False, "NEEDRETAILPRICEPH": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "PorcentajeFloor": 20, "StatusConcept": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "NEEDLASTREPORTEDSALESPRICE": None,
+            "StartDate": None, "EndDate": None,
+            "Jsonfilter": "[]",
+            "Arrayfilters_Condition": None, "Namefilters_Condition": None,
+            "Arrayfilters_Brand": None, "Namefilters_Brand": None,
+            "Arrayfilters_Model": None, "Namefilters_Model": None,
+            "Arrayfilters_Size": None, "Namefilters_Size": None,
+            "Arrayfilters_Category": None, "Namefilters_Category": None,
+            "Arrayfilters_Tags": None, "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
         }
         for attempt in range(2):
             try:
@@ -302,28 +327,16 @@ class BinManagerClient:
                     return 0
                 if r.status_code == 200:
                     data = r.json()
-                    if not isinstance(data, list):
-                        return 0
-                    avail = 0
-                    for row in data:
-                        cj = row.get("Conditions_JSON") or []
-                        if isinstance(cj, str):
-                            try:
-                                cj = _json.loads(cj)
-                            except Exception:
-                                cj = []
-                        if isinstance(cj, list) and cj:
-                            for cond in cj:
-                                for item in (cond.get("SKUCondition_JSON") or []):
-                                    qty = item.get("TotalQty", 0) or 0
-                                    if item.get("status") == "Producto Vendible":
-                                        avail += qty
-                        else:
-                            # Fallback: fila con status directo (estructura plana)
-                            qty = row.get("TotalQty", 0) or 0
-                            if row.get("status") == "Producto Vendible":
-                                avail += qty
-                    return avail
+                    if isinstance(data, list) and data:
+                        # Buscar coincidencia exacta de SKU base
+                        match = next(
+                            (x for x in data if (x.get("SKU") or "").upper() == base.upper()),
+                            None
+                        )
+                        if match is None:
+                            return 0  # SKU no encontrado — NO caer al data[0] (puede ser otro SKU)
+                        avail = match.get("AvailableQTY")
+                        return int(avail) if avail is not None else 0
                 return 0
             except httpx.TimeoutException:
                 logger.warning(f"BinManager timeout get_available_qty {sku} (intento {attempt+1})")
