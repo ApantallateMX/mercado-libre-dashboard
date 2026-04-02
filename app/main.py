@@ -1769,11 +1769,10 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             # include_paused: traer items pausados para seccion Activar
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
-        # Si el prewarm está corriendo en background, devolver loading rápido
-        # para no bloquear al usuario 90s esperando BM en frío
-        if _prewarm_task and not _prewarm_task.done():
-            asyncio.create_task(_prewarm_caches())   # asegurar que corra
-            return HTMLResponse("""
+        # Cache fría o expirada: calcular en background y devolver loading inmediato.
+        # Evita el timeout de 30s de Railway (el cálculo tarda 60-90s en frío).
+        asyncio.create_task(_prewarm_caches())
+        return HTMLResponse("""
 <div class="text-center py-16 text-gray-500">
   <svg class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -1789,111 +1788,6 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
 <script>setTimeout(function(){ if(window.switchProductTab) window.switchProductTab('stock','/partials/products-stock-issues'); }, 20000);</script>
 """)
 
-        from datetime import datetime, timedelta
-        now = datetime.utcnow()
-        date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        date_to = now.strftime("%Y-%m-%d")
-
-        all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_all=True),
-            _get_orders_cached(client, date_from, date_to),
-        )
-        sales_map = _aggregate_sales_by_item(all_orders)
-        products = _build_product_list(all_bodies, sales_map)
-        _enrich_sku_from_orders(products, all_orders)
-
-        # BM stock para todos
-        bm_map = await _get_bm_stock_cached(products)
-        _apply_bm_stock(products, bm_map)
-
-        # BM metadata: RetailPrice USD, AvgCost, Brand
-        await _enrich_with_bm_product_info(products)
-
-        # Seccion A: Reabastecer (MeLi=0, BM disponible>0, tiene ventas, NO FULL)
-        # FULL se excluye — su stock lo controla ML, no podemos modificarlo vía API
-        restock = [
-            p for p in products
-            if p.get("available_quantity", 0) == 0
-            and (p.get("_bm_avail") or 0) > 0
-            and p.get("units", 0) > 0
-            and not p.get("is_full")
-        ]
-        restock.sort(key=lambda x: x.get("units", 0), reverse=True)
-
-        # Seccion B: Riesgo Sobreventa (MeLi>0, BM total=0, no FULL)
-        oversell_risk = [
-            p for p in products
-            if p.get("available_quantity", 0) > 0
-            and (p.get("_bm_total") or 0) == 0
-            and not p.get("is_full")
-            and p.get("sku")
-        ]
-        oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
-
-        # Seccion C: Activar (MeLi=0, BM disponible>0, sin ventas, NO FULL)
-        restock_ids = {p["id"] for p in restock}
-        activate = [
-            p for p in products
-            if p.get("available_quantity", 0) == 0
-            and (p.get("_bm_avail") or 0) > 0
-            and p["id"] not in restock_ids
-            and not p.get("is_full")
-        ]
-        activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-
-        # Seccion D: Stock Crítico (MeLi>0, BM disponible bajo, no FULL)
-        critical = [
-            p for p in products
-            if p.get("available_quantity", 0) > 0
-            and 0 < (p.get("_bm_avail") or 0) <= threshold
-            and not p.get("is_full")
-            and p.get("sku")
-        ]
-        critical.sort(key=lambda x: x.get("units", 0), reverse=True)
-
-        # Seccion E: FULL sin stock — MeLi=0, BM>0, es FULL
-        # No se puede actualizar via API. Alerta para cambiar a Merchant y seguir vendiendo.
-        full_no_stock = [
-            p for p in products
-            if p.get("is_full")
-            and p.get("available_quantity", 0) == 0
-            and (p.get("_bm_avail") or 0) > 0
-        ]
-        full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
-
-        # KPIs
-        restock_count = len(restock)
-        lost_revenue = sum(p.get("revenue", 0) for p in restock)
-        risk_count = len(oversell_risk)
-        risk_stock = sum(p.get("available_quantity", 0) for p in oversell_risk)
-        activate_count = len(activate)
-        activate_stock = sum(p.get("_bm_avail", 0) for p in activate)
-        critical_count = len(critical)
-        critical_bm_total = sum(p.get("_bm_avail", 0) for p in critical)
-        full_no_stock_count = len(full_no_stock)
-        full_no_stock_bm = sum(p.get("_bm_avail", 0) for p in full_no_stock)
-
-        ctx = {
-            "restock": restock,
-            "oversell_risk": oversell_risk,
-            "activate": activate,
-            "critical": critical,
-            "full_no_stock": full_no_stock,
-            "restock_count": restock_count,
-            "lost_revenue": lost_revenue,
-            "risk_count": risk_count,
-            "risk_stock": risk_stock,
-            "activate_count": activate_count,
-            "activate_stock": activate_stock,
-            "critical_count": critical_count,
-            "critical_bm_total": critical_bm_total,
-            "full_no_stock_count": full_no_stock_count,
-            "full_no_stock_bm": full_no_stock_bm,
-            "threshold": threshold,
-        }
-        _stock_issues_cache[key] = (_time.time(), ctx)
-        ctx_with_req = ctx.copy()
-        return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx_with_req)
     finally:
         await client.close()
 
