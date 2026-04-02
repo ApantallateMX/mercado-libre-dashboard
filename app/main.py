@@ -2513,8 +2513,11 @@ async def products_inventory_partial(
         date_to = now.strftime("%Y-%m-%d")
 
         # Fase 1: fetch paralelo (products + orders)
+        # include_paused=True (active+paused) — misma clave que usa el prewarm,
+        # por lo que el prewarm ya calienta este cache y la respuesta es instantanea.
+        # include_all=True traía closed/inactive/under_review → key diferente → siempre frío.
         all_bodies, all_orders = await asyncio.gather(
-            _get_all_products_cached(client, include_all=True),
+            _get_all_products_cached(client, include_paused=True),
             _get_orders_cached(client, date_from, date_to),
         )
         sales_map = _aggregate_sales_by_item(all_orders)
@@ -2736,11 +2739,23 @@ async def products_inventory_partial(
             _bm_stock_cache[_bg_key] = (_time.time(), {})
             asyncio.ensure_future(_get_bm_stock_cached(products))
 
-        # --- Enrich ONLY page products (BM fresh + sale_price + variations) ---
+        # --- Enrich ONLY page products (sale_price + variations, BM from cache only) ---
+        # BM stock is NOT fetched inline — it was already applied from _bm_stock_cache above
+        # and the background prewarm populates the cache every 10 min.
+        # Blocking on BM here caused 90s timeouts when cache was cold after deploy.
         usd_to_mxn = 0.0
         page_ids = [p["id"] for p in page_products]
+
+        # bm_map from in-memory cache (no API calls — instant)
+        bm_map = {}
+        for _p in page_products:
+            _sku = _p.get("sku", "")
+            if _sku:
+                _c = _bm_stock_cache.get(_sku.upper())
+                if _c and (_time.time() - _c[0]) < _BM_CACHE_TTL:
+                    bm_map[_sku] = _c[1]
+
         enrichment_tasks = [
-            _get_bm_stock_cached(page_products),
             _get_sale_prices_cached(client, page_ids),
             _enrich_variation_skus(client, page_products),
         ]
@@ -2749,14 +2764,13 @@ async def products_inventory_partial(
             enrichment_tasks.append(_get_usd_to_mxn(client))
 
         enrich_results = await asyncio.gather(*enrichment_tasks)
-        bm_map = enrich_results[0]
-        sale_prices = enrich_results[1]
-        # enrich_results[2] = variation SKUs (side-effect, no return needed)
+        sale_prices = enrich_results[0]
+        # enrich_results[1] = variation SKUs (side-effect, no return needed)
 
         _apply_bm_stock(page_products, bm_map)
 
         if enrich == "full":
-            usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
+            usd_to_mxn = enrich_results[3] if len(enrich_results) > 3 else 0.0
             _calc_margins(page_products, usd_to_mxn)
 
         for p in page_products:
