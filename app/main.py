@@ -2049,9 +2049,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     """
     import httpx, json as _json
     BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-    # InventoryBySKUAndCondicion_Quantity está roto (SQL error "Invalid column name 'binid'")
-    # Usar GlobalStock_InventoryBySKU_Condition que devuelve status "Producto Vendible" / "Otro"
     BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+    BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 
     result_map = {}
     to_fetch = []
@@ -2101,52 +2100,19 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, cond_rows=None):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) y GlobalStock_InventoryBySKU_Condition.
-        GlobalStock_InventoryBySKU_Condition devuelve Conditions_JSON (JSON embebido) con registros
-        por bin que tienen status "Producto Vendible" o "Otro".
-        avail_total = suma de TotalQty donde status == "Producto Vendible".
+    def _store_wh(sku, rows_wh, reserve_global=0):
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ).
+        avail_total = stock físico en esas ubicaciones - reservas globales del SKU.
+        Las reservas (órdenes pendientes) están siempre en las mismas ubicaciones vendibles,
+        por lo que restar reserve_global del total físico da el disponible real.
+        Ejemplo: física=301, reserve=84 → available=217 ≈ BM UI muestra 221.
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
+        warehouse_total = mty + cdmx
+        avail_total    = max(0, warehouse_total - int(reserve_global or 0))
+        reserved_total = int(reserve_global or 0)
 
-        avail_total = reserved_total = 0
-        for row in (cond_rows if isinstance(cond_rows, list) else []):
-            # La respuesta puede tener Conditions_JSON (string JSON embebido)
-            cj = row.get("Conditions_JSON")
-            if cj is not None:
-                if isinstance(cj, str):
-                    try:
-                        cj = _json.loads(cj)
-                    except Exception:
-                        cj = []
-                for cond in (cj if isinstance(cj, list) else []):
-                    sku_cj = cond.get("SKUCondition_JSON") or []
-                    if isinstance(sku_cj, str):
-                        try:
-                            sku_cj = _json.loads(sku_cj)
-                        except Exception:
-                            sku_cj = []
-                    if sku_cj:
-                        # Nivel serial: contar por status individual
-                        for item in sku_cj:
-                            qty = item.get("TotalQty", 0) or 0
-                            if item.get("status") == "Producto Vendible":
-                                avail_total += qty
-                            else:
-                                reserved_total += qty
-                    else:
-                        # Sin detalle serial: usar TotalQty del nivel condición
-                        # (BM omite SKUCondition_JSON en SKUs con muchas unidades)
-                        avail_total += cond.get("TotalQty", 0) or 0
-            else:
-                # Formato plano: el row mismo tiene status y TotalQty
-                qty = row.get("TotalQty", 0) or 0
-                if row.get("status") == "Producto Vendible":
-                    avail_total += qty
-                else:
-                    reserved_total += qty
-
-        inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": mty + cdmx,
+        inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         # Agregar a result_map si hay stock físico O disponible vendible
@@ -2176,33 +2142,32 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             "LocationID": "47,62,68", "BINID": None,
             "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
         }
-        # GlobalStock_InventoryBySKU_Condition: endpoint funcional que retorna
-        # status "Producto Vendible" / "Otro" por bin — reemplaza el endpoint roto
-        cond_payload = {
-            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
-            "LOCATIONID": "47,62,68", "BINID": None,
-            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
+        # Get_GlobalStock_InventoryBySKU: obtener Reserve del SKU para calcular
+        # avail_total = warehouse_physical - reserve (órdenes pendientes).
+        inv_payload = {
+            "COMPANYID": 1, "SEARCH": base,
+            "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 5,
         }
         async with wh_sem:
             try:
-                r_wh, r_cond = await asyncio.gather(
-                    http.post(BM_WH_URL,   json=wh_payload,   timeout=15.0),
-                    http.post(BM_COND_URL, json=cond_payload, timeout=15.0),
+                r_wh, r_inv = await asyncio.gather(
+                    http.post(BM_WH_URL,  json=wh_payload,  timeout=15.0),
+                    http.post(BM_INV_URL, json=inv_payload, timeout=15.0),
                     return_exceptions=True,
                 )
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
 
-                # BM Condition puede devolver un objeto {} único o una lista [{}].
-                # Normalizar siempre a lista para iterar correctamente.
-                _raw_cond = r_cond.json() if not isinstance(r_cond, Exception) and r_cond.status_code == 200 else []
-                if isinstance(_raw_cond, dict):
-                    cond_rows = [_raw_cond]
-                elif isinstance(_raw_cond, list):
-                    cond_rows = _raw_cond
-                else:
-                    cond_rows = []
-                _store_wh(sku, rows_wh, cond_rows)
+                # Extraer Reserve del inventory endpoint
+                reserve_global = 0
+                if not isinstance(r_inv, Exception) and r_inv.status_code == 200:
+                    inv_data = r_inv.json()
+                    if isinstance(inv_data, list) and inv_data:
+                        reserve_global = inv_data[0].get("Reserve", 0) or 0
+                    elif isinstance(inv_data, dict):
+                        reserve_global = inv_data.get("Reserve", 0) or 0
+
+                _store_wh(sku, rows_wh, reserve_global)
                 return
             except Exception:
                 pass
