@@ -2049,15 +2049,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     result_map = {}
     to_fetch = []
+    _seen_to_fetch: set = set()   # deduplicar: mismo SKU en 100+ productos → 1 sola llamada BM
     for p in products:
         sku = p.get(sku_key, "")
         if not sku:
             continue
-        cached = _bm_stock_cache.get(sku.upper())
+        upper = sku.upper()
+        cached = _bm_stock_cache.get(upper)
         if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
             result_map[sku] = cached[1]
-        else:
+        elif upper not in _seen_to_fetch:
             to_fetch.append(sku)
+            _seen_to_fetch.add(upper)
 
     # También incluir SKUs de variaciones para calcular BM correcto por variación
     seen_skus = set(s.upper() for s in to_fetch)
