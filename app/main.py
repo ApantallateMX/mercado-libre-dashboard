@@ -2037,11 +2037,23 @@ async def _prewarm_caches():
                 sales_map = _aggregate_sales_by_item(all_orders)
                 products = _build_product_list(all_bodies, sales_map)
                 _enrich_sku_from_orders(products, all_orders)
-                bm_map = await _get_bm_stock_cached(products)
+
+                # SOLO fetchear BM para productos candidatos a stock issues.
+                # Con 6000+ listings, fetchear BM para todos supera el timeout de 150s.
+                # Candidatos: tienen SKU Y (tienen ventas recientes O tienen stock en MeLi).
+                # Esto cubre restock, sobreventa, critico y activar — todos los casos relevantes.
+                bm_candidates = [
+                    p for p in products
+                    if p.get("sku") and (
+                        p.get("units", 0) > 0
+                        or p.get("available_quantity", 0) > 0
+                    )
+                ]
+                bm_map = await _get_bm_stock_cached(bm_candidates)
                 _apply_bm_stock(products, bm_map)
 
-                # BM metadata: RetailPrice USD, AvgCost, Brand (necesario para stock_issues)
-                await _enrich_with_bm_product_info(products)
+                # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
+                await _enrich_with_bm_product_info(bm_candidates)
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
@@ -2732,36 +2744,45 @@ async def products_inventory_partial(
             start = (page - 1) * per_page
             page_products = products[start:start + per_page]
 
-        # --- Trigger background BM prewarm for ALL products (non-blocking) ---
-        # Fills the cache for non-page products so subsequent pages load faster.
+        # --- Trigger background BM prefetch para candidatos (non-blocking) ---
+        # Solo productos con ventas o stock (no todos los 6000+) para no timeout.
         _bg_key = f"bm_bg:{client.user_id}"
         if _bg_key not in _bm_stock_cache:
             _bm_stock_cache[_bg_key] = (_time.time(), {})
-            asyncio.ensure_future(_get_bm_stock_cached(products))
+            _bg_candidates = [
+                p for p in products
+                if p.get("sku") and (p.get("units", 0) > 0 or p.get("available_quantity", 0) > 0)
+            ]
+            asyncio.ensure_future(_get_bm_stock_cached(_bg_candidates))
 
-        # --- Enrich ONLY page products (BM + sale_price + variations) ---
-        # BM fetch is blocking but SAFE: products/orders already warm (include_paused cache),
-        # so only 20 BM calls remain → ~15-20s max vs 90s when cache was cold before.
+        # --- Enrich ONLY page products ---
+        # ORDEN CRITICO: variation SKUs deben popularse ANTES del BM fetch.
+        # Si corren en paralelo, _get_bm_stock_cached ve variaciones sin SKU y solo
+        # fetcha el padre. Luego _apply_bm_stock ve variaciones con SKU (enriquecidas)
+        # pero bm_map no tiene esos SKUs específicos → BM=0 para todos con variaciones.
         usd_to_mxn = 0.0
         page_ids = [p["id"] for p in page_products]
-        enrichment_tasks = [
+
+        # Paso 1: SKUs de variaciones (debe terminar antes del BM fetch)
+        await _enrich_variation_skus(client, page_products)
+
+        # Paso 2: BM + precios en paralelo (variaciones ya tienen SKU correcto)
+        parallel_tasks = [
             _get_bm_stock_cached(page_products),
             _get_sale_prices_cached(client, page_ids),
-            _enrich_variation_skus(client, page_products),
         ]
         if enrich == "full":
-            enrichment_tasks.append(_enrich_with_bm_product_info(page_products))
-            enrichment_tasks.append(_get_usd_to_mxn(client))
+            parallel_tasks.append(_enrich_with_bm_product_info(page_products))
+            parallel_tasks.append(_get_usd_to_mxn(client))
 
-        enrich_results = await asyncio.gather(*enrichment_tasks)
+        enrich_results = await asyncio.gather(*parallel_tasks)
         bm_map = enrich_results[0]
         sale_prices = enrich_results[1]
-        # enrich_results[2] = variation SKUs (side-effect, no return needed)
 
         _apply_bm_stock(page_products, bm_map)
 
         if enrich == "full":
-            usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
+            usd_to_mxn = enrich_results[3] if len(enrich_results) > 3 else 0.0
             _calc_margins(page_products, usd_to_mxn)
 
         for p in page_products:
