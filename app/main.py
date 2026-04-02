@@ -2116,17 +2116,29 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, reserve_global=0):
+    def _store_wh(sku, rows_wh, reserve_global=0, global_total=0):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ).
-        avail_total = stock físico en esas ubicaciones - reservas globales del SKU.
-        Las reservas (órdenes pendientes) están siempre en las mismas ubicaciones vendibles,
-        por lo que restar reserve_global del total físico da el disponible real.
-        Ejemplo: física=301, reserve=84 → available=217 ≈ BM UI muestra 221.
+
+        Fórmula correcta:
+          avail_total = min(vendible_physical, max(0, global_total - reserve_global))
+
+        Razonamiento: el reserve es global (cubre órdenes de TODAS las ubicaciones).
+        Si global_total >> vendible_physical, las reservas se cubren con stock de otros
+        bins y el vendible local sigue disponible completo.
+        Ejemplo A: física_vendible=2, global=400, reserve=3 → global_avail=397 → avail=min(2,397)=2 ✓
+        Ejemplo B: física_vendible=301, global=305, reserve=84 → global_avail=221 → avail=min(301,221)=221 ✓
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         warehouse_total = mty + cdmx
-        avail_total    = max(0, warehouse_total - int(reserve_global or 0))
-        reserved_total = int(reserve_global or 0)
+        reserve_int     = int(reserve_global or 0)
+        global_int      = int(global_total or 0)
+        if global_int > 0:
+            global_avail = max(0, global_int - reserve_int)
+            avail_total  = min(warehouse_total, global_avail)
+        else:
+            # Sin dato global → restar directamente (comportamiento anterior como fallback)
+            avail_total  = max(0, warehouse_total - reserve_int)
+        reserved_total = reserve_int
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total}
@@ -2174,16 +2186,17 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
 
-                # Extraer Reserve del inventory endpoint
+                # Extraer Reserve y TotalQty del inventory endpoint (ambos necesarios para
+                # calcular avail = min(vendible_physical, max(0, global_total - reserve)))
                 reserve_global = 0
+                global_total   = 0
                 if not isinstance(r_inv, Exception) and r_inv.status_code == 200:
                     inv_data = r_inv.json()
-                    if isinstance(inv_data, list) and inv_data:
-                        reserve_global = inv_data[0].get("Reserve", 0) or 0
-                    elif isinstance(inv_data, dict):
-                        reserve_global = inv_data.get("Reserve", 0) or 0
+                    row0 = inv_data[0] if isinstance(inv_data, list) and inv_data else (inv_data if isinstance(inv_data, dict) else {})
+                    reserve_global = row0.get("Reserve", 0) or 0
+                    global_total   = row0.get("TotalQty", 0) or 0
 
-                _store_wh(sku, rows_wh, reserve_global)
+                _store_wh(sku, rows_wh, reserve_global, global_total)
                 return
             except Exception:
                 pass
