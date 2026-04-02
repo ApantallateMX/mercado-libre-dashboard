@@ -7,6 +7,22 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — Fix: BM correcto endpoint + paginacion stock-issues
+
+### FIX — BM stock=0 masivo (root cause final: endpoint roto server-side)
+- **Root cause real:** `InventoryBySKUAndCondicion_Quantity` tiene bug SQL server-side ("Invalid column name 'binid'") — siempre devuelve lista vacía independientemente de parámetros.
+- **Fix final:** Centralizar en `BinManagerClient.get_available_qty()` usando `Get_GlobalStock_InventoryBySKU` con CONCEPTID=8. Este endpoint devuelve `AvailableQTY = TotalQty - Reserve` calculado server-side. Verificado en Network tab de BM: SNTV006850 TotalQty=84, Reserve=80, AvailableQTY=4.
+- **Archivos afectados:** `binmanager_client.py` (nuevo método), `main.py` (_wh_phase + _query_bm_avail + multi-sync-trigger), `stock_sync_multi.py` (_one), `items.py` (_bm_warehouse_qty), `productos.py` (_bm_stock).
+- **Alertas stale:** prewarm loop ahora re-ejecuta `_run_stock_sync_for_user` después de cada ciclo. "Sync ahora" limpia caches + re-prewarm + re-alertas.
+- **Commits:** serie 7d3b243
+
+### FEAT — Paginacion max 20 filas en todas las secciones del tab Stock
+- Agrega `<div id="pager-*">` en restock, risk, critical, activate, fullstock.
+- JS `paginateTable()` ya estaba en el template — solo faltaban los divs target.
+- **Commit:** 7d3b243
+
+---
+
 ## 2026-04-02 — Fix: LOCATIONID=None en InventoryBySKUAndCondicion_Quantity (BM stock=0 masivo)
 
 ### BUG — Todos los productos mostraban BM Disponible=0, Res=N (stock físico entero marcado como reservado)
