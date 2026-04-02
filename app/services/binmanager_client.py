@@ -259,8 +259,46 @@ class BinManagerClient:
                 return {}
         return {}
 
+    async def post_inventory(self, url: str, payload: dict, timeout: float = 15.0):
+        """POST autenticado a un endpoint de inventario BM. Maneja sesión expirada con re-login.
+        Retorna response httpx o None si falla."""
+        if not self._logged_in:
+            if not await self.login():
+                return None
+        c = self._client()
+        for attempt in range(2):
+            try:
+                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=timeout)
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return None
+                return r
+            except Exception as e:
+                logger.warning(f"BinManager post_inventory error (intento {attempt+1}): {e}")
+                if attempt == 0:
+                    continue
+                return None
+        return None
+
     async def close(self):
         if self._http:
             await self._http.aclose()
             self._http = None
         self._logged_in = False
+
+
+# ── Singleton compartido — usado por main.py, stock_sync_multi.py, etc. ─────
+_shared_bm: Optional[BinManagerClient] = None
+
+
+async def get_shared_bm() -> BinManagerClient:
+    """Retorna el cliente BM global con sesión activa. Login automático si es necesario."""
+    global _shared_bm
+    if _shared_bm is None:
+        _shared_bm = BinManagerClient()
+    if not _shared_bm._logged_in:
+        await _shared_bm.login()
+    return _shared_bm

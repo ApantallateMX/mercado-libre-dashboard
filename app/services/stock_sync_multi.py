@@ -174,10 +174,10 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
         async with sem:
             try:
                 r = await http.post(_BM_COND_URL, json=payload, timeout=15.0)
-                if r.status_code != 200:
-                    # BM error (5xx, 429 rate-limit, etc.) → NO escribir 0.
+                if r.status_code != 200 or "User/Index" in str(getattr(r, "url", "")):
+                    # BM error (5xx, 429, sesión expirada, etc.) → NO escribir 0.
                     # Skip: el sync no toca este SKU en este ciclo.
-                    logger.warning(f"[MULTI-SYNC-BM] HTTP {r.status_code} para {base} — skip SKU")
+                    logger.warning(f"[MULTI-SYNC-BM] HTTP {r.status_code} / sesión? para {key} — skip SKU")
                     return
                 data = r.json()
                 # BM puede devolver un objeto único {} o una lista [{}].
@@ -218,11 +218,14 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
                 # Timeout, red caída, etc. → NO escribir 0. Skip para no poner en 0 sin razón.
                 logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
 
-    async with httpx.AsyncClient(timeout=20.0) as http:
-        await asyncio.gather(
-            *[_one(k, c, http) for k, c in sku_cond_map.items()],
-            return_exceptions=True,
-        )
+    # Usar cliente BM autenticado (sesión persistente con cookies de login)
+    from app.services.binmanager_client import get_shared_bm
+    bm_cli = await get_shared_bm()
+    http = bm_cli._client()
+    await asyncio.gather(
+        *[_one(k, c, http) for k, c in sku_cond_map.items()],
+        return_exceptions=True,
+    )
 
     return result
 

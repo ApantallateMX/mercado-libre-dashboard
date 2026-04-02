@@ -2199,7 +2199,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
                 # Parsear avail directo desde BM_COND_URL (mismo approach que _fetch_bm_avail)
                 avail_direct = 0
-                if not isinstance(r_cond, Exception) and r_cond.status_code == 200:
+                if not isinstance(r_cond, Exception) and r_cond.status_code == 200 and "User/Index" not in str(getattr(r_cond, "url", "")):
                     cond_data = r_cond.json()
                     cond_rows = [cond_data] if isinstance(cond_data, dict) else (cond_data if isinstance(cond_data, list) else [])
                     for row in cond_rows:
@@ -2222,15 +2222,19 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct)
                 return
-            except Exception:
-                pass
+            except Exception as _exc:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"[BM-CACHE] Error para {sku}: {_exc}")
         _store_empty(sku)
 
-    async with httpx.AsyncClient(timeout=30.0) as http:
-        await asyncio.gather(
-            *[_wh_phase(s, http) for s in to_fetch],
-            return_exceptions=True
-        )
+    # Usar cliente BM autenticado (sesión persistente con cookies de login)
+    from app.services.binmanager_client import get_shared_bm
+    bm_cli = await get_shared_bm()
+    http = bm_cli._client()
+    await asyncio.gather(
+        *[_wh_phase(s, http) for s in to_fetch],
+        return_exceptions=True
+    )
 
     return result_map
 
