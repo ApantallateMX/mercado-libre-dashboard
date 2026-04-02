@@ -260,17 +260,37 @@ class BinManagerClient:
         return {}
 
     async def get_available_qty(self, sku: str) -> int:
-        """Retorna AvailableQTY para un SKU (ya excluye reservados).
-        Usa Get_GlobalStock_InventoryBySKU con SEARCH=sku y CONCEPTID=8.
-        AvailableQTY = TotalQty - Reserve (calculado server-side por BM).
-        Verificado en BM Network: Reserve=80, AvailableQTY=4 para SNTV006850.
+        """Retorna stock vendible para un SKU (status 'Producto Vendible') en MTY+CDMX.
+        Usa GlobalStock_InventoryBySKU_Condition con LocationID=47,62,68.
+        Suma TotalQty donde status=='Producto Vendible' en Conditions_JSON.
+
+        NOTA: Get_GlobalStock_InventoryBySKU con CONCEPTID=8 devuelve un contador
+        contable que NO refleja stock físico real (e.g. 202 cuando hay 2 unidades).
         """
+        import json as _json
         if not self._logged_in:
             if not await self.login():
                 return 0
         c = self._client()
-        url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-        payload = {**_GS_BASE_PAYLOAD, "SEARCH": sku, "RECORDSPAGE": 5, "NEEDRETAILPRICEPH": False}
+
+        # Extraer base SKU y condiciones según sufijo
+        upper = sku.upper()
+        base = sku
+        for sfx in ("-ICB", "-ICC", "-NEW", "-GRA", "-GRB", "-GRC"):
+            if upper.endswith(sfx):
+                base = sku[:-len(sfx)]
+                break
+        if upper.endswith("-ICB") or upper.endswith("-ICC"):
+            conditions = "GRA,GRB,GRC,ICB,ICC,NEW"
+        else:
+            conditions = "GRA,GRB,GRC,NEW"
+
+        url = f"{_BM_BASE}/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
+        payload = {
+            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
+            "LOCATIONID": "47,62,68", "BINID": None,
+            "CONDITION": conditions, "FORINVENTORY": 0, "SUPPLIERS": None,
+        }
         for attempt in range(2):
             try:
                 r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
@@ -282,10 +302,33 @@ class BinManagerClient:
                     return 0
                 if r.status_code == 200:
                     data = r.json()
-                    if isinstance(data, list) and data:
-                        match = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
-                        avail = match.get("AvailableQTY")
-                        return int(avail) if avail is not None else 0
+                    if not isinstance(data, list):
+                        return 0
+                    avail = 0
+                    for row in data:
+                        cj = row.get("Conditions_JSON") or []
+                        if isinstance(cj, str):
+                            try:
+                                cj = _json.loads(cj)
+                            except Exception:
+                                cj = []
+                        if isinstance(cj, list) and cj:
+                            for cond in cj:
+                                for item in (cond.get("SKUCondition_JSON") or []):
+                                    qty = item.get("TotalQty", 0) or 0
+                                    if item.get("status") == "Producto Vendible":
+                                        avail += qty
+                        else:
+                            # Fallback: fila con status directo (estructura plana)
+                            qty = row.get("TotalQty", 0) or 0
+                            if row.get("status") == "Producto Vendible":
+                                avail += qty
+                    return avail
+                return 0
+            except httpx.TimeoutException:
+                logger.warning(f"BinManager timeout get_available_qty {sku} (intento {attempt+1})")
+                if attempt == 0:
+                    continue
                 return 0
             except Exception as e:
                 logger.error(f"BinManager get_available_qty error {sku}: {e}")

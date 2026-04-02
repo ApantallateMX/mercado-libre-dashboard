@@ -2223,9 +2223,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         }
         async with wh_sem:
             try:
-                # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY real (excluye reservados)
-                # Get_GlobalStock_InventoryBySKU retorna Reserve y AvailableQTY correctos.
-                # InventoryBySKUAndCondicion_Quantity está ROTO en el servidor (SQL "Invalid column name 'binid'")
+                # Paralelo: WH breakdown (MTY/CDMX/TJ) + avail real (Producto Vendible)
+                # get_available_qty usa GlobalStock_InventoryBySKU_Condition → suma TotalQty
+                # donde status=="Producto Vendible". Correcto y verificado.
+                # NOTA: Get_GlobalStock_InventoryBySKU CONCEPTID=8 devuelve contador contable
+                # falso (e.g. 202 cuando hay 2 unidades reales) — NO usar para stock físico.
                 r_wh, avail_direct = await asyncio.gather(
                     http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
                     bm_cli.get_available_qty(base),
