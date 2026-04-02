@@ -7,6 +7,56 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-02 — PERF CRÍTICO: Stock tab tardaba 130s+ → carga instantánea desde DB
+
+### BUG — Timeout 130s + loop infinito de reinicios
+- **Root cause 1:** `_get_all_products_cached` llamaba ML API cada 15 min (~300 batch calls, ~15-25s) aunque `ml_listing_sync` ya tenía la DB actualizada. La DB nunca se leía.
+- **Root cause 2:** `_get_bm_stock_cached` hacía 2400-3600 BM calls para 1200-1800 SKUs con Semaphore(20) → 60-120s solo en BM. Total = 75-145s → timeout.
+- **Root cause 3:** Spinner en timeout hacía `setTimeout(reload, 3000)` → nuevo prewarm → nuevo timeout → loop infinito.
+- **Root cause 4:** "Sync ahora" llamaba `_prewarm_caches()` pero si ya había un prewarm corriendo retornaba inmediato (no-op). El usuario veía "0 updates" y nada cambiaba.
+
+### FIX — Fase A (fixes inmediatos)
+- Spinner: eliminar auto-reload en error/timeout → botón manual "Reintentar"
+- `_prewarm_caches`: agregar `_prewarm_queued` — si llaman mientras corre, encola y relanza al terminar
+- `multi_sync_trigger`: no limpiar `_stock_issues_cache` si prewarm activo; usar `asyncio.create_task(_prewarm_caches())` que ahora hace cola
+- BM Semaphore: 20 → 50 (reduce tiempo ~60%)
+- ML fetch Semaphore: 5 → 10 (reduce tiempo ~50%)
+
+### FIX — Fase B (caché persistente SQLite)
+- `token_store.py`: migration `data_json` en `ml_listings`, nueva tabla `bm_stock_cache`, funciones `upsert_bm_stock_batch` / `load_bm_stock_cache` / `get_ml_listings_max_synced_at`
+- `ml_listing_sync.py`: guardar `data_json` (body completo del item) en cada row
+- `_get_all_products_cached`: leer de `ml_listings` DB si `synced_at < 1h` → <100ms en lugar de 300 API calls
+- `_get_bm_stock_cached`: persistir nuevas entradas BM a DB (fire-and-forget); Semaphore 20→50
+- `_load_bm_cache_from_db`: cargar BM desde DB al arrancar (entradas < 30 min)
+- `lifespan`: `asyncio.create_task(_load_bm_cache_from_db())` en startup
+- `_startup_prewarm` delay: 30s → 90s (espera que `ml_listing_sync` llene la DB primero)
+
+### RESULTADO ESPERADO
+- Primera carga post-restart: items de DB (<100ms) + BM de DB (<100ms) → prewarm en <10s
+- "Sync ahora": funciona, encola prewarm si ya hay uno corriendo, muestra resultado correcto
+
+---
+
+## 2026-04-02 — Fix CRÍTICO: BM stock falso — Get_GlobalStock_InventoryBySKU devuelve contador contable, no stock físico
+
+### BUG — get_available_qty() retornaba datos incorrectos (202 vs 2 real)
+- **Root cause:** `Get_GlobalStock_InventoryBySKU` con CONCEPTID=8 devuelve un campo `AvailableQTY` que es un contador contable de nivel producto. NO refleja stock físico real. Verificado: SNTV006722 devuelve 202 cuando hay exactamente 2 unidades físicas (2x GRB en MTY MAXX bin P01-F055-01, seriales MTG23T0171 y MTG33T7519). El valor 202 es idéntico con CONCEPTID 1, 2, 3 y 8 — confirma que no es stock físico.
+- **Endpoint correcto:** `GlobalStock_InventoryBySKU_Condition` con `LocationID=47,62,68` + suma `TotalQty` donde `status=="Producto Vendible"` en `Conditions_JSON`. Exactamente lo que `amazon_products.py` ya usaba correctamente.
+- **Fix:** Reescribir `BinManagerClient.get_available_qty()` en `binmanager_client.py` para usar el endpoint correcto. Al ser centralizado, corrige automáticamente todos los callers: `main.py` (`_wh_phase`), `lanzar.py`, `sku_inventory.py`, `items.py`.
+- **Stock real SNTV006722:** 2 unidades (MTY MAXX, GRB). Guadalajara tiene 6 más (LocationID 66, no incluida en 47,62,68).
+- **Commit:** bbd887e
+
+## 2026-04-02 — Feat: Sync stock individual por variacion desde BM
+
+### FEAT — BM Disp. column + Sync button por variacion en panel detalle
+- **Archivos:** `products_inventory.html`, `items.py`, `items.html`
+- **Problema:** En el panel de variaciones solo se veía "Stock ML" sin columna BM, imposible saber si sincronizar cada hijo individualmente.
+- **Solución:**
+  1. `products_inventory.html`: columna "BM Disp." (azul si >0, gris si 0) + botón "Sync {qty}" por variacion. El botón llama `syncVariationStock(itemId, varId, bmQty, btn)`.
+  2. `items.py`: nuevo endpoint `PUT /api/items/{item_id}/variations/{variation_id}/stock` usando `update_variation_stocks_directly` (solo modifica la variacion indicada, no las demás).
+  3. `items.html`: nueva función JS `window.syncVariationStock()` con feedback visual OK/Error y auto-reset del botón.
+- **Commit:** 9f482fa
+
 ## 2026-04-02 — Fix: Race condition BM=0 + Stock tab timeout
 
 ### BUG — BM=0 en tab Inventario (race condition variaciones)
