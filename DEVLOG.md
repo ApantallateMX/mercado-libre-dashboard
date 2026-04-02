@@ -20,6 +20,12 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ## 2026-04-03
 
+### BUG — Sync pone en 0 items de bundle por SKU compuesto (MLM1336870147, MLM892546286)
+- **Síntoma:** ML items de TV+accesorio quedaban en qty=0 después de cada sync, aunque SNTV001864 tiene stock en BM.
+- **Root cause (commit 894857f):** `_base_sku()` hacía `sku.upper().split("-")[0]`. Para bundles con SELLER_SKU compuesto (`"SNTV001864 + SNPE000180"`, `"SNTV001864 / SNWM000001"`), el split por `-` no cambiaba nada y mandaba el string completo a BM. BM no encontraba ese SKU → devolvía 0 → sync ponía qty=0.
+- **Fix:** `_base_sku()` ahora detecta separadores de bundle (espacio, `+`, `/`) y extrae el primer token SKU reconocible via regex `[A-Z]{2,8}\d{3,10}`. Casos simples y con sufijo `-FLX` no cambian.
+- **Verificado:** todos los casos de prueba pasan: bundles `+`, `/`, espacio, sufijo `-FLX01`, SKU simple.
+
 ### BUG RAÍZ — BM Disp=0 en Inventario + Stock prewarm infinito (mismo bug)
 - **Síntoma 1:** Tab Inventario mostraba BM Disp=0 para todos los items aunque BM tenía stock (ej: SNAC000029 tiene 2,467 unidades).
 - **Síntoma 2:** Tab Stock quedaba en spinner infinito — el prewarm nunca completaba.
