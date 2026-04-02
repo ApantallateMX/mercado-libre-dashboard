@@ -78,10 +78,14 @@ def _base_sku(sku: str) -> str:
 # BINMANAGER — consulta avail_total por SKU base
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
+async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int | None]:
     """
     Consulta BM para una lista de SKUs base en paralelo (máx 10 concurrentes).
     Retorna {sku_base_upper: avail_total} donde avail_total = unidades "Producto Vendible".
+
+    IMPORTANTE: Si BM retorna error (timeout, 5xx, excepción), el SKU NO aparece en el dict.
+    El caller debe distinguir "BM retornó 0" de "BM tuvo error y no sabemos" — solo el primer
+    caso debe poner items en 0.  El segundo caso debe ser skip (no tocar ML).
     """
     result: dict[str, int] = {}
     if not base_skus:
@@ -100,7 +104,9 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
             try:
                 r = await http.post(_BM_COND_URL, json=payload, timeout=15.0)
                 if r.status_code != 200:
-                    result[base.upper()] = 0
+                    # BM error (5xx, 429 rate-limit, etc.) → NO escribir 0.
+                    # Skip: el sync no toca este SKU en este ciclo.
+                    logger.warning(f"[MULTI-SYNC-BM] HTTP {r.status_code} para {base} — skip SKU")
                     return
                 data = r.json()
                 # BM puede devolver un objeto único {} o una lista [{}].
@@ -138,8 +144,8 @@ async def _fetch_bm_avail(base_skus: list[str]) -> dict[str, int]:
                 result[base.upper()] = avail
                 logger.debug(f"[MULTI-SYNC-BM] {base} → avail={avail}")
             except Exception as exc:
-                logger.warning(f"[MULTI-SYNC-BM] Error {base}: {exc}")
-                result[base.upper()] = 0
+                # Timeout, red caída, etc. → NO escribir 0. Skip para no poner en 0 sin razón.
+                logger.warning(f"[MULTI-SYNC-BM] Error {base}: {exc} — skip SKU")
 
     async with httpx.AsyncClient(timeout=20.0) as http:
         await asyncio.gather(*[_one(b, http) for b in base_skus], return_exceptions=True)
@@ -602,7 +608,11 @@ async def run_multi_stock_sync() -> dict:
         # Procesar cada SKU base
         all_results: list = []
         for base in sorted(all_bases):
-            bm_avail  = bm_stock.get(base, 0)
+            if base not in bm_stock:
+                # BM tuvo error para este SKU → skip completo (no poner en 0)
+                logger.warning(f"[MULTI-SYNC] Skip {base}: BM no retornó datos (error de API)")
+                continue
+            bm_avail  = bm_stock[base]
             listings  = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
             enabled   = set(all_rules.get(base, []))
 
