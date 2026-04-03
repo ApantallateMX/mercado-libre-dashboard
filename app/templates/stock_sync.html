@@ -112,7 +112,22 @@
         <span id="prewarm-btn-label">🔄 Actualizar ahora</span>
       </button>
     </div>
-    <div id="prewarm-status-row" class="text-xs text-gray-500">Cargando estado...</div>
+    <div id="prewarm-status-row" class="text-xs text-gray-500 mb-3">Cargando estado...</div>
+
+    <!-- Diagnóstico por SKU -->
+    <div class="border-t border-gray-100 pt-3">
+      <p class="text-xs text-gray-400 mb-2">Consultar SKU en caché:</p>
+      <div class="flex gap-2">
+        <input id="bm-sku-input" type="text" placeholder="Ej: SNHG000004"
+               class="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-400"
+               onkeydown="if(event.key==='Enter') lookupBmCache()">
+        <button onclick="lookupBmCache()"
+                class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-lg transition">
+          Consultar
+        </button>
+      </div>
+      <div id="bm-sku-result" class="mt-2 hidden"></div>
+    </div>
   </div>
 
   <!-- ── Reglas ──────────────────────────────────────────────────── -->
@@ -644,5 +659,42 @@ window.forcePrewarm = function() {
 
 // Estado inicial al cargar la página
 _pollPrewarmStatus();
+
+window.lookupBmCache = function() {
+  var sku = document.getElementById('bm-sku-input').value.trim().toUpperCase();
+  var result = document.getElementById('bm-sku-result');
+  if (!sku) return;
+  result.className = 'mt-2 text-xs text-gray-400';
+  result.textContent = 'Consultando...';
+  fetch('/api/debug/bm-cache?sku=' + encodeURIComponent(sku), {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      result.classList.remove('hidden');
+      if (!d.found) {
+        result.className = 'mt-2 text-xs text-orange-500 bg-orange-50 rounded-lg px-3 py-2';
+        result.textContent = '⚠ ' + d.message;
+        return;
+      }
+      var c = d.cache;
+      var statusColor = c.status === 'OK' ? 'text-green-600' : 'text-red-600';
+      var alertsText = d.alerts.join(', ');
+      result.className = 'mt-2 text-xs bg-gray-50 rounded-lg px-3 py-2 space-y-1';
+      result.innerHTML =
+        '<div class="font-semibold text-gray-700 mb-1">' + d.sku + '</div>' +
+        '<div class="grid grid-cols-3 gap-x-4 gap-y-0.5">' +
+          '<span class="text-gray-400">BM Avail:</span><span class="font-mono font-bold ' + (c.avail_total > 0 ? 'text-green-600' : 'text-red-500') + '">' + c.avail_total + '</span><span></span>' +
+          '<span class="text-gray-400">Total WH:</span><span class="font-mono">' + c.total + '</span><span></span>' +
+          '<span class="text-gray-400">Reserve:</span><span class="font-mono">' + c.reserved + '</span><span></span>' +
+          '<span class="text-gray-400">MTY/CDMX/TJ:</span><span class="font-mono">' + c.mty + '/' + c.cdmx + '/' + c.tj + '</span><span></span>' +
+          '<span class="text-gray-400">Caché:</span><span>' + c.age_s + 's — TTL ' + c.ttl_left_s + 's restantes</span><span></span>' +
+          '<span class="text-gray-400">Estado:</span><span class="' + statusColor + ' font-medium">' + c.status + '</span><span></span>' +
+        '</div>' +
+        '<div class="mt-1 pt-1 border-t border-gray-200"><span class="text-gray-400">Alertas activas: </span><span class="font-medium text-indigo-600">' + alertsText + '</span></div>';
+    })
+    .catch(function() {
+      result.className = 'mt-2 text-xs text-red-500';
+      result.textContent = 'Error al consultar';
+    });
+};
 </script>
 {% endblock %}

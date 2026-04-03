@@ -7821,6 +7821,69 @@ async def prewarm_status():
     })
 
 
+@app.get("/api/debug/bm-cache")
+async def debug_bm_cache(sku: str = ""):
+    """Diagnóstico: muestra estado del caché BM para un SKU y en qué alertas aparece."""
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    upper = sku.strip().upper()
+    cached = _bm_stock_cache.get(upper)
+    if not cached:
+        return JSONResponse({"found": False, "sku": upper, "message": "No está en caché — se fetcheará en el próximo prewarm"})
+
+    ts, data = cached
+    age_s = round(_time.time() - ts)
+    ttl_left = max(0, round(_BM_CACHE_TTL - (_time.time() - ts)))
+
+    avail = data.get("avail_total", 0)
+    total = data.get("total", 0)
+    reserved = data.get("reserved_total", 0)
+    verified = data.get("_v", None)
+
+    # Determinar en qué sección de alertas aparecería
+    # Necesitamos datos del producto de MeLi — lo buscamos en el issues cache
+    alerts = []
+    client = await get_meli_client()
+    uid = client.user_id if client else None
+    if client:
+        await client.close()
+    key = f"stock_issues:{uid}:t10" if uid else None
+    issues_entry = key and _stock_issues_cache.get(key)
+    if issues_entry:
+        ctx = issues_entry[1]
+        for section in ("restock", "oversell_risk", "activate", "critical", "full_no_stock", "stagnant", "price_risk"):
+            items = ctx.get(section, [])
+            match = next((p for p in items if (p.get("sku") or "").upper() == upper), None)
+            if match:
+                alerts.append(section)
+
+    # Validez del caché
+    if total == 0 and avail == 0 and not verified:
+        cache_status = "STALE — será re-fetcheado (fetch fallido sin verificar)"
+    elif total > 0 and avail == 0:
+        cache_status = "PARCIAL — stock físico pero avail=0 (get_stock_with_reserve falló)"
+    else:
+        cache_status = "OK"
+
+    return JSONResponse({
+        "found": True,
+        "sku": upper,
+        "cache": {
+            "avail_total": avail,
+            "total": total,
+            "reserved": reserved,
+            "mty": data.get("mty", 0),
+            "cdmx": data.get("cdmx", 0),
+            "tj": data.get("tj", 0),
+            "_v": verified,
+            "age_s": age_s,
+            "ttl_left_s": ttl_left,
+            "status": cache_status,
+        },
+        "alerts": alerts if alerts else ["ninguna"],
+    })
+
+
 @app.post("/api/stock/force-prewarm")
 async def force_prewarm():
     """Fuerza un prewarm fresco: limpia caché BM stale y recalcula stock issues."""
