@@ -2147,19 +2147,9 @@ async def _prewarm_caches():
                 products = _build_product_list(all_bodies, sales_map)
                 _enrich_sku_from_orders(products, all_orders)
 
-                # SOLO fetchear BM para productos candidatos a stock issues.
-                # Con 6000+ listings, fetchear BM para todos puede tardar varios minutos.
-                # Candidatos: tienen SKU Y (tienen ventas recientes O tienen stock en MeLi O son FULL).
-                # FULL siempre incluidos: ML puede reportar available_quantity=0 aunque tengan stock
-                # en fulfillment; igualmente queremos ver BM stock para todos los FULL sin excepción.
-                bm_candidates = [
-                    p for p in products
-                    if p.get("sku") and (
-                        p.get("units", 0) > 0
-                        or p.get("available_quantity", 0) > 0
-                        or p.get("is_full")
-                    )
-                ]
+                # Fetchear BM para todos los productos con SKU — incluye productos con 0 MeLi
+                # stock y 0 ventas para detectar los que tienen BM disponible y necesitan activarse.
+                bm_candidates = [p for p in products if p.get("sku")]
                 bm_map = await _get_bm_stock_cached(bm_candidates)
                 _apply_bm_stock(products, bm_map)
 
