@@ -1652,7 +1652,7 @@ async def items_grid_partial(
                         # Warehouse: desglose MTY/CDMX/TJ (stock físico por almacén)
                         # get_stock_with_reserve: AvailableQTY + Reserve directo de BM
                         # CONCEPTID=1 + LOCATIONID=47,62,68 — única fuente correcta de stock vendible
-                        r_wh, (avail_qty, reserve_qty) = await asyncio.gather(
+                        _results = await asyncio.gather(
                             http.post(BM_WH_URL, json={
                                 "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
                                 "LocationID": "47,62,68", "BINID": None,
@@ -1661,6 +1661,9 @@ async def items_grid_partial(
                             bm_cli.get_stock_with_reserve(base_sku),
                             return_exceptions=True,
                         )
+                        r_wh = _results[0]
+                        _stock = _results[1]
+                        avail_qty, reserve_qty = _stock if isinstance(_stock, tuple) else (0, 0)
                         mty = cdmx = tj = 0
                         if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
                             for row in (r_wh.json() or []):
@@ -1673,8 +1676,6 @@ async def items_grid_partial(
                                 else:
                                     tj += qty
                         warehouse_total = mty + cdmx
-                        if isinstance(avail_qty, Exception): avail_qty = 0
-                        if isinstance(reserve_qty, Exception): reserve_qty = 0
                         return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail_qty, "reserved": reserve_qty}
                     except Exception:
                         pass
@@ -2298,15 +2299,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY y Reserve directo de BM
                 # get_stock_with_reserve usa CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta
                 # Retorna (AvailableQTY, Reserve) directo del endpoint, sin derivaciones
-                r_wh, (avail_direct, reserve_direct) = await asyncio.gather(
+                _results = await asyncio.gather(
                     http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
                     bm_cli.get_stock_with_reserve(base),
                     return_exceptions=True,
                 )
+                r_wh = _results[0]
+                _stock = _results[1]
+                avail_direct, reserve_direct = _stock if isinstance(_stock, tuple) else (0, 0)
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
-                if isinstance(avail_direct, Exception):
-                    avail_direct = reserve_direct = 0
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct)
                 return
