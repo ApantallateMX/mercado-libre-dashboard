@@ -833,11 +833,13 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             return base, None
 
     unique_bases = list(base_to_skus.keys())[:30]  # Limit to avoid BM overload
-    async with httpx.AsyncClient() as http:
-        results = await asyncio.gather(
-            *[_fetch(b, http) for b in unique_bases],
-            return_exceptions=True
-        )
+    from app.services.binmanager_client import get_shared_bm as _get_shared_bm
+    _bm_cli = await _get_shared_bm()
+    http = _bm_cli._client()
+    results = await asyncio.gather(
+        *[_fetch(b, http) for b in unique_bases],
+        return_exceptions=True
+    )
 
     # Map base -> data
     base_map = {}
@@ -2733,8 +2735,7 @@ async def products_inventory_partial(
             sku = p.get("sku", "")
             if sku:
                 cached = _bm_stock_cache.get(sku.upper())
-                _has_data = cached and cached[1].get("total", 0) > 0 or (cached and cached[1].get("avail_total", 0) > 0)
-                if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL and _has_data:
+                if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
                     data = cached[1]
                     p["_bm_total"] = data.get("total", 0)
                     p["_bm_mty"] = data.get("mty", 0)
