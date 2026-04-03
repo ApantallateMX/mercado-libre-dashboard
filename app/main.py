@@ -7272,21 +7272,27 @@ async def _run_stock_sync_for_user(user_id: str):
             logistic_type = (body_dict.get("shipping") or {}).get("logistic_type", "")
             if logistic_type == "fulfillment":
                 continue
-            qty = body_dict.get("available_quantity", 0) or 0
+            qty   = body_dict.get("available_quantity", 0) or 0
             title = body_dict.get("title", "") or ""
-            products.append({"sku": sku, "item_id": iid, "meli_stock": qty, "title": title})
-            item_map[iid] = {"sku": sku, "meli_stock": qty, "title": title}
+            price = body_dict.get("price", 0) or 0
+            products.append({"sku": sku, "item_id": iid, "meli_stock": qty, "title": title, "price": price})
+            item_map[iid] = {"sku": sku, "meli_stock": qty, "title": title, "price": price}
 
         # 3. Obtener stock BM para todos los productos
         bm_map = await _get_bm_stock_cached(products)
 
         # 4. Detectar sobreventas: MeLi stock > 0 pero BM disponible = 0
+        # IMPORTANTE: si BM no retornó datos para un SKU (error/503) → NO flaggear.
+        # Solo flaggear si BM confirmó explícitamente avail_total=0.
         alerts = []
         for p in products:
             sku = p["sku"]
             base_sku = _clean_sku_for_bm(sku)
-            bm_info = bm_map.get(sku) or bm_map.get(base_sku) or {}
-            bm_avail = bm_info.get("avail_total", 0) if bm_info else 0
+            bm_info = bm_map.get(sku) or bm_map.get(base_sku)
+            if bm_info is None:
+                # BM no retornó datos (error/503) → skip, no crear falso positivo
+                continue
+            bm_avail = bm_info.get("avail_total", 0)
             meli_stock = p["meli_stock"]
             if meli_stock > 0 and bm_avail == 0:
                 alerts.append({
@@ -7294,6 +7300,7 @@ async def _run_stock_sync_for_user(user_id: str):
                     "title": p["title"],
                     "sku": sku,
                     "meli_stock": meli_stock,
+                    "price": p.get("price", 0),
                     "bm_avail": 0,
                     "alert_type": "oversell",
                 })
@@ -7376,7 +7383,12 @@ async def get_sync_alerts_partial(request: Request):
 
     rows = ""
     for i, a in enumerate(alerts):
-        sku_str = a.get("sku") or ""
+        sku_str   = a.get("sku") or ""
+        price_val = a.get("price", 0) or 0
+        price_html = (f'<div class="text-center hidden md:block">'
+                      f'<div class="text-[10px] text-gray-400 mb-0.5">Precio</div>'
+                      f'<span class="text-xs font-semibold text-gray-700">${price_val:,.0f}</span>'
+                      f'</div>') if price_val else ""
         sku_html = (f'<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{sku_str}</span>'
                     if sku_str else '<span class="text-[10px] text-gray-300 font-mono">sin SKU</span>')
         rows += (
@@ -7389,7 +7401,8 @@ async def get_sync_alerts_partial(request: Request):
             f'</div>'
             f'<span class="text-xs text-gray-600 truncate block" title="{a["title"]}">{a["title"][:70]}</span>'
             f'</div>'
-            f'<div class="flex-shrink-0 flex items-center gap-3 text-xs">'
+            f'<div class="flex-shrink-0 flex items-center gap-4 text-xs">'
+            f'{price_html}'
             f'<div class="text-center">'
             f'<div class="text-[10px] text-gray-400 mb-0.5">MeLi</div>'
             f'<span class="bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-lg text-xs">{a["meli_stock"]}</span>'
