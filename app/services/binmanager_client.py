@@ -209,28 +209,27 @@ class BinManagerClient:
         return []
 
     async def get_stock_with_reserve(self, sku: str) -> tuple[int, int]:
-        """Retorna (AvailableQTY, Reserve) para un SKU.
-        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 (Producto Vendible), sin filtro de ubicación.
-          - AvailableQTY = stock vendible (calculado server-side por BM)
+        """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,62,68 (MTY+CDMX).
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
+          - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
           - Reserve      = unidades reservadas para órdenes pendientes
-        Verificado: SNTV001764 → 213 avail, 2 reserved; SNAC000029 → 2471 avail
+        Verificado: SNTV001764 → AvailableQTY=213, Reserve=2 (TotalQty=215)
         """
         return await self._query_bm_stock(sku)
 
     async def get_available_qty(self, sku: str) -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
-        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 (Producto Vendible), sin filtro de ubicación.
-        Verificado: SNTV001764 → 213; SNAC000029 → 2471.
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68.
+        Verificado: SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213.
         """
         avail, _ = await self._query_bm_stock(sku)
         return avail
 
     async def _query_bm_stock(self, sku: str) -> tuple[int, int]:
-        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1, sin filtro de ubicación.
-        CONCEPTID=1 = Producto Vendible — ya filtra solo stock disponible para venta.
-        LOCATIONID=None: necesario para SKUs en ubicaciones distintas a 47/62/68 (ej. SNAC000029=2471).
+        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1 + LOCATIONID=47,62,68 (MTY+CDMX).
         Método interno compartido por get_available_qty() y get_stock_with_reserve().
         Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
+        Verificado: SNTV001764 → AvailableQTY=213, Reserve=2.
         """
         if not self._logged_in:
             if not await self.login():
@@ -249,7 +248,7 @@ class BinManagerClient:
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": None, "WAREHOUSEID": None,
-            "LOCATIONID": None,
+            "LOCATIONID": "47,62,68",
             "BINID": None,
             "SEARCH": base,
             "CONDITION": "GRA,GRB,GRC,ICB,ICC,NEW",
