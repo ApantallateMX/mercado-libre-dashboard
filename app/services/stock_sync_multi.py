@@ -139,6 +139,7 @@ _SYNC_INTERVAL = 5 * 60   # 5 minutos
 _sync_running      = False
 _last_sync_ts      = 0.0
 _last_sync_result: dict = {}
+_sync_progress: dict = {}   # progreso en tiempo real mientras corre
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -600,7 +601,7 @@ async def run_multi_stock_sync() -> dict:
     Ejecuta el ciclo completo de sincronización multi-plataforma.
     Retorna resumen: {status, skus_processed, updates, errors, elapsed_s}.
     """
-    global _sync_running, _last_sync_ts, _last_sync_result
+    global _sync_running, _last_sync_ts, _last_sync_result, _sync_progress
 
     if _sync_running:
         return {"status": "already_running"}
@@ -608,12 +609,20 @@ async def run_multi_stock_sync() -> dict:
     _sync_running = True
     t0 = _time.time()
     summary = {"status": "ok", "skus_processed": 0, "updates": 0, "errors": 0}
+    _sync_progress = {
+        "phase": "Iniciando...",
+        "skus_done": 0, "skus_total": 0,
+        "updates": 0, "errors": 0,
+        "started_at": t0,
+        "error_details": [],
+    }
 
     try:
         from app.services import token_store
         from app.services.meli_client import get_meli_client
         from app.services.amazon_client import get_amazon_client
 
+        _sync_progress["phase"] = "Recopilando listings..."
         ml_accounts  = await token_store.get_all_tokens()
         amz_accounts = await token_store.get_all_amazon_accounts()
 
@@ -637,9 +646,14 @@ async def run_multi_stock_sync() -> dict:
 
         logger.info(f"[MULTI-SYNC] {len(all_bases)} SKUs base encontrados")
 
+        _sync_progress["phase"] = "Consultando BinManager..."
+        _sync_progress["skus_total"] = len(all_bases)
+
         # Consultar BM por SKU+condición específica para no mezclar stock entre condiciones
         sku_cond_map = {k: _cond_for_key(k) for k in all_bases}
         bm_stock = await _fetch_bm_avail(sku_cond_map)
+
+        _sync_progress["phase"] = "Aplicando reglas..."
 
         # Reglas de plataforma por SKU (tabla sku_platform_rules)
         try:
@@ -679,6 +693,8 @@ async def run_multi_stock_sync() -> dict:
             )
             summary["cannibalization"] = cannibals
 
+        _sync_progress["phase"] = "Actualizando plataformas..."
+
         # Procesar cada SKU base
         all_results: list = []
         for base in sorted(all_bases):
@@ -692,13 +708,26 @@ async def run_multi_stock_sync() -> dict:
 
             updates = _plan(base, bm_avail, listings, enabled)
             if not updates:
+                _sync_progress["skus_done"] += 1
                 continue
 
             summary["skus_processed"] += 1
             res = await _execute(updates, ml_clients, amz_clients)
             all_results.extend(res)
-            summary["updates"] += sum(1 for r in res if r["ok"])
-            summary["errors"]  += sum(1 for r in res if not r["ok"])
+            ok_n  = sum(1 for r in res if r["ok"])
+            err_n = sum(1 for r in res if not r["ok"])
+            summary["updates"] += ok_n
+            summary["errors"]  += err_n
+            _sync_progress["skus_done"] += 1
+            _sync_progress["updates"]   += ok_n
+            _sync_progress["errors"]    += err_n
+            if err_n:
+                for r in res:
+                    if not r["ok"]:
+                        _sync_progress["error_details"].append({
+                            "sku": base, "platform": r.get("platform", "?"),
+                            "msg": str(r.get("error", ""))[:120],
+                        })
 
         # Guardar log en DB
         try:
@@ -727,6 +756,7 @@ async def run_multi_stock_sync() -> dict:
         _sync_running     = False
         _last_sync_ts     = _time.time()
         _last_sync_result = summary
+        _sync_progress    = {}
 
     return summary
 
@@ -767,4 +797,5 @@ def get_sync_status() -> dict:
         "last_result":  _last_sync_result,
         "interval_min": _SYNC_INTERVAL // 60,
         "threshold":    STOCK_THRESHOLD,
+        "progress":     _sync_progress if _sync_running else {},
     }
