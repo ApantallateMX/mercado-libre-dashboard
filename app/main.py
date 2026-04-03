@@ -7377,43 +7377,44 @@ async def get_sync_alerts_partial(request: Request):
     rows = ""
     for i, a in enumerate(alerts):
         sku_str = a.get("sku") or ""
-        sku_html = (f'<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded flex-shrink-0">{sku_str}</span>'
-                    if sku_str else "")
+        sku_html = (f'<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{sku_str}</span>'
+                    if sku_str else '<span class="text-[10px] text-gray-300 font-mono">sin SKU</span>')
         rows += (
-            f'<div class="alert-row flex items-center gap-3 px-4 py-2.5 border-b border-gray-100'
-            f' last:border-0 hover:bg-red-50/30 transition-colors" data-idx="{i}" data-item-id="{a["item_id"]}" style="display:none">'
+            f'<div class="alert-row flex items-center gap-3 px-4 py-3 border-b border-gray-100'
+            f' last:border-0 hover:bg-red-50/20 transition-colors" data-idx="{i}" data-item-id="{a["item_id"]}" style="display:none">'
             f'<div class="min-w-0 flex-1">'
-            f'<div class="flex items-center gap-2 mb-0.5">'
-            f'<span class="font-mono text-[11px] font-semibold text-red-600 flex-shrink-0">{a["item_id"]}</span>'
+            f'<div class="flex items-center gap-2 flex-wrap mb-0.5">'
+            f'<span class="font-mono text-[11px] font-semibold text-blue-600">{a["item_id"]}</span>'
             f'{sku_html}'
             f'</div>'
-            f'<span class="text-xs text-gray-700 truncate block" title="{a["title"]}">{a["title"][:65]}</span>'
+            f'<span class="text-xs text-gray-600 truncate block" title="{a["title"]}">{a["title"][:70]}</span>'
             f'</div>'
-            f'<div class="flex-shrink-0 flex items-center gap-2 text-xs">'
-            f'<span class="text-gray-500 text-[11px]">MeLi:</span>'
-            f'<span class="bg-red-100 text-red-700 font-semibold px-2 py-0.5 rounded-full text-[11px]">{a["meli_stock"]}</span>'
-            f'<span class="text-gray-400 text-[11px] font-medium">BM: <span class="text-red-500 font-bold">0</span></span>'
+            f'<div class="flex-shrink-0 flex items-center gap-3 text-xs">'
+            f'<div class="text-center">'
+            f'<div class="text-[10px] text-gray-400 mb-0.5">MeLi</div>'
+            f'<span class="bg-red-100 text-red-700 font-bold px-2 py-0.5 rounded-lg text-xs">{a["meli_stock"]}</span>'
+            f'</div>'
+            f'<div class="text-center">'
+            f'<div class="text-[10px] text-gray-400 mb-0.5">BM</div>'
+            f'<span class="bg-gray-100 text-gray-500 font-bold px-2 py-0.5 rounded-lg text-xs">0</span>'
+            f'</div>'
             f'</div>'
             f'<button onclick="zeroAlertItem(\'{a["item_id"]}\', this)"'
             f' class="flex-shrink-0 bg-red-500 hover:bg-red-600 active:bg-red-700 text-white'
-            f' px-3 py-1 rounded-lg text-[11px] font-medium transition-colors">Qty 0</button>'
-            f'<span id="alert-msg-{a["item_id"]}" class="text-[10px] text-green-600 hidden">✓</span>'
+            f' px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-colors min-w-[56px] text-center">Qty 0</button>'
             f'</div>'
         )
 
-    html = f"""<div class="mb-4 bg-white border border-red-200 rounded-xl shadow-sm overflow-hidden">
-  <div class="flex items-center justify-between px-4 py-3 bg-red-50 border-b border-red-200">
+    html = f"""<div class="mb-4 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
     <div class="flex items-center gap-2">
-      <svg class="w-4 h-4 text-red-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-      </svg>
-      <span class="font-semibold text-red-700 text-sm">{total} items en riesgo de sobreventa</span>
+      <div class="w-1 h-5 bg-red-500 rounded"></div>
+      <span class="font-semibold text-gray-800 text-sm">{total} items en riesgo de sobreventa</span>
       {f'<span class="text-[10px] text-gray-400 hidden md:inline">— {last_str}</span>' if last_str else ''}
     </div>
     <div class="flex items-center gap-2">
       <button onclick="bulkZeroAlerts()" id="btn-bulk-zero"
-              class="text-[11px] bg-red-100 hover:bg-red-200 text-red-700 font-semibold px-3 py-1 rounded-lg transition-colors">
+              class="text-[11px] bg-red-500 hover:bg-red-600 text-white font-semibold px-3 py-1.5 rounded-xl transition-colors">
         Poner en 0 ({total})
       </button>
       <label class="flex items-center gap-1.5 cursor-pointer" title="Poner qty=0 autom\u00e1ticamente al detectar riesgo">
@@ -7422,15 +7423,15 @@ async def get_sync_alerts_partial(request: Request):
                class="w-3.5 h-3.5 accent-red-500">
       </label>
       <button onclick="triggerStockSync()" id="btn-sync-now"
-              class="text-[11px] text-red-600 hover:text-red-800 underline font-medium">Sync ahora</button>
+              class="text-[11px] text-gray-500 hover:text-gray-700 font-medium">Sync ahora</button>
     </div>
   </div>
-  <p class="text-[11px] text-red-500 px-4 py-2 border-b border-gray-100">
+  <p class="text-[11px] text-gray-400 px-5 py-2 border-b border-gray-50 bg-red-50/40">
     Items activos en MeLi con stock &gt; 0 pero BM disponible = 0. Riesgo de vender sin stock fisico.
   </p>
   <div id="alerts-list">{rows}</div>
-  <div class="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-t border-gray-100">
-    <span id="alerts-page-info" class="text-xs text-gray-500"></span>
+  <div class="flex items-center justify-between px-5 py-2.5 bg-gray-50/60 border-t border-gray-100">
+    <span id="alerts-page-info" class="text-xs text-gray-400"></span>
     <div class="flex items-center gap-1" id="alerts-pagination"></div>
   </div>
 </div>
