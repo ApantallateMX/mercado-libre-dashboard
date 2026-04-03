@@ -2330,11 +2330,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0):
+    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, avail_ok=True):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
         avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68
         reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
+        avail_ok:       True si get_stock_with_reserve respondió (tuple); False si fue excepción/timeout.
         Ambos campos vienen directo de BM, sin derivaciones.
 
         Casos verificados:
@@ -2346,6 +2347,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         warehouse_total = mty + cdmx
         avail_total     = int(avail_direct or 0)
         reserved_total  = int(reserve_direct or 0)
+        # Si get_stock_with_reserve falló (excepción/timeout) pero WH tiene stock físico,
+        # usar warehouse_total como fallback — evita falsos "Riesgo Sobreventa"
+        if avail_total == 0 and warehouse_total > 0 and not avail_ok:
+            avail_total = warehouse_total
         # _v=True: fetch produjo datos reales (no timeout/error vacío)
         verified = bool(rows_wh) or avail_total > 0 or reserved_total > 0
 
@@ -2405,11 +2410,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 )
                 r_wh = _results[0]
                 _stock = _results[1]
-                avail_direct, reserve_direct = _stock if isinstance(_stock, tuple) else (0, 0)
+                # _avail_ok=True: get_stock_with_reserve respondió (tuple) → valor confiable
+                # _avail_ok=False: excepción/timeout → no sabemos cuánto hay disponible
+                _avail_ok = isinstance(_stock, tuple)
+                avail_direct = _stock[0] if _avail_ok else 0
+                reserve_direct = _stock[1] if _avail_ok else 0
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
 
-                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct)
+                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct, avail_ok=_avail_ok)
                 return
             except Exception as _exc:
                 import logging as _log
@@ -7819,11 +7828,15 @@ async def force_prewarm():
     if _prewarm_running:
         return JSONResponse({"status": "already_running"})
 
-    # Eliminar entradas BM con _v=False/ausente y stock=0 (fetches fallidos)
+    # Eliminar entradas BM stale que causarían falsos resultados:
+    # 1) total=0 AND avail=0 sin _v → fetch fallido que guardó ceros
+    # 2) total>0 AND avail=0 → WH ok pero get_stock_with_reserve falló (fallo parcial)
     stale_cleared = 0
     for sku in list(_bm_stock_cache.keys()):
         ts, data = _bm_stock_cache[sku]
-        if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0 and not data.get("_v"):
+        all_zero_unverified = (data.get("total", 0) == 0 and data.get("avail_total", 0) == 0 and not data.get("_v"))
+        partial_failure = (data.get("total", 0) > 0 and data.get("avail_total", 0) == 0)
+        if all_zero_unverified or partial_failure:
             del _bm_stock_cache[sku]
             stale_cleared += 1
 
