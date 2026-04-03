@@ -1650,15 +1650,15 @@ async def items_grid_partial(
                     try:
                         bm_cli = await _get_bm_cli()
                         # Warehouse: desglose MTY/CDMX/TJ (stock físico por almacén)
-                        # get_available_qty: AvailableQTY real = TotalQty - Reserve
+                        # get_stock_with_reserve: AvailableQTY + Reserve directo de BM
                         # CONCEPTID=1 + LOCATIONID=47,62,68 — única fuente correcta de stock vendible
-                        r_wh, avail = await asyncio.gather(
+                        r_wh, (avail_qty, reserve_qty) = await asyncio.gather(
                             http.post(BM_WH_URL, json={
                                 "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
                                 "LocationID": "47,62,68", "BINID": None,
                                 "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
                             }, timeout=15.0),
-                            bm_cli.get_available_qty(base_sku),
+                            bm_cli.get_stock_with_reserve(base_sku),
                             return_exceptions=True,
                         )
                         mty = cdmx = tj = 0
@@ -1673,8 +1673,9 @@ async def items_grid_partial(
                                 else:
                                     tj += qty
                         warehouse_total = mty + cdmx
-                        avail_qty = avail if isinstance(avail, int) else 0
-                        return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail_qty}
+                        if isinstance(avail_qty, Exception): avail_qty = 0
+                        if isinstance(reserve_qty, Exception): reserve_qty = 0
+                        return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail_qty, "reserved": reserve_qty}
                     except Exception:
                         pass
                     return base_sku, None
@@ -2232,24 +2233,22 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, avail_direct=0):
-        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail directo de BM_COND_URL.
+    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0):
+        """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
-        avail_direct: suma de TotalQty donde status=="Producto Vendible" desde
-        GlobalStock_InventoryBySKU_Condition — la misma fuente que usa el sync multi-plataforma
-        y que ha sido verificada como correcta. Se usa directamente en lugar de la
-        fórmula "warehouse_total - reserve" que era inexacta cuando el Reserve del endpoint
-        Get_GlobalStock_InventoryBySKU difería del real.
+        avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68
+        reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
+        Ambos campos vienen directo de BM, sin derivaciones.
 
         Casos verificados:
-          SNAC000029: 2467 unidades en BM → avail_direct=2467 ✓ (antes daba 0 por reserve erróneo)
-          SNTV006485: física=1, reservada=1 → BM_COND devuelve 0 Producto Vendible ✓
-          SNTV002033: BM_COND devuelve ~59 Producto Vendible ✓
+          SNTV001764: TotalQty=215, Reserve=2, AvailableQTY=213 ✓
+          SNAC000029: AvailableQTY=2467, Reserve directo de BM ✓
+          SNTV006485: física=1, reservada=1 → AvailableQTY=0 ✓
         """
         mty, cdmx, tj = _parse_wh_rows(rows_wh)
         warehouse_total = mty + cdmx
         avail_total     = int(avail_direct or 0)
-        reserved_total  = max(0, warehouse_total - avail_total)
+        reserved_total  = int(reserve_direct or 0)
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total}
@@ -2296,21 +2295,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         }
         async with wh_sem:
             try:
-                # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY real (excluye reservados)
-                # get_available_qty usa Get_GlobalStock_InventoryBySKU con payload exacto de BM UI:
-                # CONCEPTID=1, LOCATIONID="47,62,68", CONDITION="GRA,GRB,GRC,ICB,ICC,NEW"
-                # → devuelve Reserve y AvailableQTY correctos filtrados a MTY+CDMX.
-                r_wh, avail_direct = await asyncio.gather(
+                # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY y Reserve directo de BM
+                # get_stock_with_reserve usa CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta
+                # Retorna (AvailableQTY, Reserve) directo del endpoint, sin derivaciones
+                r_wh, (avail_direct, reserve_direct) = await asyncio.gather(
                     http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
-                    bm_cli.get_available_qty(base),
+                    bm_cli.get_stock_with_reserve(base),
                     return_exceptions=True,
                 )
                 rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
                 if not isinstance(rows_wh, list): rows_wh = []
                 if isinstance(avail_direct, Exception):
-                    avail_direct = 0
+                    avail_direct = reserve_direct = 0
 
-                _store_wh(sku, rows_wh, avail_direct=avail_direct)
+                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct)
                 return
             except Exception as _exc:
                 import logging as _log

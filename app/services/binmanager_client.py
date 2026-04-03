@@ -208,16 +208,31 @@ class BinManagerClient:
                 return []
         return []
 
+    async def get_stock_with_reserve(self, sku: str) -> tuple[int, int]:
+        """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LocationID=47,62,68 (MTY+CDMX).
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
+          - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
+          - Reserve      = unidades reservadas para órdenes pendientes
+        Verificado: SNTV001764 → AvailableQTY=213, Reserve=2 (TotalQty=215)
+        """
+        return await self._query_bm_stock(sku)
+
     async def get_available_qty(self, sku: str) -> int:
-        """Retorna AvailableQTY para un SKU filtrado a LocationID=47,62,68 (MTY+CDMX).
-        Usa Get_GlobalStock_InventoryBySKU con el payload exacto que BM usa en su UI:
-          - CONCEPTID=1, LOCATIONID="47,62,68", CONDITION="GRA,GRB,GRC,ICB,ICC,NEW"
-        El campo AvailableQTY = TotalQty - Reserve (calculado por BM server-side).
-        Verificado: SNTV001764 → TotalQty=214, Reserve=1, AvailableQTY=213.
+        """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68.
+        Verificado: SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213.
+        """
+        avail, _ = await self._query_bm_stock(sku)
+        return avail
+
+    async def _query_bm_stock(self, sku: str) -> tuple[int, int]:
+        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1+LOCATIONID=47,62,68.
+        Método interno compartido por get_available_qty() y get_stock_with_reserve().
+        Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
         """
         if not self._logged_in:
             if not await self.login():
-                return 0
+                return 0, 0
         c = self._client()
 
         # Extraer base SKU (sin sufijo de condición)
@@ -265,6 +280,7 @@ class BinManagerClient:
             "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
             "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
         }
+        _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         for attempt in range(2):
             try:
                 r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
@@ -273,43 +289,43 @@ class BinManagerClient:
                     if attempt == 0:
                         await self.login()
                         continue
-                    return 0
+                    return 0, 0
                 if r.status_code == 200:
                     data = r.json()
                     if isinstance(data, list) and data:
-                        # 1. Coincidencia exacta de SKU base (caso normal: item en condición NEW)
+                        # 1. Coincidencia exacta de SKU base
                         match = next(
                             (x for x in data if (x.get("SKU") or "").upper() == base.upper()),
                             None
                         )
                         if match is not None:
-                            avail = match.get("AvailableQTY")
-                            return int(avail) if avail is not None else 0
-                        # 2. Sin match exacto: buscar variantes de condición del mismo base SKU.
-                        #    Caso real: SNTV004196 solo existe en GRB → BM retorna "SNTV004196-GRB"
-                        #    en el campo SKU, no "SNTV004196". Sin este fallback retornaría 0
-                        #    aunque hay 14 unidades físicas → falsa alerta de sobreventa.
-                        _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
+                            avail   = int(match.get("AvailableQTY") or 0)
+                            reserve = int(match.get("Reserve") or 0)
+                            return avail, reserve
+                        # 2. Sin match exacto: sumar variantes de condición del mismo base SKU
+                        #    Ej: SNTV004196 solo existe en BM como SNTV004196-GRB
                         variants = [
                             x for x in data
                             if (x.get("SKU") or "").upper().startswith(base.upper() + "-")
                             and any((x.get("SKU") or "").upper().endswith(s) for s in _COND_SFXS)
                         ]
                         if variants:
-                            return sum(int(x.get("AvailableQTY") or 0) for x in variants)
-                        return 0  # SKU no encontrado — NO caer al data[0] (puede ser otro SKU)
-                return 0
+                            avail   = sum(int(x.get("AvailableQTY") or 0) for x in variants)
+                            reserve = sum(int(x.get("Reserve") or 0) for x in variants)
+                            return avail, reserve
+                        return 0, 0  # SKU no encontrado — NO caer al data[0]
+                return 0, 0
             except httpx.TimeoutException:
-                logger.warning(f"BinManager timeout get_available_qty {sku} (intento {attempt+1})")
+                logger.warning(f"BinManager timeout _query_bm_stock {sku} (intento {attempt+1})")
                 if attempt == 0:
                     continue
-                return 0
+                return 0, 0
             except Exception as e:
-                logger.error(f"BinManager get_available_qty error {sku}: {e}")
+                logger.error(f"BinManager _query_bm_stock error {sku}: {e}")
                 if attempt == 0:
                     continue
-                return 0
-        return 0
+                return 0, 0
+        return 0, 0
 
     async def post_inventory(self, url: str, payload: dict, timeout: float = 15.0):
         """POST autenticado a un endpoint de inventario BM. Maneja sesión expirada con re-login.
