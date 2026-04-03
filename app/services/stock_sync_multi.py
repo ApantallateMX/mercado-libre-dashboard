@@ -142,6 +142,7 @@ _last_sync_result: dict = {}
 _sync_progress: dict = {}   # progreso en tiempo real mientras corre
 _cannibalization_data: list = []  # último resultado de canibalización (de último sync)
 _nocturnal_protection: bool = True  # reduce-only 10pm–6am CST por defecto
+_last_bm_stock: dict = {}  # {sku_upper: avail_int} del último sync — para prewarm cache
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -659,8 +660,10 @@ async def run_multi_stock_sync() -> dict:
         _sync_progress["skus_total"] = len(all_bases)
 
         # Consultar BM por SKU+condición específica para no mezclar stock entre condiciones
+        global _last_bm_stock
         sku_cond_map = {k: _cond_for_key(k) for k in all_bases}
         bm_stock = await _fetch_bm_avail(sku_cond_map)
+        _last_bm_stock = dict(bm_stock)  # snapshot para que main.py lo use en prewarm
 
         _sync_progress["phase"] = "Aplicando reglas..."
 
@@ -811,6 +814,11 @@ def _is_reduce_only_mode() -> bool:
     cst = timezone(timedelta(hours=-6))
     h = datetime.now(tz=cst).hour
     return h >= 22 or h < 6
+
+
+def get_last_bm_stock() -> dict:
+    """Retorna {sku_upper: avail_int} del último sync — para warm up del prewarm cache."""
+    return _last_bm_stock
 
 
 def get_nocturnal_protection() -> dict:

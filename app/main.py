@@ -1856,7 +1856,7 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
 <script>
 (function() {
   var attempts = 0;
-  var maxAttempts = 40;  // 40 x 5s = 200s (mas que el timeout de 150s del prewarm)
+  var maxAttempts = 140;  // 140 x 5s = 700s (mas que el timeout de 600s del prewarm)
   function reload() {
     if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
     else location.reload();
@@ -2126,6 +2126,8 @@ async def _prewarm_caches():
         if not client:
             _prewarm_error = "No hay cliente ML activo"
             return
+        # Cargar caché BM desde DB antes del prewarm (usa datos del último sync)
+        await _load_bm_cache_from_db()
         try:
             async def _do_prewarm():
                 from datetime import datetime, timedelta
@@ -2144,7 +2146,7 @@ async def _prewarm_caches():
                 _enrich_sku_from_orders(products, all_orders)
 
                 # SOLO fetchear BM para productos candidatos a stock issues.
-                # Con 6000+ listings, fetchear BM para todos supera el timeout de 150s.
+                # Con 6000+ listings, fetchear BM para todos puede tardar varios minutos.
                 # Candidatos: tienen SKU Y (tienen ventas recientes O tienen stock en MeLi O son FULL).
                 # FULL siempre incluidos: ML puede reportar available_quantity=0 aunque tengan stock
                 # en fulfillment; igualmente queremos ver BM stock para todos los FULL sin excepción.
@@ -2158,6 +2160,14 @@ async def _prewarm_caches():
                 ]
                 bm_map = await _get_bm_stock_cached(bm_candidates)
                 _apply_bm_stock(products, bm_map)
+
+                # Persistir caché BM en DB para sobrevivir reinicios
+                try:
+                    _bm_entries = [(s, d, t) for s, (t, d) in _bm_stock_cache.items()]
+                    if _bm_entries:
+                        await token_store.save_bm_stock_cache(_bm_entries)
+                except Exception:
+                    pass
 
                 # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
                 await _enrich_with_bm_product_info(bm_candidates)
@@ -2242,10 +2252,10 @@ async def _prewarm_caches():
                     "threshold": _DEFAULT_THRESHOLD,
                 })
 
-            # Timeout de 150s — si ML o BM tardan demasiado, abortar limpiamente
-            await asyncio.wait_for(_do_prewarm(), timeout=150.0)
+            # Timeout de 600s — BM puede tener cientos de SKUs sin caché
+            await asyncio.wait_for(_do_prewarm(), timeout=600.0)
         except asyncio.TimeoutError:
-            _prewarm_error = "Timeout: el calculo tardo mas de 150s."
+            _prewarm_error = "Timeout: el calculo tardo mas de 600s."
         finally:
             await client.close()
     except Exception as _e:
@@ -2278,13 +2288,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         upper = sku.upper()
         cached = _bm_stock_cache.get(upper)
         def _cache_is_valid(c):
-            if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
-                return False
-            d = c[1]
-            # Entrada EMPTY (todo 0) = posible error/timeout anterior → re-fetch siempre
-            if not d.get("total") and not d.get("avail_total"):
-                return False
-            return True
+            # Solo rechazar si no existe o expiró el TTL.
+            # Entradas con 0 stock son válidas (producto realmente sin stock) — no re-fetch.
+            return bool(c) and (_time.time() - c[0]) < _BM_CACHE_TTL
         if _cache_is_valid(cached):
             result_map[sku] = cached[1]
         elif upper not in _seen_to_fetch:
@@ -7815,9 +7821,19 @@ async def multi_sync_trigger():
     async def _run_sync_and_alerts():
         # 1. Sync multi-plataforma BM → ML + Amazon (actualiza stock en las plataformas)
         await run_multi_stock_sync()
-        # 2. Limpiar solo caché BM (para que el prewarm obtenga datos frescos de BM)
-        #    NO limpiar _stock_issues_cache — evita romper un prewarm que ya está corriendo
-        _bm_stock_cache.clear()
+        # 2. Actualizar _bm_stock_cache con datos frescos del sync (avail_total)
+        #    Evita que el prewarm re-fetche todos los SKUs desde cero.
+        try:
+            from app.services.stock_sync_multi import get_last_bm_stock
+            for _sku, _avail in get_last_bm_stock().items():
+                _existing = _bm_stock_cache.get(_sku.upper())
+                _d = _existing[1].copy() if _existing else {
+                    "mty": 0, "cdmx": 0, "tj": 0, "total": 0, "reserved_total": 0
+                }
+                _d["avail_total"] = int(_avail)
+                _bm_stock_cache[_sku.upper()] = (_time.time(), _d)
+        except Exception:
+            pass
         # 3. Encolar prewarm fresco (si ya hay uno corriendo, se ejecutará al terminar)
         asyncio.create_task(_prewarm_caches())
         # 4. Refrescar alertas de sobreventa
