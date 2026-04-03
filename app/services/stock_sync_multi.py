@@ -140,6 +140,7 @@ _sync_running      = False
 _last_sync_ts      = 0.0
 _last_sync_result: dict = {}
 _sync_progress: dict = {}   # progreso en tiempo real mientras corre
+_cannibalization_data: list = []  # último resultado de canibalización (de último sync)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -688,7 +689,9 @@ async def run_multi_stock_sync() -> dict:
                     pass
 
         # Fase 3C: detección de canibalización entre cuentas
+        global _cannibalization_data
         cannibals = _detect_cannibalization(ml_by_sku)
+        _cannibalization_data = cannibals  # persiste para el endpoint
         if cannibals:
             logger.warning(
                 f"[MULTI-SYNC] {len(cannibals)} SKUs con canibalización detectada: "
@@ -787,6 +790,11 @@ def start_multi_stock_sync():
     Esta función se mantiene por compatibilidad con el lifespan de FastAPI.
     """
     logger.info("[MULTI-SYNC] Modo manual — sync solo se ejecuta al presionar 'Sync ahora'")
+
+
+def get_cannibalization_data() -> list:
+    """Retorna lista de SKUs con canibalización del último sync."""
+    return _cannibalization_data
 
 
 def get_sync_status() -> dict:

@@ -102,6 +102,17 @@ async def _get_usd_to_mxn(client) -> float:
         return 20.0
 
 
+def _ml_fee(price: float) -> float:
+    """Tarifa ML escalonada por precio (más precisa que flat 17%)."""
+    if price >= 5000:
+        return 0.12
+    if price >= 1500:
+        return 0.14
+    if price >= 500:
+        return 0.16
+    return 0.18
+
+
 def _calc_margins(products: list, usd_to_mxn: float):
     """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto."""
     for p in products:
@@ -121,7 +132,7 @@ def _calc_margins(products: list, usd_to_mxn: float):
 
         # ── Ganancia/margen vs precio de venta actual ──────────────────────
         if price > 0 and p["_costo_mxn"] > 0:
-            comision = price * 0.17
+            comision = price * _ml_fee(price)
             iva_comision = comision * 0.16
             envio = 150
             ganancia = price - p["_costo_mxn"] - comision - iva_comision - envio
@@ -147,7 +158,7 @@ def _calc_margins(products: list, usd_to_mxn: float):
 
             # Margen neto si se vendiera al precio PH
             if p["_costo_mxn"] > 0:
-                comision_ph = rph * 0.17
+                comision_ph = rph * _ml_fee(rph)
                 iva_ph = comision_ph * 0.16
                 ganancia_ph = rph - p["_costo_mxn"] - comision_ph - iva_ph - 150
                 p["_margen_ph_pct"] = round((ganancia_ph / rph) * 100, 1)
@@ -162,9 +173,14 @@ def _calc_margins(products: list, usd_to_mxn: float):
         # Precio piso: mínimo para lograr 15% de margen después de comisión MeLi
         costo = p["_costo_mxn"]
         if costo > 0:
-            # precio_piso = costo / (1 - comision_total - margen_objetivo)
-            # comision_total = 19.72% (17% + IVA 16% sobre comision); margen_obj = 15%; envio = 150 flat
-            p["_precio_piso"] = round(costo / (1 - 0.1972 - 0.15), 0)
+            # precio_piso = costo / (1 - fee*1.16 - margen_obj); fee dinámico según bracket
+            # Estimación inicial → refinar una vez
+            _fee0 = _ml_fee(costo * 1.6)
+            _f0 = 1 - _fee0 * 1.16 - 0.15
+            _piso0 = costo / _f0 if _f0 > 0 else costo * 3
+            _fee1 = _ml_fee(_piso0)
+            _f1 = 1 - _fee1 * 1.16 - 0.15
+            p["_precio_piso"] = round(costo / _f1, 0) if _f1 > 0 else None
         else:
             p["_precio_piso"] = None
 
@@ -2137,15 +2153,24 @@ async def _prewarm_caches():
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
                 full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
+                # Desbalance peligroso: MeLi publica más stock del que hay en BM
+                imbalanced = [
+                    p for p in products
+                    if p.get("available_quantity", 0) > (p.get("_bm_avail") or 0) > 0
+                    and not p.get("is_full")
+                    and p.get("sku")
+                ]
+                imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail") or 0), reverse=True)
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
-                    "critical": critical, "full_no_stock": full_no_stock,
+                    "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
                     "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
                     "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
                     "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
                     "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
                     "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
+                    "imbalanced_count": len(imbalanced), "imbalanced_gap": sum(p.get("available_quantity", 0) - (p.get("_bm_avail") or 0) for p in imbalanced),
                     "threshold": _DEFAULT_THRESHOLD,
                 })
 
@@ -7739,6 +7764,14 @@ async def multi_sync_trigger():
 
     asyncio.create_task(_run_sync_and_alerts())
     return {"status": "triggered"}
+
+
+@app.get("/api/cannibalization")
+async def get_cannibalization():
+    """Retorna SKUs con canibalización del último sync."""
+    from app.services.stock_sync_multi import get_cannibalization_data
+    data = get_cannibalization_data()
+    return {"count": len(data), "items": data}
 
 
 @app.get("/api/stock/multi-sync/history")

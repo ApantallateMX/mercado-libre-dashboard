@@ -50,9 +50,17 @@
         <p class="text-[10px] text-gray-400">{{ full_no_stock_bm }} uds BM — cambiar a Merchant</p>
     </div>
     {% endif %}
+    {% if imbalanced_count %}
+    <div onclick="document.getElementById('imbalanced-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-purple-400 cursor-pointer hover:shadow-md hover:bg-purple-50/30 transition">
+        <p class="text-xs text-gray-500">Desbalance Peligroso</p>
+        <p class="text-2xl font-bold text-purple-600">{{ imbalanced_count }}</p>
+        <p class="text-[10px] text-gray-400">MeLi &gt; BM — gap {{ imbalanced_gap }} uds</p>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
 </div>
@@ -884,6 +892,94 @@
 </div>
 {% endif %}
 
+<!-- ===== Seccion F: Desbalance Peligroso ===== -->
+{% if imbalanced %}
+<div class="mb-8" id="imbalanced-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-purple-400 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Desbalance Peligroso</h3>
+        <span class="text-xs text-gray-400">(MeLi publica más stock del que hay en BM)</span>
+    </div>
+    <div class="bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3 text-xs text-purple-800">
+        MeLi tiene publicada una cantidad mayor al stock vendible en BM. Si se venden todas las unidades de MeLi puede haber sobreventas. Reducir stock en MeLi al nivel BM.
+    </div>
+
+    <!-- Mobile -->
+    <div class="md:hidden space-y-2">
+        {% for p in imbalanced %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-purple-400">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span class="font-mono text-[10px] text-gray-400">{{ p.id }}</span>
+                        {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{{ p.sku }}</span>{% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-purple-700">{{ p.get('available_quantity', 0) }}</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-700">{{ p.get('_bm_avail', 0) }}</span></div>
+                <div><span class="text-gray-500">Gap:</span> <span class="font-bold text-red-600">{{ p.get('available_quantity', 0) - (p.get('_bm_avail') or 0) }}</span></div>
+            </div>
+            <div class="mt-2 pt-2 border-t border-gray-100">
+                <button onclick="syncOneImbalanced('{{ p.id }}', {{ p.get('_bm_avail', 0) }})"
+                        class="w-full py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700">
+                    Reducir MeLi → {{ p.get('_bm_avail', 0) }}
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Desktop -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-purple-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-red-600">Gap</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in imbalanced %}
+                <tr class="hover:bg-purple-50/30" id="imbal-d-{{ p.id }}">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                            <span class="text-gray-800 truncate max-w-[220px] text-xs" title="{{ p.title }}">{{ p.title[:55] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2">
+                        <span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span>
+                        <div class="text-[10px] text-blue-500 font-mono">{{ p.id }}</div>
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-purple-700">{{ p.get('available_quantity', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-green-700">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) - (p.get('_bm_avail') or 0) }}</td>
+                    <td class="px-3 py-2 text-right text-gray-700">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
+                    <td class="px-3 py-2 text-center">
+                        <button onclick="syncOneImbalanced('{{ p.id }}', {{ p.get('_bm_avail', 0) }})"
+                                id="imbal-btn-{{ p.id }}"
+                                class="px-3 py-1.5 bg-purple-600 text-white text-xs rounded-lg hover:bg-purple-700 font-medium whitespace-nowrap">
+                            Reducir → {{ p.get('_bm_avail', 0) }}
+                        </button>
+                        <div id="imbal-msg-{{ p.id }}" class="text-[10px] mt-0.5"></div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 <script>
 // --- Helpers ---
 function _updateSectionCounts() {
@@ -1578,4 +1674,30 @@ function bulkActivateAll() {
   paginateTable('tbody-critical',  'pager-critical');
   paginateTable('tbody-fullstock', 'pager-fullstock');
 })();
+
+window.syncOneImbalanced = function(itemId, bmQty) {
+    var btn = document.getElementById('imbal-btn-' + itemId);
+    var msg = document.getElementById('imbal-msg-' + itemId);
+    if (btn) { btn.disabled = true; btn.textContent = 'Actualizando...'; }
+    fetch('/api/items/' + itemId + '/stock', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+        body: JSON.stringify({quantity: bmQty})
+    })
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+    .then(function(res) {
+        if (res.ok) {
+            if (msg) { msg.textContent = '✓ Actualizado'; msg.className = 'text-[10px] mt-0.5 text-green-600 font-bold'; }
+            var row = document.getElementById('imbal-d-' + itemId);
+            if (row) { setTimeout(function() { row.style.opacity = '0.4'; }, 800); }
+        } else {
+            if (btn) { btn.disabled = false; btn.textContent = 'Reducir → ' + bmQty; }
+            if (msg) { msg.textContent = res.d.detail || 'Error'; msg.className = 'text-[10px] mt-0.5 text-red-600'; }
+        }
+    })
+    .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.textContent = 'Reducir → ' + bmQty; }
+        if (msg) { msg.textContent = 'Error de red'; msg.className = 'text-[10px] mt-0.5 text-red-600'; }
+    });
+};
 </script>
