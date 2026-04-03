@@ -7801,13 +7801,37 @@ async def prewarm_status():
     if client:
         await client.close()
     key = f"stock_issues:{uid}:t10" if uid else None
-    cache_ready = bool(key and _stock_issues_cache.get(key) and
-                       (_time.time() - _stock_issues_cache[key][0]) < _STOCK_ISSUES_TTL)
+    cache_entry = key and _stock_issues_cache.get(key)
+    cache_ready = bool(cache_entry and (_time.time() - cache_entry[0]) < _STOCK_ISSUES_TTL)
+    last_updated = round(_time.time() - cache_entry[0]) if cache_entry else None
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
         "error": _prewarm_error[:300] if _prewarm_error else "",
+        "last_updated_s": last_updated,
     })
+
+
+@app.post("/api/stock/force-prewarm")
+async def force_prewarm():
+    """Fuerza un prewarm fresco: limpia caché BM stale y recalcula stock issues."""
+    global _prewarm_task
+    if _prewarm_running:
+        return JSONResponse({"status": "already_running"})
+
+    # Eliminar entradas BM con _v=False/ausente y stock=0 (fetches fallidos)
+    stale_cleared = 0
+    for sku in list(_bm_stock_cache.keys()):
+        ts, data = _bm_stock_cache[sku]
+        if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0 and not data.get("_v"):
+            del _bm_stock_cache[sku]
+            stale_cleared += 1
+
+    # Limpiar stock_issues_cache para forzar recalculo completo
+    _stock_issues_cache.clear()
+
+    _prewarm_task = asyncio.create_task(_prewarm_caches())
+    return JSONResponse({"status": "started", "stale_cleared": stale_cleared})
 
 
 @app.post("/api/stock/multi-sync/trigger")

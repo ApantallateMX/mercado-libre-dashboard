@@ -96,6 +96,25 @@
     {% endif %}
   </div>
 
+  <!-- ── Caché BM / Forzar Prewarm ──────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Caché de Stock BM</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Fuerza la actualización de datos BM para alertas y Riesgo Sobreventa</p>
+      </div>
+      <button id="prewarm-btn" onclick="forcePrewarm()"
+              class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-1.5">
+        <svg id="prewarm-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span id="prewarm-btn-label">🔄 Actualizar ahora</span>
+      </button>
+    </div>
+    <div id="prewarm-status-row" class="text-xs text-gray-500">Cargando estado...</div>
+  </div>
+
   <!-- ── Reglas ──────────────────────────────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-4">
@@ -554,5 +573,76 @@ window.toggleNocturnalProtection = function() {
 };
 
 loadNocturnalStatus();
+
+// ── Caché BM / Force Prewarm ────────────────────────────────────
+var _prewarmPollTimer = null;
+
+function _updatePrewarmStatus(data) {
+  var row = document.getElementById('prewarm-status-row');
+  var btn = document.getElementById('prewarm-btn');
+  var spinner = document.getElementById('prewarm-spinner');
+  var label = document.getElementById('prewarm-btn-label');
+  if (!row) return;
+
+  if (data.running) {
+    row.innerHTML = '<span class="inline-flex items-center gap-1.5 text-blue-600"><svg class="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Actualizando datos BM... puede tardar 1-2 minutos</span>';
+    btn.disabled = true;
+    spinner.classList.remove('hidden');
+    label.textContent = 'Actualizando...';
+  } else if (data.error) {
+    row.innerHTML = '<span class="text-red-500">⚠ Error: ' + data.error + '</span>';
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    label.textContent = '🔄 Reintentar';
+    if (_prewarmPollTimer) { clearInterval(_prewarmPollTimer); _prewarmPollTimer = null; }
+  } else if (data.ready) {
+    var ago = data.last_updated_s != null ? ' — actualizado hace ' + data.last_updated_s + 's' : '';
+    row.innerHTML = '<span class="text-green-600">✓ Datos BM listos' + ago + '</span>';
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    label.textContent = '🔄 Actualizar ahora';
+    if (_prewarmPollTimer) { clearInterval(_prewarmPollTimer); _prewarmPollTimer = null; }
+  } else {
+    row.innerHTML = '<span class="text-gray-400">Sin datos — presiona Actualizar ahora</span>';
+    btn.disabled = false;
+    spinner.classList.add('hidden');
+    label.textContent = '🔄 Actualizar ahora';
+  }
+}
+
+function _pollPrewarmStatus() {
+  fetch('/api/stock/prewarm-status', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      _updatePrewarmStatus(d);
+      if (!d.running && _prewarmPollTimer) {
+        clearInterval(_prewarmPollTimer);
+        _prewarmPollTimer = null;
+        if (d.ready) showToast('Caché BM actualizado — recarga el tab de Stock para ver cambios');
+      }
+    })
+    .catch(function() {});
+}
+
+window.forcePrewarm = function() {
+  fetch('/api/stock/force-prewarm', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.status === 'already_running') {
+      showToast('Ya hay un prewarm corriendo', true);
+    } else {
+      _updatePrewarmStatus({running: true, ready: false, error: ''});
+      if (_prewarmPollTimer) clearInterval(_prewarmPollTimer);
+      _prewarmPollTimer = setInterval(_pollPrewarmStatus, 3000);
+    }
+  })
+  .catch(function() { showToast('Error al iniciar', true); });
+};
+
+// Estado inicial al cargar la página
+_pollPrewarmStatus();
 </script>
 {% endblock %}
