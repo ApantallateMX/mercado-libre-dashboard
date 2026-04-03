@@ -2290,9 +2290,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         upper = sku.upper()
         cached = _bm_stock_cache.get(upper)
         def _cache_is_valid(c):
-            # Solo rechazar si no existe o expiró el TTL.
-            # Entradas con 0 stock son válidas (producto realmente sin stock) — no re-fetch.
-            return bool(c) and (_time.time() - c[0]) < _BM_CACHE_TTL
+            if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
+                return False
+            data = c[1]
+            # Entradas con total=0 y avail=0 solo son válidas si el fetch fue verificado (_v=True).
+            # Sin _v (DB antigua, timeout) se re-fetchean para no servir 0s de fetches fallidos.
+            if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
+                return bool(data.get("_v"))
+            return True
         if _cache_is_valid(cached):
             result_map[sku] = cached[1]
         elif upper not in _seen_to_fetch:
@@ -2351,9 +2356,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         warehouse_total = mty + cdmx
         avail_total     = int(avail_direct or 0)
         reserved_total  = int(reserve_direct or 0)
+        # _v=True: fetch produjo datos reales (no timeout/error vacío)
+        verified = bool(rows_wh) or avail_total > 0 or reserved_total > 0
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
-               "avail_total": avail_total, "reserved_total": reserved_total}
+               "avail_total": avail_total, "reserved_total": reserved_total,
+               "_v": verified}
         _bm_stock_cache[sku.upper()] = (_time.time(), inv)
         # Agregar a result_map si hay stock físico O disponible vendible
         if inv["total"] > 0 or avail_total > 0:
