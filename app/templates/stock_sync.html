@@ -172,6 +172,22 @@
     {% endif %}
   </div>
 
+  <!-- ── Protección nocturna ───────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Protección nocturna</h2>
+        <p class="text-xs text-gray-400 mt-0.5">10pm–6am CST — solo permite reducir stock, nunca aumentar</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="noc-status" class="text-xs px-2 py-1 rounded-full font-medium bg-gray-100 text-gray-500">Cargando...</span>
+        <button id="noc-toggle-btn" onclick="toggleNocturnalProtection()"
+                class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition">—</button>
+      </div>
+    </div>
+    <div id="noc-info" class="text-xs text-gray-400"></div>
+  </div>
+
   <!-- ── Canibalización entre cuentas ─────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-3">
@@ -498,5 +514,45 @@ window.deactivateCannibal = function(itemId, btn) {
 
 // Cargar canibalización al abrir la página
 loadCannibalization();
+
+// Protección nocturna
+function loadNocturnalStatus() {
+  fetch('/api/stock/nocturnal-protection', {headers: {'ngrok-skip-browser-warning': 'true'}})
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    var status = document.getElementById('noc-status');
+    var btn = document.getElementById('noc-toggle-btn');
+    var info = document.getElementById('noc-info');
+    if (d.enabled) {
+      status.textContent = d.active_now ? '🌙 Activa ahora' : 'Activada (fuera de horario)';
+      status.className = 'text-xs px-2 py-1 rounded-full font-medium ' + (d.active_now ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700');
+      btn.textContent = 'Desactivar';
+      info.textContent = d.active_now ? 'Modo reduce-only activo — el sync no aumentará stock hasta las 6am.' : 'Fuera del horario protegido. El sync opera con normalidad.';
+    } else {
+      status.textContent = 'Desactivada';
+      status.className = 'text-xs px-2 py-1 rounded-full font-medium bg-gray-100 text-gray-500';
+      btn.textContent = 'Activar';
+      info.textContent = 'Sin protección nocturna. El sync puede aumentar stock a cualquier hora.';
+    }
+    btn.dataset.enabled = d.enabled ? '1' : '0';
+  })
+  .catch(function() {});
+}
+
+window.toggleNocturnalProtection = function() {
+  var btn = document.getElementById('noc-toggle-btn');
+  var newEnabled = btn.dataset.enabled !== '1';
+  btn.disabled = true;
+  fetch('/api/stock/nocturnal-protection', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+    body: JSON.stringify({enabled: newEnabled})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function() { loadNocturnalStatus(); btn.disabled = false; showToast(newEnabled ? 'Protección nocturna activada' : 'Protección nocturna desactivada'); })
+  .catch(function() { btn.disabled = false; });
+};
+
+loadNocturnalStatus();
 </script>
 {% endblock %}

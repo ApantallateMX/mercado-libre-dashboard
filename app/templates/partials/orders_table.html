@@ -1,3 +1,31 @@
+<!-- GAP 10: P&L Summary -->
+{% if pl_revenue %}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold text-gray-800">${{ "{:,.0f}".format(pl_revenue) }}</div>
+        <div class="text-[10px] text-gray-400">Ventas brutas</div>
+        <div class="text-[10px] text-gray-300">{{ pl_count }} órdenes</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold text-green-700">${{ "{:,.0f}".format(pl_net) }}</div>
+        <div class="text-[10px] text-gray-400">Neto MeLi</div>
+        <div class="text-[10px] text-gray-300">{{ pl_margen }}% del bruto</div>
+    </div>
+    {% if pl_ganancia is not none %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold {% if pl_ganancia >= 0 %}text-blue-700{% else %}text-red-600{% endif %}">${{ "{:,.0f}".format(pl_ganancia) }}</div>
+        <div class="text-[10px] text-gray-400">Utilidad est. (con costo)</div>
+        <div class="text-[10px] text-gray-300">vs costo BM</div>
+    </div>
+    {% endif %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold text-gray-600">${{ "{:,.0f}".format((pl_revenue - pl_net)) }}</div>
+        <div class="text-[10px] text-gray-400">Retenciones MeLi</div>
+        <div class="text-[10px] text-gray-300">fees + envío + impuestos</div>
+    </div>
+</div>
+{% endif %}
+
 <!-- Mobile cards -->
 <div class="md:hidden space-y-2">
     {% for order in orders %}
@@ -73,6 +101,7 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Envío</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Impuestos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300 text-green-700">Total</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">Ganancia</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Estado</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
         </tr>
@@ -111,6 +140,13 @@
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-green-700">
                 ${{ "{:,.2f}".format(order.net_amount) }}
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold
+                {% if order.ganancia_est is not none %}{% if order.ganancia_est >= 0 %}text-blue-700{% else %}text-red-600{% endif %}{% else %}text-gray-300{% endif %}">
+                {% if order.ganancia_est is not none %}
+                    ${{ "{:,.0f}".format(order.ganancia_est) }}
+                    {% if order.margen_est is not none %}<div class="text-[9px] font-normal">{{ order.margen_est }}%</div>{% endif %}
+                {% else %}—{% endif %}
+            </td>
             <td class="px-4 py-3 whitespace-nowrap text-center">
                 {% if order.status == 'paid' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800">Pagado</span>
@@ -130,7 +166,7 @@
         </tr>
         <!-- Fila expandible con detalle de cobros -->
         <tr class="hidden">
-            <td colspan="10" class="px-0 py-0">
+            <td colspan="11" class="px-0 py-0">
                 <div class="bg-gray-50 border-l-4 border-yellow-400 px-6 py-4">
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <!-- Col 1: Items de la orden -->

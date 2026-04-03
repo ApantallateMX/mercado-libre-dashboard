@@ -58,9 +58,25 @@
         <p class="text-[10px] text-gray-400">MeLi &gt; BM — gap {{ imbalanced_gap }} uds</p>
     </div>
     {% endif %}
+    {% if stagnant_count %}
+    <div onclick="document.getElementById('stagnant-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition">
+        <p class="text-xs text-gray-500">Inventario Estancado</p>
+        <p class="text-2xl font-bold text-slate-600">{{ stagnant_count }}</p>
+        <p class="text-[10px] text-gray-400">{{ stagnant_bm }} uds BM — 0 ventas 30d</p>
+    </div>
+    {% endif %}
+    {% if price_risk_count %}
+    <div onclick="document.getElementById('price-risk-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-pink-400 cursor-pointer hover:shadow-md hover:bg-pink-50/30 transition">
+        <p class="text-xs text-gray-500">Precio &lt; Retail PH</p>
+        <p class="text-2xl font-bold text-pink-600">{{ price_risk_count }}</p>
+        <p class="text-[10px] text-gray-400">Gap prom. ${{ "{:,.0f}".format(price_risk_gap / price_risk_count) }}</p>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
 </div>
@@ -976,6 +992,151 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ===== Seccion G: Inventario Estancado ===== -->
+{% if stagnant %}
+<div class="mb-8" id="stagnant-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-slate-400 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Inventario Estancado</h3>
+        <span class="text-xs text-gray-400">(stock en BM y MeLi, 0 ventas en 30 días)</span>
+    </div>
+    <div class="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 mb-3 text-xs text-slate-800">
+        Productos con stock activo que no han generado ninguna venta en 30 días. Considera aplicar un descuento, bundle o mover a liquidación.
+    </div>
+    <!-- Mobile -->
+    <div class="md:hidden space-y-2">
+        {% for p in stagnant %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-slate-300">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku }}</span>{% endif %}
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">{{ p.get('available_quantity', 0) }}</span></div>
+                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</span></div>
+                <div><span class="text-gray-500">Precio:</span> <span class="font-bold">${{ "{:,.0f}".format(p.get('price', 0)) }}</span></div>
+                <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold text-red-600">0</span></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <!-- Desktop -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-slate-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-pink-600">Margen Est.</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in stagnant %}
+                <tr class="hover:bg-slate-50/30">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                            <span class="text-gray-800 truncate max-w-[220px] text-xs" title="{{ p.title }}">{{ p.title[:55] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span></td>
+                    <td class="px-3 py-2 text-right text-gray-700">{{ p.get('available_quantity', 0) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</td>
+                    <td class="px-3 py-2 text-right text-gray-700">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
+                    <td class="px-3 py-2 text-right {% if p.get('_margen_pct') is not none and p._margen_pct < 10 %}text-red-600 font-bold{% else %}text-gray-600{% endif %}">
+                        {% if p.get('_margen_pct') is not none %}{{ p._margen_pct }}%{% else %}—{% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                        <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"
+                           class="text-xs text-blue-600 hover:underline">Ver →</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- ===== Seccion H: Precio bajo Retail PH ===== -->
+{% if price_risk %}
+<div class="mb-8" id="price-risk-section">
+    <div class="flex items-center gap-2 mb-3">
+        <div class="w-1 h-6 bg-pink-400 rounded"></div>
+        <h3 class="text-sm md:text-base font-bold text-gray-800">Precio &lt; Retail PH</h3>
+        <span class="text-xs text-gray-400">(vendiendo por debajo del precio histórico de compra BM)</span>
+    </div>
+    <div class="bg-pink-50 border border-pink-200 rounded-lg px-4 py-2 mb-3 text-xs text-pink-800">
+        Estás vendiendo por debajo del precio de compra histórico (Retail PH en BM). Puede indicar márgenes negativos o stock comprado caro. Revisa precio y costo.
+    </div>
+    <!-- Desktop -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-pink-50 border-b">
+                <tr>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio MeLi</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail PH BM</th>
+                    <th class="text-right px-3 py-2 text-red-600 font-medium text-xs">Gap</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Margen Est.</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+                {% for p in price_risk %}
+                <tr class="hover:bg-pink-50/30">
+                    <td class="px-3 py-2">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span></td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-pink-700">${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0)) }}</td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">-${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0) - p.get('price', 0)) }}</td>
+                    <td class="px-3 py-2 text-right {% if p.get('_margen_pct') is not none and p._margen_pct < 0 %}text-red-600 font-bold{% else %}text-gray-600{% endif %}">
+                        {% if p.get('_margen_pct') is not none %}{{ p._margen_pct }}%{% else %}—{% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-center">
+                        <a href="https://www.mercadolibre.com.mx/anuncios/{{ p.id }}" target="_blank"
+                           class="text-xs text-blue-600 hover:underline">Ver →</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <!-- Mobile -->
+    <div class="md:hidden space-y-2">
+        {% for p in price_risk %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-pink-400">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">{% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku }}</span>{% endif %}
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">${{ "{:,.0f}".format(p.get('price', 0)) }}</span></div>
+                <div><span class="text-gray-500">Retail PH:</span> <span class="font-bold text-pink-700">${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0)) }}</span></div>
+                <div><span class="text-red-600 font-bold">Gap: -${{ "{:,.0f}".format(p.get('_retail_ph_mxn', 0) - p.get('price', 0)) }}</span></div>
+            </div>
+        </div>
+        {% endfor %}
     </div>
 </div>
 {% endif %}

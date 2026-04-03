@@ -141,6 +141,7 @@ _last_sync_ts      = 0.0
 _last_sync_result: dict = {}
 _sync_progress: dict = {}   # progreso en tiempo real mientras corre
 _cannibalization_data: list = []  # último resultado de canibalización (de último sync)
+_nocturnal_protection: bool = True  # reduce-only 10pm–6am CST por defecto
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,7 +376,7 @@ def _score(listing: dict) -> float:
     platform = listing.get("platform", "ml")
 
     if platform == "ml":
-        net_price = price * (1 - _ml_fee(price))
+        net_price = max(0.0, price * (1 - _ml_fee(price)) - 150.0)  # 150 = envío estimado MXN
         sold_qty  = int(listing.get("sold_qty") or 0)
         date_str  = listing.get("date_created", "")
         days_active = 30
@@ -401,7 +402,7 @@ def _score(listing: dict) -> float:
 # PLANIFICACIÓN DE DISTRIBUCIÓN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> list[dict]:
+def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set, reduce_only: bool = False) -> list[dict]:
     """
     Calcula las actualizaciones necesarias para un SKU base.
 
@@ -465,6 +466,10 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set) -> lis
             if lst["qty"] != bm_avail:
                 reason = "activate_and_distribute" if lst.get("status") == "paused" else "distribute"
                 updates.append({"listing": lst, "new_qty": bm_avail, "reason": reason})
+
+    # Protección nocturna: solo permitir reducciones
+    if reduce_only:
+        updates = [u for u in updates if u["new_qty"] < u["listing"]["qty"]]
 
     return updates
 
@@ -702,6 +707,12 @@ async def run_multi_stock_sync() -> dict:
         _sync_progress["phase"] = "Actualizando plataformas..."
         _sync_progress["skus_done"] = 0   # reset — ahora contamos plataformas actualizadas
 
+        # Protección nocturna: solo reducciones en horario 22–06 CST
+        ro = _is_reduce_only_mode()
+        if ro:
+            logger.info("[MULTI-SYNC] Protección nocturna activa — solo reducciones de stock")
+            summary["reduce_only"] = True
+
         # Procesar cada SKU base
         all_results: list = []
         for base in sorted(all_bases):
@@ -713,7 +724,7 @@ async def run_multi_stock_sync() -> dict:
             listings  = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
             enabled   = set(all_rules.get(base, []))
 
-            updates = _plan(base, bm_avail, listings, enabled)
+            updates = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
             if not updates:
                 _sync_progress["skus_done"] += 1
                 continue
@@ -790,6 +801,29 @@ def start_multi_stock_sync():
     Esta función se mantiene por compatibilidad con el lifespan de FastAPI.
     """
     logger.info("[MULTI-SYNC] Modo manual — sync solo se ejecuta al presionar 'Sync ahora'")
+
+
+def _is_reduce_only_mode() -> bool:
+    """True durante protección nocturna (22:00–06:00 CST). Solo reducciones de stock."""
+    if not _nocturnal_protection:
+        return False
+    from datetime import timezone, timedelta
+    cst = timezone(timedelta(hours=-6))
+    h = datetime.now(tz=cst).hour
+    return h >= 22 or h < 6
+
+
+def get_nocturnal_protection() -> dict:
+    return {
+        "enabled": _nocturnal_protection,
+        "active_now": _is_reduce_only_mode(),
+        "hours": "22:00–06:00 CST",
+    }
+
+
+def set_nocturnal_protection(enabled: bool):
+    global _nocturnal_protection
+    _nocturnal_protection = enabled
 
 
 def get_cannibalization_data() -> list:

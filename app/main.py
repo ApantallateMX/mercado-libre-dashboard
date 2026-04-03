@@ -1561,6 +1561,17 @@ async def orders_table_partial(
             buyer_raw = o.get("buyer") or {}
             total_iva = round(total_fees * 0.16, 2)  # IVA estimado sobre comisión
 
+            # GAP 6: profit estimado = neto_meli - costo_bm (si disponible)
+            total_cost_est = 0.0
+            for oi in items:
+                oi_sku = (oi.get("item", {}).get("seller_sku")
+                          or oi.get("item", {}).get("seller_custom_field") or "")
+                oi_sku_base = oi_sku.split("+")[0].strip() if oi_sku else ""
+                cost_unit = _sku_cost_map.get(oi_sku_base, 0) or 0
+                total_cost_est += cost_unit * oi.get("quantity", 1)
+            ganancia_est = round(net - total_cost_est, 2) if total_cost_est > 0 else None
+            margen_est = round(ganancia_est / total * 100, 1) if (ganancia_est is not None and total > 0) else None
+
             enriched.append(SimpleNamespace(
                 id=o.get("id", "-"),
                 date_created=o.get("date_created", "-"),
@@ -1573,6 +1584,8 @@ async def orders_table_partial(
                 iva_shipping=iva_ship,
                 taxes=taxes,
                 net_amount=net,
+                ganancia_est=ganancia_est,
+                margen_est=margen_est,
                 shipping_id=shipping.get("id"),
                 payment_method=payment_method,
                 payment_type=payment_type,
@@ -1582,12 +1595,26 @@ async def orders_table_partial(
                 tags=o.get("tags", []),
             ))
 
-        return templates.TemplateResponse(request, "partials/orders_table.html", {            "orders": enriched,
+        # GAP 10: resumen P&L de la página actual
+        active_orders = [o for o in enriched if o.status != "cancelled"]
+        pl_revenue = sum(o.total_amount for o in active_orders)
+        pl_net = sum(o.net_amount for o in active_orders)
+        pl_ganancia = sum(o.ganancia_est for o in active_orders if o.ganancia_est is not None)
+        pl_has_costs = any(o.ganancia_est is not None for o in active_orders)
+        pl_margen = round(pl_net / pl_revenue * 100, 1) if pl_revenue > 0 else 0
+
+        return templates.TemplateResponse(request, "partials/orders_table.html", {
+            "orders": enriched,
             "paging": orders_data.get("paging", {}),
             "offset": offset,
             "limit": limit,
             "sort": sort,
-            "seller_name": user.get("nickname", "-")
+            "seller_name": user.get("nickname", "-"),
+            "pl_revenue": pl_revenue,
+            "pl_net": pl_net,
+            "pl_ganancia": pl_ganancia if pl_has_costs else None,
+            "pl_margen": pl_margen,
+            "pl_count": len(active_orders),
         })
     finally:
         await client.close()
@@ -1889,6 +1916,7 @@ import time as _time
 # Cache compartido: items details + BM stock (evita re-fetch entre tabs)
 _products_cache: dict[str, tuple[float, list]] = {}
 _bm_stock_cache: dict[str, tuple[float, dict]] = {}
+_sku_cost_map: dict[str, float] = {}  # sku -> costo MXN (del último prewarm)
 _category_cache: dict[str, str] = {}  # category_id -> name
 _PRODUCTS_CACHE_TTL = 900   # 15 min
 _BM_CACHE_TTL = 900         # 15 min
@@ -2134,6 +2162,15 @@ async def _prewarm_caches():
                 # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
                 await _enrich_with_bm_product_info(bm_candidates)
 
+                # Calcular márgenes en candidatos (necesario para GAP 5, 7, 6)
+                fx = await _get_usd_to_mxn(client)
+                _calc_margins(bm_candidates, fx)
+
+                # Actualizar mapa SKU→costo para cálculo de profit en órdenes (GAP 6)
+                for _p in bm_candidates:
+                    if _p.get("sku") and (_p.get("_costo_mxn") or 0) > 0:
+                        _sku_cost_map[_p["sku"]] = _p["_costo_mxn"]
+
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
                 restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
@@ -2153,6 +2190,34 @@ async def _prewarm_caches():
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
                 full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
+                # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
+                stagnant = [
+                    p for p in products
+                    if (p.get("_bm_avail") or 0) > 0
+                    and p.get("available_quantity", 0) > 0
+                    and p.get("units", 0) == 0
+                    and not p.get("is_full")
+                    and p.get("sku")
+                ]
+                stagnant.sort(
+                    key=lambda x: (x.get("_bm_avail") or 0) * (x.get("price") or 1),
+                    reverse=True
+                )
+
+                # GAP 5: Precio MeLi por debajo del RetailPrice PH de BM
+                price_risk = [
+                    p for p in bm_candidates
+                    if p.get("price", 0) > 0
+                    and p.get("_retail_ph_mxn", 0) > 0
+                    and p["price"] < p["_retail_ph_mxn"]
+                    and p.get("available_quantity", 0) > 0
+                    and p.get("sku")
+                ]
+                price_risk.sort(
+                    key=lambda x: x.get("_retail_ph_mxn", 0) - x.get("price", 0),
+                    reverse=True
+                )
+
                 # Desbalance peligroso: MeLi publica más stock del que hay en BM
                 imbalanced = [
                     p for p in products
@@ -2165,12 +2230,15 @@ async def _prewarm_caches():
                 _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
+                    "stagnant": stagnant, "price_risk": price_risk,
                     "restock_count": len(restock), "lost_revenue": sum(p.get("revenue", 0) for p in restock),
                     "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
                     "activate_count": len(activate), "activate_stock": sum(p.get("_bm_avail", 0) for p in activate),
                     "critical_count": len(critical), "critical_bm_total": sum(p.get("_bm_avail", 0) for p in critical),
                     "full_no_stock_count": len(full_no_stock), "full_no_stock_bm": sum(p.get("_bm_avail", 0) for p in full_no_stock),
                     "imbalanced_count": len(imbalanced), "imbalanced_gap": sum(p.get("available_quantity", 0) - (p.get("_bm_avail") or 0) for p in imbalanced),
+                    "stagnant_count": len(stagnant), "stagnant_bm": sum(p.get("_bm_avail", 0) for p in stagnant),
+                    "price_risk_count": len(price_risk), "price_risk_gap": sum(p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in price_risk),
                     "threshold": _DEFAULT_THRESHOLD,
                 })
 
@@ -7772,6 +7840,23 @@ async def get_cannibalization():
     from app.services.stock_sync_multi import get_cannibalization_data
     data = get_cannibalization_data()
     return {"count": len(data), "items": data}
+
+
+@app.get("/api/stock/nocturnal-protection")
+async def nocturnal_protection_get():
+    """Estado de la protección nocturna de stock."""
+    from app.services.stock_sync_multi import get_nocturnal_protection
+    return get_nocturnal_protection()
+
+
+@app.post("/api/stock/nocturnal-protection")
+async def nocturnal_protection_set(request: Request):
+    """Activar/desactivar protección nocturna. Body: {\"enabled\": true/false}"""
+    from app.services.stock_sync_multi import set_nocturnal_protection
+    body = await request.json()
+    enabled = bool(body.get("enabled", True))
+    set_nocturnal_protection(enabled)
+    return {"enabled": enabled}
 
 
 @app.get("/api/stock/multi-sync/history")
