@@ -83,7 +83,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
 
     - Warehouse: totales reales por almacen (MTY/CDMX/TJ)
-    - get_available_qty: AvailableQTY neto (Get_GlobalStock_InventoryBySKU CONCEPTID=8)
+    - get_available_qty: AvailableQTY neto (Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68)
     - Condition: desglose GR vs IC por condicion
     InventoryBySKUAndCondicion_Quantity esta ROTO server-side (SQL binid error).
     Retorna {stock_gr, stock_ic, stock_other, total_stock, avail_total}

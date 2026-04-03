@@ -216,7 +216,7 @@ def _wh_name_to_zone(name: str) -> str:
 async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
     """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo.
     Usa Get_GlobalStock_InventoryBySKU_Warehouse para desglose por almacen y
-    get_available_qty (Get_GlobalStock_InventoryBySKU CONCEPTID=8) para AvailableQTY real.
+    get_available_qty (Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68) para AvailableQTY real.
     InventoryBySKUAndCondicion_Quantity esta ROTO en el servidor (SQL binid error).
     """
     from app.services.binmanager_client import get_shared_bm

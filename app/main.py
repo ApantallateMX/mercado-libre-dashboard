@@ -1643,20 +1643,22 @@ async def items_grid_partial(
                 sku_to_items[base]["item_ids"].append(item_id)
 
         if sku_to_items:
+            from app.services.binmanager_client import get_shared_bm as _get_bm_cli
             sem = asyncio.Semaphore(10)
             async def _fetch_inv(base_sku: str, full_sku: str, http: _httpx.AsyncClient):
                 async with sem:
                     try:
-                        r_wh, r_inv = await asyncio.gather(
+                        bm_cli = await _get_bm_cli()
+                        # Warehouse: desglose MTY/CDMX/TJ (stock físico por almacén)
+                        # get_available_qty: AvailableQTY real = TotalQty - Reserve
+                        # CONCEPTID=1 + LOCATIONID=47,62,68 — única fuente correcta de stock vendible
+                        r_wh, avail = await asyncio.gather(
                             http.post(BM_WH_URL, json={
                                 "COMPANYID": 1, "SKU": base_sku, "WarehouseID": None,
                                 "LocationID": "47,62,68", "BINID": None,
                                 "Condition": _bm_conditions_for_sku(full_sku), "ForInventory": 0, "SUPPLIERS": None,
                             }, timeout=15.0),
-                            http.post(BM_INV_URL, json={
-                                "COMPANYID": 1, "SEARCH": base_sku,
-                                "CONCEPTID": 8, "NUMBERPAGE": 1, "RECORDSPAGE": 5,
-                            }, timeout=15.0),
+                            bm_cli.get_available_qty(base_sku),
                             return_exceptions=True,
                         )
                         mty = cdmx = tj = 0
@@ -1671,17 +1673,8 @@ async def items_grid_partial(
                                 else:
                                     tj += qty
                         warehouse_total = mty + cdmx
-                        reserve_int = global_int = 0
-                        if not isinstance(r_inv, Exception) and r_inv.status_code == 200:
-                            inv_data = r_inv.json()
-                            row0 = inv_data[0] if isinstance(inv_data, list) and inv_data else (inv_data if isinstance(inv_data, dict) else {})
-                            reserve_int = int(row0.get("Reserve", 0) or 0)
-                            global_int  = int(row0.get("TotalQty", 0) or 0)
-                        # Fórmula híbrida (igual que _store_wh)
-                        old_f = max(0, warehouse_total - reserve_int)
-                        g_avail = max(0, global_int - reserve_int) if global_int > 0 else warehouse_total
-                        avail = min(warehouse_total, g_avail) if old_f == 0 and g_avail > 0 else old_f
-                        return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail}
+                        avail_qty = avail if isinstance(avail, int) else 0
+                        return base_sku, {"MTY": mty, "CDMX": cdmx, "TJ": tj, "total": warehouse_total, "avail": avail_qty}
                     except Exception:
                         pass
                     return base_sku, None

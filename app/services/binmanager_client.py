@@ -208,57 +208,6 @@ class BinManagerClient:
                 return []
         return []
 
-    async def get_sku_stock(self, sku: str) -> dict:
-        """Get stock and product info for a specific SKU."""
-        if not self._logged_in:
-            if not await self.login():
-                return {}
-        c = self._client()
-        # Use full base payload so BM returns all quantity/cost fields
-        payload = {
-            **_GS_BASE_PAYLOAD,
-            "SEARCH": sku,
-            "NEEDAVGCOST": True,
-            "NEEDRETAILPRICE": True,
-            "RECORDSPAGE": 10,
-        }
-        for attempt in range(2):
-            try:
-                r = await c.post(
-                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=payload, headers=_AJAX_HEADERS, timeout=20,
-                )
-                if self._session_expired(r):
-                    self._logged_in = False
-                    if attempt == 0:
-                        await self.login()
-                        continue
-                    return {}
-                if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, list) and data:
-                        row = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), data[0])
-                        # BM field name varies by payload: TotalQty (global), QTY (per-SKU), QtyTotal (legacy)
-                        stock = (row.get("TotalQty") or row.get("AvailableQTY")
-                                 or row.get("QTY") or row.get("QtyTotal") or row.get("Qty") or 0)
-                        return {
-                            "stock": int(stock) if stock else 0,
-                            "retail_price": row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0,
-                            "avg_cost": row.get("AvgCostQTY") or 0,
-                            "brand": row.get("BRAND") or row.get("Brand", ""),
-                            "model": row.get("MODEL") or row.get("Model", ""),
-                            "size": row.get("SIZE") or row.get("Size", ""),
-                            "category": row.get("CategoryName", "") or row.get("Category", ""),
-                            "title": row.get("Title", "") or row.get("MODEL") or row.get("Model", ""),
-                        }
-                return {}
-            except Exception as e:
-                logger.error(f"BinManager get_sku_stock error {sku}: {e}")
-                if attempt == 0:
-                    continue
-                return {}
-        return {}
-
     async def get_available_qty(self, sku: str) -> int:
         """Retorna AvailableQTY para un SKU filtrado a LocationID=47,62,68 (MTY+CDMX).
         Usa Get_GlobalStock_InventoryBySKU con el payload exacto que BM usa en su UI:
