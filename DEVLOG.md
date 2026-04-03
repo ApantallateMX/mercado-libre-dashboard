@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-03 — FIX: BM cache false positives + Inventario blank columns + force prewarm tool
+
+### BUG — Riesgo Sobreventa mostraba productos con BM stock real
+Tres root causes identificadas y corregidas:
+
+**Root cause 1 — Cache servía entradas 0-stock de fetches fallidos**
+- `_get_bm_stock_cached`: entradas con `total=0, avail=0` sin `_v=True` se servían como datos válidos.
+- Fix: `_cache_is_valid` ahora rechaza esas entradas → se re-fetchea en el siguiente prewarm.
+- `_store_wh`: nuevo campo `_v` (verified = bool(rows_wh) OR avail_total>0 OR reserved_total>0).
+
+**Root cause 2 — Fetch parcial almacenaba {total>0, avail=0}**
+- `_wh_phase`: si `get_stock_with_reserve` lanzaba excepción (timeout), se almacenaba `avail=0` aunque WH breakdown era correcto.
+- Fix: `_avail_ok = isinstance(_stock, tuple)` distingue excepción de respuesta genuina (0,0).
+- `_store_wh`: fallback `if avail_total==0 AND warehouse_total>0 AND not avail_ok → avail_total = warehouse_total`.
+
+**Root cause 3 — Prewarm excluía productos con MeLi stock=0**
+- `bm_candidates` solo incluía productos con `meli_available > 0` → productos en "Activar" nunca se fetcheaban.
+- Fix: `bm_candidates = [p for p in products if p.get("sku")]` — todos los SKUs.
+
+### BUG — Columnas Inventario en blanco (TJ, Ventas 30d, Días, Revenue, Costo BM, Margen)
+- **Fix A:** `_has_data` check en Phase 1 bloqueaba aplicar datos BM a productos con bm_avail=0.
+- **Fix B:** `products_inventory.html` — 4 TDs (`días`, `revenue`, `costo_bm`, `margen`) tenían condición `_section != 'accion'` faltante → columnas ocultas en sección correcta.
+- **Fix C:** `_enrich_with_bm_product_info` usaba `httpx.AsyncClient()` sin autenticación → respuestas HTML de login page.
+
+### FEAT — Force prewarm + SKU diagnostic en tab Stock
+- Botón "🔄 Actualizar ahora" en card "Caché de Stock BM" → `POST /api/stock/force-prewarm`
+  - Limpia entradas stale (0-stock sin `_v` + partial failures `total>0, avail=0`)
+  - Limpia `_stock_issues_cache` → alertas se recalculan fresh
+  - Polling live con spinner hasta completar
+- Campo SKU + botón "Consultar" → `GET /api/debug/bm-cache?sku=XXX`
+  - Muestra: BM Avail, Total WH, Reserve, MTY/CDMX/TJ, edad/TTL, estado
+  - Lista alertas activas en `_stock_issues_cache` donde aparece el SKU
+
+---
+
 ## 2026-04-02 — FIX: BM columns show 0 instead of "-" + health banner only on errors
 
 **BM columnas muestran 0 en vez de "-"** (todas las secciones):
