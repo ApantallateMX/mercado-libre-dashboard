@@ -176,6 +176,9 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
             except Exception as exc:
                 # Error → NO escribir 0. Skip para no poner en 0 sin razón.
                 logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
+            finally:
+                if _sync_progress:
+                    _sync_progress["skus_done"] = _sync_progress.get("skus_done", 0) + 1
 
     # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
@@ -694,6 +697,7 @@ async def run_multi_stock_sync() -> dict:
             summary["cannibalization"] = cannibals
 
         _sync_progress["phase"] = "Actualizando plataformas..."
+        _sync_progress["skus_done"] = 0   # reset — ahora contamos plataformas actualizadas
 
         # Procesar cada SKU base
         all_results: list = []

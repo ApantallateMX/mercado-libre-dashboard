@@ -275,11 +275,16 @@ function _updateProgress(prog) {
 
   var done  = prog.skus_done  || 0;
   var total = prog.skus_total || 0;
-  var pct   = total > 0 ? Math.min(100, Math.round(done / total * 100)) : 5;
-  // Keep bar animated at ≥5% so it never looks stuck at 0
-  document.getElementById('prog-bar').style.width = pct + '%';
-  document.getElementById('prog-skus-label').textContent =
-    total > 0 ? (done + ' / ' + total + ' SKUs') : 'Preparando...';
+  var phase = prog.phase || '';
+  var pct   = total > 0 ? Math.min(98, Math.round(done / total * 100)) : 5;
+  document.getElementById('prog-bar').style.width = Math.max(pct, 5) + '%';
+  var label = total > 0 ? (done + ' / ' + total + ' SKUs') : 'Preparando...';
+  if (phase.indexOf('BinManager') >= 0 && total > 0) {
+    label = 'Consultando BM: ' + done + ' / ' + total + ' SKUs';
+  } else if (phase.indexOf('plataformas') >= 0 && total > 0) {
+    label = 'Actualizando: ' + done + ' / ' + total + ' SKUs';
+  }
+  document.getElementById('prog-skus-label').textContent = label;
 
   var upd = prog.updates || 0;
   var err = prog.errors  || 0;
@@ -378,8 +383,8 @@ function pollStatus() {
       });
   }, 2000);
 
-  // Timeout 5 min
-  setTimeout(function() { clearInterval(interval); _stopElapsedTimer(); }, 300000);
+  // Timeout 20 min (sync con 6000+ SKUs puede tardar ~15 min)
+  setTimeout(function() { clearInterval(interval); _stopElapsedTimer(); }, 1200000);
 }
 
 // Si la página carga con un sync ya corriendo, arrancar polling automáticamente
