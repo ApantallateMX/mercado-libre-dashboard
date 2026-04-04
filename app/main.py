@@ -74,6 +74,33 @@ def _bm_conditions_for_sku(sku: str) -> str:
 
 import re as _re
 
+
+def normalize_to_bm_sku(sku: str) -> str:
+    """Normaliza cualquier variante de SKU de MeLi al SKU base de BinManager.
+
+    Todos los SKUs de BM siguen el patrón: SN + 2 letras categoría + 6 dígitos = 10 chars.
+    Ejemplos: SNTV007270, SNHG000004, SNAC000029
+
+    Limpieza en 4 pasos:
+      1. Bundle: tomar primera parte antes de " / " o " + "
+      2. Packs: quitar sufijos entre paréntesis (2), (18), (N)
+      3. Cortar en primer espacio o guión → elimina -GRA, -ICS, -NEW, etc.
+      4. Primeros 10 caracteres en mayúsculas = SKU BM
+
+    Casos verificados:
+      SNTV007270-ICS  → SNTV007270
+      SNTV007270 NEW  → SNTV007270
+      SNTV007270 / SNAC000029  → SNTV007270  (bundle: primera parte)
+      SNTV001764 (2)  → SNTV001764  (pack x2)
+    """
+    if not sku:
+        return ""
+    s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
+    s = _re.sub(r'\s*\(\w+\)', '', s).strip()
+    s = _re.split(r'[\s\-]', s)[0].strip()
+    return s[:10].upper()
+
+
 def _clean_sku_for_bm(sku: str) -> str:
     """Limpia SKU de MeLi para consultar BinManager.
     Quita: (N), / segunda_parte, + segunda_parte, espacios extra, etc."""
@@ -340,14 +367,52 @@ async def lifespan(app: FastAPI):
     async def _startup_prewarm():
         await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
         while True:
-            # Precalentar TODAS las cuentas para que el cambio de cuenta sea instantáneo
+            # Fase 2 — Prewarm BM unificado cross-account:
+            # 1) Recolectar productos de TODAS las cuentas en paralelo
+            # 2) Normalizar y deduplicar SKUs → lista única de SKUs base BM
+            # 3) Una sola pasada BM para todas las cuentas (la cache normalizada garantiza
+            #    que SNTV007270-GRA y SNTV007270 NEW no se consulten dos veces)
+            # 4) Por cuenta: aplicar los datos BM ya en cache (sin nueva consulta)
             try:
                 accounts = await token_store.get_all_tokens()
-                for acc in accounts:
-                    uid = acc.get("user_id", "")
-                    if uid:
-                        await _prewarm_caches(user_id=uid)
-                        await asyncio.sleep(1)  # pausa mínima entre cuentas
+                if accounts:
+                    # Recolectar todos los products de todas las cuentas en paralelo
+                    async def _fetch_acc_products(uid):
+                        try:
+                            cli = await get_meli_client(user_id=uid)
+                            if cli:
+                                return await _get_all_products_cached(cli, include_paused=True)
+                        except Exception:
+                            pass
+                        return []
+
+                    all_products_lists = await asyncio.gather(
+                        *[_fetch_acc_products(acc.get("user_id", "")) for acc in accounts
+                          if acc.get("user_id")],
+                        return_exceptions=True
+                    )
+                    # Aplanar: lista única de todos los productos de todas las cuentas
+                    all_products = []
+                    for pl in all_products_lists:
+                        if isinstance(pl, list):
+                            all_products.extend(pl)
+
+                    # Una sola llamada _get_bm_stock_cached con el universo completo.
+                    # La deduplicación por normalize_to_bm_sku garantiza que SNTV007270-GRA,
+                    # SNTV007270 NEW y SNTV007270 cuenten como 1 solo fetch a BM.
+                    bm_candidates = [p for p in all_products if p.get("sku")]
+                    if bm_candidates:
+                        _prewarm_progress["done"] = 0
+                        _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
+                        _prewarm_progress["started_at"] = _time.time()
+                        await _get_bm_stock_cached(bm_candidates)
+
+                    # Con BM ya en cache, correr prewarm por cuenta (sin volver a fetchear BM)
+                    for acc in accounts:
+                        uid = acc.get("user_id", "")
+                        if uid:
+                            await _prewarm_caches(user_id=uid)
+                            await asyncio.sleep(1)
             except Exception:
                 pass
             # Refrescar alertas de sobreventa con datos BM actualizados
@@ -2291,49 +2356,60 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
     result_map = {}
     to_fetch = []
-    _seen_to_fetch: set = set()   # deduplicar: mismo SKU en 100+ productos → 1 sola llamada BM
+    # Deduplicar por SKU base BM (normalize_to_bm_sku): SNTV007270-GRA y SNTV007270 NEW
+    # son el mismo producto en BM → 1 sola consulta, resultado compartido entre ambos.
+    _seen_bm_keys: set = set()
+
+    def _cache_is_valid(c):
+        if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
+            return False
+        data = c[1]
+        # Entradas con total=0 y avail=0 solo son válidas si el fetch fue verificado (_v=True).
+        # Sin _v (DB antigua, timeout) se re-fetchean para no servir 0s de fetches fallidos.
+        if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
+            return bool(data.get("_v"))
+        # total>0, avail=0, reserve=0 → matemáticamente incoherente.
+        # Indica fallo silencioso de CONCEPTID=1 (devolvió (0,0) sin encontrar el SKU).
+        if data.get("total", 0) > 0 and data.get("avail_total", 0) == 0 and data.get("reserved_total", 0) == 0:
+            return False
+        return True
+
     for p in products:
         sku = p.get(sku_key, "")
         if not sku:
             continue
-        upper = sku.upper()
-        cached = _bm_stock_cache.get(upper)
-        def _cache_is_valid(c):
-            if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
-                return False
-            data = c[1]
-            # Entradas con total=0 y avail=0 solo son válidas si el fetch fue verificado (_v=True).
-            # Sin _v (DB antigua, timeout) se re-fetchean para no servir 0s de fetches fallidos.
-            if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
-                return bool(data.get("_v"))
-            # total>0, avail=0, reserve=0 → matemáticamente incoherente (AvailableQTY = TotalQty - Reserve = total > 0).
-            # Indica fallo silencioso de CONCEPTID=1 (devolvió (0,0) como tuple sin encontrar el SKU).
-            # Re-fetchear para obtener el valor correcto y evitar falso Riesgo Sobreventa.
-            if data.get("total", 0) > 0 and data.get("avail_total", 0) == 0 and data.get("reserved_total", 0) == 0:
-                return False
-            return True
+        bm_key = normalize_to_bm_sku(sku)  # clave normalizada: primeros 10 chars
+        cached = _bm_stock_cache.get(bm_key)
         if _cache_is_valid(cached):
             result_map[sku] = cached[1]
-        elif upper not in _seen_to_fetch:
+        elif bm_key not in _seen_bm_keys:
             to_fetch.append(sku)
-            _seen_to_fetch.add(upper)
+            _seen_bm_keys.add(bm_key)
+        # Si bm_key ya está en _seen_bm_keys (duplicado cross-account o variante),
+        # no agregar a to_fetch. result_map se llenará en el post-fetch pass abajo.
 
     # También incluir SKUs de variaciones para calcular BM correcto por variación
-    seen_skus = set(s.upper() for s in to_fetch)
-    seen_skus.update(s.upper() for s in result_map)
+    seen_skus = set(normalize_to_bm_sku(s) for s in to_fetch)
+    seen_skus.update(normalize_to_bm_sku(s) for s in result_map)
     for p in products:
         if not p.get("has_variations"):
             continue
         for v in p.get("variations", []):
             v_sku = v.get("sku", "")
-            if not v_sku or v_sku.upper() in seen_skus:
+            if not v_sku:
                 continue
-            cached = _bm_stock_cache.get(v_sku.upper())
+            v_bm_key = normalize_to_bm_sku(v_sku)
+            if v_bm_key in seen_skus:
+                cached = _bm_stock_cache.get(v_bm_key)
+                if _cache_is_valid(cached):
+                    result_map[v_sku] = cached[1]
+                continue
+            cached = _bm_stock_cache.get(v_bm_key)
             if _cache_is_valid(cached):
                 result_map[v_sku] = cached[1]
             else:
                 to_fetch.append(v_sku)
-            seen_skus.add(v_sku.upper())
+            seen_skus.add(v_bm_key)
 
     if not to_fetch:
         return result_map
@@ -2404,14 +2480,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total,
                "_v": verified}
-        _bm_stock_cache[sku.upper()] = (_time.time(), inv)
-        # Agregar a result_map si hay stock físico O disponible vendible
+        # Guardar bajo clave normalizada (base BM SKU, 10 chars) para que todas las variantes
+        # del mismo producto (SNTV007270-GRA, SNTV007270 NEW, etc.) compartan una sola entrada.
+        _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), inv)
+        # Agregar a result_map con el SKU original de MeLi para que _apply_bm_stock lo encuentre
         if inv["total"] > 0 or avail_total > 0:
             result_map[sku] = inv
         return inv["total"] > 0 or avail_total > 0
 
     def _store_empty(sku):
-        _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
+        _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
 
     wh_sem = asyncio.Semaphore(15)  # Fix B: reducido 50→15 para no estresar BM server (evita session expiry bajo carga)
 
@@ -2510,12 +2588,38 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         for _retry_sku in _stale_after_prewarm:
             await _wh_phase(_retry_sku, http)
 
+    # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
+    # _seen_bm_keys pero result_map nunca se pobló). Ahora el cache sí tiene el dato.
+    # Ejemplo: "SNTV007270-GRA" fue el SKU fetcheado; "SNTV007270 NEW" del mismo prewarm
+    # fue omitido de to_fetch (misma bm_key) → aquí se sirve del cache.
+    for p in products:
+        sku = p.get(sku_key, "")
+        if not sku or sku in result_map:
+            continue
+        bm_key = normalize_to_bm_sku(sku)
+        cached = _bm_stock_cache.get(bm_key)
+        if cached and _cache_is_valid(cached):
+            result_map[sku] = cached[1]
+    # Lo mismo para variaciones
+    for p in products:
+        if not p.get("has_variations"):
+            continue
+        for v in p.get("variations", []):
+            v_sku = v.get("sku", "")
+            if not v_sku or v_sku in result_map:
+                continue
+            v_bm_key = normalize_to_bm_sku(v_sku)
+            cached = _bm_stock_cache.get(v_bm_key)
+            if cached and _cache_is_valid(cached):
+                result_map[v_sku] = cached[1]
+
     # Persistir nuevas entradas BM a DB (fire-and-forget — no bloquea la respuesta)
     if to_fetch:
         now_ts = _time.time()
         entries_to_persist = []
         for _sku in to_fetch:
-            cached = _bm_stock_cache.get(_sku.upper())
+            _bm_key = normalize_to_bm_sku(_sku)
+            cached = _bm_stock_cache.get(_bm_key)
             if cached:
                 entries_to_persist.append((_sku, cached[1], cached[0]))
         if entries_to_persist:
@@ -7912,7 +8016,8 @@ async def debug_bm_cache(sku: str = ""):
     if not sku:
         return JSONResponse({"error": "sku requerido"}, status_code=400)
     upper = sku.strip().upper()
-    cached = _bm_stock_cache.get(upper)
+    bm_key = normalize_to_bm_sku(upper)  # normalizar para buscar en cache unificado
+    cached = _bm_stock_cache.get(bm_key)
     if not cached:
         return JSONResponse({"found": False, "sku": upper, "message": "No está en caché — se fetcheará en el próximo prewarm"})
 
@@ -9386,6 +9491,204 @@ async def planning_unlaunched():
         "total_amz_only":   sum(1 for x in result if x["tag"] == "amz_only"),
         "has_amazon": bool(amz_vel),
     }
+
+
+# ── Proceso 1: Vista unificada cross-account ─────────────────────────────────
+
+@app.get("/api/stock/unified")
+async def stock_unified_view():
+    """Vista cross-account: por cada SKU base BM, muestra stock BM vs qty en cada cuenta ML.
+
+    Retorna lista ordenada por BM avail desc:
+    [{
+      bm_sku:      "SNTV007270",
+      bm_avail:    86,
+      bm_reserved: 0,
+      bm_total:    86,
+      mty: 35, cdmx: 51, tj: 0,
+      accounts: [
+        { name: "Cuenta A", user_id: "...", listings: [
+            { item_id: "MLM123", title: "...", meli_qty: 5, price: 1500 }
+        ], total_meli_qty: 5 }
+      ],
+      total_meli_qty: 8,
+      action:  "ok" | "oversell_risk" | "zero_listing" | "low_stock" | "no_listing"
+    }]
+    """
+    accounts = await token_store.get_all_tokens()
+    if not accounts:
+        return JSONResponse({"error": "No hay cuentas configuradas"}, status_code=400)
+
+    # Recolectar productos de todas las cuentas
+    async def _get_acc_data(acc):
+        uid = acc.get("user_id", "")
+        name = acc.get("nickname") or acc.get("name") or uid
+        try:
+            cli = await get_meli_client(user_id=uid)
+            if not cli:
+                return uid, name, []
+            products = await _get_all_products_cached(cli, include_paused=False)
+            await cli.close()
+            return uid, name, products
+        except Exception:
+            return uid, name, []
+
+    acc_results = await asyncio.gather(*[_get_acc_data(a) for a in accounts], return_exceptions=True)
+
+    # Mapa: bm_sku → { bm_data, accounts: {uid: {name, listings}} }
+    bm_sku_map: dict = {}
+
+    for res in acc_results:
+        if isinstance(res, Exception):
+            continue
+        uid, name, products = res
+        for p in products:
+            ml_sku = p.get("sku", "")
+            if not ml_sku:
+                continue
+            bm_sku = normalize_to_bm_sku(ml_sku)
+            if not bm_sku:
+                continue
+            if bm_sku not in bm_sku_map:
+                bm_sku_map[bm_sku] = {"accounts": {}}
+            if uid not in bm_sku_map[bm_sku]["accounts"]:
+                bm_sku_map[bm_sku]["accounts"][uid] = {"name": name, "listings": []}
+            bm_sku_map[bm_sku]["accounts"][uid]["listings"].append({
+                "item_id": p.get("id", ""),
+                "title":   p.get("title", ""),
+                "meli_qty": p.get("available_quantity", 0),
+                "price":   p.get("price", 0),
+                "sku_original": ml_sku,
+            })
+
+    # Enriquecer con datos BM del cache
+    result = []
+    for bm_sku, entry in bm_sku_map.items():
+        bm_cached = _bm_stock_cache.get(bm_sku)
+        bm_data = bm_cached[1] if bm_cached else {}
+        bm_avail    = bm_data.get("avail_total", 0)
+        bm_reserved = bm_data.get("reserved_total", 0)
+        bm_total_wh = bm_data.get("total", 0)
+
+        accounts_list = []
+        total_meli_qty = 0
+        for uid, acc_info in entry["accounts"].items():
+            acc_total = sum(l["meli_qty"] for l in acc_info["listings"])
+            total_meli_qty += acc_total
+            accounts_list.append({
+                "name": acc_info["name"],
+                "user_id": uid,
+                "listings": acc_info["listings"],
+                "total_meli_qty": acc_total,
+            })
+
+        # Determinar acción sugerida
+        if bm_avail == 0 and total_meli_qty > 0:
+            action = "oversell_risk"
+        elif total_meli_qty == 0 and bm_avail > 0:
+            action = "zero_listing"
+        elif 0 < bm_avail <= 10:
+            action = "low_stock"
+        else:
+            action = "ok"
+
+        result.append({
+            "bm_sku":        bm_sku,
+            "bm_avail":      bm_avail,
+            "bm_reserved":   bm_reserved,
+            "bm_total":      bm_total_wh,
+            "mty":           bm_data.get("mty", 0),
+            "cdmx":          bm_data.get("cdmx", 0),
+            "tj":            bm_data.get("tj", 0),
+            "accounts":      accounts_list,
+            "total_meli_qty": total_meli_qty,
+            "action":        action,
+            "bm_in_cache":   bm_cached is not None,
+        })
+
+    result.sort(key=lambda x: (x["action"] != "oversell_risk", x["action"] != "zero_listing", -x["bm_avail"]))
+    return JSONResponse({"skus": result, "total": len(result)})
+
+
+# ── Proceso 2: SKUs de BM sin listing en ninguna cuenta ML ───────────────────
+
+@app.get("/api/bm/launch-opportunities")
+async def bm_launch_opportunities(min_qty: int = 1):
+    """Proceso inverso: SKUs en BM con stock que NO tienen listing activo en ninguna cuenta ML.
+
+    Corre un scan de BM global inventory, extrae SKUs con avail >= min_qty,
+    cruza contra todos los SKUs activos de todas las cuentas ML, y devuelve
+    los que no tienen listing → oportunidades de lanzamiento.
+
+    min_qty: mínimo de unidades en BM para considerar el SKU (default: 1)
+    """
+    from app.services.binmanager_client import get_shared_bm
+
+    # 1. Recolectar todos los SKUs activos de todas las cuentas ML
+    accounts = await token_store.get_all_tokens()
+    ml_bm_skus: set = set()
+
+    async def _get_ml_skus(acc):
+        uid = acc.get("user_id", "")
+        try:
+            cli = await get_meli_client(user_id=uid)
+            if not cli:
+                return set()
+            products = await _get_all_products_cached(cli, include_paused=False)
+            await cli.close()
+            return {normalize_to_bm_sku(p["sku"]) for p in products if p.get("sku")}
+        except Exception:
+            return set()
+
+    ml_sku_sets = await asyncio.gather(*[_get_ml_skus(a) for a in accounts], return_exceptions=True)
+    for s in ml_sku_sets:
+        if isinstance(s, set):
+            ml_bm_skus.update(s)
+
+    # 2. Scan BM global inventory (todas las páginas con avail > 0)
+    bm_client = await get_shared_bm()
+    bm_all: list = []
+    page = 1
+    while True:
+        page_data = await bm_client.get_global_inventory(page=page, per_page=100, min_qty=min_qty)
+        if not page_data:
+            break
+        bm_all.extend(page_data)
+        if len(page_data) < 100:
+            break
+        page += 1
+
+    # 3. Cruzar: BM SKUs sin listing en ML
+    opportunities = []
+    seen_bm = set()
+    for item in bm_all:
+        raw_sku = (item.get("SKU") or "").strip()
+        if not raw_sku:
+            continue
+        bm_sku = normalize_to_bm_sku(raw_sku)
+        if bm_sku in seen_bm:
+            continue
+        seen_bm.add(bm_sku)
+        if bm_sku not in ml_bm_skus:
+            opportunities.append({
+                "bm_sku":   bm_sku,
+                "sku_raw":  raw_sku,
+                "title":    item.get("Title") or item.get("title") or "",
+                "brand":    item.get("Brand") or item.get("brand") or "",
+                "category": item.get("CategoryName") or item.get("category") or "",
+                "avail":    int(item.get("AvailableQTY") or 0),
+                "total":    int(item.get("TotalQty") or 0),
+                "cost_usd": float(item.get("AvgCostQTY") or item.get("avgcostqty") or 0),
+                "retail_price": float(item.get("LastRetailPricePurchaseHistory") or 0),
+            })
+
+    opportunities.sort(key=lambda x: -x["avail"])
+    return JSONResponse({
+        "opportunities": opportunities,
+        "total": len(opportunities),
+        "ml_active_skus": len(ml_bm_skus),
+        "bm_total_scanned": len(seen_bm),
+    })
 
 
 if __name__ == "__main__":

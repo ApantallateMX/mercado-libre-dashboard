@@ -222,6 +222,30 @@
     <div id="noc-info" class="text-xs text-gray-400"></div>
   </div>
 
+  <!-- ── Vista Unificada Cross-Account ────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-700">Stock Unificado — Todas las Cuentas</h2>
+      <button onclick="loadUnifiedStock()" class="text-xs text-blue-600 hover:underline">Actualizar</button>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Un SKU = una fila aunque esté en varias cuentas. Acción sugerida por fila.</p>
+    <div id="unified-panel">
+      <p class="text-xs text-gray-400 text-center py-4">Haz clic en Actualizar para cargar.</p>
+    </div>
+  </div>
+
+  <!-- ── Oportunidades de Lanzamiento (BM sin listing ML) ──────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-gray-700">Oportunidades de Lanzamiento</h2>
+      <button onclick="loadLaunchOpportunities()" class="text-xs text-blue-600 hover:underline">Escanear BM</button>
+    </div>
+    <p class="text-xs text-gray-400 mb-3">SKUs con stock en BM que no tienen listing activo en ninguna cuenta ML.</p>
+    <div id="launch-panel">
+      <p class="text-xs text-gray-400 text-center py-4">Haz clic en "Escanear BM" para iniciar (puede tardar ~15s).</p>
+    </div>
+  </div>
+
   <!-- ── Canibalización entre cuentas ─────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-3">
@@ -483,6 +507,98 @@ function saveRule() {
   })
   .catch(function() { showToast('Error al guardar', true); });
 }
+
+// ── Stock Unificado Cross-Account ────────────────────────────────────────────
+window.loadUnifiedStock = function() {
+  var panel = document.getElementById('unified-panel');
+  panel.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Cargando datos de todas las cuentas...</p>';
+  fetch('/api/stock/unified', {headers: {'ngrok-skip-browser-warning': 'true'}})
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (!data.skus || data.skus.length === 0) {
+      panel.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin datos. Ejecuta un prewarm primero.</p>';
+      return;
+    }
+    var actionLabel = {
+      'oversell_risk': '<span class="px-2 py-0.5 bg-red-100 text-red-700 rounded text-[11px] font-bold">Riesgo Sobreventa</span>',
+      'zero_listing':  '<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[11px] font-bold">Listing en 0</span>',
+      'low_stock':     '<span class="px-2 py-0.5 bg-amber-100 text-amber-700 rounded text-[11px] font-bold">Stock Bajo</span>',
+      'ok':            '<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded text-[11px]">OK</span>',
+    };
+    var rows = data.skus.map(function(s) {
+      var accCells = s.accounts.map(function(a) {
+        return a.name + ': ' + a.total_meli_qty;
+      }).join(' / ');
+      return '<tr class="border-b border-gray-50 hover:bg-gray-50">'
+        + '<td class="py-2 pr-3 font-mono text-xs font-bold text-gray-800">' + s.bm_sku + '</td>'
+        + '<td class="py-2 pr-3 text-xs text-right font-semibold ' + (s.bm_avail > 0 ? 'text-green-700' : 'text-red-600') + '">' + s.bm_avail + '</td>'
+        + '<td class="py-2 pr-3 text-xs text-right text-gray-500">' + s.mty + ' / ' + s.cdmx + ' / ' + s.tj + '</td>'
+        + '<td class="py-2 pr-3 text-xs text-gray-600">' + accCells + '</td>'
+        + '<td class="py-2 pr-3 text-right text-xs font-semibold text-gray-700">' + s.total_meli_qty + '</td>'
+        + '<td class="py-2 text-center">' + (actionLabel[s.action] || s.action) + '</td>'
+        + '</tr>';
+    }).join('');
+    // Resumen por acción
+    var summary = data.skus.reduce(function(acc, s) { acc[s.action] = (acc[s.action] || 0) + 1; return acc; }, {});
+    var summaryHtml = Object.entries(summary).map(function(e) {
+      return '<span class="px-2 py-1 bg-gray-100 rounded text-[11px]"><b>' + e[1] + '</b> ' + e[0] + '</span>';
+    }).join(' ');
+    panel.innerHTML = '<div class="flex flex-wrap gap-2 mb-3 text-xs">' + summaryHtml + '</div>'
+      + '<div class="overflow-x-auto"><table class="w-full text-sm">'
+      + '<thead class="bg-gray-50 border-b"><tr>'
+      + '<th class="text-left py-2 pr-3 text-xs text-gray-500 font-medium">SKU BM</th>'
+      + '<th class="text-right py-2 pr-3 text-xs text-gray-500 font-medium">BM Avail</th>'
+      + '<th class="text-right py-2 pr-3 text-xs text-gray-500 font-medium">MTY/CDMX/TJ</th>'
+      + '<th class="text-left py-2 pr-3 text-xs text-gray-500 font-medium">Por cuenta</th>'
+      + '<th class="text-right py-2 pr-3 text-xs text-gray-500 font-medium">Total ML</th>'
+      + '<th class="text-center py-2 text-xs text-gray-500 font-medium">Acción</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  })
+  .catch(function() {
+    panel.innerHTML = '<p class="text-xs text-red-500 text-center py-4">Error al cargar vista unificada</p>';
+  });
+};
+
+// ── Oportunidades de Lanzamiento (BM sin listing ML) ─────────────────────────
+window.loadLaunchOpportunities = function() {
+  var panel = document.getElementById('launch-panel');
+  panel.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Escaneando inventario BM completo... (~15s)</p>';
+  fetch('/api/bm/launch-opportunities', {headers: {'ngrok-skip-browser-warning': 'true'}})
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (!data.opportunities || data.opportunities.length === 0) {
+      panel.innerHTML = '<p class="text-xs text-green-600 text-center py-4">Todos los SKUs de BM con stock ya tienen listing en ML. ✓</p>';
+      return;
+    }
+    var rows = data.opportunities.map(function(op) {
+      var costHtml = op.cost_usd > 0 ? '$' + op.cost_usd.toFixed(0) + ' USD' : '—';
+      var retailHtml = op.retail_price > 0 ? '$' + op.retail_price.toFixed(0) : '—';
+      return '<tr class="border-b border-gray-50 hover:bg-blue-50/20">'
+        + '<td class="py-2 pr-3 font-mono text-xs font-bold text-blue-700">' + op.bm_sku + '</td>'
+        + '<td class="py-2 pr-3 text-xs text-gray-700 max-w-[200px] truncate" title="' + op.title + '">' + (op.title || '—') + '</td>'
+        + '<td class="py-2 pr-3 text-xs text-gray-500">' + (op.brand || '—') + '</td>'
+        + '<td class="py-2 pr-3 text-right text-xs font-semibold text-green-700">' + op.avail + '</td>'
+        + '<td class="py-2 pr-3 text-right text-xs text-gray-500">' + costHtml + '</td>'
+        + '<td class="py-2 text-right text-xs text-gray-500">' + retailHtml + '</td>'
+        + '</tr>';
+    }).join('');
+    panel.innerHTML = '<p class="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2 mb-3">'
+      + data.total + ' SKUs en BM con stock sin listing en ML (de ' + data.bm_total_scanned + ' SKUs escaneados)'
+      + '</p>'
+      + '<div class="overflow-x-auto"><table class="w-full text-sm">'
+      + '<thead class="bg-gray-50 border-b"><tr>'
+      + '<th class="text-left py-2 pr-3 text-xs text-gray-500 font-medium">SKU BM</th>'
+      + '<th class="text-left py-2 pr-3 text-xs text-gray-500 font-medium">Descripción</th>'
+      + '<th class="text-left py-2 pr-3 text-xs text-gray-500 font-medium">Marca</th>'
+      + '<th class="text-right py-2 pr-3 text-xs text-gray-500 font-medium">Avail</th>'
+      + '<th class="text-right py-2 pr-3 text-xs text-gray-500 font-medium">Costo</th>'
+      + '<th class="text-right py-2 text-xs text-gray-500 font-medium">Precio Retail</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  })
+  .catch(function() {
+    panel.innerHTML = '<p class="text-xs text-red-500 text-center py-4">Error al escanear BM. Intenta de nuevo.</p>';
+  });
+};
 
 window.loadCannibalization = function() {
   var panel = document.getElementById('cannib-panel');

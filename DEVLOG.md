@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-04 — FEAT: SKU unificado cross-account + oportunidades de lanzamiento
+
+### Proceso 1 — Stock unificado: ML → BM (una sola consulta por SKU único)
+
+**normalize_to_bm_sku**: nueva función central que extrae el SKU base BM de cualquier variante ML.
+- Regla: primeros 10 chars tras limpiar bundle, packs y sufijos (-GRA, -ICS, NEW, etc.)
+- SNTV007270-ICS → SNTV007270; SNTV007270 / SNAC000029 → SNTV007270 (14/14 casos verificados)
+
+**Cache key unificado**: `_bm_stock_cache` ahora indexado por `normalize_to_bm_sku(sku)` en lugar de `sku.upper()`.
+- SNTV007270-GRA, SNTV007270 NEW y SNTV007270 de 3 cuentas distintas → 1 entrada en cache
+- Reducción ~40-60% de requests a BM en prewarm → menos sesiones expiradas → menos STALE
+
+**Prewarm unificado** (`_startup_prewarm`): ahora recolecta productos de TODAS las cuentas en paralelo,
+deduplica por SKU base BM, hace UNA sola pasada BM para el universo completo, y luego corre
+prewarm por cuenta usando los datos ya en cache (sin re-fetch).
+
+**Post-fetch fill**: después del `asyncio.gather`, rellena `result_map` para SKUs que fueron
+deduplicados (misma bm_key, distintos sufijos) usando el cache ya poblado.
+
+### Proceso 2 — Oportunidades de lanzamiento: BM → ML (inverso)
+
+**`/api/bm/launch-opportunities`**: escanea inventario BM completo (paginado), cruza con todos los
+SKUs activos de todas las cuentas ML, devuelve los que no tienen listing → oportunidades de venta.
+
+### Vista cross-account
+
+**`/api/stock/unified`**: por cada SKU base BM, muestra BM avail + qty por cuenta + acción sugerida
+(oversell_risk / zero_listing / low_stock / ok).
+
+### UI
+
+- Dos nuevas secciones en stock_sync.html: "Stock Unificado" y "Oportunidades de Lanzamiento"
+- Tablas paginadas con resumen de acciones por categoría
+
+**Archivos modificados:**
+- `app/main.py`: `normalize_to_bm_sku`, `_get_bm_stock_cached`, `_store_wh`, `_store_empty`,
+  `_startup_prewarm`, `/api/debug/bm-cache`, + 2 nuevos endpoints
+- `app/templates/stock_sync.html`: 2 nuevas secciones + JS
+
+---
+
 ## 2026-04-04 — FIX: STALE perpetuo por session failure bajo carga de prewarm (SNHG000004)
 
 ### BUG — SKUs con stock real (ej: SNHG000004 con 2146 uds) persisten como STALE y oversell_risk
