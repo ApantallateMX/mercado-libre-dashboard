@@ -2437,7 +2437,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         # Sin este fix, el STALE sobreescribe la entrada previa (ej: avail_total=2146) y
         # genera falso oversell_risk hasta que vence el TTL.
         if not verified and avail_total == 0 and warehouse_total == 0:
-            existing = _bm_stock_cache.get(sku.upper())
+            existing = _bm_stock_cache.get(normalize_to_bm_sku(sku))
             if existing:
                 _ex_ts, _ex_data = existing
                 if _ex_data.get("_v") and _ex_data.get("avail_total", 0) > 0:
@@ -2890,7 +2890,7 @@ async def products_inventory_partial(
         for p in products:
             sku = p.get("sku", "")
             if sku:
-                cached = _bm_stock_cache.get(sku.upper())
+                cached = _bm_stock_cache.get(normalize_to_bm_sku(sku))
                 if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
                     data = cached[1]
                     p["_bm_total"] = data.get("total", 0)
@@ -3027,7 +3027,7 @@ async def products_inventory_partial(
                 for p in extra_products:
                     sku_val = p.get("sku", "")
                     if sku_val:
-                        cached = _bm_stock_cache.get(sku_val.upper())
+                        cached = _bm_stock_cache.get(normalize_to_bm_sku(sku_val))
                         if cached and (_time.time() - cached[0]) < _BM_CACHE_TTL:
                             bm_data = cached[1]
                             p["_bm_total"] = bm_data.get("total", 0)
@@ -8089,12 +8089,12 @@ async def multi_sync_trigger():
         try:
             from app.services.stock_sync_multi import get_last_bm_stock
             for _sku, _avail in get_last_bm_stock().items():
-                _existing = _bm_stock_cache.get(_sku.upper())
+                _existing = _bm_stock_cache.get(normalize_to_bm_sku(_sku))
                 _d = _existing[1].copy() if _existing else {
                     "mty": 0, "cdmx": 0, "tj": 0, "total": 0, "reserved_total": 0
                 }
                 _d["avail_total"] = int(_avail)
-                _bm_stock_cache[_sku.upper()] = (_time.time(), _d)
+                _bm_stock_cache[normalize_to_bm_sku(_sku)] = (_time.time(), _d)
         except Exception:
             pass
         # 3. Encolar prewarm fresco (si ya hay uno corriendo, se ejecutará al terminar)
