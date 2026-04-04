@@ -753,10 +753,11 @@ function _updatePrewarmStatus(data) {
 
     var html = '';
     if (total > 0) {
-      var pct = Math.round((done / total) * 100);
+      var displayDone = Math.min(done, total);
+      var pct = Math.min(100, Math.round((displayDone / total) * 100));
       var statusText = isStuck
         ? '<span class="text-yellow-600">⚠ Sin avance en ' + stuckSecs + 's — puede estar lento</span>'
-        : '<span class="text-blue-600">Consultando BM: <strong>' + done + ' / ' + total + '</strong> SKUs (' + elapsed + 's)</span>';
+        : '<span class="text-blue-600">Consultando BM: <strong>' + displayDone + ' / ' + total + '</strong> SKUs (' + elapsed + 's)</span>';
       html = statusText +
         '<div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">' +
           '<div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style="width:' + pct + '%"></div>' +
