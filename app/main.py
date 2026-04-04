@@ -2189,9 +2189,15 @@ async def _prewarm_caches(user_id: str = None):
                 products = _build_product_list(all_bodies, sales_map)
                 _enrich_sku_from_orders(products, all_orders)
 
-                # Fetchear BM para todos los productos con SKU — incluye productos con 0 MeLi
-                # stock y 0 ventas para detectar los que tienen BM disponible y necesitan activarse.
-                bm_candidates = [p for p in products if p.get("sku")]
+                # Fetchear BM solo para activos + pausados con ventas recientes.
+                # Pausados sin ventas no necesitan BM urgente y engrosan el batch innecesariamente.
+                bm_candidates = [
+                    p for p in products
+                    if p.get("sku") and (
+                        p.get("status") == "active"
+                        or (p.get("status") == "paused" and p.get("units", 0) > 0)
+                    )
+                ]
                 _prewarm_progress["done"] = 0
                 # Total = SKUs únicos normalizados (no productos totales).
                 # Con include_paused=True puede haber miles de listings del mismo SKU base;
