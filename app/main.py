@@ -2540,9 +2540,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         return_exceptions=True
     )
 
-    # Fix C: retry serial para SKUs que quedaron STALE (solo en prewarm, no en requests del usuario).
-    # En requests del usuario (retry_stale=False), omitir para no bloquear 90s+.
-    # En prewarm (retry_stale=True), reintentar hasta 30 SKUs en serie con sesión fresca.
+    # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
+    # Solo en prewarm (retry_stale=True). Se lanza como tarea background y prewarm continúa.
     if retry_stale:
         _stale_after_prewarm = [
             s for s in to_fetch
@@ -2550,12 +2549,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         ]
         _stale_to_retry = _stale_after_prewarm[:30]
         if _stale_to_retry:
-            import logging as _log_retry
-            _log_retry.getLogger(__name__).info(
-                f"[BM-CACHE] Retry serial para {len(_stale_to_retry)}/{len(_stale_after_prewarm)} SKUs STALE post-prewarm"
-            )
-            for _retry_sku in _stale_to_retry:
-                await _wh_phase(_retry_sku, http)
+            _http_ref = http  # capturar referencia para el closure
+            async def _do_stale_retry(_skus=_stale_to_retry, _h=_http_ref):
+                import logging as _log_retry
+                _log_retry.getLogger(__name__).info(
+                    f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE"
+                )
+                for _retry_sku in _skus:
+                    await _wh_phase(_retry_sku, _h)
+            asyncio.create_task(_do_stale_retry())
 
     # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
     # _seen_bm_keys pero result_map nunca se pobló). Ahora el cache sí tiene el dato.
