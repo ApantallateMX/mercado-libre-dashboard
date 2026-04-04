@@ -1,6 +1,9 @@
 import asyncio
 import json
+import logging
 import time as _time_module
+
+logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
@@ -845,9 +848,9 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
                 _ebase = _extract_base_sku(_esk)
                 if _ebase not in base_map:
                     base_map[_ebase] = _erow
-            import logging as _enrich_log; _enrich_log.getLogger(__name__).debug(f"[BM-ENRICH] Usando bulk cache — {len(base_map)} SKUs sin requests adicionales")
+            logger.debug(f"[BM-ENRICH] Usando bulk cache — {len(base_map)} SKUs sin requests adicionales")
     except Exception as _ce:
-        import logging as _enrich_log; _enrich_log.getLogger(__name__).warning(f"[BM-ENRICH] Error leyendo bulk cache: {_ce} — fallback per-SKU")
+        logger.warning(f"[BM-ENRICH] Error leyendo bulk cache: {_ce} — fallback per-SKU")
         base_map = {}
 
     if not base_map:
