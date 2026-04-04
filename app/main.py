@@ -2415,8 +2415,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 _avail_ok = isinstance(_stock, tuple)
                 avail_direct = _stock[0] if _avail_ok else 0
                 reserve_direct = _stock[1] if _avail_ok else 0
-                rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-                if not isinstance(rows_wh, list): rows_wh = []
+                # Parsear WH breakdown en try propio: si BM devuelve HTML (sesión expirada),
+                # r_wh.json() lanza JSONDecodeError — no debe tirar avail_direct válido.
+                try:
+                    rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+                    if not isinstance(rows_wh, list): rows_wh = []
+                except Exception:
+                    rows_wh = []  # HTML de página de login → breakdown WH vacío, avail_direct se preserva
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct, avail_ok=_avail_ok)
                 return

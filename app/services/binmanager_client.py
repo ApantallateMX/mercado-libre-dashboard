@@ -8,6 +8,7 @@ import logging
 import os
 from typing import Optional
 
+import asyncio
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class BinManagerClient:
     def __init__(self):
         self._http: Optional[httpx.AsyncClient] = None
         self._logged_in = False
+        self._login_lock = asyncio.Lock()
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -71,23 +73,27 @@ class BinManagerClient:
         return "User/Index" in str(r.url) or r.status_code == 401
 
     async def login(self) -> bool:
-        c = self._client()
-        try:
-            await c.get(f"{_BM_BASE}/User/Index", timeout=15)
-            r = await c.post(
-                f"{_BM_BASE}/User/LoginUser",
-                json={"USRNAME": _BM_USER, "PASS": _BM_PASS},
-                headers=_AJAX_HEADERS,
-                timeout=15,
-            )
-            if r.status_code == 200 and r.json().get("Id"):
-                self._logged_in = True
-                logger.info("BinManager login OK")
+        async with self._login_lock:
+            # Si otra coroutine ya completó el login mientras esperábamos, no repetir
+            if self._logged_in:
                 return True
-        except Exception as e:
-            logger.error(f"BinManager login error: {e}")
-        self._logged_in = False
-        return False
+            c = self._client()
+            try:
+                await c.get(f"{_BM_BASE}/User/Index", timeout=15)
+                r = await c.post(
+                    f"{_BM_BASE}/User/LoginUser",
+                    json={"USRNAME": _BM_USER, "PASS": _BM_PASS},
+                    headers=_AJAX_HEADERS,
+                    timeout=15,
+                )
+                if r.status_code == 200 and r.json().get("Id"):
+                    self._logged_in = True
+                    logger.info("BinManager login OK")
+                    return True
+            except Exception as e:
+                logger.error(f"BinManager login error: {e}")
+            self._logged_in = False
+            return False
 
     async def get_retail_price_ph(self, sku: str) -> Optional[float]:
         """
