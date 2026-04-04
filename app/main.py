@@ -2121,6 +2121,7 @@ _prewarm_running: bool = False    # flag global — solo 1 prewarm a la vez
 _prewarm_queued: bool = False     # si True, lanzar otro prewarm al terminar el actual
 _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = default)
 _prewarm_error: str = ""          # último error para mostrar en UI
+_prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
 
 async def _prewarm_caches(user_id: str = None):
     """Pre-carga products + orders + BM stock + stock issues en background.
@@ -2163,6 +2164,9 @@ async def _prewarm_caches(user_id: str = None):
                 # Fetchear BM para todos los productos con SKU — incluye productos con 0 MeLi
                 # stock y 0 ventas para detectar los que tienen BM disponible y necesitan activarse.
                 bm_candidates = [p for p in products if p.get("sku")]
+                _prewarm_progress["done"] = 0
+                _prewarm_progress["total"] = len(bm_candidates)
+                _prewarm_progress["started_at"] = _time.time()
                 bm_map = await _get_bm_stock_cached(bm_candidates)
                 _apply_bm_stock(products, bm_map)
 
@@ -2459,11 +2463,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct,
                           avail_ok=_avail_ok, wh_responded=wh_responded)
+                _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
                 return
             except Exception as _exc:
                 import logging as _log
                 _log.getLogger(__name__).warning(f"[BM-CACHE] Error para {sku}: {_exc}")
         _store_empty(sku)
+        _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
 
     # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
@@ -7853,11 +7859,20 @@ async def prewarm_status():
     cache_entry = key and _stock_issues_cache.get(key)
     cache_ready = bool(cache_entry and (_time.time() - cache_entry[0]) < _STOCK_ISSUES_TTL)
     last_updated = round(_time.time() - cache_entry[0]) if cache_entry else None
+    progress = {}
+    if _prewarm_running and _prewarm_progress.get("total", 0) > 0:
+        elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()))
+        progress = {
+            "done": _prewarm_progress.get("done", 0),
+            "total": _prewarm_progress.get("total", 0),
+            "elapsed_s": elapsed,
+        }
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
         "error": _prewarm_error[:300] if _prewarm_error else "",
         "last_updated_s": last_updated,
+        "progress": progress,
     })
 
 

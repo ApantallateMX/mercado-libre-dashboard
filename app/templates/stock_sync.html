@@ -591,6 +591,10 @@ loadNocturnalStatus();
 
 // ── Caché BM / Force Prewarm ────────────────────────────────────
 var _prewarmPollTimer = null;
+var _prewarmLastDone = -1;
+var _prewarmStuckSince = null;
+var _prewarm_last_total = 0;
+var _prewarm_last_elapsed = 0;
 
 function _updatePrewarmStatus(data) {
   var row = document.getElementById('prewarm-status-row');
@@ -600,10 +604,46 @@ function _updatePrewarmStatus(data) {
   if (!row) return;
 
   if (data.running) {
-    row.innerHTML = '<span class="inline-flex items-center gap-1.5 text-blue-600"><svg class="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Actualizando datos BM... puede tardar 1-2 minutos</span>';
     btn.disabled = true;
     spinner.classList.remove('hidden');
     label.textContent = 'Actualizando...';
+
+    var p = data.progress || {};
+    var done = p.done || 0;
+    var total = p.total || 0;
+    var elapsed = p.elapsed_s || 0;
+    if (total > 0) { _prewarm_last_total = total; _prewarm_last_elapsed = elapsed; }
+
+    // Detectar si está atorado (sin avance en 30s)
+    if (total > 0) {
+      if (done !== _prewarmLastDone) {
+        _prewarmLastDone = done;
+        _prewarmStuckSince = null;
+      } else if (_prewarmStuckSince === null) {
+        _prewarmStuckSince = Date.now();
+      }
+    }
+    var stuckSecs = _prewarmStuckSince ? Math.round((Date.now() - _prewarmStuckSince) / 1000) : 0;
+    var isStuck = stuckSecs >= 30 && total > 0 && done < total;
+
+    var html = '';
+    if (total > 0) {
+      var pct = Math.round((done / total) * 100);
+      var statusText = isStuck
+        ? '<span class="text-yellow-600">⚠ Sin avance en ' + stuckSecs + 's — puede estar lento</span>'
+        : '<span class="text-blue-600">Consultando BM: <strong>' + done + ' / ' + total + '</strong> SKUs (' + elapsed + 's)</span>';
+      html = statusText +
+        '<div class="mt-1 w-full bg-gray-200 rounded-full h-1.5">' +
+          '<div class="bg-blue-500 h-1.5 rounded-full transition-all duration-500" style="width:' + pct + '%"></div>' +
+        '</div>';
+    } else {
+      html = '<span class="inline-flex items-center gap-1.5 text-blue-600">' +
+        '<svg class="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        'Preparando datos... puede tardar 1-2 minutos</span>';
+    }
+    row.innerHTML = html;
   } else if (data.error) {
     row.innerHTML = '<span class="text-red-500">⚠ Error: ' + data.error + '</span>';
     btn.disabled = false;
@@ -611,8 +651,10 @@ function _updatePrewarmStatus(data) {
     label.textContent = '🔄 Reintentar';
     if (_prewarmPollTimer) { clearInterval(_prewarmPollTimer); _prewarmPollTimer = null; }
   } else if (data.ready) {
-    var ago = data.last_updated_s != null ? ' — actualizado hace ' + data.last_updated_s + 's' : '';
-    row.innerHTML = '<span class="text-green-600">✓ Datos BM listos' + ago + '</span>';
+    _prewarmLastDone = -1; _prewarmStuckSince = null;
+    var ago = data.last_updated_s != null ? ' hace ' + data.last_updated_s + 's' : '';
+    var skuInfo = (_prewarm_last_total > 0) ? ' — ' + _prewarm_last_total + ' SKUs en ' + _prewarm_last_elapsed + 's' : '';
+    row.innerHTML = '<span class="text-green-600">✓ Datos BM listos' + ago + skuInfo + '</span>';
     btn.disabled = false;
     spinner.classList.add('hidden');
     label.textContent = '🔄 Actualizar ahora';
