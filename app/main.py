@@ -390,6 +390,8 @@ async def lifespan(app: FastAPI):
                 pass
             await asyncio.sleep(600)   # 10 minutos
     asyncio.create_task(_startup_prewarm())
+    # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
+    asyncio.create_task(_bm_health_loop())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
@@ -1937,6 +1939,14 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
           if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar</button>';
           return;
         }
+        // Alerta BM caído
+        if (s.bm_down) {
+          if (msg) msg.innerHTML = '<span style="color:#dc2626">⚠ BinManager no responde</span> — mostrando datos del último cache' + (s.bm_down_min ? ' (hace ' + s.bm_down_min + 'min)' : '');
+          if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar</button>';
+          var sp2 = document.getElementById('stock-spinner');
+          if (sp2) sp2.classList.add('hidden');
+          return;
+        }
         var secs = attempts * 5;
         if (sub) sub.textContent = s.running ? ('Calculando... ' + secs + 's') : ('En espera... ' + secs + 's');
         if (attempts < maxAttempts) {
@@ -2167,6 +2177,51 @@ _prewarm_queued: bool = False     # si True, lanzar otro prewarm al terminar el 
 _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = default)
 _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
+
+# --- BM Health Monitor ---
+_bm_health: dict = {
+    "ok": None,           # None=nunca chequeado, True=up, False=down
+    "latency_ms": 0,
+    "last_check_ts": 0.0,
+    "last_ok_ts": 0.0,
+    "consecutive_failures": 0,
+}
+
+async def _check_bm_health():
+    """Ping rápido a BM (5s timeout). Actualiza _bm_health en memoria."""
+    global _bm_health
+    import httpx as _httpx
+    t0 = _time.time()
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as _hc:
+            r = await _hc.get("https://binmanager.mitechnologiesinc.com/User/Index")
+            elapsed_ms = round((_time.time() - t0) * 1000)
+            ok = r.status_code < 500
+    except Exception:
+        elapsed_ms = round((_time.time() - t0) * 1000)
+        ok = False
+    _bm_health["last_check_ts"] = _time.time()
+    if ok:
+        _bm_health["ok"] = True
+        _bm_health["latency_ms"] = elapsed_ms
+        _bm_health["last_ok_ts"] = _time.time()
+        _bm_health["consecutive_failures"] = 0
+    else:
+        _bm_health["ok"] = False
+        _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
+        logger.warning(f"[BM-HEALTH] BM no responde — fallo #{_bm_health['consecutive_failures']} ({elapsed_ms}ms)")
+
+
+async def _bm_health_loop():
+    """Chequea BM cada 2 min en background."""
+    await asyncio.sleep(10)   # primer check a los 10s del arranque
+    while True:
+        try:
+            await _check_bm_health()
+        except Exception as _e:
+            logger.error(f"[BM-HEALTH] Error inesperado: {_e}")
+        await asyncio.sleep(120)  # cada 2 minutos
+
 
 async def _prewarm_caches(user_id: str = None):
     """Pre-carga products + orders + BM stock + stock issues en background.
@@ -2523,6 +2578,19 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _store_empty(sku)
         if _track_progress:
             _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+
+    # Fast-fail: si BM está caído (2+ fallos consecutivos), servir cache stale en lugar de
+    # bloquear 600 × 25s = 10+ min esperando timeouts. El health loop detecta la caída.
+    if _bm_health.get("consecutive_failures", 0) >= 2:
+        logger.warning(f"[BM-CACHE] BM DOWN — skip fetch de {len(to_fetch)} SKUs, usando cache stale")
+        for p in products:
+            sku = p.get(sku_key, "")
+            if not sku or sku in result_map:
+                continue
+            cached = _bm_stock_cache.get(normalize_to_bm_sku(sku))
+            if cached:
+                result_map[sku] = cached[1]
+        return result_map
 
     # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
@@ -7974,12 +8042,38 @@ async def prewarm_status():
             "total": _prewarm_progress.get("total", 0),
             "elapsed_s": elapsed,
         }
+    bm_down = _bm_health.get("ok") is False and _bm_health.get("consecutive_failures", 0) >= 2
+    bm_down_min = None
+    if bm_down and _bm_health.get("last_ok_ts", 0) > 0:
+        bm_down_min = round((_time.time() - _bm_health["last_ok_ts"]) / 60)
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
         "error": _prewarm_error[:300] if _prewarm_error else "",
         "last_updated_s": last_updated,
         "progress": progress,
+        "bm_down": bm_down,
+        "bm_down_min": bm_down_min,
+    })
+
+
+@app.get("/api/bm/status")
+async def bm_health_status():
+    """Estado de salud de BinManager — para el indicador en navbar."""
+    from datetime import datetime
+    h = _bm_health
+    down_since_min = None
+    if h["ok"] is False and h["last_ok_ts"] > 0:
+        down_since_min = round((_time.time() - h["last_ok_ts"]) / 60)
+    last_check_iso = (
+        datetime.utcfromtimestamp(h["last_check_ts"]).strftime("%H:%M") if h["last_check_ts"] else None
+    )
+    return JSONResponse({
+        "ok": h["ok"],
+        "latency_ms": h["latency_ms"],
+        "last_check_iso": last_check_iso,
+        "consecutive_failures": h["consecutive_failures"],
+        "down_since_min": down_since_min,
     })
 
 

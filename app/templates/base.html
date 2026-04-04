@@ -268,6 +268,7 @@
                 </a>
                 <a href="/stock-sync" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'stock_sync' %}font-semibold bg-yellow-500{% endif %} flex items-center gap-0.5 whitespace-nowrap">
                     <span class="text-blue-600">⇄</span> Sync Stock
+                    <span id="bm-health-dot" title="BinManager: verificando..." class="inline-block w-2 h-2 rounded-full bg-gray-300 ml-1 flex-shrink-0"></span>
                 </a>
 <script>
 (function() {
@@ -297,6 +298,37 @@
     }
     _refreshHealthBadge();
     setInterval(_refreshHealthBadge, 60000);
+})();
+</script>
+<script>
+(function() {
+    function _updateBmDot(d) {
+        var dot = document.getElementById('bm-health-dot');
+        if (!dot) return;
+        if (d.ok === true) {
+            dot.style.background = d.latency_ms > 3000 ? '#f59e0b' : '#22c55e';
+            dot.title = 'BinManager: OK (' + d.latency_ms + 'ms, ' + (d.last_check_iso || '') + ')';
+        } else if (d.ok === false) {
+            dot.style.background = '#ef4444';
+            var msg = 'BinManager: CAÍDO';
+            if (d.down_since_min) msg += ' (hace ' + d.down_since_min + 'min)';
+            dot.title = msg;
+        } else {
+            dot.style.background = '#d1d5db';
+            dot.title = 'BinManager: verificando...';
+        }
+        // Mostrar toast solo cuando cambia de OK a caído
+        var prev = dot.dataset.prevOk;
+        if (prev === 'true' && d.ok === false) {
+            if (typeof showToast === 'function') showToast('⚠ BinManager no responde — stock puede estar desactualizado', true);
+        }
+        dot.dataset.prevOk = String(d.ok);
+    }
+    function _checkBmHealth() {
+        fetch('/api/bm/status').then(function(r){ return r.json(); }).then(_updateBmDot).catch(function(){});
+    }
+    _checkBmHealth();
+    setInterval(_checkBmHealth, 120000);  // cada 2 min
 })();
 </script>
             </div>

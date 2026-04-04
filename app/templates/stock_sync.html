@@ -25,6 +25,17 @@
     </div>
   </div>
 
+  <!-- ── Alerta BM caído ────────────────────────────────────────── -->
+  <div id="bm-down-banner" class="hidden bg-red-50 border border-red-200 rounded-2xl px-5 py-4 flex items-start gap-3">
+    <svg class="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <div>
+      <p class="text-sm font-semibold text-red-700">BinManager no responde</p>
+      <p id="bm-down-detail" class="text-xs text-red-600 mt-0.5">El servicio de inventario está caído. Los datos de stock pueden estar desactualizados.</p>
+    </div>
+  </div>
+
   <!-- ── Panel de Preview (cambios planificados) ───────────────── -->
   <div id="preview-panel" class="hidden bg-white rounded-2xl shadow-sm border border-indigo-200 p-5 space-y-4">
     <div class="flex items-center justify-between">
@@ -378,6 +389,30 @@
      bg-green-50 text-green-700 border border-green-200"></div>
 
 <script>
+// ── BM Health check al cargar página ─────────────────────────────────────────
+(function() {
+  fetch('/api/bm/status').then(function(r){ return r.json(); }).then(function(d) {
+    if (d.ok === false && d.consecutive_failures >= 2) {
+      var banner = document.getElementById('bm-down-banner');
+      var detail = document.getElementById('bm-down-detail');
+      if (banner) banner.classList.remove('hidden');
+      if (detail) {
+        var msg = 'El servicio de inventario no responde';
+        if (d.down_since_min) msg += ' (caído hace ' + d.down_since_min + ' min)';
+        msg += '. Los datos de stock pueden estar desactualizados.';
+        detail.textContent = msg;
+      }
+      var previewBtn = document.getElementById('btn-preview');
+      if (previewBtn) {
+        previewBtn.disabled = true;
+        previewBtn.title = 'BinManager no responde — no se puede calcular el preview';
+        previewBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+        previewBtn.classList.add('bg-gray-300', 'text-gray-400', 'cursor-not-allowed');
+      }
+    }
+  }).catch(function(){});
+})();
+
 function showToast(msg, isError) {
   var t = document.getElementById('toast');
   t.textContent = msg;
