@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-04 — FIX: STALE perpetuo por session failure bajo carga de prewarm (SNHG000004)
+
+### BUG — SKUs con stock real (ej: SNHG000004 con 2146 uds) persisten como STALE y oversell_risk
+
+**Root Cause confirmado por BM Agent:**
+- SNHG000004 tiene 2,146 unidades en LocationID 47 (CDMX) + 68 (MTY) — ubicaciones vendibles correctas
+- El prewarm con Semaphore(50) estresa el servidor BM → sesión expira mid-prewarm
+- `get_stock_with_reserve` detecta expiración → intenta re-login → falla bajo carga → retorna `(0,0)` **tuple**
+- El endpoint WH (httpx raw, sin session management) también devuelve HTML → `wh_responded=False`, `rows=[]`
+- Ambos en cero: `warehouse_total=0`, `avail_total=0` → fallback `warehouse_total>0` nunca aplica
+- `verified = False` → escribe `{avail_total:0, _v:False}` → **sobreescribe la entrada previa buena (avail=2146)**
+
+**Fix A — Preservar datos buenos ante session-failure zeros** (`_store_wh` en `main.py`)
+- Si `not verified AND avail_total==0 AND warehouse_total==0`, verificar si hay entrada previa con `_v=True` y `avail_total>0`
+- Si existe → `return` sin sobreescribir → la entrada buena se preserva hasta que vence su TTL naturalmente
+- Previene falso oversell_risk por sesión rota
+
+**Fix B — Reducir concurrencia de prewarm: Semaphore(50) → Semaphore(15)**
+- 50 requests simultáneos a BM estresa el server → más sesiones expiradas → más fetches fallidos
+- 15 es el valor anterior estable; el prewarm tarda un poco más pero los datos son confiables
+
+**Fix C — Retry serial post-prewarm para SKUs STALE**
+- Tras el `asyncio.gather` principal, detectar SKUs que quedaron con `_v=False`
+- Re-intentarlos uno a uno (serial, baja carga) con sesión ya establecida
+- Cubre el caso donde no había entrada previa para Fix A (primer prewarm tras reinicio)
+
+**Archivos modificados:**
+- `app/main.py`: `_store_wh` (Fix A), `wh_sem` (Fix B), post-gather retry pass (Fix C)
+
+---
+
 ## 2026-04-03 — FIX: BM stock data discarded on session expiry (intermittent BM=0)
 
 ### BUG — SNTV007283 y otros SKUs con stock real aparecen en Riesgo Sobreventa intermitentemente

@@ -2387,6 +2387,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         # que es una respuesta verificada (no un error de sesión).
         verified = wh_responded or avail_total > 0 or reserved_total > 0
 
+        # Fix A: si ambos endpoints fallaron (todo en cero, sin verificación), NO sobreescribir
+        # una entrada anterior válida con datos de sesión rota.
+        # Causa: bajo carga del prewarm (50 SKUs paralelos), BM session expira → re-login falla →
+        # get_stock_with_reserve retorna (0,0) tuple (_avail_ok=True pero avail=0) Y el WH
+        # endpoint raw retorna HTML (wh_responded=False) → ambos en cero → STALE.
+        # Sin este fix, el STALE sobreescribe la entrada previa (ej: avail_total=2146) y
+        # genera falso oversell_risk hasta que vence el TTL.
+        if not verified and avail_total == 0 and warehouse_total == 0:
+            existing = _bm_stock_cache.get(sku.upper())
+            if existing:
+                _ex_ts, _ex_data = existing
+                if _ex_data.get("_v") and _ex_data.get("avail_total", 0) > 0:
+                    return  # Preservar datos previos verificados — no clobber con session-failure zeros
+
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total,
                "_v": verified}
@@ -2399,7 +2413,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     def _store_empty(sku):
         _bm_stock_cache[sku.upper()] = (_time.time(), _EMPTY_BM)
 
-    wh_sem = asyncio.Semaphore(50)  # aumentado de 20 → 50 para reducir tiempo BM ~60%
+    wh_sem = asyncio.Semaphore(15)  # Fix B: reducido 50→15 para no estresar BM server (evita session expiry bajo carga)
 
     async def _wh_phase(sku, http):
         """Consulta en paralelo:
@@ -2479,6 +2493,22 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         *[_wh_phase(s, http) for s in to_fetch],
         return_exceptions=True
     )
+
+    # Fix C: retry serial para SKUs que quedaron STALE tras el prewarm principal.
+    # Cuando la sesión expira bajo carga, algunos SKUs terminan con _v=False aunque tengan stock.
+    # Fix A previene sobreescribir datos buenos, pero si NO había entrada previa, quedan STALE.
+    # Este pass serial garantiza que esos SKUs se re-intentan con sesión fresca y baja concurrencia.
+    _stale_after_prewarm = [
+        s for s in to_fetch
+        if not _bm_stock_cache.get(s.upper(), (None, {}))[1].get("_v")
+    ]
+    if _stale_after_prewarm:
+        import logging as _log_retry
+        _log_retry.getLogger(__name__).info(
+            f"[BM-CACHE] Retry serial para {len(_stale_after_prewarm)} SKUs STALE post-prewarm"
+        )
+        for _retry_sku in _stale_after_prewarm:
+            await _wh_phase(_retry_sku, http)
 
     # Persistir nuevas entradas BM a DB (fire-and-forget — no bloquea la respuesta)
     if to_fetch:
