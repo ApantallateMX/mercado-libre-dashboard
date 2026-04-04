@@ -2302,6 +2302,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
             # Sin _v (DB antigua, timeout) se re-fetchean para no servir 0s de fetches fallidos.
             if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
                 return bool(data.get("_v"))
+            # total>0, avail=0, reserve=0 → matemáticamente incoherente (AvailableQTY = TotalQty - Reserve = total > 0).
+            # Indica fallo silencioso de CONCEPTID=1 (devolvió (0,0) como tuple sin encontrar el SKU).
+            # Re-fetchear para obtener el valor correcto y evitar falso Riesgo Sobreventa.
+            if data.get("total", 0) > 0 and data.get("avail_total", 0) == 0 and data.get("reserved_total", 0) == 0:
+                return False
             return True
         if _cache_is_valid(cached):
             result_map[sku] = cached[1]
@@ -2362,9 +2367,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         warehouse_total = mty + cdmx
         avail_total     = int(avail_direct or 0)
         reserved_total  = int(reserve_direct or 0)
-        # Si get_stock_with_reserve falló (excepción/timeout) pero WH tiene stock físico,
-        # usar warehouse_total como fallback — evita falsos "Riesgo Sobreventa"
-        if avail_total == 0 and warehouse_total > 0 and not avail_ok:
+        # Fallback avail: si avail=0 con stock físico real, usar warehouse_total.
+        # Dos casos que justifican el fallback:
+        #   1) avail_ok=False: get_stock_with_reserve lanzó excepción/timeout — dato desconocido
+        #   2) avail_ok=True pero reserve=0: CONCEPTID=1 devolvió (0,0) sin encontrar el SKU.
+        #      Si TotalQty=67 y Reserve=0, AvailableQTY debería ser 67 — el (0,0) es un fallo silencioso.
+        #      Genuinamente reservado tendría reserve > 0 (ej: SNTV006485: total=1, reserve=1 → avail=0 correcto).
+        if avail_total == 0 and warehouse_total > 0 and (not avail_ok or reserved_total == 0):
             avail_total = warehouse_total
         # _v=True: fetch produjo datos reales (no timeout/error vacío)
         verified = bool(rows_wh) or avail_total > 0 or reserved_total > 0
