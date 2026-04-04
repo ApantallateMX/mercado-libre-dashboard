@@ -845,9 +845,9 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
                 _ebase = _extract_base_sku(_esk)
                 if _ebase not in base_map:
                     base_map[_ebase] = _erow
-            logger.debug(f"[BM-ENRICH] Usando bulk cache — {len(base_map)} SKUs sin requests adicionales")
+            import logging as _enrich_log; _enrich_log.getLogger(__name__).debug(f"[BM-ENRICH] Usando bulk cache — {len(base_map)} SKUs sin requests adicionales")
     except Exception as _ce:
-        logger.warning(f"[BM-ENRICH] Error leyendo bulk cache: {_ce} — fallback per-SKU")
+        import logging as _enrich_log; _enrich_log.getLogger(__name__).warning(f"[BM-ENRICH] Error leyendo bulk cache: {_ce} — fallback per-SKU")
         base_map = {}
 
     if not base_map:
@@ -6526,10 +6526,12 @@ async def update_item_stock_api(item_id: str, request: Request):
         body = await request.json()
         quantity = int(body.get("quantity", 0))
         result = await client.update_item_stock(item_id, quantity)
-        # Invalidar cache para que el inventario muestre datos frescos
+        # Invalidar cache en memoria y actualizar DB para reflejar nuevo stock
         uid = str(client.user_id)
         for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
             del _products_cache[k]
+        from app.services.token_store import update_ml_listing_qty as _update_qty
+        asyncio.create_task(_update_qty(item_id, quantity))
         return {"ok": True, "quantity": quantity}
     except ValueError as e:
         # Item tiene variaciones — rechazar con mensaje claro
@@ -6734,6 +6736,10 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 uid = str(client.user_id)
                 for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
                     del _products_cache[k]
+                # Actualizar DB con qty total (suma de variaciones actualizadas)
+                _new_total_qty = sum(u["available_quantity"] for u in var_updates)
+                from app.services.token_store import update_ml_listing_qty as _update_qty
+                asyncio.create_task(_update_qty(item_id, _new_total_qty))
             except Exception as ex:
                 for r in var_results:
                     if not r["error"]:

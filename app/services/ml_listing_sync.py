@@ -103,21 +103,24 @@ async def _sync_account_incremental(uid: str, client) -> int:
     try:
         # Obtener los 50 items más recientemente modificados
         url = f"https://api.mercadolibre.com/users/{uid}/items/search"
-        params = {"sort": "last_updated_date", "limit": 50, "status": "active"}
         headers = {"Authorization": f"Bearer {client.access_token}"}
 
+        # Buscar active + inactive (re-activados post-sync no aparecen solo con active)
+        item_ids = []
         async with httpx.AsyncClient(timeout=15.0) as http:
-            r = await http.get(url, params=params, headers=headers)
-            if r.status_code != 200:
-                return 0
-            data = r.json()
-            item_ids = data.get("results", [])
+            for status in ("active", "inactive"):
+                r = await http.get(url, params={"sort": "last_updated_date", "limit": 25, "status": status}, headers=headers)
+                if r.status_code == 200:
+                    item_ids.extend(r.json().get("results", []))
+        # Deduplicar preservando orden
+        seen: set = set()
+        item_ids = [x for x in item_ids if not (x in seen or seen.add(x))]
 
         if not item_ids:
             return 0
 
-        # Fetch detalles
-        entries = await client.get_items_details(item_ids[:20])
+        # Fetch detalles (top 40 más recientes entre active + inactive)
+        entries = await client.get_items_details(item_ids[:40])
         rows = []
         for entry in (entries or []):
             item = entry.get("body") if isinstance(entry, dict) and "body" in entry else entry

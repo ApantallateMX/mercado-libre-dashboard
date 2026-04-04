@@ -1018,6 +1018,31 @@ async def get_ml_listings_max_synced_at(account_id: str) -> float:
     return float(row[0]) if row and row[0] else 0.0
 
 
+async def update_ml_listing_qty(item_id: str, new_qty: int) -> None:
+    """Actualiza available_qty y data_json tras sincronizar stock a ML.
+    Evita que la DB sirva datos stale (0) cuando ML ya tiene el stock nuevo."""
+    import json as _json, time as _time2
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT data_json FROM ml_listings WHERE item_id=?", [item_id]
+        )).fetchone()
+        if row and row[0]:
+            try:
+                data = _json.loads(row[0])
+                data["available_quantity"] = new_qty
+                new_json = _json.dumps(data, ensure_ascii=False)
+                await db.execute(
+                    "UPDATE ml_listings SET available_qty=?, data_json=?, synced_at=? WHERE item_id=?",
+                    [new_qty, new_json, _time2.time(), item_id],
+                )
+            except Exception:
+                await db.execute(
+                    "UPDATE ml_listings SET available_qty=?, synced_at=? WHERE item_id=?",
+                    [new_qty, _time2.time(), item_id],
+                )
+        await db.commit()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # BM STOCK CACHE — persiste el caché de BinManager entre reinicios del servidor
 # ─────────────────────────────────────────────────────────────────────────────
