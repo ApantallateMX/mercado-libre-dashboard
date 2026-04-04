@@ -340,7 +340,16 @@ async def lifespan(app: FastAPI):
     async def _startup_prewarm():
         await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
         while True:
-            await _prewarm_caches()
+            # Precalentar TODAS las cuentas para que el cambio de cuenta sea instantáneo
+            try:
+                accounts = await token_store.get_all_tokens()
+                for acc in accounts:
+                    uid = acc.get("user_id", "")
+                    if uid:
+                        await _prewarm_caches(user_id=uid)
+                        await asyncio.sleep(1)  # pausa mínima entre cuentas
+            except Exception:
+                pass
             # Refrescar alertas de sobreventa con datos BM actualizados
             try:
                 accounts = await token_store.get_all_tokens()
@@ -2108,23 +2117,27 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
 
 # --- Background pre-warm ---
 _prewarm_task = None
-_prewarm_running: bool = False   # flag global — solo 1 prewarm a la vez
-_prewarm_queued: bool = False    # si True, lanzar otro prewarm al terminar el actual
-_prewarm_error: str = ""         # último error para mostrar en UI
+_prewarm_running: bool = False    # flag global — solo 1 prewarm a la vez
+_prewarm_queued: bool = False     # si True, lanzar otro prewarm al terminar el actual
+_prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = default)
+_prewarm_error: str = ""          # último error para mostrar en UI
 
-async def _prewarm_caches():
+async def _prewarm_caches(user_id: str = None):
     """Pre-carga products + orders + BM stock + stock issues en background.
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
-    _prewarm_queued=True y el prewarm activo lanza otro al terminar."""
-    global _prewarm_running, _prewarm_queued, _prewarm_error
+    _prewarm_queued=True y el prewarm activo lanza otro al terminar.
+    user_id: cuenta a precalentar explícitamente. None = usar ContextVar / default."""
+    global _prewarm_running, _prewarm_queued, _prewarm_queued_uid, _prewarm_error
     if _prewarm_running:
-        _prewarm_queued = True   # encolar: relanzar cuando el activo termine
+        _prewarm_queued = True
+        if user_id:
+            _prewarm_queued_uid = user_id
         return
     _prewarm_running = True
     _prewarm_queued = False
     _prewarm_error = ""
     try:
-        client = await get_meli_client()
+        client = await get_meli_client(user_id=user_id)
         if not client:
             _prewarm_error = "No hay cliente ML activo"
             return
@@ -2255,10 +2268,12 @@ async def _prewarm_caches():
         _prewarm_error = _tb.format_exc()
     finally:
         _prewarm_running = False
-        # Si hubo un prewarm en cola (p.ej. de "Sync ahora"), lanzarlo ahora
+        # Si hubo un prewarm en cola (p.ej. de "Sync ahora"), lanzarlo preservando el user_id
         if _prewarm_queued:
             _prewarm_queued = False
-            asyncio.create_task(_prewarm_caches())
+            _queued_uid = _prewarm_queued_uid
+            _prewarm_queued_uid = None
+            asyncio.create_task(_prewarm_caches(user_id=_queued_uid))
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
@@ -7895,6 +7910,11 @@ async def force_prewarm():
     global _prewarm_task
     if _prewarm_running:
         return JSONResponse({"status": "already_running"})
+    # Capturar user_id activo para precalentar la cuenta correcta
+    _fp_client = await get_meli_client()
+    _fp_uid = _fp_client.user_id if _fp_client else None
+    if _fp_client:
+        await _fp_client.close()
 
     # Eliminar entradas BM stale que causarían falsos resultados:
     # 1) total=0 AND avail=0 sin _v → fetch fallido que guardó ceros
@@ -7911,7 +7931,7 @@ async def force_prewarm():
     # Limpiar stock_issues_cache para forzar recalculo completo
     _stock_issues_cache.clear()
 
-    _prewarm_task = asyncio.create_task(_prewarm_caches())
+    _prewarm_task = asyncio.create_task(_prewarm_caches(user_id=_fp_uid))
     return JSONResponse({"status": "started", "stale_cleared": stale_cleared})
 
 
