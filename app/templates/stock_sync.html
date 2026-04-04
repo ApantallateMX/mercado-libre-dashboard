@@ -798,6 +798,10 @@ function _pollPrewarmStatus() {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       _updatePrewarmStatus(d);
+      // Si el prewarm estaba corriendo al cargar la página, arrancar polling para detectar el fin.
+      if (d.running && !_prewarmPollTimer) {
+        _prewarmPollTimer = setInterval(_pollPrewarmStatus, 3000);
+      }
       if (!d.running && _prewarmPollTimer) {
         clearInterval(_prewarmPollTimer);
         _prewarmPollTimer = null;

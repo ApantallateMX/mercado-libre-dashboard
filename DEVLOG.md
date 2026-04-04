@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-04 — FIX: Falso oversell_risk + botón Actualizando stuck
+
+### Fix 1 — Falso oversell_risk cuando BM fetch falló (SNAC000029 y similares)
+
+**Causa raíz**: `_store_wh` no agregaba entradas con `total=0, avail=0` a `result_map`,
+incluso cuando BM respondió exitosamente confirmando 0 stock (`verified=True`).
+Resultado: `_apply_bm_stock` no encontraba `inv`, `_bm_avail` quedaba como `None`,
+y el filtro `(None or 0)==0` marcaba el producto como oversell_risk aunque BM tuviera stock.
+
+**Fix**: `_store_wh` ahora incluye en `result_map` cualquier entrada con `verified=True`,
+permitiendo distinguir "BM confirmó 0" de "BM no fue consultado / fetch falló".
+
+**Fix**: Filtro `oversell_risk` ahora verifica `"_bm_avail" in p` (BM respondió)
+antes de flaggear. Fetch fallido → `_bm_avail` no en dict → NO se flaggea. ✓
+
+### Fix 2 — Botón "Actualizando..." stuck al cargar la página
+
+**Causa raíz**: `_pollPrewarmStatus()` (llamada al cargar la página) actualizaba el botón
+a "Actualizando..." si el prewarm estaba corriendo, pero NO arrancaba el timer de polling.
+El botón nunca se reseteaba cuando terminaba el prewarm.
+
+**Fix**: Si `d.running=true` y no hay timer activo, arranca `_prewarmPollTimer` automáticamente.
+
+---
+
 ## 2026-04-04 — FEAT: SKU unificado cross-account + oportunidades de lanzamiento
 
 ### Proceso 1 — Stock unificado: ML → BM (una sola consulta por SKU único)

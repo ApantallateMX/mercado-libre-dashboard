@@ -2231,7 +2231,10 @@ async def _prewarm_caches(user_id: str = None):
                 _DEFAULT_THRESHOLD = 10
                 restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
-                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and (p.get("_bm_avail") or 0) == 0 and not p.get("is_full") and p.get("sku")]
+                # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
+                # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
+                # porque (None or 0)==0. Solo flaggear cuando BM confirmó explícitamente avail=0.
+                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and not p.get("is_full") and p.get("sku")]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
                 activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
@@ -2457,8 +2460,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         # Guardar bajo clave normalizada (base BM SKU, 10 chars) para que todas las variantes
         # del mismo producto (SNTV007270-GRA, SNTV007270 NEW, etc.) compartan una sola entrada.
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), inv)
-        # Agregar a result_map con el SKU original de MeLi para que _apply_bm_stock lo encuentre
-        if inv["total"] > 0 or avail_total > 0:
+        # Agregar a result_map con el SKU original de MeLi para que _apply_bm_stock lo encuentre.
+        # Incluir también entradas verificadas con stock=0: BM confirmó genuinamente 0 unidades.
+        # Si no se incluyen aquí, _apply_bm_stock no puede distinguir "BM dijo 0" de "BM no consultado"
+        # y el filtro oversell_risk usa (None or 0)==0 generando falsos positivos.
+        if inv["total"] > 0 or avail_total > 0 or verified:
             result_map[sku] = inv
         return inv["total"] > 0 or avail_total > 0
 
