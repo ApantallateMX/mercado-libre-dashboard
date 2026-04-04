@@ -367,56 +367,15 @@ async def lifespan(app: FastAPI):
     async def _startup_prewarm():
         await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
         while True:
-            # Fase 2 — Prewarm BM unificado cross-account:
-            # 1) Recolectar productos de TODAS las cuentas en paralelo
-            # 2) Normalizar y deduplicar SKUs → lista única de SKUs base BM
-            # 3) Una sola pasada BM para todas las cuentas (la cache normalizada garantiza
-            #    que SNTV007270-GRA y SNTV007270 NEW no se consulten dos veces)
-            # 4) Por cuenta: aplicar los datos BM ya en cache (sin nueva consulta)
+            # Precalentar todas las cuentas — la deduplicación por normalize_to_bm_sku
+            # garantiza que SKUs repetidos entre cuentas usen el cache existente.
             try:
                 accounts = await token_store.get_all_tokens()
-                if accounts:
-                    # Recolectar todos los products de todas las cuentas en paralelo
-                    async def _fetch_acc_products(uid):
-                        try:
-                            cli = await get_meli_client(user_id=uid)
-                            if cli:
-                                # include_paused=False: el prewarm unificado opera solo sobre
-                                # listings ACTIVOS. Con 3 cuentas y include_paused=True se
-                                # acumulan miles de SKUs históricos que saturan BM innecesariamente.
-                                # Los pausados se cubren en el prewarm per-account que sigue.
-                                return await _get_all_products_cached(cli, include_paused=False)
-                        except Exception:
-                            pass
-                        return []
-
-                    all_products_lists = await asyncio.gather(
-                        *[_fetch_acc_products(acc.get("user_id", "")) for acc in accounts
-                          if acc.get("user_id")],
-                        return_exceptions=True
-                    )
-                    # Aplanar: lista única de todos los productos de todas las cuentas
-                    all_products = []
-                    for pl in all_products_lists:
-                        if isinstance(pl, list):
-                            all_products.extend(pl)
-
-                    # Una sola llamada _get_bm_stock_cached con el universo completo.
-                    # La deduplicación por normalize_to_bm_sku garantiza que SNTV007270-GRA,
-                    # SNTV007270 NEW y SNTV007270 cuenten como 1 solo fetch a BM.
-                    bm_candidates = [p for p in all_products if p.get("sku")]
-                    if bm_candidates:
-                        _prewarm_progress["done"] = 0
-                        _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
-                        _prewarm_progress["started_at"] = _time.time()
-                        await _get_bm_stock_cached(bm_candidates)
-
-                    # Con BM ya en cache, correr prewarm por cuenta (sin volver a fetchear BM)
-                    for acc in accounts:
-                        uid = acc.get("user_id", "")
-                        if uid:
-                            await _prewarm_caches(user_id=uid)
-                            await asyncio.sleep(1)
+                for acc in accounts:
+                    uid = acc.get("user_id", "")
+                    if uid:
+                        await _prewarm_caches(user_id=uid)
+                        await asyncio.sleep(1)
             except Exception:
                 pass
             # Refrescar alertas de sobreventa con datos BM actualizados
