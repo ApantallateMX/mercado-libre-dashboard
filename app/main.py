@@ -2234,7 +2234,10 @@ async def _prewarm_caches(user_id: str = None):
                 # stock y 0 ventas para detectar los que tienen BM disponible y necesitan activarse.
                 bm_candidates = [p for p in products if p.get("sku")]
                 _prewarm_progress["done"] = 0
-                _prewarm_progress["total"] = len(bm_candidates)
+                # Total = SKUs únicos normalizados (no productos totales).
+                # Con include_paused=True puede haber miles de listings del mismo SKU base;
+                # la deduplicación por normalize_to_bm_sku garantiza 1 sola consulta BM por SKU.
+                _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
                 _prewarm_progress["started_at"] = _time.time()
                 bm_map = await _get_bm_stock_cached(bm_candidates)
                 _apply_bm_stock(products, bm_map)
