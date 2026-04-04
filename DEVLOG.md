@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-03 — FIX: BM stock data discarded on session expiry (intermittent BM=0)
+
+### BUG — SNTV007283 y otros SKUs con stock real aparecen en Riesgo Sobreventa intermitentemente
+
+**Root Cause 1 (primario):** `r_wh.json()` dentro del `try` general de `_wh_phase`
+- Cuando BM session expira, `http.post(BM_WH_URL)` devuelve HTML (redirect a login, status=200)
+- `r_wh.json()` lanza `JSONDecodeError` → except block → `_store_empty(sku)`
+- El valor válido `avail_direct=653` ya calculado desde `get_stock_with_reserve` se descartaba completamente
+- Fix: Envolver `r_wh.json()` en su propio try/except → `rows_wh=[]` en fallo, `_store_wh` siempre corre con `avail_direct` correcto
+
+**Root Cause 2 (secundario):** Concurrent re-login sin lock
+- Con Semaphore(50), hasta 50 coroutines detectan sesión expirada y llaman `login()` simultáneamente
+- `BinManagerClient.login()` sin `asyncio.Lock` → 50 requests de login a BM en paralelo
+- Fix: `asyncio.Lock` en `login()` → solo un re-login real; coroutines en espera detectan `_logged_in=True` y continúan
+
+**Archivos modificados:**
+- `app/main.py`: `_wh_phase` — JSON parse en try/except propio
+- `app/services/binmanager_client.py`: `__init__` + `login()` — `asyncio.Lock`
+
+---
+
 ## 2026-04-03 — FIX: BM cache false positives + Inventario blank columns + force prewarm tool
 
 ### BUG — Riesgo Sobreventa mostraba productos con BM stock real
