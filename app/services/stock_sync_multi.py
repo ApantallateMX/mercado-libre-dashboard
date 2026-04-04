@@ -254,6 +254,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                             "platform":     "ml",
                             "account_id":   uid,
                             "item_id":      str(item.get("id", "")),
+                            "title":        (item.get("title") or "")[:80],
                             "price":        float(item.get("price") or 0),
                             "qty":          int(item.get("available_quantity") or 0),
                             "sold_qty":     int(item.get("sold_quantity") or 0),
@@ -780,6 +781,81 @@ async def run_multi_stock_sync() -> dict:
         _sync_progress    = {}
 
     return summary
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PREVIEW / DRY-RUN
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def preview_multi_stock_sync() -> dict:
+    """Simula el sync completo sin ejecutar ningún cambio en ML ni Amazon.
+
+    Retorna los mismos datos que run_multi_stock_sync pero con dry_run=True:
+    la lista de cambios planificados por _plan, sin llamar a _execute.
+
+    Útil para revisar qué se actualizaría antes de confirmar.
+    """
+    from app.services import token_store
+
+    t0 = _time.time()
+    try:
+        ml_accounts  = await token_store.get_all_tokens()
+        amz_accounts = await token_store.get_all_amazon_accounts()
+
+        ml_by_sku, amz_by_sku = await asyncio.gather(
+            _collect_ml_listings(ml_accounts),
+            _collect_amz_listings(amz_accounts),
+        )
+
+        all_bases = set(ml_by_sku.keys()) | set(amz_by_sku.keys())
+        if not all_bases:
+            return {"status": "no_skus", "changes": [], "bm_stock": {}}
+
+        sku_cond_map = {k: _cond_for_key(k) for k in all_bases}
+        bm_stock = await _fetch_bm_avail(sku_cond_map)
+
+        try:
+            all_rules = await token_store.get_all_sku_platform_rules()
+        except Exception:
+            all_rules = {}
+
+        ro = _is_reduce_only_mode()
+        changes = []
+
+        for base in sorted(all_bases):
+            if base not in bm_stock:
+                continue
+            bm_avail = bm_stock[base]
+            listings = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
+            enabled  = set(all_rules.get(base, []))
+            updates  = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
+
+            for u in updates:
+                lst = u["listing"]
+                changes.append({
+                    "sku":         base,
+                    "platform":    lst["platform"],
+                    "account_id":  lst["account_id"],
+                    "item_id":     lst["item_id"],
+                    "title":       lst.get("title", ""),
+                    "status":      lst["status"],
+                    "current_qty": lst["qty"],
+                    "bm_avail":    bm_avail,
+                    "new_qty":     u["new_qty"],
+                    "reason":      u["reason"],
+                })
+
+        return {
+            "status":       "ok",
+            "changes":      changes,
+            "total_skus":   len(all_bases),
+            "bm_queried":   len(bm_stock),
+            "reduce_only":  ro,
+            "elapsed_s":    round(_time.time() - t0, 1),
+        }
+    except Exception as exc:
+        logger.exception(f"[MULTI-SYNC-PREVIEW] Error: {exc}")
+        return {"status": "error", "error": str(exc)[:200], "changes": []}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

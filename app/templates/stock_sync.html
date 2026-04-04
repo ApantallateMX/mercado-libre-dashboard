@@ -11,17 +11,70 @@
       <p class="text-xs text-gray-500 mt-0.5">BinManager → MercadoLibre + Amazon · ciclo cada {{ interval_min }} min · umbral={{ threshold }} uds</p>
     </div>
     <div class="flex flex-col items-end gap-1">
-      <button id="btn-trigger"
-              disabled
-              title="Sync deshabilitado — las decisiones de stock deben revisarse en las Alertas de Stock"
-              class="flex items-center gap-2 bg-gray-200 text-gray-400 font-semibold text-sm px-4 py-2 rounded-xl shadow cursor-not-allowed opacity-60">
+      <button id="btn-preview" onclick="runPreview()"
+              class="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm px-4 py-2 rounded-xl shadow transition">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
         </svg>
-        Sincronizar ahora
+        Ver cambios
       </button>
-      <span class="text-[11px] text-amber-600 font-medium">⚠ Usa las Alertas de Stock para gestionar cambios</span>
+      <span class="text-[11px] text-gray-400">Previsualiza antes de aplicar</span>
+    </div>
+  </div>
+
+  <!-- ── Panel de Preview (cambios planificados) ───────────────── -->
+  <div id="preview-panel" class="hidden bg-white rounded-2xl shadow-sm border border-indigo-200 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <svg id="preview-spinner" class="hidden w-4 h-4 text-indigo-600 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        <span id="preview-title" class="text-sm font-semibold text-indigo-800">Calculando cambios...</span>
+      </div>
+      <button onclick="closePreview()" class="text-xs text-gray-400 hover:text-gray-600">✕ Cerrar</button>
+    </div>
+
+    <!-- Summary badges -->
+    <div id="preview-summary" class="hidden flex flex-wrap gap-2 text-xs"></div>
+
+    <!-- Table -->
+    <div id="preview-table-wrap" class="hidden overflow-x-auto max-h-96">
+      <table class="w-full text-xs">
+        <thead class="bg-gray-50 sticky top-0">
+          <tr class="border-b border-gray-200">
+            <th class="text-left py-2 pr-3 text-gray-500 font-medium">SKU</th>
+            <th class="text-left py-2 pr-3 text-gray-500 font-medium">Título</th>
+            <th class="text-left py-2 pr-3 text-gray-500 font-medium">Plataforma</th>
+            <th class="text-right py-2 pr-3 text-gray-500 font-medium">Actual</th>
+            <th class="text-right py-2 pr-3 text-gray-500 font-medium">BM Avail</th>
+            <th class="text-right py-2 pr-3 text-gray-500 font-medium">Nuevo</th>
+            <th class="text-left py-2 text-gray-500 font-medium">Motivo</th>
+          </tr>
+        </thead>
+        <tbody id="preview-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- No changes -->
+    <div id="preview-empty" class="hidden text-center py-4 text-xs text-green-700 bg-green-50 rounded-xl border border-green-200">
+      ✓ Sin cambios pendientes — el stock de ML ya está alineado con BM
+    </div>
+
+    <!-- Action buttons -->
+    <div id="preview-actions" class="hidden flex items-center gap-3 pt-2 border-t border-gray-100">
+      <button id="btn-confirm" onclick="confirmSync()"
+              class="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm px-5 py-2 rounded-xl transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+        Confirmar y ejecutar
+      </button>
+      <button onclick="closePreview()" class="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">Cancelar</button>
+      <span class="text-xs text-gray-400 ml-auto" id="preview-meta"></span>
     </div>
   </div>
 
@@ -399,31 +452,121 @@ function _updateProgress(prog) {
   }
 }
 
-var _syncBtn = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Sincronizar ahora';
+// ── Preview / Dry-run ────────────────────────────────────────────────────────
+window.runPreview = function() {
+  var btn  = document.getElementById('btn-preview');
+  var panel = document.getElementById('preview-panel');
+  btn.disabled = true;
+  btn.textContent = 'Calculando...';
+  panel.classList.remove('hidden');
+  document.getElementById('preview-spinner').classList.remove('hidden');
+  document.getElementById('preview-title').textContent = 'Calculando cambios planificados...';
+  document.getElementById('preview-summary').classList.add('hidden');
+  document.getElementById('preview-table-wrap').classList.add('hidden');
+  document.getElementById('preview-empty').classList.add('hidden');
+  document.getElementById('preview-actions').classList.add('hidden');
 
-function triggerSync() {
-  // Sync deshabilitado — todas las decisiones de stock pasan por Alertas de Stock.
-  // Para re-habilitar: quitar el return y el disabled en el botón HTML.
-  showToast('Sync deshabilitado. Usa las Alertas de Stock para gestionar cambios.', true);
-  return;
+  fetch('/api/stock/multi-sync/preview', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById('preview-spinner').classList.add('hidden');
+      btn.disabled = false;
+      btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg> Ver cambios';
 
-  var btn = document.getElementById('btn-trigger');
+      if (d.status === 'already_running') {
+        document.getElementById('preview-title').textContent = 'Hay un sync en curso — espera que termine.';
+        return;
+      }
+      if (d.status !== 'ok') {
+        document.getElementById('preview-title').textContent = 'Sin SKUs para procesar.';
+        return;
+      }
+
+      var changes = d.changes || [];
+      document.getElementById('preview-title').textContent =
+        changes.length + ' cambio' + (changes.length !== 1 ? 's' : '') + ' planificado' + (changes.length !== 1 ? 's' : '');
+
+      // Summary
+      var byReason = {};
+      changes.forEach(function(c) {
+        byReason[c.reason] = (byReason[c.reason] || 0) + 1;
+      });
+      var reasonColors = {
+        'increase': 'bg-green-100 text-green-700',
+        'decrease': 'bg-amber-100 text-amber-700',
+        'zero_bm':  'bg-red-100 text-red-700',
+        'winner':   'bg-blue-100 text-blue-700',
+        'loser':    'bg-gray-100 text-gray-600',
+        'reduce_only_skip': 'bg-purple-100 text-purple-700',
+      };
+      var summaryEl = document.getElementById('preview-summary');
+      summaryEl.innerHTML = Object.entries(byReason).map(function(e) {
+        var cls = reasonColors[e[0]] || 'bg-gray-100 text-gray-600';
+        return '<span class="px-2 py-1 rounded-full ' + cls + '"><b>' + e[1] + '</b> ' + e[0] + '</span>';
+      }).join('');
+      summaryEl.classList.remove('hidden');
+
+      if (changes.length === 0) {
+        document.getElementById('preview-empty').classList.remove('hidden');
+        document.getElementById('preview-meta').textContent = d.total_skus + ' SKUs · ' + d.elapsed_s + 's';
+        document.getElementById('preview-actions').classList.remove('hidden');
+        return;
+      }
+
+      // Table
+      var tbody = document.getElementById('preview-tbody');
+      tbody.innerHTML = changes.map(function(c) {
+        var delta = c.new_qty - c.current_qty;
+        var arrowCls = delta > 0 ? 'text-green-600' : (delta < 0 ? 'text-red-600' : 'text-gray-400');
+        var arrow    = delta > 0 ? '▲' : (delta < 0 ? '▼' : '=');
+        var newQtyHtml = '<span class="font-semibold ' + arrowCls + '">' + arrow + ' ' + c.new_qty + '</span>';
+        var platLabel = c.platform === 'ml' ? 'ML' : (c.platform === 'amazon' ? 'AMZ' : c.platform);
+        var titleShort = (c.title || '').substring(0, 40) + (c.title && c.title.length > 40 ? '…' : '');
+        return '<tr class="border-b border-gray-50 hover:bg-indigo-50/30">'
+          + '<td class="py-1.5 pr-3 font-mono font-bold text-gray-700">' + c.sku + '</td>'
+          + '<td class="py-1.5 pr-3 text-gray-500 max-w-[180px] truncate" title="' + (c.title || '') + '">' + (titleShort || '—') + '</td>'
+          + '<td class="py-1.5 pr-3"><span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono">' + platLabel + '</span></td>'
+          + '<td class="py-1.5 pr-3 text-right text-gray-600">' + c.current_qty + '</td>'
+          + '<td class="py-1.5 pr-3 text-right font-semibold ' + (c.bm_avail > 0 ? 'text-green-700' : 'text-red-500') + '">' + c.bm_avail + '</td>'
+          + '<td class="py-1.5 pr-3 text-right">' + newQtyHtml + '</td>'
+          + '<td class="py-1.5 text-gray-400 font-mono">' + c.reason + '</td>'
+          + '</tr>';
+      }).join('');
+      document.getElementById('preview-table-wrap').classList.remove('hidden');
+      document.getElementById('preview-meta').textContent = d.total_skus + ' SKUs · ' + d.bm_queried + ' en BM · ' + d.elapsed_s + 's' + (d.reduce_only ? ' · modo nocturno' : '');
+      document.getElementById('preview-actions').classList.remove('hidden');
+    })
+    .catch(function(err) {
+      document.getElementById('preview-spinner').classList.add('hidden');
+      document.getElementById('preview-title').textContent = 'Error al calcular cambios';
+      btn.disabled = false;
+      btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg> Ver cambios';
+      showToast('Error al calcular preview', true);
+    });
+};
+
+window.closePreview = function() {
+  document.getElementById('preview-panel').classList.add('hidden');
+};
+
+window.confirmSync = function() {
+  var btn = document.getElementById('btn-confirm');
   btn.disabled = true;
   btn.textContent = 'Iniciando...';
+  document.getElementById('preview-actions').querySelector('button:last-of-type').disabled = true;
 
   fetch('/api/stock/multi-sync/trigger', { method: 'POST' })
     .then(function(r) { return r.json(); })
     .then(function(d) {
       if (d.status === 'already_running') {
         showToast('Ya hay un ciclo corriendo', false);
-        btn.disabled = false;
-        btn.innerHTML = _syncBtn;
+        closePreview();
         _showProgress(true);
         _startElapsedTimer();
         pollStatus();
         return;
       }
-      btn.textContent = 'Corriendo...';
+      closePreview();
       _showProgress(true);
       _startElapsedTimer();
       pollStatus();
@@ -431,8 +574,13 @@ function triggerSync() {
     .catch(function() {
       showToast('Error al disparar sync', true);
       btn.disabled = false;
-      btn.innerHTML = _syncBtn;
+      btn.textContent = 'Confirmar y ejecutar';
     });
+};
+
+function triggerSync() {
+  // Mantenido por compatibilidad — el flujo ahora pasa por runPreview() + confirmSync()
+  runPreview();
 }
 
 function pollStatus() {

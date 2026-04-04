@@ -8078,6 +8078,16 @@ async def force_prewarm():
     return JSONResponse({"status": "started", "stale_cleared": stale_cleared})
 
 
+@app.get("/api/stock/multi-sync/preview")
+async def multi_sync_preview():
+    """Dry-run: calcula cambios planificados sin ejecutar nada en ML/Amazon."""
+    from app.services.stock_sync_multi import preview_multi_stock_sync, get_sync_status
+    if get_sync_status()["running"]:
+        return JSONResponse({"status": "already_running", "changes": []})
+    result = await preview_multi_stock_sync()
+    return JSONResponse(result)
+
+
 @app.post("/api/stock/multi-sync/trigger")
 async def multi_sync_trigger():
     """Dispara sync manual: sync BM→ML/Amazon + fuerza prewarm fresco."""
