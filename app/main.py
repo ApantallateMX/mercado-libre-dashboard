@@ -381,7 +381,11 @@ async def lifespan(app: FastAPI):
                         try:
                             cli = await get_meli_client(user_id=uid)
                             if cli:
-                                return await _get_all_products_cached(cli, include_paused=True)
+                                # include_paused=False: el prewarm unificado opera solo sobre
+                                # listings ACTIVOS. Con 3 cuentas y include_paused=True se
+                                # acumulan miles de SKUs históricos que saturan BM innecesariamente.
+                                # Los pausados se cubren en el prewarm per-account que sigue.
+                                return await _get_all_products_cached(cli, include_paused=False)
                         except Exception:
                             pass
                         return []
@@ -2578,14 +2582,17 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
     # Este pass serial garantiza que esos SKUs se re-intentan con sesión fresca y baja concurrencia.
     _stale_after_prewarm = [
         s for s in to_fetch
-        if not _bm_stock_cache.get(s.upper(), (None, {}))[1].get("_v")
+        if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
     ]
-    if _stale_after_prewarm:
+    # Cap: máximo 30 retries seriales para no bloquear el prewarm en batches grandes.
+    # Los SKUs que no entren en el cap se re-intentarán en el próximo ciclo de prewarm.
+    _stale_to_retry = _stale_after_prewarm[:30]
+    if _stale_to_retry:
         import logging as _log_retry
         _log_retry.getLogger(__name__).info(
-            f"[BM-CACHE] Retry serial para {len(_stale_after_prewarm)} SKUs STALE post-prewarm"
+            f"[BM-CACHE] Retry serial para {len(_stale_to_retry)}/{len(_stale_after_prewarm)} SKUs STALE post-prewarm"
         )
-        for _retry_sku in _stale_after_prewarm:
+        for _retry_sku in _stale_to_retry:
             await _wh_phase(_retry_sku, http)
 
     # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
