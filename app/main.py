@@ -2027,7 +2027,9 @@ async def _get_all_products_cached(client, include_paused=False, include_all=Fal
                 max_synced = await token_store.get_ml_listings_max_synced_at(client.user_id)
                 db_age = _time.time() - max_synced
                 if max_synced > 0 and db_age < _DB_PRODUCTS_MAX_AGE:
-                    statuses = ["active", "paused"] if include_paused else ["active"]
+                    # "inactive" = "Inactiva sin stock" en UI de ML — auto-desactivado por stock=0.
+                    # Se incluye para poder detectar alertas de restock y re-activación.
+                    statuses = ["active", "paused", "inactive"] if include_paused else ["active"]
                     db_rows = await token_store.get_ml_listings(client.user_id, statuses=statuses)
                     products_from_db = []
                     for r in db_rows:
@@ -2056,7 +2058,8 @@ async def _get_all_products_cached(client, include_paused=False, include_all=Fal
         if include_all:
             all_ids = await client.get_all_item_ids_by_statuses(_ALL_MELI_STATUSES)
         elif include_paused:
-            all_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
+            # "inactive" = "Inactiva sin stock" — ML auto-desactivó por qty=0; incluir para alertas.
+            all_ids = await client.get_all_item_ids_by_statuses(["active", "paused", "inactive"])
         else:
             all_ids = await client.get_all_active_item_ids()
         all_details = []
@@ -2203,12 +2206,12 @@ async def _prewarm_caches(user_id: str = None):
                 products = _build_product_list(all_bodies, sales_map)
                 _enrich_sku_from_orders(products, all_orders)
 
-                # Fetchear BM para TODOS los activos + pausados.
-                # Incluir pausados sin ventas garantiza base de datos completa:
-                # SKUs pausados pueden tener stock en BM que no reflejamos → oversell latente.
+                # Fetchear BM para activos + pausados + inactivos.
+                # "inactive" = "Inactiva sin stock" — ML auto-desactivó por qty=0.
+                # Incluirlos garantiza que SNTV007283-tipo no queden STALE y generen alertas.
                 bm_candidates = [
                     p for p in products
-                    if p.get("sku") and p.get("status") in ("active", "paused")
+                    if p.get("sku") and p.get("status") in ("active", "paused", "inactive")
                 ]
                 _prewarm_progress["done"] = 0
                 # Total = SKUs únicos normalizados (no productos totales).
@@ -9621,7 +9624,7 @@ async def bm_launch_opportunities(
         for _p in _prods:
             _s = _p.get("sku") or ""
             _st = _p.get("status") or ""
-            if _s and _st in ("active", "paused"):
+            if _s and _st in ("active", "paused", "inactive"):
                 ml_bm_skus.add(normalize_to_bm_sku(_s))
 
     # Si products_cache está vacío (primer arranque), hacer fetch fresco de todas las cuentas

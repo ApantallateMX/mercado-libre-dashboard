@@ -220,8 +220,8 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
             if not client:
                 continue
 
-            # Recopilar activos + pausados
-            item_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
+            # Recopilar activos + pausados + inactivos ("Inactiva sin stock")
+            item_ids = await client.get_all_item_ids_by_statuses(["active", "paused", "inactive"])
             if not item_ids:
                 continue
 
@@ -236,7 +236,7 @@ async def _collect_ml_listings(ml_accounts: list) -> dict[str, list]:
                         if not isinstance(item, dict):
                             continue
                         item_status = item.get("status", "")
-                        if item_status not in ("active", "paused"):
+                        if item_status not in ("active", "paused", "inactive"):
                             continue
 
                         sku = extract_item_sku(item)

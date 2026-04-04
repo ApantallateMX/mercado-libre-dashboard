@@ -59,7 +59,8 @@ async def _sync_account_full(uid: str, client) -> int:
     from app.services import token_store
 
     try:
-        item_ids = await client.get_all_item_ids_by_statuses(["active", "paused"])
+        # "inactive" = "Inactiva sin stock" (ML auto-desactivó por qty=0) — incluir para alertas BM.
+        item_ids = await client.get_all_item_ids_by_statuses(["active", "paused", "inactive"])
         if not item_ids:
             return 0
 

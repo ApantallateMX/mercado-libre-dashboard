@@ -38,6 +38,33 @@ Ahora: `status in ("active", "paused")` — base de datos completa de todos los 
 
 ---
 
+## 2026-04-04 — FIX: items "Inactiva sin stock" excluidos del prewarm (CAUSA RAÍZ REAL)
+
+### Causa raíz confirmada
+ML muestra "Inactiva sin stock" en la UI para listings que auto-desactivó por qty=0.
+El API de ML devuelve estos items con `status: "inactive"` — NO `"paused"`.
+El código solo buscaba `["active", "paused"]` en todos los lugares → items "inactive"
+NUNCA entraban al prewarm ni al ml_listing_sync → BM nunca se consultaba → STALE perpetuo.
+
+Afectados confirmados (BM tiene stock real):
+SNTV007283=653, SNTV007867=300, SNTV003804=236, SNTV003805=104, SNTV003806=105,
+SNTV003803=94, SNTV007241=92, SNTV007313=150, SNTV006829=43, SNTV007756=25
+
+### Fix aplicado — 5 puntos
+1. `main.py _get_all_products_cached` DB path: `["active","paused","inactive"]`
+2. `main.py _get_all_products_cached` ML API fallback: idem
+3. `main.py bm_candidates` filter: `status in ("active","paused","inactive")`
+4. `main.py bm_launch_opportunities` ML SKU set: idem
+5. `ml_listing_sync._sync_account_full`: `["active","paused","inactive"]` → DB ahora almacena inactive
+6. `stock_sync_multi` fetch + skip guard: idem
+
+### Flujo post-deploy
+1. App reinicia → ml_listing_sync corre full sync con inactive → DB actualizada
+2. 90s luego: prewarm lee DB → bm_candidates incluye SNTV007283+ → BM devuelve stock real
+3. Alertas "Activar" / "Restock" se generan correctamente
+
+---
+
 ## 2026-04-04 — FEAT: Corrida inversa — SKUs en BM sin listing en ML
 
 ### Nueva pantalla: /bm/unlaunched
