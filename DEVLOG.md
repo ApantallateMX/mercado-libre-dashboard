@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-04 — FIX: STALE persistente — 3 causas raíz resueltas
+
+### Causa raíz final confirmada
+`asyncio.gather(WH_endpoint, get_stock_with_reserve)` = 2 requests por SKU simultáneos.
+Con `wh_sem=12`: 12 × 2 = **24 conexiones simultáneas** → httpx per-host limit = 20 → timeouts
+→ ambos fallan → `verified=False` → STALE. Fix anterior (wh_sem=12) reducía *SKUs* paralelos
+pero no reducía *requests* por SKU. El problema era el gather de 2 endpoints en _wh_phase.
+
+### Fix 1 — Eliminar WH endpoint de `_wh_phase` (main.py)
+`_wh_phase` ahora hace 1 solo request: `bm_cli.get_stock_with_reserve(base)`.
+Con `wh_sem=12` + 1 request = 12 simultáneos máx — holgado bajo el límite de 20.
+MTY/CDMX/TJ breakdown = 0 (no disponible sin WH endpoint — solo avail total importa).
+
+### Fix 2 — `_query_bm_stock` retorna `None` en fallos (binmanager_client.py)
+Antes: retornaba `(0,0)` tanto para "SKU con 0 stock genuino" como para fallos de sesión/red.
+`_store_wh` no podía distinguirlos → STALE marcado como verified → falsos avisos.
+Ahora: `None` = fallo (timeout, sesión expirada, non-200) / `(0,0)` = HTTP 200 sin match genuino.
+`_store_wh` usa `avail_ok = _stock is not None` como señal de verificación.
+
+### Fix 3 — `bm_candidates` incluye TODOS los pausados (main.py)
+Antes: `paused AND units>0` → excluía pausados sin ventas recientes.
+Resultado: SKUs como SNTV007283, SNTV003804-06, SNTV007241, etc. nunca entraban al cache.
+Ahora: `status in ("active", "paused")` — base de datos completa de todos los SKUs lanzados.
+
+### Impacto
+- SKUs "No está en caché" post-prewarm: eliminados (todos los pausados ahora se consultan)
+- STALE persistente: eliminado (1 request vs 2 → nunca supera límite httpx)
+- `_query_bm_stock` None → `verified=False` → Fix A preserva datos buenos previos en cache
+
+---
+
 ## 2026-04-04 — FIX: STALE BM cache persistente (SNAC000029 y similares)
 
 ### Causa raíz

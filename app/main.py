@@ -2189,14 +2189,12 @@ async def _prewarm_caches(user_id: str = None):
                 products = _build_product_list(all_bodies, sales_map)
                 _enrich_sku_from_orders(products, all_orders)
 
-                # Fetchear BM solo para activos + pausados con ventas recientes.
-                # Pausados sin ventas no necesitan BM urgente y engrosan el batch innecesariamente.
+                # Fetchear BM para TODOS los activos + pausados.
+                # Incluir pausados sin ventas garantiza base de datos completa:
+                # SKUs pausados pueden tener stock en BM que no reflejamos → oversell latente.
                 bm_candidates = [
                     p for p in products
-                    if p.get("sku") and (
-                        p.get("status") == "active"
-                        or (p.get("status") == "paused" and p.get("units", 0) > 0)
-                    )
+                    if p.get("sku") and p.get("status") in ("active", "paused")
                 ]
                 _prewarm_progress["done"] = 0
                 # Total = SKUs únicos normalizados (no productos totales).
@@ -2435,18 +2433,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         #      Genuinamente reservado tendría reserve > 0 (ej: SNTV006485: total=1, reserve=1 → avail=0 correcto).
         if avail_total == 0 and warehouse_total > 0 and (not avail_ok or reserved_total == 0):
             avail_total = warehouse_total
-        # _v=True: BM respondió con datos reales o confirmó que no hay stock.
-        # wh_responded=True cubre el caso de SKU con 0 stock genuino: WH devuelve [] JSON válido
-        # que es una respuesta verificada (no un error de sesión).
-        verified = wh_responded or avail_total > 0 or reserved_total > 0
+        # _v=True: BM respondió con datos reales (incluyendo 0 genuino) o ya hay stock.
+        # avail_ok=True: get_stock_with_reserve retornó tuple — respuesta verificada aunque sea (0,0).
+        # avail_ok=False: retornó None (timeout/sesión) — no sabemos el estado real.
+        verified = avail_ok or avail_total > 0 or reserved_total > 0
 
-        # Fix A: si ambos endpoints fallaron (todo en cero, sin verificación), NO sobreescribir
-        # una entrada anterior válida con datos de sesión rota.
-        # Causa: bajo carga del prewarm (50 SKUs paralelos), BM session expira → re-login falla →
-        # get_stock_with_reserve retorna (0,0) tuple (_avail_ok=True pero avail=0) Y el WH
-        # endpoint raw retorna HTML (wh_responded=False) → ambos en cero → STALE.
-        # Sin este fix, el STALE sobreescribe la entrada previa (ej: avail_total=2146) y
-        # genera falso oversell_risk hasta que vence el TTL.
+        # Fix A: si BM falló (verified=False, todo en cero), NO sobreescribir entrada válida.
+        # Causa: bajo carga del prewarm, sesión BM expira → get_stock_with_reserve retorna None
+        # → avail_ok=False, avail=0 → verified=False → sin esta guarda sobreescribiría la entrada
+        # previa con datos buenos (ej: avail_total=2146) → falso oversell_risk hasta TTL.
         if not verified and avail_total == 0 and warehouse_total == 0:
             existing = _bm_stock_cache.get(normalize_to_bm_sku(sku))
             if existing:
@@ -2471,80 +2466,37 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_empty(sku):
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
 
-    # sem=12: balance entre velocidad y estabilidad de sesión BM.
-    # Con sem=50 todos los requests llegan simultáneos → sesión BM expira bajo carga →
-    # get_stock_with_reserve retorna (0,0) → STALE para muchos SKUs.
-    # Fix C (serial retry) no alcanzaba a resolver porque el prewarm de la 2ª cuenta
-    # ya corría en paralelo y re-saturaba la sesión.
-    # Con sem=12: ~7 batches de 12 → ~25s total, sesión nunca sobrecargada.
+    # sem=12 + 1 request por SKU = 12 simultáneos máx — holgado bajo el límite de 20 de httpx.
+    # Con WH endpoint eliminado: de 2 requests por SKU → 1. Antes sem=12 = 24 simultáneos (WH+avail),
+    # ahora sem=12 = 12 simultáneos. Sesión BM estable sin saturar el pool de conexiones.
     wh_sem = asyncio.Semaphore(12)
 
     async def _wh_phase(sku, http, _track_progress=True):
-        """Consulta en paralelo:
-        1) Get_GlobalStock_InventoryBySKU_Warehouse → MTY/CDMX/TJ breakdown (totales físicos)
-        2) GlobalStock_InventoryBySKU_Condition    → avail directo (Producto Vendible)
+        """Consulta Get_GlobalStock_InventoryBySKU CONCEPTID=1 — fuente única de stock vendible.
+        1 solo request HTTP por SKU (WH breakdown eliminado para reducir concurrencia BM).
 
-        El avail viene directo de BM_COND_URL — igual que _fetch_bm_avail en stock_sync_multi.
-        Reemplaza la fórmula "warehouse_total - reserve" que era inexacta cuando el endpoint
-        Get_GlobalStock_InventoryBySKU (CONCEPTID=8) devolvía reserve >= total (e.g. SNAC000029).
+        Con sem=12 + 1 request = 12 simultáneos máx → bien bajo el límite de 20 de httpx.
+        MTY/CDMX/TJ breakdown = 0 (no disponible sin endpoint WH — solo avail total).
         """
         clean = _clean_sku_for_bm(sku)
         if not clean:
             _store_empty(sku)
             return
         base = _extract_base_sku(clean)
-        conditions = _bm_conditions_for_sku(clean)
-        wh_payload = {
-            "COMPANYID": 1, "SKU": base, "WarehouseID": None,
-            "LocationID": "47,62,68", "BINID": None,
-            "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
-        }
-        # BM_AVAIL_URL: InventoryBySKUAndCondicion_Quantity → Available (excluye reservados)
-        # LOCATIONID=None: este endpoint requiere None para devolver total disponible global.
-        # Con LOCATIONID="47,62,68" retorna vacío aunque haya stock (diferente a WH endpoint).
-        # Verificado: SNAC000029 Available=2471 con None, Available=0 con "47,62,68".
-        avail_payload = {
-            "COMPANYID": 1, "TYPEINVENTORY": 0,
-            "WAREHOUSEID": None, "LOCATIONID": None, "BINID": None,
-            "PRODUCTSKU": base, "CONDITION": conditions,
-            "SUPPLIERS": None, "LCN": None, "SEARCH": base,
-        }
         async with wh_sem:
             try:
-                # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY y Reserve directo de BM
-                # get_stock_with_reserve usa CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta
-                # Retorna (AvailableQTY, Reserve) directo del endpoint, sin derivaciones
-                # get_stock_with_reserve: timeout=20 interno + re-login (3-5s) + retry = hasta 25s total.
-                # _login_lock serializa re-logins → 1 sola sesión activa, otros esperan el lock.
-                # wait_for(8s) cortaba el wait del lock → SIEMPRE fallaba al re-login → SKUs STALE.
-                # wait_for(25s) da tiempo al re-login + retry. WH usa 10s (solo necesita sesión activa).
-                _results = await asyncio.gather(
-                    http.post(BM_WH_URL, json=wh_payload, timeout=10.0),
-                    asyncio.wait_for(bm_cli.get_stock_with_reserve(base), timeout=25.0),
-                    return_exceptions=True,
-                )
-                r_wh = _results[0]
-                _stock = _results[1]
-                # _avail_ok=True: get_stock_with_reserve respondió (tuple) → valor confiable
-                # _avail_ok=False: excepción/timeout → no sabemos cuánto hay disponible
-                _avail_ok = isinstance(_stock, tuple)
+                # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta.
+                # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
+                # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
+                # timeout=25s: cubre re-login interno (3-5s) + retry + latencia de red.
+                _stock = await asyncio.wait_for(bm_cli.get_stock_with_reserve(base), timeout=25.0)
+                # _avail_ok=True: BM respondió (tuple) — dato verificado aunque sea (0,0) genuino.
+                # _avail_ok=False: retornó None (timeout/sesión) — no sabemos el stock real.
+                _avail_ok = _stock is not None
                 avail_direct = _stock[0] if _avail_ok else 0
                 reserve_direct = _stock[1] if _avail_ok else 0
-                # Parsear WH breakdown en try propio: si BM devuelve HTML (sesión expirada),
-                # r_wh.json() lanza JSONDecodeError — no debe tirar avail_direct válido.
-                # wh_responded=True: el endpoint devolvió JSON válido (aunque [] vacío).
-                # wh_responded=False: devolvió HTML/error — no sabemos el estado real del stock.
-                wh_responded = False
-                try:
-                    _wh_ok = not isinstance(r_wh, Exception) and r_wh.status_code == 200
-                    rows_wh = r_wh.json() if _wh_ok else []
-                    if not isinstance(rows_wh, list): rows_wh = []
-                    wh_responded = _wh_ok  # JSON parseó OK — respuesta verificada aunque esté vacía
-                except Exception:
-                    rows_wh = []  # HTML de página de login → breakdown WH vacío, avail_direct se preserva
-
-                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct,
-                          avail_ok=_avail_ok, wh_responded=wh_responded)
+                _store_wh(sku, [], avail_direct=avail_direct, reserve_direct=reserve_direct,
+                          avail_ok=_avail_ok, wh_responded=False)
                 if _track_progress:
                     _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
                 return

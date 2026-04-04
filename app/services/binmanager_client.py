@@ -214,11 +214,12 @@ class BinManagerClient:
                 return []
         return []
 
-    async def get_stock_with_reserve(self, sku: str) -> tuple[int, int]:
+    async def get_stock_with_reserve(self, sku: str) -> tuple[int, int] | None:
         """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,62,68 (MTY+CDMX).
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
           - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
           - Reserve      = unidades reservadas para órdenes pendientes
+          - None         = fallo de sesión/red — dato desconocido (NO confundir con 0 genuino)
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2 (TotalQty=215)
         """
         return await self._query_bm_stock(sku)
@@ -226,12 +227,14 @@ class BinManagerClient:
     async def get_available_qty(self, sku: str) -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68.
+        Retorna 0 tanto para stock genuino 0 como para fallos — usar get_stock_with_reserve()
+        si necesitas distinguir entre 0 real y fallo de red.
         Verificado: SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213.
         """
-        avail, _ = await self._query_bm_stock(sku)
-        return avail
+        result = await self._query_bm_stock(sku)
+        return result[0] if result is not None else 0
 
-    async def _query_bm_stock(self, sku: str) -> tuple[int, int]:
+    async def _query_bm_stock(self, sku: str) -> tuple[int, int] | None:
         """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1 + LOCATIONID=47,62,68 (MTY+CDMX).
         Método interno compartido por get_available_qty() y get_stock_with_reserve().
         Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
@@ -296,7 +299,7 @@ class BinManagerClient:
                     if attempt == 0:
                         await self.login()
                         continue
-                    return 0, 0
+                    return None  # Sesión expirada tras retry — dato desconocido
                 if r.status_code == 200:
                     data = r.json()
                     if isinstance(data, list) and data:
@@ -320,19 +323,20 @@ class BinManagerClient:
                             avail   = sum(int(x.get("AvailableQTY") or 0) for x in variants)
                             reserve = sum(int(x.get("Reserve") or 0) for x in variants)
                             return avail, reserve
-                        return 0, 0  # SKU no encontrado — NO caer al data[0]
-                return 0, 0
+                        return 0, 0  # HTTP 200 — BM respondió, SKU sin stock (0 genuino)
+                    return 0, 0  # HTTP 200 — BM respondió con lista vacía (SKU inexistente → 0 genuino)
+                return None  # HTTP no-200 (503, 401, etc.) — fallo de servidor, dato desconocido
             except httpx.TimeoutException:
                 logger.warning(f"BinManager timeout _query_bm_stock {sku} (intento {attempt+1})")
                 if attempt == 0:
                     continue
-                return 0, 0
+                return None  # Timeout — no sabemos el stock real
             except Exception as e:
                 logger.error(f"BinManager _query_bm_stock error {sku}: {e}")
                 if attempt == 0:
                     continue
-                return 0, 0
-        return 0, 0
+                return None  # Excepción — no sabemos el stock real
+        return None  # Agotados los intentos sin respuesta válida
 
     async def post_inventory(self, url: str, payload: dict, timeout: float = 15.0):
         """POST autenticado a un endpoint de inventario BM. Maneja sesión expirada con re-login.
