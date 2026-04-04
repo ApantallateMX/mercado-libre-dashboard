@@ -2350,13 +2350,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, avail_ok=True):
+    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, avail_ok=True, wh_responded=True):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
         avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68
         reserve_direct: Reserve del mismo endpoint — unidades reservadas para órdenes pendientes.
         avail_ok:       True si get_stock_with_reserve respondió (tuple); False si fue excepción/timeout.
-        Ambos campos vienen directo de BM, sin derivaciones.
+        wh_responded:   True si el WH endpoint devolvió JSON válido (aunque vacío []).
+                        False si devolvió HTML (sesión expirada) — JSON parse falló.
+                        [] vacío con wh_responded=True ES dato verificado (SKU sin stock en esas ubicaciones).
+                        [] vacío con wh_responded=False significa que NO sabemos el estado real.
 
         Casos verificados:
           SNTV001764: TotalQty=215, Reserve=2, AvailableQTY=213 ✓
@@ -2375,8 +2378,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         #      Genuinamente reservado tendría reserve > 0 (ej: SNTV006485: total=1, reserve=1 → avail=0 correcto).
         if avail_total == 0 and warehouse_total > 0 and (not avail_ok or reserved_total == 0):
             avail_total = warehouse_total
-        # _v=True: fetch produjo datos reales (no timeout/error vacío)
-        verified = bool(rows_wh) or avail_total > 0 or reserved_total > 0
+        # _v=True: BM respondió con datos reales o confirmó que no hay stock.
+        # wh_responded=True cubre el caso de SKU con 0 stock genuino: WH devuelve [] JSON válido
+        # que es una respuesta verificada (no un error de sesión).
+        verified = wh_responded or avail_total > 0 or reserved_total > 0
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total,
@@ -2441,13 +2446,19 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
                 reserve_direct = _stock[1] if _avail_ok else 0
                 # Parsear WH breakdown en try propio: si BM devuelve HTML (sesión expirada),
                 # r_wh.json() lanza JSONDecodeError — no debe tirar avail_direct válido.
+                # wh_responded=True: el endpoint devolvió JSON válido (aunque [] vacío).
+                # wh_responded=False: devolvió HTML/error — no sabemos el estado real del stock.
+                wh_responded = False
                 try:
-                    rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
+                    _wh_ok = not isinstance(r_wh, Exception) and r_wh.status_code == 200
+                    rows_wh = r_wh.json() if _wh_ok else []
                     if not isinstance(rows_wh, list): rows_wh = []
+                    wh_responded = _wh_ok  # JSON parseó OK — respuesta verificada aunque esté vacía
                 except Exception:
                     rows_wh = []  # HTML de página de login → breakdown WH vacío, avail_direct se preserva
 
-                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct, avail_ok=_avail_ok)
+                _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct,
+                          avail_ok=_avail_ok, wh_responded=wh_responded)
                 return
             except Exception as _exc:
                 import logging as _log
