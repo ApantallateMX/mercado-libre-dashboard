@@ -176,20 +176,32 @@ class BinManagerClient:
                 return None
         return None
 
-    async def get_global_inventory(self, page: int = 1, per_page: int = 50, min_qty: int = 1) -> list:
-        """Get global inventory page from BinManager (all SKUs with stock)."""
+    async def get_global_inventory(self, page: int = 1, per_page: int = 9999, min_qty: int = 0) -> list:
+        """Retorna inventario global de BM.
+
+        Con per_page=9999 (default) trae los ~8,700 SKUs en una sola llamada.
+        CONCEPTID=1 (Producto Vendible) — mismo que get_stock_with_reserve.
+        SEARCH=null retorna todos los SKUs (verificado: BUSCADOR=False requerido).
+        La respuesta incluye: SKU, CategoryName, Brand, Model, Title,
+          TotalQty, AvailableQTY, Reserve, AvgCostQTY, LastRetailPricePurchaseHistory.
+        """
         if not self._logged_in:
             if not await self.login():
                 return []
         c = self._client()
         payload = {
-            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 8,
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
             "NUMBERPAGE": page, "RECORDSPAGE": per_page,
-            "MinQty": min_qty, "NEEDRETAILPRICEPH": True,
+            "MinQty": min_qty if min_qty > 0 else None,
+            "NEEDRETAILPRICEPH": False,
             "CATEGORYID": None, "WAREHOUSEID": None, "LOCATIONID": None,
             "BINID": None, "CONDITION": None, "FORINVENTORY": None,
             "BUSCADOR": False, "BRAND": None, "MODEL": None,
             "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "SIZE": None, "LCN": None,
+            "NEEDAVGCOST": True,
+            "NEEDLASTREPORTEDSALESPRICE": None,
+            "Jsonfilter": "[]",
         }
         for attempt in range(2):
             try:

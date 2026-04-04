@@ -1105,6 +1105,20 @@ async def items_page(request: Request):
     })
 
 
+@app.get("/bm/unlaunched", response_class=HTMLResponse)
+async def bm_unlaunched_page(request: Request):
+    """Corrida inversa: SKUs en BM sin listing en ML, paginados por categoría."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "bm_unlaunched.html", {
+        "user": user,
+        "active": "bm_unlaunched",
+        **ctx,
+    })
+
+
 @app.get("/sku-sales", response_class=HTMLResponse)
 async def sku_sales_page(request: Request):
     user = await get_current_user()
@@ -9568,82 +9582,144 @@ async def stock_unified_view():
 
 # ── Proceso 2: SKUs de BM sin listing en ninguna cuenta ML ───────────────────
 
+# Cache interno para evitar re-fetch de BM cada request: (timestamp, data_list)
+_bm_unlaunched_cache: tuple[float, list] | None = None
+_BM_UNLAUNCHED_TTL = 900  # 15 min
+
 @app.get("/api/bm/launch-opportunities")
-async def bm_launch_opportunities(min_qty: int = 1):
-    """Proceso inverso: SKUs en BM con stock que NO tienen listing activo en ninguna cuenta ML.
+async def bm_launch_opportunities(
+    min_qty: int = 1,
+    page: int = 1,
+    per_page: int = 20,
+    category: str = "",
+    search: str = "",
+    refresh: bool = False,
+):
+    """Corrida inversa: SKUs en BM con stock NO lanzados en ninguna cuenta ML (activa o pausada).
 
-    Corre un scan de BM global inventory, extrae SKUs con avail >= min_qty,
-    cruza contra todos los SKUs activos de todas las cuentas ML, y devuelve
-    los que no tienen listing → oportunidades de lanzamiento.
+    Trae los ~8,700 SKUs de BM en 1 llamada (SEARCH=null, CONCEPTID=1, RECORDSPAGE=9999),
+    cruza contra todos los SKUs de ML (activos + pausados de todas las cuentas), y retorna
+    los que no tienen listing. Resultado cacheado 15 min.
 
-    min_qty: mínimo de unidades en BM para considerar el SKU (default: 1)
+    Parámetros:
+      min_qty   — AvailableQTY mínimo (default 1; 0 = todos incluyendo sin stock)
+      page      — página (default 1)
+      per_page  — items por página (default 20)
+      category  — filtrar por categoría exacta (vacío = todas)
+      search    — filtrar por SKU/Brand/Model (substring, case-insensitive)
+      refresh   — forzar re-fetch de BM aunque el caché sea válido
     """
+    global _bm_unlaunched_cache
     from app.services.binmanager_client import get_shared_bm
 
-    # 1. Recolectar todos los SKUs activos de todas las cuentas ML
-    accounts = await token_store.get_all_tokens()
-    ml_bm_skus: set = set()
+    # 1. Recolectar todos los SKUs de ML (activos + pausados) de todas las cuentas
+    #    Usar _products_cache directamente — ya está cargado por prewarm, sin llamadas extra.
+    ml_bm_skus: set[str] = set()
+    for _cache_key, (_ts, _prods) in list(_products_cache.items()):
+        if not _cache_key.startswith("products:"):
+            continue
+        for _p in _prods:
+            _s = _p.get("sku") or ""
+            _st = _p.get("status") or ""
+            if _s and _st in ("active", "paused"):
+                ml_bm_skus.add(normalize_to_bm_sku(_s))
 
-    async def _get_ml_skus(acc):
-        uid = acc.get("user_id", "")
-        try:
-            cli = await get_meli_client(user_id=uid)
-            if not cli:
+    # Si products_cache está vacío (primer arranque), hacer fetch fresco de todas las cuentas
+    if not ml_bm_skus:
+        accounts = await token_store.get_all_tokens()
+        async def _get_ml_skus(acc):
+            uid = acc.get("user_id", "")
+            try:
+                cli = await get_meli_client(user_id=uid)
+                if not cli:
+                    return set()
+                prods = await _get_all_products_cached(cli, include_paused=True)
+                await cli.close()
+                return {normalize_to_bm_sku(p["sku"]) for p in prods if p.get("sku")}
+            except Exception:
                 return set()
-            products = await _get_all_products_cached(cli, include_paused=False)
-            await cli.close()
-            return {normalize_to_bm_sku(p["sku"]) for p in products if p.get("sku")}
-        except Exception:
-            return set()
+        _sets = await asyncio.gather(*[_get_ml_skus(a) for a in accounts], return_exceptions=True)
+        for _s in _sets:
+            if isinstance(_s, set):
+                ml_bm_skus.update(_s)
 
-    ml_sku_sets = await asyncio.gather(*[_get_ml_skus(a) for a in accounts], return_exceptions=True)
-    for s in ml_sku_sets:
-        if isinstance(s, set):
-            ml_bm_skus.update(s)
-
-    # 2. Scan BM global inventory (todas las páginas con avail > 0)
-    bm_client = await get_shared_bm()
-    bm_all: list = []
-    page = 1
-    while True:
-        page_data = await bm_client.get_global_inventory(page=page, per_page=100, min_qty=min_qty)
-        if not page_data:
-            break
-        bm_all.extend(page_data)
-        if len(page_data) < 100:
-            break
-        page += 1
-
-    # 3. Cruzar: BM SKUs sin listing en ML
-    opportunities = []
-    seen_bm = set()
-    for item in bm_all:
-        raw_sku = (item.get("SKU") or "").strip()
-        if not raw_sku:
-            continue
-        bm_sku = normalize_to_bm_sku(raw_sku)
-        if bm_sku in seen_bm:
-            continue
-        seen_bm.add(bm_sku)
-        if bm_sku not in ml_bm_skus:
-            opportunities.append({
+    # 2. BM global inventory — caché 15 min para no martillar BM con cada pageload
+    now = _time.time()
+    if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:
+        bm_client = await get_shared_bm()
+        bm_raw = await bm_client.get_global_inventory(page=1, per_page=9999, min_qty=0)
+        # Deduplicar por BM base SKU + armar lista de oportunidades
+        seen_bm: set[str] = set()
+        all_items: list[dict] = []
+        for item in bm_raw:
+            raw_sku = (item.get("SKU") or "").strip()
+            if not raw_sku:
+                continue
+            bm_sku = normalize_to_bm_sku(raw_sku)
+            if bm_sku in seen_bm:
+                continue
+            seen_bm.add(bm_sku)
+            if bm_sku in ml_bm_skus:
+                continue  # Ya lanzado en ML
+            all_items.append({
                 "bm_sku":   bm_sku,
                 "sku_raw":  raw_sku,
-                "title":    item.get("Title") or item.get("title") or "",
-                "brand":    item.get("Brand") or item.get("brand") or "",
-                "category": item.get("CategoryName") or item.get("category") or "",
+                "title":    item.get("Title") or "",
+                "brand":    item.get("Brand") or "",
+                "model":    item.get("Model") or "",
+                "category": item.get("CategoryName") or "",
                 "avail":    int(item.get("AvailableQTY") or 0),
+                "reserve":  int(item.get("Reserve") or 0),
                 "total":    int(item.get("TotalQty") or 0),
-                "cost_usd": float(item.get("AvgCostQTY") or item.get("avgcostqty") or 0),
-                "retail_price": float(item.get("LastRetailPricePurchaseHistory") or 0),
+                "cost_usd": float(item.get("AvgCostQTY") or 0),
+                "retail":   float(item.get("LastRetailPricePurchaseHistory") or 0),
             })
+        all_items.sort(key=lambda x: (-x["avail"], x["category"], x["bm_sku"]))
+        _bm_unlaunched_cache = (now, all_items)
+    else:
+        all_items = _bm_unlaunched_cache[1]
 
-    opportunities.sort(key=lambda x: -x["avail"])
+    # 3. Filtros en memoria
+    filtered = all_items
+    if min_qty > 0:
+        filtered = [x for x in filtered if x["avail"] >= min_qty]
+    if category:
+        filtered = [x for x in filtered if x["category"] == category]
+    if search:
+        q = search.lower()
+        filtered = [x for x in filtered if q in x["bm_sku"].lower()
+                    or q in x["brand"].lower() or q in x["model"].lower()
+                    or q in x["title"].lower()]
+
+    # 4. Categorías disponibles (sobre datos filtrados por min_qty/search pero no category)
+    base_for_cats = all_items
+    if min_qty > 0:
+        base_for_cats = [x for x in all_items if x["avail"] >= min_qty]
+    if search:
+        q = search.lower()
+        base_for_cats = [x for x in base_for_cats if q in x["bm_sku"].lower()
+                         or q in x["brand"].lower() or q in x["model"].lower()
+                         or q in x["title"].lower()]
+    categories = sorted({x["category"] for x in base_for_cats if x["category"]})
+
+    # 5. Paginar
+    total = len(filtered)
+    pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, pages))
+    start = (page - 1) * per_page
+    page_items = filtered[start: start + per_page]
+
+    cache_age = int(now - _bm_unlaunched_cache[0]) if _bm_unlaunched_cache else 0
     return JSONResponse({
-        "opportunities": opportunities,
-        "total": len(opportunities),
-        "ml_active_skus": len(ml_bm_skus),
-        "bm_total_scanned": len(seen_bm),
+        "items":        page_items,
+        "total":        total,
+        "page":         page,
+        "per_page":     per_page,
+        "pages":        pages,
+        "categories":   categories,
+        "ml_skus":      len(ml_bm_skus),
+        "bm_scanned":   len(all_items) + len(ml_bm_skus),  # total BM antes de cruzar
+        "cache_age_s":  cache_age,
     })
 
 

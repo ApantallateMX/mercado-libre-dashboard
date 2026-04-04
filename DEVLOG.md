@@ -38,6 +38,27 @@ Ahora: `status in ("active", "paused")` — base de datos completa de todos los 
 
 ---
 
+## 2026-04-04 — FEAT: Corrida inversa — SKUs en BM sin listing en ML
+
+### Nueva pantalla: /bm/unlaunched
+Lista paginada de todos los SKUs de BinManager que NO están publicados en ninguna cuenta ML.
+Accesible desde el subnav de Productos → "No Lanzados en ML".
+
+### Implementación
+- `GET /api/bm/launch-opportunities` refactorizado: 1 sola llamada BM (SEARCH=null, CONCEPTID=1,
+  RECORDSPAGE=9999) → 8,706 SKUs en ~3s. Caché 15 min. Antes hacía paginación con CONCEPTID=8.
+- Filtros: categoría, búsqueda SKU/marca/modelo, stock mínimo (min_qty).
+- Paginación: 20 items/página con controles prev/next.
+- Cruce ML: usa `_products_cache` directamente (activos + pausados de todas las cuentas).
+  Si el caché está vacío (primer arranque), hace fetch fresco de todas las cuentas.
+- Botón "↻ Actualizar BM" fuerza re-fetch ignorando caché.
+- `get_global_inventory` actualizado: CONCEPTID 8→1, per_page=9999 por defecto.
+
+### Datos mostrados por SKU
+SKU, Categoría (badge por color), Marca/Modelo, Disponible, Reservado, Total, Costo USD, Retail USD
+
+---
+
 ## 2026-04-04 — FIX: STALE BM cache persistente (SNAC000029 y similares)
 
 ### Causa raíz
