@@ -2459,7 +2459,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_empty(sku):
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
 
-    wh_sem = asyncio.Semaphore(30)  # Fix A protege cache si hay session expiry; 30 balancea velocidad vs estrés BM
+    wh_sem = asyncio.Semaphore(50)  # Fix A protege cache si sesión expira bajo carga — podemos volver a 50
 
     async def _wh_phase(sku, http):
         """Consulta en paralelo:
