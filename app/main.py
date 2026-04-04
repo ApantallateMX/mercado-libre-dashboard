@@ -2502,9 +2502,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 # Paralelo: WH breakdown (MTY/CDMX/TJ) + AvailableQTY y Reserve directo de BM
                 # get_stock_with_reserve usa CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta
                 # Retorna (AvailableQTY, Reserve) directo del endpoint, sin derivaciones
+                # Timeout agresivo: get_stock_with_reserve tiene timeout=20 interno + 2 intentos = hasta 40s.
+                # asyncio.gather espera el más lento → 40s por SKU → 8 rondas × 40s = 320s de prewarm.
+                # wait_for(8s) corta el wait; si BM no responde en 8s, _avail_ok=False y fallback usa WH.
                 _results = await asyncio.gather(
-                    http.post(BM_WH_URL, json=wh_payload, timeout=15.0),
-                    bm_cli.get_stock_with_reserve(base),
+                    http.post(BM_WH_URL, json=wh_payload, timeout=8.0),
+                    asyncio.wait_for(bm_cli.get_stock_with_reserve(base), timeout=8.0),
                     return_exceptions=True,
                 )
                 r_wh = _results[0]
