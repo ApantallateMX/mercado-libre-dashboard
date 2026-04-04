@@ -2198,7 +2198,7 @@ async def _prewarm_caches(user_id: str = None):
                 # la deduplicación por normalize_to_bm_sku garantiza 1 sola consulta BM por SKU.
                 _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
                 _prewarm_progress["started_at"] = _time.time()
-                bm_map = await _get_bm_stock_cached(bm_candidates)
+                bm_map = await _get_bm_stock_cached(bm_candidates, retry_stale=True)
                 _apply_bm_stock(products, bm_map)
 
                 # Persistir caché BM en DB para sobrevivir reinicios
@@ -2311,10 +2311,12 @@ async def _prewarm_caches(user_id: str = None):
             asyncio.create_task(_prewarm_caches(user_id=_queued_uid))
 
 
-async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
+async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool = False) -> dict:
     """Devuelve {sku: {mty, cdmx, tj, total, avail_total}} para products, con cache.
     Usa Warehouse endpoint para desglose MTY/CDMX/TJ y InventoryBySKUAndCondicion_Quantity
     para stock verdaderamente disponible (Available, excluyendo reservados).
+    retry_stale: True solo en prewarm — hace retry serial de SKUs STALE (puede tardar 60-120s).
+                 False en requests del usuario — evita timeout de 90s.
     """
     import httpx, json as _json
     BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
@@ -2538,24 +2540,22 @@ async def _get_bm_stock_cached(products: list, sku_key="sku") -> dict:
         return_exceptions=True
     )
 
-    # Fix C: retry serial para SKUs que quedaron STALE tras el prewarm principal.
-    # Cuando la sesión expira bajo carga, algunos SKUs terminan con _v=False aunque tengan stock.
-    # Fix A previene sobreescribir datos buenos, pero si NO había entrada previa, quedan STALE.
-    # Este pass serial garantiza que esos SKUs se re-intentan con sesión fresca y baja concurrencia.
-    _stale_after_prewarm = [
-        s for s in to_fetch
-        if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
-    ]
-    # Cap: máximo 30 retries seriales para no bloquear el prewarm en batches grandes.
-    # Los SKUs que no entren en el cap se re-intentarán en el próximo ciclo de prewarm.
-    _stale_to_retry = _stale_after_prewarm[:30]
-    if _stale_to_retry:
-        import logging as _log_retry
-        _log_retry.getLogger(__name__).info(
-            f"[BM-CACHE] Retry serial para {len(_stale_to_retry)}/{len(_stale_after_prewarm)} SKUs STALE post-prewarm"
-        )
-        for _retry_sku in _stale_to_retry:
-            await _wh_phase(_retry_sku, http)
+    # Fix C: retry serial para SKUs que quedaron STALE (solo en prewarm, no en requests del usuario).
+    # En requests del usuario (retry_stale=False), omitir para no bloquear 90s+.
+    # En prewarm (retry_stale=True), reintentar hasta 30 SKUs en serie con sesión fresca.
+    if retry_stale:
+        _stale_after_prewarm = [
+            s for s in to_fetch
+            if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
+        ]
+        _stale_to_retry = _stale_after_prewarm[:30]
+        if _stale_to_retry:
+            import logging as _log_retry
+            _log_retry.getLogger(__name__).info(
+                f"[BM-CACHE] Retry serial para {len(_stale_to_retry)}/{len(_stale_after_prewarm)} SKUs STALE post-prewarm"
+            )
+            for _retry_sku in _stale_to_retry:
+                await _wh_phase(_retry_sku, http)
 
     # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
     # _seen_bm_keys pero result_map nunca se pobló). Ahora el cache sí tiene el dato.
