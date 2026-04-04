@@ -2467,7 +2467,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
     wh_sem = asyncio.Semaphore(50)  # Fix A protege cache si sesión expira bajo carga — podemos volver a 50
 
-    async def _wh_phase(sku, http):
+    async def _wh_phase(sku, http, _track_progress=True):
         """Consulta en paralelo:
         1) Get_GlobalStock_InventoryBySKU_Warehouse → MTY/CDMX/TJ breakdown (totales físicos)
         2) GlobalStock_InventoryBySKU_Condition    → avail directo (Producto Vendible)
@@ -2532,13 +2532,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
                 _store_wh(sku, rows_wh, avail_direct=avail_direct, reserve_direct=reserve_direct,
                           avail_ok=_avail_ok, wh_responded=wh_responded)
-                _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+                if _track_progress:
+                    _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
                 return
             except Exception as _exc:
                 import logging as _log
                 _log.getLogger(__name__).warning(f"[BM-CACHE] Error para {sku}: {_exc}")
         _store_empty(sku)
-        _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+        if _track_progress:
+            _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
 
     # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
@@ -2565,7 +2567,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE"
                 )
                 for _retry_sku in _skus:
-                    await _wh_phase(_retry_sku, _h)
+                    await _wh_phase(_retry_sku, _h, _track_progress=False)
             asyncio.create_task(_do_stale_retry())
 
     # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
