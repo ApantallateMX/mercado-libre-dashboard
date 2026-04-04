@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-04 — FIX: STALE BM cache persistente (SNAC000029 y similares)
+
+### Causa raíz
+Con `wh_sem=50`, los 50+ requests BM concurrentes saturaban la sesión BM → todos retornaban
+(0,0) → STALE. Fix C (serial retry) no lo resolvía porque el prewarm de la 2ª cuenta ya
+empezaba y re-saturaba la sesión antes de que Fix C completara los retries.
+
+### Fix 1 — wh_sem: 50 → 12
+Reduce el batch paralelo a 12 requests simultáneos. BM nunca se sobrecarga.
+~7 batches × ~3s = ~25s total vs ~5-10s anterior — velocidad aceptable y sesión estable.
+
+### Fix 2 — Fix C delays: +10s inicial + 2s entre retries
+`_do_stale_retry` ahora espera 10s antes de iniciar (sesión estabilizada post-prewarm)
+y pausa 2s entre cada SKU retry (breathing room para BM).
+Con esto, Fix C garantiza que ningún STALE queda sin resolver después del prewarm.
+
+---
+
 ## 2026-04-04 — FIX: Falso oversell_risk + botón Actualizando stuck
 
 ### Fix 1 — Falso oversell_risk cuando BM fetch falló (SNAC000029 y similares)

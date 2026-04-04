@@ -2471,7 +2471,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_empty(sku):
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
 
-    wh_sem = asyncio.Semaphore(50)  # Fix A protege cache si sesión expira bajo carga — podemos volver a 50
+    # sem=12: balance entre velocidad y estabilidad de sesión BM.
+    # Con sem=50 todos los requests llegan simultáneos → sesión BM expira bajo carga →
+    # get_stock_with_reserve retorna (0,0) → STALE para muchos SKUs.
+    # Fix C (serial retry) no alcanzaba a resolver porque el prewarm de la 2ª cuenta
+    # ya corría en paralelo y re-saturaba la sesión.
+    # Con sem=12: ~7 batches de 12 → ~25s total, sesión nunca sobrecargada.
+    wh_sem = asyncio.Semaphore(12)
 
     async def _wh_phase(sku, http, _track_progress=True):
         """Consulta en paralelo:
@@ -2571,10 +2577,19 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             async def _do_stale_retry(_skus=_stale_to_retry, _h=_http_ref):
                 import logging as _log_retry
                 _log_retry.getLogger(__name__).info(
-                    f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE"
+                    f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE — esperando 10s para sesión BM"
                 )
+                # Esperar 10s: deja que la sesión BM se estabilice tras el parallel prewarm
+                # y que el prewarm de la próxima cuenta no compita con estos retries.
+                await asyncio.sleep(10)
                 for _retry_sku in _skus:
                     await _wh_phase(_retry_sku, _h, _track_progress=False)
+                    # 2s entre retries: breathing room para BM — evita saturar la sesión
+                    # en el retry serial igual que se saturaba en el parallel batch.
+                    await asyncio.sleep(2)
+                _log_retry.getLogger(__name__).info(
+                    f"[BM-CACHE] Retry serial BG completado: {len(_skus)} SKUs procesados"
+                )
             asyncio.create_task(_do_stale_retry())
 
     # Post-fetch pass: llenar result_map para SKUs que fueron deduplicados (bm_key ya en
