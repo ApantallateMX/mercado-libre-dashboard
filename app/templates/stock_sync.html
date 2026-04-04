@@ -10,15 +10,19 @@
       <h1 class="text-xl font-bold text-gray-800">Sync Stock Multi-Plataforma</h1>
       <p class="text-xs text-gray-500 mt-0.5">BinManager → MercadoLibre + Amazon · ciclo cada {{ interval_min }} min · umbral={{ threshold }} uds</p>
     </div>
-    <button id="btn-trigger"
-            onclick="triggerSync()"
-            class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm px-4 py-2 rounded-xl shadow transition-colors">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-      </svg>
-      Sincronizar ahora
-    </button>
+    <div class="flex flex-col items-end gap-1">
+      <button id="btn-trigger"
+              disabled
+              title="Sync deshabilitado — las decisiones de stock deben revisarse en las Alertas de Stock"
+              class="flex items-center gap-2 bg-gray-200 text-gray-400 font-semibold text-sm px-4 py-2 rounded-xl shadow cursor-not-allowed opacity-60">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Sincronizar ahora
+      </button>
+      <span class="text-[11px] text-amber-600 font-medium">⚠ Usa las Alertas de Stock para gestionar cambios</span>
+    </div>
   </div>
 
   <!-- ── Panel de progreso en vivo (visible solo cuando corre) ────── -->
@@ -398,6 +402,11 @@ function _updateProgress(prog) {
 var _syncBtn = '<svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Sincronizar ahora';
 
 function triggerSync() {
+  // Sync deshabilitado — todas las decisiones de stock pasan por Alertas de Stock.
+  // Para re-habilitar: quitar el return y el disabled en el botón HTML.
+  showToast('Sync deshabilitado. Usa las Alertas de Stock para gestionar cambios.', true);
+  return;
+
   var btn = document.getElementById('btn-trigger');
   btn.disabled = true;
   btn.textContent = 'Iniciando...';
