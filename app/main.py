@@ -829,67 +829,70 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
 
 
 async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
-    """Consulta BinManager InventoryReport para obtener RetailPrice, AvgCostQTY, Brand, etc.
-    Deduplica por base SKU para minimizar llamadas."""
-    import httpx
-    BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-    sem = asyncio.Semaphore(15)
+    """Enriquece productos con RetailPrice, AvgCostQTY, Brand, etc. desde BM.
 
-    # Deduplicate by base SKU (clean for BM)
-    base_to_skus = {}
-    for p in products:
-        sku = p.get(sku_key, "")
-        if not sku:
-            continue
-        clean = _clean_sku_for_bm(sku)
-        if not clean:
-            continue
-        base = _extract_base_sku(clean).upper()
-        base_to_skus.setdefault(base, []).append(sku)
+    Optimización: si _bm_bulk_cache está fresco (del prewarm), usa esos datos sin
+    hacer ninguna request adicional. Solo hace requests individuales si no hay bulk cache.
+    """
+    # --- Intentar usar bulk cache del prewarm (gratis — ya fue consultado) ---
+    base_map: dict = {}
+    if _bm_bulk_cache and (_time.time() - _bm_bulk_cache[0]) < _BM_CACHE_TTL:
+        for row in _bm_bulk_cache[1]:
+            sk = (row.get("SKU") or "").upper().strip()
+            if not sk:
+                continue
+            base = _extract_base_sku(sk)
+            if base not in base_map:
+                base_map[base] = row
+        logger.debug(f"[BM-ENRICH] Usando bulk cache — {len(base_map)} SKUs sin requests adicionales")
+    else:
+        # Fallback: requests individuales (sin bulk cache disponible)
+        import httpx
+        BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        sem = asyncio.Semaphore(15)
+        base_to_skus: dict = {}
+        for p in products:
+            sku = p.get(sku_key, "")
+            if not sku:
+                continue
+            clean = _clean_sku_for_bm(sku)
+            if not clean:
+                continue
+            base = _extract_base_sku(clean).upper()
+            base_to_skus.setdefault(base, []).append(sku)
 
-    async def _fetch(base, http):
-        async with sem:
-            try:
-                resp = await http.post(BM_URL, json={
-                    "COMPANYID": 1,
-                    "SEARCH": base,
-                    "CONCEPTID": 8,
-                    "NUMBERPAGE": 1,
-                    "RECORDSPAGE": 10,
-                    "NEEDRETAILPRICEPH": True,
-                    "NEEDRETAILPRICE": True,
-                    "NEEDAVGCOST": True,
-                }, headers={"Content-Type": "application/json"}, timeout=30.0)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and data:
-                        for item in data:
-                            if item.get("SKU", "").upper() == base:
-                                return base, item
-                        return base, data[0]
-            except Exception:
-                pass
-            return base, None
+        async def _fetch(base, http):
+            async with sem:
+                try:
+                    resp = await http.post(BM_URL, json={
+                        "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
+                        "NUMBERPAGE": 1, "RECORDSPAGE": 10,
+                        "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True, "NEEDAVGCOST": True,
+                    }, headers={"Content-Type": "application/json"}, timeout=30.0)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data and isinstance(data, list) and data:
+                            for item in data:
+                                if item.get("SKU", "").upper() == base:
+                                    return base, item
+                            return base, data[0]
+                except Exception:
+                    pass
+                return base, None
 
-    unique_bases = list(base_to_skus.keys())[:30]  # Limit to avoid BM overload
-    from app.services.binmanager_client import get_shared_bm as _get_shared_bm
-    _bm_cli = await _get_shared_bm()
-    http = _bm_cli._client()
-    results = await asyncio.gather(
-        *[_fetch(b, http) for b in unique_bases],
-        return_exceptions=True
-    )
+        unique_bases = list(base_to_skus.keys())[:30]
+        from app.services.binmanager_client import get_shared_bm as _get_shared_bm
+        _bm_cli = await _get_shared_bm()
+        http = _bm_cli._client()
+        results = await asyncio.gather(*[_fetch(b, http) for b in unique_bases], return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception) or r is None:
+                continue
+            base, data = r
+            if data:
+                base_map[base] = data
 
-    # Map base -> data
-    base_map = {}
-    for r in results:
-        if isinstance(r, Exception) or r is None:
-            continue
-        base, data = r
-        if data:
-            base_map[base] = data
-
-    # Apply to all products that share each base SKU
+    # Aplicar datos a todos los productos
     for p in products:
         sku = p.get(sku_key, "")
         if not sku:
@@ -902,8 +905,6 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         if bm:
             retail_price = bm.get("RetailPrice", 0) or 0
             retail_ph    = bm.get("LastRetailPricePurchaseHistory", 0) or 0
-            # RetailPrice via SEARCH puede retornar 0 aunque el SKU tenga precio;
-            # usar LastRetailPricePurchaseHistory como fallback confiable.
             p["_bm_retail_price"] = retail_price if retail_price > 0 else retail_ph
             p["_bm_avg_cost"] = bm.get("AvgCostQTY", 0) or 0
             p["_bm_brand"] = bm.get("Brand", "")
@@ -2178,6 +2179,9 @@ _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = de
 _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
 
+# --- BM Bulk Cache (resultado del último get_bulk_stock) ---
+_bm_bulk_cache: tuple[float, list] | None = None  # (timestamp, rows)
+
 # --- BM Health Monitor ---
 _bm_health: dict = {
     "ok": None,           # None=nunca chequeado, True=up, False=down
@@ -2592,14 +2596,56 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 result_map[sku] = cached[1]
         return result_map
 
-    # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
     bm_cli = await get_shared_bm()
-    http = bm_cli._client()
-    await asyncio.gather(
-        *[_wh_phase(s, http) for s in to_fetch],
-        return_exceptions=True
-    )
+
+    if len(to_fetch) > 30:
+        # BULK FETCH: 1 request → todos los SKUs (~5-10s vs 100-200s per-SKU)
+        # Mismos filtros que _query_bm_stock: LOCATIONID=47,62,68 + CONDITION=GRA,GRB,...
+        global _bm_bulk_cache
+        bulk_rows = await bm_cli.get_bulk_stock()
+        if bulk_rows:
+            _bm_bulk_cache = (_time.time(), bulk_rows)
+            # Construir lookup: exact {SKU: row} + by_base {base_sku: [rows]}
+            exact_map: dict = {}
+            by_base: dict = {}
+            for row in bulk_rows:
+                sk = (row.get("SKU") or "").upper().strip()
+                if not sk:
+                    continue
+                exact_map[sk] = row
+                b = _extract_base_sku(sk)
+                by_base.setdefault(b, []).append(row)
+            # Procesar cada SKU pendiente desde el lookup
+            for sku in to_fetch:
+                clean = _clean_sku_for_bm(sku)
+                if not clean:
+                    _store_empty(sku)
+                    _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+                    continue
+                base = _extract_base_sku(clean).upper()
+                row = exact_map.get(base)
+                if row is not None:
+                    avail   = int(row.get("AvailableQTY") or 0)
+                    reserve = int(row.get("Reserve") or 0)
+                else:
+                    # Sumar variantes de condición (igual que _query_bm_stock fallback)
+                    variants = by_base.get(base, [])
+                    avail   = sum(int(v.get("AvailableQTY") or 0) for v in variants)
+                    reserve = sum(int(v.get("Reserve") or 0) for v in variants)
+                _store_wh(sku, [], avail_direct=avail, reserve_direct=reserve,
+                          avail_ok=True, wh_responded=False)
+                _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+            logger.info(f"[BM-CACHE] Bulk fetch: {len(bulk_rows)} SKUs en BM → {len(to_fetch)} mapeados")
+        else:
+            # BM devolvió vacío — usar per-SKU como fallback
+            logger.warning("[BM-CACHE] get_bulk_stock vacío — fallback per-SKU")
+            http = bm_cli._client()
+            await asyncio.gather(*[_wh_phase(s, http) for s in to_fetch], return_exceptions=True)
+    else:
+        # Lote pequeño (≤30 SKUs): per-SKU sigue siendo eficiente
+        http = bm_cli._client()
+        await asyncio.gather(*[_wh_phase(s, http) for s in to_fetch], return_exceptions=True)
 
     # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
     # Solo en prewarm (retry_stale=True). Se lanza como tarea background y prewarm continúa.

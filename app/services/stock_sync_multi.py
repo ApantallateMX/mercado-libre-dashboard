@@ -151,11 +151,8 @@ _last_bm_stock: dict = {}  # {sku_upper: avail_int} del último sync — para pr
 
 async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]:
     """
-    Consulta BM para cada listing key con su condición específica (máx 10 concurrentes).
+    Consulta BM para todos los SKUs usando 1 llamada bulk (get_bulk_stock).
     Retorna {listing_key_upper: avail_total} donde avail_total = unidades "Producto Vendible".
-
-    sku_cond_map: {listing_key → conditions_str}
-    Ejemplo: {"SHIL000154": "NEW", "SHIL000154-GRA": "GRA", "SNAC000029": "NEW"}
 
     IMPORTANTE: Si BM retorna error (timeout, 5xx, excepción), el SKU NO aparece en el dict.
     El caller debe distinguir "BM retornó 0" de "BM tuvo error y no sabemos" — solo el primer
@@ -165,33 +162,62 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
     if not sku_cond_map:
         return result
 
-    sem = asyncio.Semaphore(10)
-
-    async def _one(key: str, conditions: str, _http: httpx.AsyncClient) -> None:
-        base = _bm_base_for_key(key)
-        # Usar Get_GlobalStock_InventoryBySKU → AvailableQTY (excluye reservados, calculado server-side)
-        # InventoryBySKUAndCondicion_Quantity está ROTO (SQL "Invalid column name 'binid'")
-        async with sem:
-            try:
-                avail = await bm_cli.get_available_qty(base)
-                result[key.upper()] = avail
-                logger.debug(f"[MULTI-SYNC-BM] {key} → AvailableQTY={avail}")
-            except Exception as exc:
-                # Error → NO escribir 0. Skip para no poner en 0 sin razón.
-                logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
-            finally:
-                if _sync_progress:
-                    _sync_progress["skus_done"] = _sync_progress.get("skus_done", 0) + 1
-
-    # Usar cliente BM autenticado (sesión persistente con cookies de login)
     from app.services.binmanager_client import get_shared_bm
     bm_cli = await get_shared_bm()
-    http = bm_cli._client()
-    await asyncio.gather(
-        *[_one(k, c, http) for k, c in sku_cond_map.items()],
-        return_exceptions=True,
-    )
 
+    # BULK FETCH: 1 request → todos los SKUs (~5-10s vs N×1-2s per-SKU)
+    bulk_rows = await bm_cli.get_bulk_stock()
+    if not bulk_rows:
+        # BM vacío o error — fallback per-SKU para no fallar silenciosamente
+        logger.warning("[MULTI-SYNC-BM] get_bulk_stock vacío — fallback per-SKU")
+        sem = asyncio.Semaphore(10)
+
+        async def _one_fallback(key: str) -> None:
+            base = _bm_base_for_key(key)
+            async with sem:
+                try:
+                    avail = await bm_cli.get_available_qty(base)
+                    result[key.upper()] = avail
+                except Exception as exc:
+                    logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
+                finally:
+                    if _sync_progress:
+                        _sync_progress["skus_done"] = _sync_progress.get("skus_done", 0) + 1
+
+        await asyncio.gather(*[_one_fallback(k) for k in sku_cond_map], return_exceptions=True)
+        return result
+
+    # Construir lookup desde bulk
+    exact_map: dict = {}
+    by_base: dict = {}
+    _SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
+    for row in bulk_rows:
+        sk = (row.get("SKU") or "").upper().strip()
+        if not sk:
+            continue
+        exact_map[sk] = row
+        base_sk = sk
+        for sfx in _SFXS:
+            if sk.endswith(sfx):
+                base_sk = sk[:-len(sfx)]
+                break
+        by_base.setdefault(base_sk, []).append(row)
+
+    for key in sku_cond_map:
+        base = _bm_base_for_key(key).upper()
+        row = exact_map.get(base)
+        if row is not None:
+            result[key.upper()] = int(row.get("AvailableQTY") or 0)
+        else:
+            variants = by_base.get(base, [])
+            if variants:
+                result[key.upper()] = sum(int(v.get("AvailableQTY") or 0) for v in variants)
+            else:
+                result[key.upper()] = 0  # confirmado: no está en BM
+        if _sync_progress:
+            _sync_progress["skus_done"] = _sync_progress.get("skus_done", 0) + 1
+
+    logger.info(f"[MULTI-SYNC-BM] Bulk fetch: {len(bulk_rows)} SKUs BM → {len(result)} mapeados")
     return result
 
 

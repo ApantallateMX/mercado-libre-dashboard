@@ -226,6 +226,71 @@ class BinManagerClient:
                 return []
         return []
 
+    async def get_bulk_stock(self) -> list:
+        """Retorna TODOS los SKUs vendibles en 1 llamada — mismos filtros que _query_bm_stock.
+
+        LOCATIONID=47,62,68 + CONDITION=GRA,GRB,GRC,ICB,ICC,NEW + CONCEPTID=1
+        Incluye AvgCostQTY y LastRetailPricePurchaseHistory.
+        Reemplaza N requests per-SKU → ~5-10s para todos los SKUs.
+        """
+        if not self._logged_in:
+            if not await self.login():
+                return []
+        c = self._client()
+        payload = {
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68",
+            "CONDITION": "GRA,GRB,GRC,ICB,ICC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "NUMBERPAGE": 1, "RECORDSPAGE": 9999,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
+            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+            "OPENCELL": "", "OCCOMPTABILITY": "",
+            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
+            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "PorcentajeFloor": 20, "StatusConcept": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
+            "Jsonfilter": "[]",
+            "Arrayfilters_Condition": None, "Namefilters_Condition": None,
+            "Arrayfilters_Brand": None, "Namefilters_Brand": None,
+            "Arrayfilters_Model": None, "Namefilters_Model": None,
+            "Arrayfilters_Size": None, "Namefilters_Size": None,
+            "Arrayfilters_Category": None, "Namefilters_Category": None,
+            "Arrayfilters_Tags": None, "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
+        }
+        for attempt in range(2):
+            try:
+                r = await c.post(
+                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                    json=payload, headers=_AJAX_HEADERS, timeout=45,
+                )
+                if self._session_expired(r):
+                    self._logged_in = False
+                    if attempt == 0:
+                        await self.login()
+                        continue
+                    return []
+                if r.status_code == 200:
+                    data = r.json()
+                    return data if isinstance(data, list) else []
+                return []
+            except Exception as e:
+                logger.error(f"BinManager get_bulk_stock error: {e}")
+                if attempt == 0:
+                    continue
+                return []
+        return []
+
     async def get_stock_with_reserve(self, sku: str) -> tuple[int, int] | None:
         """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,62,68 (MTY+CDMX).
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
