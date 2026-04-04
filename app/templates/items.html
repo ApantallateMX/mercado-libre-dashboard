@@ -274,7 +274,7 @@
             .then(function(d) {
                 if (d.status === 'already_running') {
                     var b = document.getElementById('btn-sync-bar');
-                    if (b) { b.textContent = 'Sync ahora'; b.style.pointerEvents = 'auto'; }
+                    if (b) { b.textContent = '↻ Actualizar alertas'; b.style.pointerEvents = 'auto'; }
                     return;
                 }
                 // Esperar a que el prewarm termine, luego recargar alertas
@@ -302,13 +302,13 @@
                 setTimeout(function() {
                     clearInterval(pw);
                     var b = document.getElementById('btn-sync-bar');
-                    if (b) { b.textContent = 'Sync ahora'; b.style.pointerEvents = 'auto'; }
+                    if (b) { b.textContent = '↻ Actualizar alertas'; b.style.pointerEvents = 'auto'; }
                     loadAlertBar();
                 }, 120000);
             })
             .catch(function() {
                 var b = document.getElementById('btn-sync-bar');
-                if (b) { b.textContent = 'Sync ahora'; b.style.pointerEvents = 'auto'; }
+                if (b) { b.textContent = '↻ Actualizar alertas'; b.style.pointerEvents = 'auto'; }
             });
     };
 
