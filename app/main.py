@@ -8268,9 +8268,10 @@ async def debug_bm_cache(sku: str = ""):
 _DEBUG_KEY = "mi-apantallate-debug-2025"
 
 @app.get("/api/debug/item-stock")
-async def debug_item_stock(item_id: str = "", key: str = ""):
+async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
-    Requiere ?key=<DEBUG_KEY> — acceso sin sesión para consultas externas."""
+    Requiere ?key=<DEBUG_KEY> — acceso sin sesión para consultas externas.
+    ?live=1 — además consulta ML API en tiempo real para obtener sub_status fresco."""
     if key != _DEBUG_KEY:
         return JSONResponse({"error": "key inválida"}, status_code=401)
     if not item_id:
@@ -8398,6 +8399,70 @@ async def debug_item_stock(item_id: str = "", key: str = ""):
         except Exception:
             pass
 
+    # --- Consulta ML API en tiempo real (solo si ?live=1) ---
+    live_data = None
+    if live:
+        try:
+            import httpx as _httpx
+            from app.services import token_store as _ts
+            _acc_id = db_item.get("account_id", "") if db_item else ""
+            _ml_tok = None
+            if _acc_id:
+                _all_toks = await _ts.get_all_tokens()
+                for _t in _all_toks:
+                    if str(_t.get("user_id", "")) == str(_acc_id):
+                        _ml_tok = _t.get("access_token", "")
+                        break
+            if _ml_tok:
+                async with _httpx.AsyncClient(timeout=10.0) as _hc:
+                    _r = await _hc.get(
+                        f"https://api.mercadolibre.com/items/{iid}",
+                        headers={"Authorization": f"Bearer {_ml_tok}"},
+                        params={"include_attributes": "all"},
+                    )
+                if _r.status_code == 200:
+                    _lb = _r.json()
+                    _lh = _lb.get("health") or {}
+                    live_data = {
+                        "status": _lb.get("status"),
+                        "sub_status": _lb.get("sub_status") or [],
+                        "catalog_listing": _lb.get("catalog_listing", False),
+                        "catalog_product_id": _lb.get("catalog_product_id"),
+                        "available_quantity": _lb.get("available_quantity"),
+                        "health": {
+                            "status": _lh.get("status"),
+                            "color": _lh.get("color"),
+                            "level": _lh.get("level_id"),
+                            "reasons": _lh.get("reasons") or [],
+                        },
+                        "warnings": [
+                            {"type": w.get("type"), "message": w.get("message")}
+                            for w in (_lb.get("warnings") or [])
+                        ],
+                    }
+                    # Detectar causa específica de pausa
+                    _cause = "desconocido"
+                    _sub = live_data["sub_status"]
+                    _cat = live_data["catalog_listing"]
+                    _cat_id = live_data["catalog_product_id"]
+                    if _cat and _cat_id and _lb.get("status") == "paused":
+                        _cause = f"catalog_required — producto catálogo: {_cat_id}"
+                    elif "out_of_stock" in _sub:
+                        _cause = "sin_stock"
+                    elif "paused_by_seller" in _sub:
+                        _cause = "pausado_por_vendedor"
+                    elif "under_review" in _sub:
+                        _cause = "en_revision"
+                    elif _sub:
+                        _cause = ", ".join(_sub)
+                    live_data["pause_cause"] = _cause
+                else:
+                    live_data = {"error": f"ML API HTTP {_r.status_code}"}
+            else:
+                live_data = {"error": "token no encontrado para esta cuenta"}
+        except Exception as _le:
+            live_data = {"error": str(_le)[:200]}
+
     return JSONResponse({
         "found": True,
         "item_id": iid,
@@ -8415,6 +8480,7 @@ async def debug_item_stock(item_id: str = "", key: str = ""):
         "warnings": warnings_ml,
         "variations": variations_db,
         "alerts": alerts if alerts else ["ninguna"],
+        **({"live": live_data} if live_data is not None else {}),
     })
 
 
