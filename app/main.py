@@ -8404,15 +8404,13 @@ async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     if live:
         try:
             import httpx as _httpx
-            from app.services import token_store as _ts
             _acc_id = db_item.get("account_id", "") if db_item else ""
             _ml_tok = None
             if _acc_id:
-                _all_toks = await _ts.get_all_tokens()
-                for _t in _all_toks:
-                    if str(_t.get("user_id", "")) == str(_acc_id):
-                        _ml_tok = _t.get("access_token", "")
-                        break
+                _live_client = await get_meli_client(user_id=str(_acc_id))
+                if _live_client:
+                    _ml_tok = _live_client.access_token
+                    await _live_client.close()
             if _ml_tok:
                 async with _httpx.AsyncClient(timeout=10.0) as _hc:
                     _r = await _hc.get(
