@@ -488,12 +488,18 @@ def _plan(base_sku: str, bm_avail: int, listings: list, enabled_ids: set, reduce
                 updates.append({"listing": lst, "new_qty": new_qty, "reason": reason})
 
     else:
-        # Distribuir: todas las plataformas updatable muestran avail_total completo
-        # Incluye pausados → _execute los activará antes de setear qty
-        for lst in updatable:
-            if lst["qty"] != bm_avail:
-                reason = "activate_and_distribute" if lst.get("status") == "paused" else "distribute"
-                updates.append({"listing": lst, "new_qty": bm_avail, "reason": reason})
+        # Distribuir: dividir BM stock equitativamente entre listings para evitar sobreventa.
+        # El listing de mayor score recibe el sobrante de la división entera.
+        # Ej: BM=244, 3 listings → [82, 81, 81] en vez de [244, 244, 244]
+        _n = len(updatable)
+        _base_share = bm_avail // _n
+        _remainder = bm_avail % _n
+        _scored_dist = sorted(updatable, key=_score, reverse=True)
+        for _i, lst in enumerate(_scored_dist):
+            _share = _base_share + (1 if _i < _remainder else 0)
+            if lst["qty"] != _share:
+                reason = "activate_and_split" if lst.get("status") == "paused" else "split"
+                updates.append({"listing": lst, "new_qty": _share, "reason": reason})
 
     # Protección nocturna: solo permitir reducciones
     if reduce_only:

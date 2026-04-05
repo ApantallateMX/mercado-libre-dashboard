@@ -6635,7 +6635,27 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 merged["_combo_override"] = cv["combo"]
             raw_vars.append(merged)
 
-        # 2. Para cada variacion: obtener SKU y consultar BM
+        # 2. Pre-construir mapas desde caché BM (evita HTTP calls por variación)
+        import re as _re_var
+        _bulk_avail_map: dict = {}   # base_sku -> AvailableQTY (desde bulk cache)
+        _wh_cache_map: dict = {}     # base_sku -> {mty, cdmx, total} (desde per-SKU cache)
+        if _bm_bulk_cache and (_time.time() - _bm_bulk_cache[0]) < _BM_CACHE_TTL:
+            for _br in _bm_bulk_cache[1]:
+                _bsk = (_br.get("SKU") or "").upper().strip()
+                if not _bsk:
+                    continue
+                _bb = _extract_base_sku(_bsk)
+                if _bb not in _bulk_avail_map:
+                    _bulk_avail_map[_bb] = int(_br.get("AvailableQTY") or 0)
+        for _bkey, (_bts, _bcdata) in list(_bm_stock_cache.items()):
+            if (_time.time() - _bts) < _BM_CACHE_TTL:
+                _wh_cache_map[_bkey.upper()] = {
+                    "mty": _bcdata.get("mty", 0),
+                    "cdmx": _bcdata.get("cdmx", 0),
+                    "total": _bcdata.get("total", 0),
+                }
+
+        # 2b. Para cada variacion: obtener SKU y consultar BM (cache-first)
         async def _fetch_var_bm(v: dict, http: httpx.AsyncClient):
             v_sku = _get_var_sku(v)
             if v.get("_combo_override"):
@@ -6662,7 +6682,6 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 result["error"] = "Sin SKU en variacion"
                 return result
             # Para bundles (A / B o A + B): extraer todos los SKUs componentes
-            import re as _re_var
             raw_parts = _re_var.split(r'\s*[/+]\s*', v_sku)
             sku_parts = []
             for part in raw_parts:
@@ -6674,18 +6693,39 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 result["error"] = "SKU no mapeable a BM"
                 return result
 
+            primary_sku = sku_parts[0]
+            primary_base = _extract_base_sku(primary_sku).upper()
+
+            # --- Intentar resolver desde caché (sin HTTP) ---
+            avails_from_cache = []
+            all_in_cache = True
+            for sp in sku_parts:
+                sp_base = _extract_base_sku(sp).upper()
+                if sp_base in _bulk_avail_map:
+                    avails_from_cache.append(_bulk_avail_map[sp_base])
+                else:
+                    all_in_cache = False
+                    break
+
+            if all_in_cache and avails_from_cache:
+                result["bm_avail"] = min(avails_from_cache)  # bottleneck para bundles
+                wh = _wh_cache_map.get(normalize_to_bm_sku(primary_sku).upper())
+                if wh:
+                    result["bm_mty"]   = wh["mty"]
+                    result["bm_cdmx"]  = wh["cdmx"]
+                    result["bm_total"] = wh["total"]
+                return result
+
+            # --- Fallback: HTTP a BM (si caché vacío o no encontrado) ---
             async def _query_bm_avail(sku: str) -> int:
-                """Retorna AvailableQTY para un SKU en BM (excluye reservados)."""
                 from app.services.binmanager_client import get_shared_bm
                 try:
                     bm = await get_shared_bm()
                     return await bm.get_available_qty(sku)
                 except Exception:
-                    return -1  # error
+                    return -1
 
             try:
-                # Warehouse: solo del primer SKU (para breakdown MTY/CDMX)
-                primary_sku = sku_parts[0]
                 conditions_primary = _bm_conditions_for_sku(primary_sku)
                 avail_tasks = [_query_bm_avail(s) for s in sku_parts]
                 r_wh, *avail_results = await asyncio.gather(
@@ -6712,12 +6752,9 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     result["bm_mty"] = mty
                     result["bm_cdmx"] = cdmx
                     result["bm_total"] = mty + cdmx
-
-                # Para bundles: stock disponible = mínimo entre todos los componentes
-                # (el cuello de botella determina cuántos bundles se pueden armar)
                 valid_avails = [a for a in avail_results if isinstance(a, int) and a >= 0]
                 if valid_avails:
-                    result["bm_avail"] = min(valid_avails)  # min = bottleneck del bundle
+                    result["bm_avail"] = min(valid_avails)
                 elif any(isinstance(a, int) and a == -1 for a in avail_results):
                     result["error"] = "BM no respondió para uno de los componentes"
             except Exception as ex:
@@ -6727,13 +6764,27 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
         async with httpx.AsyncClient() as http:
             var_results = await asyncio.gather(*[_fetch_var_bm(v, http) for v in raw_vars])
 
-        # 3. Actualizar cada variacion con su propio stock BM disponible
+        # 3. Dividir stock entre variaciones del mismo SKU base para evitar sobreventa
+        # Si var1 y var2 comparten SNTV001864 con BM=244 → cada una recibe 122, no 244
+        from collections import defaultdict as _defdict
+        _sku_base_groups: dict = _defdict(list)
+        for _rv in var_results:
+            if not _rv["error"]:
+                _rv_parts = _re_var.split(r'\s*[/+]\s*', _rv.get("sku") or "")
+                _rv_base = _extract_base_sku(_clean_sku_for_bm(_rv_parts[0].strip()) or _rv_parts[0].strip()).upper() if _rv_parts else "__none__"
+                _sku_base_groups[_rv_base].append(_rv)
+
         var_updates = []
         for r in var_results:
-            qty = int(r["bm_avail"] * pct)  # Usa Available (excluye reservados), no bm_total
-            r["meli_qty"] = qty
             if r["error"]:
-                continue  # No actualizar variaciones con error en BM
+                r["meli_qty"] = 0
+                continue
+            _parts = _re_var.split(r'\s*[/+]\s*', r.get("sku") or "")
+            _base = _extract_base_sku(_clean_sku_for_bm(_parts[0].strip()) or _parts[0].strip()).upper() if _parts else "__none__"
+            _n_sharing = len(_sku_base_groups.get(_base, [r]))
+            qty = int((r["bm_avail"] / _n_sharing) * pct)
+            r["meli_qty"] = qty
+            r["split_n"] = _n_sharing  # info para UI
             var_updates.append({"id": r["variation_id"], "available_quantity": qty})
 
         if var_updates and not dry_run:
