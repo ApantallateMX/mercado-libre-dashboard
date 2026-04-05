@@ -171,6 +171,10 @@ var _coverageData  = [];   // enriched items from /api/planning/coverage
 var _unlaunchedData = [];  // items from /api/planning/unlaunched
 var _productionKpis = {};
 
+// Pagination state
+var _velPage = 1, _velPageSize = 10, _velFiltered = [];
+var _covPage = 1, _covPageSize = 10;
+
 var _sectionStates = { 'plan-coverage': false, 'plan-unlaunched': false };
 
 // ============================================================
@@ -178,6 +182,31 @@ var _sectionStates = { 'plan-coverage': false, 'plan-unlaunched': false };
 // ============================================================
 function _days()  { return parseInt(document.getElementById('plan-days').value) || 30; }
 function _target(){ return parseInt(document.getElementById('plan-target').value) || 14; }
+
+function _paginationBar(ns, page, totalPages, totalItems, from, to) {
+    if (totalPages <= 1) return '';
+    var goFn = ns + 'GoPage';
+    var btns = '';
+    // prev
+    btns += '<button onclick="' + goFn + '(' + (page-1) + ')" ' + (page <= 1 ? 'disabled' : '') +
+        ' class="px-2 py-1 rounded border text-xs ' + (page <= 1 ? 'text-gray-300 border-gray-200 cursor-not-allowed' : 'text-gray-600 border-gray-300 hover:bg-gray-100') + '">‹</button>';
+    // page numbers (show max 7 buttons)
+    var start = Math.max(1, page - 3);
+    var end   = Math.min(totalPages, start + 6);
+    if (end - start < 6) start = Math.max(1, end - 6);
+    if (start > 1) btns += '<button onclick="' + goFn + '(1)" class="px-2 py-1 rounded border text-xs text-gray-600 border-gray-300 hover:bg-gray-100">1</button>' + (start > 2 ? '<span class="px-1 text-gray-400 text-xs">…</span>' : '');
+    for (var i = start; i <= end; i++) {
+        btns += '<button onclick="' + goFn + '(' + i + ')" class="px-2 py-1 rounded border text-xs ' + (i === page ? 'bg-blue-600 text-white border-blue-600 font-bold' : 'text-gray-600 border-gray-300 hover:bg-gray-100') + '">' + i + '</button>';
+    }
+    if (end < totalPages) btns += (end < totalPages - 1 ? '<span class="px-1 text-gray-400 text-xs">…</span>' : '') + '<button onclick="' + goFn + '(' + totalPages + ')" class="px-2 py-1 rounded border text-xs text-gray-600 border-gray-300 hover:bg-gray-100">' + totalPages + '</button>';
+    // next
+    btns += '<button onclick="' + goFn + '(' + (page+1) + ')" ' + (page >= totalPages ? 'disabled' : '') +
+        ' class="px-2 py-1 rounded border text-xs ' + (page >= totalPages ? 'text-gray-300 border-gray-200 cursor-not-allowed' : 'text-gray-600 border-gray-300 hover:bg-gray-100') + '">›</button>';
+    return '<div class="flex items-center justify-between mt-3 px-1">' +
+        '<span class="text-xs text-gray-400">' + (from+1) + '–' + to + ' de ' + totalItems + '</span>' +
+        '<div class="flex items-center gap-1">' + btns + '</div>' +
+        '</div>';
+}
 
 function _spinner(msg) {
     return '<div class="flex items-center justify-center gap-3 py-10 text-sm text-gray-500">' +
@@ -313,24 +342,65 @@ function loadVelocity() {
 
 var _velRows = [];
 function _renderVelocityTable(items) {
+    _velFiltered = items;
+    _velPage = 1;
+    _renderVelPage();
+}
+
+function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
+    var totalRate = p.total_daily_rate || p.daily_rate;
+    var barW = maxRate > 0 ? Math.round(totalRate / maxRate * 100) : 0;
+    var barC = globalIdx < 3 ? 'bg-red-400' : (globalIdx < 8 ? 'bg-orange-400' : 'bg-yellow-400');
+    var skuChip = p.sku
+        ? '<span class="px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
+        : '<span class="px-1 py-0.5 text-[9px] bg-gray-50 text-gray-400 rounded border">sin SKU</span>';
+    var acctChips = (p.accounts || []).map(function(a) {
+        return '<span class="px-1 py-0.5 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100 font-medium">' + a + '</span>';
+    }).join('');
+    var listingsChip = (p.item_ids || []).length > 1
+        ? '<span class="px-1 py-0.5 text-[8px] bg-gray-100 text-gray-500 rounded border">' + p.item_ids.length + ' listings</span>'
+        : '';
+    var amzAcctChips = (p.amz_accounts || []).map(function(a) {
+        return '<span class="px-1 py-0.5 text-[8px] bg-orange-50 text-orange-500 rounded border border-orange-100">' + a + '</span>';
+    }).join('');
+    return '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition">' +
+        '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (globalIdx+1) + '</td>' +
+        '<td class="py-2 pr-3 max-w-xs">' +
+            '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
+            '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips + listingsChip + amzAcctChips + '</div>' +
+        '</td>' +
+        '<td class="py-2 pr-3 text-right font-bold text-gray-700">' + p.daily_rate + '</td>' +
+        (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + ((p.amz_daily_rate||0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
+        '<td class="py-2 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
+        '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_7d||0) + (p.amz_units_7d||0)) + '</td>' +
+        '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_30d||0) + (p.amz_units_30d||0)) + '</td>' +
+        '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
+        '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
+            '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
+        '</tr>';
+}
+
+function _renderVelPage() {
     var el = document.getElementById('plan-velocity-content');
     var cnt = document.getElementById('plan-vel-count');
+    var items = _velFiltered;
     if (!items.length) {
         el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin ventas en el periodo seleccionado.</p>';
+        if (cnt) cnt.textContent = '';
         return;
     }
-    if (cnt) cnt.textContent = items.length + ' productos';
+    var total = items.length;
+    var totalPages = Math.ceil(total / _velPageSize);
+    if (_velPage < 1) _velPage = 1;
+    if (_velPage > totalPages) _velPage = totalPages;
+    var start = (_velPage - 1) * _velPageSize;
+    var pageItems = items.slice(start, start + _velPageSize);
 
-    var statusCfg = {
-        critical:    { cls:'bg-red-100 text-red-700 border-red-200',    label:'CRÍTICO',    icon:'🔴' },
-        alert:       { cls:'bg-yellow-100 text-yellow-700 border-yellow-200', label:'ALERTA', icon:'🟡' },
-        ok:          { cls:'bg-green-100 text-green-700 border-green-200', label:'OK',       icon:'🟢' },
-        no_movement: { cls:'bg-gray-100 text-gray-500 border-gray-200',  label:'SIN MOV',   icon:'⚪' },
-        out_of_stock:{ cls:'bg-red-200 text-red-800 border-red-300',     label:'AGOTADO',   icon:'🔴' },
-    };
+    if (cnt) cnt.textContent = total + ' productos';
 
     var maxRate = items[0] ? (items[0].total_daily_rate || items[0].daily_rate) : 1;
     var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
+
     var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
         '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
         '<th class="pb-2 pl-1 w-6">#</th>' +
@@ -345,58 +415,30 @@ function _renderVelocityTable(items) {
         '</tr></thead><tbody>';
 
     _velRows = [];
-    items.forEach(function(p, i) {
-        var totalRate = p.total_daily_rate || p.daily_rate;
-        var barW = maxRate > 0 ? Math.round(totalRate / maxRate * 100) : 0;
-        var barC = i < 3 ? 'bg-red-400' : (i < 8 ? 'bg-orange-400' : 'bg-yellow-400');
-        var skuChip = p.sku
-            ? '<span class="px-1 py-0.5 text-[9px] bg-blue-50 text-blue-600 rounded font-mono border border-blue-100">' + p.sku + '</span>'
-            : '<span class="px-1 py-0.5 text-[9px] bg-gray-50 text-gray-400 rounded border">sin SKU</span>';
-
-        var acctChips = (p.accounts || []).map(function(a) {
-            return '<span class="px-1 py-0.5 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100 font-medium">' + a + '</span>';
-        }).join('');
-
-        // Show number of listings consolidated under this SKU
-        var listingsChip = (p.item_ids || []).length > 1
-            ? '<span class="px-1 py-0.5 text-[8px] bg-gray-100 text-gray-500 rounded border">' + p.item_ids.length + ' listings</span>'
-            : '';
-
-        var amzAcctChips = (p.amz_accounts || []).map(function(a) {
-            return '<span class="px-1 py-0.5 text-[8px] bg-orange-50 text-orange-500 rounded border border-orange-100">' + a + '</span>';
-        }).join('');
-
-        var row = '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition" ' +
-            'data-search="' + (p.title + ' ' + p.sku + ' ' + (p.item_ids||[]).join(' ') + ' ' + (p.accounts||[]).join(' ')).toLowerCase() + '">' +
-            '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (i+1) + '</td>' +
-            '<td class="py-2 pr-3 max-w-xs">' +
-                '<p class="font-medium text-gray-800 truncate text-xs" title="' + p.title + '">' + p.title + '</p>' +
-                '<div class="flex flex-wrap items-center gap-1 mt-0.5">' + skuChip + acctChips + listingsChip + amzAcctChips + '</div>' +
-            '</td>' +
-            '<td class="py-2 pr-3 text-right font-bold text-gray-700">' + p.daily_rate + '</td>' +
-            (hasAmz ? '<td class="py-2 pr-3 text-right text-orange-500 font-semibold">' + ((p.amz_daily_rate||0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
-            '<td class="py-2 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_7d||0) + (p.amz_units_7d||0)) + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_30d||0) + (p.amz_units_30d||0)) + '</td>' +
-            '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
-            '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
-                '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
-            '</tr>';
+    pageItems.forEach(function(p, i) {
+        var globalIdx = start + i;
+        var row = _buildVelRow(p, globalIdx, maxRate, hasAmz);
         html += row;
         _velRows.push(row);
     });
 
     html += '</tbody></table></div>';
+    html += _paginationBar('vel', _velPage, totalPages, total, start, start + pageItems.length);
     el.innerHTML = html;
 }
 
 window.filterVelocityTable = function() {
     var q = (document.getElementById('plan-vel-search').value || '').toLowerCase();
-    document.querySelectorAll('.vel-row').forEach(function(row) {
-        var match = !q || row.getAttribute('data-search').includes(q);
-        row.style.display = match ? '' : 'none';
-    });
+    _velFiltered = q
+        ? _velocityData.filter(function(p) {
+            return (p.title + ' ' + p.sku + ' ' + (p.item_ids||[]).join(' ') + ' ' + (p.accounts||[]).join(' ')).toLowerCase().includes(q);
+          })
+        : _velocityData;
+    _velPage = 1;
+    _renderVelPage();
 };
+
+window.velGoPage = function(p) { _velPage = p; _renderVelPage(); };
 
 // ============================================================
 // LOAD COVERAGE
@@ -462,7 +504,63 @@ function _renderCoverage(d) {
 
     var hasAmzCov = d.items.some(function(p){ return (p.amz_daily_rate || 0) > 0; });
 
-    html += '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+    // store for pagination
+    _renderCoverageTable(d.items, hasAmzCov, html, el);
+}
+
+function _buildCovRow(p, hasAmzCov) {
+    var cfg = STATUS_CFG[p.status] || STATUS_CFG.ok;
+    var covText = p.coverage_days != null ? p.coverage_days + 'd' : '—';
+    var reqText = p.units_to_request > 0
+        ? '<strong class="text-red-700">' + p.units_to_request + ' uds</strong>'
+        : '<span class="text-gray-400">—</span>';
+    var covAccts = (p.accounts || []).map(function(a) {
+        return '<span class="px-1 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100">' + a + '</span>';
+    }).join('');
+    var covItemIds = (p.item_ids || []).length > 1
+        ? '<span class="text-[8px] text-gray-400">(' + p.item_ids.length + ' publicaciones)</span>'
+        : '';
+    var totalRate = p.total_daily_rate || p.daily_rate;
+    return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+        '<td class="py-2.5 pr-3">' +
+            '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
+            '<div class="flex flex-wrap gap-1 mt-0.5">' +
+            (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
+            (p.brand ? '<span class="text-[9px] text-gray-400">' + (p.brand || '') + (p.size ? ' ' + p.size + '"' : '') + '</span>' : '') +
+            covAccts + covItemIds +
+            '</div>' +
+        '</td>' +
+        (hasAmzCov ? '<td class="py-2.5 pr-3 text-right text-gray-600">' + (p.daily_rate || 0) + '</td>' +
+            '<td class="py-2.5 pr-3 text-right ' + ((p.amz_daily_rate || 0) > 0 ? 'text-orange-500 font-semibold' : 'text-gray-300') + '">' + ((p.amz_daily_rate || 0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
+        '<td class="py-2.5 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
+        '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
+        '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
+        '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
+        '<td class="py-2.5 pr-3 text-right text-gray-500">' + (p.retail_price ? '$' + p.retail_price : '—') + '</td>' +
+        '<td class="py-2.5 pr-3"><span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + cfg.cls + '">' + cfg.label + '</span></td>' +
+        '</tr>';
+}
+
+var _covItems = [], _covHasAmz = false, _covHeaderHtml = '';
+function _renderCoverageTable(items, hasAmzCov, headerHtml, el) {
+    _covItems = items; _covHasAmz = hasAmzCov; _covHeaderHtml = headerHtml;
+    _covPage = 1;
+    _renderCovPage(el);
+}
+
+function _renderCovPage(el) {
+    if (!el) el = document.getElementById('plan-coverage-content');
+    var items = _covItems;
+    var total = items.length;
+    var totalPages = Math.ceil(total / _covPageSize);
+    if (_covPage < 1) _covPage = 1;
+    if (_covPage > totalPages) _covPage = totalPages;
+    var start = (_covPage - 1) * _covPageSize;
+    var pageItems = items.slice(start, start + _covPageSize);
+    var hasAmzCov = _covHasAmz;
+
+    var html = _covHeaderHtml +
+        '<div class="overflow-x-auto"><table class="w-full text-xs">' +
         '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
         '<th class="pb-2 pr-3">Producto / SKU</th>' +
         (hasAmzCov ? '<th class="pb-2 pr-3 text-right">ML/día</th><th class="pb-2 pr-3 text-right text-orange-500">AMZ/día</th>' : '') +
@@ -474,44 +572,14 @@ function _renderCoverage(d) {
         '<th class="pb-2 pr-3">Estado</th>' +
         '</tr></thead><tbody>';
 
-    d.items.forEach(function(p) {
-        var cfg = STATUS_CFG[p.status] || STATUS_CFG.ok;
-        var covText = p.coverage_days != null ? p.coverage_days + 'd' : '—';
-        var reqText = p.units_to_request > 0
-            ? '<strong class="text-red-700">' + p.units_to_request + ' uds</strong>'
-            : '<span class="text-gray-400">—</span>';
-
-        var covAccts = (p.accounts || []).map(function(a) {
-            return '<span class="px-1 text-[8px] bg-purple-50 text-purple-600 rounded border border-purple-100">' + a + '</span>';
-        }).join('');
-        var covItemIds = (p.item_ids || []).length > 1
-            ? '<span class="text-[8px] text-gray-400">(' + p.item_ids.length + ' publicaciones)</span>'
-            : '';
-
-        var totalRate = p.total_daily_rate || p.daily_rate;
-        html += '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
-            '<td class="py-2.5 pr-3">' +
-                '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
-                '<div class="flex flex-wrap gap-1 mt-0.5">' +
-                (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
-                (p.brand ? '<span class="text-[9px] text-gray-400">' + (p.brand || '') + (p.size ? ' ' + p.size + '"' : '') + '</span>' : '') +
-                covAccts + covItemIds +
-                '</div>' +
-            '</td>' +
-            (hasAmzCov ? '<td class="py-2.5 pr-3 text-right text-gray-600">' + (p.daily_rate || 0) + '</td>' +
-                '<td class="py-2.5 pr-3 text-right ' + ((p.amz_daily_rate || 0) > 0 ? 'text-orange-500 font-semibold' : 'text-gray-300') + '">' + ((p.amz_daily_rate || 0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
-            '<td class="py-2.5 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
-            '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
-            '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
-            '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
-            '<td class="py-2.5 pr-3 text-right text-gray-500">' + (p.retail_price ? '$' + p.retail_price : '—') + '</td>' +
-            '<td class="py-2.5 pr-3"><span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + cfg.cls + '">' + cfg.label + '</span></td>' +
-            '</tr>';
-    });
+    pageItems.forEach(function(p) { html += _buildCovRow(p, hasAmzCov); });
 
     html += '</tbody></table></div>';
+    html += _paginationBar('cov', _covPage, totalPages, total, start, start + pageItems.length);
     el.innerHTML = html;
 }
+
+window.covGoPage = function(p) { _covPage = p; _renderCovPage(); };
 
 function _summaryChip(n, label, cls) {
     return '<div class="' + cls + ' rounded-xl px-4 py-3 flex-1 min-w-[120px]">' +
