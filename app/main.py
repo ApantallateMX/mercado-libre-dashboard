@@ -446,7 +446,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -8203,10 +8203,14 @@ async def debug_bm_cache(sku: str = ""):
     })
 
 
+_DEBUG_KEY = "mi-apantallate-debug-2025"
+
 @app.get("/api/debug/item-stock")
-async def debug_item_stock(item_id: str = ""):
+async def debug_item_stock(item_id: str = "", key: str = ""):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
-    Sin autenticación — solo lectura, igual que /api/debug/bm-cache."""
+    Requiere ?key=<DEBUG_KEY> — acceso sin sesión para consultas externas."""
+    if key != _DEBUG_KEY:
+        return JSONResponse({"error": "key inválida"}, status_code=401)
     if not item_id:
         return JSONResponse({"error": "item_id requerido"}, status_code=400)
     iid = item_id.strip().upper()
