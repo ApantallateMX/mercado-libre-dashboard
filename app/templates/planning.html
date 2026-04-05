@@ -383,48 +383,52 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
 function _renderVelPage() {
     var el = document.getElementById('plan-velocity-content');
     var cnt = document.getElementById('plan-vel-count');
-    var items = _velFiltered;
-    if (!items.length) {
-        el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin ventas en el periodo seleccionado.</p>';
-        if (cnt) cnt.textContent = '';
-        return;
+    try {
+        var items = _velFiltered;
+        if (!items || !items.length) {
+            el.innerHTML = '<p class="text-center text-gray-400 py-6 text-sm">Sin ventas en el periodo seleccionado.</p>';
+            if (cnt) cnt.textContent = '';
+            return;
+        }
+        var total = items.length;
+        var totalPages = Math.ceil(total / _velPageSize);
+        if (_velPage < 1) _velPage = 1;
+        if (_velPage > totalPages) _velPage = totalPages;
+        var start = (_velPage - 1) * _velPageSize;
+        var pageItems = items.slice(start, start + _velPageSize);
+
+        if (cnt) cnt.textContent = total + ' productos';
+
+        var maxRate = items[0] ? (items[0].total_daily_rate || items[0].daily_rate) : 1;
+        var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
+
+        var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
+            '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
+            '<th class="pb-2 pl-1 w-6">#</th>' +
+            '<th class="pb-2 pr-3">Producto / SKU</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap">ML/día</th>' +
+            (hasAmz ? '<th class="pb-2 pr-3 text-right whitespace-nowrap text-orange-600">AMZ/día</th>' : '') +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap font-bold">Total/día</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
+            '<th class="pb-2 pr-3">Proporción</th>' +
+            '</tr></thead><tbody>';
+
+        _velRows = [];
+        pageItems.forEach(function(p, i) {
+            var globalIdx = start + i;
+            var row = _buildVelRow(p, globalIdx, maxRate, hasAmz);
+            html += row;
+            _velRows.push(row);
+        });
+
+        html += '</tbody></table></div>';
+        html += _paginationBar('vel', _velPage, totalPages, total, start, start + pageItems.length);
+        el.innerHTML = html;
+    } catch(e) {
+        if (el) el.innerHTML = '<p class="text-center text-red-500 py-4 text-xs font-mono">Error paginación: ' + e.message + '</p>';
     }
-    var total = items.length;
-    var totalPages = Math.ceil(total / _velPageSize);
-    if (_velPage < 1) _velPage = 1;
-    if (_velPage > totalPages) _velPage = totalPages;
-    var start = (_velPage - 1) * _velPageSize;
-    var pageItems = items.slice(start, start + _velPageSize);
-
-    if (cnt) cnt.textContent = total + ' productos';
-
-    var maxRate = items[0] ? (items[0].total_daily_rate || items[0].daily_rate) : 1;
-    var hasAmz = items.some(function(p){ return p.amz_daily_rate > 0; });
-
-    var html = '<div class="overflow-x-auto"><table class="w-full text-sm" id="vel-table">' +
-        '<thead><tr class="border-b border-gray-200 text-left text-[10px] text-gray-500 uppercase tracking-wide">' +
-        '<th class="pb-2 pl-1 w-6">#</th>' +
-        '<th class="pb-2 pr-3">Producto / SKU</th>' +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">ML/día</th>' +
-        (hasAmz ? '<th class="pb-2 pr-3 text-right whitespace-nowrap text-orange-600">AMZ/día</th>' : '') +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap font-bold">Total/día</th>' +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
-        '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
-        '<th class="pb-2 pr-3">Proporción</th>' +
-        '</tr></thead><tbody>';
-
-    _velRows = [];
-    pageItems.forEach(function(p, i) {
-        var globalIdx = start + i;
-        var row = _buildVelRow(p, globalIdx, maxRate, hasAmz);
-        html += row;
-        _velRows.push(row);
-    });
-
-    html += '</tbody></table></div>';
-    html += _paginationBar('vel', _velPage, totalPages, total, start, start + pageItems.length);
-    el.innerHTML = html;
 }
 
 window.filterVelocityTable = function() {
