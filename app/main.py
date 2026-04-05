@@ -8420,46 +8420,53 @@ async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
                     )
                 if _r.status_code == 200:
                     _lb = _r.json()
-                    _lh = _lb.get("health") or {}
-                    live_data = {
-                        "status": _lb.get("status"),
-                        "sub_status": _lb.get("sub_status") or [],
-                        "catalog_listing": _lb.get("catalog_listing", False),
-                        "catalog_product_id": _lb.get("catalog_product_id"),
-                        "available_quantity": _lb.get("available_quantity"),
-                        "health": {
-                            "status": _lh.get("status"),
-                            "color": _lh.get("color"),
-                            "level": _lh.get("level_id"),
-                            "reasons": _lh.get("reasons") or [],
-                        },
-                        "warnings": [
-                            {"type": w.get("type"), "message": w.get("message")}
-                            for w in (_lb.get("warnings") or [])
-                        ],
-                    }
-                    # Detectar causa específica de pausa
-                    _cause = "desconocido"
-                    _sub = live_data["sub_status"]
-                    _cat = live_data["catalog_listing"]
-                    _cat_id = live_data["catalog_product_id"]
-                    if _cat and _cat_id and _lb.get("status") == "paused":
-                        _cause = f"catalog_required — producto catálogo: {_cat_id}"
-                    elif "out_of_stock" in _sub:
-                        _cause = "sin_stock"
-                    elif "paused_by_seller" in _sub:
-                        _cause = "pausado_por_vendedor"
-                    elif "under_review" in _sub:
-                        _cause = "en_revision"
-                    elif _sub:
-                        _cause = ", ".join(_sub)
-                    live_data["pause_cause"] = _cause
+                    if not isinstance(_lb, dict):
+                        live_data = {"error": f"ML API tipo inesperado: {type(_lb).__name__}", "raw": str(_lb)[:200]}
+                    else:
+                        _lh = _lb.get("health") or {}
+                        if not isinstance(_lh, dict):
+                            _lh = {}
+                        _warns = _lb.get("warnings") or []
+                        live_data = {
+                            "status": _lb.get("status"),
+                            "sub_status": _lb.get("sub_status") or [],
+                            "catalog_listing": _lb.get("catalog_listing", False),
+                            "catalog_product_id": _lb.get("catalog_product_id"),
+                            "available_quantity": _lb.get("available_quantity"),
+                            "health": {
+                                "status": _lh.get("status"),
+                                "color": _lh.get("color"),
+                                "level": _lh.get("level_id"),
+                                "reasons": _lh.get("reasons") or [],
+                            },
+                            "warnings": [
+                                {"type": w.get("type"), "message": w.get("message")}
+                                for w in _warns if isinstance(w, dict)
+                            ],
+                        }
+                        # Detectar causa específica de pausa
+                        _cause = "desconocido"
+                        _sub = live_data["sub_status"]
+                        _cat = live_data["catalog_listing"]
+                        _cat_id = live_data["catalog_product_id"]
+                        if _cat and _cat_id and _lb.get("status") == "paused":
+                            _cause = f"catalog_required — producto catálogo: {_cat_id}"
+                        elif "out_of_stock" in _sub:
+                            _cause = "sin_stock"
+                        elif "paused_by_seller" in _sub:
+                            _cause = "pausado_por_vendedor"
+                        elif "under_review" in _sub:
+                            _cause = "en_revision"
+                        elif _sub:
+                            _cause = ", ".join(_sub)
+                        live_data["pause_cause"] = _cause
                 else:
-                    live_data = {"error": f"ML API HTTP {_r.status_code}"}
+                    live_data = {"error": f"ML API HTTP {_r.status_code}", "body": _r.text[:300]}
             else:
                 live_data = {"error": "token no encontrado para esta cuenta"}
         except Exception as _le:
-            live_data = {"error": str(_le)[:200]}
+            import traceback as _tb
+            live_data = {"error": str(_le)[:200], "traceback": _tb.format_exc()[-600:]}
 
     return JSONResponse({
         "found": True,
