@@ -8367,6 +8367,37 @@ async def debug_item_stock(item_id: str = "", key: str = ""):
         return JSONResponse({"found": False, "item_id": iid,
                              "message": "No encontrado en DB local — puede estar fuera de sync"})
 
+    # --- Motivo de pausa / condición del listing ---
+    pause_reasons = []
+    health_score = None
+    warnings_ml = []
+    listing_health = {}
+    dj_raw = db_item.get("data_json", "")
+    if dj_raw:
+        try:
+            _body = _j.loads(dj_raw)
+            # sub_status: ["out_of_stock", "paused_by_seller", "under_review", etc.]
+            pause_reasons = _body.get("sub_status") or []
+            # health: {status, color, level_id, reasons[]}
+            _h = _body.get("health") or {}
+            health_score = _h.get("status")
+            listing_health = {
+                "status": _h.get("status"),
+                "color": _h.get("color"),
+                "level": _h.get("level_id"),
+                "reasons": _h.get("reasons") or [],
+            }
+            # warnings: [{type, message}]
+            warnings_ml = [
+                {"type": w.get("type"), "message": w.get("message")}
+                for w in (_body.get("warnings") or [])
+            ]
+            # catalog_listing puede requerir acción especial
+            if _body.get("catalog_listing") and status_ml == "paused":
+                pause_reasons = pause_reasons or ["catalog_listing_paused"]
+        except Exception:
+            pass
+
     return JSONResponse({
         "found": True,
         "item_id": iid,
@@ -8379,6 +8410,9 @@ async def debug_item_stock(item_id: str = "", key: str = ""):
         "bm_reserve": bm_reserve,
         "bm_cache_age_min": round(bm_cache_age_s / 60, 1) if bm_cache_age_s is not None else None,
         "bm_status": bm_status,
+        "pause_reasons": pause_reasons,
+        "health": listing_health,
+        "warnings": warnings_ml,
         "variations": variations_db,
         "alerts": alerts if alerts else ["ninguna"],
     })
