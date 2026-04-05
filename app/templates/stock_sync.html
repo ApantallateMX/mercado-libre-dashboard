@@ -196,6 +196,21 @@
       </div>
       <div id="bm-sku-result" class="mt-2 hidden"></div>
     </div>
+
+    <!-- Diagnóstico por MLM -->
+    <div class="border-t border-gray-100 pt-3 mt-3">
+      <p class="text-xs text-gray-400 mb-2">Consultar publicación ML (MLM):</p>
+      <div class="flex gap-2">
+        <input id="mlm-input" type="text" placeholder="Ej: MLM3370190196"
+               class="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-400"
+               onkeydown="if(event.key==='Enter') lookupMlmStock()">
+        <button onclick="lookupMlmStock()"
+                class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-lg transition">
+          Consultar
+        </button>
+      </div>
+      <div id="mlm-result" class="mt-2 hidden"></div>
+    </div>
   </div>
 
   <!-- ── Reglas ──────────────────────────────────────────────────── -->
@@ -1045,6 +1060,72 @@ window.lookupBmCache = function() {
           '<span class="text-gray-400">Estado:</span><span class="' + statusColor + ' font-medium">' + c.status + '</span><span></span>' +
         '</div>' +
         '<div class="mt-1 pt-1 border-t border-gray-200"><span class="text-gray-400">Alertas activas: </span><span class="font-medium text-indigo-600">' + alertsText + '</span></div>';
+    })
+    .catch(function() {
+      result.className = 'mt-2 text-xs text-red-500';
+      result.textContent = 'Error al consultar';
+    });
+};
+
+window.lookupMlmStock = function() {
+  var iid = document.getElementById('mlm-input').value.trim().toUpperCase();
+  var result = document.getElementById('mlm-result');
+  if (!iid) return;
+  result.className = 'mt-2 text-xs text-gray-400';
+  result.classList.remove('hidden');
+  result.textContent = 'Consultando...';
+  fetch('/api/debug/item-stock?item_id=' + encodeURIComponent(iid), {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.found) {
+        result.className = 'mt-2 text-xs text-orange-500 bg-orange-50 rounded-lg px-3 py-2';
+        result.textContent = '⚠ ' + (d.message || 'No encontrado');
+        return;
+      }
+      var dbAgeStr = d.db_age_min !== null ? d.db_age_min + ' min' : '?';
+      var bmAgeStr = d.bm_cache_age_min !== null ? d.bm_cache_age_min + ' min' : '—';
+      var mlColor  = (d.ml_qty_db || 0) > 0 ? 'text-green-600' : 'text-red-500';
+      var bmColor  = (d.bm_avail || 0) > 0  ? 'text-green-600' : 'text-red-500';
+      var alertsHtml = (d.alerts || []).map(function(a) {
+        var color = a === 'ninguna' ? 'text-gray-400' : 'text-orange-600 font-semibold';
+        return '<span class="' + color + '">' + a + '</span>';
+      }).join(', ');
+
+      // Variaciones
+      var varsHtml = '';
+      if (d.variations && d.variations.length > 0) {
+        varsHtml = '<div class="mt-2 pt-2 border-t border-gray-200"><p class="text-gray-400 mb-1">Variaciones:</p><div class="space-y-0.5">';
+        d.variations.forEach(function(v) {
+          var vml = v.ml_qty !== undefined ? v.ml_qty : '?';
+          var vbm = v.bm_avail !== undefined ? v.bm_avail : '—';
+          var vmlc = vml > 0 ? 'text-green-600' : 'text-red-500';
+          var vbmc = (vbm === '—' || vbm > 0) ? 'text-green-600' : 'text-red-500';
+          varsHtml += '<div class="flex gap-3 font-mono">' +
+            '<span class="text-gray-500 w-28 truncate">' + (v.sku || v.variation_id) + '</span>' +
+            '<span class="text-gray-400">' + (v.combo || '') + '</span>' +
+            '<span class="ml-auto ' + vmlc + '">ML:' + vml + '</span>' +
+            '<span class="' + vbmc + '">BM:' + vbm + '</span>' +
+            '</div>';
+        });
+        varsHtml += '</div></div>';
+      }
+
+      result.className = 'mt-2 text-xs bg-gray-50 rounded-lg px-3 py-2';
+      result.innerHTML =
+        '<div class="flex items-center justify-between mb-2">' +
+          '<span class="font-semibold text-gray-700 truncate max-w-xs">' + (d.title || iid) + '</span>' +
+          '<span class="ml-2 px-1.5 py-0.5 rounded text-white text-[10px] ' + (d.status === 'active' ? 'bg-green-500' : d.status === 'inactive' ? 'bg-red-400' : 'bg-yellow-500') + '">' + (d.status || '?') + '</span>' +
+        '</div>' +
+        '<div class="grid grid-cols-2 gap-x-6 gap-y-0.5">' +
+          '<span class="text-gray-400">SKU:</span><span class="font-mono">' + (d.sku || '—') + '</span>' +
+          '<span class="text-gray-400">Stock ML (DB):</span><span class="font-mono font-bold ' + mlColor + '">' + (d.ml_qty_db !== null ? d.ml_qty_db : '?') + '</span>' +
+          '<span class="text-gray-400">Edad dato ML:</span><span>' + dbAgeStr + '</span>' +
+          '<span class="text-gray-400">BM Disponible:</span><span class="font-mono font-bold ' + bmColor + '">' + (d.bm_avail !== null ? d.bm_avail : '—') + '</span>' +
+          '<span class="text-gray-400">BM Reservado:</span><span class="font-mono">' + (d.bm_reserve !== null ? d.bm_reserve : '—') + '</span>' +
+          '<span class="text-gray-400">Edad caché BM:</span><span>' + bmAgeStr + '</span>' +
+        '</div>' +
+        '<div class="mt-1.5 pt-1.5 border-t border-gray-200"><span class="text-gray-400">Alertas: </span>' + alertsHtml + '</div>' +
+        varsHtml;
     })
     .catch(function() {
       result.className = 'mt-2 text-xs text-red-500';

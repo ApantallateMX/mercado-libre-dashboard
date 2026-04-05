@@ -8203,6 +8203,121 @@ async def debug_bm_cache(sku: str = ""):
     })
 
 
+@app.get("/api/debug/item-stock")
+async def debug_item_stock(item_id: str = ""):
+    """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
+    Sin autenticación — solo lectura, igual que /api/debug/bm-cache."""
+    if not item_id:
+        return JSONResponse({"error": "item_id requerido"}, status_code=400)
+    iid = item_id.strip().upper()
+
+    # --- Leer de ml_listings DB ---
+    from app.services.token_store import get_ml_listings_all_accounts as _get_all_listings
+    import json as _j, time as _t2
+    db_item = None
+    db_age_s = None
+    try:
+        rows = await _get_all_listings()
+        for r in rows:
+            if str(r.get("item_id", "")).upper() == iid:
+                db_item = r
+                break
+    except Exception:
+        pass
+
+    ml_qty_db = None
+    title = ""
+    status_ml = ""
+    sku = ""
+    variations_db = []
+    if db_item:
+        ml_qty_db = db_item.get("available_qty", 0)
+        title = db_item.get("title", "")
+        status_ml = db_item.get("status", "")
+        sku = db_item.get("sku", "")
+        synced_at = db_item.get("synced_at", 0)
+        db_age_s = round(_t2.time() - float(synced_at)) if synced_at else None
+        # Variaciones desde data_json
+        dj = db_item.get("data_json", "")
+        if dj:
+            try:
+                body = _j.loads(dj)
+                for v in body.get("variations", []):
+                    v_sku = ""
+                    for attr in v.get("attributes", []):
+                        if attr.get("id") in ("SELLER_SKU", "seller_custom_field"):
+                            v_sku = attr.get("value_name", "")
+                            break
+                    combos = [f"{a.get('name')}: {a.get('value_name')}" for a in v.get("attribute_combinations", [])]
+                    variations_db.append({
+                        "variation_id": v.get("id"),
+                        "sku": v_sku,
+                        "combo": ", ".join(combos),
+                        "ml_qty": v.get("available_quantity", 0),
+                    })
+            except Exception:
+                pass
+
+    # --- Leer BM caché ---
+    bm_avail = None
+    bm_reserve = None
+    bm_cache_age_s = None
+    bm_status = "sin datos"
+    if sku:
+        bm_key = normalize_to_bm_sku(sku.upper())
+        cached = _bm_stock_cache.get(bm_key)
+        if cached:
+            ts, bdata = cached
+            bm_avail = bdata.get("avail_total", 0)
+            bm_reserve = bdata.get("reserved_total", 0)
+            bm_cache_age_s = round(_t2.time() - ts)
+            bm_status = "OK" if bdata.get("_v") else "sin verificar"
+        # También buscar en variaciones
+        for vd in variations_db:
+            v_sku = (vd.get("sku") or "").upper()
+            if not v_sku:
+                continue
+            vkey = normalize_to_bm_sku(v_sku)
+            vc = _bm_stock_cache.get(vkey)
+            if vc:
+                _vts, _vd = vc
+                vd["bm_avail"] = _vd.get("avail_total", 0)
+                vd["bm_reserve"] = _vd.get("reserved_total", 0)
+
+    # --- Alertas activas ---
+    alerts = []
+    client = await get_meli_client()
+    uid = client.user_id if client else None
+    if client:
+        await client.close()
+    issues_key = f"stock_issues:{uid}:t10" if uid else None
+    issues_entry = issues_key and _stock_issues_cache.get(issues_key)
+    if issues_entry:
+        for section in ("restock", "oversell_risk", "activate", "critical", "full_no_stock", "stagnant", "price_risk"):
+            if any(str(p.get("id", "")).upper() == iid for p in issues_entry[1].get(section, [])):
+                alerts.append(section)
+
+    if not db_item:
+        return JSONResponse({"found": False, "item_id": iid,
+                             "message": "No encontrado en DB local — puede estar fuera de sync"})
+
+    return JSONResponse({
+        "found": True,
+        "item_id": iid,
+        "title": title,
+        "status": status_ml,
+        "sku": sku,
+        "ml_qty_db": ml_qty_db,
+        "db_age_min": round(db_age_s / 60, 1) if db_age_s is not None else None,
+        "bm_avail": bm_avail,
+        "bm_reserve": bm_reserve,
+        "bm_cache_age_min": round(bm_cache_age_s / 60, 1) if bm_cache_age_s is not None else None,
+        "bm_status": bm_status,
+        "variations": variations_db,
+        "alerts": alerts if alerts else ["ninguna"],
+    })
+
+
 @app.post("/api/stock/force-prewarm")
 async def force_prewarm():
     """Fuerza un prewarm fresco: limpia caché BM stale y recalcula stock issues."""
