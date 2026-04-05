@@ -27,6 +27,16 @@ _last_incremental_ts = 0.0
 _sync_error = ""
 _sync_status = {"accounts_synced": 0, "items_total": 0, "last_run_iso": None}
 
+# Callback registrado por main.py para invalidar _products_cache + _stock_issues_cache
+# sin crear una dependencia circular.
+_on_listings_updated = None
+
+
+def register_listings_updated_callback(fn):
+    """main.py llama esto en el lifespan para registrar la función de invalidación."""
+    global _on_listings_updated
+    _on_listings_updated = fn
+
 
 def _item_to_row(item: dict, account_id: str) -> dict:
     """Convierte un body de ML item a un row de ml_listings."""
@@ -88,6 +98,11 @@ async def _sync_account_full(uid: str, client) -> int:
 
         if rows:
             await token_store.upsert_ml_listings(rows)
+            if _on_listings_updated:
+                try:
+                    _on_listings_updated(uid)
+                except Exception:
+                    pass
         logger.info(f"[ML-SYNC] Full sync uid={uid}: {len(rows)} items")
         return len(rows)
     except Exception as e:
@@ -129,6 +144,11 @@ async def _sync_account_incremental(uid: str, client) -> int:
 
         if rows:
             await token_store.upsert_ml_listings(rows)
+            if _on_listings_updated:
+                try:
+                    _on_listings_updated(uid)
+                except Exception:
+                    pass
         return len(rows)
     except Exception as e:
         logger.warning(f"[ML-SYNC] Incremental error uid={uid}: {e}")

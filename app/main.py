@@ -398,7 +398,18 @@ async def lifespan(app: FastAPI):
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
-    from app.services.ml_listing_sync import start_ml_listing_sync
+    from app.services.ml_listing_sync import start_ml_listing_sync, register_listings_updated_callback
+
+    def _invalidate_products_on_sync(uid: str):
+        """Limpia _products_cache + _stock_issues_cache cuando ml_listing_sync actualiza la DB.
+        Evita que las alertas muestren Stock MeLi=0 cuando ML ya tiene stock."""
+        uid_prefix = f"{uid}:"
+        for k in [k for k in _products_cache if k.startswith(uid_prefix)]:
+            del _products_cache[k]
+        _stock_issues_cache.clear()
+        logger.debug(f"[ML-SYNC-CB] Cache invalidado para uid={uid} post-sync")
+
+    register_listings_updated_callback(_invalidate_products_on_sync)
     start_ml_listing_sync()
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
     from app.api.lanzar import router as _lanzar_router_ref
@@ -2007,7 +2018,7 @@ _stock_issues_cache: dict[str, tuple[float, dict]] = {}
 # Cache cross-account para dashboard general (independiente de cuenta activa)
 _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
-_STOCK_ISSUES_TTL = 900      # 15 min — mismo TTL que BM cache para evitar re-fetch innecesario
+_STOCK_ISSUES_TTL = 480      # 8 min — menor que ciclo ml_listing_sync (10 min) para evitar alertas stale
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 _synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
 
