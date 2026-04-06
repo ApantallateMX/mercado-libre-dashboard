@@ -8,26 +8,35 @@
     <p class="text-gray-600">Productos defectuosos o diferentes reportados por compradores</p>
 </div>
 
-<!-- Date Filters -->
+<!-- Date Filters + Presets -->
 <div class="bg-white rounded-lg shadow p-4 mb-6">
+    <!-- Presets rápidos -->
+    <div class="flex flex-wrap gap-1.5 mb-3">
+        <span class="text-xs text-gray-400 self-center mr-1">Período:</span>
+        <button onclick="setPreset('today')"    data-preset="today"    class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Hoy</button>
+        <button onclick="setPreset('week')"     data-preset="week"     class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Esta semana</button>
+        <button onclick="setPreset('month')"    data-preset="month"    class="preset-btn px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold transition">Este mes</button>
+        <button onclick="setPreset('year')"     data-preset="year"     class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Este año</button>
+        <button onclick="setPreset('30d')"      data-preset="30d"      class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">30 días</button>
+        <button onclick="setPreset('90d')"      data-preset="90d"      class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">90 días</button>
+        <button onclick="setPreset('custom')"   data-preset="custom"   class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Personalizado</button>
+    </div>
     <div class="flex flex-wrap items-end gap-4">
-        <div>
-            <label class="block text-xs text-gray-500 mb-1">Desde</label>
-            <input type="date" id="ret-date-from" class="border rounded px-3 py-1.5 text-sm">
+        <div id="custom-dates" class="flex gap-3 hidden">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Desde</label>
+                <input type="date" id="ret-date-from" class="border rounded px-3 py-1.5 text-sm">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+                <input type="date" id="ret-date-to" class="border rounded px-3 py-1.5 text-sm">
+            </div>
+            <button onclick="applyRetFilters()"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm self-end">
+                Aplicar
+            </button>
         </div>
-        <div>
-            <label class="block text-xs text-gray-500 mb-1">Hasta</label>
-            <input type="date" id="ret-date-to" class="border rounded px-3 py-1.5 text-sm">
-        </div>
-        <button onclick="applyRetFilters()"
-                class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
-            Aplicar
-        </button>
-        <button onclick="clearRetFilters()"
-                class="bg-gray-200 text-gray-700 px-4 py-1.5 rounded hover:bg-gray-300 text-sm">
-            Limpiar
-        </button>
-        <span id="ret-filter-indicator" class="text-xs text-gray-400 ml-2"></span>
+        <span id="ret-filter-indicator" class="text-xs text-gray-400"></span>
         <div class="flex items-center gap-3 text-xs text-gray-400 ml-auto">
             <span id="ret-last-update"></span>
             <button onclick="manualRefreshAll()"
@@ -38,6 +47,29 @@
                 </svg>
                 Refrescar
             </button>
+        </div>
+    </div>
+</div>
+
+<!-- Timeline Chart -->
+<div class="bg-white rounded-lg shadow mb-6">
+    <div class="px-6 py-3 flex items-center justify-between border-b border-gray-100 cursor-pointer select-none"
+         onclick="toggleTimelineSection()">
+        <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+            </svg>
+            <h2 class="text-sm font-semibold text-gray-700">Tendencia de Retornos</h2>
+            <span class="text-[10px] text-gray-400 font-normal">(por día o semana)</span>
+        </div>
+        <svg id="ret-timeline-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+    </div>
+    <div id="ret-timeline-content" class="p-5">
+        <div id="ret-timeline-chart-wrap" class="relative" style="height:220px">
+            <canvas id="ret-timeline-chart"></canvas>
+            <div id="ret-timeline-empty" class="hidden absolute inset-0 flex items-center justify-center text-sm text-gray-400">Sin datos en este periodo</div>
         </div>
     </div>
 </div>
@@ -218,16 +250,66 @@
 // ============================================================
 function _fmtDate(d) { return d.toISOString().slice(0, 10); }
 var _today = new Date();
-var _monthAgo = new Date(_today);
-_monthAgo.setDate(_today.getDate() - 29);
+
+// Default: este mes
+var _monthStart = new Date(_today.getFullYear(), _today.getMonth(), 1);
 
 var retFilters = {
-    date_from: _fmtDate(_monthAgo),
+    date_from: _fmtDate(_monthStart),
     date_to:   _fmtDate(_today),
     status:    '',
     offset:    0,
     limit:     20,
 };
+
+// ============================================================
+// Fase 2 — Presets de período
+// ============================================================
+window.setPreset = function(preset) {
+    var from, to = _fmtDate(_today);
+    var now = new Date(_today);
+    if (preset === 'today') {
+        from = to;
+    } else if (preset === 'week') {
+        var d = new Date(now);
+        d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1));
+        from = _fmtDate(d);
+    } else if (preset === 'month') {
+        from = _fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    } else if (preset === 'year') {
+        from = now.getFullYear() + '-01-01';
+    } else if (preset === '30d') {
+        var d30 = new Date(now); d30.setDate(d30.getDate() - 29);
+        from = _fmtDate(d30);
+    } else if (preset === '90d') {
+        var d90 = new Date(now); d90.setDate(d90.getDate() - 89);
+        from = _fmtDate(d90);
+    } else { // custom
+        document.getElementById('custom-dates').classList.remove('hidden');
+        _highlightPreset('custom');
+        return;
+    }
+    document.getElementById('custom-dates').classList.add('hidden');
+    retFilters.date_from = from;
+    retFilters.date_to   = to;
+    retFilters.offset    = 0;
+    // Sync hidden inputs
+    var elFrom = document.getElementById('ret-date-from');
+    var elTo   = document.getElementById('ret-date-to');
+    if (elFrom) elFrom.value = from;
+    if (elTo)   elTo.value   = to;
+    _highlightPreset(preset);
+    _updateFilterIndicator();
+    loadSummary(); loadTable(); loadAnalysis(); loadTimeline(); _updateTimestamp();
+};
+
+function _highlightPreset(active) {
+    document.querySelectorAll('.preset-btn').forEach(function(btn) {
+        var isActive = btn.dataset.preset === active;
+        btn.className = 'preset-btn px-3 py-1 text-xs rounded-full transition font-medium ' +
+            (isActive ? 'bg-yellow-400 text-gray-800 font-semibold' : 'bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800');
+    });
+}
 
 var _tableCtrl   = null;
 var _summaryCtrl = null;
@@ -287,7 +369,87 @@ function loadTable() {
 }
 
 window.manualRefreshTable = function() { loadTable(); };
-window.manualRefreshAll   = function() { loadSummary(); loadTable(); loadAnalysis(); _updateTimestamp(); };
+window.manualRefreshAll   = function() { loadSummary(); loadTable(); loadAnalysis(); loadTimeline(); _updateTimestamp(); };
+
+// ============================================================
+// Fase 3 — Timeline chart
+// ============================================================
+var _timelineChart = null;
+var _timelineSectionOpen = true;
+
+window.toggleTimelineSection = function() {
+    _timelineSectionOpen = !_timelineSectionOpen;
+    var content = document.getElementById('ret-timeline-content');
+    var chevron = document.getElementById('ret-timeline-chevron');
+    content.classList.toggle('hidden', !_timelineSectionOpen);
+    chevron.style.transform = _timelineSectionOpen ? '' : 'rotate(-90deg)';
+};
+
+function loadTimeline() {
+    var p = _buildParams();
+    var url = '/api/returns/timeline' + (p.length ? '?' + p.join('&') : '');
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderTimeline(data); })
+        .catch(function() {});
+}
+
+function _renderTimeline(data) {
+    var wrap  = document.getElementById('ret-timeline-chart-wrap');
+    var empty = document.getElementById('ret-timeline-empty');
+    var canvas = document.getElementById('ret-timeline-chart');
+    if (!canvas) return;
+    var tl = data.timeline || [];
+    if (!tl.length) {
+        if (empty) empty.classList.remove('hidden');
+        return;
+    }
+    if (empty) empty.classList.add('hidden');
+    var labels = tl.map(function(b) { return b.date; });
+    var counts = tl.map(function(b) { return b.count; });
+    var ctx = canvas.getContext('2d');
+    if (_timelineChart) _timelineChart.destroy();
+    _timelineChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Retornos',
+                data: counts,
+                backgroundColor: counts.map(function(v) {
+                    return v >= 5 ? 'rgba(239,68,68,0.7)' : v >= 2 ? 'rgba(249,115,22,0.6)' : 'rgba(234,179,8,0.5)';
+                }),
+                borderColor: counts.map(function(v) {
+                    return v >= 5 ? '#ef4444' : v >= 2 ? '#f97316' : '#eab308';
+                }),
+                borderWidth: 1,
+                borderRadius: 3,
+            }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        afterBody: function(items) {
+                            var idx = items[0].dataIndex;
+                            var bucket = tl[idx];
+                            if (!bucket.reasons) return [];
+                            return Object.entries(bucket.reasons).map(function(kv) {
+                                return '  ' + kv[0] + ': ' + kv[1];
+                            });
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+                y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } } }
+            }
+        }
+    });
+}
 
 // ============================================================
 // Sidebar analysis
@@ -530,7 +692,7 @@ function _renderTopProducts(data) {
         html += '</div>';
 
         // Count + comparison row
-        html += '<div class="flex items-center gap-4 mb-2">';
+        html += '<div class="flex flex-wrap items-center gap-4 mb-2">';
         html += '<span class="text-2xl font-black text-gray-800">' + p.count_a + '</span>';
         html += '<span class="text-xs text-gray-400">retorno' + (p.count_a !== 1 ? 's' : '') + '</span>';
         if (hasComp && p.count_b !== null) {
@@ -543,6 +705,15 @@ function _renderTopProducts(data) {
         html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-4">' +
                 '<span class="text-red-500 font-semibold">' + p.opened + '</span> abiertos · ' +
                 '<span class="text-green-600 font-semibold">' + p.closed + '</span> cerrados</span>';
+        // Valor monetario
+        if (p.sale_amount_mxn > 0) {
+            html += '<span class="text-xs text-orange-600 font-semibold border-l border-gray-200 pl-4">' +
+                    '💰 $' + p.sale_amount_mxn.toLocaleString('es-MX', {maximumFractionDigits:0}) + ' MXN</span>';
+        }
+        if (p.cost_usd_bm > 0) {
+            html += '<span class="text-xs text-red-600 font-semibold border-l border-gray-200 pl-4">' +
+                    '🏷 $' + p.cost_usd_bm.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' USD costo</span>';
+        }
         html += '</div>';
 
         // Proportion bar
@@ -582,6 +753,26 @@ function _renderTopProducts(data) {
             html += '</div>';
         }
 
+        // Action buttons
+        if (p.item_id) {
+            html += '<div class="px-5 py-3 bg-gray-50 border-t flex flex-wrap items-center gap-2">';
+            html += '<span class="text-xs text-gray-500 font-medium mr-1">Acciones:</span>';
+            // Open in ML Seller Center
+            html += '<a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search=' + p.item_id + '" ' +
+                    'target="_blank" ' +
+                    'class="flex items-center gap-1 px-3 py-1 text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">' +
+                    '🔗 Ver en ML</a>';
+            // Mark for review
+            html += '<button onclick="window.flagItem(\'' + p.item_id + '\',\'review\')" ' +
+                    'class="flex items-center gap-1 px-3 py-1 text-xs bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-lg hover:bg-yellow-100 transition font-medium">' +
+                    '⚠️ Marcar revisión</button>';
+            // Set qty=0
+            html += '<button onclick="window.flagItem(\'' + p.item_id + '\',\'qty_zero\')" ' +
+                    'class="flex items-center gap-1 px-3 py-1 text-xs bg-red-50 border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition font-medium">' +
+                    '🔻 Bajar a qty=0</button>';
+            html += '</div>';
+        }
+
         html += '</div>'; // end card
     });
 
@@ -605,6 +796,34 @@ function _kpiCard(label, value, textClass, bgClass, note) {
 }
 
 // ============================================================
+// Fase 4 — Acciones en listing
+// ============================================================
+window.flagItem = function(itemId, flagType) {
+    var label = flagType === 'qty_zero'
+        ? '⚠️ Esto pondrá el stock a 0 en MercadoLibre para el listing ' + itemId + '.\n¿Confirmas?'
+        : '¿Marcar el listing ' + itemId + ' para revisión?';
+    if (!confirm(label)) return;
+    fetch('/api/returns/flag-item', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item_id: itemId, flag_type: flagType,
+                              note: flagType === 'qty_zero' ? 'Bajado a qty=0 desde análisis retornos' : 'Marcado para revisión desde análisis retornos'})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (d.ok) {
+            var msg = flagType === 'qty_zero'
+                ? (d.stock_updated ? '✅ Stock puesto a 0 correctamente' : (d.stock_error ? '⚠️ Marcado, pero error al actualizar stock: ' + d.stock_error : '✅ Acción registrada'))
+                : '✅ Listing marcado para revisión';
+            alert(msg);
+        } else {
+            alert('Error: ' + (d.error || 'Error desconocido'));
+        }
+    })
+    .catch(function() { alert('Error de conexión al procesar acción'); });
+};
+
+// ============================================================
 // Filter controls
 // ============================================================
 window.applyRetFilters = function() {
@@ -615,6 +834,7 @@ window.applyRetFilters = function() {
     loadSummary();
     loadTable();
     loadAnalysis();
+    loadTimeline();
     _updateTimestamp();
 };
 
@@ -622,12 +842,16 @@ window.clearRetFilters = function() {
     retFilters.date_from = '';
     retFilters.date_to   = '';
     retFilters.offset    = 0;
-    document.getElementById('ret-date-from').value = '';
-    document.getElementById('ret-date-to').value   = '';
+    var elFrom = document.getElementById('ret-date-from');
+    var elTo   = document.getElementById('ret-date-to');
+    if (elFrom) elFrom.value = '';
+    if (elTo)   elTo.value   = '';
+    _highlightPreset('');
     _updateFilterIndicator();
     loadSummary();
     loadTable();
     loadAnalysis();
+    loadTimeline();
     _updateTimestamp();
 };
 
@@ -710,17 +934,24 @@ window.respondReturn = function(claimId) {
 // ============================================================
 // Init — NO auto-refresh. Manual control only.
 // ============================================================
-document.getElementById('ret-date-from').value = retFilters.date_from;
-document.getElementById('ret-date-to').value   = retFilters.date_to;
+var _elFrom = document.getElementById('ret-date-from');
+var _elTo   = document.getElementById('ret-date-to');
+if (_elFrom) _elFrom.value = retFilters.date_from;
+if (_elTo)   _elTo.value   = retFilters.date_to;
 
 // Pre-fill Period A inputs with same default
-document.getElementById('ret-top-from-a').value = retFilters.date_from;
-document.getElementById('ret-top-to-a').value   = retFilters.date_to;
+var _elTopA = document.getElementById('ret-top-from-a');
+var _elTopB = document.getElementById('ret-top-to-a');
+if (_elTopA) _elTopA.value = retFilters.date_from;
+if (_elTopB) _elTopB.value = retFilters.date_to;
 
+// Highlight "Este mes" preset by default
+_highlightPreset('month');
 _updateFilterIndicator();
 loadSummary();
 loadTable();
 loadAnalysis();
+loadTimeline();
 _updateTimestamp();
 
 })();

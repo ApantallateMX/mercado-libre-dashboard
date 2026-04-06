@@ -8744,6 +8744,36 @@ async def set_fx_rate(request: Request):
 # RETORNOS / DEVOLUCIONES
 # ===========================
 
+_bm_retail_cache: tuple[float, dict] | None = None  # (ts, {sku: retail_usd})
+_BM_RETAIL_TTL = 600  # 10 min
+
+
+async def _get_bm_retail_prices() -> dict:
+    """Returns {bm_sku: retail_price_usd} with 10-min cache. Uses get_bulk_stock()."""
+    global _bm_retail_cache
+    import time as _t2
+    if _bm_retail_cache and (_t2.time() - _bm_retail_cache[0]) < _BM_RETAIL_TTL:
+        return _bm_retail_cache[1]
+    try:
+        from app.services.binmanager_client import BinManagerClient
+        bm = BinManagerClient()
+        if not await bm.login():
+            return {}
+        items = await bm.get_bulk_stock()
+        price_map: dict = {}
+        for item in items:
+            sku = (item.get("SKU") or "").strip()
+            if sku:
+                price = float(item.get("LastRetailPricePurchaseHistory") or 0)
+                if price > 0:
+                    price_map[sku] = price
+        _bm_retail_cache = (_t2.time(), price_map)
+        return price_map
+    except Exception as _e:
+        logger.warning(f"[BM-RETAIL] Error al obtener precios: {_e}")
+        return {}
+
+
 @app.get("/returns", response_class=HTMLResponse)
 async def returns_page(request: Request):
     user = await get_current_user()
@@ -8814,6 +8844,40 @@ async def returns_summary_partial(
 
         return_rate = (total / total_orders * 100) if total_orders > 0 else 0.0
 
+        # ── Valor monetario de retornos ──────────────────────────────────
+        valor_mxn = 0.0
+        costo_usd = 0.0
+        try:
+            oids = list({str(c.get("resource_id", "")) for c in pdd_claims
+                         if c.get("resource") == "order" and c.get("resource_id")})[:50]
+            if oids:
+                sem_v = asyncio.Semaphore(5)
+                async def _fetch_order_val(oid):
+                    async with sem_v:
+                        try:
+                            order = await client.get(f"/orders/{oid}")
+                            items_o = order.get("order_items", [])
+                            sku = ""
+                            if items_o:
+                                item_d = items_o[0].get("item", {})
+                                sku = item_d.get("seller_custom_field") or ""
+                            return float(order.get("total_amount") or 0), sku
+                        except Exception:
+                            return 0.0, ""
+                vals = await asyncio.gather(*[_fetch_order_val(o) for o in oids],
+                                            return_exceptions=True)
+                skus_returned = []
+                for v in vals:
+                    if isinstance(v, tuple):
+                        valor_mxn += v[0]
+                        if v[1]:
+                            skus_returned.append(normalize_to_bm_sku(v[1]))
+                # BM cost
+                bm_prices = await _get_bm_retail_prices()
+                costo_usd = sum(bm_prices.get(s, 0.0) for s in skus_returned if s)
+        except Exception as _ev:
+            logger.warning(f"[RETURNS-SUMMARY] valor error: {_ev}")
+
         summary = SimpleNamespace(
             total=total,
             opened=opened,
@@ -8821,6 +8885,8 @@ async def returns_summary_partial(
             urgent=urgent,
             total_orders=total_orders,
             return_rate=round(return_rate, 2),
+            valor_mxn=round(valor_mxn, 2),
+            costo_usd=round(costo_usd, 2),
         )
 
         return templates.TemplateResponse(request, "partials/returns_summary.html", {            "summary": summary,
@@ -9020,6 +9086,7 @@ async def returns_table_partial(
                 reason_id=reason_id,
                 product_title=order_info.get("title", ""),
                 product_price=order_info.get("price", 0),
+                item_id=str(order_info.get("item_id", "")),
                 due_date=due_date,
                 buyer_complaint=buyer_complaint,
                 conversation=conversation,
@@ -9171,28 +9238,36 @@ async def returns_top_products(
                         return oid, {
                             "title": item.get("title", "") or "Producto desconocido",
                             "item_id": str(item.get("id", "")),
+                            "sku": item.get("seller_custom_field") or "",
+                            "sale_amount": float(order.get("total_amount") or 0),
                         }
                 except Exception:
                     pass
-                return oid, {"title": "Producto desconocido", "item_id": ""}
+                return oid, {"title": "Producto desconocido", "item_id": "", "sku": "", "sale_amount": 0.0}
 
         results = await asyncio.gather(*[_fetch_order_info(oid) for oid in all_oids], return_exceptions=True)
         order_map = {r[0]: r[1] for r in results if isinstance(r, tuple)}
+
+        # BM retail prices for cost calculation
+        bm_prices_tp = await _get_bm_retail_prices()
 
         def _count_by_product(claims):
             counts = {}
             for c in claims:
                 oid = str(c.get("resource_id", ""))
-                info = order_map.get(oid, {"title": "Producto desconocido", "item_id": ""})
+                info = order_map.get(oid, {"title": "Producto desconocido", "item_id": "", "sku": "", "sale_amount": 0.0})
                 title = info["title"]
                 reason_id = str(c.get("reason_id", "PDD")).upper()
                 status = c.get("status", "")
                 if title not in counts:
                     counts[title] = {
                         "title": title, "item_id": info["item_id"],
+                        "sku": normalize_to_bm_sku(info.get("sku", "")),
                         "count": 0, "opened": 0, "closed": 0, "reasons": {},
+                        "sale_amount_mxn": 0.0,
                     }
                 counts[title]["count"] += 1
+                counts[title]["sale_amount_mxn"] += info.get("sale_amount", 0.0)
                 if status == "opened":
                     counts[title]["opened"] += 1
                 else:
@@ -9267,9 +9342,12 @@ async def returns_top_products(
             if count_b is not None and count_b > 0:
                 delta_pct = round((count_a - count_b) / count_b * 100, 1)
             rec = _recommendation(p["reasons"], p["opened"], count_a)
+            sku = p.get("sku", "")
+            cost_usd = bm_prices_tp.get(sku, 0.0) * count_a if sku else 0.0
             products.append({
                 "title": p["title"],
                 "item_id": p["item_id"],
+                "sku": sku,
                 "count_a": count_a,
                 "count_b": count_b,
                 "delta_pct": delta_pct,
@@ -9278,6 +9356,8 @@ async def returns_top_products(
                 "closed": p["closed"],
                 "reasons": p["reasons"],
                 "recommendation": rec,
+                "sale_amount_mxn": round(p.get("sale_amount_mxn", 0.0), 2),
+                "cost_usd_bm": round(cost_usd, 2),
             })
 
         def _label(df, dt):
@@ -9294,6 +9374,122 @@ async def returns_top_products(
         return {"error": str(e)}
     finally:
         await client.close()
+
+
+@app.get("/api/returns/timeline")
+async def returns_timeline(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+    granularity: str = Query("auto", description="day | week | auto"),
+):
+    """Timeline de retornos agrupados por día o semana para gráfica de tendencia."""
+    client = await get_meli_client()
+    if not client:
+        return {"error": "No autenticado"}
+    try:
+        from datetime import datetime, timedelta, timezone
+        df = date_from or None
+        dt = date_to or None
+
+        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+        pdd_claims = [c for c in all_claims
+                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+
+        # Auto-granularity
+        gran = granularity
+        if gran == "auto":
+            if date_from and date_to:
+                try:
+                    days_range = (datetime.fromisoformat(date_to) - datetime.fromisoformat(date_from)).days
+                    gran = "week" if days_range > 90 else "day"
+                except Exception:
+                    gran = "day"
+            else:
+                gran = "day"
+
+        REASON_LABELS = {
+            "PDD1": "Defecto fábrica", "PDD2": "No coincide",
+            "PDD3": "Prod. incorrecto", "PDD4": "Partes faltantes",
+            "PDD5": "Dañado tránsito",  "PDD6": "No funciona",
+        }
+
+        buckets: dict = {}
+        for c in pdd_claims:
+            dc = c.get("date_created", "")
+            if not dc:
+                continue
+            try:
+                dt_obj = datetime.fromisoformat(dc.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if gran == "week":
+                week_start = dt_obj - timedelta(days=dt_obj.weekday())
+                key = week_start.strftime("%Y-%m-%d")
+            else:
+                key = dc[:10]
+            reason_id = str(c.get("reason_id", "PDD")).upper()
+            reason_label = REASON_LABELS.get(reason_id, "Otro")
+            if key not in buckets:
+                buckets[key] = {"date": key, "count": 0, "reasons": {}}
+            buckets[key]["count"] += 1
+            buckets[key]["reasons"][reason_label] = buckets[key]["reasons"].get(reason_label, 0) + 1
+
+        timeline = sorted(buckets.values(), key=lambda x: x["date"])
+        return {"timeline": timeline, "granularity": gran, "total": len(pdd_claims)}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        await client.close()
+
+
+@app.post("/api/returns/flag-item")
+async def returns_flag_item(request: Request):
+    """Marca un listing desde análisis de retornos. flag_type: 'review' | 'qty_zero'."""
+    body = await request.json()
+    item_id = str(body.get("item_id", "")).strip()
+    flag_type = str(body.get("flag_type", "review"))
+    note = str(body.get("note", ""))
+
+    if not item_id:
+        return {"ok": False, "error": "item_id requerido"}
+
+    from app.services import token_store as _ts
+    await _ts.save_return_flag(item_id, flag_type, note)
+    result: dict = {"ok": True, "flagged": item_id, "type": flag_type}
+
+    if flag_type == "qty_zero":
+        client = await get_meli_client()
+        if client:
+            try:
+                await client.update_item_stock(item_id, 0)
+                result["stock_updated"] = True
+                result["message"] = f"Stock del listing {item_id} puesto a 0"
+            except Exception as _e2:
+                result["stock_error"] = str(_e2)
+            finally:
+                await client.close()
+
+    return result
+
+
+@app.get("/api/returns/flags")
+async def returns_get_flags():
+    """Retorna todos los listings marcados desde análisis de retornos."""
+    from app.services import token_store as _ts
+    flags = await _ts.get_return_flags()
+    return {"flags": flags}
+
+
+@app.post("/api/returns/resolve-flag")
+async def returns_resolve_flag(request: Request):
+    """Marca una flag de retorno como resuelta."""
+    body = await request.json()
+    item_id = str(body.get("item_id", "")).strip()
+    if not item_id:
+        return {"ok": False, "error": "item_id requerido"}
+    from app.services import token_store as _ts
+    await _ts.resolve_return_flag(item_id)
+    return {"ok": True, "resolved": item_id}
 
 
 # ============================================================

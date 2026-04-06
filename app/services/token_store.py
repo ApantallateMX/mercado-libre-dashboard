@@ -343,6 +343,19 @@ async def init_db():
                 synced_at REAL NOT NULL DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS return_flags (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id    TEXT NOT NULL,
+                flag_type  TEXT NOT NULL DEFAULT 'review',
+                note       TEXT DEFAULT '',
+                created_at REAL NOT NULL DEFAULT 0,
+                resolved   INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_return_flags_item ON return_flags(item_id)"
+        )
         await db.commit()
 
 
@@ -1073,3 +1086,51 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
             [min_ts],
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── return_flags helpers ────────────────────────────────────────────────────
+
+async def save_return_flag(item_id: str, flag_type: str, note: str = "") -> None:
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Upsert: si ya hay una flag activa para este item, actualizarla
+        await db.execute(
+            """INSERT INTO return_flags (item_id, flag_type, note, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT DO NOTHING""",
+            (item_id, flag_type, note, _t.time()),
+        )
+        # Si ya existía, actualizar
+        await db.execute(
+            """UPDATE return_flags SET flag_type=?, note=?, created_at=?, resolved=0
+               WHERE item_id=? AND resolved=0""",
+            (flag_type, note, _t.time(), item_id),
+        )
+        await db.commit()
+
+
+async def get_return_flags() -> list[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM return_flags WHERE resolved=0 ORDER BY created_at DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_flagged_item_ids() -> set:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT item_id FROM return_flags WHERE resolved=0"
+        ) as cur:
+            rows = await cur.fetchall()
+    return {r[0] for r in rows}
+
+
+async def resolve_return_flag(item_id: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE return_flags SET resolved=1 WHERE item_id=?", (item_id,)
+        )
+        await db.commit()

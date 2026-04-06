@@ -54,15 +54,31 @@
             <span class="text-xs text-gray-500 flex-shrink-0">{{ ret.date_created }} &middot; {{ ret.elapsed }}</span>
         </div>
 
-        <!-- Product info -->
+        <!-- Product info + acciones rápidas -->
         {% if ret.product_title %}
         <div class="flex items-start gap-3 mb-3 p-3 bg-gray-50 rounded-lg">
             <svg class="w-5 h-5 text-gray-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
-            <div>
+            <div class="flex-1 min-w-0">
                 <p class="text-sm font-medium text-gray-800">{{ ret.product_title }}</p>
-                {% if ret.product_price and ret.product_price > 0 %}
-                <p class="text-xs text-gray-500">${{ "{:,.2f}".format(ret.product_price) }} MXN</p>
-                {% endif %}
+                <div class="flex flex-wrap items-center gap-2 mt-1">
+                    {% if ret.product_price and ret.product_price > 0 %}
+                    <span class="text-xs text-orange-600 font-semibold">${{ "{:,.2f}".format(ret.product_price) }} MXN</span>
+                    {% endif %}
+                    {% if ret.item_id %}
+                    <span class="text-[10px] text-gray-400 font-mono">{{ ret.item_id }}</span>
+                    <a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search={{ ret.item_id }}"
+                       target="_blank"
+                       class="text-[10px] text-blue-600 hover:underline">Ver en ML ↗</a>
+                    <button onclick="window.flagItem('{{ ret.item_id }}','review')"
+                            class="text-[10px] px-2 py-0.5 bg-yellow-50 border border-yellow-300 text-yellow-700 rounded hover:bg-yellow-100 transition">
+                        ⚠️ Marcar revisión
+                    </button>
+                    <button onclick="window.flagItem('{{ ret.item_id }}','qty_zero')"
+                            class="text-[10px] px-2 py-0.5 bg-red-50 border border-red-300 text-red-700 rounded hover:bg-red-100 transition">
+                        🔻 qty=0
+                    </button>
+                    {% endif %}
+                </div>
             </div>
         </div>
         {% endif %}

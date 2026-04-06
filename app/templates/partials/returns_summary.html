@@ -8,7 +8,7 @@
 </div>
 {% endif %}
 
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
     <!-- Total retornos -->
     <div class="bg-white p-5 rounded-lg shadow">
         <p class="text-xs text-gray-500 mb-1">Total Retornos</p>
@@ -71,6 +71,30 @@
         <div class="h-1.5 rounded-full mt-2 bg-gray-100">
             <div class="h-1.5 rounded-full {% if summary.return_rate >= 5 %}bg-red-500{% elif summary.return_rate >= 2 %}bg-yellow-500{% else %}bg-green-500{% endif %}"
                  style="width:{{ [summary.return_rate * 5, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Valor retornado MXN -->
+    <div class="bg-white p-5 rounded-lg shadow border-l-4 border-orange-300">
+        <p class="text-xs text-gray-500 mb-1">Valor Retornado</p>
+        <p class="text-xl font-bold {% if summary.valor_mxn > 0 %}text-orange-600{% else %}text-gray-400{% endif %}">
+            ${{ "{:,.0f}".format(summary.valor_mxn) }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">MXN estimado</p>
+        <div class="h-1.5 rounded-full mt-2 bg-orange-100">
+            <div class="h-1.5 rounded-full bg-orange-400" style="width:{{ [summary.total * 10, 100]|min }}%"></div>
+        </div>
+    </div>
+
+    <!-- Costo BM USD -->
+    <div class="bg-white p-5 rounded-lg shadow border-l-4 border-red-300">
+        <p class="text-xs text-gray-500 mb-1">Costo Estimado</p>
+        <p class="text-xl font-bold {% if summary.costo_usd > 0 %}text-red-600{% else %}text-gray-400{% endif %}">
+            ${{ "{:,.2f}".format(summary.costo_usd) }}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-1">USD (Retail BM)</p>
+        <div class="h-1.5 rounded-full mt-2 bg-red-100">
+            <div class="h-1.5 rounded-full bg-red-400" style="width:{{ [summary.total * 10, 100]|min }}%"></div>
         </div>
     </div>
 </div>
