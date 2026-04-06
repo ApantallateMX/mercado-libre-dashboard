@@ -457,7 +457,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -8487,6 +8487,76 @@ async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
         "alerts": alerts if alerts else ["ninguna"],
         **({"live": live_data} if live_data is not None else {}),
     })
+
+
+@app.get("/api/debug/test-merchant")
+async def debug_test_merchant(item_id: str = "", key: str = "", execute: int = 0):
+    """Prueba si ML API permite cambiar logistic_type a not_specified en un item FULL.
+    execute=0 → solo lee config actual (sin cambios)
+    execute=1 → intenta el PUT real (¡modifica el listing!)
+    """
+    if key != _DEBUG_KEY:
+        return JSONResponse({"error": "key inválida"}, status_code=401)
+    if not item_id:
+        return JSONResponse({"error": "item_id requerido"}, status_code=400)
+    iid = item_id.strip().upper()
+    try:
+        import httpx as _hx
+        from app.services import token_store as _ts2
+        # Obtener token
+        _all_toks2 = await _ts2.get_all_tokens()
+        _tok2 = None
+        _acc2 = None
+        # Buscar en ml_listings qué cuenta tiene este item
+        _rows2 = await _ts2.get_ml_listings_all_accounts()
+        for _r2 in _rows2:
+            if str(_r2.get("item_id","")).upper() == iid:
+                _acc2 = str(_r2.get("account_id",""))
+                break
+        if _acc2:
+            _cl2 = await get_meli_client(user_id=_acc2)
+            if _cl2:
+                _tok2 = _cl2.access_token
+                await _cl2.close()
+        if not _tok2:
+            return JSONResponse({"error": "token no encontrado"})
+
+        async with _hx.AsyncClient(timeout=15.0) as _hc2:
+            # 1. Leer config actual
+            _rget = await _hc2.get(
+                f"https://api.mercadolibre.com/items/{iid}",
+                headers={"Authorization": f"Bearer {_tok2}"},
+            )
+            _item2 = _rget.json() if _rget.status_code == 200 else {}
+            _ship2 = _item2.get("shipping") or {}
+            _current = {
+                "status": _item2.get("status"),
+                "logistic_type": _ship2.get("logistic_type"),
+                "mode": _ship2.get("mode"),
+                "free_shipping": _ship2.get("free_shipping"),
+                "available_quantity": _item2.get("available_quantity"),
+                "catalog_listing": _item2.get("catalog_listing"),
+            }
+
+            if not execute:
+                return JSONResponse({"mode": "readonly", "item_id": iid, "current": _current,
+                                     "note": "Pasa ?execute=1 para intentar el cambio real"})
+
+            # 2. Intentar cambio a not_specified
+            _rput = await _hc2.put(
+                f"https://api.mercadolibre.com/items/{iid}",
+                headers={"Authorization": f"Bearer {_tok2}", "Content-Type": "application/json"},
+                json={"shipping": {"logistic_type": "not_specified"}},
+            )
+            return JSONResponse({
+                "mode": "execute",
+                "item_id": iid,
+                "current_before": _current,
+                "put_status": _rput.status_code,
+                "put_response": _rput.json() if _rput.headers.get("content-type","").startswith("application/json") else _rput.text[:500],
+            })
+    except Exception as _e2:
+        return JSONResponse({"error": str(_e2)[:300]})
 
 
 @app.post("/api/stock/force-prewarm")
