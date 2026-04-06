@@ -2750,22 +2750,47 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
     """
     for p in products:
         if p.get("has_variations"):
-            tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
             any_var_sku = False
+            # Group variations by their normalized BM key to avoid double-counting
+            # when multiple ML variations map to the same BM SKU.
+            from collections import defaultdict as _dd
+            _bm_key_vars: dict = _dd(list)  # bm_key → [variation_dicts]
             for v in p.get("variations", []):
                 v_sku = v.get("sku", "")
                 if v_sku:
                     any_var_sku = True
-                inv = bm_map.get(v_sku) if v_sku else None
-                v["_bm_total"] = inv["total"] if inv else 0
-                v["_bm_avail"] = inv.get("avail_total", 0) if inv else 0
-                v["_bm_reserved"] = inv.get("reserved_total", 0) if inv else 0
+                _bk = normalize_to_bm_sku(v_sku.split("/")[0].strip()) if v_sku else ""
+                _bm_key_vars[_bk].append(v)
+
+            tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
+            for _bk, _vars in _bm_key_vars.items():
+                # Look up BM data: try each variation's raw SKU until we find a match
+                inv = None
+                if _bk:
+                    for _v in _vars:
+                        inv = bm_map.get(_v.get("sku", ""))
+                        if inv:
+                            break
                 if inv:
+                    _n = len(_vars)
+                    _pool = inv.get("avail_total", 0)
+                    _quot, _rem = divmod(_pool, _n)
+                    # Deduplicated parent totals — add once per unique BM key
                     tot_mty += inv["mty"]
                     tot_cdmx += inv["cdmx"]
                     tot_tj += inv["tj"]
-                    tot_avail += inv.get("avail_total", 0)
+                    tot_avail += _pool
                     tot_reserved += inv.get("reserved_total", 0)
+                    for i, v in enumerate(_vars):
+                        v["_bm_total"] = inv["total"] // _n if _n > 1 else inv["total"]
+                        v["_bm_avail"] = _quot + (1 if i == 0 and _rem else 0)
+                        v["_bm_reserved"] = inv.get("reserved_total", 0) // _n
+                else:
+                    for v in _vars:
+                        v["_bm_total"] = 0
+                        v["_bm_avail"] = 0
+                        v["_bm_reserved"] = 0
+
             if any_var_sku:
                 p["_bm_mty"] = tot_mty
                 p["_bm_cdmx"] = tot_cdmx
@@ -6771,7 +6796,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
         for _rv in var_results:
             if not _rv["error"]:
                 _rv_parts = _re_var.split(r'\s*[/+]\s*', _rv.get("sku") or "")
-                _rv_base = _extract_base_sku(_clean_sku_for_bm(_rv_parts[0].strip()) or _rv_parts[0].strip()).upper() if _rv_parts else "__none__"
+                _rv_base = normalize_to_bm_sku(_rv_parts[0].strip()) if _rv_parts else "__none__"
                 _sku_base_groups[_rv_base].append(_rv)
 
         var_updates = []
@@ -6780,7 +6805,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 r["meli_qty"] = 0
                 continue
             _parts = _re_var.split(r'\s*[/+]\s*', r.get("sku") or "")
-            _base = _extract_base_sku(_clean_sku_for_bm(_parts[0].strip()) or _parts[0].strip()).upper() if _parts else "__none__"
+            _base = normalize_to_bm_sku(_parts[0].strip()) if _parts else "__none__"
             _n_sharing = len(_sku_base_groups.get(_base, [r]))
             qty = int((r["bm_avail"] / _n_sharing) * pct)
             r["meli_qty"] = qty
