@@ -10093,15 +10093,17 @@ async def bm_launch_opportunities(
     """
     global _bm_unlaunched_cache
     from app.services.binmanager_client import get_shared_bm
+    from app.services.sku_utils import extract_item_sku
 
     # 1. Recolectar todos los SKUs de ML (activos + pausados) de todas las cuentas
     #    Usar _products_cache directamente — ya está cargado por prewarm, sin llamadas extra.
+    #    Los products en cache son bodies crudos de ML → usar extract_item_sku (no .get("sku"))
     ml_bm_skus: set[str] = set()
     for _cache_key, (_ts, _prods) in list(_products_cache.items()):
         if not _cache_key.startswith("products:"):
             continue
         for _p in _prods:
-            _s = _p.get("sku") or ""
+            _s = extract_item_sku(_p) or ""
             _st = _p.get("status") or ""
             if _s and _st in ("active", "paused", "inactive"):
                 ml_bm_skus.add(normalize_to_bm_sku(_s))
@@ -10117,7 +10119,7 @@ async def bm_launch_opportunities(
                     return set()
                 prods = await _get_all_products_cached(cli, include_paused=True)
                 await cli.close()
-                return {normalize_to_bm_sku(p["sku"]) for p in prods if p.get("sku")}
+                return {normalize_to_bm_sku(extract_item_sku(p)) for p in prods if extract_item_sku(p)}
             except Exception:
                 return set()
         _sets = await asyncio.gather(*[_get_ml_skus(a) for a in accounts], return_exceptions=True)
@@ -10125,11 +10127,12 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM global inventory — caché 15 min para no martillar BM con cada pageload
+    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68 + CONDITION vendible + CONCEPTID=1)
+    #    get_bulk_stock() usa los mismos filtros que el resto de la app — stock vendible real.
     now = _time.time()
     if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:
         bm_client = await get_shared_bm()
-        bm_raw = await bm_client.get_global_inventory(page=1, per_page=9999, min_qty=0)
+        bm_raw = await bm_client.get_bulk_stock()
         # Deduplicar por BM base SKU + armar lista de oportunidades
         seen_bm: set[str] = set()
         all_items: list[dict] = []
@@ -10143,6 +10146,7 @@ async def bm_launch_opportunities(
             seen_bm.add(bm_sku)
             if bm_sku in ml_bm_skus:
                 continue  # Ya lanzado en ML
+            retail = float(item.get("LastRetailPricePurchaseHistory") or 0)
             all_items.append({
                 "bm_sku":   bm_sku,
                 "sku_raw":  raw_sku,
@@ -10153,8 +10157,8 @@ async def bm_launch_opportunities(
                 "avail":    int(item.get("AvailableQTY") or 0),
                 "reserve":  int(item.get("Reserve") or 0),
                 "total":    int(item.get("TotalQty") or 0),
-                "cost_usd": float(item.get("AvgCostQTY") or 0),
-                "retail":   float(item.get("LastRetailPricePurchaseHistory") or 0),
+                "cost_usd": retail,   # costo = retail BM (precio de adquisición)
+                "retail":   retail,
             })
         all_items.sort(key=lambda x: (-x["avail"], x["category"], x["bm_sku"]))
         _bm_unlaunched_cache = (now, all_items)
