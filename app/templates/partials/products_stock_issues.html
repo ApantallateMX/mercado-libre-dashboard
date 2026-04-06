@@ -986,13 +986,12 @@
     window.openMerchantModal = function(itemId, bmAvail, title) {
         _mId = itemId;
         _mBm = bmAvail;
-        var numericId = itemId.replace('MLM','');
         document.getElementById('merchant-modal-id').textContent = itemId;
         document.getElementById('merchant-modal-title').textContent = title;
         document.getElementById('merchant-modal-title-2').textContent = title;
         document.getElementById('merchant-bm-hint').textContent = 'BM disponible: ' + bmAvail + ' uds';
         document.getElementById('merchant-stock-input').value = bmAvail > 0 ? bmAvail : '';
-        document.getElementById('merchant-ml-link').href = 'https://www.mercadolibre.com.mx/publicaciones/' + numericId + '/editar';
+        document.getElementById('merchant-ml-link').href = 'https://www.mercadolibre.com.mx/publicaciones/' + itemId + '/editar';
         // Reset fases
         document.getElementById('merchant-phase-1').classList.remove('hidden');
         document.getElementById('merchant-phase-2').classList.add('hidden');
