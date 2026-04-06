@@ -9781,34 +9781,8 @@ async def planning_coverage(
     target_days: int = Query(14, ge=7, le=60),
 ):
     """Sales velocity (ML+Amazon) + BinManager stock = days of coverage per SKU."""
-    from app.services.binmanager_client import BinManagerClient
 
-    # ── Fetch velocity and BM inventory in parallel ──────────────────────────
-    bm = BinManagerClient()
-
-    async def _fetch_bm_inventory() -> dict:
-        """Bulk-fetch all BM inventory → {SKU_UPPER: row}.
-        4-6 pages of 200 items = ~1000 SKUs in 4-6 requests instead of 1 per SKU.
-        """
-        bm_stock: dict = {}
-        login_ok = await bm.login()
-        if not login_ok:
-            return bm_stock
-        for page in range(1, 8):   # up to 7 × 200 = 1400 items
-            rows = await bm.get_global_inventory(page=page, per_page=200, min_qty=1)
-            for row in rows:
-                sku = (row.get("SKU") or "").upper().strip()
-                if sku:
-                    bm_stock[sku] = row
-            if len(rows) < 200:
-                break
-        return bm_stock
-
-    vel_task = asyncio.create_task(planning_velocity(days=days))
-    bm_task  = asyncio.create_task(_fetch_bm_inventory())
-
-    vel, bm_stock = await asyncio.gather(vel_task, bm_task)
-    await bm.close()
+    vel = await planning_velocity(days=days)
 
     if vel.get("error") or not vel.get("items"):
         return {"error": vel.get("error", "Sin datos de velocidad"), "items": []}
@@ -9826,30 +9800,13 @@ async def planning_coverage(
             "note": "Ningún item tiene SKU asignado — agrega seller_custom_field en tus publicaciones de ML",
         }
 
-    def _bm_normalize(row: dict) -> dict:
-        """Normalize raw BM inventory row to standard fields.
-        BM global inventory uses TotalQty or AvailableQTY; per-SKU uses QTY."""
-        stock = (row.get("TotalQty") or row.get("AvailableQTY")
-                 or row.get("QTY") or row.get("QtyTotal") or 0)
-        try:
-            stock = int(stock)
-        except (TypeError, ValueError):
-            stock = 0
-        return {
-            "stock": stock,
-            "retail_price": row.get("RetailPrice") or row.get("LastRetailPricePurchaseHistory") or 0,
-            "brand": row.get("BRAND") or row.get("Brand", ""),
-            "model": row.get("MODEL") or row.get("Model", ""),
-            "size":  row.get("SIZE")  or row.get("Size", ""),
-            "category": row.get("CategoryName", "") or row.get("Category", ""),
-        }
+    # Usar el mismo código de inventario BM que funciona en toda la app
+    bm_map = await _get_bm_stock_cached(items_with_sku)
+    _apply_bm_stock(items_with_sku, bm_map)
 
     result = []
     for item in items_with_sku:
-        sku = item["sku"].upper()
-        bm_row  = bm_stock.get(sku, {})
-        bm_info = _bm_normalize(bm_row) if bm_row else {"stock": 0, "retail_price": 0, "brand": "", "model": "", "size": "", "category": ""}
-        stock   = bm_info["stock"]
+        stock = item.get("_bm_avail", 0)
 
         # Use combined ML+Amazon demand for coverage calculation
         daily = item.get("total_daily_rate", item["daily_rate"])
@@ -9875,10 +9832,10 @@ async def planning_coverage(
             "coverage_days": coverage_days,
             "status": status,
             "units_to_request": units_to_request,
-            "retail_price": bm_info["retail_price"],
-            "brand": bm_info["brand"],
-            "model": bm_info["model"],
-            "bm_category": bm_info["category"],
+            "retail_price": item.get("_bm_retail_price", 0),
+            "brand": item.get("_bm_brand", ""),
+            "model": item.get("_bm_model", ""),
+            "bm_category": item.get("_bm_category", ""),
         })
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
