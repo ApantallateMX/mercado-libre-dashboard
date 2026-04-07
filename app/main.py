@@ -6571,6 +6571,8 @@ async def update_item_stock_api(item_id: str, request: Request):
             del _products_cache[k]
         from app.services.token_store import update_ml_listing_qty as _update_qty
         asyncio.create_task(_update_qty(item_id, quantity))
+        # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
+        asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
         return {"ok": True, "quantity": quantity}
     except ValueError as e:
         # Item tiene variaciones — rechazar con mensaje claro
@@ -6830,6 +6832,8 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 _new_total_qty = sum(u["available_quantity"] for u in var_updates)
                 from app.services.token_store import update_ml_listing_qty as _update_qty
                 asyncio.create_task(_update_qty(item_id, _new_total_qty))
+                # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
+                asyncio.create_task(_reactivate_if_oos_bg(item_id, str(client.user_id)))
             except Exception as ex:
                 for r in var_results:
                     if not r["error"]:
@@ -8097,8 +8101,13 @@ async def get_stock_counts():
     """Conteos rápidos de los 4 grupos de acción. Usa _stock_issues_cache si disponible."""
     client = await get_meli_client()
     if not client:
-        return {"sin_stock": 0, "riesgo": 0, "critico": 0, "sin_publicar": 0}
+        return {"sin_stock": 0, "riesgo": 0, "critico": 0, "sin_publicar": 0, "pausados": 0}
     try:
+        # Paused count from cache (non-blocking — returns 0 if not yet fetched)
+        uid = str(client.user_id)
+        cached_paused = _paused_items_cache.get(uid)
+        pausados = len(cached_paused[1]) if cached_paused else 0
+
         key = f"stock_issues:{client.user_id}:t10"
         entry = _stock_issues_cache.get(key)
         if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
@@ -8108,10 +8117,136 @@ async def get_stock_counts():
                 "riesgo": ctx.get("risk_count", 0),
                 "critico": ctx.get("critical_count", 0),
                 "sin_publicar": 0,
+                "pausados": pausados,
             }
         # Fallback: solo alertas de sobreventa desde DB (siempre disponibles)
         alerts = await token_store.get_sync_alerts(client.user_id)
-        return {"sin_stock": 0, "riesgo": len(alerts), "critico": 0, "sin_publicar": 0}
+        return {"sin_stock": 0, "riesgo": len(alerts), "critico": 0, "sin_publicar": 0, "pausados": pausados}
+    finally:
+        await client.close()
+
+
+# ── Listings pausados por stock 0 ─────────────────────────────────────────────
+_paused_items_cache: dict[str, tuple[float, list]] = {}
+_PAUSED_ITEMS_TTL = 300  # 5 min
+
+
+async def _reactivate_if_oos_bg(item_id: str, user_id: str):
+    """Background task: if item is paused due to out_of_stock, reactivate it silently."""
+    try:
+        from app.services.meli_client import get_meli_client as _gmcl
+        _client = await _gmcl(user_id=user_id)
+        if not _client:
+            return
+        try:
+            detail = await _client.get_item(item_id)
+            sub = detail.get("sub_status") or []
+            if detail.get("status") == "paused" and "out_of_stock" in sub:
+                await _client.update_item_status(item_id, "active")
+                _paused_items_cache.pop(user_id, None)
+        finally:
+            await _client.close()
+    except Exception:
+        pass
+
+
+async def _get_paused_oos_items(client) -> list[dict]:
+    """Fetches all paused items with sub_status=out_of_stock from ML.
+    Returns list of dicts: {id, title, price, sku}.
+    Result is cached per user for 5 minutes.
+    """
+    uid = str(client.user_id)
+    cached = _paused_items_cache.get(uid)
+    if cached and (_time.time() - cached[0]) < _PAUSED_ITEMS_TTL:
+        return cached[1]
+
+    ids = await client.get_all_paused_item_ids()
+    items: list[dict] = []
+    # Batch-fetch details in chunks of 20
+    for i in range(0, len(ids), 20):
+        chunk = ids[i:i + 20]
+        try:
+            details = await client.get_items_details(chunk)
+            for d in (details if isinstance(details, list) else []):
+                if not isinstance(d, dict):
+                    continue
+                sub = d.get("sub_status") or []
+                if "out_of_stock" not in sub:
+                    continue
+                # Extract SKU from attributes
+                sku = ""
+                for att in (d.get("attributes") or []):
+                    if att.get("id") == "SELLER_SKU":
+                        sku = att.get("value_name") or ""
+                        break
+                items.append({
+                    "id": d.get("id", ""),
+                    "title": d.get("title", ""),
+                    "price": d.get("price", 0),
+                    "sku": sku,
+                })
+        except Exception:
+            pass
+
+    _paused_items_cache[uid] = (_time.time(), items)
+    return items
+
+
+@app.get("/api/ml/paused-items")
+async def get_paused_items_api():
+    """Lista todos los listings pausados por stock=0 (sub_status=out_of_stock)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    try:
+        items = await _get_paused_oos_items(client)
+        return {"count": len(items), "items": items}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.post("/api/ml/reactivate/{item_id}")
+async def reactivate_item_api(item_id: str):
+    """Reactiva un listing pausado (solo cambia status=active, no toca stock)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    try:
+        result = await client.update_item_status(item_id, "active")
+        # Invalidar cache
+        uid = str(client.user_id)
+        _paused_items_cache.pop(uid, None)
+        return {"ok": True, "item_id": item_id, "result": result}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
+@app.post("/api/ml/reactivate-all")
+async def reactivate_all_paused_api():
+    """Reactiva en bulk todos los listings pausados por out_of_stock."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"}, status_code=401)
+    try:
+        items = await _get_paused_oos_items(client)
+        ok_ids, fail_ids = [], []
+        for it in items:
+            try:
+                await client.update_item_status(it["id"], "active")
+                ok_ids.append(it["id"])
+            except Exception:
+                fail_ids.append(it["id"])
+        # Invalidar cache
+        uid = str(client.user_id)
+        _paused_items_cache.pop(uid, None)
+        return {"ok": True, "reactivated": len(ok_ids), "failed": len(fail_ids),
+                "ok_ids": ok_ids, "fail_ids": fail_ids}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     finally:
         await client.close()
 

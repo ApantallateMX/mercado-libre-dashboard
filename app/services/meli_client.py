@@ -299,6 +299,23 @@ class MeliClient:
             }
         )
 
+    async def get_all_paused_item_ids(self, max_items: int = 1000) -> list[str]:
+        """Paginates through all paused items and returns their IDs."""
+        ids: list[str] = []
+        offset = 0
+        limit = 50
+        while len(ids) < max_items:
+            result = await self.get_items(offset=offset, limit=limit, status="paused")
+            batch = result.get("results", [])
+            if not batch:
+                break
+            ids.extend(batch)
+            total = result.get("paging", {}).get("total", 0)
+            offset += limit
+            if offset >= total:
+                break
+        return ids
+
     async def get_item(self, item_id: str) -> dict:
         """Obtiene el detalle de un item."""
         return await self.get(f"/items/{item_id}")

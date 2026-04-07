@@ -24,6 +24,8 @@
      hx-trigger="load"
      hx-swap="innerHTML">
 </div>
+<!-- Panel listings pausados por stock 0 -->
+<div id="paused-items-container" class="mb-3" style="display:none"></div>
 
 <!-- Tabs (4) -->
 <div class="bg-white rounded-lg shadow mb-4 md:mb-6">
@@ -229,7 +231,7 @@
             .then(function(d) {
                 var bar = document.getElementById('alerts-bar');
                 if (!bar) return;
-                var total = (d.sin_stock||0) + (d.riesgo||0) + (d.critico||0) + (d.sin_publicar||0);
+                var total = (d.sin_stock||0) + (d.riesgo||0) + (d.critico||0) + (d.sin_publicar||0) + (d.pausados||0);
                 var goAccion = "window.switchProductTab('inventory','/partials/products-inventory?preset=accion&enrich=full')";
                 var syncBtn = '<button onclick="triggerSyncNow()" id="btn-sync-bar" class="ml-auto flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 underline whitespace-nowrap">↻ Actualizar alertas</button>';
                 if (total === 0) {
@@ -254,6 +256,10 @@
                     '<button onclick="window.switchProductTab(\'unpublished\',\'/partials/products-not-published\')" class="flex items-center gap-1.5 px-2.5 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 border border-blue-300 rounded-lg text-xs font-semibold transition-colors">' +
                     '<span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500"></span>Sin publicar' +
                     '<span class="ml-1 bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-bold">' + d.sin_publicar + '</span></button>';
+                if (d.pausados > 0) badges +=
+                    '<button onclick="window.togglePausedPanel()" class="flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-700 border border-purple-300 rounded-lg text-xs font-semibold transition-colors">' +
+                    '<span class="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>Pausados x stock' +
+                    '<span class="ml-1 bg-purple-500 text-white rounded-full px-1.5 py-0.5 text-[10px] font-bold">' + d.pausados + '</span></button>';
                 bar.innerHTML = '<div class="flex flex-wrap items-center gap-2 px-3 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm">' +
                     '<span class="text-xs text-gray-400 font-medium hidden md:inline">Alertas:</span>' + badges + syncBtn + '</div>';
             })
@@ -313,6 +319,115 @@
     };
 
     loadAlertBar();
+    // Carga no-bloqueante del conteo de pausados (alimenta la badge en la barra)
+    window._pausedLoaded = false;
+    (function fetchPausedCount() {
+        fetch('/api/ml/paused-items')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                window._pausedLoaded = true;
+                window._pausedData = d;
+                if ((d.count || 0) > 0) loadAlertBar(); // refresh bar with new count
+            })
+            .catch(function() {});
+    })();
+
+    // ── Panel de listings pausados ────────────────────────────────────────────
+    window.togglePausedPanel = function() {
+        var panel = document.getElementById('paused-items-container');
+        if (!panel) return;
+        if (panel.style.display !== 'none') {
+            panel.style.display = 'none';
+            return;
+        }
+        panel.style.display = 'block';
+        if (panel.innerHTML.trim()) return; // already loaded
+        panel.innerHTML = '<div class="flex items-center gap-2 p-4 bg-purple-50 rounded-xl text-sm text-purple-600 animate-pulse">Cargando listings pausados...</div>';
+        fetch('/api/ml/paused-items')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { _renderPausedPanel(d); })
+            .catch(function() { panel.innerHTML = ''; });
+    };
+
+    function _renderPausedPanel(d) {
+        var panel = document.getElementById('paused-items-container');
+        if (!panel) return;
+        var items = d.items || [];
+        if (!items.length) {
+            panel.style.display = 'none';
+            return;
+        }
+        var rows = items.map(function(it) {
+            var sku = it.sku ? '<span class="font-mono text-[11px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">' + it.sku + '</span>' : '';
+            var price = it.price ? '<span class="text-xs text-gray-500">$' + Number(it.price).toLocaleString('es-MX', {maximumFractionDigits:0}) + '</span>' : '';
+            return '<div class="flex items-center gap-3 px-4 py-2.5 border-b border-gray-100 last:border-0 hover:bg-purple-50/20">' +
+                '<div class="min-w-0 flex-1">' +
+                '<div class="flex items-center gap-2 flex-wrap mb-0.5">' +
+                '<span class="font-mono text-[11px] font-semibold text-blue-600">' + it.id + '</span>' + sku + price +
+                '</div>' +
+                '<span class="text-xs text-gray-600 truncate block">' + (it.title||'').substring(0,70) + '</span>' +
+                '</div>' +
+                '<a href="https://www.mercadolibre.com.mx/p/' + it.id + '" target="_blank" ' +
+                '   class="text-[11px] text-blue-500 hover:underline flex-shrink-0">Ver ↗</a>' +
+                '<button onclick="window.reactivateItem(\'' + it.id + '\', this)" ' +
+                '   class="flex-shrink-0 bg-purple-500 hover:bg-purple-600 text-white px-3 py-1.5 rounded-xl text-[11px] font-semibold transition-colors">Reactivar</button>' +
+                '</div>';
+        }).join('');
+        panel.innerHTML = '<div class="mb-3 bg-white rounded-2xl shadow-sm border border-purple-200 overflow-hidden">' +
+            '<div class="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">' +
+            '<div class="flex items-center gap-2">' +
+            '<div class="w-1 h-5 bg-purple-500 rounded"></div>' +
+            '<span class="font-semibold text-gray-800 text-sm">' + items.length + ' listings pausados por stock 0</span>' +
+            '</div>' +
+            '<div class="flex items-center gap-2">' +
+            '<button onclick="window.reactivateAll(this)" class="text-[11px] bg-purple-500 hover:bg-purple-600 text-white font-semibold px-3 py-1.5 rounded-xl transition-colors">Reactivar todos (' + items.length + ')</button>' +
+            '<button onclick="document.getElementById(\'paused-items-container\').style.display=\'none\'" class="text-[11px] text-gray-400 hover:text-gray-600">Cerrar</button>' +
+            '</div></div>' +
+            '<p class="text-[11px] text-gray-400 px-5 py-2 bg-purple-50/40 border-b border-gray-50">Listings visibles en ML como "Sin stock" una vez reactivados. El stock no se modifica.</p>' +
+            '<div id="paused-list">' + rows + '</div>' +
+            '</div>';
+    }
+
+    window.reactivateItem = function(itemId, btn) {
+        if (!confirm('Reactivar ' + itemId + '?\n\nEl listing quedará visible en ML como "Sin stock". El stock no cambia.')) return;
+        if (btn) { btn.textContent = '...'; btn.disabled = true; }
+        fetch('/api/ml/reactivate/' + itemId, {method: 'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (d.ok) {
+                    var row = btn ? btn.closest('[class*="flex items-center gap-3"]') : null;
+                    if (row) row.remove();
+                    showToast('Reactivado: ' + itemId, 'success');
+                    loadAlertBar();
+                    window._pausedLoaded = false;
+                } else {
+                    showToast('Error: ' + (d.error||'unknown'), 'error');
+                    if (btn) { btn.textContent = 'Reactivar'; btn.disabled = false; }
+                }
+            })
+            .catch(function() {
+                showToast('Error al reactivar', 'error');
+                if (btn) { btn.textContent = 'Reactivar'; btn.disabled = false; }
+            });
+    };
+
+    window.reactivateAll = function(btn) {
+        if (!confirm('Reactivar TODOS los listings pausados por stock 0?\n\nQuedarán visibles como "Sin stock". El stock no se modifica.')) return;
+        if (btn) { btn.textContent = 'Reactivando...'; btn.disabled = true; }
+        fetch('/api/ml/reactivate-all', {method: 'POST'})
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                showToast('Reactivados: ' + (d.reactivated||0) + (d.failed ? ' | Fallidos: ' + d.failed : ''), d.failed ? 'warning' : 'success');
+                document.getElementById('paused-items-container').innerHTML = '';
+                document.getElementById('paused-items-container').style.display = 'none';
+                window._pausedLoaded = false;
+                loadAlertBar();
+            })
+            .catch(function() {
+                showToast('Error al reactivar en bulk', 'error');
+                if (btn) { btn.textContent = 'Reactivar todos'; btn.disabled = false; }
+            });
+    };
 
     // Expose for external use
     window.switchProductTab = switchTab;
