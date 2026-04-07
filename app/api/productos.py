@@ -255,12 +255,13 @@ async def get_candidates(
 
 @router.get("")
 async def list_productos(
-    status:         str = Query("all"),
-    q:              str = Query(""),
-    offset:         int = Query(0, ge=0),
-    limit:          int = Query(50, ge=1, le=100),
-    score_category: str = Query(""),
-    sort_by:        str = Query(""),
+    status:         str  = Query("all"),
+    q:              str  = Query(""),
+    offset:         int  = Query(0, ge=0),
+    limit:          int  = Query(50, ge=1, le=100),
+    score_category: str  = Query(""),
+    sort_by:        str  = Query(""),
+    bm_gt0:         bool = Query(False),
 ):
     """Lista paginada de publicaciones ML + BM stock + health score.
     status: all | active | paused
@@ -417,6 +418,10 @@ async def list_productos(
                 continue
             items.append(row)
 
+        # Optional filter: only items with BM stock > 0
+        if bm_gt0:
+            items = [i for i in items if i.get("bm_total", 0) > 0]
+
         # Apply sort_by
         if sort_by == "score_asc":
             items.sort(key=lambda x: x.get("score", 0))
@@ -430,6 +435,14 @@ async def list_productos(
             items.sort(key=lambda x: x.get("sold_quantity", 0))
         elif sort_by == "ventas_desc":
             items.sort(key=lambda x: x.get("sold_quantity", 0), reverse=True)
+        elif sort_by == "precio_asc":
+            items.sort(key=lambda x: x.get("price", 0))
+        elif sort_by == "precio_desc":
+            items.sort(key=lambda x: x.get("price", 0), reverse=True)
+        elif sort_by == "stock_ml_asc":
+            items.sort(key=lambda x: x.get("stock_ml", 0))
+        elif sort_by == "stock_ml_desc":
+            items.sort(key=lambda x: x.get("stock_ml", 0), reverse=True)
 
         total_filtered = len(items) if q else grand_total
         if q:

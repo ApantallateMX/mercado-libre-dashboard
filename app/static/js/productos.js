@@ -6,14 +6,15 @@
 
   // ── Estado global ──────────────────────────────────────────────────────────
   const state = {
-    tab:            'all',       // all | active | paused | critico | candidates (candidates = Lanzador Inteligente)
+    tab:            'all',       // all | active | paused | critico | candidates
     q:              '',
     offset:         0,
     limit:          50,
     total:          0,
     items:          [],
     loading:        false,
-    sort_by:        '',          // '' | score_asc | score_desc | stock_asc | stock_desc | ventas_asc | ventas_desc
+    sort_by:        '',          // '' | score_asc | score_desc | stock_asc | stock_desc | ventas_asc | ventas_desc | precio_asc | precio_desc | stock_ml_asc | stock_ml_desc
+    bm_gt0:         false,       // filter: only items with BM stock > 0
     // Panel
     panelItem:      null,
     panelTab:       'editar',
@@ -65,7 +66,7 @@
                : state.tab;
       const sc = state.tab === 'critico' ? 'critico' : '';
       const data = await apiFetch(
-        `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}&score_category=${sc}&sort_by=${encodeURIComponent(state.sort_by)}`
+        `/api/productos?status=${st}&q=${encodeURIComponent(state.q)}&offset=${state.offset}&limit=${state.limit}&score_category=${sc}&sort_by=${encodeURIComponent(state.sort_by)}&bm_gt0=${state.bm_gt0}`
       );
       state.items = data.items || [];
       state.total = data.total || 0;
@@ -125,11 +126,15 @@
           <td class="px-3 py-2.5 text-right text-sm font-semibold text-gray-700 whitespace-nowrap">
             ${item.price ? '$' + fmt(item.price) : '—'}
           </td>
+          <td class="px-3 py-2.5 text-right text-sm font-mono text-gray-600">
+            ${item.sold_quantity != null ? item.sold_quantity : '—'}
+          </td>
           <td class="px-3 py-2.5 text-center" onclick="event.stopPropagation()">
             ${actionBtns(item)}
           </td>
         </tr>
       `).join('');
+      _updateSortHeaders();
     }
 
     // Mobile cards
@@ -273,18 +278,58 @@
     state.sort_by  = sortBy;
     state.offset   = 0;
     const labels = {
-      '':           'Ordenar',
-      'score_desc': 'Score ↓',
-      'score_asc':  'Score ↑',
-      'stock_desc': 'Stock ↓',
-      'stock_asc':  'Stock ↑',
-      'ventas_desc':'Ventas ↓',
-      'ventas_asc': 'Ventas ↑',
+      '':              'Ordenar',
+      'score_desc':    'Score ↓',
+      'score_asc':     'Score ↑',
+      'stock_desc':    'Stock BM ↓',
+      'stock_asc':     'Stock BM ↑',
+      'ventas_desc':   'Ventas ↓',
+      'ventas_asc':    'Ventas ↑',
+      'precio_desc':   'Precio ↓',
+      'precio_asc':    'Precio ↑',
+      'stock_ml_desc': 'Stock ML ↓',
+      'stock_ml_asc':  'Stock ML ↑',
     };
     setText('sort-label', labels[sortBy] || 'Ordenar');
     document.getElementById('sort-dropdown')?.classList.add('hidden');
     loadItems();
   };
+
+  // Click on a column header: toggle desc/asc for that column
+  window.setSortCol = function (col) {
+    const next = state.sort_by === col + '_desc' ? col + '_asc' : col + '_desc';
+    window.setSort(next);
+  };
+
+  // "Stock BM > 0" filter chip toggle
+  window.toggleFilterBm = function () {
+    state.bm_gt0 = !state.bm_gt0;
+    const btn = document.getElementById('filter-bm-btn');
+    if (btn) {
+      if (state.bm_gt0) {
+        btn.className = 'text-xs px-2.5 py-1 rounded-full border border-yellow-500 bg-yellow-400 text-gray-800 font-semibold transition whitespace-nowrap';
+      } else {
+        btn.className = 'text-xs px-2.5 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 transition whitespace-nowrap';
+      }
+    }
+    state.offset = 0;
+    loadItems();
+  };
+
+  // Update column header sort arrows after each render
+  function _updateSortHeaders() {
+    ['score', 'stock', 'stock_ml', 'precio', 'ventas'].forEach(function (col) {
+      const el = document.getElementById('arr-' + col);
+      if (!el) return;
+      if (state.sort_by === col + '_desc') {
+        el.textContent = '↓'; el.className = 'text-yellow-600 font-bold normal-case';
+      } else if (state.sort_by === col + '_asc') {
+        el.textContent = '↑'; el.className = 'text-yellow-600 font-bold normal-case';
+      } else {
+        el.textContent = '↕'; el.className = 'text-gray-300 normal-case';
+      }
+    });
+  }
 
   // ── Comparador manual (colapsable dentro de Candidatos) ────────────────────
   window.toggleComparadorManual = function () {

@@ -88,16 +88,33 @@
           </svg>
           <span id="sort-label">Ordenar</span>
         </button>
-        <div id="sort-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white border rounded-xl shadow-lg z-30 py-1 w-48">
-          <button onclick="setSort('')"         class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Por defecto</button>
-          <button onclick="setSort('score_desc')" class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Score ↓ (críticos primero)</button>
-          <button onclick="setSort('score_asc')"  class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Score ↑ (mejores primero)</button>
-          <button onclick="setSort('stock_desc')" class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock BM ↓</button>
-          <button onclick="setSort('stock_asc')"  class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock BM ↑</button>
-          <button onclick="setSort('ventas_desc')" class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Ventas ↓</button>
-          <button onclick="setSort('ventas_asc')"  class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Ventas ↑</button>
+        <div id="sort-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white border rounded-xl shadow-lg z-30 py-1 w-52">
+          <button onclick="setSort('')"              class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Por defecto</button>
+          <div class="border-t border-gray-100 my-1"></div>
+          <button onclick="setSort('stock_desc')"    class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock BM ↓ (mayor primero)</button>
+          <button onclick="setSort('stock_asc')"     class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock BM ↑ (menor primero)</button>
+          <div class="border-t border-gray-100 my-1"></div>
+          <button onclick="setSort('ventas_desc')"   class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Ventas ↓ (más vendidos)</button>
+          <button onclick="setSort('ventas_asc')"    class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Ventas ↑ (menos vendidos)</button>
+          <div class="border-t border-gray-100 my-1"></div>
+          <button onclick="setSort('precio_desc')"   class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Precio ↓ (mayor primero)</button>
+          <button onclick="setSort('precio_asc')"    class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Precio ↑ (menor primero)</button>
+          <div class="border-t border-gray-100 my-1"></div>
+          <button onclick="setSort('score_desc')"    class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Score ↓ (críticos primero)</button>
+          <button onclick="setSort('score_asc')"     class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Score ↑ (mejores primero)</button>
+          <div class="border-t border-gray-100 my-1"></div>
+          <button onclick="setSort('stock_ml_desc')" class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock ML ↓</button>
+          <button onclick="setSort('stock_ml_asc')"  class="sort-opt w-full text-left px-4 py-2 text-sm hover:bg-gray-50 text-gray-700">Stock ML ↑</button>
         </div>
       </div>
+    </div>
+    <!-- Filter chips -->
+    <div class="flex items-center gap-2 px-4 py-2 border-b bg-gray-50/60 overflow-x-auto">
+      <span class="text-xs text-gray-400 shrink-0">Filtrar:</span>
+      <button onclick="window.toggleFilterBm()" id="filter-bm-btn"
+              class="text-xs px-2.5 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:bg-gray-100 transition whitespace-nowrap">
+        Stock BM &gt; 0
+      </button>
     </div>
     <!-- Tab bar -->
     <div class="flex overflow-x-auto">
@@ -135,10 +152,11 @@
             <th class="px-3 py-3 text-left">Producto</th>
             <th class="px-3 py-3 text-left">SKU</th>
             <th class="px-3 py-3 text-center">Estado</th>
-            <th class="px-3 py-3 text-center">Score</th>
-            <th class="px-3 py-3 text-right">Stock BM</th>
-            <th class="px-3 py-3 text-right">Stock ML</th>
-            <th class="px-3 py-3 text-right">Precio</th>
+            <th class="px-3 py-3 text-center cursor-pointer hover:bg-yellow-50 select-none" onclick="window.setSortCol('score')" title="Ordenar por Score">Score <span id="arr-score" class="text-gray-300 normal-case">↕</span></th>
+            <th class="px-3 py-3 text-right cursor-pointer hover:bg-yellow-50 select-none" onclick="window.setSortCol('stock')" title="Ordenar por Stock BM">Stock BM <span id="arr-stock" class="text-gray-300 normal-case">↕</span></th>
+            <th class="px-3 py-3 text-right cursor-pointer hover:bg-yellow-50 select-none" onclick="window.setSortCol('stock_ml')" title="Ordenar por Stock ML">Stock ML <span id="arr-stock_ml" class="text-gray-300 normal-case">↕</span></th>
+            <th class="px-3 py-3 text-right cursor-pointer hover:bg-yellow-50 select-none" onclick="window.setSortCol('precio')" title="Ordenar por Precio">Precio <span id="arr-precio" class="text-gray-300 normal-case">↕</span></th>
+            <th class="px-3 py-3 text-right cursor-pointer hover:bg-yellow-50 select-none" onclick="window.setSortCol('ventas')" title="Ordenar por Ventas">Ventas <span id="arr-ventas" class="text-gray-300 normal-case">↕</span></th>
             <th class="px-3 py-3 text-center w-28">Acciones</th>
           </tr>
         </thead>
