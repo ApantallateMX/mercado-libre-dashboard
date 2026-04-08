@@ -1135,7 +1135,7 @@ async function loadOpsListing() {
   var sellerParam = window.amzActiveSellerId ? '&seller_id=' + window.amzActiveSellerId : '';
   wrap.innerHTML = '<div class="text-center py-8 text-gray-400 text-sm">Cargando...</div>';
   try {
-    var r = await fetch('/api/amazon/products/catalog?status_filter=' + filter + '&include_checkboxes=1' + sellerParam);
+    var r = await fetch('/api/amazon/products/catalog?status_filter=' + filter + sellerParam);
     var html = await r.text();
     wrap.innerHTML = html;
     initBulkSelection();

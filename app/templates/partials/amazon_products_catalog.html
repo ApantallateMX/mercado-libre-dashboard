@@ -35,7 +35,7 @@
         <!-- Ordenamiento -->
         <div class="flex items-center gap-2">
             <span class="text-xs text-gray-500 font-medium">Ordenar:</span>
-            {% set sorts = [('fba_stock','FBA Stock'),('price','Precio'),('title','Título')] %}
+            {% set sorts = [('fba_stock','FBA Stock'),('price','Precio'),('revenue30d','$ 30d'),('title','Título')] %}
             {% for val, label in sorts %}
             {% set new_dir = 'asc' if (sort_by == val and sort_dir == 'desc') else 'desc' %}
             <a href="/api/amazon/products/catalog?status_filter={{ status_filter }}&sort_by={{ val }}&sort_dir={{ new_dir }}"
@@ -79,6 +79,8 @@
                     <th class="py-3 px-3 font-semibold text-right hidden md:table-cell">Res.</th>
                     <th class="py-3 px-3 font-semibold text-right hidden md:table-cell">Entrante</th>
                     <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell">Dañado</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell{% if sku_sales_loading %} opacity-50{% endif %}" title="Unidades vendidas en 30 días">Uds 30d{% if sku_sales_loading %} ⏳{% endif %}</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell{% if sku_sales_loading %} opacity-50{% endif %}" title="Revenue en 30 días">$ 30d{% if sku_sales_loading %} ⏳{% endif %}</th>
                     <th class="py-3 px-3 font-semibold text-center">Estado</th>
                     <th class="py-3 px-3 font-semibold text-left hidden lg:table-cell">Sugerencia</th>
                     <th class="py-3 px-3 font-semibold text-center">Acciones</th>
@@ -147,6 +149,16 @@
                     <td class="py-2.5 px-3 text-right hidden lg:table-cell">
                         {% if item.unfulfillable > 0 %}
                         <span class="text-red-500 font-medium">{{ item.unfulfillable }}</span>
+                        {% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell">
+                        {% if item.units_30d > 0 %}
+                        <span class="font-semibold text-indigo-600">{{ item.units_30d }}</span>
+                        {% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell">
+                        {% if item.revenue_30d > 0 %}
+                        <span class="font-semibold text-green-600">${{ "{:,.0f}".format(item.revenue_30d) }}</span>
                         {% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">

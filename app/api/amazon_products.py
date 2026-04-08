@@ -655,8 +655,9 @@ async def amazon_products_summary(
 async def amazon_products_catalog(
     request: Request,
     status_filter: str = Query("all", description="all | active | inactive | suppressed"),
-    sort_by:       str = Query("fba_stock", description="fba_stock | price | title"),
+    sort_by:       str = Query("fba_stock", description="fba_stock | price | title | revenue30d"),
     sort_dir:      str = Query("desc", description="asc | desc"),
+    seller_id:     Optional[str] = Query(None),
 ):
     """
     Catálogo completo de listings Amazon.
@@ -665,11 +666,12 @@ async def amazon_products_catalog(
     - Listings Items API: SKU, ASIN, título, precio, estado
     - FBA Inventory: stock disponible, reservado, dañado, en camino
     - Issues del listing: alertas de calidad por Amazon
+    - SKU Sales (30d): unidades y revenue por SKU desde caché
 
-    Columnas: Imagen · Título/SKU · ASIN · Precio · FBA Disp. · Reservado ·
-              Entrante · Dañado · Estado · Issues · Acciones
+    Columnas: Imagen · Título/SKU · ASIN · Precio · FBA · Uds 30d · $ 30d ·
+              Estado · Issues · Acciones
     """
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return _render_no_account(request, "amazon_products_catalog.html")
 
@@ -679,6 +681,9 @@ async def amazon_products_catalog(
             _get_fba_cached(client),
         )
         fba_index = _build_fba_index(fba_summaries)
+
+        # ── SKU Sales (non-blocking, from cache or trigger BG refresh) ─────
+        sku_sales, sku_sales_loading = _get_sku_sales_cached(client)
 
         # ── Enriquecer cada listing con datos FBA ──────────────────────────
         enriched = []
@@ -718,6 +723,10 @@ async def amazon_products_catalog(
             # Sugerencia automática de mejora
             suggestion = _get_listing_suggestion(fba_stock, status, unfulfillable, issue_list)
 
+            sale_data    = sku_sales.get(sku, {})
+            units_30d    = int(sale_data.get("units", 0) or 0)
+            revenue_30d  = round(float(sale_data.get("revenue", 0) or 0), 0)
+
             enriched.append({
                 "sku":           sku,
                 "asin":          asin,
@@ -732,6 +741,8 @@ async def amazon_products_catalog(
                 "image_url":     image_url,
                 "issues":        issue_list,
                 "suggestion":    suggestion,
+                "units_30d":     units_30d,
+                "revenue_30d":   revenue_30d,
                 "amazon_url":    f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
             })
 
@@ -749,18 +760,21 @@ async def amazon_products_catalog(
             enriched.sort(key=lambda x: x["price"], reverse=reverse)
         elif sort_by == "title":
             enriched.sort(key=lambda x: x["title"].lower(), reverse=reverse)
+        elif sort_by == "revenue30d":
+            enriched.sort(key=lambda x: x["revenue_30d"], reverse=reverse)
         else:  # fba_stock (default)
             enriched.sort(key=lambda x: x["fba_stock"], reverse=reverse)
 
         ctx = {
-            "listings":      enriched,
-            "total":         len(enriched),
-            "status_filter": status_filter,
-            "sort_by":       sort_by,
-            "sort_dir":      sort_dir,
-            "nickname":      client.nickname,
-            "marketplace":   client.marketplace_name,
-            "seller_id":     client.seller_id,
+            "listings":           enriched,
+            "total":              len(enriched),
+            "status_filter":      status_filter,
+            "sort_by":            sort_by,
+            "sort_dir":           sort_dir,
+            "nickname":           client.nickname,
+            "marketplace":        client.marketplace_name,
+            "seller_id":          client.seller_id,
+            "sku_sales_loading":  sku_sales_loading,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_catalog.html", ctx)
 
