@@ -683,9 +683,10 @@ def _build_amazon_chart_data(orders: list, date_from: str, date_to: str):
 async def get_amazon_dashboard_data(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
 ):
     """Métricas + chart de Amazon — usa Sales API para revenue exacto (OPS = Seller Central)."""
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")
 
@@ -770,9 +771,10 @@ async def get_amazon_daily_sales_data(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     goal: float = Query(0, description="Meta diaria (0 = leer de DB)"),
+    seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
 ):
     """Ventas diarias de Amazon — usa Sales API para revenue exacto (OPS = Seller Central)."""
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
 
@@ -921,9 +923,12 @@ async def get_amazon_debug_today():
 
 
 @router.get("/amazon-recent-orders", response_class=HTMLResponse)
-async def get_amazon_recent_orders(request: Request):
+async def get_amazon_recent_orders(
+    request: Request,
+    seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
+):
     """Últimas 5 órdenes de Amazon — HTML partial para el dashboard."""
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         return HTMLResponse(
             '<p class="text-center text-gray-400 py-6 text-sm">Sin cuenta Amazon conectada</p>'
@@ -984,9 +989,11 @@ def _amazon_health_alerts(cancel_rate: float, unshipped: int, unfulfillable: int
 
 
 @router.get("/amazon-health-data")
-async def get_amazon_health_data():
+async def get_amazon_health_data(
+    seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
+):
     """Métricas de salud de la cuenta Amazon: órdenes, FBA, cancelaciones."""
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon configurada")
 

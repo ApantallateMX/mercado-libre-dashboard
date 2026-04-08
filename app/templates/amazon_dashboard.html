@@ -706,6 +706,7 @@ function getDateParams() {
     var p = [];
     if (df) p.push('date_from=' + df);
     if (dt) p.push('date_to=' + dt);
+    if (window.amzActiveSellerId) p.push('seller_id=' + window.amzActiveSellerId);
     return p.join('&');
 }
 
@@ -922,7 +923,8 @@ function loadAmazonDashboard() {
     // Delay de 1.5s para que el caché se llene con la llamada de dashboard-data
     // y así evitar un 3er request simultáneo a SP-API (429 QuotaExceeded)
     setTimeout(function() {
-        fetch('/api/metrics/amazon-recent-orders')
+        var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+        fetch('/api/metrics/amazon-recent-orders' + sellerParam)
             .then(function(r){return r.text();})
             .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
             .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
@@ -1169,7 +1171,8 @@ async function loadAmzFinanzasTab() {
 function loadAmzSaludTab() {
     var cont = document.getElementById('amz-health-content');
     cont.innerHTML = '<div class="animate-pulse space-y-3">'+Array(4).fill('<div class="h-20 bg-orange-50 rounded-xl"></div>').join('')+'</div>';
-    fetch('/api/metrics/amazon-health-data')
+    var _hSellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+    fetch('/api/metrics/amazon-health-data' + _hSellerParam)
         .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
         .then(function(data){ renderAmzHealth(data, cont); amzTabLoaded.salud = true; })
         .catch(function(e){ cont.innerHTML = '<p class="text-red-400 text-center py-6 bg-white rounded-xl shadow p-6">Error cargando salud: '+e.message+'</p>'; });
