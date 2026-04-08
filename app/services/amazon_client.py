@@ -1391,21 +1391,21 @@ async def _seed_amazon_accounts():
 
     if seller_id2 and client_id2 and refresh_rt2:
         existing2 = await token_store.get_amazon_account(seller_id2)
-        if existing2 and existing2.get("refresh_token", "").startswith("Atzr|"):
-            await token_store.save_amazon_account(
-                seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
-                client_secret=client_sec2, refresh_token="",
-                marketplace_id=mkt_id2, marketplace_name=mkt_name2,
-                app_solution_id=app_sol_id2,
-            )
-            logger.info(f"[Amazon] Cuenta2 actualizada (token preservado): {seller_id2}")
+        stored_rt2 = (existing2 or {}).get("refresh_token", "")
+        # AMAZON2 siempre usa el env var como fuente de verdad.
+        # El env var se actualiza manualmente cuando se re-autoriza la app con nuevos permisos.
+        # Si el env var tiene un token DIFERENTE al almacenado → actualizar (nueva autorización).
+        # Si son iguales → preservar (no overwrite innecesario).
+        token_to_save2 = refresh_rt2 if refresh_rt2 != stored_rt2 else ""
+        await token_store.save_amazon_account(
+            seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
+            client_secret=client_sec2, refresh_token=token_to_save2,
+            marketplace_id=mkt_id2, marketplace_name=mkt_name2,
+            app_solution_id=app_sol_id2,
+        )
+        if token_to_save2:
+            logger.info(f"[Amazon] Cuenta2 token actualizado (nuevo env var): {seller_id2}")
         else:
-            await token_store.save_amazon_account(
-                seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
-                client_secret=client_sec2, refresh_token=refresh_rt2,
-                marketplace_id=mkt_id2, marketplace_name=mkt_name2,
-                app_solution_id=app_sol_id2,
-            )
-            logger.info(f"[Amazon] Cuenta2 sembrada: {seller_id2} ({nickname2})")
+            logger.info(f"[Amazon] Cuenta2 actualizada (token sin cambios): {seller_id2}")
     else:
         logger.info("[Amazon] AMAZON2_* no configurado — skip segunda cuenta")
