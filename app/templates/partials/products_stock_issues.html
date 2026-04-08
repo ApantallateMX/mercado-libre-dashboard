@@ -1112,7 +1112,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-imbalanced" class="divide-y divide-gray-100">
                 {% for p in imbalanced %}
                 <tr class="hover:bg-purple-50/30" id="imbal-d-{{ p.id }}">
                     <td class="px-3 py-2">
@@ -1142,6 +1142,7 @@
             </tbody>
         </table>
     </div>
+    <div id="pager-imbalanced"></div>
 </div>
 {% endif %}
 
@@ -1190,7 +1191,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-stagnant" class="divide-y divide-gray-100">
                 {% for p in stagnant %}
                 <tr class="hover:bg-slate-50/30">
                     <td class="px-3 py-2">
@@ -1215,6 +1216,7 @@
             </tbody>
         </table>
     </div>
+    <div id="pager-stagnant"></div>
 </div>
 {% endif %}
 
@@ -1243,7 +1245,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-gray-100">
+            <tbody id="tbody-price-risk" class="divide-y divide-gray-100">
                 {% for p in price_risk %}
                 <tr class="hover:bg-pink-50/30">
                     <td class="px-3 py-2">
@@ -1268,6 +1270,7 @@
             </tbody>
         </table>
     </div>
+    <div id="pager-price-risk"></div>
     <!-- Mobile -->
     <div class="md:hidden space-y-2">
         {% for p in price_risk %}
@@ -1978,11 +1981,14 @@ function bulkActivateAll() {
     };
     render();
   }
-  paginateTable('tbody-restock',   'pager-restock');
-  paginateTable('tbody-risk',      'pager-risk');
-  paginateTable('tbody-activate',  'pager-activate');
-  paginateTable('tbody-critical',  'pager-critical');
-  paginateTable('tbody-fullstock', 'pager-fullstock');
+  paginateTable('tbody-restock',    'pager-restock');
+  paginateTable('tbody-risk',       'pager-risk');
+  paginateTable('tbody-activate',   'pager-activate');
+  paginateTable('tbody-critical',   'pager-critical');
+  paginateTable('tbody-fullstock',  'pager-fullstock');
+  paginateTable('tbody-imbalanced', 'pager-imbalanced');
+  paginateTable('tbody-stagnant',   'pager-stagnant');
+  paginateTable('tbody-price-risk', 'pager-price-risk');
 })();
 
 window.syncOneImbalanced = function(itemId, bmQty) {

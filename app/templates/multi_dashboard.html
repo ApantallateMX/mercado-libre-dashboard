@@ -17,18 +17,26 @@
         </div>
         <div class="hidden md:flex items-center gap-5 divide-x divide-gray-100">
             <div class="pr-5 text-center">
-                <p class="text-xs text-gray-400">MeLi hoy</p>
+                <p class="text-xs text-gray-400">MeLi hoy <span class="text-[10px] text-gray-300">(neto)</span></p>
                 <p class="font-bold text-gray-800 text-lg" id="md-total-today">—</p>
             </div>
             <div class="px-5 text-center">
-                <p class="text-xs text-gray-400">MeLi semana</p>
+                <p class="text-xs text-gray-400">MeLi semana <span class="text-[10px] text-gray-300">(neto)</span></p>
                 <p class="font-bold text-gray-800 text-lg" id="md-total-week">—</p>
             </div>
             <div class="px-5 text-center">
-                <p class="text-xs text-gray-400">MeLi mes</p>
+                <p class="text-xs text-gray-400">MeLi mes <span class="text-[10px] text-gray-300">(neto)</span></p>
                 <p class="font-bold text-green-600 text-lg" id="md-total-month">—</p>
             </div>
             {% if amazon_accounts %}
+            <div class="px-5 text-center">
+                <p class="text-xs text-orange-400">AMZ hoy</p>
+                <p class="font-bold text-orange-600 text-lg" id="md-amz-today">—</p>
+            </div>
+            <div class="px-5 text-center">
+                <p class="text-xs text-orange-400">AMZ semana</p>
+                <p class="font-bold text-orange-500 text-lg" id="md-amz-week">—</p>
+            </div>
             <div class="pl-5 text-center">
                 <p class="text-xs text-orange-400">AMZ mes</p>
                 <p class="font-bold text-orange-600 text-lg" id="md-amz-month">—</p>
@@ -164,7 +172,15 @@
 <div class="bg-white rounded-xl shadow p-4 mb-5">
     <div class="flex items-center justify-between mb-3">
         <h2 class="font-semibold text-gray-700">Top Productos — Todas las Cuentas</h2>
-        <span id="md-top-period" class="text-xs text-gray-400"></span>
+        <div class="flex items-center gap-2">
+            <span id="md-top-period" class="text-xs text-gray-400"></span>
+            <div class="flex rounded-lg overflow-hidden border border-gray-200 text-xs">
+                <button id="top-sort-rev" onclick="setTopSort('revenue')"
+                    class="px-2 py-1 bg-yellow-400 text-white font-semibold">Por Ingreso</button>
+                <button id="top-sort-units" onclick="setTopSort('units')"
+                    class="px-2 py-1 bg-white text-gray-500 hover:bg-gray-50">Por Unidades</button>
+            </div>
+        </div>
     </div>
     <div id="md-top-products">
         <div class="animate-pulse space-y-2">
@@ -275,7 +291,7 @@ function showError(msg) {
 function clearError() { /* se limpia con showLeaderSkeletons */ }
 
 function renderAll(data) {
-    renderHeader(data.totals);
+    renderHeader(data.totals, data.accounts);
     renderLeaders(data);
     renderAccountCards(data.accounts);
     renderChart(data);
@@ -284,11 +300,18 @@ function renderAll(data) {
 }
 
 // ─── Header totals ────────────────────────────────────────────────────────
-function renderHeader(totals) {
+function renderHeader(totals, accounts) {
     document.getElementById('md-total-today').textContent = fmt(totals.today.revenue);
     document.getElementById('md-total-week').textContent = fmt(totals.week.revenue);
     document.getElementById('md-total-month').textContent = fmt(totals.month.revenue);
     _updateGoalBar(totals.today.revenue || 0);
+    // Actualizar revenue de hoy en cada tarjeta del Resumen del Día
+    if (accounts) {
+        accounts.forEach(function(acc) {
+            var el = document.getElementById('mb-rev-' + acc.user_id);
+            if (el) el.textContent = fmt(acc.today.revenue);
+        });
+    }
 }
 
 // ─── Leaders ──────────────────────────────────────────────────────────────
@@ -532,13 +555,20 @@ function renderSummaryTable(accounts) {
 }
 
 // ─── Top products ─────────────────────────────────────────────────────────
-function renderTopProducts(products, dateFrom, dateTo) {
-    document.getElementById('md-top-period').textContent = `${dateFrom} → ${dateTo}`;
-    if (!products || !products.length) {
-        document.getElementById('md-top-products').innerHTML =
-            '<p class="text-sm text-gray-400 py-4 text-center">No hay ventas en el período seleccionado.</p>';
-        return;
-    }
+var _topProductsData = [];  // cache para re-ordenar sin llamar API
+var _topSortMode = 'revenue';
+
+window.setTopSort = function(mode) {
+    _topSortMode = mode;
+    document.getElementById('top-sort-rev').className   = mode === 'revenue' ? 'px-2 py-1 bg-yellow-400 text-white font-semibold' : 'px-2 py-1 bg-white text-gray-500 hover:bg-gray-50';
+    document.getElementById('top-sort-units').className = mode === 'units'   ? 'px-2 py-1 bg-yellow-400 text-white font-semibold' : 'px-2 py-1 bg-white text-gray-500 hover:bg-gray-50';
+    _renderTopTable(_topProductsData);
+};
+
+function _renderTopTable(products) {
+    const sorted = [...products].sort((a, b) =>
+        _topSortMode === 'units' ? b.total_units - a.total_units : b.total_revenue - a.total_revenue
+    );
     document.getElementById('md-top-products').innerHTML = `
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -547,12 +577,12 @@ function renderTopProducts(products, dateFrom, dateTo) {
                     <th class="pb-2 pr-3">#</th>
                     <th class="pb-2 pr-3">Producto</th>
                     <th class="pb-2 pr-3 text-center">Unidades</th>
-                    <th class="pb-2 pr-3 text-right">Ingresos</th>
+                    <th class="pb-2 pr-3 text-right">Ingresos (neto)</th>
                     <th class="pb-2">Cuentas</th>
                 </tr>
             </thead>
             <tbody>
-                ${products.slice(0, 15).map((p, i) => `
+                ${sorted.slice(0, 15).map((p, i) => `
                 <tr class="border-b border-gray-50 hover:bg-gray-50">
                     <td class="py-2 pr-3 text-gray-400 font-medium">${i+1}</td>
                     <td class="py-2 pr-3">
@@ -572,6 +602,17 @@ function renderTopProducts(products, dateFrom, dateTo) {
             </tbody>
         </table>
     </div>`;
+}
+
+function renderTopProducts(products, dateFrom, dateTo) {
+    document.getElementById('md-top-period').textContent = `${dateFrom} → ${dateTo}`;
+    if (!products || !products.length) {
+        document.getElementById('md-top-products').innerHTML =
+            '<p class="text-sm text-gray-400 py-4 text-center">No hay ventas en el período seleccionado.</p>';
+        return;
+    }
+    _topProductsData = products;
+    _renderTopTable(products);
 }
 
 // ─── Concentration preview ────────────────────────────────────────────────
@@ -848,8 +889,12 @@ async function loadAmazonSection() {
         if (!resp.ok) { throw new Error('HTTP ' + resp.status); }
         const data = await resp.json();
         renderAmazonCards(data.amazon_accounts);
-        if (amzMonthEl && data.totals) {
-            amzMonthEl.textContent = fmt(data.totals.month.revenue);
+        if (data.totals) {
+            if (amzMonthEl) amzMonthEl.textContent = fmt(data.totals.month.revenue);
+            const amzTodayEl = document.getElementById('md-amz-today');
+            const amzWeekEl  = document.getElementById('md-amz-week');
+            if (amzTodayEl) amzTodayEl.textContent = fmt(data.totals.today.revenue);
+            if (amzWeekEl)  amzWeekEl.textContent  = fmt(data.totals.week.revenue);
         }
     } catch(e) {
         amzCards.innerHTML = `<div class="col-span-4 text-center py-4 text-orange-400 text-sm">Error cargando cuentas Amazon: ${escapeHtml(e.message)}</div>`;
@@ -943,10 +988,9 @@ window.loadMorningBriefing = function() {
         var goalFmt = a.daily_goal > 0
           ? '$' + Math.round(a.daily_goal).toLocaleString('es-MX')
           : '—';
-        // Click action: switch to this account, then go to items (alerts) or dashboard
         var dest = hasAlerts ? '/items#stock-section' : '/dashboard';
         var onclick = "mbSwitchAndGo('" + a.user_id + "','" + dest + "')";
-        return '<div onclick="' + onclick + '" class="bg-white rounded-xl shadow border p-4 cursor-pointer hover:shadow-md transition-shadow ' +
+        return '<div onclick="' + onclick + '" data-uid="' + a.user_id + '" class="bg-white rounded-xl shadow border p-4 cursor-pointer hover:shadow-md transition-shadow ' +
           (hasAlerts ? 'border-red-300 hover:border-red-400' : 'border-gray-100 hover:border-yellow-300') + '">' +
           '<div class="flex items-center justify-between mb-1.5">' +
             '<span class="text-xs font-bold text-gray-700 truncate max-w-[120px]">' + (a.label || a.user_id) + '</span>' +
@@ -954,7 +998,10 @@ window.loadMorningBriefing = function() {
               ? '<span class="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">' + a.alert_count + ' ⚠</span>'
               : '<span class="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-0.5 rounded-full">OK ✓</span>') +
           '</div>' +
-          '<p class="text-[11px] text-gray-400 mb-1.5">' + (hasAlerts ? a.alert_count + ' item(s) en riesgo' : 'Sin alertas activas') + '</p>' +
+          '<div class="flex items-center justify-between mb-1.5">' +
+            '<span class="text-[11px] text-gray-400">' + (hasAlerts ? a.alert_count + ' item(s) en riesgo' : 'Sin alertas activas') + '</span>' +
+            '<span id="mb-rev-' + a.user_id + '" class="text-xs font-bold text-gray-500">—</span>' +
+          '</div>' +
           '<div class="flex items-center justify-between">' +
             '<span class="text-[11px] text-gray-400">Meta: <span class="font-semibold text-gray-600">' + goalFmt + '</span></span>' +
             '<span class="text-[10px] ' + (hasAlerts ? 'text-red-500 font-semibold' : 'text-green-600 font-semibold') + '">' +

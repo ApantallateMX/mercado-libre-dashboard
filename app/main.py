@@ -7162,10 +7162,13 @@ async def get_multi_account_dashboard(
     Cache de 5 minutos cross-account (independiente de la cuenta activa).
     """
     now = datetime.utcnow()
+    # México CST = UTC-6 permanente (DST eliminado en 2022).
+    # Sin este ajuste, "hoy" se corta a las 6 PM hora México porque UTC ya es el día siguiente.
+    now_mx = now - timedelta(hours=6)
     if not date_from:
-        date_from = now.replace(day=1).strftime("%Y-%m-%d")
+        date_from = now_mx.replace(day=1).strftime("%Y-%m-%d")
     if not date_to:
-        date_to = now.strftime("%Y-%m-%d")
+        date_to = now_mx.strftime("%Y-%m-%d")
 
     cache_key = f"multi_account:{date_from}:{date_to}"
     cached = _multi_account_cache.get(cache_key)
@@ -7173,8 +7176,8 @@ async def get_multi_account_dashboard(
         return cached[1]
 
     accounts_list = await token_store.get_all_tokens()
-    today_str = now.strftime("%Y-%m-%d")
-    week_start_str = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+    today_str = now_mx.strftime("%Y-%m-%d")
+    week_start_str = (now_mx - timedelta(days=6)).strftime("%Y-%m-%d")
 
     ACC_COLORS = {
         "523916436": "#3B82F6",  # APANTALLATEMX - azul
@@ -7188,20 +7191,34 @@ async def get_multi_account_dashboard(
         nickname = account.get("nickname") or uid
         try:
             client = await get_meli_client(user_id=uid)
+            # +1 día en date_to para que la API de ML devuelva órdenes de la noche
+            # del día seleccionado en hora México (p.ej. 11 PM CST = 5 AM UTC del día siguiente).
+            # El filtro _in_period usa hora MX, así que nada se cuenta de más.
+            _fetch_date_to = (
+                datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+            ).strftime("%Y-%m-%d")
             all_orders, items_data = await asyncio.gather(
-                client.fetch_all_orders(date_from=date_from, date_to=date_to),
+                client.fetch_all_orders(date_from=date_from, date_to=_fetch_date_to),
                 client.get_items(limit=1)
             )
             await client.close()
 
-            paid = [o for o in all_orders if o.get("status") in ("paid", "delivered")]
+            def _order_mx_date(order) -> str:
+                """Devuelve la fecha de la orden en hora México (CST UTC-6)."""
+                od_utc = datetime.fromisoformat(
+                    order["date_created"].replace("Z", "+00:00")
+                ).replace(tzinfo=None)
+                return (od_utc - timedelta(hours=6)).strftime("%Y-%m-%d")
+
+            paid = [
+                o for o in all_orders
+                if o.get("status") in ("paid", "delivered")
+                and date_from <= _order_mx_date(o) <= date_to
+            ]
 
             def _in_period(order, start_str):
                 try:
-                    od = datetime.fromisoformat(
-                        order["date_created"].replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
-                    return od.strftime("%Y-%m-%d") >= start_str
+                    return _order_mx_date(order) >= start_str
                 except Exception:
                     return False
 
@@ -7216,14 +7233,11 @@ async def get_multi_account_dashboard(
                 revenue = sum(order_net_revenue(o) for o in orders)
                 return {"orders": len(orders), "units": units, "revenue": round(revenue, 2)}
 
-            # Daily revenues para la gráfica comparativa
+            # Daily revenues para la gráfica comparativa (fecha en hora México)
             daily_revenues: dict[str, float] = {}
             for o in paid:
                 try:
-                    od = datetime.fromisoformat(
-                        o["date_created"].replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
-                    dk = od.strftime("%Y-%m-%d")
+                    dk = _order_mx_date(o)
                     daily_revenues[dk] = daily_revenues.get(dk, 0) + order_net_revenue(o)
                 except Exception:
                     pass
@@ -7336,7 +7350,7 @@ async def get_multi_account_dashboard(
 
     top_products = sorted(
         global_items.values(),
-        key=lambda x: x["total_units"],
+        key=lambda x: x["total_revenue"],  # Ordenar por ingreso neto (más relevante para negocio)
         reverse=True
     )[:15]
     for p in top_products:
@@ -7360,8 +7374,8 @@ async def get_multi_account_dashboard(
 @app.get("/api/dashboard/morning-briefing")
 async def morning_briefing():
     """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado."""
-    from datetime import date
-    today = date.today().isoformat()
+    # Usar hora México (CST UTC-6) para que la fecha del resumen sea correcta en el servidor UTC
+    today = (datetime.utcnow() - timedelta(hours=6)).strftime("%Y-%m-%d")
     accounts_list = await token_store.get_all_tokens()
     all_alerts = await token_store.get_all_sync_alerts()
 
@@ -7408,10 +7422,12 @@ async def get_multi_account_amazon_dashboard(
     from app.services.amazon_client import get_amazon_client as _get_amz_client
 
     now = datetime.utcnow()
+    # México CST = UTC-6 permanente (DST eliminado en 2022).
+    now_mx = now - timedelta(hours=6)
     if not date_from:
-        date_from = now.replace(day=1).strftime("%Y-%m-%d")
+        date_from = now_mx.replace(day=1).strftime("%Y-%m-%d")
     if not date_to:
-        date_to = now.strftime("%Y-%m-%d")
+        date_to = now_mx.strftime("%Y-%m-%d")
 
     cache_key = f"multi_amazon:{date_from}:{date_to}"
     cached = _multi_account_cache.get(cache_key)
@@ -7419,10 +7435,6 @@ async def get_multi_account_amazon_dashboard(
         return cached[1]
 
     amazon_accounts_list = await token_store.get_all_amazon_accounts()
-    # Fix timezone: México CST = UTC-6 (febrero sin horario de verano).
-    # Usar fecha local MX para que "hoy" sea correcto después de las 6 PM CST.
-    # Sin esto, después de medianoche UTC (6 PM CST), today_str = mañana → 0 órdenes.
-    now_mx = now - timedelta(hours=6)
     today_str = now_mx.strftime("%Y-%m-%d")
     week_start_str = (now_mx - timedelta(days=6)).strftime("%Y-%m-%d")
 
@@ -7446,11 +7458,13 @@ async def get_multi_account_amazon_dashboard(
             # llamada a SP-API. Si no, el lock evita llamadas simultáneas.
             orders = await _cached_orders(client, cache_date_from, cache_date_to)
 
-            def _parse_dt(o):
+            def _parse_dt_mx(o):
+                """Devuelve la fecha de la orden Amazon en hora México (CST UTC-6)."""
                 try:
-                    return datetime.fromisoformat(
+                    dt_utc = datetime.fromisoformat(
                         o.get("PurchaseDate", "").replace("Z", "+00:00")
                     ).replace(tzinfo=None)
+                    return (dt_utc - timedelta(hours=6)).strftime("%Y-%m-%d")
                 except Exception:
                     return None
 
@@ -7466,16 +7480,16 @@ async def get_multi_account_amazon_dashboard(
                     units += int(o.get("NumberOfItemsUnshipped", 0) or 0)
                 return {"orders": len(order_list), "units": units, "revenue": round(rev, 2)}
 
-            today_orders = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= today_str]
-            week_orders  = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= week_start_str]
-            month_start  = now.replace(day=1).strftime("%Y-%m-%d")
-            month_orders = [o for o in orders if (dt := _parse_dt(o)) and dt.strftime("%Y-%m-%d") >= month_start]
+            # Filtrar por fecha México para consistencia con MeLi
+            month_start = now_mx.replace(day=1).strftime("%Y-%m-%d")
+            today_orders = [o for o in orders if (d := _parse_dt_mx(o)) and d >= today_str]
+            week_orders  = [o for o in orders if (d := _parse_dt_mx(o)) and d >= week_start_str]
+            month_orders = [o for o in orders if (d := _parse_dt_mx(o)) and d >= month_start]
 
             daily_revenues: dict[str, float] = {}
             for o in orders:
-                dt = _parse_dt(o)
-                if dt:
-                    dk = dt.strftime("%Y-%m-%d")
+                dk = _parse_dt_mx(o)
+                if dk:
                     try:
                         daily_revenues[dk] = daily_revenues.get(dk, 0.0) + float(
                             o.get("OrderTotal", {}).get("Amount", 0) or 0
