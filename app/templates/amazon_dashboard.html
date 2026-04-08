@@ -1919,7 +1919,7 @@ async function loadCompPricingSection(forceRefresh) {
       bbWinEl.innerHTML =
         '<p class="text-xs text-gray-400 mb-1">🏆 Buy Box Win %</p>' +
         '<p class="text-2xl font-extrabold" style="color:' + bbColor + '">' + bbWinPct + '%</p>' +
-        '<p class="text-xs text-gray-400 mt-1">' + (d.at_bb_count || 0) + ' de ' + ((d.at_bb_count||0)+(d.above_bb_count||0)+(d.below_bb_count||0)) + ' listings</p>';
+        '<p class="text-xs text-gray-400 mt-1">' + (d.at_bb_count || 0) + ' de ' + (d.total || (d.at_bb_count||0)+(d.above_bb_count||0)+(d.below_bb_count||0)+(d.no_bb_count||0)) + ' analizados</p>';
       bbWinEl.style.borderBottom = '4px solid ' + bbColor;
     }
     // Mini KPIs

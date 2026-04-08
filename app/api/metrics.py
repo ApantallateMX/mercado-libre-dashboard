@@ -1038,8 +1038,8 @@ async def get_amazon_health_data(
     # ── 1. Órdenes de los últimos 30 días (desde caché compartida) ────────
     try:
         orders = await _get_cached_amazon_orders(client, date_from, date_to)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception:
+        orders = []  # Soft fallback — show zeroed health instead of 503
 
     by_status: dict[str, int] = {}
     for o in orders:

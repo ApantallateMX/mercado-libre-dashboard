@@ -71,6 +71,10 @@ _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
 _SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
 
+# ─── BSR (Catalog Items API) ──────────────────────────────────────────────────
+_bsr_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {asin: (rank, category)})}
+_BSR_TTL = 1800  # 30 minutos (cambia poco)
+
 # ─── Onsite Stock (Amazon Reports API) ────────────────────────────────────────
 _onsite_stock_cache:  dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, {sku: qty})}
 _onsite_stock_locks:  dict[str, asyncio.Lock] = {}
@@ -266,6 +270,49 @@ async def _get_fba_cached(client) -> list:
     data = await client.get_fba_inventory_all()
     _fba_cache[key] = (now, data)
     return data
+
+
+async def _get_bsr_cached(client, asins: list) -> dict:
+    """Fetches BSR (Best Seller Rank) from Catalog API for a list of ASINs.
+
+    Returns {asin: {"rank": int, "category": str}} — empty dict if unavailable.
+    Uses a 30-min cache keyed by seller_id. Fetches up to 40 ASINs with semaphore-5.
+    """
+    now = _time.time()
+    key = client.seller_id
+    cached = _bsr_cache.get(key)
+    if cached and (now - cached[0]) < _BSR_TTL:
+        return cached[1]
+
+    result: dict = {}
+    # Limit to first 40 ASINs to avoid long waits
+    target = [a for a in asins if a][:40]
+    if not target:
+        return result
+
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch_one(asin: str):
+        async with sem:
+            try:
+                data = await client.get_catalog_item(asin)
+                ranks = data.get("salesRanks", []) if data else []
+                if ranks:
+                    # First rank group — displayGroupRanks has the primary BSR
+                    group = ranks[0]
+                    rank_list = group.get("displayGroupRanks") or group.get("classificationRanks") or []
+                    if rank_list:
+                        top = rank_list[0]
+                        result[asin] = {
+                            "rank": top.get("rank"),
+                            "category": top.get("title") or top.get("displayGroupName") or "",
+                        }
+            except Exception:
+                pass
+
+    await asyncio.gather(*[_fetch_one(a) for a in target])
+    _bsr_cache[key] = (now, result)
+    return result
 
 
 async def _refresh_flx_stock_bg(client, flx_skus: list) -> None:
@@ -3264,11 +3311,22 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
 
     listings = await _get_listings_cached(client)
 
+    # ── Pre-fetch BSR from Catalog API (cached 30 min) ───────────────────────
+    # The Listings Items API does NOT include sales rank — it comes from Catalog API.
+    asin_list = []
+    for listing in listings:
+        summaries = listing.get("summaries", [])
+        asin = (summaries[0].get("asin") if summaries else None) or ""
+        if asin:
+            asin_list.append(asin)
+    bsr_index = await _get_bsr_cached(client, asin_list)
+
     items = []
     for listing in listings:
         summaries = listing.get("summaries", [])
         sku = listing.get("sku", "")
         title = summaries[0].get("itemName", "") if summaries else ""
+        asin = (summaries[0].get("asin") if summaries else None) or ""
         issues = listing.get("issues", [])
         status = _listing_status(summaries)
 
@@ -3295,19 +3353,14 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
             msg = issue.get("message") or issue.get("code") or str(issue)
             issue_messages.append(msg)
 
-        # BSR — pulled from listing attributes if available (salesRank field)
-        bsr_rank = None
-        bsr_category = None
-        attributes = listing.get("attributes", {}) or {}
-        # Listing Items API may include salesRankings or productType in attributes
-        sales_ranking = attributes.get("sales_ranking", [])
-        if sales_ranking and isinstance(sales_ranking, list) and sales_ranking[0]:
-            first = sales_ranking[0]
-            bsr_rank = first.get("rank") or first.get("value")
-            bsr_category = first.get("product_category_id") or first.get("displayGroupName")
+        # BSR — from Catalog API (bsr_index built above)
+        bsr_data = bsr_index.get(asin, {})
+        bsr_rank = bsr_data.get("rank")
+        bsr_category = bsr_data.get("category")
 
         items.append({
             "sku": sku,
+            "asin": asin,
             "title": title,
             "score": score,
             "grade": grade,
@@ -3696,8 +3749,8 @@ async def amazon_competitive_pricing(
                 "amazon_url":    f"https://www.amazon.com.mx/dp/{c['asin']}" if c["asin"] else "",
             })
 
-        total_checked = above_bb + at_bb + below_bb  # exclude no_bb
-        buybox_win_pct = round(at_bb / total_checked * 100, 1) if total_checked > 0 else 0.0
+        total_items = above_bb + at_bb + below_bb + no_bb
+        buybox_win_pct = round(at_bb / total_items * 100, 1) if total_items > 0 else 0.0
 
         resp = {
             "items": items_out, "total": len(items_out),
