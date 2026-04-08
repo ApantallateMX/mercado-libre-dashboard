@@ -745,9 +745,12 @@ async def get_amazon_dashboard_data(
 
 
 @router.get("/amazon-goal")
-async def get_amazon_goal(request: Request):
+async def get_amazon_goal(
+    request: Request,
+    seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
+):
     """Obtiene la meta diaria de Amazon de la cuenta activa."""
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
     goal = await token_store.get_daily_goal(f"amz_{client.seller_id}")
@@ -757,10 +760,11 @@ async def get_amazon_goal(request: Request):
 @router.post("/amazon-goal")
 async def set_amazon_goal(request: Request):
     """Guarda la meta diaria de Amazon de la cuenta activa."""
-    client = await get_amazon_client()
+    body = await request.json()
+    sid = body.get("seller_id", "") or ""
+    client = await get_amazon_client(seller_id=sid or None)
     if not client:
         raise HTTPException(status_code=404, detail="Sin cuenta Amazon")
-    body = await request.json()
     goal = float(body.get("daily_goal", 50000))
     await token_store.set_daily_goal(f"amz_{client.seller_id}", goal)
     return {"seller_id": client.seller_id, "daily_goal": goal}

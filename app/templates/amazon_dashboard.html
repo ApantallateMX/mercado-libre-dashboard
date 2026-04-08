@@ -1258,7 +1258,7 @@ document.getElementById('btn-amz-update-goal').addEventListener('click', functio
     amzDailyGoal = newGoal;
     fetch('/api/metrics/amazon-goal', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({daily_goal: newGoal})
+        body: JSON.stringify({daily_goal: newGoal, seller_id: window.amzActiveSellerId || ''})
     }).then(function(){
         var p = getDateParams();
         fetch('/api/metrics/amazon-daily-sales-data?' + p)
