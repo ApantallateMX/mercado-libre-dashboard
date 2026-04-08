@@ -855,6 +855,71 @@ async def get_amazon_daily_sales_data(
     }
 
 
+@router.get("/amazon-debug-today")
+async def get_amazon_debug_today():
+    """Diagnóstico: compara Sales API vs Orders API para el día de hoy."""
+    client = await get_amazon_client()
+    if not client:
+        return {"error": "Sin cuenta Amazon"}
+
+    now = datetime.utcnow()
+    # Hoy en Pacific (PDT=UTC-7 en abril)
+    try:
+        import zoneinfo as _zi
+        _la = _zi.ZoneInfo("America/Los_Angeles")
+        _offset_h = int(datetime.now(_la).utcoffset().total_seconds() // 3600)
+    except Exception:
+        _offset_h = -8
+    now_pac = now + timedelta(hours=_offset_h)
+    today_pac = now_pac.strftime("%Y-%m-%d")
+
+    # Sales API (OPS diario)
+    try:
+        metrics = await _get_cached_order_metrics(client, today_pac, today_pac)
+        sales_orders = sum(int(d.get("orderCount", 0) or 0) for d in metrics)
+        sales_units  = sum(int(d.get("unitCount", 0) or 0) for d in metrics)
+        sales_rev    = sum(float((d.get("totalSales") or {}).get("amount", 0) or 0) for d in metrics)
+        sales_error  = None
+    except Exception as e:
+        sales_orders = sales_units = sales_rev = 0
+        sales_error = str(e)[:200]
+
+    # Orders API (tiempo real)
+    try:
+        today_str_utc = f"{today_pac}T00:00:00Z"
+        now_str_utc   = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        orders_raw = await client.get_orders(
+            created_after=today_str_utc,
+            created_before=now_str_utc,
+            order_statuses=["Shipped", "Unshipped", "PartiallyShipped", "Pending"],
+        )
+        ord_orders = len(orders_raw)
+        ord_units  = sum(int(o.get("NumberOfItemsShipped", 0) or 0) +
+                         int(o.get("NumberOfItemsUnshipped", 0) or 0) for o in orders_raw)
+        ord_rev    = sum(float(o.get("OrderTotal", {}).get("Amount", 0) or 0) for o in orders_raw)
+        ord_error  = None
+    except Exception as e:
+        ord_orders = ord_units = ord_rev = 0
+        ord_error = str(e)[:200]
+
+    return {
+        "seller_id":   client.seller_id,
+        "marketplace": client.marketplace_id,
+        "today_pac":   today_pac,
+        "utc_now":     now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pacific_offset_h": _offset_h,
+        "sales_api": {
+            "orders": sales_orders, "units": sales_units,
+            "revenue": round(sales_rev, 2), "error": sales_error,
+            "raw_intervals": len(metrics) if not sales_error else 0,
+        },
+        "orders_api": {
+            "orders": ord_orders, "units": ord_units,
+            "revenue": round(ord_rev, 2), "error": ord_error,
+        },
+    }
+
+
 @router.get("/amazon-recent-orders", response_class=HTMLResponse)
 async def get_amazon_recent_orders(request: Request):
     """Últimas 5 órdenes de Amazon — HTML partial para el dashboard."""
