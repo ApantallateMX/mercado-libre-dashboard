@@ -1053,6 +1053,23 @@ async def get_amazon_health_data(
     canceled  = by_status.get("Canceled", 0)
     cancel_rate = round(canceled / total_orders * 100, 1) if total_orders > 0 else 0.0
 
+    # ── Late Shipment Rate — count Unshipped orders past LatestShipDate ───
+    late_ship_count = 0
+    now_utc = now.replace(tzinfo=None)
+    for o in orders:
+        if o.get("OrderStatus") == "Unshipped":
+            lsd = o.get("LatestShipDate", "")
+            if lsd:
+                try:
+                    lsd_dt = datetime.strptime(lsd[:19], "%Y-%m-%dT%H:%M:%S")
+                    if now_utc > lsd_dt:
+                        late_ship_count += 1
+                except ValueError:
+                    pass
+    # Denominator: shipped + unshipped orders (exclude Pending/Canceled)
+    fulfillment_base = shipped + unshipped + late_ship_count
+    late_ship_rate = round(late_ship_count / fulfillment_base * 100, 1) if fulfillment_base > 0 else 0.0
+
     # ── 2. Inventario FBA (primer página ≤ 50 SKUs — rápido) ─────────────
     try:
         fba_items = await client.get_fba_inventory()
@@ -1084,13 +1101,15 @@ async def get_amazon_health_data(
 
     return {
         "orders": {
-            "total_30d":   total_orders,
-            "shipped":     shipped,
-            "unshipped":   unshipped,
-            "pending":     pending,
-            "canceled":    canceled,
-            "cancel_rate": cancel_rate,
-            "by_status":   by_status,
+            "total_30d":       total_orders,
+            "shipped":         shipped,
+            "unshipped":       unshipped,
+            "pending":         pending,
+            "canceled":        canceled,
+            "cancel_rate":     cancel_rate,
+            "late_ship_count": late_ship_count,
+            "late_ship_rate":  late_ship_rate,
+            "by_status":       by_status,
         },
         "fba": {
             "sku_count":     len(fba_items),

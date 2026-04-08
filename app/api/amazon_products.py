@@ -3184,23 +3184,85 @@ _FINANCES_TTL = 1800  # 30 minutos
 @router.get("/finances/summary")
 async def get_finances_summary(seller_id: Optional[str] = Query(None)):
     """
-    Retorna grupos de liquidación recientes (últimos 6 meses).
-    TTL de caché: 30 minutos.
+    Retorna: grupos de liquidación recientes + métricas mensuales (OPS, fees est., neto est.).
+    Mes actual y mes anterior. TTL: 30 min.
     """
-    import time
-
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
         return JSONResponse({"error": "Sin cliente Amazon"}, status_code=400)
 
     sid = client.seller_id
     cached = _finances_cache.get(sid)
-    if cached and (time.time() - cached["ts"]) < _FINANCES_TTL:
+    if cached and (_time.time() - cached["ts"]) < _FINANCES_TTL:
         return JSONResponse(cached["data"])
 
-    groups = await client.get_financial_event_groups(max_results=10)
-    payload = {"groups": groups, "count": len(groups)}
-    _finances_cache[sid] = {"ts": time.time(), "data": payload}
+    # ── 1. Settlement groups ─────────────────────────────────────────────────
+    groups = await client.get_financial_event_groups(max_results=12)
+
+    # ── 2. Monthly OPS from Sales API ────────────────────────────────────────
+    from app.api.metrics import _get_cached_order_metrics
+    now = datetime.utcnow()
+    # Current month: 1st of this month → today
+    month_start = now.replace(day=1).strftime("%Y-%m-%d")
+    today_str   = now.strftime("%Y-%m-%d")
+    # Previous month: 1st → last day of prev month
+    first_this  = now.replace(day=1)
+    last_prev   = first_this - timedelta(days=1)
+    prev_start  = last_prev.replace(day=1).strftime("%Y-%m-%d")
+    prev_end    = last_prev.strftime("%Y-%m-%d")
+
+    async def _month_ops(d_from, d_to):
+        try:
+            metrics = await _get_cached_order_metrics(client, d_from, d_to)
+            total = sum(float((m.get("totalSales") or {}).get("amount") or 0) for m in metrics)
+            units = sum(int(m.get("unitCount") or 0) for m in metrics)
+            orders = sum(int(m.get("orderCount") or 0) for m in metrics)
+            return {"sales": round(total, 2), "units": units, "orders": orders}
+        except Exception:
+            return {"sales": 0, "units": 0, "orders": 0}
+
+    cur, prev = await asyncio.gather(_month_ops(month_start, today_str), _month_ops(prev_start, prev_end))
+
+    # Pending payout = most recent Open settlement group total
+    pending_payout = 0.0
+    pending_currency = "MXN"
+    for g in groups:
+        if g.get("status") == "Open":
+            pending_payout = g.get("converted_total") or g.get("original_total") or 0
+            pending_currency = g.get("currency", "MXN")
+            break
+
+    # Fee estimate: Amazon MX referral ~15% + FBA ~5% ≈ 20% of OPS
+    FEE_RATE = 0.20
+    fees_est    = round(cur["sales"] * FEE_RATE, 2)
+    net_est     = round(cur["sales"] - fees_est, 2)
+    fees_prev   = round(prev["sales"] * FEE_RATE, 2)
+    net_prev    = round(prev["sales"] - fees_prev, 2)
+
+    payload = {
+        "groups": groups,
+        "count": len(groups),
+        "current_month": {
+            "label": now.strftime("%B %Y"),
+            "sales": cur["sales"],
+            "units": cur["units"],
+            "orders": cur["orders"],
+            "fees_est": fees_est,
+            "net_est": net_est,
+        },
+        "prev_month": {
+            "label": last_prev.strftime("%B %Y"),
+            "sales": prev["sales"],
+            "units": prev["units"],
+            "orders": prev["orders"],
+            "fees_est": fees_prev,
+            "net_est": net_prev,
+        },
+        "pending_payout": pending_payout,
+        "pending_currency": pending_currency,
+        "currency": "MXN",
+    }
+    _finances_cache[sid] = {"ts": _time.time(), "data": payload}
     return JSONResponse(payload)
 
 
