@@ -1270,6 +1270,8 @@ async function loadAmzFinanzasTab() {
       : '';
 
     // ── KPI Cards ─────────────────────────────────────────────────────────
+    var ref = d.refunds_30d || {};
+    var refColor = (ref.rate_pct||0) >= 5 ? '#EF4444' : ((ref.rate_pct||0) >= 2 ? '#F59E0B' : '#6B7280');
     var kpiCards = [
       { label: 'Ventas ' + (cm.label||'mes actual'), value: fmt(cm.sales, cur), icon: '💰', color: '#F97316',
         sub: (cm.orders||0) + ' órd · ' + (cm.units||0) + ' uds', extra: trendHtml },
@@ -1279,6 +1281,8 @@ async function loadAmzFinanzasTab() {
         sub: 'Ventas - fees estimados', extra: '' },
       { label: 'Pendiente liquidación', value: fmt(d.pending_payout, d.pending_currency||cur), icon: '🏦', color: '#0EA5E9',
         sub: 'Ciclo abierto en Amazon', extra: '' },
+      { label: 'Reembolsos 30d', value: (ref.count||0) + ' dev.', icon: '↩️', color: refColor,
+        sub: fmt(ref.total||0, ref.currency||cur) + ' · ' + (ref.rate_pct||0) + '% de ventas', extra: '' },
     ].map(function(c) {
       return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
         '<div class="flex items-center justify-between mb-2">' +
@@ -1336,7 +1340,7 @@ async function loadAmzFinanzasTab() {
       : '<div class="text-center py-8 text-gray-400 text-sm">Sin liquidaciones disponibles aún</div>';
 
     el.innerHTML =
-      '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">' + kpiCards + '</div>' +
+      '<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5">' + kpiCards + '</div>' +
       prevRow +
       '<div class="bg-orange-50 border border-orange-100 rounded-xl p-3 mb-5 text-xs text-orange-700">' +
         '<b>Nota:</b> Fees y neto son estimados (~20% de ventas). Para datos exactos consultar <a href="https://sellercentral.amazon.com.mx/payments/dashboard" target="_blank" class="underline">Seller Central → Pagos</a>.' +
@@ -1661,18 +1665,37 @@ async function loadFbaTab() {
 
     // Render KPIs
     var s = d.summary || {};
+
+    // ── IPI Estimate ─────────────────────────────────────────────────────────
+    // Formula proxy: IPI ∝ sell_through × 1000
+    // sell_through = ok_count / total (penaliza excess + sin stock)
+    var totalActive  = s.total_active || 0;
+    var okCount      = s.ok || 0;
+    var criticalOut  = (s.critical || 0) + (s.out_of_stock || 0);
+    var sellThrough  = totalActive > 0 ? (okCount / totalActive) : 0;
+    var excessPenalty = totalActive > 0 ? Math.min(0.3, criticalOut / totalActive * 0.5) : 0;
+    var ipiEst = Math.round(Math.max(0, Math.min(1000, (sellThrough - excessPenalty) * 800 + 200)));
+    var ipiColor = ipiEst >= 450 ? '#10B981' : (ipiEst >= 350 ? '#F59E0B' : '#EF4444');
+    var ipiLabel = ipiEst >= 450 ? 'Bueno' : (ipiEst >= 350 ? 'Regular' : 'Mejorar');
+
     if (kpis) {
+      kpis.className = 'grid grid-cols-2 md:grid-cols-5 gap-3 mb-5';
       kpis.innerHTML = [
-        {label:'Total activos', value: s.total_active || 0, icon:'📦', color:'#F97316', sub:'listings activos'},
-        {label:'OK (>30 días)', value: s.ok || 0, icon:'✅', color:'#10B981', sub:'cobertura suficiente'},
+        {label:'Total activos', value: totalActive, icon:'📦', color:'#F97316', sub:'listings activos'},
+        {label:'OK (>30 días)', value: okCount, icon:'✅', color:'#10B981', sub:'cobertura suficiente'},
         {label:'Advertencia', value: (s.warning || 0), icon:'⚠️', color:'#D97706', sub:'10-30 días stock'},
-        {label:'Crítico / Sin stock', value: (s.critical || 0) + (s.out_of_stock || 0), icon:'🚨', color:'#EF4444', sub:'necesitan reposición'},
+        {label:'Crítico / Sin stock', value: criticalOut, icon:'🚨', color:'#EF4444', sub:'necesitan reposición'},
       ].map(function(c) {
         return '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + c.color + '">' +
           '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">' + c.label + '</span><span class="text-xl">' + c.icon + '</span></div>' +
           '<p class="text-2xl font-extrabold" style="color:' + c.color + '">' + c.value + '</p>' +
           '<p class="text-xs mt-1 text-gray-400">' + c.sub + '</p></div>';
-      }).join('');
+      }).join('') +
+      // IPI card
+      '<div class="bg-white rounded-xl shadow p-4 border-b-4" style="border-bottom-color:' + ipiColor + '">' +
+        '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">IPI Estimado</span><span class="text-xl">📊</span></div>' +
+        '<p class="text-2xl font-extrabold" style="color:' + ipiColor + '">' + ipiEst + '</p>' +
+        '<p class="text-xs mt-1 text-gray-400">' + ipiLabel + ' · Amazon meta: ≥450</p></div>';
     }
 
     // Filter items

@@ -3256,7 +3256,11 @@ async def get_finances_summary(seller_id: Optional[str] = Query(None)):
         except Exception:
             return {"sales": 0, "units": 0, "orders": 0}
 
-    cur, prev = await asyncio.gather(_month_ops(month_start, today_str), _month_ops(prev_start, prev_end))
+    cur, prev, refunds = await asyncio.gather(
+        _month_ops(month_start, today_str),
+        _month_ops(prev_start, prev_end),
+        client.get_refunds_30d(),
+    )
 
     # Pending payout = most recent Open settlement group total
     pending_payout = 0.0
@@ -3296,6 +3300,12 @@ async def get_finances_summary(seller_id: Optional[str] = Query(None)):
         "pending_payout": pending_payout,
         "pending_currency": pending_currency,
         "currency": "MXN",
+        "refunds_30d": {
+            "count":    refunds.get("count", 0),
+            "total":    refunds.get("total", 0),
+            "currency": refunds.get("currency", "MXN"),
+            "rate_pct": round(refunds.get("total", 0) / cur["sales"] * 100, 1) if cur["sales"] > 0 else 0.0,
+        },
     }
     _finances_cache[sid] = {"ts": _time.time(), "data": payload}
     return JSONResponse(payload)

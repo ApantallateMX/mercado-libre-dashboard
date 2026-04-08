@@ -1095,6 +1095,36 @@ class AmazonClient:
         except Exception as e:
             return {"pending_amount": None, "currency": "MXN", "error": str(e)}
 
+    async def get_refunds_30d(self) -> dict:
+        """
+        Obtiene devoluciones / reembolsos de los últimos 30 días.
+        Endpoint: GET /finances/v0/financialEvents → RefundEventList
+        Returns: {count, total_amount, currency, rate_pct (if sales provided)}
+        """
+        try:
+            posted_after = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            result = await self._request(
+                "GET", "/finances/v0/financialEvents",
+                params={"PostedAfter": posted_after, "MaxResultsPerPage": 100},
+            )
+            payload  = result.get("payload", {}).get("FinancialEvents", {})
+            refunds  = payload.get("RefundEventList", [])
+            count    = 0
+            total    = 0.0
+            currency = "MXN"
+            for event in refunds:
+                for item in event.get("ShipmentItemAdjustmentList", []):
+                    count += 1
+                    for charge in item.get("ItemChargeAdjustmentList", []):
+                        amt = charge.get("ChargeAmount", {})
+                        total += abs(float(amt.get("CurrencyAmount", 0) or 0))
+                        if amt.get("CurrencyCode"):
+                            currency = amt["CurrencyCode"]
+            return {"count": count, "total": round(total, 2), "currency": currency}
+        except Exception as e:
+            logger.warning(f"[Amazon] get_refunds_30d error: {e}")
+            return {"count": 0, "total": 0, "currency": "MXN", "error": str(e)}
+
     async def get_financial_event_groups(self, max_results: int = 10) -> list:
         """
         Retorna los grupos de liquidación (períodos de pago) más recientes.
