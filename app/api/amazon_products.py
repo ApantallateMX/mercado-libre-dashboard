@@ -727,6 +727,17 @@ async def amazon_products_catalog(
             units_30d    = int(sale_data.get("units", 0) or 0)
             revenue_30d  = round(float(sale_data.get("revenue", 0) or 0), 0)
 
+            # ── Margen estimado usando costo BM (si está en caché) ─────────
+            bm           = _bm_from_cache(sku)
+            cost_usd     = bm.get("_bm_retail_ph") or bm.get("_bm_avg_cost") or 0
+            FX           = 18.5  # MXN/USD approximate
+            cost_mxn     = cost_usd * FX if cost_usd > 0 else 0
+            amz_fee_rate = 0.18   # ~18% Amazon referral + FBA est.
+            margin_pct: float | None = None
+            if cost_mxn > 0 and price > 0:
+                net = price - cost_mxn - price * amz_fee_rate
+                margin_pct = round(net / price * 100, 1)
+
             enriched.append({
                 "sku":           sku,
                 "asin":          asin,
@@ -743,8 +754,18 @@ async def amazon_products_catalog(
                 "suggestion":    suggestion,
                 "units_30d":     units_30d,
                 "revenue_30d":   revenue_30d,
+                "cost_mxn":      round(cost_mxn, 0) if cost_mxn > 0 else None,
+                "margin_pct":    margin_pct,
                 "amazon_url":    f"https://www.amazon.com.mx/dp/{asin}" if asin else "",
             })
+
+        # ── Trigger BG BM refresh if cache is cold ─────────────────────────
+        bm_needs_refresh = not any(_bm_from_cache(e["sku"]).get("_bm_retail_ph") for e in enriched[:5])
+        if bm_needs_refresh and enriched:
+            active = [e for e in enriched if e["status"] == "ACTIVE"][:50]
+            asyncio.create_task(_refresh_bm_all_bg(
+                [{"sku": e["sku"], "summaries": [{"asin": e.get("asin","")}]} for e in active]
+            ))
 
         # ── Filtrar por estado ─────────────────────────────────────────────
         if status_filter == "active":

@@ -81,6 +81,7 @@
                     <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell">Dañado</th>
                     <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell{% if sku_sales_loading %} opacity-50{% endif %}" title="Unidades vendidas en 30 días">Uds 30d{% if sku_sales_loading %} ⏳{% endif %}</th>
                     <th class="py-3 px-3 font-semibold text-right hidden lg:table-cell{% if sku_sales_loading %} opacity-50{% endif %}" title="Revenue en 30 días">$ 30d{% if sku_sales_loading %} ⏳{% endif %}</th>
+                    <th class="py-3 px-3 font-semibold text-right hidden xl:table-cell" title="Margen estimado: (precio - costo BM - fees 18%) / precio">Margen</th>
                     <th class="py-3 px-3 font-semibold text-center">Estado</th>
                     <th class="py-3 px-3 font-semibold text-left hidden lg:table-cell">Sugerencia</th>
                     <th class="py-3 px-3 font-semibold text-center">Acciones</th>
@@ -160,6 +161,12 @@
                         {% if item.revenue_30d > 0 %}
                         <span class="font-semibold text-green-600">${{ "{:,.0f}".format(item.revenue_30d) }}</span>
                         {% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden xl:table-cell">
+                        {% if item.margin_pct is not none %}
+                        {% set mc = 'text-green-600 font-bold' if item.margin_pct >= 30 else ('text-yellow-600 font-semibold' if item.margin_pct >= 15 else 'text-red-600 font-bold') %}
+                        <span class="{{ mc }}">{{ item.margin_pct }}%</span>
+                        {% else %}<span class="text-gray-300" title="Sin datos de costo BM">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-center whitespace-nowrap">
                         {% if item.status == 'ACTIVE' %}
