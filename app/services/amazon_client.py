@@ -1375,3 +1375,37 @@ async def _seed_amazon_accounts():
             app_solution_id=app_sol_id,
         )
         logger.info(f"[Amazon] Cuenta sembrada: {seller_id} ({nickname})")
+
+    # ── Segunda cuenta (AMAZON2_*) ──────────────────────────────────────────
+    seller_id2  = _g("AMAZON2_SELLER_ID",       "")
+    client_id2  = _g("AMAZON2_CLIENT_ID",        "")
+    client_sec2 = _g("AMAZON2_CLIENT_SECRET",    "")
+    mkt_id2     = _g("AMAZON2_MARKETPLACE_ID",   "A1AM78C64UM0Y8")
+    mkt_name2   = _g("AMAZON2_MARKETPLACE_NAME", "MX")
+    app_sol_id2 = _g("AMAZON2_APP_SOLUTION_ID",  "")
+    nickname2   = _g("AMAZON2_NICKNAME",         "")
+    _rt2_file   = file_vars.get("AMAZON2_REFRESH_TOKEN", "").strip()
+    import os as _os2
+    _rt2_env    = (_os2.getenv("AMAZON2_REFRESH_TOKEN") or "").strip().replace("\n","").replace("\r","").replace(" ","")
+    refresh_rt2 = _rt2_file or _rt2_env or ""
+
+    if seller_id2 and client_id2 and refresh_rt2:
+        existing2 = await token_store.get_amazon_account(seller_id2)
+        if existing2 and existing2.get("refresh_token", "").startswith("Atzr|"):
+            await token_store.save_amazon_account(
+                seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
+                client_secret=client_sec2, refresh_token="",
+                marketplace_id=mkt_id2, marketplace_name=mkt_name2,
+                app_solution_id=app_sol_id2,
+            )
+            logger.info(f"[Amazon] Cuenta2 actualizada (token preservado): {seller_id2}")
+        else:
+            await token_store.save_amazon_account(
+                seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
+                client_secret=client_sec2, refresh_token=refresh_rt2,
+                marketplace_id=mkt_id2, marketplace_name=mkt_name2,
+                app_solution_id=app_sol_id2,
+            )
+            logger.info(f"[Amazon] Cuenta2 sembrada: {seller_id2} ({nickname2})")
+    else:
+        logger.info("[Amazon] AMAZON2_* no configurado — skip segunda cuenta")
