@@ -7444,8 +7444,8 @@ async def get_multi_account_amazon_dashboard(
     cache_date_to   = now.strftime("%Y-%m-%d")
 
     async def _fetch_amz_data(account: dict) -> dict:
-        # Import local para compartir el caché con metrics.py (mismo objeto en memoria)
-        from app.api.metrics import _get_cached_amazon_orders as _cached_orders
+        # Sales API (OPS) = lo mismo que muestra Seller Central — más preciso que OrderTotal
+        from app.api.metrics import _get_cached_order_metrics as _cached_metrics
         seller_id   = account["seller_id"]
         nickname    = account.get("nickname") or seller_id
         marketplace = account.get("marketplace_name", "MX")
@@ -7454,45 +7454,37 @@ async def get_multi_account_amazon_dashboard(
             if not client:
                 raise ValueError("No client para seller_id=" + seller_id)
 
-            # Usa caché compartido — si el Amazon dashboard ya cargó, esto no hace ninguna
-            # llamada a SP-API. Si no, el lock evita llamadas simultáneas.
-            orders = await _cached_orders(client, cache_date_from, cache_date_to)
+            # Amazon Sales API reporta en PST = UTC-8 (fijo, sin DST).
+            # Seller Central también usa PST → usar PST para hacer coincidir cifras.
+            now_pst     = now - timedelta(hours=8)
+            today_pst   = now_pst.strftime("%Y-%m-%d")
+            week_start  = (now_pst - timedelta(days=6)).strftime("%Y-%m-%d")
+            month_start = now_pst.replace(day=1).strftime("%Y-%m-%d")
 
-            def _parse_dt_mx(o):
-                """Devuelve la fecha de la orden Amazon en hora México (CST UTC-6)."""
-                try:
-                    dt_utc = datetime.fromisoformat(
-                        o.get("PurchaseDate", "").replace("Z", "+00:00")
-                    ).replace(tzinfo=None)
-                    return (dt_utc - timedelta(hours=6)).strftime("%Y-%m-%d")
-                except Exception:
-                    return None
+            metrics_data = await _cached_metrics(client, cache_date_from, cache_date_to)
 
-            def _agg(order_list: list) -> dict:
-                rev = 0.0
-                units = 0
-                for o in order_list:
-                    try:
-                        rev += float(o.get("OrderTotal", {}).get("Amount", 0) or 0)
-                    except (TypeError, ValueError):
-                        pass
-                    units += int(o.get("NumberOfItemsShipped", 0) or 0)
-                    units += int(o.get("NumberOfItemsUnshipped", 0) or 0)
-                return {"orders": len(order_list), "units": units, "revenue": round(rev, 2)}
-
-            # Filtrar por fecha México para consistencia con MeLi
-            month_start = now_mx.replace(day=1).strftime("%Y-%m-%d")
-            today_orders = [o for o in orders if (d := _parse_dt_mx(o)) and d >= today_str]
-            week_orders  = [o for o in orders if (d := _parse_dt_mx(o)) and d >= week_start_str]
-            month_orders = [o for o in orders if (d := _parse_dt_mx(o)) and d >= month_start]
+            def _sum_period(min_date: str) -> dict:
+                orders = units = 0
+                revenue = 0.0
+                for item in metrics_data:
+                    # interval = "YYYY-MM-DDT00:00:00-08:00--..." → primeros 10 chars = fecha PST
+                    dk = (item.get("interval") or "")[:10]
+                    if dk and dk >= min_date:
+                        orders += int(item.get("orderCount", 0) or 0)
+                        units  += int(item.get("unitCount",  0) or 0)
+                        try:
+                            revenue += float((item.get("totalSales") or {}).get("amount", 0) or 0)
+                        except (TypeError, ValueError):
+                            pass
+                return {"orders": orders, "units": units, "revenue": round(revenue, 2)}
 
             daily_revenues: dict[str, float] = {}
-            for o in orders:
-                dk = _parse_dt_mx(o)
+            for item in metrics_data:
+                dk = (item.get("interval") or "")[:10]
                 if dk:
                     try:
                         daily_revenues[dk] = daily_revenues.get(dk, 0.0) + float(
-                            o.get("OrderTotal", {}).get("Amount", 0) or 0
+                            (item.get("totalSales") or {}).get("amount", 0) or 0
                         )
                     except (TypeError, ValueError):
                         pass
@@ -7503,9 +7495,9 @@ async def get_multi_account_amazon_dashboard(
                 "marketplace":    marketplace,
                 "platform":       "amazon",
                 "color":          "#F97316",
-                "today":          _agg(today_orders),
-                "week":           _agg(week_orders),
-                "month":          _agg(month_orders),
+                "today":          _sum_period(today_pst),
+                "week":           _sum_period(week_start),
+                "month":          _sum_period(month_start),
                 "active_items":   0,
                 "daily_revenues": {k: round(v, 2) for k, v in daily_revenues.items()},
                 "error":          None,
