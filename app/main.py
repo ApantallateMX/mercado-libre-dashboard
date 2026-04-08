@@ -7454,12 +7454,17 @@ async def get_multi_account_amazon_dashboard(
             if not client:
                 raise ValueError("No client para seller_id=" + seller_id)
 
-            # Amazon Sales API reporta en PST = UTC-8 (fijo, sin DST).
-            # Seller Central también usa PST → usar PST para hacer coincidir cifras.
-            now_pst     = now - timedelta(hours=8)
-            today_pst   = now_pst.strftime("%Y-%m-%d")
-            week_start  = (now_pst - timedelta(days=6)).strftime("%Y-%m-%d")
-            month_start = now_pst.replace(day=1).strftime("%Y-%m-%d")
+            # Amazon Sales API usa US/Pacific (PDT=UTC-7 mar-nov, PST=UTC-8 nov-mar)
+            try:
+                import zoneinfo as _zi
+                _la = _zi.ZoneInfo("America/Los_Angeles")
+                _offset_h = int(datetime.now(_la).utcoffset().total_seconds() // 3600)
+            except Exception:
+                _offset_h = -8
+            now_pac     = now + timedelta(hours=_offset_h)
+            today_pst   = now_pac.strftime("%Y-%m-%d")
+            week_start  = (now_pac - timedelta(days=6)).strftime("%Y-%m-%d")
+            month_start = now_pac.replace(day=1).strftime("%Y-%m-%d")
 
             metrics_data = await _cached_metrics(client, cache_date_from, cache_date_to)
 

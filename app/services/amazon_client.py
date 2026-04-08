@@ -1010,8 +1010,17 @@ class AmazonClient:
         Rate limit: 0.5 req/s, burst 15 — mucho más generoso que Orders API.
         """
         # Formato de intervalo: {inicio}--{fin} con doble guión (separador ISO 8601)
-        # PST = UTC-8 (febrero, sin horario de verano en USA)
-        interval = f"{date_from}T00:00:00-08:00--{date_to_exclusive}T00:00:00-08:00"
+        # US/Pacific observa DST: PST=UTC-8 (nov-mar), PDT=UTC-7 (mar-nov)
+        # Usar el offset correcto según la fecha para alinear con Seller Central.
+        try:
+            import zoneinfo
+            _tz = zoneinfo.ZoneInfo("America/Los_Angeles")
+            _ref = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=_tz)
+            _offset_h = int(_ref.utcoffset().total_seconds() // 3600)
+            _offset_str = f"{_offset_h:+03d}:00"  # e.g. "-07:00" or "-08:00"
+        except Exception:
+            _offset_str = "-08:00"  # fallback seguro
+        interval = f"{date_from}T00:00:00{_offset_str}--{date_to_exclusive}T00:00:00{_offset_str}"
 
         params: list = [
             ("marketplaceIds", self.marketplace_id),
