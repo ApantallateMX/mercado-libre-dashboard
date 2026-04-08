@@ -3295,6 +3295,17 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
             msg = issue.get("message") or issue.get("code") or str(issue)
             issue_messages.append(msg)
 
+        # BSR — pulled from listing attributes if available (salesRank field)
+        bsr_rank = None
+        bsr_category = None
+        attributes = listing.get("attributes", {}) or {}
+        # Listing Items API may include salesRankings or productType in attributes
+        sales_ranking = attributes.get("sales_ranking", [])
+        if sales_ranking and isinstance(sales_ranking, list) and sales_ranking[0]:
+            first = sales_ranking[0]
+            bsr_rank = first.get("rank") or first.get("value")
+            bsr_category = first.get("product_category_id") or first.get("displayGroupName")
+
         items.append({
             "sku": sku,
             "title": title,
@@ -3303,6 +3314,8 @@ async def get_listing_quality(seller_id: Optional[str] = Query(None)):
             "status": status,
             "issues_count": issues_count,
             "issues": issue_messages,
+            "bsr_rank": bsr_rank,
+            "bsr_category": bsr_category,
         })
 
     items.sort(key=lambda x: x["score"])
@@ -3683,10 +3696,14 @@ async def amazon_competitive_pricing(
                 "amazon_url":    f"https://www.amazon.com.mx/dp/{c['asin']}" if c["asin"] else "",
             })
 
+        total_checked = above_bb + at_bb + below_bb  # exclude no_bb
+        buybox_win_pct = round(at_bb / total_checked * 100, 1) if total_checked > 0 else 0.0
+
         resp = {
             "items": items_out, "total": len(items_out),
             "above_bb_count": above_bb, "at_bb_count": at_bb,
             "below_bb_count": below_bb, "no_bb_count": no_bb,
+            "buybox_win_pct": buybox_win_pct,
             "cached": False,
         }
         _comp_price_cache[cache_key] = (_time.time(), resp)

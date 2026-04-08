@@ -728,12 +728,41 @@ async def get_amazon_dashboard_data(
     )
     avg_per_order = (total_revenue / total_orders) if total_orders > 0 else 0.0
 
+    # ── Período anterior para tendencias ──────────────────────────────────────
+    try:
+        start_dt  = datetime.strptime(date_from, "%Y-%m-%d")
+        end_dt    = datetime.strptime(date_to,   "%Y-%m-%d")
+        period_len = (end_dt - start_dt).days + 1
+        prev_to_dt   = start_dt - timedelta(days=1)
+        prev_from_dt = prev_to_dt - timedelta(days=period_len - 1)
+        prev_from = prev_from_dt.strftime("%Y-%m-%d")
+        prev_to   = prev_to_dt.strftime("%Y-%m-%d")
+        prev_data = await _get_cached_order_metrics(client, prev_from, prev_to)
+        prev_orders  = sum(int(d.get("orderCount", 0) or 0) for d in prev_data)
+        prev_units   = sum(int(d.get("unitCount",  0) or 0) for d in prev_data)
+        prev_revenue = sum(float((d.get("totalSales") or {}).get("amount", 0) or 0) for d in prev_data)
+
+        def _pct_change(cur, prev):
+            if prev == 0:
+                return 100.0 if cur > 0 else 0.0
+            return round((cur - prev) / prev * 100, 1)
+
+        trend = {
+            "orders_pct":  _pct_change(total_orders, prev_orders),
+            "units_pct":   _pct_change(total_units,  prev_units),
+            "revenue_pct": _pct_change(total_revenue, prev_revenue),
+        }
+    except Exception:
+        trend = {"orders_pct": 0.0, "units_pct": 0.0, "revenue_pct": 0.0}
+
     metrics = {
         "total_orders":   total_orders,
         "total_units":    total_units,
         "total_revenue":  round(total_revenue, 2),
         "avg_per_order":  round(avg_per_order, 2),
         "active_listings": active_listings,
+        "net_revenue_est": round(total_revenue * 0.85, 2),
+        "trend": trend,
     }
 
     chart_data, group_by = _build_amazon_chart_from_metrics(metrics_data, date_from, date_to)
@@ -837,6 +866,7 @@ async def get_amazon_daily_sales_data(
             "orders": d["orders"],
             "units": d["units"],
             "revenue": round(d["revenue"], 2),
+            "net_est": round(d["revenue"] * 0.85, 2),
             "pct_of_goal": round(pct, 1),
         })
 

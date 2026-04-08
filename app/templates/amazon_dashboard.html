@@ -132,6 +132,28 @@
      ══════════════════════════════════════════════════════════════════════ -->
 <div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
 
+<!-- ─── Morning Briefing Card ──────────────────────────────────────────── -->
+<div id="amz-briefing-card" class="rounded-xl mb-5 overflow-hidden" style="background:#1a1a2e; border-left:4px solid #FF9900;">
+  <div class="px-5 py-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">☀️</span>
+        <div>
+          <h3 class="font-bold text-white text-sm">Resumen del día</h3>
+          <p class="text-xs" style="color:#FF9900" id="amz-briefing-date">—</p>
+        </div>
+      </div>
+      <button onclick="refreshAmzBriefing()" class="text-xs px-2 py-1 rounded-lg border border-orange-700 text-orange-400 hover:bg-orange-900/30 transition">↻ Actualizar</button>
+    </div>
+    <div id="amz-briefing-content" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ─── Filtro de fechas ───────────────────────────────────────────────── -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
     <div class="flex flex-wrap gap-1.5 md:gap-2 mb-3" id="amz-range-buttons">
@@ -455,6 +477,12 @@
     <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
     <div class="bg-white p-4 rounded-xl shadow animate-pulse"><div class="h-3 bg-gray-200 rounded w-1/2 mb-3"></div><div class="h-7 bg-orange-100 rounded w-3/4"></div></div>
   </div>
+  <!-- Buy Box Win % KPI -->
+  <div id="amz-bb-win-kpi" class="bg-white p-4 rounded-xl shadow border-b-4 border-gray-200">
+    <p class="text-xs text-gray-400 mb-1">🏆 Buy Box Win %</p>
+    <p class="text-2xl font-extrabold text-gray-300">—</p>
+    <p class="text-xs text-gray-400 mt-1">Cargando análisis de precios...</p>
+  </div>
 
   <!-- Sección 1: Lightning Deals & Best Deals -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -676,6 +704,9 @@ function switchAmzTab(tabName) {
         else if (tabName === 'fba') loadFbaTab();
         else if (tabName === 'listings') loadListingsTab();
         else if (tabName === 'deals') loadDealsTab();
+        else if (tabName === 'ventas') { loadAmazonDashboard(); loadAmzBriefing(); }
+    } else if (tabName === 'ventas') {
+        loadAmzBriefing();
     }
 }
 
@@ -714,25 +745,38 @@ function getDateParams() {
 
 // ─── TAB VENTAS ───────────────────────────────────────────────────────────────
 
+function _trendArrow(pct) {
+    if (pct == null || isNaN(pct)) return '';
+    var abs = Math.abs(pct);
+    if (abs <= 2) return '<span class="text-gray-400 text-xs ml-1">→ 0%</span>';
+    var sign = pct > 0 ? '+' : '−';
+    var color = pct > 0 ? 'text-green-500' : 'text-red-500';
+    var arrow = pct > 0 ? '↑' : '↓';
+    return '<span class="' + color + ' text-xs ml-1 font-semibold">' + arrow + ' ' + sign + abs.toFixed(1) + '%</span>';
+}
+
 function renderAmazonMetrics(m) {
     var udsXOrden = m.total_orders > 0 ? (m.total_units / m.total_orders).toFixed(1) : '—';
     var listingsVal = (m.active_listings != null) ? m.active_listings : '—';
+    var trend = m.trend || {};
     var cards = [
         { label: 'Órdenes del Período', value: m.total_orders,
-          icon: '📦', color: '#F97316', hint: udsXOrden + ' uds/orden en promedio' },
+          icon: '📦', color: '#F97316', hint: udsXOrden + ' uds/orden en promedio', trendPct: trend.orders_pct },
         { label: 'Unidades Ordenadas',  value: m.total_units,
-          icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? udsXOrden + ' uds por orden' : '—' },
+          icon: '📊', color: '#EA580C', hint: m.total_orders > 0 ? udsXOrden + ' uds por orden' : '—', trendPct: trend.units_pct },
         { label: 'Ventas del Período',  value: '$' + fmtMoney(m.total_revenue),
-          icon: '💰', color: '#C2410C', hint: m.total_orders > 0 ? '$' + fmtMoney(m.avg_per_order) + ' por orden' : '—' },
+          icon: '💰', color: '#C2410C', hint: m.total_orders > 0 ? '$' + fmtMoney(m.avg_per_order) + ' por orden' : '—', trendPct: trend.revenue_pct },
         { label: 'Listings Activos',    value: listingsVal,
-          icon: '🏷️', color: '#9A3412', hint: 'Productos activos en Amazon MX' }
+          icon: '🏷️', color: '#9A3412', hint: 'Productos activos en Amazon MX', trendPct: null },
+        { label: 'Neto Est. (−15%)',    value: '$' + fmtMoney(m.net_revenue_est || 0),
+          icon: '📉', color: '#7C3AED', hint: 'Revenue menos comisión Amazon ~15%', trendPct: trend.revenue_pct }
     ];
-    var html = '<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">';
+    var html = '<div class="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4">';
     cards.forEach(function(c) {
         html += '<div class="bg-white rounded-xl shadow p-4 md:p-5 border-b-4" style="border-bottom-color:'+c.color+'">' +
             '<div class="flex items-center justify-between mb-2"><span class="text-xs text-gray-400 font-medium">'+c.label+'</span><span class="text-xl">'+c.icon+'</span></div>' +
             '<p class="text-2xl md:text-3xl font-extrabold" style="color:'+c.color+'">'+c.value+'</p>' +
-            '<p class="text-xs mt-2 text-gray-400">'+c.hint+'</p></div>';
+            '<p class="text-xs mt-2 text-gray-400">'+c.hint+_trendArrow(c.trendPct)+'</p></div>';
     });
     html += '</div>';
     document.getElementById('amz-metric-cards').innerHTML = html;
@@ -839,6 +883,7 @@ function renderAmazonDailyTable(data) {
         row += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.orders+'</td>';
         row += '<td class="py-2.5 px-3 text-right text-gray-600">'+day.units+'</td>';
         row += '<td class="py-2.5 px-3 text-right font-semibold text-orange-700">$'+fmtMoney(day.revenue)+'</td>';
+        row += '<td class="py-2.5 px-3 text-right text-violet-600 font-medium">$'+fmtMoney(day.net_est || 0)+'</td>';
         row += '<td class="py-2.5 px-3 text-right font-bold" style="color:'+barColor+'">'+pct.toFixed(1)+'%</td>';
         row += '<td class="py-2.5 px-4"><div class="w-full bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:'+Math.min(pct,100)+'%;background:'+barColor+'"></div></div></td>';
         row += '<td class="py-2.5 px-3 text-center"><span class="px-2 py-0.5 text-xs rounded-full font-semibold '+bc+'">'+badge+'</span></td>';
@@ -851,6 +896,7 @@ function renderAmazonDailyTable(data) {
     tfoot += '<td class="py-3 px-3 text-right text-gray-800">'+totals.orders+'</td>';
     tfoot += '<td class="py-3 px-3 text-right text-gray-800">'+totals.units+'</td>';
     tfoot += '<td class="py-3 px-3 text-right text-orange-700">$'+fmtMoney(totals.revenue)+'</td>';
+    tfoot += '<td class="py-3 px-3 text-right text-violet-600">$'+fmtMoney(Math.round(totals.revenue * 0.85 * 100) / 100)+'</td>';
     tfoot += '<td class="py-3 px-3 text-right text-gray-500">Prom: '+totals.avg_pct.toFixed(1)+'%</td>';
     tfoot += '<td class="py-3 px-4"></td>';
     tfoot += '<td class="py-3 px-3 text-center text-xs text-gray-500">'+totals.days_met+'/'+totals.total_days+' días</td>';
@@ -861,6 +907,7 @@ function renderAmazonDailyTable(data) {
         '<th class="py-2.5 px-3 font-semibold text-right">Órd.</th>' +
         '<th class="py-2.5 px-3 font-semibold text-right">Uds</th>' +
         '<th class="py-2.5 px-3 font-semibold text-right">Revenue</th>' +
+        '<th class="py-2.5 px-3 font-semibold text-right">Neto Est.</th>' +
         '<th class="py-2.5 px-3 font-semibold text-right">% Meta</th>' +
         '<th class="py-2.5 px-4 font-semibold w-36">Progreso</th>' +
         '<th class="py-2.5 px-3 font-semibold text-center">Estado</th>' +
@@ -931,6 +978,51 @@ function loadAmazonDashboard() {
             .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
             .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
     }, 1500);
+}
+
+// ── Morning Briefing ───────────────────────────────────────────────────────
+var _amzBriefingLoaded = false;
+function refreshAmzBriefing() {
+    _amzBriefingLoaded = false;
+    loadAmzBriefing();
+}
+async function loadAmzBriefing() {
+    if (_amzBriefingLoaded) return;
+    _amzBriefingLoaded = true;
+    var cont = document.getElementById('amz-briefing-content');
+    var dateEl = document.getElementById('amz-briefing-date');
+    if (!cont) return;
+    var now = new Date();
+    var todayStr = toDateStr(now);
+    if (dateEl) {
+        var months = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        dateEl.textContent = now.getDate() + ' de ' + months[now.getMonth()] + ' ' + now.getFullYear();
+    }
+    try {
+        var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+        var r = await fetch('/api/metrics/amazon-daily-sales-data?date_from=' + todayStr + '&date_to=' + todayStr + (window.amzActiveSellerId ? '&seller_id=' + window.amzActiveSellerId : ''));
+        var d = await r.json();
+        var daily = (d.daily_data || [])[0] || {};
+        var todayRev = daily.revenue || 0;
+        var todayOrd = daily.orders || 0;
+        var todayUds = daily.units || 0;
+        var goal = d.goal || 0;
+        var pct = goal > 0 ? (todayRev / goal * 100) : 0;
+        var pctColor = pct >= 100 ? '#10B981' : (pct >= 80 ? '#F59E0B' : '#EF4444');
+        cont.innerHTML = [
+            { label: 'Revenue hoy', val: '$' + fmtMoney(todayRev), color: '#FF9900' },
+            { label: 'Órdenes hoy', val: todayOrd + ' órd.', color: '#FBD38D' },
+            { label: 'Unidades', val: todayUds + ' uds', color: '#FBD38D' },
+            { label: '% de Meta', val: pct.toFixed(1) + '%', color: pctColor },
+        ].map(function(k) {
+            return '<div class="bg-white/5 rounded-lg px-3 py-2.5 text-center">' +
+                '<p class="text-xs text-gray-400 mb-1">' + k.label + '</p>' +
+                '<p class="font-extrabold text-sm" style="color:' + k.color + '">' + k.val + '</p>' +
+            '</div>';
+        }).join('');
+    } catch(e) {
+        cont.innerHTML = '<div class="col-span-4 text-xs text-gray-500 text-center py-2">Sin datos disponibles</div>';
+    }
 }
 
 // ── Alertas ────────────────────────────────────────────────────────────────
@@ -1182,9 +1274,21 @@ function loadAmzSaludTab() {
 
 function renderAmzHealth(d, cont) {
     var score = d.health_score || 0;
-    var scoreColor = score >= 80 ? '#10B981' : (score >= 50 ? '#F97316' : '#EF4444');
-    var scoreLabel = score >= 80 ? 'Excelente' : (score >= 50 ? 'Regular' : 'Crítico');
+    var scoreColor = score >= 80 ? '#10B981' : (score >= 60 ? '#F59E0B' : '#EF4444');
+    var scoreLabel = score >= 80 ? 'Excelente' : (score >= 60 ? 'Regular' : 'Crítico');
     var o = d.orders || {}, fba = d.fba || {};
+    var pct = score; // 0-100
+
+    // Circular progress ring via conic-gradient
+    var ringStyle = 'background: conic-gradient(' + scoreColor + ' ' + pct + '%, #e5e7eb ' + pct + '%); width:96px; height:96px; border-radius:50%; display:flex; align-items:center; justify-content:center;';
+    var innerStyle = 'width:72px; height:72px; border-radius:50%; background:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center;';
+    var circularScore =
+        '<div style="' + ringStyle + '">' +
+          '<div style="' + innerStyle + '">' +
+            '<span class="text-2xl font-extrabold" style="color:' + scoreColor + '; line-height:1">' + score + '</span>' +
+            '<span class="text-xs font-semibold" style="color:' + scoreColor + '">' + scoreLabel + '</span>' +
+          '</div>' +
+        '</div>';
 
     // Alerts
     var alertsHtml = (d.alerts || []).map(function(a) {
@@ -1198,13 +1302,11 @@ function renderAmzHealth(d, cont) {
         '<div class="flex items-center justify-between mb-4">' +
             '<div><h2 class="text-base font-bold text-gray-800">Salud de la Cuenta</h2>' +
             '<p class="text-xs text-gray-400 mt-0.5">' + (d.nickname||'Amazon') + ' · ' + (d.marketplace||'MX') + ' · Últimos 30 días</p></div>' +
-            '<div class="text-center">' +
-                '<div class="text-4xl font-extrabold" style="color:'+scoreColor+'">'+score+'</div>' +
-                '<div class="text-xs font-semibold mt-1" style="color:'+scoreColor+'">'+scoreLabel+'</div>' +
-                '<div class="text-xs text-gray-400">/ 100</div>' +
+            '<div class="flex flex-col items-center gap-1">' +
+                circularScore +
+                '<div class="text-xs text-gray-400 mt-1">/ 100</div>' +
             '</div>' +
         '</div>' +
-        '<div class="w-full bg-gray-100 rounded-full h-3 mb-2"><div class="h-3 rounded-full transition-all" style="width:'+score+'%;background:'+scoreColor+'"></div></div>' +
         '<div class="flex gap-6 text-xs text-gray-500 mt-2">' +
             '<span>Cancelaciones: <b style="color:'+scoreColor+'">'+o.cancel_rate+'%</b></span>' +
             '<span>Sin enviar: <b>'+o.unshipped+'</b></span>' +
@@ -1328,6 +1430,7 @@ if (amzActiveTab === 'salud') {
     loadAmzFinanzasTab();
 } else {
     loadAmazonDashboard();
+    loadAmzBriefing();
 }
 loadAmzBalance();
 loadAmzAlerts();
@@ -1546,11 +1649,16 @@ async function loadListingsTab() {
       var statusColors = {ACTIVE:'text-green-600', INACTIVE:'text-gray-400', SUPPRESSED:'text-red-600', DISCOVERABLE:'text-yellow-600'};
       var gc = gradeColor[item.grade] || 'bg-gray-100 text-gray-500';
       var issuesHtml = (item.issues || []).map(function(i){ return '<div class="text-xs text-red-600 truncate max-w-[220px]">• ' + i + '</div>'; }).join('');
+      var bsrHtml = (item.bsr_rank != null)
+        ? '<div class="text-xs font-bold text-indigo-600">#' + item.bsr_rank.toLocaleString('es-MX') + '</div>' +
+          (item.bsr_category ? '<div class="text-xs text-gray-400 truncate max-w-[120px]">' + item.bsr_category + '</div>' : '')
+        : '<span class="text-xs text-gray-300">—</span>';
       var row = '<tr class="hover:bg-gray-50">';
       row += '<td class="py-3 px-4"><div class="font-medium text-gray-700 text-xs">' + item.sku + '</div><div class="text-xs text-gray-400 truncate max-w-[250px]">' + (item.title || '—') + '</div></td>';
       row += '<td class="py-3 px-3 text-center"><span class="inline-block w-8 py-0.5 rounded-full text-xs font-bold ' + gc + '">' + item.grade + '</span></td>';
       row += '<td class="py-3 px-3 text-center"><div class="flex items-center justify-center gap-1"><div class="w-14 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full" style="width:' + item.score + '%;background:' + scoreColor + '"></div></div><span class="text-xs font-bold" style="color:' + scoreColor + '">' + item.score + '</span></div></td>';
       row += '<td class="py-3 px-3 text-center text-xs font-medium ' + (statusColors[item.status] || 'text-gray-500') + '">' + item.status + '</td>';
+      row += '<td class="py-3 px-3">' + bsrHtml + '</td>';
       row += '<td class="py-3 px-4">' + (issuesHtml || '<span class="text-xs text-green-600">Sin issues</span>') + '</td>';
       // Action: link to edit the listing in Seller Central (by SKU)
       var encodedSku = encodeURIComponent(item.sku);
@@ -1561,12 +1669,13 @@ async function loadListingsTab() {
       row += '</tr>';
       return row;
     });
-    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[600px]">' +
+    wrap.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-sm min-w-[700px]">' +
       '<thead><tr class="text-left text-xs text-gray-400 bg-gray-50">' +
       '<th class="py-3 px-4 font-semibold">SKU / Título</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Grado</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Score</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Estado</th>' +
+      '<th class="py-3 px-3 font-semibold">BSR</th>' +
       '<th class="py-3 px-3 font-semibold">Issues</th>' +
       '<th class="py-3 px-3 text-center font-semibold">Acción</th>' +
       '</tr></thead><tbody id="amz-lq-tbody" class="divide-y divide-gray-50"></tbody></table></div>' +
@@ -1802,6 +1911,17 @@ async function loadCompPricingSection(forceRefresh) {
   try {
     var r = await fetch('/api/amazon/competitive-pricing?limit=20' + (sp ? '&' + sp.slice(1) : ''));
     var d = await r.json();
+    // Buy Box Win % KPI card
+    var bbWinPct = d.buybox_win_pct != null ? d.buybox_win_pct : null;
+    var bbWinEl = document.getElementById('amz-bb-win-kpi');
+    if (bbWinEl && bbWinPct != null) {
+      var bbColor = bbWinPct >= 70 ? '#10B981' : (bbWinPct >= 40 ? '#F59E0B' : '#EF4444');
+      bbWinEl.innerHTML =
+        '<p class="text-xs text-gray-400 mb-1">🏆 Buy Box Win %</p>' +
+        '<p class="text-2xl font-extrabold" style="color:' + bbColor + '">' + bbWinPct + '%</p>' +
+        '<p class="text-xs text-gray-400 mt-1">' + (d.at_bb_count || 0) + ' de ' + ((d.at_bb_count||0)+(d.above_bb_count||0)+(d.below_bb_count||0)) + ' listings</p>';
+      bbWinEl.style.borderBottom = '4px solid ' + bbColor;
+    }
     // Mini KPIs
     var mkEl = document.getElementById('amz-pricing-mini-kpis');
     if (mkEl) {
