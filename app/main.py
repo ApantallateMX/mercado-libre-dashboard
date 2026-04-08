@@ -7396,7 +7396,7 @@ async def morning_briefing():
     result = []
     for acc, goal in zip(accounts_list, goals):
         uid = acc.get("user_id", "")
-        label = acc.get("label", uid[:8])
+        label = acc.get("label") or acc.get("nickname") or uid[:8]
         result.append({
             "user_id": uid,
             "label": label,
