@@ -582,6 +582,8 @@
 var amzChartInstance = null;
 var amzDailyGoal = 50000;
 var amzActiveTab = '{{ active_amazon_tab }}';
+// Seller ID de la cuenta activa — usado en TODOS los fetch para evitar mezclar cuentas
+window.amzActiveSellerId = '{{ active_amazon_id or "" }}';
 
 // ─── Banner de error Amazon con botón de reconexión automático ───────────────
 function _amzIsAuthError(msg) {
