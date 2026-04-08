@@ -192,6 +192,24 @@
     <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
 </div>
 
+{% if amazon_accounts|length > 1 %}
+<!-- ─── Comparativa multi-cuenta (solo si hay >1 cuenta Amazon) ──── -->
+<div id="amz-compare-section" class="mb-5">
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800 text-sm">📊 Comparativa de cuentas</h3>
+        <p class="text-xs text-gray-400">Mes actual · todas las cuentas Amazon</p>
+      </div>
+      <button onclick="loadAmzCompare()" class="text-xs text-orange-500 hover:text-orange-700 font-medium">↻</button>
+    </div>
+    <div id="amz-compare-content" class="p-4">
+      <div class="text-center py-4 text-gray-400 text-xs">Cargando comparativa...</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- ─── Métricas principales ──────────────────────────────────────────── -->
 <div id="amz-metric-cards" class="mb-5">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
@@ -707,7 +725,7 @@ function switchAmzTab(tabName) {
         else if (tabName === 'fba') loadFbaTab();
         else if (tabName === 'listings') loadListingsTab();
         else if (tabName === 'deals') loadDealsTab();
-        else if (tabName === 'ventas') { loadAmazonDashboard(); loadAmzBriefing(); }
+        else if (tabName === 'ventas') { loadAmazonDashboard(); loadAmzBriefing(); loadAmzCompare(); }
     } else if (tabName === 'ventas') {
         loadAmzBriefing();
     }
@@ -981,6 +999,46 @@ function loadAmazonDashboard() {
             .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
             .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
     }, 1500);
+}
+
+// ── Multi-cuenta comparativa ──────────────────────────────────────────────
+async function loadAmzCompare() {
+  var el = document.getElementById('amz-compare-content');
+  if (!el) return;
+  try {
+    var r = await fetch('/api/dashboard/multi-account-amazon');
+    var d = await r.json();
+    var accounts = (d.amazon_accounts || d.accounts || []);
+    if (!accounts.length) { el.innerHTML = '<div class="text-center py-4 text-gray-400 text-xs">Sin cuentas disponibles</div>'; return; }
+    var fmt = function(v) { return new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',minimumFractionDigits:0,maximumFractionDigits:0}).format(v||0); };
+    var cards = accounts.map(function(acc) {
+      var m = acc.month || {};
+      var t = acc.today || {};
+      return '<div class="flex-1 min-w-0 bg-orange-50 rounded-xl p-4 border border-orange-100">' +
+        '<div class="flex items-center gap-2 mb-2">' +
+          '<span class="w-2 h-2 rounded-full bg-orange-500 shrink-0"></span>' +
+          '<span class="font-semibold text-gray-800 text-sm truncate">' + (acc.nickname||acc.seller_id) + '</span>' +
+          '<span class="text-xs text-gray-400 shrink-0">' + (acc.marketplace||'MX') + '</span>' +
+        '</div>' +
+        '<div class="grid grid-cols-2 gap-2 text-xs">' +
+          '<div class="bg-white rounded-lg p-2">' +
+            '<p class="text-gray-400 mb-0.5">Hoy</p>' +
+            '<p class="font-bold text-orange-700">' + fmt(t.revenue) + '</p>' +
+            '<p class="text-gray-400">' + (t.orders||0) + ' órd</p>' +
+          '</div>' +
+          '<div class="bg-white rounded-lg p-2">' +
+            '<p class="text-gray-400 mb-0.5">Mes</p>' +
+            '<p class="font-bold text-gray-800">' + fmt(m.revenue) + '</p>' +
+            '<p class="text-gray-400">' + (m.orders||0) + ' órd</p>' +
+          '</div>' +
+        '</div>' +
+        (acc.error ? '<p class="text-xs text-red-400 mt-1">⚠ ' + acc.error.slice(0,50) + '</p>' : '') +
+      '</div>';
+    }).join('');
+    el.innerHTML = '<div class="flex flex-wrap gap-3">' + cards + '</div>';
+  } catch(e) {
+    el.innerHTML = '<div class="text-center py-4 text-red-400 text-xs">Error: ' + e.message + '</div>';
+  }
 }
 
 // ── Morning Briefing ───────────────────────────────────────────────────────
@@ -1555,6 +1613,7 @@ if (amzActiveTab === 'salud') {
 } else {
     loadAmazonDashboard();
     loadAmzBriefing();
+    loadAmzCompare();
 }
 loadAmzBalance();
 loadAmzAlerts();
