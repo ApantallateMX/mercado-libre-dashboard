@@ -2267,7 +2267,8 @@
     }, 8000);  // Cambiar paso cada 8s aprox
 
     try {
-      var resp = await fetch('/api/lanzar/generate-video-commercial', {
+      // Paso 1: iniciar job en background — retorna job_id inmediatamente (evita timeout Railway)
+      var startResp = await fetch('/api/lanzar/generate-video-commercial', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2293,9 +2294,53 @@
           })(),
         }),
       });
-      var d = await resp.json();
+      var startData = await startResp.json();
+
+      if (startData.error) {
+        clearInterval(stepTimer);
+        btn.disabled = false; btn.innerHTML = '🎬 Video';
+        errEl.textContent = '❌ ' + startData.error;
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      var jobId = startData.job_id;
+      if (!jobId) {
+        throw new Error('No se recibió job_id del servidor');
+      }
+
+      // Paso 2: polling cada 5s hasta que status = "done" | "error"
+      var MAX_POLLS = 72;  // 72 × 5s = 6 minutos máximo
+      var pollCount = 0;
+      var d = null;
+
+      while (pollCount < MAX_POLLS) {
+        await new Promise(function(res) { setTimeout(res, 5000); });
+        pollCount++;
+        try {
+          var pollResp = await fetch('/api/lanzar/video-job/' + jobId);
+          var pollData = await pollResp.json();
+          if (pollData.status === 'done') {
+            d = pollData;
+            break;
+          } else if (pollData.status === 'error') {
+            throw new Error(pollData.error || 'Error generando video');
+          }
+          // status === "processing" → continuar polling
+        } catch(pollErr) {
+          if (pollErr.message && pollErr.message !== 'Failed to fetch') throw pollErr;
+          // red error temporal — seguir intentando
+        }
+      }
+
       clearInterval(stepTimer);
       btn.disabled = false; btn.innerHTML = '🎬 Video';
+
+      if (!d) {
+        errEl.textContent = '❌ Timeout: el video tardó demasiado. Intenta de nuevo.';
+        errEl.classList.remove('hidden');
+        return;
+      }
 
       if (d.error) {
         errEl.textContent = '❌ ' + d.error;
@@ -2509,6 +2554,16 @@
     function _uploadAndCreate(imgs) {
 
     function _create(pictureIds) {
+      // GTIN warning for categories that typically require it
+      if (!_wiz.gtin) {
+        var confirmed = confirm('⚠️ No hay GTIN/UPC configurado. Algunas categorías de ML (ej. Televisores) lo requieren.\n\nPublicar sin GTIN puede causar error.\n\n¿Continuar de todas formas?');
+        if (!confirmed) {
+          btn.disabled = false; btn.classList.remove('opacity-50');
+          status.textContent = '';
+          return;
+        }
+      }
+
       status.textContent = 'Creando publicación en Mercado Libre...';
       var descText = _wiz.draft.description || '';
       if (_wiz.draft.bullet_points && _wiz.draft.bullet_points.length) {
