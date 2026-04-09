@@ -290,25 +290,37 @@ async def _get_bsr_cached(client, asins: list) -> dict:
     if not target:
         return result
 
-    sem = asyncio.Semaphore(5)
+    # Catalog Items API rate limit = 2 req/s → semaphore-2 + 0.6s delay
+    sem = asyncio.Semaphore(2)
 
     async def _fetch_one(asin: str):
         async with sem:
+            await asyncio.sleep(0.6)  # respect 2 req/s
             try:
                 data = await client.get_catalog_item(asin)
-                ranks = data.get("salesRanks", []) if data else []
-                if ranks:
-                    # First rank group — displayGroupRanks has the primary BSR
-                    group = ranks[0]
-                    rank_list = group.get("displayGroupRanks") or group.get("classificationRanks") or []
-                    if rank_list:
-                        top = rank_list[0]
-                        result[asin] = {
-                            "rank": top.get("rank"),
-                            "category": top.get("title") or top.get("displayGroupName") or "",
-                        }
-            except Exception:
-                pass
+                if not data:
+                    return
+                # Handle potential payload wrapper (some API versions)
+                if "payload" in data and isinstance(data["payload"], dict):
+                    data = data["payload"]
+                ranks = data.get("salesRanks", [])
+                if not ranks:
+                    logger.debug(
+                        "[BSR] ASIN %s: no salesRanks. Keys present: %s",
+                        asin, list(data.keys())[:8],
+                    )
+                    return
+                # First rank group — displayGroupRanks has the primary BSR
+                group = ranks[0]
+                rank_list = group.get("displayGroupRanks") or group.get("classificationRanks") or []
+                if rank_list:
+                    top = rank_list[0]
+                    result[asin] = {
+                        "rank": top.get("rank"),
+                        "category": top.get("title") or top.get("displayGroupName") or "",
+                    }
+            except Exception as exc:
+                logger.warning("[BSR] Error fetching ASIN %s: %s", asin, exc)
 
     await asyncio.gather(*[_fetch_one(a) for a in target])
     _bsr_cache[key] = (now, result)
@@ -1138,6 +1150,18 @@ async def amazon_product_details(sku: str, request: Request):
 
     asin = summary_0.get("asin", "")
 
+    # Bullet points from attributes → bullet_point
+    bullet_points: list[str] = []
+    bp_attr = attributes.get("bullet_point", [])
+    if isinstance(bp_attr, list):
+        bullet_points = [bp.get("value", "") for bp in bp_attr if bp.get("value")]
+
+    # Description from attributes → product_description
+    description = ""
+    desc_attr = attributes.get("product_description", [])
+    if isinstance(desc_attr, list) and desc_attr:
+        description = desc_attr[0].get("value", "")
+
     return {
         "sku": sku,
         "asin": asin,
@@ -1146,6 +1170,8 @@ async def amazon_product_details(sku: str, request: Request):
         "qty": qty,
         "fulfillment_type": fulfillment_type,
         "product_type": listing.get("productType", ""),
+        "bullet_points": bullet_points,
+        "description": description,
     }
 
 
@@ -1164,11 +1190,13 @@ async def update_amazon_listing(sku: str, request: Request):
         raise HTTPException(status_code=401, detail="Sin cuenta Amazon")
 
     body = await request.json()
-    price = body.get("price")
-    title = body.get("title")
-    qty   = body.get("qty")
+    price         = body.get("price")
+    title         = body.get("title")
+    qty           = body.get("qty")
+    bullet_points = body.get("bullet_points")   # list[str] | None
+    description   = body.get("description")     # str | None
 
-    if price is None and title is None and qty is None:
+    if all(v is None for v in (price, title, qty, bullet_points, description)):
         raise HTTPException(status_code=400, detail="Sin campos para actualizar")
 
     results = {}
@@ -1194,6 +1222,20 @@ async def update_amazon_listing(sku: str, request: Request):
             results["qty"] = "ok"
         except Exception as e:
             errors.append(f"Cantidad: {e}")
+
+    if bullet_points is not None and isinstance(bullet_points, list):
+        try:
+            await client.update_listing_bullets(sku, bullet_points)
+            results["bullet_points"] = "ok"
+        except Exception as e:
+            errors.append(f"Bullets: {e}")
+
+    if description is not None and str(description).strip():
+        try:
+            await client.update_listing_description(sku, str(description).strip())
+            results["description"] = "ok"
+        except Exception as e:
+            errors.append(f"Descripción: {e}")
 
     # Invalidar caché
     _listings_cache.pop(client.seller_id, None)
@@ -4003,3 +4045,176 @@ async def amazon_deal_candidates(
              "no_sales_data": True, "error": str(e)[:150]},
             status_code=200,
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON LANZADOR — SKUs de BM con stock que NO tienen listing activo en Amazon
+# ─────────────────────────────────────────────────────────────────────────────
+
+_sin_lanzar_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, resp)}
+_SIN_LANZAR_TTL = 900  # 15 min — BM fetch es lento, cachear agresivo
+
+
+@router.get("/products/sin-lanzar", response_class=HTMLResponse)
+async def amazon_sin_lanzar(
+    request: Request,
+    seller_id: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=5, le=100),
+    q: str = Query("", description="Filtro por SKU o título"),
+    force: bool = Query(False),
+):
+    """
+    SKUs de BinManager con stock vendible que NO tienen listing activo en Amazon.
+    Equivalente al Lanzador de ML pero adaptado para Amazon.
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return _render_no_account(request, "partials/amazon_sin_lanzar.html")
+
+    cache_key = client.seller_id
+    now = _time.time()
+
+    if not force:
+        cached = _sin_lanzar_cache.get(cache_key)
+        if cached and (now - cached[0]) < _SIN_LANZAR_TTL:
+            gaps_all = cached[1]["gaps"]
+            bm_total = cached[1]["bm_total"]
+            amazon_active = cached[1]["amazon_active"]
+            cached_at = cached[0]
+        else:
+            cached = None
+    else:
+        cached = None
+
+    if cached is None:
+        try:
+            from app.services.binmanager_client import get_shared_bm
+            bm_cli = await get_shared_bm()
+
+            # Fetch BM + Amazon listings in parallel
+            listings, bm_items = await asyncio.gather(
+                _get_listings_cached(client),
+                bm_cli.get_global_inventory(min_qty=1),
+            )
+
+            # Build set of active Amazon base SKUs
+            amazon_base_skus: set[str] = set()
+            for listing in listings:
+                sku = listing.get("sku", "")
+                if not sku:
+                    continue
+                summaries = listing.get("summaries", [])
+                status = _listing_status(summaries)
+                if status == "ACTIVE":
+                    amazon_base_skus.add(sku.upper())
+                    base = _amz_base_sku(sku).upper()
+                    if base:
+                        amazon_base_skus.add(base)
+
+            gaps_all = []
+            for item in bm_items:
+                bm_sku = (item.get("SKU") or "").strip()
+                if not bm_sku:
+                    continue
+
+                bm_sku_up = bm_sku.upper()
+                # Check if BM SKU (or its suffixed variants) is on Amazon
+                already_on_amz = (
+                    bm_sku_up in amazon_base_skus
+                    or any(
+                        (bm_sku_up + sfx) in amazon_base_skus
+                        for sfx in ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-FLX01", "-FLX02")
+                    )
+                )
+                if already_on_amz:
+                    continue
+
+                avail_qty = int(item.get("AvailableQTY") or item.get("TotalQty") or 0)
+                if avail_qty <= 0:
+                    continue
+
+                cost_usd = float(
+                    item.get("LastRetailPricePurchaseHistory")
+                    or item.get("AvgCostQTY")
+                    or 0
+                )
+                FX = 18.5
+                cost_mxn = round(cost_usd * FX, 2) if cost_usd > 0 else 0
+                # Suggested price: cover cost + 18% Amazon fee + target ~20% margin
+                # price = cost_mxn / (1 - 0.18 - 0.20) = cost_mxn / 0.62
+                price_sug = round(cost_mxn / 0.62, 0) if cost_mxn > 0 else 0
+                margin_pct: Optional[float] = None
+                if cost_mxn > 0 and price_sug > 0:
+                    margin_pct = round(
+                        (price_sug - cost_mxn - price_sug * 0.18) / price_sug * 100, 1
+                    )
+
+                gaps_all.append({
+                    "sku":          bm_sku,
+                    "title":        (item.get("Title") or item.get("Description") or "")[:120],
+                    "brand":        item.get("Brand") or "",
+                    "model":        item.get("Model") or "",
+                    "category":     item.get("CategoryName") or "",
+                    "avail_qty":    avail_qty,
+                    "cost_usd":     round(cost_usd, 2),
+                    "cost_mxn":     cost_mxn,
+                    "price_sug":    price_sug,
+                    "margin_pct":   margin_pct,
+                    "upc":          item.get("UPC") or item.get("Upc") or "",
+                    "image_url":    item.get("ImageURL") or "",
+                })
+
+            # Sort by available qty desc
+            gaps_all.sort(key=lambda x: x["avail_qty"], reverse=True)
+
+            bm_total = len(bm_items)
+            amazon_active = len([l for l in listings if _listing_status(l.get("summaries", [])) == "ACTIVE"])
+            cached_at = now
+            _sin_lanzar_cache[cache_key] = (now, {
+                "gaps": gaps_all, "bm_total": bm_total, "amazon_active": amazon_active,
+            })
+
+        except Exception as e:
+            logger.exception("[Amazon Sin Lanzar] Error")
+            ctx = {"error": str(e)[:200], "gaps": [], "total": 0, "page": 1, "pages": 1,
+                   "per_page": per_page, "q": q, "bm_total": 0, "amazon_active": 0,
+                   "cached_at": "", "force": force}
+            return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
+
+    # Filter by search query
+    q_lower = q.strip().lower()
+    if q_lower:
+        gaps_filtered = [
+            g for g in gaps_all
+            if q_lower in g["sku"].lower()
+            or q_lower in g["title"].lower()
+            or q_lower in (g["brand"] or "").lower()
+        ]
+    else:
+        gaps_filtered = gaps_all
+
+    # Paginate
+    total = len(gaps_filtered)
+    pages = max(1, math.ceil(total / per_page))
+    page = max(1, min(page, pages))
+    offset = (page - 1) * per_page
+    gaps_page = gaps_filtered[offset: offset + per_page]
+
+    from datetime import datetime as _dt
+    cached_ago = int(now - cached_at) if cached_at else 0
+
+    ctx = {
+        "gaps":          gaps_page,
+        "total":         total,
+        "page":          page,
+        "pages":         pages,
+        "per_page":      per_page,
+        "q":             q,
+        "bm_total":      bm_total,
+        "amazon_active": amazon_active,
+        "cached_ago":    cached_ago,
+        "force":         force,
+        "marketplace":   client.marketplace_name,
+    }
+    return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)

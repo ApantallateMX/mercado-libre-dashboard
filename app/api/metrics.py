@@ -857,6 +857,47 @@ async def get_amazon_daily_sales_data(
         except (TypeError, ValueError):
             pass
 
+    # ── Fallback real-time para hoy (Sales API tiene lag de 2-4 horas) ────────
+    # Si el bucket de hoy tiene 0 órdenes, consultar Orders API que sí es real-time.
+    try:
+        import zoneinfo as _zi
+        _la = _zi.ZoneInfo("America/Los_Angeles")
+        _offset_h = int(datetime.now(_la).utcoffset().total_seconds() // 3600)
+    except Exception:
+        _offset_h = -7  # PDT fallback (abril–octubre)
+
+    now_pac = now + timedelta(hours=_offset_h)
+    today_pac = now_pac.strftime("%Y-%m-%d")
+
+    if today_pac in buckets and buckets[today_pac]["orders"] == 0:
+        try:
+            # Medianoche Pacific → UTC
+            midnight_pac = now_pac.replace(hour=0, minute=0, second=0, microsecond=0)
+            midnight_utc_str = (midnight_pac - timedelta(hours=_offset_h)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            today_orders = await client.get_orders(
+                created_after=midnight_utc_str,
+                order_statuses=["Shipped", "Unshipped", "PartiallyShipped"],
+            )
+            if today_orders:
+                buckets[today_pac]["orders"] = len(today_orders)
+                buckets[today_pac]["units"] = sum(
+                    int(o.get("NumberOfItemsShipped", 0) or 0)
+                    + int(o.get("NumberOfItemsUnshipped", 0) or 0)
+                    for o in today_orders
+                )
+                buckets[today_pac]["revenue"] = round(
+                    sum(
+                        float(o.get("OrderTotal", {}).get("Amount", 0) or 0)
+                        for o in today_orders
+                        if o.get("OrderStatus") not in ("Cancelled",)
+                    ),
+                    2,
+                )
+        except Exception:
+            pass  # fallback silencioso — peor caso sigue mostrando 0
+
     daily_data = []
     for date_key in sorted(buckets.keys(), reverse=True):
         d = buckets[date_key]

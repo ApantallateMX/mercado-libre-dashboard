@@ -52,6 +52,12 @@
             🏭 Seller Flex
         </button>
 
+        <button data-tab="sin-lanzar" data-url="/api/amazon/products/sin-lanzar"
+                class="amz-prod-tab flex-1 md:flex-none px-5 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap transition
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            🚀 Sin Lanzar
+        </button>
+
     </div>
 </div>
 
@@ -76,7 +82,7 @@
 <div id="amz-edit-modal"
      class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
      onclick="if(event.target===this)window.closeAmzEdit()">
-    <div class="bg-white rounded-xl shadow-2xl w-full max-w-md" onclick="event.stopPropagation()">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg" onclick="event.stopPropagation()">
 
         <!-- Header -->
         <div class="flex items-start justify-between px-5 py-4 border-b">
@@ -88,8 +94,20 @@
                     class="text-gray-300 hover:text-gray-600 text-xl leading-none mt-0.5 transition">✕</button>
         </div>
 
-        <!-- Body -->
-        <div class="px-5 py-4 space-y-4">
+        <!-- Tabs de sección dentro del modal -->
+        <div class="flex border-b border-gray-100 px-5 gap-4 text-xs font-medium">
+            <button id="amz-edit-tab-basic" onclick="window._amzEditTab('basic')"
+                    class="py-2.5 border-b-2 border-[#FF9900] text-orange-700 transition">
+                Básico
+            </button>
+            <button id="amz-edit-tab-content" onclick="window._amzEditTab('content')"
+                    class="py-2.5 border-b-2 border-transparent text-gray-400 hover:text-gray-600 transition">
+                Contenido
+            </button>
+        </div>
+
+        <!-- Body: Básico -->
+        <div id="amz-edit-section-basic" class="px-5 py-4 space-y-4">
             <div>
                 <label class="block text-xs font-semibold text-gray-600 mb-1">Título del Producto</label>
                 <input id="amz-edit-title" type="text" maxlength="200"
@@ -116,8 +134,36 @@
                        placeholder="0">
                 <p class="text-[10px] text-gray-400 mt-0.5">Solo aplica a listings FBM. Para FBA gestiona desde Seller Central.</p>
             </div>
-            <div id="amz-edit-error" class="hidden px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700"></div>
         </div>
+
+        <!-- Body: Contenido (bullets + description) -->
+        <div id="amz-edit-section-content" class="hidden px-5 py-4 space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-2">Bullet Points (hasta 5)</label>
+                <div class="space-y-1.5">
+                    <input id="amz-edit-bp1" type="text" maxlength="500" placeholder="• Característica 1..."
+                           class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition">
+                    <input id="amz-edit-bp2" type="text" maxlength="500" placeholder="• Característica 2..."
+                           class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition">
+                    <input id="amz-edit-bp3" type="text" maxlength="500" placeholder="• Característica 3..."
+                           class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition">
+                    <input id="amz-edit-bp4" type="text" maxlength="500" placeholder="• Característica 4..."
+                           class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition">
+                    <input id="amz-edit-bp5" type="text" maxlength="500" placeholder="• Característica 5..."
+                           class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition">
+                </div>
+                <p class="text-[10px] text-gray-400 mt-1">Deja vacíos los que no uses. Máx. 500 chars cada uno.</p>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Descripción del Producto</label>
+                <textarea id="amz-edit-description" rows="5" maxlength="2000"
+                          class="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg outline-none focus:border-[#FF9900] transition resize-none"
+                          placeholder="Descripción detallada del producto..."></textarea>
+                <p class="text-[10px] text-gray-400 mt-0.5">Máx. 2000 caracteres</p>
+            </div>
+        </div>
+
+        <div id="amz-edit-error" class="hidden mx-5 mb-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700"></div>
 
         <!-- Footer -->
         <div class="px-5 py-3 border-t bg-gray-50 rounded-b-xl flex items-center justify-between gap-3">
@@ -190,6 +236,7 @@ function loadAmzProdTab(tabName, url, btn) {
             if (tabName === 'seller-flex' && document.getElementById('sfx-auto-sync-trigger')) {
                 _sfxStartPollingOnly('');
             }
+            // Sin Lanzar usa su propio loader — no hace nada extra aquí
         })
         .catch(function(e) {
             container.innerHTML =
@@ -518,6 +565,19 @@ window.switchAmzProdTab = function(tabName) {
     }
 };
 
+// ── Tab switcher del modal de edición ────────────────────────────────────
+window._amzEditTab = function(tab) {
+    var isBasic = tab === 'basic';
+    document.getElementById('amz-edit-section-basic').classList.toggle('hidden', !isBasic);
+    document.getElementById('amz-edit-section-content').classList.toggle('hidden', isBasic);
+    document.getElementById('amz-edit-tab-basic').className =
+        'py-2.5 border-b-2 transition text-xs font-medium ' +
+        (isBasic ? 'border-[#FF9900] text-orange-700' : 'border-transparent text-gray-400 hover:text-gray-600');
+    document.getElementById('amz-edit-tab-content').className =
+        'py-2.5 border-b-2 transition text-xs font-medium ' +
+        (!isBasic ? 'border-[#FF9900] text-orange-700' : 'border-transparent text-gray-400 hover:text-gray-600');
+};
+
 // ── Modal de edición de listing ───────────────────────────────────────────
 var _editSku = null;
 var _editFulfillmentType = null;
@@ -533,6 +593,12 @@ window.openAmzEdit = async function(sku, asin, scUrl) {
     document.getElementById('amz-edit-qty').value = '';
     document.getElementById('amz-edit-qty-group').classList.add('hidden');
     document.getElementById('amz-edit-error').classList.add('hidden');
+    // Reset bullets and description
+    ['bp1','bp2','bp3','bp4','bp5'].forEach(function(id) {
+        document.getElementById('amz-edit-' + id).value = '';
+    });
+    document.getElementById('amz-edit-description').value = '';
+    window._amzEditTab('basic');
     var btn = document.getElementById('amz-edit-save-btn');
     btn.textContent = 'Cargando...';
     btn.disabled = true;
@@ -549,6 +615,13 @@ window.openAmzEdit = async function(sku, asin, scUrl) {
                 document.getElementById('amz-edit-qty').value = data.qty != null ? data.qty : 0;
                 document.getElementById('amz-edit-qty-group').classList.remove('hidden');
             }
+            // Populate bullet points
+            var bps = data.bullet_points || [];
+            ['bp1','bp2','bp3','bp4','bp5'].forEach(function(id, idx) {
+                document.getElementById('amz-edit-' + id).value = bps[idx] || '';
+            });
+            // Populate description
+            document.getElementById('amz-edit-description').value = data.description || '';
         } else {
             document.getElementById('amz-edit-error').textContent = 'No se pudieron cargar los datos del listing.';
             document.getElementById('amz-edit-error').classList.remove('hidden');
@@ -575,10 +648,19 @@ window.saveAmzEdit = async function() {
     var price = parseFloat(priceVal);
     var qty = parseInt(qtyVal);
 
+    // Bullet points — collect non-empty inputs
+    var bullets = ['bp1','bp2','bp3','bp4','bp5'].map(function(id) {
+        return document.getElementById('amz-edit-' + id).value.trim();
+    }).filter(function(v) { return v.length > 0; });
+
+    var description = document.getElementById('amz-edit-description').value.trim();
+
     var body = {};
     if (title) body.title = title;
     if (priceVal !== '' && price > 0) body.price = price;
     if (_editFulfillmentType === 'FBM' && qtyVal !== '' && !isNaN(qty) && qty >= 0) body.qty = qty;
+    if (bullets.length > 0) body.bullet_points = bullets;
+    if (description) body.description = description;
 
     if (Object.keys(body).length === 0) {
         document.getElementById('amz-edit-error').textContent = 'No hay cambios para guardar.';
@@ -638,6 +720,47 @@ document.addEventListener('keydown', function(e) {
         if (modal && !modal.classList.contains('hidden')) window.closeAmzEdit();
     }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIN LANZAR — funciones para el tab 🚀
+// ─────────────────────────────────────────────────────────────────────────────
+
+window._loadAmzSinLanzar = function(page, force) {
+    var q = (document.getElementById('sl-search') || {}).value || '';
+    var url = '/api/amazon/products/sin-lanzar?page=' + (page || 1) +
+              '&per_page=20' +
+              (q ? '&q=' + encodeURIComponent(q) : '') +
+              (force ? '&force=1' : '');
+    var container = document.getElementById('amz-prod-tab-content');
+    container.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+        '<svg class="animate-spin h-7 w-7 mx-auto mb-3 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        'Analizando gaps BM ↔ Amazon…<br><span class="text-xs mt-1 block">Esto puede tardar 10-20s la primera vez</span></div>';
+    fetch(url)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold">Error</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+};
+
+// Modal de lanzamiento rápido desde Sin Lanzar
+window.openAmzLanzar = function(sku, title, priceSug, upc) {
+    var msg = '¿Lanzar "' + sku + '" en Amazon?\n\n' +
+              'Producto: ' + (title || sku) + '\n' +
+              'Precio sugerido: $' + (priceSug ? priceSug.toLocaleString('es-MX') : '—') + ' MXN\n\n' +
+              'Se abrirá Seller Central para que completes la publicación.';
+    if (confirm(msg)) {
+        var scUrl = 'https://sellercentral.amazon.com.mx/listing/wizard?ref=bmi';
+        if (upc) scUrl += '&searchVal=' + encodeURIComponent(upc);
+        window.open(scUrl, '_blank');
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SELLER FLEX — funciones para el tab 🏭

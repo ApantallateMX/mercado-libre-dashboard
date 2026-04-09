@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FEAT: Amazon listing management completo + Sin Lanzar + fixes header
+
+### FIX 1: "Órdenes hoy: 0 / Unidades hoy: 0 / Revenue hoy: $0.00"
+- Root cause: Sales API tiene lag de 2-4h para el día actual. El bucket de hoy siempre llegaba vacío.
+- Fix: en `get_amazon_daily_sales_data` (metrics.py), después de llenar buckets con Sales API,
+  si el bucket del día actual tiene 0 órdenes, hace fallback al Orders API (real-time) para obtener
+  datos del día desde medianoche Pacific.
+- El cálculo de medianoche Pacific usa `zoneinfo.ZoneInfo("America/Los_Angeles")` para ser DST-aware.
+
+### FIX 2: BSR siempre mostrando "—"
+- Root cause probable: semaphore-5 excedía el rate limit de 2 req/s del Catalog Items API.
+  Los errores se tragaban silenciosamente con `except Exception: pass`.
+- Fix: reducir semaphore a 2 + agregar `asyncio.sleep(0.6)` + logging explícito de errores.
+- Además: manejar posible wrapper `{"payload": {...}}` en la respuesta del Catalog API.
+
+### FEAT: Inline edit de listings — bullet points + descripción
+- `amazon_client.py`: nuevos métodos `update_listing_bullets(sku, bullets)` y `update_listing_description(sku, desc)`.
+  Usan Listings Items API PATCH con `bullet_point` y `product_description` attributes.
+- `amazon_products.py` PATCH endpoint: acepta ahora `bullet_points: list[str]` y `description: str` en body.
+- `amazon_product_details`: retorna ahora `bullet_points` y `description` además de título/precio/qty.
+- `amazon_products.html`: modal extendido con pestañas "Básico" (título/precio/qty) y "Contenido" (5 bullets + descripción).
+  Los campos se pre-llenan automáticamente al abrir el modal.
+
+### FEAT: Tab "Sin Lanzar" — Amazon Lanzador (BM → Amazon gap analysis)
+- Nuevo endpoint `GET /api/amazon/products/sin-lanzar` en amazon_products.py.
+  - Usa `get_shared_bm().get_global_inventory(min_qty=1)` para obtener todos los SKUs de BM con stock.
+  - Compara contra listings activos de Amazon (stripping condition suffixes).
+  - Calcula precio sugerido = costo_mxn / 0.62 (covers 18% fees + ~20% margin).
+  - Paginación server-side (20/pág), búsqueda por SKU/título/marca, caché 15min.
+- Nueva template `partials/amazon_sin_lanzar.html` con tabla paginada + KPI header.
+- `amazon_products.html`: nuevo tab "🚀 Sin Lanzar" + funciones JS `_loadAmzSinLanzar()` y `openAmzLanzar()`.
+
+---
+
 ## 2026-04-04 — FIX: STALE persistente — 3 causas raíz resueltas
 
 ### Causa raíz final confirmada

@@ -591,6 +591,84 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def update_listing_bullets(self, sku: str, bullets: list) -> dict:
+        """
+        Actualiza los bullet points (características) de un listing.
+
+        Args:
+            sku:     SellerSKU exacto
+            bullets: Lista de hasta 5 strings (cada uno máx. 500 chars)
+        """
+        listing = await self.get_listing(sku)
+        if not listing:
+            raise ValueError(f"SKU '{sku}' no encontrado en marketplace {self.marketplace_id}")
+
+        product_type = listing.get("productType", "PRODUCT")
+        cleaned = [str(b).strip()[:500] for b in (bullets or []) if str(b).strip()][:5]
+
+        body = {
+            "productType": product_type,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": "/attributes/bullet_point",
+                    "value": [
+                        {
+                            "value": bp,
+                            "marketplace_id": self.marketplace_id,
+                            "language_tag": "es_MX",
+                        }
+                        for bp in cleaned
+                    ],
+                }
+            ],
+        }
+
+        return await self._request(
+            "PATCH",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={"marketplaceIds": self.marketplace_id},
+            json_body=body,
+        )
+
+    async def update_listing_description(self, sku: str, description: str) -> dict:
+        """
+        Actualiza la descripción del producto de un listing.
+
+        Args:
+            sku:         SellerSKU exacto
+            description: Descripción nueva (máx. 2000 chars)
+        """
+        listing = await self.get_listing(sku)
+        if not listing:
+            raise ValueError(f"SKU '{sku}' no encontrado en marketplace {self.marketplace_id}")
+
+        product_type = listing.get("productType", "PRODUCT")
+
+        body = {
+            "productType": product_type,
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": "/attributes/product_description",
+                    "value": [
+                        {
+                            "value": description.strip()[:2000],
+                            "marketplace_id": self.marketplace_id,
+                            "language_tag": "es_MX",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        return await self._request(
+            "PATCH",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={"marketplaceIds": self.marketplace_id},
+            json_body=body,
+        )
+
     # ─────────────────────────────────────────────────────────────────────
     # INVENTARIO FBA
     # ─────────────────────────────────────────────────────────────────────

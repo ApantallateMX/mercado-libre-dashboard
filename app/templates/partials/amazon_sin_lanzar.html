@@ -1,0 +1,189 @@
+{% if error %}
+<div class="bg-white rounded-xl shadow p-8 text-center">
+    <p class="text-red-500 font-semibold mb-1">Error cargando datos</p>
+    <p class="text-gray-400 text-sm">{{ error }}</p>
+    <button onclick="window._loadAmzSinLanzar(1,true)"
+            class="mt-4 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm hover:bg-orange-600 transition">
+        Reintentar
+    </button>
+</div>
+{% else %}
+
+<!-- ─── KPI header ──────────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+    <div class="bg-white rounded-xl shadow p-4">
+        <p class="text-xs text-gray-400 mb-1">SKUs sin lanzar</p>
+        <p class="text-2xl font-bold text-orange-600">{{ total }}</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">con stock disponible en BM</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4">
+        <p class="text-xs text-gray-400 mb-1">Activos en Amazon</p>
+        <p class="text-2xl font-bold text-green-600">{{ amazon_active }}</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">listings activos actualmente</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4">
+        <p class="text-xs text-gray-400 mb-1">SKUs en BM</p>
+        <p class="text-2xl font-bold text-indigo-600">{{ bm_total }}</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">total con stock ≥ 1</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4">
+        <p class="text-xs text-gray-400 mb-1">Caché</p>
+        <p class="text-lg font-bold text-gray-600">
+            {% if cached_ago < 60 %}< 1 min
+            {% elif cached_ago < 3600 %}{{ (cached_ago // 60) }} min
+            {% else %}{{ (cached_ago // 3600) }} h{% endif %}
+        </p>
+        <p class="text-[10px] text-gray-400 mt-0.5">
+            <button onclick="window._loadAmzSinLanzar(1,true)"
+                    class="text-orange-500 hover:underline">↻ Actualizar</button>
+        </p>
+    </div>
+</div>
+
+<!-- ─── Búsqueda ─────────────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow p-3 mb-4 flex items-center gap-3">
+    <input id="sl-search" type="text" value="{{ q }}" placeholder="Buscar por SKU, título o marca…"
+           class="flex-1 text-sm px-3 py-2 border border-gray-200 rounded-lg outline-none focus:border-orange-400 transition"
+           onkeydown="if(event.key==='Enter') window._loadAmzSinLanzar(1)">
+    <button onclick="window._loadAmzSinLanzar(1)"
+            class="px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition">
+        Buscar
+    </button>
+    {% if q %}
+    <a href="#" onclick="document.getElementById('sl-search').value=''; window._loadAmzSinLanzar(1); return false"
+       class="text-xs text-gray-400 hover:text-gray-600">✕ Limpiar</a>
+    {% endif %}
+    <span class="text-xs text-gray-400 whitespace-nowrap">{{ total }} resultados</span>
+</div>
+
+<!-- ─── Tabla ─────────────────────────────────────────────────────────────────── -->
+{% if not gaps %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <div class="text-4xl mb-3">🚀</div>
+    <p class="font-semibold text-gray-700">¡Todos los SKUs de BM ya están en Amazon!</p>
+    <p class="text-sm text-gray-400 mt-1">No se encontraron gaps en este momento.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-4 text-left font-semibold">Producto</th>
+                    <th class="py-3 px-3 text-right font-semibold">Stock BM</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Costo USD</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Costo MXN</th>
+                    <th class="py-3 px-3 text-right font-semibold">Precio Sug.</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Margen</th>
+                    <th class="py-3 px-3 text-center font-semibold">Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for g in gaps %}
+                <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition">
+                    <td class="py-2.5 px-4">
+                        <div class="flex items-center gap-2.5">
+                            {% if g.image_url %}
+                            <img src="{{ g.image_url }}" alt="" class="w-9 h-9 rounded object-contain bg-gray-50 border border-gray-100 shrink-0" loading="lazy">
+                            {% else %}
+                            <div class="w-9 h-9 rounded bg-orange-100 flex items-center justify-center shrink-0 text-orange-400 text-xs font-bold">BM</div>
+                            {% endif %}
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium text-gray-800 truncate max-w-[280px]">
+                                    {{ g.title or g.sku }}
+                                </p>
+                                <div class="flex items-center gap-2 mt-0.5">
+                                    <span class="text-xs text-gray-400 font-mono">{{ g.sku }}</span>
+                                    {% if g.brand %}
+                                    <span class="text-xs text-gray-300">·</span>
+                                    <span class="text-xs text-gray-400">{{ g.brand }}{% if g.model %} {{ g.model }}{% endif %}</span>
+                                    {% endif %}
+                                </div>
+                                {% if g.upc %}
+                                <p class="text-[10px] text-gray-300 mt-0.5">UPC: {{ g.upc }}</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-right">
+                        {% if g.avail_qty >= 10 %}
+                        <span class="font-bold text-green-600">{{ g.avail_qty }}</span>
+                        {% elif g.avail_qty > 0 %}
+                        <span class="font-bold text-yellow-600">{{ g.avail_qty }}</span>
+                        {% else %}
+                        <span class="text-gray-300">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right text-gray-500 hidden md:table-cell">
+                        {% if g.cost_usd > 0 %}${{ "%.2f"|format(g.cost_usd) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right text-gray-500 hidden md:table-cell">
+                        {% if g.cost_mxn > 0 %}${{ "{:,.0f}".format(g.cost_mxn) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right font-semibold text-gray-800">
+                        {% if g.price_sug > 0 %}${{ "{:,.0f}".format(g.price_sug) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell">
+                        {% if g.margin_pct is not none %}
+                        {% if g.margin_pct >= 20 %}
+                        <span class="text-green-600 font-bold">{{ g.margin_pct }}%</span>
+                        {% elif g.margin_pct >= 10 %}
+                        <span class="text-yellow-600 font-semibold">{{ g.margin_pct }}%</span>
+                        {% else %}
+                        <span class="text-red-600 font-bold">{{ g.margin_pct }}%</span>
+                        {% endif %}
+                        {% else %}
+                        <span class="text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        <button onclick="window.openAmzLanzar('{{ g.sku }}', '{{ g.title|replace("'","\'") }}', {{ g.price_sug }}, '{{ g.upc }}')"
+                                class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-lg transition whitespace-nowrap">
+                            🚀 Lanzar
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Paginación -->
+    {% if pages > 1 %}
+    <div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400">
+        <span>{{ total }} SKUs · Página {{ page }} de {{ pages }}</span>
+        <div class="flex gap-1">
+            {% if page > 1 %}
+            <button onclick="window._loadAmzSinLanzar({{ page - 1 }})"
+                    class="px-2.5 py-1 bg-white border border-gray-200 rounded hover:border-orange-400 hover:text-orange-600 transition">
+                ← Anterior
+            </button>
+            {% endif %}
+            {% for p in range([1, page-2]|max, [pages+1, page+3]|min) %}
+            <button onclick="window._loadAmzSinLanzar({{ p }})"
+                    class="px-2.5 py-1 rounded border transition
+                           {{ 'bg-orange-500 text-white border-orange-500' if p == page else 'bg-white border-gray-200 hover:border-orange-400 hover:text-orange-600' }}">
+                {{ p }}
+            </button>
+            {% endfor %}
+            {% if page < pages %}
+            <button onclick="window._loadAmzSinLanzar({{ page + 1 }})"
+                    class="px-2.5 py-1 bg-white border border-gray-200 rounded hover:border-orange-400 hover:text-orange-600 transition">
+                Siguiente →
+            </button>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Footer info -->
+    <div class="px-4 py-2 bg-orange-50 border-t border-orange-100">
+        <p class="text-xs text-orange-700">
+            💡 Precio sugerido = costo BM × 1.61 (cubre fees 18% + margen ~20%). Ajusta antes de publicar.
+            <span class="text-orange-400 ml-2">· {{ marketplace }}</span>
+        </p>
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
