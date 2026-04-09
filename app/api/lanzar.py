@@ -2963,6 +2963,87 @@ Retorna SOLO este JSON (sin markdown, sin texto extra):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/estimate-dimensions")
+async def estimate_dimensions_endpoint(request: Request):
+    """Estima dimensiones del paquete por tipo/tamaño de producto.
+    Para TVs usa tabla de referencia por pulgadas. Para otros, usa Claude.
+    """
+    import re as _re
+    body     = await request.json()
+    brand    = (body.get("brand") or "").strip()
+    model    = (body.get("model") or "").strip()
+    title    = (body.get("title") or body.get("product_title") or "").strip()
+    category = (body.get("category") or "").strip()
+    size     = str(body.get("size") or "").strip()
+
+    cat_lower = category.lower()
+    is_tv = any(w in cat_lower for w in ("television", "televisor", "tv"))
+    if not is_tv:
+        # Check title/model for TV hints
+        combined = f"{title} {model}".lower()
+        is_tv = any(w in combined for w in ("tv", "televisor", "television", "pfl", "pus", "qled", "oled", "uled"))
+
+    # ── TV: lookup table por tamaño en pulgadas ───────────────────────────────
+    if is_tv:
+        size_in = None
+        # Try size field first
+        m = _re.search(r'(\d{2,3})', size)
+        if m:
+            size_in = int(m.group(1))
+        # Fallback: search title/model for inches
+        if not size_in:
+            for src in [title, model, brand]:
+                m2 = _re.search(r'\b(\d{2,3})\s*(?:"|pulgadas|pulg|inches?|in\b)', src, _re.I)
+                if m2:
+                    size_in = int(m2.group(1))
+                    break
+
+        # Tabla: dimensiones de caja de embalaje incluyendo espuma (cm) + peso (kg)
+        _tv = {
+            24: (70,  46,  12,  5.0),
+            32: (90,  57,  12,  7.0),
+            40: (110, 67,  14, 10.0),
+            43: (116, 72,  14, 12.0),
+            50: (130, 82,  15, 16.0),
+            55: (144, 90,  16, 20.0),
+            58: (152, 94,  16, 22.0),
+            65: (170, 106, 17, 28.0),
+            70: (181, 114, 18, 33.0),
+            75: (193, 120, 19, 38.0),
+            85: (218, 136, 21, 48.0),
+        }
+        if size_in:
+            closest = min(_tv.keys(), key=lambda x: abs(x - size_in))
+            h, w, l, wt = _tv[closest]
+            return {
+                "height_cm": h, "width_cm": w, "length_cm": l, "weight_kg": wt,
+                "confidence": "table", "note": f"TV {closest}\" — caja de embalaje típica"
+            }
+        # TV pero sin tamaño conocido — retorna tabla para que el frontend use defaults
+        return {"height_cm": 130, "width_cm": 82, "length_cm": 15, "weight_kg": 16.0,
+                "confidence": "default", "note": "TV sin tamaño — promedio 50\""}
+
+    # ── No-TV: usar Claude para estimación rápida ─────────────────────────────
+    try:
+        product_desc = " ".join(filter(None, [brand, model, title])).strip() or title
+        prompt = (
+            f"Producto: {product_desc}\nCategoría: {category}\n\n"
+            "Estima las dimensiones del PAQUETE/CAJA DE ENVÍO de este producto (incluyendo embalaje).\n"
+            "Responde SOLO con JSON válido sin markdown:\n"
+            '{"height_cm": X, "width_cm": X, "length_cm": X, "weight_kg": X, "note": "breve explicación"}'
+        )
+        raw = await claude_client.generate(prompt, max_tokens=150)
+        import json as _json2, re as _re2
+        raw = _re2.sub(r'```[a-z]*\n?', '', raw.strip()).strip('`').strip()
+        data = _json2.loads(raw)
+        data["confidence"] = "estimated"
+        return data
+    except Exception as e:
+        logger.warning(f"estimate-dimensions Claude fallback failed: {e}")
+        return {"height_cm": None, "width_cm": None, "length_cm": None, "weight_kg": None,
+                "confidence": "unknown", "note": "No se pudo estimar"}
+
+
 @router.post("/search-upc")
 async def search_upc_endpoint(request: Request):
     """Busca el UPC/GTIN de un producto por marca + modelo + título usando Open UPC API."""

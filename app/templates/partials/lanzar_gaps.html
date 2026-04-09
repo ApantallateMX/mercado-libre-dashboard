@@ -1393,6 +1393,39 @@
     if (step === 3) _wizPopulateSummary();
   }
 
+  // Auto-fill package dimensions from product data
+  window._wizAutoFillDimensions = async function(gap) {
+    var hEl  = document.getElementById('wiz-f-pkg-h');
+    var wEl  = document.getElementById('wiz-f-pkg-w');
+    var lEl  = document.getElementById('wiz-f-pkg-l');
+    var wtEl = document.getElementById('wiz-f-pkg-wt');
+    if (!hEl) return;
+    // Only auto-fill if all fields are empty
+    if (hEl.value || wEl.value || lEl.value || wtEl.value) return;
+
+    try {
+      var r = await fetch('/api/lanzar/estimate-dimensions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand: gap.brand || '', model: gap.model || '',
+          title: gap.product_title || '', category: gap.category || '',
+          size: gap.size ? String(gap.size) : '',
+        }),
+      });
+      var d = await r.json();
+      if (d.height_cm)  hEl.value  = d.height_cm;
+      if (d.width_cm)   wEl.value  = d.width_cm;
+      if (d.length_cm)  lEl.value  = d.length_cm;
+      if (d.weight_kg)  wtEl.value = d.weight_kg;
+      // Show note if available
+      var noteEl = document.querySelector('#wiz-panel-2 .text-orange-600');
+      if (noteEl && d.note) {
+        noteEl.textContent = '💡 ' + d.note + ' — verifica antes de publicar.';
+      }
+    } catch(e) { /* silencioso — usuario puede ingresar manualmente */ }
+  };
+
   window._wizSearchUPC = function() {
     var btn    = document.getElementById('wiz-btn-search-upc');
     var status = document.getElementById('wiz-upc-status');
@@ -1584,9 +1617,15 @@
     document.getElementById('wiz-f-model').value = gap.model || '';
     document.getElementById('wiz-f-brand').value = gap.brand || '';
     document.getElementById('wiz-f-gtin').value  = gap.upc || '';
-    // Pre-fill warranty from AI draft if available
-    if (_wiz.draft.warranty_type) document.getElementById('wiz-f-warranty-type').value = _wiz.draft.warranty_type;
-    if (_wiz.draft.warranty_time) document.getElementById('wiz-f-warranty-time').value = _wiz.draft.warranty_time;
+    // Garantía — siempre aplicar desde _wiz.warranty_type (nunca dejar vacío)
+    document.getElementById('wiz-f-warranty-type').value = _wiz.warranty_type || 'Garantía del vendedor';
+    document.getElementById('wiz-f-warranty-time').value = _wiz.warranty_time || '3 meses';
+
+    // Auto-fill dimensiones del paquete si están vacías
+    var _pkgEmpty = !document.getElementById('wiz-f-pkg-h').value;
+    if (_pkgEmpty && _wiz.gap) {
+      window._wizAutoFillDimensions(_wiz.gap);
+    }
 
     // Competitor reference
     if (_wiz.gap && _wiz.gap.competitor_price > 0) {
