@@ -944,6 +944,7 @@ async def ai_improve(body: dict):
     field = body.get("field", "")
     current_value = body.get("current_value", "")
     context = body.get("context", {})
+    image_urls = body.get("image_urls", [])  # Claude Vision — URLs de fotos del producto
 
     sku = context.get("sku", "")
     brand = context.get("brand", "")
@@ -956,10 +957,14 @@ async def ai_improve(body: dict):
     )
 
     if field == "title":
+        vision_note = ""
+        if image_urls:
+            vision_note = "\nMIRAS las imagenes reales del producto — usa la informacion visual (color, tamaño, forma, accesorios) para hacer los titulos mas precisos.\n"
         prompt = (
             f"Genera exactamente 3 titulos SEO para Mercado Libre Mexico.\n"
             f"Producto: {current_value}\n"
-            f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n\n"
+            f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n"
+            f"{vision_note}\n"
             f"REGLAS CRITICAS:\n"
             f"- OBLIGATORIO: cada titulo debe tener entre 55 y 60 caracteres EXACTOS\n"
             f"- Usa TODOS los caracteres disponibles — un titulo de 44 chars es INACEPTABLE\n"
@@ -975,7 +980,12 @@ async def ai_improve(body: dict):
 
         async def title_stream():
             try:
-                async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=300):
+                gen = (
+                    claude_client.generate_stream_with_images(prompt, image_urls, system_prompt, max_tokens=300)
+                    if image_urls else
+                    claude_client.generate_stream(prompt, system_prompt, max_tokens=300)
+                )
+                async for chunk in gen:
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
@@ -984,25 +994,34 @@ async def ai_improve(body: dict):
         return StreamingResponse(title_stream(), media_type="text/event-stream")
 
     elif field == "description":
+        vision_note = ""
+        if image_urls:
+            vision_note = "\nMIRAS las imagenes reales del producto. Usa lo que ves (colores, dimensiones, accesorios incluidos, pantalla, botones) para hacer la descripcion precisa y convincente.\n"
         prompt = (
             f"Genera una descripcion profesional para Mercado Libre Mexico.\n"
             f"Titulo: {current_value}\n"
-            f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\nSKU: {sku}\n\n"
+            f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\nSKU: {sku}\n"
+            f"{vision_note}\n"
             f"Estructura:\n"
-            f"- Parrafo de apertura (beneficios principales)\n"
+            f"- Parrafo de apertura (beneficios principales, lo que ve el comprador)\n"
             f"- Caracteristicas tecnicas en lista\n"
             f"- Contenido del paquete\n"
             f"- Garantia y soporte\n\n"
             f"Reglas:\n"
             f"- Solo texto plano (MeLi no soporta HTML)\n"
             f"- Usa saltos de linea para separar secciones\n"
-            f"- Maximo 800 palabras\n"
+            f"- Minimo 300 palabras, maximo 800\n"
             f"- Tono profesional pero accesible"
         )
 
         async def desc_stream():
             try:
-                async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=1500):
+                gen = (
+                    claude_client.generate_stream_with_images(prompt, image_urls, system_prompt, max_tokens=1500)
+                    if image_urls else
+                    claude_client.generate_stream(prompt, system_prompt, max_tokens=1500)
+                )
+                async for chunk in gen:
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:

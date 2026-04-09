@@ -127,6 +127,65 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str
         return "".join(block.get("text", "") for block in content if block.get("type") == "text")
 
 
+async def generate_stream_with_images(prompt: str, image_urls: list, system: str = "", max_tokens: int = 1024) -> AsyncGenerator[str, None]:
+    """Stream generation with Claude Vision — same as generate_stream but with image context."""
+    key = _get_key()
+    if not key or len(key) <= 10:
+        raise RuntimeError("ANTHROPIC_API_KEY not configured")
+
+    content: list = []
+    for url in image_urls[:4]:
+        if url and isinstance(url, str) and url.startswith("http"):
+            content.append({"type": "image", "source": {"type": "url", "url": url}})
+    content.append({"type": "text", "text": prompt})
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        payload = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if system:
+            payload["system"] = system
+
+        async with client.stream(
+            "POST",
+            ANTHROPIC_API_URL,
+            json=payload,
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        ) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                try:
+                    import json as _json
+                    err = _json.loads(body)
+                    msg = err.get("error", {}).get("message", body.decode())
+                except Exception:
+                    msg = body.decode()
+                raise RuntimeError(f"Anthropic API error: {msg}")
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    import json
+                    event = json.loads(data_str)
+                    if event.get("type") == "content_block_delta":
+                        delta = event.get("delta", {})
+                        text = delta.get("text", "")
+                        if text:
+                            yield text
+                except Exception:
+                    continue
+
+
 async def generate_stream(prompt: str, system: str = "", max_tokens: int = 1024) -> AsyncGenerator[str, None]:
     """Generate a streaming response (SSE). Yields text chunks."""
     key = _get_key()

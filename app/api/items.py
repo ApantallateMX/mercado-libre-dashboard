@@ -718,7 +718,7 @@ def _calculate_health_score(body: dict, description: str = "") -> tuple:
     if not has_video:
         score -= 10; problems.append("Sin video clip")
     breakdown.append({"label": "Video/Clip ML", "impact": -10 if not has_video else 0, "ok": has_video,
-                       "tip": "" if has_video else "Genera y sube un clip comercial"})
+                       "tip": "" if has_video else "Genera y sube un clip comercial", "key": "" if has_video else "video"})
 
     # Envio
     shipping = body.get("shipping", {})
@@ -747,23 +747,23 @@ def _calculate_health_score(body: dict, description: str = "") -> tuple:
     tlen = len(title)
     if tlen < 30:
         score -= 20; problems.append(f"Titulo muy corto ({tlen} chars)")
-        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -20, "ok": False, "tip": "Usa el boton IA para generar un titulo SEO de 55-60 chars"})
+        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -20, "ok": False, "tip": "Usa el boton IA para generar un titulo SEO de 55-60 chars", "key": "title"})
     elif tlen < 45:
         score -= 10; problems.append(f"Titulo corto ({tlen} chars)")
-        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -10, "ok": False, "tip": "Extiende el titulo a 55-60 chars con IA"})
+        breakdown.append({"label": f"Titulo ({tlen}/55 chars)", "impact": -10, "ok": False, "tip": "Extiende el titulo a 55-60 chars con IA", "key": "title"})
     else:
-        breakdown.append({"label": f"Titulo ({tlen} chars)", "impact": 0, "ok": True, "tip": ""})
+        breakdown.append({"label": f"Titulo ({tlen} chars)", "impact": 0, "ok": True, "tip": "", "key": ""})
 
     # Descripcion
     desc_words = len(description.split()) if description and description.strip() else 0
     if desc_words < 50:
         score -= 10; problems.append(f"Descripcion muy corta ({desc_words} palabras)")
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -10, "ok": False, "tip": "Genera descripcion con IA (min 200 palabras)"})
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -10, "ok": False, "tip": "Genera descripcion con IA (min 200 palabras)", "key": "description"})
     elif desc_words < 150:
         score -= 5; problems.append(f"Descripcion corta ({desc_words} palabras)")
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -5, "ok": False, "tip": "Ampliar descripcion a 200+ palabras mejora visibilidad"})
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": -5, "ok": False, "tip": "Ampliar descripcion a 200+ palabras mejora visibilidad", "key": "description"})
     else:
-        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": 0, "ok": True, "tip": ""})
+        breakdown.append({"label": f"Descripcion ({desc_words} palabras)", "impact": 0, "ok": True, "tip": "", "key": ""})
 
     # GTIN
     attrs = body.get("attributes", [])

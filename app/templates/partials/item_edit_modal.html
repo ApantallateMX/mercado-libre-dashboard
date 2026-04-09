@@ -47,20 +47,40 @@
 
     <!-- ── Panel diagnóstico ── -->
     <div class="bg-gray-50 rounded-xl border border-gray-200 p-3">
-        <p class="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Diagnóstico</p>
+        <div class="flex items-center justify-between mb-2">
+            <p class="text-xs font-semibold text-gray-600 uppercase tracking-wide">Diagnóstico</p>
+            {% set has_issues = breakdown | selectattr("ok", "equalto", false) | list %}
+            {% if has_issues %}
+            <button onclick="editModalOptimizeAll('{{ item.id }}')"
+                    class="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1">
+                ⚡ Optimizar Todo
+            </button>
+            {% endif %}
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">
             {% for item_b in breakdown %}
             <div class="flex items-start gap-1.5 text-xs py-0.5">
                 <span class="flex-shrink-0 mt-0.5 {% if item_b.ok %}text-green-500{% elif item_b.impact <= -20 %}text-red-500{% else %}text-yellow-500{% endif %}">
                     {% if item_b.ok %}✓{% else %}✗{% endif %}
                 </span>
-                <div>
-                    <span class="{% if item_b.ok %}text-gray-600{% else %}text-gray-800 font-medium{% endif %}">{{ item_b.label }}</span>
-                    {% if not item_b.ok and item_b.impact != 0 %}
-                    <span class="text-red-400 ml-1">({{ item_b.impact }}pts)</span>
-                    {% endif %}
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        <span class="{% if item_b.ok %}text-gray-600{% else %}text-gray-800 font-medium{% endif %}">{{ item_b.label }}</span>
+                        {% if not item_b.ok and item_b.impact != 0 %}
+                        <span class="text-red-400">({{ item_b.impact }}pts)</span>
+                        {% endif %}
+                        {% if not item_b.ok and item_b.key %}
+                            {% if item_b.key == 'title' %}
+                            <button onclick="editModalAiTitle(true)" class="px-1.5 py-0.5 bg-purple-100 hover:bg-purple-200 text-purple-700 text-[10px] font-semibold rounded transition">✦ Mejorar</button>
+                            {% elif item_b.key == 'video' %}
+                            <button onclick="editModalGenVideo('{{ item.id }}')" class="px-1.5 py-0.5 bg-purple-100 hover:bg-purple-200 text-purple-700 text-[10px] font-semibold rounded transition">✦ Generar</button>
+                            {% elif item_b.key == 'description' %}
+                            <button onclick="editModalAiDesc()" class="px-1.5 py-0.5 bg-purple-100 hover:bg-purple-200 text-purple-700 text-[10px] font-semibold rounded transition">✦ Mejorar</button>
+                            {% endif %}
+                        {% endif %}
+                    </div>
                     {% if item_b.tip %}
-                    <p class="text-gray-400 text-xs">{{ item_b.tip }}</p>
+                    <p class="text-gray-400 text-[10px] leading-tight mt-0.5">{{ item_b.tip }}</p>
                     {% endif %}
                 </div>
             </div>
@@ -557,8 +577,18 @@ window.saveAttributes = function(itemId) {
     saveField(itemId, 'attributes', {attributes: attrs}, 'btn-save-attrs', 'msg-attrs');
 };
 
+// ─── Helper: recoger URLs de fotos del producto ─────────────────
+function _editGetPhotoUrls() {
+    var urls = [];
+    document.querySelectorAll('#photos-grid img').forEach(function(img) {
+        var src = img.getAttribute('src') || '';
+        if (src.startsWith('http')) urls.push(src);
+    });
+    return urls.slice(0, 4);
+}
+
 // ─── AI: Título ─────────────────────────────────────────────────
-window.editModalAiTitle = async function() {
+window.editModalAiTitle = async function(autoApply) {
     var titleInput = document.getElementById('edit-title');
     var btn = document.getElementById('btn-ai-title');
     var suggestionsDiv = document.getElementById('ai-title-suggestions');
@@ -568,14 +598,17 @@ window.editModalAiTitle = async function() {
         if (id === 'BRAND') brand = inp.value;
         if (id === 'MODEL') model = inp.value;
     });
+    var imageUrls = _editGetPhotoUrls();
     btn.disabled = true; btn.textContent = '...';
-    suggestionsDiv.innerHTML = '<p class="text-xs text-purple-500 animate-pulse">Generando títulos con IA...</p>';
+    suggestionsDiv.innerHTML = '<p class="text-xs text-purple-500 animate-pulse">' + (imageUrls.length ? '👁 Analizando imágenes del producto...' : 'Generando títulos con IA...') + '</p>';
     suggestionsDiv.classList.remove('hidden');
     try {
         var resp = await fetch('/api/sku-inventory/ai-improve', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({field: 'title', current_value: titleInput.value, context: {brand: brand, model: model}})
+            body: JSON.stringify({field: 'title', current_value: titleInput.value,
+                                  context: {brand: brand, model: model},
+                                  image_urls: imageUrls})
         });
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
@@ -595,13 +628,21 @@ window.editModalAiTitle = async function() {
         }
         var titles = result.trim().split('\n').filter(function(t) { return t.trim().length >= 40; });
         if (titles.length > 0) {
-            suggestionsDiv.innerHTML = titles.map(function(t, i) {
-                var clean = t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
-                return '<button onclick="applyAiTitle(\'' + clean.replace(/'/g, "\\'") + '\')" ' +
-                    'class="w-full text-left text-xs px-2 py-1.5 bg-white border border-purple-200 rounded hover:bg-purple-50 transition">' +
-                    '<span class="font-mono">' + clean + '</span>' +
-                    ' <span class="text-gray-400">(' + clean.length + ' chars)</span></button>';
-            }).join('');
+            if (autoApply) {
+                // Auto-apply best title (longest under 60)
+                var best = titles.map(function(t) { return t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60); })
+                                 .sort(function(a,b) { return b.length - a.length; })[0];
+                applyAiTitle(best);
+                suggestionsDiv.classList.add('hidden');
+            } else {
+                suggestionsDiv.innerHTML = titles.map(function(t) {
+                    var clean = t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60);
+                    return '<button onclick="applyAiTitle(\'' + clean.replace(/'/g, "\\'") + '\')" ' +
+                        'class="w-full text-left text-xs px-2 py-1.5 bg-white border border-purple-200 rounded hover:bg-purple-50 transition">' +
+                        '<span class="font-mono">' + clean + '</span>' +
+                        ' <span class="text-gray-400">(' + clean.length + ' chars)</span></button>';
+                }).join('');
+            }
         } else {
             suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">No se generaron títulos. Intenta de nuevo.</p>';
         }
@@ -629,6 +670,7 @@ window.editModalAiDesc = async function() {
         if (id === 'BRAND') brand = inp.value;
         if (id === 'MODEL') model = inp.value;
     });
+    var imageUrls = _editGetPhotoUrls();
     btn.disabled = true; btn.textContent = '...';
     var titleVal = document.getElementById('edit-title').value;
     try {
@@ -636,12 +678,13 @@ window.editModalAiDesc = async function() {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({field: 'description', current_value: titleVal,
-                                  context: {brand: brand, model: model, title: titleVal}})
+                                  context: {brand: brand, model: model, title: titleVal},
+                                  image_urls: imageUrls})
         });
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var buffer = '', result = '';
-        descInput.value = '';
+        descInput.value = imageUrls.length ? '👁 Analizando imágenes del producto...\n' : '';
         while (true) {
             var chunk = await reader.read();
             if (chunk.done) break;
@@ -740,53 +783,94 @@ window.editModalGenVideo = async function(itemId) {
     var statusDiv = document.getElementById('clip-gen-status');
     var msgEl = document.getElementById('msg-clip');
     var titleVal = document.getElementById('edit-title').value;
+    // Collect product images for Claude Vision scene generation
+    var imageUrls = _editGetPhotoUrls();
 
-    btn.disabled = true;
-    btn.textContent = 'Generando...';
-    statusDiv.textContent = 'Generando video comercial (puede tomar 1-2 min)...';
+    btn.disabled = true; btn.innerHTML = '<svg class="animate-spin w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Iniciando...';
+    statusDiv.textContent = 'Analizando producto y preparando escenas...';
     statusDiv.classList.remove('hidden');
     msgEl.textContent = '';
 
     try {
+        // Step 1: Start background job
         var resp = await fetch('/api/lanzar/generate-video-commercial', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({title: titleVal, item_id: itemId})
+            body: JSON.stringify({title: titleVal, item_id: itemId, ai_image_urls: imageUrls})
         });
-        var data = await resp.json();
-        if (data.video_url) {
-            var vidId = data.video_url.split('/').pop();
-            statusDiv.textContent = 'Video generado. Subiendo a ML como clip...';
-            // Auto-upload
-            var upResp = await fetch('/api/lanzar/upload-clip/' + itemId, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({video_id: vidId})
-            });
-            var upData = await upResp.json();
-            if (upData.ok || upData.status) {
-                statusDiv.textContent = '';
-                statusDiv.classList.add('hidden');
-                msgEl.textContent = 'Clip subido a ML. Estado: ' + (upData.status || 'enviado');
-                msgEl.className = 'text-xs text-green-600';
-                if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
-            } else {
-                statusDiv.classList.add('hidden');
-                msgEl.textContent = 'Video generado (ID: ' + vidId + ') pero error al subir: ' + (upData.error || 'ver log');
-                msgEl.className = 'text-xs text-yellow-600';
-                document.getElementById('clip-video-id').value = vidId;
+        var startData = await resp.json();
+        var jobId = startData.job_id;
+        if (!jobId) {
+            throw new Error(startData.error || 'No se pudo iniciar el video');
+        }
+
+        // Step 2: Poll until done
+        var statusMsgs = [
+            'Generando escenas cinematográficas con IA...',
+            'Procesando clips de video T2V...',
+            'Combinando escenas con locutor...',
+            'Finalizando video comercial...',
+        ];
+        var pollCount = 0;
+        while (true) {
+            await new Promise(function(r) { setTimeout(r, 4000); });
+            pollCount++;
+            statusDiv.textContent = statusMsgs[Math.min(Math.floor(pollCount / 5), statusMsgs.length - 1)];
+            var pollResp = await fetch('/api/lanzar/video-job/' + jobId);
+            var pollData = await pollResp.json();
+            if (pollData.status === 'done' && pollData.video_url) {
+                var vidId = pollData.video_url.split('/').pop();
+                // Show preview
+                statusDiv.innerHTML =
+                    '<video src="' + pollData.video_url + '" controls class="w-full rounded mt-1 max-h-48"></video>' +
+                    '<p class="mt-1 text-green-600 font-medium">✅ Video listo — ' + (pollData.method === 't2v' ? 'IA Text-to-Video' : 'Slideshow') + '</p>';
+                // Auto-upload to ML
+                setTimeout(async function() {
+                    try {
+                        statusDiv.innerHTML += '<p class="text-purple-600 animate-pulse text-[10px] mt-1">Subiendo clip a ML...</p>';
+                        var upResp = await fetch('/api/lanzar/upload-clip/' + itemId, {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({video_id: vidId})
+                        });
+                        var upData = await upResp.json();
+                        if (upData.ok || upData.status) {
+                            msgEl.textContent = '✅ Clip subido a Mercado Libre — Estado: ' + (upData.status || 'procesando');
+                            msgEl.className = 'text-xs text-green-600 font-semibold';
+                            if (typeof _modalHadChanges !== 'undefined') _modalHadChanges = true;
+                        } else {
+                            document.getElementById('clip-video-id').value = vidId;
+                            msgEl.textContent = 'Video listo (ID: ' + vidId + ') — Error al subir: ' + (upData.error || 'usa el botón Subir Clip');
+                            msgEl.className = 'text-xs text-yellow-600';
+                        }
+                    } catch(ue) { msgEl.textContent = 'Error subiendo: ' + ue.message; msgEl.className = 'text-xs text-red-500'; }
+                }, 500);
+                break;
+            } else if (pollData.status === 'error') {
+                throw new Error(pollData.error || 'El video falló');
             }
-        } else {
-            statusDiv.classList.add('hidden');
-            msgEl.textContent = 'Error generando video: ' + (data.error || 'sin respuesta');
-            msgEl.className = 'text-xs text-red-500';
+            if (pollCount > 90) throw new Error('Timeout: el video tardó más de 6 minutos');
         }
     } catch(e) {
         statusDiv.classList.add('hidden');
-        msgEl.textContent = 'Error: ' + e.message;
+        msgEl.textContent = '❌ ' + e.message;
         msgEl.className = 'text-xs text-red-500';
     }
-    btn.disabled = false; btn.textContent = '✦ Generar Video con IA';
+    btn.disabled = false; btn.innerHTML = '<span>✦</span> Generar Video con IA';
+};
+
+// ─── Optimizar Todo ─────────────────────────────────────────────
+window.editModalOptimizeAll = async function(itemId) {
+    var btn = document.querySelector('[onclick*="editModalOptimizeAll"]');
+    if (btn) { btn.disabled = true; btn.textContent = '⚡ Optimizando...'; }
+    // 1. Title
+    await editModalAiTitle(true);
+    // 2. Description (small delay so title update is visible)
+    await new Promise(function(r) { setTimeout(r, 300); });
+    await editModalAiDesc();
+    // 3. Attributes
+    await new Promise(function(r) { setTimeout(r, 300); });
+    await editModalAiAttrs(itemId);
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Optimizar Todo'; }
 };
 
 // ─── Video: Subir clip existente ─────────────────────────────────
