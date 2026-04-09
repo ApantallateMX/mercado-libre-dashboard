@@ -3527,11 +3527,25 @@ async def create_listing_endpoint(request: Request):
             except Exception as e:
                 logger.warning(f"Description upload failed for {item_id}: {e}")
 
-        # Mark gap as launched
+        # Mark gap as launched — save all published listing data
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
-                "UPDATE bm_sku_gaps SET status='launched' WHERE user_id=? AND sku=?",
-                (user_id, sku.upper()),
+                """UPDATE bm_sku_gaps SET
+                   status='launched',
+                   ml_item_id=?, ml_title=?, ml_price=?,
+                   ml_category_id=?, ml_permalink=?, ml_condition=?,
+                   launched_at=CURRENT_TIMESTAMP
+                   WHERE user_id=? AND sku=?""",
+                (
+                    item_id,
+                    title,
+                    float(price),
+                    category_id,
+                    result.get("permalink", ""),
+                    result.get("condition", "new"),
+                    user_id,
+                    sku.upper(),
+                ),
             )
             await db.commit()
 
@@ -3563,12 +3577,73 @@ async def create_listing_endpoint(request: Request):
             "ok": True,
             "item_id": item_id,
             "permalink": result.get("permalink", ""),
+            "title": title,
+            "price": float(price),
             "status": result.get("status", ""),
             "clip_status": clip_status,
         }
 
     except Exception as e:
         logger.error(f"create-listing error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@router.post("/modify-listing")
+async def modify_listing(request: Request):
+    """PATCH a launched listing: title, price, and/or available stock."""
+    from app.services.meli_client import MeliClient, _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body = await request.json()
+    item_id = (body.get("item_id") or "").strip()
+    title   = (body.get("title")   or "").strip()
+    price   = body.get("price")
+    stock   = body.get("stock")
+    sku     = (body.get("sku")     or "").strip().upper()
+
+    if not item_id:
+        return JSONResponse({"error": "item_id requerido"}, status_code=400)
+
+    client = MeliClient(user_id)
+    try:
+        patch: dict = {}
+        if title:
+            patch["title"] = title
+        if price is not None and float(price) > 0:
+            patch["price"] = float(price)
+        if stock is not None:
+            patch["available_quantity"] = max(0, int(stock))
+
+        if patch:
+            resp = await client.put(f"/items/{item_id}", json=patch)
+            if resp.get("error") or resp.get("_meli_error"):
+                err = resp.get("message") or resp.get("error") or resp.get("_meli_error") or str(resp)
+                return JSONResponse({"error": err}, status_code=400)
+
+        # Update DB with new values
+        if sku:
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                fields, vals = [], []
+                if title:
+                    fields.append("ml_title=?"); vals.append(title)
+                if price is not None and float(price) > 0:
+                    fields.append("ml_price=?"); vals.append(float(price))
+                if fields:
+                    vals.extend([user_id, sku])
+                    await db.execute(
+                        f"UPDATE bm_sku_gaps SET {', '.join(fields)} WHERE user_id=? AND sku=?",
+                        vals,
+                    )
+                    await db.commit()
+
+        return {"ok": True, "item_id": item_id}
+
+    except Exception as e:
+        logger.error(f"modify-listing error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()

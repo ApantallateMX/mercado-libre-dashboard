@@ -341,6 +341,48 @@
   <div id="gaps-pagination" class="px-4 py-3 border-t border-gray-100"></div>
 </div>
 
+<!-- ── Modify Launched Listing modal ─────────────────────────────────────── -->
+<div id="modify-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h3 class="text-sm font-bold text-gray-800">✏️ Modificar publicación</h3>
+        <p id="modify-sku-label" class="text-[10px] text-gray-400 mt-0.5"></p>
+      </div>
+      <button onclick="document.getElementById('modify-modal').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="text-[10px] text-gray-400 block mb-0.5">Título (máx 60 caracteres)</label>
+        <input id="modify-title" type="text" maxlength="60"
+               class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-green-400"/>
+        <p id="modify-title-counter" class="text-[9px] text-gray-300 mt-0.5 text-right">0/60</p>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[10px] text-gray-400 block mb-0.5">Precio (MXN)</label>
+          <input id="modify-price" type="number" min="1" step="1"
+                 class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-green-400"/>
+        </div>
+        <div>
+          <label class="text-[10px] text-gray-400 block mb-0.5">Stock disponible</label>
+          <input id="modify-stock" type="number" min="0" step="1"
+                 class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-green-400"/>
+        </div>
+      </div>
+    </div>
+    <div id="modify-msg" class="hidden text-xs rounded-lg px-3 py-2"></div>
+    <div class="flex gap-2 justify-end pt-1">
+      <button onclick="document.getElementById('modify-modal').classList.add('hidden')"
+              class="text-xs border border-gray-200 hover:border-gray-400 text-gray-500 px-3 py-1.5 rounded-lg transition">Cancelar</button>
+      <button id="modify-save-btn" onclick="window._submitModify()"
+              class="text-xs bg-green-500 hover:bg-green-600 text-white font-semibold px-4 py-1.5 rounded-lg transition">
+        Guardar cambios
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Batch launch modal ────────────────────────────────────────────────── -->
 <div id="batch-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 space-y-4">
@@ -962,17 +1004,49 @@
       return;
     }
     tbody.innerHTML = _gaps.map(function(g) {
+      var imgTag = g.image_url
+        ? '<img src="' + g.image_url + '" class="w-9 h-9 object-contain rounded border border-gray-100 flex-shrink-0" onerror="this.style.display=\'none\'">'
+        : '<div class="w-9 h-9 bg-gray-100 rounded border border-gray-200 flex-shrink-0 flex items-center justify-center text-gray-300 text-[9px]">IMG</div>';
+      var gJson = JSON.stringify(g).replace(/"/g, '&quot;');
+
+      // ── Launched tab: show published ML data ──────────────────────────────────
+      if (_state.status === 'launched') {
+        var mlTitle = g.ml_title || g.product_title || g.sku;
+        var mlPrice = g.ml_price > 0 ? '$' + Math.round(g.ml_price).toLocaleString() + ' MXN' : '—';
+        var mlLink  = g.ml_permalink
+          ? '<a href="' + g.ml_permalink + '" target="_blank" class="text-[10px] text-blue-500 hover:underline font-mono">' + (g.ml_item_id || 'Ver') + ' ↗</a>'
+          : (g.ml_item_id ? '<span class="text-[10px] text-gray-400 font-mono">' + g.ml_item_id + '</span>' : '<span class="text-gray-300 text-[10px]">—</span>');
+        var launchedDate = '';
+        if (g.launched_at) {
+          try { launchedDate = new Date(g.launched_at).toLocaleDateString('es-MX', {day:'2-digit',month:'short',year:'2-digit'}); } catch(e) {}
+        }
+        return '<tr class="hover:bg-green-50/30 transition">' +
+          '<td class="px-4 py-3 max-w-xs"><div class="flex items-center gap-2">' +
+            imgTag +
+            '<div class="min-w-0">' +
+              '<div class="font-medium text-gray-800 text-xs leading-tight truncate" title="' + mlTitle + '">' + mlTitle + '</div>' +
+              '<div class="text-gray-400 text-[10px] mt-0.5 flex gap-1 flex-wrap items-center">' +
+                '<span class="font-mono bg-gray-50 px-1 rounded border border-gray-100">' + g.sku + '</span>' +
+                mlLink +
+              '</div>' +
+            '</div></div></td>' +
+          '<td class="px-3 py-3 text-right"><span class="text-gray-700 text-xs font-semibold">' + mlPrice + '</span></td>' +
+          '<td class="px-3 py-3 text-center"><span class="text-gray-500 text-xs">' + (launchedDate || '—') + '</span></td>' +
+          '<td class="px-3 py-3 text-center"><span class="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-semibold">✅ Activo</span></td>' +
+          '<td class="px-3 py-3"><div class="flex items-center justify-center gap-1.5">' +
+            '<button onclick="window._openModifyLaunched(' + gJson + ')" class="text-xs bg-green-500 hover:bg-green-600 text-white font-semibold px-2.5 py-1.5 rounded-lg transition">✏️ Modificar</button>' +
+            (g.ml_permalink ? '<a href="' + g.ml_permalink + '" target="_blank" class="text-xs border border-gray-200 hover:border-blue-400 text-gray-500 hover:text-blue-600 px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">Ver en ML ↗</a>' : '') +
+          '</div></td></tr>';
+      }
+
+      // ── Default: unlaunched / ignored ─────────────────────────────────────────
       var sc = g.priority_score >= 70 ? 'text-red-600 font-bold' : g.priority_score >= 40 ? 'text-yellow-600 font-semibold' : 'text-gray-500';
       var priceUsd = g.retail_price_usd > 0 ? '$' + g.retail_price_usd.toFixed(2) : '—';
       var priceMxn = g.suggested_price_mxn > 0 ? '$' + Math.round(g.suggested_price_mxn).toLocaleString() : '—';
       var compStr  = g.competitor_price > 0 ? '$' + Math.round(g.competitor_price).toLocaleString() : '—';
-      var imgTag   = g.image_url
-        ? '<img src="' + g.image_url + '" class="w-9 h-9 object-contain rounded border border-gray-100 flex-shrink-0" onerror="this.style.display=\'none\'">'
-        : '<div class="w-9 h-9 bg-gray-100 rounded border border-gray-200 flex-shrink-0 flex items-center justify-center text-gray-300 text-[9px]">IMG</div>';
       var catBadge = g.category
         ? '<span class="px-1 py-0.5 bg-blue-50 text-blue-600 text-[9px] rounded border border-blue-100">' + g.category + '</span>'
         : '<span class="text-gray-300 text-[9px]">—</span>';
-      var gJson = JSON.stringify(g).replace(/"/g, '&quot;');
       return '<tr class="hover:bg-gray-50 transition">' +
         '<td class="px-4 py-3 max-w-xs"><div class="flex items-center gap-2">' +
           '<input type="checkbox" class="gap-batch-check mt-1 w-3.5 h-3.5 rounded accent-yellow-400 cursor-pointer shrink-0" data-sku="' + g.sku + '" onchange="window._updateBatchCount()">' +
@@ -1043,6 +1117,29 @@
     window._gapsFilter();
   };
 
+  function _updateTableHeader() {
+    var thead = document.querySelector('#gaps-list thead tr');
+    if (!thead) return;
+    if (_state.status === 'launched') {
+      thead.innerHTML =
+        '<th class="text-left px-4 py-2.5 font-semibold text-gray-600 text-xs">Producto publicado</th>' +
+        '<th class="text-right px-3 py-2.5 font-semibold text-gray-600 text-xs">Precio ML</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs">Lanzado</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs">Estado</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs">Acciones</th>';
+    } else {
+      thead.innerHTML =
+        '<th class="text-left px-4 py-2.5 font-semibold text-gray-600 text-xs">Producto</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs cursor-pointer hover:text-yellow-700" onclick="window._gapsSortBy(\'stock_desc\')">Stock ⇅</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs">Categoría BM</th>' +
+        '<th class="text-right px-3 py-2.5 font-semibold text-gray-600 text-xs cursor-pointer hover:text-yellow-700" onclick="window._gapsSortBy(\'price_desc\')">Precio USD ⇅</th>' +
+        '<th class="text-right px-3 py-2.5 font-semibold text-gray-600 text-xs">Precio MXN Sug.</th>' +
+        '<th class="text-right px-3 py-2.5 font-semibold text-gray-600 text-xs">Competencia</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs cursor-pointer hover:text-yellow-700" onclick="window._gapsSortBy(\'priority\')">Prior. ⇅</th>' +
+        '<th class="text-center px-3 py-2.5 font-semibold text-gray-600 text-xs">Acciones</th>';
+    }
+  }
+
   window._gapsSetStatus = function(status) {
     _state.status = status; _state.page = 1;
     document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
@@ -1052,6 +1149,7 @@
       ? 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-green-500 text-green-700 mr-2 flex items-center gap-1'
       : 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-yellow-400 text-yellow-700 mr-2';
     document.getElementById('tab-' + status).className = activeClass;
+    _updateTableHeader();
     _loadGaps();
   };
 
@@ -3459,6 +3557,66 @@
       var badge=document.getElementById('competencia-badge');
       if(d.total>0){badge.textContent=d.total;badge.classList.remove('hidden');}
     }).catch(function(){});
+
+  // ── Modify launched listing ──────────────────────────────────────────────
+  var _modifyGap = null;
+
+  window._openModifyLaunched = function(gap) {
+    _modifyGap = gap;
+    var modal = document.getElementById('modify-modal');
+    document.getElementById('modify-sku-label').textContent = 'SKU: ' + gap.sku + (gap.ml_item_id ? ' · ' + gap.ml_item_id : '');
+    var titleInput = document.getElementById('modify-title');
+    titleInput.value = gap.ml_title || gap.product_title || '';
+    document.getElementById('modify-price').value = gap.ml_price > 0 ? Math.round(gap.ml_price) : '';
+    document.getElementById('modify-stock').value = gap.stock_total || 0;
+    var msg = document.getElementById('modify-msg');
+    msg.className = 'hidden text-xs rounded-lg px-3 py-2';
+    msg.textContent = '';
+    // title counter
+    var counter = document.getElementById('modify-title-counter');
+    function updateCounter() { counter.textContent = titleInput.value.length + '/60'; }
+    titleInput.oninput = updateCounter;
+    updateCounter();
+    modal.classList.remove('hidden');
+  };
+
+  window._submitModify = function() {
+    var gap = _modifyGap;
+    if (!gap || !gap.ml_item_id) return;
+    var title = document.getElementById('modify-title').value.trim();
+    var price = parseFloat(document.getElementById('modify-price').value) || 0;
+    var stock = parseInt(document.getElementById('modify-stock').value) || 0;
+    var btn = document.getElementById('modify-save-btn');
+    var msg = document.getElementById('modify-msg');
+    btn.disabled = true; btn.textContent = 'Guardando...';
+    msg.className = 'hidden text-xs rounded-lg px-3 py-2';
+
+    fetch('/api/lanzar/modify-listing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: gap.ml_item_id, title: title, price: price, stock: stock, sku: gap.sku }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false; btn.textContent = 'Guardar cambios';
+      if (d.ok) {
+        msg.className = 'block text-xs rounded-lg px-3 py-2 bg-green-50 text-green-700';
+        msg.textContent = '✅ Publicación actualizada correctamente.';
+        setTimeout(function() {
+          document.getElementById('modify-modal').classList.add('hidden');
+          _loadGaps();
+        }, 1500);
+      } else {
+        msg.className = 'block text-xs rounded-lg px-3 py-2 bg-red-50 text-red-700';
+        msg.textContent = '❌ ' + (d.error || 'Error desconocido');
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Guardar cambios';
+      msg.className = 'block text-xs rounded-lg px-3 py-2 bg-red-50 text-red-700';
+      msg.textContent = '❌ Error de red: ' + e;
+    });
+  };
 
   _loadHealthDashboard();
   _loadFilters();
