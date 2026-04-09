@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FEAT: Tab Lanzados — datos de publicación + modal Modificar
+
+### Funcionalidad: Guardar datos de publicación al lanzar
+- `create-listing` ahora persiste `ml_item_id`, `ml_title`, `ml_price`, `ml_category_id`, `ml_permalink`, `ml_condition`, `launched_at` en `bm_sku_gaps`.
+- Columnas agregadas via migración `ALTER TABLE` idempotente en `token_store.py`.
+
+### FEAT: Tab Lanzados con vista de publicaciones
+- Tab "✅ Lanzados" muestra: título publicado en ML, precio, fecha de lanzamiento, link directo al listing (`ml_permalink`) y botón "Modificar".
+- Header de la tabla cambia dinámicamente al activar este tab (columnas diferentes vs. Sin publicar).
+- `_gapsSetStatus('launched')` llama `_updateTableHeader()` antes de recargar.
+
+### FEAT: Modal Modificar publicación
+- Nuevo modal permite editar título, precio MXN y stock disponible de un listing ya publicado.
+- Frontend envía `POST /api/lanzar/modify-listing` con `{item_id, title, price, stock, sku}`.
+- Backend hace `PUT /items/{item_id}` a ML y actualiza la DB local (`ml_title`, `ml_price`).
+
+---
+
 ## 2026-04-09 — FIX+FEAT: ML Lanzador — 4 mejoras wizard
 
 ### FIX 1: Título generado por IA < 55 chars (SEO subóptimo)
