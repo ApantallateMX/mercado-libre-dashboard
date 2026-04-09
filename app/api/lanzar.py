@@ -2222,7 +2222,22 @@ async def _run_video_pipeline(job_id: str, body: dict):
             "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL."
         )
         try:
-            raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=800)).strip()
+            # Use Vision when product images are available — Claude SEES the product → specific scenes
+            if ai_image_urls:
+                vision_prompt = (
+                    f"Producto: {title}\nMarca: {brand}\nCategoria: {category}\n"
+                    f"Guion existente: {script or 'generar uno nuevo'}\n\n"
+                    "Miras las imágenes reales del producto. "
+                    "Genera las 3 escenas cinematicas EN INGLES y el guion EN ESPANOL.\n"
+                    "Las escenas deben reflejar EXACTAMENTE este producto: su apariencia, color, tamaño y uso real."
+                )
+                logger.info(f"Claude Vision: analizando {len(ai_image_urls)} imágenes del producto...")
+                raw = (await claude_client.generate_with_images(
+                    prompt=vision_prompt, image_urls=ai_image_urls[:3],
+                    system=claude_system, max_tokens=800
+                )).strip()
+            else:
+                raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=800)).strip()
             if "```" in raw:
                 raw = raw[raw.index("```") + 3:]
                 if raw.startswith("json"): raw = raw[4:]
@@ -2235,7 +2250,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
             scenes  = [s.strip() for s in (parsed.get("scenes") or []) if isinstance(s, str) and s.strip()]
             if not script:
                 script = parsed.get("script", "").strip().strip('"').strip("'")
-            logger.info(f"Claude scenes: {len(scenes)} | script: {len(script.split())} words")
+            logger.info(f"Claude {'Vision' if ai_image_urls else 'text'} scenes: {len(scenes)} | script: {len(script.split())} words")
         except Exception as e:
             logger.warning(f"Claude scenes failed: {e}")
             scenes = []
@@ -2366,269 +2381,39 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 return vf.read()
     
         # ────────────────────────────────────────────────────────────────────────────
-        # PATH A: IMG2VID con Minimax Live → video real coherente con el producto
-        # La imagen del producto es el primer frame → el video es COHERENTE (no inventa contenido)
-        # Fallback: Wan2.1 img2vid → zoompan ffmpeg como último recurso
+        # PRIMARY: T2V con escenas específicas del producto (generadas por Claude Vision)
+        # Las imágenes se usan como REFERENCIA para Claude — no para animar
+        # → video real con movimiento, personas, lifestyle — NO foto estática animada
+        # FALLBACK: zoompan ffmpeg (solo si T2V falla y hay imágenes disponibles)
         # ────────────────────────────────────────────────────────────────────────────
-        if ai_image_urls:
-            logger.info(f"=== IMG2VID: intentando Minimax Live con {len(ai_image_urls)} imágenes ===")
-    
-            # Motion prompt: solo movimiento de cámara. El producto viene de la imagen real.
-            _motion_prompt_live = (
-                "slow cinematic camera zoom-out revealing the product, "
-                "product stays centered and unchanged, warm commercial studio lighting, "
-                "smooth elegant camera movement, premium product video quality"
-            )
-            try:
-                _audio_live, _url_live = await asyncio.gather(
-                    elevenlabs_client.generate_audio(script),
-                    replicate_client.generate_video_minimax_live(ai_image_urls[0], _motion_prompt_live),
-                    return_exceptions=True,
-                )
-                if not isinstance(_url_live, Exception) and isinstance(_url_live, str) and _url_live.startswith("http"):
-                    _has_audio_live = isinstance(_audio_live, bytes) and bool(_audio_live)
-                    async with httpx.AsyncClient(timeout=120.0) as _dl_live:
-                        _vr = await _dl_live.get(_url_live, follow_redirects=True)
-                        _raw_vid = _vr.content if _vr.status_code == 200 and len(_vr.content) > 1000 else None
-                    if _raw_vid:
-                        if _has_audio_live:
-                            try:
-                                with _tf.TemporaryDirectory() as _td:
-                                    _vp = _os.path.join(_td, "v.mp4")
-                                    _ap = _os.path.join(_td, "a.mp3")
-                                    _op = _os.path.join(_td, "out.mp4")
-                                    with open(_vp, "wb") as _f: _f.write(_raw_vid)
-                                    with open(_ap, "wb") as _f: _f.write(_audio_live)
-                                    _pr = _sp.run(
-                                        [ffmpeg_bin, "-y", "-i", _vp, "-i", _ap,
-                                         "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
-                                         "-map", "[vpad]", "-map", "1:a",
-                                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                                         "-c:a", "aac", "-b:a", "128k",
-                                         "-shortest", "-movflags", "+faststart", _op],
-                                        capture_output=True, timeout=180,
-                                    )
-                                    if _pr.returncode == 0:
-                                        with open(_op, "rb") as _f: _raw_vid = _f.read()
-                                    else:
-                                        logger.warning(f"Audio+video combine: {_pr.stderr.decode(errors='replace')[:150]}")
-                            except Exception as _ff_e:
-                                logger.warning(f"ffmpeg combine falló: {_ff_e}")
-                        _video_cache[vid_id] = _raw_vid
-                        _persist_video(vid_id, _raw_vid)
-                        _mb = len(_raw_vid) / 1_048_576
-                        logger.info(f"Minimax Live img2vid listo: {vid_id} ({_mb:.1f} MB)")
-                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_live, "error": None, "method": "minimax_live"}
-                        return
-                else:
-                    _why = str(_url_live) if isinstance(_url_live, Exception) else f"output vacío: {_url_live!r}"
-                    logger.warning(f"Minimax Live FALLÓ — motivo: {_why}. Intentando Wan2.1...")
-            except Exception as _e_live:
-                logger.warning(f"Minimax Live pipeline exception: {type(_e_live).__name__}: {_e_live}. Intentando Wan2.1...")
-    
-            # Fallback 1: Wan2.1 image-to-video
-            try:
-                logger.info("IMG2VID fallback: Wan2.1 i2v...")
-                _wan_prompt = (
-                    "professional product commercial, slow cinematic camera orbit, "
-                    "warm studio lighting, premium quality, smooth motion"
-                )
-                _audio_wan, _url_wan = await asyncio.gather(
-                    elevenlabs_client.generate_audio(script),
-                    replicate_client.generate_video_img2vid(ai_image_urls[0], _wan_prompt),
-                    return_exceptions=True,
-                )
-                if not isinstance(_url_wan, Exception) and isinstance(_url_wan, str) and _url_wan.startswith("http"):
-                    _has_audio_wan = isinstance(_audio_wan, bytes) and bool(_audio_wan)
-                    async with httpx.AsyncClient(timeout=120.0) as _dl_wan:
-                        _vr2 = await _dl_wan.get(_url_wan, follow_redirects=True)
-                        _raw_wan = _vr2.content if _vr2.status_code == 200 and len(_vr2.content) > 1000 else None
-                    if _raw_wan:
-                        if _has_audio_wan:
-                            try:
-                                with _tf.TemporaryDirectory() as _td2:
-                                    _vp2 = _os.path.join(_td2, "v.mp4")
-                                    _ap2 = _os.path.join(_td2, "a.mp3")
-                                    _op2 = _os.path.join(_td2, "out.mp4")
-                                    with open(_vp2, "wb") as _f: _f.write(_raw_wan)
-                                    with open(_ap2, "wb") as _f: _f.write(_audio_wan)
-                                    _pr2 = _sp.run(
-                                        [ffmpeg_bin, "-y", "-i", _vp2, "-i", _ap2,
-                                         "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
-                                         "-map", "[vpad]", "-map", "1:a",
-                                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-                                         "-c:a", "aac", "-b:a", "128k",
-                                         "-shortest", "-movflags", "+faststart", _op2],
-                                        capture_output=True, timeout=180,
-                                    )
-                                    if _pr2.returncode == 0:
-                                        with open(_op2, "rb") as _f: _raw_wan = _f.read()
-                            except Exception as _ff2:
-                                logger.warning(f"Wan2.1 audio combine falló: {_ff2}")
-                        _video_cache[vid_id] = _raw_wan
-                        _persist_video(vid_id, _raw_wan)
-                        logger.info(f"Wan2.1 img2vid listo: {vid_id} ({len(_raw_wan)/1_048_576:.1f} MB)")
-                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_wan, "error": None, "method": "wan2_i2v"}
-                        return
-            except Exception as _e_wan:
-                logger.warning(f"Wan2.1 img2vid FALLÓ — {type(_e_wan).__name__}: {_e_wan}. Usando zoompan...")
-    
-            # Fallback 2: zoompan ffmpeg (último recurso — sin IA generativa)
-            logger.info(f"=== ZOOMPAN FALLBACK: {len(ai_image_urls)} fotos reales del producto ===")
-    
-            FPS   = 25
-            DUR_S = 5.0   # segundos por clip
-    
-            # 10 efectos de cámara: solo movimiento, el producto real siempre visible
-            _ZP = [
-                # Lento zoom in, centrado
-                "zoompan=z='zoom+0.0006':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
-                # Pan lento izquierda → derecha
-                "zoompan=z='1.05':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
-                # Pan lento derecha → izquierda
-                "zoompan=z='1.05':x='(iw-iw/zoom)*(1-on/124)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
-                # Pan lento arriba → abajo
-                "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
-                # Pan lento abajo → arriba
-                "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
-                # Zoom in suave (más lento)
-                "zoompan=z='zoom+0.0004':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
-                # Diagonal sup-izq → inf-der
-                "zoompan=z='1.07':x='(iw-iw/zoom)*on/124':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
-                # Zoom in + deriva suave derecha
-                "zoompan=z='zoom+0.0005':x='min((iw-iw/zoom)*on/124,iw-iw/zoom)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
-                # Diagonal inf-der → sup-izq
-                "zoompan=z='1.07':x='(iw-iw/zoom)*(1-on/124)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
-                # Zoom in desde parte superior (revela producto de arriba)
-                "zoompan=z='zoom+0.0007':x='iw/2-(iw/zoom/2)':y='max(ih*0.05-(ih/zoom/2),0)':fps=25,scale=720:1280,setsar=1",
-            ]
-    
-            # Filtro portrait: fondo desenfocado 9:16 + producto centrado nítido
-            _PFC = (
-                "[0:v]split=2[bg][fg];"
-                "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
-                "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
-                "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
-                "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[norm];"
-            )
-    
-            async def _dl_photo(url: str):
-                try:
-                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _c:
-                        r = await _c.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                        return r.content if r.status_code == 200 and len(r.content) > 100 else None
-                except Exception as _e:
-                    logger.warning(f"Photo DL error: {_e}")
-                    return None
-    
-            # Descargar TTS + fotos en paralelo
-            _all_dl = await asyncio.gather(
-                elevenlabs_client.generate_audio(script),
-                *[_dl_photo(u) for u in ai_image_urls[:5]],
-                return_exceptions=True,
-            )
-            audio_result = _all_dl[0]
-            photos       = [p for p in _all_dl[1:] if isinstance(p, bytes) and len(p) > 100]
-            has_audio    = isinstance(audio_result, bytes) and bool(audio_result)
-            logger.info(f"TTS: {'OK' if has_audio else 'X'}, fotos: {len(photos)}")
-    
-            if not photos:
-                _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": "No se pudieron descargar fotos del producto"}
-                return
-    
-            _ev_loop = asyncio.get_event_loop()
-    
-            def _make_zp_clip(pbytes: bytes, eff_idx: int, ci: int, tdir: str):
-                ph  = _os.path.join(tdir, f"ph_{ci:02d}.jpg")
-                out = _os.path.join(tdir, f"norm_{ci:02d}.mp4")
-                with open(ph, "wb") as _f:
-                    _f.write(pbytes)
-                fc = _PFC + f"[norm]{_ZP[eff_idx % len(_ZP)]}[out]"
-                cmd = [
-                    ffmpeg_bin, "-y",
-                    "-loop", "1", "-i", ph, "-t", str(DUR_S),
-                    "-filter_complex", fc, "-map", "[out]",
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                    "-pix_fmt", "yuv420p", out,
-                ]
-                r = _sp.run(cmd, capture_output=True, timeout=90)
-                if r.returncode == 0 and _os.path.exists(out) and _os.path.getsize(out) > 1000:
-                    logger.info(f"ZP clip {ci} (eff {eff_idx}): {_os.path.getsize(out)//1024} KB")
-                    return out
-                logger.error(f"ZP clip {ci} falló: {r.stderr.decode(errors='replace')[:200]}")
-                return None
-    
-            try:
-                with _tf.TemporaryDirectory() as tmpdir:
-                    # 2 efectos distintos por foto → hasta 10 clips de 5s = 50s de video
-                    zp_tasks = [
-                        _ev_loop.run_in_executor(
-                            None, _make_zp_clip,
-                            photos[(ci // 2) % len(photos)],  # photo 0→clips 0-1, photo 1→clips 2-3…
-                            ci,                                # índice de efecto
-                            ci,                                # índice de clip
-                            tmpdir,
-                        )
-                        for ci in range(10)
-                    ]
-                    zp_results = await asyncio.gather(*zp_tasks, return_exceptions=True)
-                    norm_paths = [p for p in zp_results if isinstance(p, str)]
-    
-                    if not norm_paths:
-                        raise RuntimeError("Todos los clips zoompan fallaron")
-    
-                    logger.info(f"Clips zoompan OK: {len(norm_paths)}/10")
-                    clip_durs = [DUR_S] * len(norm_paths)
-    
-                    video_bytes = _xfade_and_combine(norm_paths, clip_durs, audio_result, has_audio, tmpdir)
-                    _video_cache[vid_id] = video_bytes
-    
-                _persist_video(vid_id, _video_cache[vid_id])
-                out_mb = len(_video_cache[vid_id]) / 1_048_576
-                logger.info(f"Zoompan video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
-                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "zoompan"}
-                return
-    
-            except Exception as e:
-                logger.error(f"Zoompan pipeline falló: {e}", exc_info=True)
-                _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": str(e)}
-                return
-    
-        # ────────────────────────────────────────────────────────────────────────────
-        # PATH B: T2V text-to-video (sin fotos del producto — fallback)
-        # ────────────────────────────────────────────────────────────────────────────
-        else:
-            logger.info("=== T2V FALLBACK: sin imágenes del producto ===")
-    
-            async def _gen_t2v_clip(idx: int):
-                # Usar escenas generadas por Claude (específicas al producto) en vez de motion prompts genéricos
-                # Las escenas describen el producto real con contexto de uso → evita contenido aleatorio
-                _t2v_pool = scenes if scenes else _motion_prompts
-                return await replicate_client.generate_video_t2v(_t2v_pool[idx % len(_t2v_pool)])
-    
-            _all_t2v = await asyncio.gather(
-                elevenlabs_client.generate_audio(script),
-                *[_gen_t2v_clip(i) for i in range(10)],
-                return_exceptions=True,
-            )
-            audio_result     = _all_t2v[0]
-            clip_url_results = list(_all_t2v[1:])
-            has_audio        = isinstance(audio_result, bytes) and bool(audio_result)
-    
-            clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
-            logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
-    
-            if not clip_urls:
-                _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": "T2V: no se generó ningún clip"}
-                return
-    
+        logger.info(f"=== T2V PRIMARY: {len(scenes)} escenas {'(Vision)' if ai_image_urls else '(text)'} ===")
+
+        _t2v_ok = False
+
+        async def _gen_t2v_clip(idx: int):
+            _t2v_pool = scenes if scenes else _motion_prompts
+            return await replicate_client.generate_video_t2v(_t2v_pool[idx % len(_t2v_pool)])
+
+        _all_t2v = await asyncio.gather(
+            elevenlabs_client.generate_audio(script),
+            *[_gen_t2v_clip(i) for i in range(10)],
+            return_exceptions=True,
+        )
+        audio_result     = _all_t2v[0]
+        clip_url_results = list(_all_t2v[1:])
+        has_audio        = isinstance(audio_result, bytes) and bool(audio_result)
+
+        clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
+        logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
+
+        if clip_urls:
             try:
                 async with httpx.AsyncClient(timeout=120.0) as dl:
                     async def _dl(url):
                         r = await dl.get(url, follow_redirects=True)
                         return r.content if r.status_code == 200 and len(r.content) > 1000 else None
                     downloaded = await asyncio.gather(*[_dl(u) for u in clip_urls], return_exceptions=True)
-    
+
                 with _tf.TemporaryDirectory() as tmpdir:
                     clip_paths = []
                     for i, data in enumerate(downloaded):
@@ -2637,10 +2422,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
                             with open(p, "wb") as f:
                                 f.write(data)
                             clip_paths.append(p)
-    
+
                     if not clip_paths:
                         raise RuntimeError("T2V: todos los clips fallaron al descargar")
-    
+
                     norm_paths = []
                     for ci, cp in enumerate(clip_paths):
                         norm_path = _os.path.join(tmpdir, f"norm_{ci:02d}.mp4")
@@ -2662,25 +2447,138 @@ async def _run_video_pipeline(job_id: str, body: dict):
                         )
                         if nr.returncode == 0 and _os.path.exists(norm_path) and _os.path.getsize(norm_path) > 1000:
                             norm_paths.append(norm_path)
-    
+
                     if not norm_paths:
                         raise RuntimeError("T2V: todos los clips fallaron al normalizar")
-    
-                    clip_durs  = [_probe_dur(p) for p in norm_paths]
+
+                    clip_durs   = [_probe_dur(p) for p in norm_paths]
                     video_bytes = _xfade_and_combine(norm_paths, clip_durs, audio_result, has_audio, tmpdir)
                     _video_cache[vid_id] = video_bytes
-    
+
                 _persist_video(vid_id, _video_cache[vid_id])
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
                 logger.info(f"T2V video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
                 _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "t2v"}
+                _t2v_ok = True
                 return
-    
-            except Exception as e:
-                logger.error(f"T2V pipeline falló: {e}", exc_info=True)
-                _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": str(e)}
-                return
-    
+
+            except Exception as _t2v_err:
+                logger.error(f"T2V pipeline falló: {_t2v_err}", exc_info=True)
+
+        # ────────────────────────────────────────────────────────────────────────────
+        # FALLBACK: zoompan ffmpeg (solo si hay imágenes del producto)
+        # ────────────────────────────────────────────────────────────────────────────
+        if not ai_image_urls:
+            _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": "T2V: sin clips y sin imágenes para fallback"}
+            return
+
+        logger.info(f"=== ZOOMPAN FALLBACK: {len(ai_image_urls)} fotos del producto ===")
+
+        FPS   = 25
+        DUR_S = 5.0   # segundos por clip
+
+        # 10 efectos de cámara: solo movimiento, el producto real siempre visible
+        _ZP = [
+            "zoompan=z='zoom+0.0006':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.05':x='(iw-iw/zoom)*on/124':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.05':x='(iw-iw/zoom)*(1-on/124)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.05':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='zoom+0.0004':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.07':x='(iw-iw/zoom)*on/124':y='(ih-ih/zoom)*on/124':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='zoom+0.0005':x='min((iw-iw/zoom)*on/124,iw-iw/zoom)':y='ih/2-(ih/zoom/2)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='1.07':x='(iw-iw/zoom)*(1-on/124)':y='(ih-ih/zoom)*(1-on/124)':fps=25,scale=720:1280,setsar=1",
+            "zoompan=z='zoom+0.0007':x='iw/2-(iw/zoom/2)':y='max(ih*0.05-(ih/zoom/2),0)':fps=25,scale=720:1280,setsar=1",
+        ]
+
+        # Filtro portrait: fondo desenfocado 9:16 + producto centrado nítido
+        _PFC = (
+            "[0:v]split=2[bg][fg];"
+            "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+            "crop=720:1280,setsar=1,boxblur=40:5[blurred];"
+            "[fg]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1[sharp];"
+            "[blurred][sharp]overlay=(W-w)/2:(H-h)/2[norm];"
+        )
+
+        async def _dl_photo(url: str):
+            try:
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as _c:
+                    r = await _c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                    return r.content if r.status_code == 200 and len(r.content) > 100 else None
+            except Exception as _e:
+                logger.warning(f"Photo DL error: {_e}")
+                return None
+
+        # Descargar TTS + fotos en paralelo
+        _all_dl = await asyncio.gather(
+            elevenlabs_client.generate_audio(script),
+            *[_dl_photo(u) for u in ai_image_urls[:5]],
+            return_exceptions=True,
+        )
+        audio_result = _all_dl[0]
+        photos       = [p for p in _all_dl[1:] if isinstance(p, bytes) and len(p) > 100]
+        has_audio    = isinstance(audio_result, bytes) and bool(audio_result)
+        logger.info(f"TTS: {'OK' if has_audio else 'X'}, fotos: {len(photos)}")
+
+        if not photos:
+            _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": "No se pudieron descargar fotos del producto"}
+            return
+
+        _ev_loop = asyncio.get_event_loop()
+
+        def _make_zp_clip(pbytes: bytes, eff_idx: int, ci: int, tdir: str):
+            ph  = _os.path.join(tdir, f"ph_{ci:02d}.jpg")
+            out = _os.path.join(tdir, f"norm_{ci:02d}.mp4")
+            with open(ph, "wb") as _f:
+                _f.write(pbytes)
+            fc = _PFC + f"[norm]{_ZP[eff_idx % len(_ZP)]}[out]"
+            cmd = [
+                ffmpeg_bin, "-y",
+                "-loop", "1", "-i", ph, "-t", str(DUR_S),
+                "-filter_complex", fc, "-map", "[out]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-pix_fmt", "yuv420p", out,
+            ]
+            r = _sp.run(cmd, capture_output=True, timeout=90)
+            if r.returncode == 0 and _os.path.exists(out) and _os.path.getsize(out) > 1000:
+                logger.info(f"ZP clip {ci} (eff {eff_idx}): {_os.path.getsize(out)//1024} KB")
+                return out
+            logger.error(f"ZP clip {ci} falló: {r.stderr.decode(errors='replace')[:200]}")
+            return None
+
+        try:
+            with _tf.TemporaryDirectory() as tmpdir:
+                zp_tasks = [
+                    _ev_loop.run_in_executor(
+                        None, _make_zp_clip,
+                        photos[(ci // 2) % len(photos)],
+                        ci, ci, tmpdir,
+                    )
+                    for ci in range(10)
+                ]
+                zp_results = await asyncio.gather(*zp_tasks, return_exceptions=True)
+                norm_paths = [p for p in zp_results if isinstance(p, str)]
+
+                if not norm_paths:
+                    raise RuntimeError("Todos los clips zoompan fallaron")
+
+                logger.info(f"Clips zoompan OK: {len(norm_paths)}/10")
+                clip_durs = [DUR_S] * len(norm_paths)
+
+                video_bytes = _xfade_and_combine(norm_paths, clip_durs, audio_result, has_audio, tmpdir)
+                _video_cache[vid_id] = video_bytes
+
+            _persist_video(vid_id, _video_cache[vid_id])
+            out_mb = len(_video_cache[vid_id]) / 1_048_576
+            logger.info(f"Zoompan video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
+            _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "zoompan"}
+            return
+
+        except Exception as _zp_err:
+            logger.error(f"Zoompan pipeline falló: {_zp_err}", exc_info=True)
+            _video_jobs[job_id] = {"status": "error", "video_url": None, "script": script, "has_audio": False, "error": str(_zp_err)}
+            return
+
     except Exception as _outer_e:
         logger.error(f"_run_video_pipeline error inesperado: {_outer_e}", exc_info=True)
         _video_jobs[job_id] = {"status": "error", "video_url": None, "script": "", "has_audio": False, "error": str(_outer_e)}
@@ -3604,6 +3502,14 @@ async def create_listing_endpoint(request: Request):
         if not item_id:
             err = result.get("message") or result.get("error") or str(result)
             return JSONResponse({"error": err}, status_code=400)
+
+        # Force title — User Products API puede haberlo reemplazado con título de catálogo
+        if title and not catalog_product_id:
+            try:
+                await client.put(f"/items/{item_id}", json={"title": title})
+                logger.info(f"Title forzado para {item_id}: {title!r}")
+            except Exception as _te:
+                logger.warning(f"Title patch falló para {item_id}: {_te}")
 
         # Add description separately (ML doesn't accept it in the initial POST)
         if description:
