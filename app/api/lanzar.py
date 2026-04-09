@@ -2340,11 +2340,112 @@ async def generate_video_commercial_endpoint(request: Request):
             return vf.read()
 
     # ────────────────────────────────────────────────────────────────────────────
-    # PATH A: ZOOMPAN desde fotos reales del producto
-    # Sin IA generativa → sin productos inventados, sin idiomas raros, sin fantasmas
+    # PATH A: IMG2VID con Minimax Live → video real coherente con el producto
+    # La imagen del producto es el primer frame → el video es COHERENTE (no inventa contenido)
+    # Fallback: Wan2.1 img2vid → zoompan ffmpeg como último recurso
     # ────────────────────────────────────────────────────────────────────────────
     if ai_image_urls:
-        logger.info(f"=== ZOOMPAN PROFESIONAL: {len(ai_image_urls)} fotos reales del producto ===")
+        logger.info(f"=== IMG2VID: intentando Minimax Live con {len(ai_image_urls)} imágenes ===")
+
+        # Motion prompt: solo movimiento de cámara. El producto viene de la imagen real.
+        _motion_prompt_live = (
+            "slow cinematic camera zoom-out revealing the product, "
+            "product stays centered and unchanged, warm commercial studio lighting, "
+            "smooth elegant camera movement, premium product video quality"
+        )
+        try:
+            _audio_live, _url_live = await asyncio.gather(
+                elevenlabs_client.generate_audio(script),
+                replicate_client.generate_video_minimax_live(ai_image_urls[0], _motion_prompt_live),
+                return_exceptions=True,
+            )
+            if not isinstance(_url_live, Exception) and isinstance(_url_live, str) and _url_live.startswith("http"):
+                _has_audio_live = isinstance(_audio_live, bytes) and bool(_audio_live)
+                async with httpx.AsyncClient(timeout=120.0) as _dl_live:
+                    _vr = await _dl_live.get(_url_live, follow_redirects=True)
+                    _raw_vid = _vr.content if _vr.status_code == 200 and len(_vr.content) > 1000 else None
+                if _raw_vid:
+                    if _has_audio_live:
+                        try:
+                            with _tf.TemporaryDirectory() as _td:
+                                _vp = _os.path.join(_td, "v.mp4")
+                                _ap = _os.path.join(_td, "a.mp3")
+                                _op = _os.path.join(_td, "out.mp4")
+                                with open(_vp, "wb") as _f: _f.write(_raw_vid)
+                                with open(_ap, "wb") as _f: _f.write(_audio_live)
+                                _pr = _sp.run(
+                                    [ffmpeg_bin, "-y", "-i", _vp, "-i", _ap,
+                                     "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
+                                     "-map", "[vpad]", "-map", "1:a",
+                                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                                     "-c:a", "aac", "-b:a", "128k",
+                                     "-shortest", "-movflags", "+faststart", _op],
+                                    capture_output=True, timeout=180,
+                                )
+                                if _pr.returncode == 0:
+                                    with open(_op, "rb") as _f: _raw_vid = _f.read()
+                                else:
+                                    logger.warning(f"Audio+video combine: {_pr.stderr.decode(errors='replace')[:150]}")
+                        except Exception as _ff_e:
+                            logger.warning(f"ffmpeg combine falló: {_ff_e}")
+                    _video_cache[vid_id] = _raw_vid
+                    _persist_video(vid_id, _raw_vid)
+                    _mb = len(_raw_vid) / 1_048_576
+                    logger.info(f"Minimax Live img2vid listo: {vid_id} ({_mb:.1f} MB)")
+                    return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_live}
+            else:
+                logger.warning(f"Minimax Live falló ({_url_live.__class__.__name__ if isinstance(_url_live, Exception) else 'no url'}), intentando Wan2.1...")
+        except Exception as _e_live:
+            logger.warning(f"Minimax Live pipeline error: {_e_live}, intentando Wan2.1...")
+
+        # Fallback 1: Wan2.1 image-to-video
+        try:
+            logger.info("IMG2VID fallback: Wan2.1 i2v...")
+            _wan_prompt = (
+                "professional product commercial, slow cinematic camera orbit, "
+                "warm studio lighting, premium quality, smooth motion"
+            )
+            _audio_wan, _url_wan = await asyncio.gather(
+                elevenlabs_client.generate_audio(script),
+                replicate_client.generate_video_img2vid(ai_image_urls[0], _wan_prompt),
+                return_exceptions=True,
+            )
+            if not isinstance(_url_wan, Exception) and isinstance(_url_wan, str) and _url_wan.startswith("http"):
+                _has_audio_wan = isinstance(_audio_wan, bytes) and bool(_audio_wan)
+                async with httpx.AsyncClient(timeout=120.0) as _dl_wan:
+                    _vr2 = await _dl_wan.get(_url_wan, follow_redirects=True)
+                    _raw_wan = _vr2.content if _vr2.status_code == 200 and len(_vr2.content) > 1000 else None
+                if _raw_wan:
+                    if _has_audio_wan:
+                        try:
+                            with _tf.TemporaryDirectory() as _td2:
+                                _vp2 = _os.path.join(_td2, "v.mp4")
+                                _ap2 = _os.path.join(_td2, "a.mp3")
+                                _op2 = _os.path.join(_td2, "out.mp4")
+                                with open(_vp2, "wb") as _f: _f.write(_raw_wan)
+                                with open(_ap2, "wb") as _f: _f.write(_audio_wan)
+                                _pr2 = _sp.run(
+                                    [ffmpeg_bin, "-y", "-i", _vp2, "-i", _ap2,
+                                     "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
+                                     "-map", "[vpad]", "-map", "1:a",
+                                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                                     "-c:a", "aac", "-b:a", "128k",
+                                     "-shortest", "-movflags", "+faststart", _op2],
+                                    capture_output=True, timeout=180,
+                                )
+                                if _pr2.returncode == 0:
+                                    with open(_op2, "rb") as _f: _raw_wan = _f.read()
+                        except Exception as _ff2:
+                            logger.warning(f"Wan2.1 audio combine falló: {_ff2}")
+                    _video_cache[vid_id] = _raw_wan
+                    _persist_video(vid_id, _raw_wan)
+                    logger.info(f"Wan2.1 img2vid listo: {vid_id} ({len(_raw_wan)/1_048_576:.1f} MB)")
+                    return {"video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_wan}
+        except Exception as _e_wan:
+            logger.warning(f"Wan2.1 img2vid falló: {_e_wan}, usando zoompan...")
+
+        # Fallback 2: zoompan ffmpeg (último recurso — sin IA generativa)
+        logger.info(f"=== ZOOMPAN FALLBACK: {len(ai_image_urls)} fotos reales del producto ===")
 
         FPS   = 25
         DUR_S = 5.0   # segundos por clip
@@ -2825,11 +2926,13 @@ PRODUCTO:
 - Stock: {stock} unidades
 
 REGLAS MeLi 2026:
-1. TÍTULO: máx 60 chars. Formato: Marca + Tipo de producto + Tecnología/Característica clave + Tamaño/Capacidad.
+1. TÍTULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible. 59 chars > 49 chars.
+   Formato: Marca + Tipo de producto + Tecnología/Característica clave + Tamaño/Capacidad.
    - SIN número de modelo (va en ficha técnica)
    - SIN signos de puntuación ni mayúsculas innecesarias
    - SIN palabras como "nuevo", "oferta", "envío gratis"
-   - Ejemplo correcto: "Samsung Televisor QLED 4K Smart 65 Pulgadas"
+   - Ejemplo correcto (60 chars): "Samsung Televisor QLED 4K Smart HDR 65 Pulgadas Google TV"
+   - Si el título queda corto, agrega características adicionales del producto hasta llegar a 55-60 chars.
 2. DESCRIPCIÓN: mínimo 4 párrafos. Incluye: beneficios principales, tecnología destacada, conectividad, compatibilidad, uso recomendado. Texto natural, orientado a compra.
 3. BULLETS: 5 puntos cortos y contundentes. Cada uno destaca UN beneficio/característica. Empiezan con sustantivo o verbo de acción.
 4. KEYWORDS: 8 palabras clave que los compradores mexicanos buscan en MeLi para este producto. Sin repetir palabras del título.
@@ -2858,6 +2961,43 @@ Retorna SOLO este JSON (sin markdown, sin texto extra):
     except Exception as e:
         logger.error(f"ai-draft-json error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/search-upc")
+async def search_upc_endpoint(request: Request):
+    """Busca el UPC/GTIN de un producto por marca + modelo + título usando Open UPC API."""
+    body  = await request.json()
+    brand = (body.get("brand") or "").strip()
+    model = (body.get("model") or "").strip()
+    title = (body.get("title") or body.get("product_title") or "").strip()
+
+    query = " ".join(filter(None, [brand, model])).strip() or title
+    if not query:
+        return JSONResponse({"error": "brand/model requeridos"}, status_code=400)
+
+    try:
+        # Open UPC ItemDB — free tier, no key required, returns GTIN/EAN/UPC
+        search_url = f"https://api.upcitemdb.com/prod/trial/search?s={query}&type=product&match_mode=0"
+        async with httpx.AsyncClient(timeout=15.0) as cl:
+            resp = await cl.get(search_url, headers={"User-Agent": "Mozilla/5.0"})
+
+        if resp.status_code == 200:
+            data  = resp.json()
+            items = data.get("items") or []
+            for item in items:
+                ean = (item.get("ean") or "").strip()
+                upc = (item.get("upc") or "").strip()
+                gtin = ean or upc
+                if gtin and len(gtin) >= 12:
+                    logger.info(f"UPC encontrado para '{query}': {gtin}")
+                    return {"upc": gtin, "source": "upcitemdb", "title": item.get("title", "")}
+
+        logger.info(f"UPC no encontrado para '{query}' (status {resp.status_code})")
+        return {"upc": None, "source": None}
+
+    except Exception as e:
+        logger.warning(f"search-upc error: {e}")
+        return {"upc": None, "source": None}
 
 
 @router.post("/predict-category")
@@ -3233,6 +3373,9 @@ async def create_listing_endpoint(request: Request):
             ]
     # Merge attributes from body
     attrs = list(body.get("attributes") or [])
+    # FAMILY_NAME va como campo raíz (item_payload["family_name"]) — quitarlo de attrs
+    # para evitar duplicado que causa validation_error en ML
+    attrs = [a for a in attrs if a.get("id") != "FAMILY_NAME"]
     # Ensure SELLER_SKU is always in attributes (visible como "Código de identificación" en ML)
     if sku and not catalog_product_id:
         has_seller_sku = any(a.get("id") == "SELLER_SKU" for a in attrs)
@@ -3252,7 +3395,12 @@ async def create_listing_endpoint(request: Request):
         try:
             return await client.post("/items", json=payload)
         except _MeliErr as exc:
-            return {"_meli_error": str(exc), "_meli_body": getattr(exc, "body", {})}
+            _body = getattr(exc, "body", {}) or {}
+            # Construir error string legible desde el cuerpo ML (str(exc) puede quedar vacío)
+            _err_str = (
+                str(_body) if _body else (str(exc) or "meli_error")
+            )
+            return {"_meli_error": _err_str, "_meli_body": _body}
 
     # ── family_name (User Products API) — campo raíz, no un atributo ─────────
     # ML lo exige para categorías con catálogo (ej. Televisores MLM1002).

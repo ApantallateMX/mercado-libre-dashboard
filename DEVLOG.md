@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FIX+FEAT: ML Lanzador — 4 mejoras wizard
+
+### FIX 1: Título generado por IA < 55 chars (SEO subóptimo)
+- Root cause: prompt decía "máx 60 chars" — Claude lo trataba como techo, no como objetivo.
+- Fix: `lanzar.py:2929` — regla cambiada a "ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). 59 chars > 49 chars."
+- Agrega instrucción de relleno con características adicionales si el título queda corto.
+
+### FIX 2: Video generado es slideshow (zoompan) en vez de video real
+- Root cause: PATH A en `generate-video-commercial` usaba ffmpeg zoompan (imágenes estáticas con zoom/pan), no IA generativa de video.
+- Fix: `lanzar.py:2343-2448` — nuevo orden de intento:
+  1. **Minimax Live img2vid**: primer frame = imagen real del producto → video AI coherente
+  2. **Wan2.1 i2v**: fallback img2vid de alta calidad
+  3. **Zoompan ffmpeg**: último recurso si ambos fallan
+- PATH B (sin imágenes, T2V) sin cambios.
+
+### FIX 3: Error "The fields [title] are invalid for requested call" al publicar
+- Root causa: `FAMILY_NAME` se enviaba duplicado — como campo raíz `family_name` Y como atributo `{id: "FAMILY_NAME"}` en la lista de attributes.
+- Fix 1: `lanzar.py:3378` — filtrar `FAMILY_NAME` de attrs antes de construir el payload.
+- Root causa 2: `str(exc)` para `MeliApiError` podía ser vacío (no llama `super().__init__()`).
+- Fix 2: `lanzar.py:3399-3403` — `_post_item` ahora usa `str(exc.body)` para construir `_meli_error`.
+
+### FEAT: Búsqueda de UPC online cuando BM no tiene el dato
+- Nuevo endpoint `POST /api/lanzar/search-upc` — busca por brand+model en Open UPC ItemDB API.
+- UI: botón 🔍 junto al campo GTIN en Step 2 del wizard (solo visible cuando el campo está vacío).
+- Si BM ya tiene el UPC, el botón no hace nada (campo ya está lleno).
+
+---
+
 ## 2026-04-09 — FEAT: Amazon listing management completo + Sin Lanzar + fixes header
 
 ### FIX 1: "Órdenes hoy: 0 / Unidades hoy: 0 / Revenue hoy: $0.00"

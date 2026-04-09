@@ -575,8 +575,16 @@
             </div>
             <div>
               <label class="text-[10px] text-gray-400 block mb-0.5">GTIN / UPC / EAN</label>
-              <input id="wiz-f-gtin" type="text" placeholder="Ej. 887276728926"
-                     class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
+              <div class="flex gap-1">
+                <input id="wiz-f-gtin" type="text" placeholder="Ej. 887276728926"
+                       class="flex-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400"/>
+                <button id="wiz-btn-search-upc" onclick="window._wizSearchUPC()"
+                        title="Buscar UPC en base de datos online"
+                        class="text-xs px-2 py-1.5 bg-gray-100 hover:bg-yellow-400 border border-gray-200 rounded-lg transition whitespace-nowrap text-gray-600 hover:text-gray-800">
+                  🔍
+                </button>
+              </div>
+              <span id="wiz-upc-status" class="text-[10px] text-gray-400 hidden mt-0.5 block"></span>
             </div>
             <div>
               <label class="text-[10px] text-gray-400 block mb-0.5">Marca</label>
@@ -1356,6 +1364,33 @@
     if (step === 2) _wizLoadCategories();
     if (step === 3) _wizPopulateSummary();
   }
+
+  window._wizSearchUPC = function() {
+    var btn    = document.getElementById('wiz-btn-search-upc');
+    var status = document.getElementById('wiz-upc-status');
+    var input  = document.getElementById('wiz-f-gtin');
+    if (input.value.trim()) return; // ya tiene UPC, no buscar
+    btn.disabled = true; btn.textContent = '⏳';
+    status.textContent = 'Buscando...'; status.classList.remove('hidden');
+    fetch('/api/lanzar/search-upc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ brand: _wiz.brand, model: _wiz.model, title: _wiz.draft.title || (_wiz.gap ? _wiz.gap.product_title : '') }),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.upc) {
+        input.value = d.upc; _wiz.gtin = d.upc;
+        status.textContent = '✅ UPC encontrado'; status.className = 'text-[10px] text-green-600 block mt-0.5';
+      } else {
+        status.textContent = 'No encontrado — ingresa manualmente'; status.className = 'text-[10px] text-gray-400 block mt-0.5';
+      }
+    })
+    .catch(function() {
+      status.textContent = 'Error buscando UPC'; status.className = 'text-[10px] text-red-400 block mt-0.5';
+    })
+    .finally(function() { btn.disabled = false; btn.textContent = '🔍'; });
+  };
 
   window._wizNext = function() {
     if (_wiz.step === 1) {
