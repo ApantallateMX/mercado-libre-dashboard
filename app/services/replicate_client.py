@@ -839,8 +839,8 @@ async def _t2v_ltx(prompt: str) -> str:
         "input": {
             "prompt":               prompt,
             "negative_prompt":      "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
-            "width":                480,
-            "height":               848,
+            "width":                576,   # must be multiple of 32
+            "height":               1024,  # must be multiple of 32 — portrait for ML/Reels
             "num_frames":           97,
             "frame_rate":           24,
             "guidance_scale":       3.5,
@@ -889,8 +889,6 @@ async def _t2v_wan(prompt: str) -> str:
             "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, amateur",
             "num_frames":      81,
             "fps":             16,
-            "guide_scale":     5.0,
-            "sample_steps":    25,
         }
     }
     hdrs = {"Authorization": f"Bearer {_REPLICATE_KEY}", "Content-Type": "application/json"}

@@ -2402,12 +2402,17 @@ async def _run_video_pipeline(job_id: str, body: dict):
 
         _all_t2v = await asyncio.gather(
             elevenlabs_client.generate_audio(script),
-            *[_gen_t2v_clip(i) for i in range(10)],
+            *[_gen_t2v_clip(i) for i in range(4)],   # 4 clips = ~20s raw, suficiente para comercial 30s
             return_exceptions=True,
         )
         audio_result     = _all_t2v[0]
         clip_url_results = list(_all_t2v[1:])
         has_audio        = isinstance(audio_result, bytes) and bool(audio_result)
+
+        # Log failures for debugging
+        for _ci, _cr in enumerate(clip_url_results):
+            if isinstance(_cr, Exception):
+                logger.error(f"T2V clip {_ci} falló: {type(_cr).__name__}: {str(_cr)[:300]}")
 
         clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
         logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
@@ -2945,14 +2950,16 @@ async def estimate_dimensions_endpoint(request: Request):
                     size_in = int(m2.group(1))
                     break
         if not size_in:
-            # Pattern 2: TV model numbers start with screen size digits (e.g. 40PQF7446, 32PFL6446, 55PUS8808)
+            # Pattern 2: TV model numbers embed screen size digits anywhere in the string
+            # e.g. 40PQF7446, K-55S20M2, XBR-65X900H, UN55TU7000, OLED55C2PSA
             for src in [model, title]:
-                m3 = _re.search(r'(?:^|\s)(\d{2,3})[A-Z]', src.upper().strip())
-                if m3:
+                for m3 in _re.finditer(r'(\d{2,3})[A-Z]', src.upper().strip()):
                     candidate = int(m3.group(1))
                     if 24 <= candidate <= 100:  # sane TV size range
                         size_in = candidate
                         break
+                if size_in:
+                    break
 
         # Tabla: dimensiones de caja de embalaje incluyendo espuma (cm) + peso (kg)
         _tv = {

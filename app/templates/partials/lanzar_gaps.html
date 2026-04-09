@@ -1447,11 +1447,11 @@
       }
       if (d.warranty_type) {
         var wt = document.getElementById('wiz-f-warranty-type');
-        if (wt) wt.value = d.warranty_type;
+        if (wt) wt.value = _validWarrantyType(d.warranty_type);
       }
       if (d.warranty_time) {
         var wm = document.getElementById('wiz-f-warranty-time');
-        if (wm) wm.value = d.warranty_time;
+        if (wm) wm.value = _validWarrantyTime(d.warranty_time);
       }
       if (d.price) {
         var pf = document.getElementById('wiz-f-price');
@@ -1702,9 +1702,17 @@
       document.getElementById('wiz-f-desc').value  = d.description || '';
       _wizBullets(d.bullet_points || []);
       _wizKeywords(d.keywords || []);
-      // Pre-set warranty from AI suggestion
-      if (d.warranty_type) { _wiz.warranty_type = d.warranty_type; }
-      if (d.warranty_time) { _wiz.warranty_time = d.warranty_time; }
+      // Pre-set warranty from AI suggestion — validate to avoid blank selects
+      if (d.warranty_type) {
+        _wiz.warranty_type = _validWarrantyType(d.warranty_type);
+        var wtEl = document.getElementById('wiz-f-warranty-type');
+        if (wtEl) wtEl.value = _wiz.warranty_type;
+      }
+      if (d.warranty_time) {
+        _wiz.warranty_time = _validWarrantyTime(d.warranty_time);
+        var wmEl = document.getElementById('wiz-f-warranty-time');
+        if (wmEl) wmEl.value = _wiz.warranty_time;
+      }
       window._wizTitleLen();
       if (d.price_regular && !_wiz.price) _wiz.price = d.price_regular;
     })
@@ -1714,6 +1722,32 @@
       loading.classList.add('hidden');
     });
   };
+
+  // Warranty validation — prevents blank selects when AI or draft returns invalid values
+  var _WARRANTY_TYPES = ['Garantía de fábrica', 'Garantía del vendedor', 'Sin garantía'];
+  var _WARRANTY_TIMES = ['3 meses', '6 meses', '12 meses', '24 meses', '36 meses'];
+  function _validWarrantyType(v) {
+    if (!v) return 'Garantía del vendedor';
+    var vl = v.toLowerCase();
+    // Normalize common AI variations
+    if (vl.indexOf('vendedor') >= 0 || vl.indexOf('seller') >= 0) return 'Garantía del vendedor';
+    if (vl.indexOf('fábrica') >= 0 || vl.indexOf('fabrica') >= 0 || vl.indexOf('fabricante') >= 0 || vl.indexOf('manufacturer') >= 0) return 'Garantía de fábrica';
+    if (vl === 'sin garantía' || vl === 'sin garantia' || vl === 'none' || vl === 'no warranty') return 'Sin garantía';
+    // Exact match check
+    return _WARRANTY_TYPES.indexOf(v) >= 0 ? v : 'Garantía del vendedor';
+  }
+  function _validWarrantyTime(v) {
+    if (!v) return '3 meses';
+    // Exact match
+    if (_WARRANTY_TIMES.indexOf(v) >= 0) return v;
+    // Extract number and find closest
+    var num = parseInt(v);
+    if (!num) return '3 meses';
+    var closest = _WARRANTY_TIMES.reduce(function(best, opt) {
+      return Math.abs(parseInt(opt) - num) < Math.abs(parseInt(best) - num) ? opt : best;
+    });
+    return closest;
+  }
 
   function _wizBullets(bullets) {
     var cont = document.getElementById('wiz-bullets');

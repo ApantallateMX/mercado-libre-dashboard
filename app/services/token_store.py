@@ -241,9 +241,20 @@ async def init_db():
             )
         """)
         # Migrations — add columns if not present (SQLite doesn't support IF NOT EXISTS on columns)
-        for col, definition in [("upc", "TEXT NOT NULL DEFAULT ''"), ("size", "TEXT NOT NULL DEFAULT ''")]:
+        for col, definition in [
+            ("upc",           "TEXT NOT NULL DEFAULT ''"),
+            ("size",          "TEXT NOT NULL DEFAULT ''"),
+            ("ml_item_id",    "TEXT NOT NULL DEFAULT ''"),
+            ("ml_title",      "TEXT NOT NULL DEFAULT ''"),
+            ("ml_price",      "REAL NOT NULL DEFAULT 0"),
+            ("ml_category_id","TEXT NOT NULL DEFAULT ''"),
+            ("ml_permalink",  "TEXT NOT NULL DEFAULT ''"),
+            ("ml_condition",  "TEXT NOT NULL DEFAULT ''"),
+            ("launched_at",   "TIMESTAMP DEFAULT NULL"),
+        ]:
             try:
                 await db.execute(f"ALTER TABLE bm_sku_gaps ADD COLUMN {col} {definition}")
+                await db.commit()
             except Exception:
                 pass  # column already exists
         await db.execute("""
