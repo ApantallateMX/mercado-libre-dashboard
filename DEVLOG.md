@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FEAT: Panel Editar Inventario — Claude Vision, video polling, diagnóstico IA
+
+### FEAT: Claude Vision en panel Editar
+- `editModalAiTitle()` y `editModalAiDesc()` ahora recopilan las fotos del producto (thumbnails + pictures) y las envían a Claude Vision mediante `generate_stream_with_images()`.
+- Indicador visual "👁 Analizando imágenes..." mientras Claude procesa las fotos.
+- `autoApply=true` en title: aplica automáticamente el mejor título sin interacción del usuario.
+
+### FIX: Video generation — polling correcto del job background
+- `editModalGenVideo()` estaba haciendo `fetch()` y esperando `video_url` de inmediato, pero el endpoint devuelve `{job_id, status: "processing"}`.
+- Reescrito con loop de polling cada 4s, mensajes de progreso dinámicos, timeout a 90 rondas (~6 min).
+- Al terminar: preview de video en panel + auto-upload a ML vía `/api/lanzar/upload-clip/{item_id}`.
+
+### FEAT: Botones de acción diagnóstico por ítem
+- `_calculate_health_score()` ahora incluye campo `"key"` en cada ítem del breakdown (`title`, `description`, `video`).
+- Template renderiza botón de acción inline junto a cada ítem diagnóstico que falló: "✦ Mejorar" (título/desc) o "✦ Generar" (video).
+
+### FEAT: Botón "Optimizar Todo"
+- Botón ⚡ visible cuando hay al menos un ítem de diagnóstico con problema.
+- Ejecuta en secuencia: `editModalAiTitle(true)` → `editModalAiDesc()` → `editModalAiAttrs()`.
+- Título se aplica automáticamente; descripción se genera en el textarea para revisión.
+
+### Infraestructura
+- `claude_client.py`: nueva función `generate_stream_with_images()` — Vision + SSE streaming.
+- `sku_inventory.py` `/ai-improve`: acepta `image_urls[]` en body; usa Vision cuando hay imágenes.
+
+---
+
 ## 2026-04-09 — FEAT: Tab Lanzados — datos de publicación + modal Modificar
 
 ### Funcionalidad: Guardar datos de publicación al lanzar
