@@ -2569,7 +2569,10 @@ async def generate_video_commercial_endpoint(request: Request):
         logger.info("=== T2V FALLBACK: sin imágenes del producto ===")
 
         async def _gen_t2v_clip(idx: int):
-            return await replicate_client.generate_video_t2v(_motion_prompts[idx % len(_motion_prompts)])
+            # Usar escenas generadas por Claude (específicas al producto) en vez de motion prompts genéricos
+            # Las escenas describen el producto real con contexto de uso → evita contenido aleatorio
+            _t2v_pool = scenes if scenes else _motion_prompts
+            return await replicate_client.generate_video_t2v(_t2v_pool[idx % len(_t2v_pool)])
 
         _all_t2v = await asyncio.gather(
             elevenlabs_client.generate_audio(script),

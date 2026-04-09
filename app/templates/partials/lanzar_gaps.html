@@ -640,8 +640,8 @@
                        class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400 bg-white"/>
               </div>
               <div>
-                <label class="text-[10px] text-gray-400 block mb-0.5">Peso del paquete (kg)</label>
-                <input id="wiz-f-pkg-wt" type="number" min="0.1" step="0.1" placeholder="Ej. 12.5"
+                <label class="text-[10px] text-gray-400 block mb-0.5">Peso del paquete (kg → ML lo convierte a g)</label>
+                <input id="wiz-f-pkg-wt" type="number" min="0.1" step="0.1" placeholder="Ej. 7.0"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-yellow-400 bg-white"/>
               </div>
             </div>
@@ -2278,10 +2278,18 @@
           size:              gap.size ? String(gap.size) : '',
           first_frame_image: firstFrame,
           ai_image_urls:     (function() {
+            // 1. Imágenes AI generadas (mejor calidad)
             var aiUrls = (_wiz.ai_images || []).filter(function(img) { return img && img.url; }).map(function(img) { return img.url; });
-            // Si no se generaron imágenes AI, usar la foto real del producto (BM) como primer frame
-            if (aiUrls.length === 0 && gap && gap.image_url) return [gap.image_url];
-            return aiUrls;
+            if (aiUrls.length > 0) return aiUrls;
+            // 2. Imágenes de referencia añadidas por el usuario (fotos reales del producto)
+            var refs = (_wiz.reference_images || []).filter(Boolean);
+            if (refs.length > 0) return refs;
+            // 3. Imágenes seleccionadas para el listing
+            var sel = (_wiz.selected_images || []).filter(Boolean);
+            if (sel.length > 0) return sel;
+            // 4. Foto del producto en BM (última opción)
+            if (gap && gap.image_url) return [gap.image_url];
+            return [];
           })(),
         }),
       });
@@ -2516,10 +2524,12 @@
       var _pkgW  = (document.getElementById('wiz-f-pkg-w')  || {}).value || '';
       var _pkgL  = (document.getElementById('wiz-f-pkg-l')  || {}).value || '';
       var _pkgWt = (document.getElementById('wiz-f-pkg-wt') || {}).value || '';
-      if (_pkgH)  attrs.push({id: 'SELLER_PACKAGE_HEIGHT', value_name: _pkgH});
-      if (_pkgW)  attrs.push({id: 'SELLER_PACKAGE_WIDTH',  value_name: _pkgW});
-      if (_pkgL)  attrs.push({id: 'SELLER_PACKAGE_LENGTH', value_name: _pkgL});
-      if (_pkgWt) attrs.push({id: 'SELLER_PACKAGE_WEIGHT', value_name: _pkgWt});
+      // ML requiere: dimensiones como entero + "cm", peso como entero en GRAMOS + "g"
+      // Ejemplo: "90 cm", "7000 g"  (no kg, no decimales, no número solo)
+      if (_pkgH)  attrs.push({id: 'SELLER_PACKAGE_HEIGHT', value_name: Math.round(parseFloat(_pkgH))  + ' cm'});
+      if (_pkgW)  attrs.push({id: 'SELLER_PACKAGE_WIDTH',  value_name: Math.round(parseFloat(_pkgW))  + ' cm'});
+      if (_pkgL)  attrs.push({id: 'SELLER_PACKAGE_LENGTH', value_name: Math.round(parseFloat(_pkgL))  + ' cm'});
+      if (_pkgWt) attrs.push({id: 'SELLER_PACKAGE_WEIGHT', value_name: Math.round(parseFloat(_pkgWt) * 1000) + ' g'});
       // SELLER_SKU — código de identificación del vendedor (visible en panel de vendedor)
       var skuVal = _wiz.sku || (gap ? gap.sku : '');
       if (skuVal) attrs.push({id: 'SELLER_SKU', value_name: skuVal});
