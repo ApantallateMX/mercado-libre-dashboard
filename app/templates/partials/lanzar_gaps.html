@@ -113,6 +113,11 @@
       📈 Ventas
       <span id="ventas-badge" class="hidden bg-red-100 text-red-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
     </button>
+    <button id="tab-launched" onclick="window._gapsSetStatus('launched')"
+            class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-green-600 hover:text-green-700 mr-2 flex items-center gap-1">
+      ✅ Lanzados
+      <span id="launched-badge" class="hidden bg-green-100 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full"></span>
+    </button>
     <button id="tab-ignored" onclick="window._gapsSetStatus('ignored')"
             class="gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2">
       Ignorados
@@ -891,6 +896,15 @@
         _gapsCache = _gaps;
         _state.total = d.total || 0; _state.pages = d.pages || 1;
         _state.badge_total = d.badge_total || d.total || 0;
+        // Update launched badge
+        if (typeof d.launched_total !== 'undefined') {
+          var lb = document.getElementById('launched-badge');
+          if (lb) {
+            lb.textContent = d.launched_total;
+            if (d.launched_total > 0) lb.classList.remove('hidden');
+            else lb.classList.add('hidden');
+          }
+        }
         _renderBadge(); _renderTable(); _renderPagination();
       })
       .catch(function(e) {
@@ -941,7 +955,9 @@
   function _renderTable() {
     var tbody = document.getElementById('gaps-tbody');
     if (!_gaps.length) {
-      var msg = _state.status === 'ignored' ? 'No hay SKUs ignorados.' : 'Sin resultados con los filtros aplicados.';
+      var msg = _state.status === 'ignored' ? 'No hay SKUs ignorados.'
+              : _state.status === 'launched' ? 'No hay SKUs lanzados aún.'
+              : 'Sin resultados con los filtros aplicados.';
       tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-gray-400 text-sm"><div class="text-2xl mb-2">🎉</div>' + msg + '</td></tr>';
       return;
     }
@@ -1032,8 +1048,10 @@
     document.querySelectorAll('.gaps-status-tab').forEach(function(t) {
       t.className = 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-transparent text-gray-400 hover:text-gray-600 mr-2';
     });
-    document.getElementById('tab-' + status).className =
-      'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-yellow-400 text-yellow-700 mr-2';
+    var activeClass = status === 'launched'
+      ? 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-green-500 text-green-700 mr-2 flex items-center gap-1'
+      : 'gaps-status-tab px-3 py-1.5 text-xs font-semibold border-b-2 border-yellow-400 text-yellow-700 mr-2';
+    document.getElementById('tab-' + status).className = activeClass;
     _loadGaps();
   };
 

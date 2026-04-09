@@ -1157,7 +1157,7 @@ async def get_gaps(
         "name_asc":    "product_title ASC",
     }
     order = _SORT_MAP.get(sort, "priority_score DESC, stock_total DESC")
-    status_filter = status if status in ("unlaunched", "ignored") else "unlaunched"
+    status_filter = status if status in ("unlaunched", "ignored", "launched") else "unlaunched"
 
     # Build WHERE clause dynamically
     conditions = ["user_id=?", "status=?"]
@@ -1201,6 +1201,11 @@ async def get_gaps(
             (user_id,)
         )
         badge_total = (await badge_cur.fetchone())[0]
+        launched_cur = await db.execute(
+            "SELECT COUNT(*) FROM bm_sku_gaps WHERE user_id=? AND status='launched'",
+            (user_id,)
+        )
+        launched_total = (await launched_cur.fetchone())[0]
 
     items = []
     for r in rows:
@@ -1216,13 +1221,14 @@ async def get_gaps(
         items.append(d)
 
     return {
-        "user_id":     user_id,
-        "total":       total,          # filtered count
-        "badge_total": badge_total,    # unfiltered count for the badge
-        "page":        page,
-        "per_page":    per_page,
-        "pages":       max(1, -(-total // per_page)),  # ceiling division
-        "items":       items,
+        "user_id":        user_id,
+        "total":          total,
+        "badge_total":    badge_total,
+        "launched_total": launched_total,
+        "page":           page,
+        "per_page":       per_page,
+        "pages":          max(1, -(-total // per_page)),
+        "items":          items,
     }
 
 

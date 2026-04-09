@@ -48,6 +48,49 @@ def is_available() -> bool:
     return bool(k and len(k) > 10)
 
 
+async def generate_with_images(prompt: str, image_urls: list, system: str = "", max_tokens: int = 1024) -> str:
+    """Generate using Claude Vision — analyzes product images + text prompt.
+    Uses images as reference context (max 4) to produce product-specific output.
+    """
+    key = _get_key()
+    if not key or len(key) <= 10:
+        raise RuntimeError("ANTHROPIC_API_KEY not configured")
+
+    content: list = []
+    for url in image_urls[:4]:
+        if url and isinstance(url, str) and url.startswith("http"):
+            content.append({"type": "image", "source": {"type": "url", "url": url}})
+    content.append({"type": "text", "text": prompt})
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        payload = {
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if system:
+            payload["system"] = system
+        resp = await client.post(
+            ANTHROPIC_API_URL,
+            json=payload,
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+        )
+        if resp.status_code != 200:
+            try:
+                err = resp.json()
+                msg = err.get("error", {}).get("message", resp.text)
+            except Exception:
+                msg = resp.text
+            raise RuntimeError(f"Anthropic Vision API error: {msg}")
+        data = resp.json()
+        content_out = data.get("content", [])
+        return "".join(block.get("text", "") for block in content_out if block.get("type") == "text")
+
+
 async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str:
     """Generate a complete response (non-streaming)."""
     key = _get_key()
