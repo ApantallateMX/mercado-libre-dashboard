@@ -415,6 +415,11 @@
               class="text-[10px] text-amber-500 hover:text-amber-700 underline ml-2 flex-shrink-0">Limpiar</button>
     </div>
 
+    <!-- Already launched banner -->
+    <div id="wiz-launched-banner" class="hidden px-5 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-2">
+      <span class="text-xs text-blue-700">✅ Este SKU ya fue publicado en Mercado Libre. Puedes volver a publicarlo si fue eliminado o necesitas re-lanzarlo.</span>
+    </div>
+
     <!-- Stepper -->
     <div class="px-5 py-3 border-b border-gray-100 flex-shrink-0">
       <div class="flex items-center">
@@ -1228,6 +1233,15 @@
     _wizKeywords([]);
     window._wizTitleLen();
 
+    // Si el producto ya fue lanzado → borrar borrador obsoleto y arrancar limpio
+    var launchedBanner = document.getElementById('wiz-launched-banner');
+    if (gap.status === 'launched') {
+      try { localStorage.removeItem('wiz_draft_' + gap.sku); } catch(e) {}
+      if (launchedBanner) launchedBanner.classList.remove('hidden');
+    } else {
+      if (launchedBanner) launchedBanner.classList.add('hidden');
+    }
+
     // Intentar restaurar borrador guardado para este SKU
     var hasDraft = _wizLoadDraft(gap.sku);
     if (hasDraft) {
@@ -1268,6 +1282,10 @@
         warranty_time:    _wiz.warranty_time,
         family_name:      _wiz.family_name,
         gtin:             _wiz.gtin,
+        pkg_h:  (document.getElementById('wiz-f-pkg-h')  || {}).value || '',
+        pkg_w:  (document.getElementById('wiz-f-pkg-w')  || {}).value || '',
+        pkg_l:  (document.getElementById('wiz-f-pkg-l')  || {}).value || '',
+        pkg_wt: (document.getElementById('wiz-f-pkg-wt') || {}).value || '',
       }));
     } catch(e) {}
   }
@@ -1327,6 +1345,11 @@
         var qf = document.getElementById('wiz-f-qty');
         if (qf) qf.value = d.qty;
       }
+      // Restaurar dimensiones del paquete
+      if (d.pkg_h)  { var ph = document.getElementById('wiz-f-pkg-h');  if (ph) ph.value  = d.pkg_h; }
+      if (d.pkg_w)  { var pw = document.getElementById('wiz-f-pkg-w');  if (pw) pw.value  = d.pkg_w; }
+      if (d.pkg_l)  { var pl = document.getElementById('wiz-f-pkg-l');  if (pl) pl.value  = d.pkg_l; }
+      if (d.pkg_wt) { var pwt = document.getElementById('wiz-f-pkg-wt'); if (pwt) pwt.value = d.pkg_wt; }
 
       // Restaurar grids de imágenes
       _renderRefGrid();
@@ -2274,7 +2297,7 @@
         body: JSON.stringify({
           brand:             gap.brand         || '',
           model:             gap.model         || '',
-          title:             gap.product_title || '',
+          title:             _wiz.draft.title || gap.product_title || '',
           category:          gap.category      || '',
           size:              gap.size ? String(gap.size) : '',
           first_frame_image: firstFrame,
@@ -2360,11 +2383,18 @@
       var dlLink = document.getElementById('wiz-video-download');
       dlLink.href = d.video_url;
 
-      // Modo label
+      // Modo label — muestra qué motor se usó
       var modeEl = document.getElementById('wiz-video-mode-label');
+      var methodLabels = {
+        'minimax_live': '🤖 Video IA real (Minimax Live)',
+        'wan2_i2v': '🤖 Video IA real (Wan2.1)',
+        'zoompan': '📷 Slideshow (Ken Burns) — IA no disponible',
+        't2v': '🤖 Video IA text-to-video',
+      };
+      var methodLabel = methodLabels[d.method] || '📹 Video generado';
       modeEl.textContent = d.has_audio
-        ? '✅ Comercial con voz en español'
-        : '📹 Video visual (voz no disponible — intentando de nuevo)';
+        ? '✅ ' + methodLabel + ' + voz en español'
+        : methodLabel + ' (sin audio)';
 
       // Mostrar guion
       if (d.script) {

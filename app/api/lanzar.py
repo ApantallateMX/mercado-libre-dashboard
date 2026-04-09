@@ -2418,12 +2418,13 @@ async def _run_video_pipeline(job_id: str, body: dict):
                         _persist_video(vid_id, _raw_vid)
                         _mb = len(_raw_vid) / 1_048_576
                         logger.info(f"Minimax Live img2vid listo: {vid_id} ({_mb:.1f} MB)")
-                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_live, "error": None}
+                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_live, "error": None, "method": "minimax_live"}
                         return
                 else:
-                    logger.warning(f"Minimax Live falló ({_url_live.__class__.__name__ if isinstance(_url_live, Exception) else 'no url'}), intentando Wan2.1...")
+                    _why = str(_url_live) if isinstance(_url_live, Exception) else f"output vacío: {_url_live!r}"
+                    logger.warning(f"Minimax Live FALLÓ — motivo: {_why}. Intentando Wan2.1...")
             except Exception as _e_live:
-                logger.warning(f"Minimax Live pipeline error: {_e_live}, intentando Wan2.1...")
+                logger.warning(f"Minimax Live pipeline exception: {type(_e_live).__name__}: {_e_live}. Intentando Wan2.1...")
     
             # Fallback 1: Wan2.1 image-to-video
             try:
@@ -2467,10 +2468,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
                         _video_cache[vid_id] = _raw_wan
                         _persist_video(vid_id, _raw_wan)
                         logger.info(f"Wan2.1 img2vid listo: {vid_id} ({len(_raw_wan)/1_048_576:.1f} MB)")
-                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_wan, "error": None}
+                        _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": _has_audio_wan, "error": None, "method": "wan2_i2v"}
                         return
             except Exception as _e_wan:
-                logger.warning(f"Wan2.1 img2vid falló: {_e_wan}, usando zoompan...")
+                logger.warning(f"Wan2.1 img2vid FALLÓ — {type(_e_wan).__name__}: {_e_wan}. Usando zoompan...")
     
             # Fallback 2: zoompan ffmpeg (último recurso — sin IA generativa)
             logger.info(f"=== ZOOMPAN FALLBACK: {len(ai_image_urls)} fotos reales del producto ===")
@@ -2585,7 +2586,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 _persist_video(vid_id, _video_cache[vid_id])
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
                 logger.info(f"Zoompan video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
-                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None}
+                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "zoompan"}
                 return
     
             except Exception as e:
@@ -2672,7 +2673,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 _persist_video(vid_id, _video_cache[vid_id])
                 out_mb = len(_video_cache[vid_id]) / 1_048_576
                 logger.info(f"T2V video listo: {vid_id} ({out_mb:.1f} MB) clips={len(norm_paths)}")
-                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None}
+                _video_jobs[job_id] = {"status": "done", "video_url": f"/api/lanzar/video-file/{vid_id}", "script": script, "has_audio": has_audio, "error": None, "method": "t2v"}
                 return
     
             except Exception as e:
@@ -3031,13 +3032,23 @@ async def estimate_dimensions_endpoint(request: Request):
         m = _re.search(r'(\d{2,3})', size)
         if m:
             size_in = int(m.group(1))
-        # Fallback: search title/model for inches
+        # Fallback: search title/model for inches — with or without unit suffix
         if not size_in:
+            # Pattern 1: explicit unit suffix ("40 pulgadas", '43"', etc.)
             for src in [title, model, brand]:
                 m2 = _re.search(r'\b(\d{2,3})\s*(?:"|pulgadas|pulg|inches?|in\b)', src, _re.I)
                 if m2:
                     size_in = int(m2.group(1))
                     break
+        if not size_in:
+            # Pattern 2: TV model numbers start with screen size digits (e.g. 40PQF7446, 32PFL6446, 55PUS8808)
+            for src in [model, title]:
+                m3 = _re.search(r'(?:^|\s)(\d{2,3})[A-Z]', src.upper().strip())
+                if m3:
+                    candidate = int(m3.group(1))
+                    if 24 <= candidate <= 100:  # sane TV size range
+                        size_in = candidate
+                        break
 
         # Tabla: dimensiones de caja de embalaje incluyendo espuma (cm) + peso (kg)
         _tv = {
