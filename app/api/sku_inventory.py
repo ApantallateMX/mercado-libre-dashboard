@@ -957,50 +957,31 @@ async def ai_improve(body: dict):
     )
 
     if field == "title":
-        vision_note = ""
-        if image_urls:
-            vision_note = "\nMIRAS las imagenes reales del producto — usa la informacion visual (color, tamaño, forma, accesorios) para hacer los titulos mas precisos.\n"
-        prompt = (
-            f"Genera exactamente 3 titulos SEO para Mercado Libre Mexico.\n"
-            f"Producto: {current_value}\n"
-            f"Marca: {brand}\nModelo: {model}\nCategoria: {category}\n"
-            f"{vision_note}\n"
-            f"REGLAS CRITICAS:\n"
-            f"- OBLIGATORIO: cada titulo debe tener entre 55 y 60 caracteres EXACTOS\n"
-            f"- Usa TODOS los caracteres disponibles — un titulo de 44 chars es INACEPTABLE\n"
-            f"- Formato base: Marca + Tipo Producto + Especificacion principal + Detalle\n"
-            f"- Incluye tamaño/capacidad, tecnologia, voltaje (127V) si el espacio lo permite\n"
-            f"- Si sobran caracteres agrega: Smart, WiFi, para Casa, Negro, Blanco, etc.\n"
-            f"- NO incluir numeros de parte ni codigos de modelo\n"
-            f"- Palabras clave de alto volumen de busqueda en Mexico\n\n"
-            f"EJEMPLO MALO (44 chars): 'Samsung Televisor QLED 4K Smart 55 Pulgadas'\n"
-            f"EJEMPLO BUENO (59 chars): 'Samsung Televisor QLED 4K Smart 55 Pulgadas WiFi 127V'\n\n"
-            f"Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."
-        )
+        prompt = f"""Genera exactamente 3 titulos SEO para Mercado Libre Mexico.
 
-        async def title_stream():
-            try:
-                gen = (
-                    claude_client.generate_stream_with_images(prompt, image_urls, system_prompt, max_tokens=300)
-                    if image_urls else
-                    claude_client.generate_stream(prompt, system_prompt, max_tokens=300)
-                )
-                async for chunk in gen:
-                    yield f"data: {chunk}\n\n"
-                yield "data: [DONE]\n\n"
-            except Exception as e:
-                if image_urls:
-                    # Vision failed — retry text-only silently
-                    try:
-                        async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=300):
-                            yield f"data: {chunk}\n\n"
-                        yield "data: [DONE]\n\n"
-                    except Exception as e2:
-                        yield f"data: [ERROR] {str(e2)}\n\n"
-                else:
-                    yield f"data: [ERROR] {str(e)}\n\n"
+PRODUCTO:
+- Titulo actual: {current_value}
+- Marca: {brand}
+- Modelo: {model}
+- Categoria: {category}
 
-        return StreamingResponse(title_stream(), media_type="text/event-stream")
+REGLAS CRITICAS (MeLi 2026):
+1. TITULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible.
+   Formato: Marca + Tipo de producto + Tecnologia/Caracteristica clave + Tamaño/Capacidad.
+   - SIN numero de modelo (va en ficha tecnica)
+   - SIN signos de puntuacion ni mayusculas innecesarias
+   - SIN palabras como "nuevo", "oferta", "envio gratis"
+   - Ejemplo correcto (57 chars): "Samsung Televisor QLED 4K Smart HDR 65 Pulgadas Google TV"
+   - Si queda corto, agrega: Smart, WiFi, Negro, 127V, para Casa, etc.
+
+Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
+
+        try:
+            raw = await claude_client.generate(prompt, system=system_prompt, max_tokens=300)
+            titles = [t.strip() for t in raw.strip().split("\n") if t.strip()]
+            return {"titles": titles}
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     elif field == "description":
         vision_note = ""

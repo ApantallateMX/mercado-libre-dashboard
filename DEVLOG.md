@@ -7,6 +7,17 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FIX: AI título — reemplazar streaming+Vision por generate() JSON igual que lanzar
+
+### BUG: Título IA generaba "No puedo generar los títulos sin ver las imágenes reales del"
+- El enfoque anterior usaba streaming SSE + Claude Vision (URLs de imágenes ML), que fallaba silenciosamente o generaba respuestas inválidas.
+- Solución: reemplazar por `claude_client.generate()` no-streaming + JSON, igual al endpoint `/api/lanzar/ai-draft-json` que ya funciona bien.
+- Prompt con las mismas reglas MeLi 2026 (55-60 chars, formato Marca+Tipo+Tecnología).
+- Frontend ahora consume `resp.json().titles[]` en lugar de parsear SSE stream.
+- Se elimina también el envío de `image_urls` en este endpoint — no era necesario.
+
+---
+
 ## 2026-04-09 — FIX: AI título — error silencioso en stream Vision + fallback texto
 
 ### BUG: `generate_stream_with_images` ignoraba errores del stream de Anthropic

@@ -598,44 +598,25 @@ window.editModalAiTitle = async function(autoApply) {
         if (id === 'BRAND') brand = inp.value;
         if (id === 'MODEL') model = inp.value;
     });
-    var imageUrls = _editGetPhotoUrls();
     btn.disabled = true; btn.textContent = '...';
-    suggestionsDiv.innerHTML = '<p class="text-xs text-purple-500 animate-pulse">' + (imageUrls.length ? '👁 Analizando imágenes del producto...' : 'Generando títulos con IA...') + '</p>';
+    suggestionsDiv.innerHTML = '<p class="text-xs text-purple-500 animate-pulse">Generando títulos con IA...</p>';
     suggestionsDiv.classList.remove('hidden');
     try {
         var resp = await fetch('/api/sku-inventory/ai-improve', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({field: 'title', current_value: titleInput.value,
-                                  context: {brand: brand, model: model},
-                                  image_urls: imageUrls})
+                                  context: {brand: brand, model: model}})
         });
-        var reader = resp.body.getReader();
-        var decoder = new TextDecoder();
-        var buffer = '', result = '', streamError = '';
-        while (true) {
-            var chunk = await reader.read();
-            if (chunk.done) break;
-            buffer += decoder.decode(chunk.value, {stream: true});
-            var lines = buffer.split('\n'); buffer = lines.pop();
-            for (var line of lines) {
-                if (line.startsWith('data: ')) {
-                    var data = line.slice(6);
-                    if (data === '[DONE]') break;
-                    if (data.startsWith('[ERROR]')) { streamError = data.slice(7); }
-                    else { result += data; }
-                }
-            }
-        }
-        if (streamError && !result.trim()) {
-            suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">Error IA: ' + streamError + '</p>';
+        var data = await resp.json();
+        if (data.error) {
+            suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">Error IA: ' + data.error + '</p>';
             btn.disabled = false; btn.textContent = '✦ IA';
             return;
         }
-        var titles = result.trim().split('\n').filter(function(t) { return t.trim().length >= 40; });
+        var titles = (data.titles || []).filter(function(t) { return t.trim().length >= 40; });
         if (titles.length > 0) {
             if (autoApply) {
-                // Auto-apply best title (longest under 60)
                 var best = titles.map(function(t) { return t.trim().replace(/^["'\-•\d.]+\s*/, '').slice(0, 60); })
                                  .sort(function(a,b) { return b.length - a.length; })[0];
                 applyAiTitle(best);
