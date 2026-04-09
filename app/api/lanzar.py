@@ -3654,3 +3654,63 @@ async def modify_listing(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()
+
+
+@router.post("/register-launched")
+async def register_launched(request: Request):
+    """Registra un SKU como lanzado en ML usando un Item ID existente.
+    Útil para publicaciones que existían antes del sistema de tracking.
+    Obtiene título, precio y permalink desde la API de ML automáticamente.
+    """
+    from app.services.meli_client import MeliClient, _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body    = await request.json()
+    sku     = (body.get("sku")     or "").strip().upper()
+    item_id = (body.get("item_id") or "").strip().upper()
+
+    if not sku or not item_id:
+        return JSONResponse({"error": "sku e item_id requeridos"}, status_code=400)
+
+    client = MeliClient(user_id)
+    try:
+        # Fetch item data from ML
+        item = await client.get(f"/items/{item_id}")
+        if item.get("error") or item.get("_meli_error"):
+            err = item.get("message") or item.get("error") or item.get("_meli_error") or "Item no encontrado"
+            return JSONResponse({"error": err}, status_code=400)
+
+        ml_title     = item.get("title", "")
+        ml_price     = float(item.get("price") or 0)
+        ml_category  = item.get("category_id", "")
+        ml_permalink = item.get("permalink", "")
+        ml_condition = item.get("condition", "new")
+
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            # Update if row exists, insert if not
+            await db.execute(
+                """UPDATE bm_sku_gaps SET
+                   status='launched',
+                   ml_item_id=?, ml_title=?, ml_price=?,
+                   ml_category_id=?, ml_permalink=?, ml_condition=?,
+                   launched_at=CURRENT_TIMESTAMP
+                   WHERE user_id=? AND sku=?""",
+                (item_id, ml_title, ml_price, ml_category, ml_permalink, ml_condition,
+                 user_id, sku),
+            )
+            rows_updated = db.total_changes
+            await db.commit()
+
+        if rows_updated == 0:
+            return JSONResponse({"error": f"SKU {sku} no encontrado en la base de datos. Ejecuta un escaneo primero."}, status_code=404)
+
+        logger.info(f"register-launched: {sku} → {item_id} ({user_id})")
+        return {"ok": True, "item_id": item_id, "title": ml_title, "price": ml_price, "permalink": ml_permalink}
+
+    except Exception as e:
+        logger.error(f"register-launched error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+    finally:
+        await client.close()
