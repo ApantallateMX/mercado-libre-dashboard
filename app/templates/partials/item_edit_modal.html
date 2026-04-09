@@ -612,7 +612,7 @@ window.editModalAiTitle = async function(autoApply) {
         });
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
-        var buffer = '', result = '';
+        var buffer = '', result = '', streamError = '';
         while (true) {
             var chunk = await reader.read();
             if (chunk.done) break;
@@ -622,9 +622,15 @@ window.editModalAiTitle = async function(autoApply) {
                 if (line.startsWith('data: ')) {
                     var data = line.slice(6);
                     if (data === '[DONE]') break;
-                    if (!data.startsWith('[ERROR]')) result += data;
+                    if (data.startsWith('[ERROR]')) { streamError = data.slice(7); }
+                    else { result += data; }
                 }
             }
+        }
+        if (streamError && !result.trim()) {
+            suggestionsDiv.innerHTML = '<p class="text-xs text-red-500">Error IA: ' + streamError + '</p>';
+            btn.disabled = false; btn.textContent = '✦ IA';
+            return;
         }
         var titles = result.trim().split('\n').filter(function(t) { return t.trim().length >= 40; });
         if (titles.length > 0) {

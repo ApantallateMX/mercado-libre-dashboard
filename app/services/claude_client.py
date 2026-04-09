@@ -177,11 +177,15 @@ async def generate_stream_with_images(prompt: str, image_urls: list, system: str
                 try:
                     import json
                     event = json.loads(data_str)
+                    if event.get("type") == "error":
+                        raise RuntimeError(event.get("error", {}).get("message", "Anthropic streaming error"))
                     if event.get("type") == "content_block_delta":
                         delta = event.get("delta", {})
                         text = delta.get("text", "")
                         if text:
                             yield text
+                except RuntimeError:
+                    raise
                 except Exception:
                     continue
 
@@ -230,10 +234,14 @@ async def generate_stream(prompt: str, system: str = "", max_tokens: int = 1024)
                 try:
                     import json
                     event = json.loads(data_str)
+                    if event.get("type") == "error":
+                        raise RuntimeError(event.get("error", {}).get("message", "Anthropic streaming error"))
                     if event.get("type") == "content_block_delta":
                         delta = event.get("delta", {})
                         text = delta.get("text", "")
                         if text:
                             yield text
+                except RuntimeError:
+                    raise
                 except Exception:
                     continue

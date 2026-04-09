@@ -989,7 +989,16 @@ async def ai_improve(body: dict):
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
-                yield f"data: [ERROR] {str(e)}\n\n"
+                if image_urls:
+                    # Vision failed — retry text-only silently
+                    try:
+                        async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=300):
+                            yield f"data: {chunk}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e2:
+                        yield f"data: [ERROR] {str(e2)}\n\n"
+                else:
+                    yield f"data: [ERROR] {str(e)}\n\n"
 
         return StreamingResponse(title_stream(), media_type="text/event-stream")
 
