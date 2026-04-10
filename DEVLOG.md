@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: video 15s + title minimum_length ML
+
+### FIX: Video solo duraba 15 segundos
+- Claude generaba script de ~50-60 palabras (prompt decía "70-90").
+- ElevenLabs a 140 wpm → ~50/140 × 60 = ~21s de audio → video cortado ahí.
+- **Fix**: Prompt cambiado a MÍNIMO 100 palabras, máximo 120.
+  → 100/140 = ~43s de audio → video siempre ≥40s sin importar ritmo del narrador.
+- Enfatizado en mayúsculas "CRITICAL: under 100 words = video too short".
+
+### FIX: ML item.title.minimum_length sigue fallando (intento 5)
+- Agotados intentos 1-4, ninguno manejaba minimum_length.
+- **Fix**: Intento 5: si ML devuelve minimum_length, enriquecer el título con brand + model
+  hasta llegar a mínimo 25 chars descriptivos.
+- Frontend ahora envía `brand` y `model` en el payload de create-listing para que el
+  backend tenga los datos disponibles en este retry.
+
+---
+
 ## 2026-04-10 — FIX: video 2 clips en loop + título corto al restaurar draft
 
 ### BUG: Video solo usaba 2 clips y los ciclaba
