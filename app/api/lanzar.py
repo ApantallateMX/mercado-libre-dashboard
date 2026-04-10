@@ -3376,8 +3376,6 @@ async def create_listing_endpoint(request: Request):
         return JSONResponse({"error": "price es requerido"}, status_code=400)
     if not category_id:
         return JSONResponse({"error": "category_id es requerido"}, status_code=400)
-    if not catalog_product_id and len(title) < 25:
-        return JSONResponse({"error": f"Título demasiado corto para ML ({len(title)} chars, mínimo 25). Genera el título con IA antes de publicar."}, status_code=400)
 
     description = body.get("description", "")
     sku         = body.get("sku", "")
@@ -3432,6 +3430,19 @@ async def create_listing_endpoint(request: Request):
     # FAMILY_NAME va como campo raíz (item_payload["family_name"]) — quitarlo de attrs
     # para evitar duplicado que causa validation_error en ML
     attrs = [a for a in attrs if a.get("id") != "FAMILY_NAME"]
+
+    # Auto-fix título corto — ML requiere mínimo ~25 chars descriptivos
+    if not catalog_product_id and len(title) < 25:
+        _brand = next((a.get("value_name","") for a in attrs if isinstance(a,dict) and a.get("id")=="BRAND"), body.get("brand",""))
+        _model = next((a.get("value_name","") for a in attrs if isinstance(a,dict) and a.get("id")=="MODEL"), body.get("model",""))
+        _size  = next((a.get("value_name","") for a in attrs if isinstance(a,dict) and a.get("id") in ("SIZE","SCREEN_SIZE")), "")
+        _cat   = body.get("category_name", "Televisor")
+        _auto  = " ".join(filter(None, [_brand, _cat, _size, _model])).strip()[:60]
+        if len(_auto) >= 25:
+            title = _auto
+            if "title" in item_payload:
+                item_payload["title"] = title
+            logger.info(f"Título auto-construido: {title!r} (original era muy corto)")
     # Ensure SELLER_SKU is always in attributes (visible como "Código de identificación" en ML)
     if sku and not catalog_product_id:
         has_seller_sku = any(a.get("id") == "SELLER_SKU" for a in attrs)

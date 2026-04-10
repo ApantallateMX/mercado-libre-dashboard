@@ -841,7 +841,7 @@ async def _t2v_ltx(prompt: str) -> str:
             "negative_prompt":      "blurry, low quality, distorted, watermark, text overlay, logo, amateur, shaky camera",
             "width":                576,   # must be multiple of 32
             "height":               1024,  # must be multiple of 32 — portrait for ML/Reels
-            "num_frames":           97,
+            "num_frames":           241,  # 241/24fps ≈ 10s por clip — 3 clips = ~30s de video real
             "frame_rate":           24,
             "guidance_scale":       3.5,
             "num_inference_steps":  40,
@@ -887,7 +887,7 @@ async def _t2v_wan(prompt: str) -> str:
         "input": {
             "prompt":          prompt,
             "negative_prompt": "blurry, low quality, distorted, watermark, text overlay, amateur",
-            "num_frames":      81,
+            "num_frames":      161,  # 161/16fps ≈ 10s por clip — 3 clips = ~30s de video real
             "fps":             16,
         }
     }

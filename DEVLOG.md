@@ -7,17 +7,17 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
-## 2026-04-10 — FIX: video congelado + título demasiado corto
+## 2026-04-10 — FIX: clips T2V cortos (imagen fija) + título auto-fix sin bloqueo
 
-### FIX: Video se congelaba después de ~10s (imagen fija con audio)
-- Los clips T2V duran ~10-12s total, el audio 30-36s. El `tpad=stop_mode=clone` congelaba el último frame.
-- **Fix**: reemplazar `tpad` con `-stream_loop -1` en ffmpeg — el video loopea hasta que termine el audio.
-- El comercial ahora muestra video en movimiento durante toda la duración del audio.
+### FIX: Video clips demasiado cortos — imagen congelada tras 10s de movimiento
+- LTX-Video: 97 frames/24fps = ~4s/clip. 3 clips = ~12s real. Audio ~36s → imagen fija el resto.
+- **Fix**: aumentar a 241 frames (LTX-Video) y 161 frames (Wan2.1) → ~10s/clip → 3 clips ≈ 30s de video real continuo.
+- `-stream_loop -1` como safety net por si hay diferencia de duración entre video y audio.
 
-### FIX: Error ML `item.title.minimum_length` al publicar
-- El título llegaba muy corto (ej. "Sony KD-50X85K" = 14 chars) cuando el AI draft no se generó.
-- **Fix frontend**: validación mínimo 25 chars (antes 10), mensaje indica usar ⚡ Generar con IA.
-- **Fix backend**: check antes de llamar ML — rechaza con mensaje claro si el título < 25 chars.
+### FIX: Error ML item.title.minimum_length — auto-construir título sin bloquear
+- Título muy corto (ej. "Sony KD-50X85K" = 14 chars) cuando no se generó el borrador IA.
+- **Fix backend**: si título < 25 chars, auto-construir desde brand + category + size + model.
+- Sin bloqueo en frontend — el sistema se corrige solo antes de llamar a ML.
 
 ---
 

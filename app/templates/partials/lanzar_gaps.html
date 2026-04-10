@@ -2707,8 +2707,8 @@
       _wiz.family_name = _guessFamilyName(_wiz.brand, _wiz.model, _wiz.draft.title);
     }
     var _valErrors = [];
-    if (!_wiz.draft.title || _wiz.draft.title.trim().length < 25)
-      _valErrors.push('Título demasiado corto para ML (mínimo 25 caracteres) — usa el botón ⚡ Generar con IA');
+    if (!_wiz.draft.title || _wiz.draft.title.trim().length < 10)
+      _valErrors.push('Título vacío — usa el botón ⚡ Generar con IA');
     if (!_wiz.category_id)
       _valErrors.push('Categoría de Mercado Libre requerida');
     if (!_wiz.price || Number(_wiz.price) <= 0)
