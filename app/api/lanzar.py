@@ -2363,15 +2363,23 @@ async def _run_video_pipeline(job_id: str, body: dict):
             if has_audio and audio_bytes:
                 with open(aud_path, "wb") as af:
                     af.write(audio_bytes)
+                # Solo usar stream_loop si el video es más corto que el audio estimado
+                # (evita loops visibles cuando tenemos 3 clips ~30s ≥ audio ~28s)
+                total_video_dur = sum(clip_durs) - FADE * max(0, len(norm_paths) - 1)
+                est_audio_dur = len(audio_bytes) / (128 * 1024 / 8)  # aprox a 128kbps
+                use_loop = total_video_dur < (est_audio_dur - 1.0)
+                loop_flag = ["-stream_loop", "-1"] if use_loop else []
+                logger.info(f"xfade+audio: video={total_video_dur:.1f}s audio≈{est_audio_dur:.1f}s loop={use_loop}")
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
-                        "-stream_loop", "-1", "-i", xfade_path,  # loopear video hasta que termine el audio
+                    ] + loop_flag + [
+                        "-i", xfade_path,
                         "-i", aud_path,
                         "-map", "0:v", "-map", "1:a",
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest", "-movflags", "+faststart",  # cortar cuando termine el audio
+                        "-shortest", "-movflags", "+faststart",
                         out_path,
                     ],
                     capture_output=True, timeout=180,
@@ -2416,16 +2424,24 @@ async def _run_video_pipeline(job_id: str, body: dict):
         clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
         logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
 
-        # Si solo 1 clip T2V tuvo éxito y hay imágenes, generar 1 clip extra secuencialmente
-        if len(clip_urls) == 1 and ai_image_urls:
-            logger.info("Solo 1 clip T2V — intentando 1 más secuencialmente...")
+        # Reintentar secuencialmente hasta tener 3 clips — evita loops visibles en el video final
+        _retry_idx = len(clip_url_results)
+        _retry_max = 3  # máximo 3 reintentos extra
+        while len(clip_urls) < 3 and _retry_max > 0:
+            _retry_max -= 1
+            logger.info(f"Solo {len(clip_urls)} clips — reintentando clip extra secuencial (idx={_retry_idx})...")
             try:
-                extra_url = await _gen_t2v_clip(len(clip_url_results))
+                extra_url = await _gen_t2v_clip(_retry_idx)
                 if isinstance(extra_url, str) and extra_url.startswith("http"):
                     clip_urls.append(extra_url)
-                    logger.info(f"Clip extra OK: {extra_url[:60]}")
+                    logger.info(f"Clip extra OK ({len(clip_urls)} total): {extra_url[:60]}")
+                else:
+                    logger.warning(f"Clip extra idx={_retry_idx} devolvió respuesta inválida")
+                    break
             except Exception as _ex_err:
-                logger.warning(f"Clip extra falló: {_ex_err}")
+                logger.warning(f"Clip extra idx={_retry_idx} falló: {_ex_err}")
+                break
+            _retry_idx += 1
 
         if clip_urls:
             try:

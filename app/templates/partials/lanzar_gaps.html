@@ -1390,11 +1390,17 @@
 
     // Intentar restaurar borrador guardado para este SKU
     var hasDraft = _wizLoadDraft(gap.sku);
+    var _needsRegen = false;
     if (hasDraft) {
       var draftBanner = document.getElementById('wiz-draft-banner');
       if (draftBanner) draftBanner.classList.remove('hidden');
-    } else {
-      // Sin borrador previo → auto-generar título/descripción con IA en background
+      // Si el título restaurado es muy corto (<20 chars) es el product_title de BM — regenerar IA
+      if (!_wiz.draft.title || _wiz.draft.title.trim().length < 20) {
+        _needsRegen = true;
+      }
+    }
+    if (!hasDraft || _needsRegen) {
+      // Sin borrador válido → auto-generar título/descripción con IA en background
       // Deshabilitar "Siguiente" hasta que la IA termine de llenar el título
       var _nxtBtnInit = document.getElementById('wiz-btn-next');
       if (_nxtBtnInit) { _nxtBtnInit.disabled = true; _nxtBtnInit.classList.add('opacity-50'); _nxtBtnInit.title = 'Espera a que la IA genere el borrador...'; }
