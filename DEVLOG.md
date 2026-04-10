@@ -7,6 +7,18 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-09 — FIX: título corto de BM llegando a ML por race condition en wizard
+
+### BUG: "Sony KD-50X85K" (14 chars) llegaba a ML en lugar del título IA aceptado
+- Causa raíz: al abrir el wizard, `_wizGenDraft()` se auto-dispara con 400ms de delay y puede tardar 2-5s.
+- Si el usuario clickeaba "Siguiente" antes de que terminara la API call, `wiz-f-title` todavía tenía el `product_title` corto de BM.
+- `_wizNext()` tomaba ese valor y lo guardaba en `_wiz.draft.title` → ese título corto llegaba a ML.
+- **Fix**: deshabilitar el botón "Siguiente" (wiz-btn-next) mientras `_wizGenDraft()` está en progreso.
+- Al terminar (`.finally()`), el botón se re-habilita con el título IA ya en el campo.
+- Sin bloqueo permanente — solo espera hasta que la IA llene el campo (< 5s normalmente).
+
+---
+
 ## 2026-04-10 — FIX: clips T2V cortos (imagen fija) + título auto-fix sin bloqueo
 
 ### FIX: Video clips demasiado cortos — imagen congelada tras 10s de movimiento
