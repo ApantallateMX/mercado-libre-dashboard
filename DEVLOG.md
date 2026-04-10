@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: Salir no redirigía al login + FAMILY_NAME bloqueaba publicación
+
+### BUG: Botón "Salir" borraba nombres de cuentas pero no salía del dashboard
+- Causa raíz: `auth.py` tiene `router = APIRouter(prefix="/auth")` con `POST /logout` → registrado como `POST /auth/logout`.
+- FastAPI lo registra ANTES que el `@app.post("/auth/logout")` de `main.py` → el de auth.py gana.
+- auth.py logout solo eliminaba tokens ML, NO la `dash_session` cookie.
+- Al redirigir a `/login`, el middleware ve la cookie válida y manda de vuelta al dashboard.
+- **Fix**: actualizar `auth.py` logout para aceptar `request: Request`, importar `user_store`,
+  eliminar también la sesión del dashboard y borrar la cookie en la respuesta.
+
+### BUG: Publicar bloqueado por FAMILY_NAME aunque el backend tiene fallback
+- Frontend validaba `if (!_wiz.family_name)` y bloqueaba con error al usuario.
+- El backend ya tiene `family_name = title[:60]` si llega vacío.
+- **Fix**: quitar la validación dura. Agregar doble auto-fill antes de enviar:
+  1. `_guessFamilyName(brand, model, title)` 
+  2. Fallback: `draft.title.slice(0, 60)`
+
+---
+
 ## 2026-04-09 — FIX: título corto de BM llegando a ML por race condition en wizard
 
 ### BUG: "Sony KD-50X85K" (14 chars) llegaba a ML en lugar del título IA aceptado
