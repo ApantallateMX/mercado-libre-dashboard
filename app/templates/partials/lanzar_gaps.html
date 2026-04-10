@@ -2712,9 +2712,14 @@
 
     // ── Validación de campos requeridos por Mercado Libre ──────────────────
     // Auto-detectar family_name si está vacío
+    // Auto-fill family_name: primero desde brand/model/title, luego desde draft.title
     if (!_wiz.family_name && (_wiz.brand || _wiz.model || _wiz.draft.title)) {
       _wiz.family_name = _guessFamilyName(_wiz.brand, _wiz.model, _wiz.draft.title);
     }
+    if (!_wiz.family_name && _wiz.draft.title) {
+      _wiz.family_name = _wiz.draft.title.trim().slice(0, 60);
+    }
+    // El backend tiene fallback title[:60] si llega vacío — no bloqueamos aquí
     var _valErrors = [];
     if (!_wiz.draft.title || _wiz.draft.title.trim().length < 10)
       _valErrors.push('Título vacío — usa el botón ⚡ Generar con IA');
@@ -2724,8 +2729,6 @@
       _valErrors.push('Precio requerido (mayor a $0)');
     if (!imagesToUpload.length)
       _valErrors.push('Al menos una imagen seleccionada es requerida');
-    if (!_wiz.family_name)
-      _valErrors.push('Familia del producto requerida (FAMILY_NAME) — revisa la pestaña Atributos');
 
     if (_valErrors.length > 0) {
       status.classList.add('hidden');

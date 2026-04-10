@@ -39,6 +39,7 @@ from app.config import (
     AMAZON_MARKETPLACE_NAME, AMAZON_NICKNAME,
 )
 from app.services import token_store
+from app.services import user_store
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +240,27 @@ async def callback(code: str = None, state: str = None, error: str = None):
 
 
 @router.post("/logout")
-async def logout():
-    """Cierra la sesion eliminando los tokens."""
+async def logout(request: Request):
+    """Cierra la sesion: elimina tokens ML y la sesion del dashboard."""
+    # Eliminar tokens ML
     tokens = await token_store.get_any_tokens()
     if tokens:
         await token_store.delete_tokens(tokens["user_id"])
-    return RedirectResponse(url="/login", status_code=303)
+    # Eliminar sesión del dashboard
+    dash_token = request.cookies.get("dash_session")
+    if dash_token:
+        du = await user_store.get_session(dash_token)
+        if du:
+            await user_store.log_action(
+                username=du["username"],
+                action="logout",
+                ip=request.client.host if request.client else "",
+                user_id=du["id"],
+            )
+        await user_store.delete_session(dash_token)
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("dash_session")
+    return response
 
 
 # ═══════════════════════════════════════════════════════════════════════════
