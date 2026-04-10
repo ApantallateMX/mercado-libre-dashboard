@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: video 2 clips en loop + título corto al restaurar draft
+
+### BUG: Video solo usaba 2 clips y los ciclaba
+- `asyncio.gather` de 3 clips en paralelo: rate limiting en Replicate → solo 2 éxitos.
+- 2 clips × 10s = 20s < audio 28s → `-stream_loop -1` rellenaba con loops visibles.
+- Retry anterior solo disparaba si `len(clip_urls) == 1`, no con 2.
+- **Fix A** (retry): loop while `len(clip_urls) < 3`, máx 3 reintentos secuenciales.
+- **Fix B** (no-loop): `_xfade_and_combine` ahora estima duración de audio (`len(bytes)/bitrate`)
+  y solo activa `-stream_loop` si video < audio - 1s. Con 3 clips ~30s vs audio ~28s: sin loop.
+
+### BUG: Título corto de BM pasaba al publicar desde draft restaurado
+- Draft guardado ANTES del fix del botón Next → tenía product_title "Westinghouse WR43QE2350" (22 chars).
+- Al restaurar draft, el título corto llegaba a ML → `item.title.minimum_length`.
+- **Fix**: en `_wizOpen`, si draft restaurado tiene título < 20 chars → tratar igual que sin draft
+  (deshabilitar Next + auto-regenerar con IA).
+
+---
+
 ## 2026-04-10 — FIX: Salir no redirigía al login + FAMILY_NAME bloqueaba publicación
 
 ### BUG: Botón "Salir" borraba nombres de cuentas pero no salía del dashboard
