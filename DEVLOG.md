@@ -7,6 +7,22 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: título lanzar + video 1 clip
+
+### BUG CRÍTICO: ML mostraba "Hisense 55u75qg" (brand+model) en lugar del título IA
+- El frontend no enviaba `family_name` como campo raíz del payload.
+- El backend calculaba `family_name = brand + " " + model = "Hisense 55u75qg"` cuando family_name_body estaba vacío.
+- ML recibía ese family_name y lo usaba como nombre del listing, ignorando el título IA.
+- **Fix frontend**: agregar `family_name: _wiz.family_name || ''` al payload de create-listing.
+- **Fix backend**: fallback `family_name = title[:60]` en vez de brand+model — así ML usa el título IA si family_name no viene del wizard.
+
+### FIX: Video se generaba con solo 1 clip (se veía "1 movimiento y nada más")
+- Se lanzaban 4 clips T2V en paralelo con asyncio.gather → Replicate bajo carga → 3 fallaban.
+- Reducido a 3 clips paralelos para bajar la presión en Replicate.
+- Si solo 1 clip tiene éxito, se intenta 1 clip extra secuencial antes de pasar al combinado.
+
+---
+
 ## 2026-04-09 — FIX: AI título — reemplazar streaming+Vision por generate() JSON igual que lanzar
 
 ### BUG: Título IA generaba "No puedo generar los títulos sin ver las imágenes reales del"

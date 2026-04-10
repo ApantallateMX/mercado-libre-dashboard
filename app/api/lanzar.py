@@ -2402,7 +2402,7 @@ async def _run_video_pipeline(job_id: str, body: dict):
 
         _all_t2v = await asyncio.gather(
             elevenlabs_client.generate_audio(script),
-            *[_gen_t2v_clip(i) for i in range(4)],   # 4 clips = ~20s raw, suficiente para comercial 30s
+            *[_gen_t2v_clip(i) for i in range(3)],   # 3 clips paralelos — menos carga en Replicate
             return_exceptions=True,
         )
         audio_result     = _all_t2v[0]
@@ -2416,6 +2416,17 @@ async def _run_video_pipeline(job_id: str, body: dict):
 
         clip_urls = [r for r in clip_url_results if isinstance(r, str) and r.startswith("http")]
         logger.info(f"T2V clips OK: {len(clip_urls)}/{len(clip_url_results)}")
+
+        # Si solo 1 clip T2V tuvo éxito y hay imágenes, generar 1 clip extra secuencialmente
+        if len(clip_urls) == 1 and ai_image_urls:
+            logger.info("Solo 1 clip T2V — intentando 1 más secuencialmente...")
+            try:
+                extra_url = await _gen_t2v_clip(len(clip_url_results))
+                if isinstance(extra_url, str) and extra_url.startswith("http"):
+                    clip_urls.append(extra_url)
+                    logger.info(f"Clip extra OK: {extra_url[:60]}")
+            except Exception as _ex_err:
+                logger.warning(f"Clip extra falló: {_ex_err}")
 
         if clip_urls:
             try:
@@ -3449,15 +3460,8 @@ async def create_listing_endpoint(request: Request):
     # ── family_name (User Products API) — campo raíz, no un atributo ─────────
     family_name = family_name_body
     if not family_name and not catalog_product_id:
-        brand_val = next(
-            (a.get("value_name", "") for a in attrs if isinstance(a, dict) and a.get("id") == "BRAND"),
-            body.get("brand", ""),
-        )
-        model_val = next(
-            (a.get("value_name", "") for a in attrs if isinstance(a, dict) and a.get("id") == "MODEL"),
-            body.get("model", ""),
-        )
-        family_name = f"{brand_val} {model_val}".strip()[:60]
+        # Usar el título IA como family_name — evita que ML muestre brand+model como nombre del listing
+        family_name = title[:60] if title else ""
     if not family_name:
         family_name = title[:60]
     # NO incluir family_name en Intento 1 — permite que ML use nuestro título personalizado
