@@ -1327,6 +1327,16 @@
     if (b.indexOf('tcl') >= 0) return t.indexOf('qled') >= 0 ? 'QLED' : 'S-Series';
     if (b.indexOf('vizio') >= 0) return 'M-Series';
     if (b.indexOf('philips') >= 0) return 'The One';
+    if (b.indexOf('westinghouse') >= 0) {
+      var wp = m.match(/^([a-z]+\d*)/i);
+      return wp ? wp[1].toUpperCase() : 'WestTV';
+    }
+    // Universal fallback: extraer prefijo del modelo (letras+números iniciales)
+    // ej. "WR43QE2350" → "WR43", "UN55TU7000" → "UN55", "SNTV007966" → "SNTV"
+    var mp = m.match(/^([a-z]+\d+)/i);
+    if (mp) return mp[1].toUpperCase().slice(0, 8);
+    // Último recurso: primera palabra de la marca
+    if (brand) return brand.split(' ')[0];
     return '';
   }
 

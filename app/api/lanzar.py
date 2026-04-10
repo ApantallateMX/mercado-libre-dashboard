@@ -3498,16 +3498,36 @@ async def create_listing_endpoint(request: Request):
         result = await _post_item(item_payload)
         logger.info(f"ML intento 1 (sin family_name): {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
 
-        # Intento 2: family_name requerido → agregar family_name, mantener título
+        # Intento 2: family_name requerido → ciclar candidatos cortos hasta que ML acepte
+        # ML requiere family_name como identificador de línea de producto (NO un título largo)
+        # Candidatos en orden: modelo, prefijo del modelo, marca, marca+prefijo
         if result.get("_meli_error"):
             err_lower = result["_meli_error"].lower()
-            fn_required = any(w in err_lower for w in ("family_name", "family name"))
+            fn_required = "family_name" in err_lower
             if fn_required:
-                payload_with_fn = _copy.deepcopy(item_payload)
-                payload_with_fn["family_name"] = family_name
-                logger.warning(f"ML intento 2: family_name requerido, agregando: {family_name!r}")
-                result = await _post_item(payload_with_fn)
-                logger.info(f"ML intento 2: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+                import re as _re_fn
+                _mp = _re_fn.match(r'^([A-Za-z]+\d+)', model_body or "")
+                _model_prefix = _mp.group(1).upper()[:8] if _mp else ""
+                _fn_candidates = [c.strip() for c in [
+                    model_body,                                                  # "WR43QE2350"
+                    _model_prefix,                                               # "WR43"
+                    brand_body,                                                  # "Westinghouse"
+                    ((brand_body or "") + " " + _model_prefix).strip()[:30],   # "Westinghouse WR43"
+                    family_name,                                                 # fallback del frontend
+                ] if c and c.strip() and len(c.strip()) >= 2]
+                # Deduplicar preservando orden
+                _seen_fn: set = set()
+                _fn_candidates = [x for x in _fn_candidates if x not in _seen_fn and not _seen_fn.add(x)]  # type: ignore
+                logger.info(f"ML intento 2: probando family_name candidatos: {_fn_candidates}")
+                for _fn_cand in _fn_candidates:
+                    _p2 = _copy.deepcopy(item_payload)
+                    _p2["family_name"] = _fn_cand
+                    result = await _post_item(_p2)
+                    logger.info(f"ML intento 2 family_name={_fn_cand!r}: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
+                    if not result.get("_meli_error"):
+                        break  # éxito
+                    if "family_name" not in result["_meli_error"].lower():
+                        break  # error diferente — salir del loop y dejar que siga
 
         # Intento 3: title inválido en categoría catálogo → family_name + sin title
         if result.get("_meli_error"):
