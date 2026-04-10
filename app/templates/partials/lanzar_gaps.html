@@ -1395,6 +1395,9 @@
       if (draftBanner) draftBanner.classList.remove('hidden');
     } else {
       // Sin borrador previo → auto-generar título/descripción con IA en background
+      // Deshabilitar "Siguiente" hasta que la IA termine de llenar el título
+      var _nxtBtnInit = document.getElementById('wiz-btn-next');
+      if (_nxtBtnInit) { _nxtBtnInit.disabled = true; _nxtBtnInit.classList.add('opacity-50'); _nxtBtnInit.title = 'Espera a que la IA genere el borrador...'; }
       setTimeout(function() { window._wizGenDraft(); }, 400);
     }
 
@@ -1718,6 +1721,9 @@
     var loading = document.getElementById('wiz-draft-loading');
     btn.disabled = true; btn.classList.add('opacity-50');
     loading.classList.remove('hidden');
+    // Bloquear "Siguiente" mientras la IA genera el borrador (evita que el usuario avance con el título corto de BM)
+    var _nxtBtn = document.getElementById('wiz-btn-next');
+    if (_nxtBtn) { _nxtBtn.disabled = true; _nxtBtn.classList.add('opacity-50'); _nxtBtn.title = 'Espera a que la IA genere el borrador...'; }
 
     fetch('/api/lanzar/ai-draft-json', {
       method: 'POST',
@@ -1750,6 +1756,9 @@
     .finally(function() {
       btn.disabled = false; btn.classList.remove('opacity-50');
       loading.classList.add('hidden');
+      // Re-habilitar "Siguiente" al terminar (éxito o error)
+      var _nxtBtnF = document.getElementById('wiz-btn-next');
+      if (_nxtBtnF) { _nxtBtnF.disabled = false; _nxtBtnF.classList.remove('opacity-50'); _nxtBtnF.title = ''; }
     });
   };
 
