@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 KNOWLEDGE_DIR = Path("Agentes/bm-knowledge")
-AGENT_FILE    = Path("Agentes/binmanager-specialist.md")
+AGENT_FILE    = Path(".claude/agents/binmanager-specialist.md")
 MAIN_FILE     = KNOWLEDGE_DIR / "binmanager-knowledge.md"
 INDEX_FILE    = KNOWLEDGE_DIR / "bm-index.json"
 API_FILE      = KNOWLEDGE_DIR / "binmanager-api-endpoints.json"

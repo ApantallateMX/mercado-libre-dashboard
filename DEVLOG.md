@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: family_name rechazado aunque estaba en el payload
+
+### Análisis del problema
+- ML requiere `family_name` como identificador corto de línea de producto (NO texto libre largo).
+- Enviábamos el título del draft (ej. "Televisor Westinghouse QLED 43 Pulgadas Smart TV Roku") como family_name → ML lo rechaza con `body.required_fields [family_name]` aunque el campo SÍ estaba en el payload.
+- ML trata como "ausente" cualquier valor que no reconozca como identificador de familia.
+- `_guessFamilyName` no tenía caso para Westinghouse → retornaba `''` → fallback era el título completo.
+
+### Fix backend — Intento 2 restructurado (ciclo de candidatos)
+Probamos en orden hasta que ML acepte:
+1. model_body exacto: `"WR43QE2350"` (10 chars, muy específico)
+2. prefijo del modelo: `"WR43"` (4 chars, extraído con regex `^([A-Za-z]+\d+)`)
+3. brand_body: `"Westinghouse"` (12 chars)
+4. brand + prefijo: `"Westinghouse WR43"` (17 chars)
+5. family_name del frontend como último recurso
+- Sale del loop al primer éxito, o si el error cambia (ya no es de family_name)
+
+### Fix frontend — _guessFamilyName
+- Nuevo caso: Westinghouse → extrae prefijo del modelo (WR43, etc.)
+- Fallback universal: para cualquier marca no reconocida, extrae `[letters+digits]` del modelo (máx 8 chars)
+- Último recurso: primera palabra de la marca
+
+---
+
 ## 2026-04-10 — FIX: video 15s + title minimum_length ML
 
 ### FIX: Video solo duraba 15 segundos
