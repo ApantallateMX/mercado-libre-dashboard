@@ -2202,8 +2202,10 @@ async def _run_video_pipeline(job_id: str, body: dict):
             "Respond ONLY with valid JSON (no markdown, no backticks, no extra text):\n"
             '{"script": "...", "scenes": ["scene1", "scene2", "scene3"]}\n\n'
             "SCRIPT rules (if empty, generate one):\n"
-            "- Mexican Spanish, 70-90 words, exciting aspirational tone\n"
-            "- Describe benefits and lifestyle — never mention model numbers or SKU codes\n"
+            "- Mexican Spanish, MINIMUM 100 words, maximum 120 words (CRITICAL: under 100 words = video too short)\n"
+            "- Exciting aspirational tone — describe benefits, lifestyle, emotions, use cases\n"
+            "- Use varied sentence rhythm: short punchy lines mixed with longer flowing descriptions\n"
+            "- Never mention model numbers, SKU codes, or technical specs directly\n"
             "- End with: Disponible ahora en Mercado Libre.\n\n"
             "SCENES rules — 3 items, each max 55 words, in English:\n"
             "- Each scene is a TEXT PROMPT for an AI video model — describe ONLY what the camera sees\n"
@@ -3395,6 +3397,8 @@ async def create_listing_endpoint(request: Request):
 
     description = body.get("description", "")
     sku         = body.get("sku", "")
+    brand_body  = body.get("brand", "").strip()
+    model_body  = body.get("model", "").strip()
     pictures    = body.get("pictures", [])
 
     warranty_type = body.get("warranty_type", "")
@@ -3527,6 +3531,25 @@ async def create_listing_endpoint(request: Request):
                 logger.warning("ML intento 4: family_name no permitido, quitando")
                 result = await _post_item(payload_no_fn)
                 logger.info(f"ML intento 4: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
+
+        # Intento 5: título muy corto → enriquecer con marca + tipo de producto hasta 55 chars
+        if result.get("_meli_error"):
+            err_lower = result["_meli_error"].lower()
+            if "minimum_length" in err_lower or ("title" in err_lower and "minimum" in err_lower):
+                # Construir título enriquecido asegurando mínimo 35 chars
+                _parts = [p for p in [brand_body, title, model_body] if p and p.lower() not in (title.lower() if title else "")]
+                enriched_title = title
+                for _p in _parts:
+                    candidate = (enriched_title + " " + _p).strip()[:60]
+                    if len(candidate) > len(enriched_title):
+                        enriched_title = candidate
+                if len(enriched_title) < 25 and brand_body:
+                    enriched_title = (brand_body + " " + enriched_title).strip()[:60]
+                payload_enriched = _copy.deepcopy(item_payload)
+                payload_enriched["title"] = enriched_title
+                logger.warning(f"ML intento 5: título corto, enriquecido: {enriched_title!r}")
+                result = await _post_item(payload_enriched)
+                logger.info(f"ML intento 5: {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
 
         if result.get("_meli_error"):
             return JSONResponse({"error": result["_meli_error"]}, status_code=400)
