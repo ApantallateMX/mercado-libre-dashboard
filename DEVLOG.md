@@ -7,6 +7,20 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-10 — FIX: video congelado + título demasiado corto
+
+### FIX: Video se congelaba después de ~10s (imagen fija con audio)
+- Los clips T2V duran ~10-12s total, el audio 30-36s. El `tpad=stop_mode=clone` congelaba el último frame.
+- **Fix**: reemplazar `tpad` con `-stream_loop -1` en ffmpeg — el video loopea hasta que termine el audio.
+- El comercial ahora muestra video en movimiento durante toda la duración del audio.
+
+### FIX: Error ML `item.title.minimum_length` al publicar
+- El título llegaba muy corto (ej. "Sony KD-50X85K" = 14 chars) cuando el AI draft no se generó.
+- **Fix frontend**: validación mínimo 25 chars (antes 10), mensaje indica usar ⚡ Generar con IA.
+- **Fix backend**: check antes de llamar ML — rechaza con mensaje claro si el título < 25 chars.
+
+---
+
 ## 2026-04-10 — FIX: título lanzar + video 1 clip
 
 ### BUG CRÍTICO: ML mostraba "Hisense 55u75qg" (brand+model) en lugar del título IA

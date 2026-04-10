@@ -2366,13 +2366,12 @@ async def _run_video_pipeline(job_id: str, body: dict):
                 proc = _sp.run(
                     [
                         ffmpeg_bin, "-y",
-                        "-i", xfade_path, "-i", aud_path,
-                        # tpad congela el último frame si el video es más corto que el audio
-                        "-filter_complex", "[0:v]tpad=stop=-1:stop_mode=clone[vpad]",
-                        "-map", "[vpad]", "-map", "1:a",
+                        "-stream_loop", "-1", "-i", xfade_path,  # loopear video hasta que termine el audio
+                        "-i", aud_path,
+                        "-map", "0:v", "-map", "1:a",
                         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                         "-c:a", "aac", "-b:a", "128k",
-                        "-shortest", "-movflags", "+faststart",
+                        "-shortest", "-movflags", "+faststart",  # cortar cuando termine el audio
                         out_path,
                     ],
                     capture_output=True, timeout=180,
@@ -3377,6 +3376,8 @@ async def create_listing_endpoint(request: Request):
         return JSONResponse({"error": "price es requerido"}, status_code=400)
     if not category_id:
         return JSONResponse({"error": "category_id es requerido"}, status_code=400)
+    if not catalog_product_id and len(title) < 25:
+        return JSONResponse({"error": f"Título demasiado corto para ML ({len(title)} chars, mínimo 25). Genera el título con IA antes de publicar."}, status_code=400)
 
     description = body.get("description", "")
     sku         = body.get("sku", "")
