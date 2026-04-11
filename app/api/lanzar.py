@@ -3583,7 +3583,7 @@ async def create_listing_endpoint(request: Request):
                     _model_prefix,                                               # "K50" / "WR43"
                     brand_body,                                                  # "Sony" / "Westinghouse"
                     ((brand_body or "") + " " + _model_prefix).strip()[:30],   # "Sony K50"
-                    # family_name del frontend removido — puede ser "BRAVIA N" que causa catalog-match en ML y sobrescribe el título
+                    family_name,                                                 # último recurso: "BRAVIA 2", "ULED", etc.
                 ] if c and c.strip() and len(c.strip()) >= 2]
                 # Deduplicar preservando orden
                 _seen_fn: set = set()
@@ -3650,10 +3650,19 @@ async def create_listing_endpoint(request: Request):
             return JSONResponse({"error": err}, status_code=400)
 
         # Force title — User Products API puede haberlo reemplazado con título de catálogo
+        # Verificamos el título real que quedó en ML para detectar si fue ignorado
+        ml_actual_title = title  # asumimos éxito; se corrige si ML devuelve algo diferente
         if title and not catalog_product_id:
             try:
-                await client.put(f"/items/{item_id}", json={"title": title})
-                logger.info(f"Title forzado para {item_id}: {title!r}")
+                put_resp = await client.put(f"/items/{item_id}", json={"title": title})
+                if isinstance(put_resp, dict) and put_resp.get("title"):
+                    ml_actual_title = put_resp["title"]
+                    if ml_actual_title != title:
+                        logger.warning(f"Title PUT aceptado pero ML devolvió título diferente: {ml_actual_title!r} (queríamos {title!r})")
+                    else:
+                        logger.info(f"Title confirmado para {item_id}: {ml_actual_title!r}")
+                else:
+                    logger.info(f"Title forzado para {item_id}: {title!r}")
             except Exception as _te:
                 logger.warning(f"Title patch falló para {item_id}: {_te}")
 
@@ -3713,11 +3722,16 @@ async def create_listing_endpoint(request: Request):
                     logger.warning(f"Clip upload fallido para {item_id}: {ce}")
 
         logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
+        title_warning = None
+        if ml_actual_title and ml_actual_title != title:
+            title_warning = f"ML aplicó el título: \"{ml_actual_title}\" (en lugar de tu título IA)"
         return {
             "ok": True,
             "item_id": item_id,
             "permalink": result.get("permalink", ""),
             "title": title,
+            "ml_actual_title": ml_actual_title,
+            "title_warning": title_warning,
             "price": float(price),
             "status": result.get("status", ""),
             "clip_status": clip_status,

@@ -1329,9 +1329,8 @@
     var t = (title  || '').toLowerCase();
     var m = (model  || '').toLowerCase();
     if (b.indexOf('sony') >= 0) {
-      // Usar modelo limpio como family_name — "BRAVIA N" hace catalog-match en ML y sobrescribe el título
-      var sm = (model || '').replace(/[^A-Za-z0-9]/g, '');
-      return sm.slice(0, 10) || 'SONY';
+      var bm = t.match(/bravia\s*(\d+)/i);
+      return bm ? 'BRAVIA ' + bm[1] : 'BRAVIA';
     }
     if (b.indexOf('samsung') >= 0) {
       if (t.indexOf('neo qled') >= 0 || m.indexOf('neo') >= 0) return 'Neo QLED';
@@ -2901,7 +2900,10 @@
         var link = d.permalink
           ? ' <a href="' + d.permalink + '" target="_blank" class="underline text-green-700 font-semibold">Ver en MeLi →</a>'
           : '';
-        status.innerHTML = '✅ Publicado exitosamente!' + link;
+        var titleWarn = d.title_warning
+          ? '<div class="mt-1 text-amber-600 text-[11px]">⚠️ ' + d.title_warning + '</div>'
+          : '';
+        status.innerHTML = '✅ Publicado exitosamente!' + link + titleWarn;
         status.className = 'text-center text-xs py-1 text-green-600';
         _wizClearDraft(_wiz.sku);   // borrar draft al publicar exitosamente
 
