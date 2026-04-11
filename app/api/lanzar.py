@@ -2744,8 +2744,8 @@ async def relaunch_sku(sku: str, request: Request):
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='unlaunched',
-               ml_item_id=NULL, ml_title=NULL, ml_price=NULL,
-               ml_permalink=NULL, ml_condition=NULL, launched_at=NULL
+               ml_item_id='', ml_title='', ml_price=0,
+               ml_permalink='', ml_condition='', launched_at=NULL
                WHERE user_id=? AND sku=?""",
             (user_id, sku.upper())
         )
@@ -2788,8 +2788,8 @@ async def delete_launched_sku(sku: str, request: Request):
         await db.execute(
             """UPDATE bm_sku_gaps SET
                status='unlaunched',
-               ml_item_id=NULL, ml_title=NULL, ml_price=NULL,
-               ml_permalink=NULL, ml_condition=NULL, launched_at=NULL
+               ml_item_id='', ml_title='', ml_price=0,
+               ml_permalink='', ml_condition='', launched_at=NULL
                WHERE user_id=? AND sku=?""",
             (user_id, sku.upper())
         )
