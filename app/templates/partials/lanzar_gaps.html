@@ -1301,8 +1301,9 @@
     var t = (title  || '').toLowerCase();
     var m = (model  || '').toLowerCase();
     if (b.indexOf('sony') >= 0) {
-      var bm = t.match(/bravia\s*(\d+)/i);
-      return bm ? 'BRAVIA ' + bm[1] : 'BRAVIA';
+      // Usar modelo limpio como family_name — "BRAVIA N" hace catalog-match en ML y sobrescribe el título
+      var sm = (model || '').replace(/[^A-Za-z0-9]/g, '');
+      return sm.slice(0, 10) || 'SONY';
     }
     if (b.indexOf('samsung') >= 0) {
       if (t.indexOf('neo qled') >= 0 || m.indexOf('neo') >= 0) return 'Neo QLED';

@@ -3506,14 +3506,18 @@ async def create_listing_endpoint(request: Request):
             fn_required = "family_name" in err_lower
             if fn_required:
                 import re as _re_fn
-                _mp = _re_fn.match(r'^([A-Za-z]+\d+)', model_body or "")
+                # Limpiar modelo de caracteres especiales para extraer prefijo
+                # "K-50S20M2" → "K50S20M2" (guión rompía regex antes)
+                _model_clean = _re_fn.sub(r'[^A-Za-z0-9]', '', model_body or "")
+                _mp = _re_fn.match(r'^([A-Za-z]+\d+)', _model_clean)
                 _model_prefix = _mp.group(1).upper()[:8] if _mp else ""
                 _fn_candidates = [c.strip() for c in [
-                    model_body,                                                  # "WR43QE2350"
-                    _model_prefix,                                               # "WR43"
-                    brand_body,                                                  # "Westinghouse"
-                    ((brand_body or "") + " " + _model_prefix).strip()[:30],   # "Westinghouse WR43"
-                    family_name,                                                 # fallback del frontend
+                    model_body,                                                  # "K-50S20M2" / "WR43QE2350"
+                    _model_clean,                                                # "K50S20M2" (sin guiones)
+                    _model_prefix,                                               # "K50" / "WR43"
+                    brand_body,                                                  # "Sony" / "Westinghouse"
+                    ((brand_body or "") + " " + _model_prefix).strip()[:30],   # "Sony K50"
+                    # family_name del frontend removido — puede ser "BRAVIA N" que causa catalog-match en ML y sobrescribe el título
                 ] if c and c.strip() and len(c.strip()) >= 2]
                 # Deduplicar preservando orden
                 _seen_fn: set = set()
