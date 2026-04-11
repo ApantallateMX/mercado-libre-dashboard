@@ -649,9 +649,9 @@ async def admin_mark_launched(request: Request):
     Marca un SKU como lanzado (protegido por PIN — accesible sin sesión de dashboard).
     Body: {pin, user_id, sku, item_id, title, price, permalink, condition}
     """
-    from app.config import APP_PIN
+    from fastapi.responses import JSONResponse
+    from app.config import APP_PIN, DATABASE_PATH
     import aiosqlite
-    from app.config import DATABASE_PATH
 
     body = await request.json()
     pin = body.get("pin", "")
