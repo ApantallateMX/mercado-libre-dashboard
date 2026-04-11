@@ -1062,9 +1062,11 @@
           '<td class="px-3 py-3 text-right"><span class="text-gray-700 text-xs font-semibold">' + mlPrice + '</span></td>' +
           '<td class="px-3 py-3 text-center"><span class="text-gray-500 text-xs">' + (launchedDate || '—') + '</span></td>' +
           '<td class="px-3 py-3 text-center"><span class="text-[10px] px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full font-semibold">✅ Activo</span></td>' +
-          '<td class="px-3 py-3"><div class="flex items-center justify-center gap-1.5">' +
+          '<td class="px-3 py-3"><div class="flex items-center justify-center gap-1.5 flex-wrap">' +
             '<button onclick="window._openModifyLaunched(' + gJson + ')" class="text-xs bg-green-500 hover:bg-green-600 text-white font-semibold px-2.5 py-1.5 rounded-lg transition">✏️ Modificar</button>' +
             (g.ml_permalink ? '<a href="' + g.ml_permalink + '" target="_blank" class="text-xs border border-gray-200 hover:border-blue-400 text-gray-500 hover:text-blue-600 px-2.5 py-1.5 rounded-lg transition whitespace-nowrap">Ver en ML ↗</a>' : '') +
+            '<button onclick="window._relanzarLaunched(\'' + g.sku + '\')" class="text-xs border border-orange-300 hover:border-orange-500 text-orange-500 hover:text-orange-700 px-2.5 py-1.5 rounded-lg transition whitespace-nowrap" title="Resetear a Sin publicar para relanzar con el wizard">🔄 Relanzar</button>' +
+            '<button onclick="window._eliminarLaunched(\'' + g.sku + '\',\'' + (g.ml_item_id||'') + '\')" class="text-xs border border-red-200 hover:border-red-400 text-red-400 hover:text-red-600 px-2.5 py-1.5 rounded-lg transition whitespace-nowrap" title="Cerrar en ML y quitar de Lanzados">🗑 Eliminar</button>' +
           '</div></td></tr>';
       }
 
@@ -1205,6 +1207,25 @@
   window._restoreGap = function(sku) {
     fetch('/api/lanzar/restore/' + encodeURIComponent(sku), { method: 'POST' })
       .then(function() { _loadGaps(); _loadFilters(); });
+  };
+
+  window._relanzarLaunched = function(sku) {
+    if (!confirm('¿Mover "' + sku + '" a Sin publicar para relanzarlo?\n\nEl listing en ML NO será tocado.')) return;
+    fetch('/api/lanzar/relaunch/' + encodeURIComponent(sku), { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function() { _loadGaps(); _loadFilters(); });
+  };
+
+  window._eliminarLaunched = function(sku, mlItemId) {
+    var mlInfo = mlItemId ? ' (' + mlItemId + ')' : '';
+    if (!confirm('¿Eliminar el listing' + mlInfo + ' de MercadoLibre y quitar "' + sku + '" de Lanzados?\n\nEsto cerrará la publicación en ML y devolverá el SKU a Sin publicar.')) return;
+    fetch('/api/lanzar/delete-launched/' + encodeURIComponent(sku), { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var msg = d.ml_closed ? 'Publicación cerrada en ML.' : 'Nota: no se pudo cerrar en ML (puede que ya no exista).';
+        alert(msg + '\nSKU devuelto a Sin publicar.');
+        _loadGaps(); _loadFilters();
+      });
   };
 
   window._scanNow = function() {

@@ -2732,6 +2732,72 @@ async def restore_sku(sku: str, request: Request):
     return {"ok": True}
 
 
+@router.post("/relaunch/{sku}")
+async def relaunch_sku(sku: str, request: Request):
+    """Resetea un SKU lanzado a unlaunched para poder relanzarlo desde el wizard."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """UPDATE bm_sku_gaps SET
+               status='unlaunched',
+               ml_item_id=NULL, ml_title=NULL, ml_price=NULL,
+               ml_permalink=NULL, ml_condition=NULL, launched_at=NULL
+               WHERE user_id=? AND sku=?""",
+            (user_id, sku.upper())
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+@router.post("/delete-launched/{sku}")
+async def delete_launched_sku(sku: str, request: Request):
+    """Cierra el listing en ML (best effort) y resetea el SKU a unlaunched."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    # Obtener ml_item_id de la DB
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            "SELECT ml_item_id FROM bm_sku_gaps WHERE user_id=? AND sku=?",
+            (user_id, sku.upper())
+        )
+        row = await cur.fetchone()
+
+    ml_item_id = row[0] if row else None
+
+    # Intentar cerrar en ML (best effort — puede que ya no exista)
+    ml_closed = False
+    if ml_item_id:
+        try:
+            client = await get_meli_client()
+            if client:
+                await client.put(f"/items/{ml_item_id}", json={"status": "closed"})
+                ml_closed = True
+                logger.info(f"Listing {ml_item_id} cerrado en ML para SKU {sku}")
+        except Exception as e:
+            logger.warning(f"No se pudo cerrar {ml_item_id} en ML (puede ya no existir): {e}")
+
+    # Resetear DB independientemente del resultado de ML
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """UPDATE bm_sku_gaps SET
+               status='unlaunched',
+               ml_item_id=NULL, ml_title=NULL, ml_price=NULL,
+               ml_permalink=NULL, ml_condition=NULL, launched_at=NULL
+               WHERE user_id=? AND sku=?""",
+            (user_id, sku.upper())
+        )
+        await db.commit()
+
+    return {"ok": True, "ml_closed": ml_closed}
+
+
 @router.get("/prepare/{sku}")
 async def prepare_sku(sku: str, request: Request):
     """Retorna datos del SKU desde BM + análisis de competidores en MeLi."""
