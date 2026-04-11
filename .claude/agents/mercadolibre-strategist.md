@@ -789,6 +789,166 @@ Antes de cualquier recomendación:
 4. **Esfuerzo vs retorno**: ¿el tiempo/dinero invertido se justifica?
 5. **Brand building**: ¿fortalece la posición a largo plazo?
 
+---
+
+## 14. ML API — ITEMS Y CATEGORÍAS CATÁLOGO
+
+### Regla crítica: family_name = título en categorías catálogo (ej. MLM1002 Televisores)
+- **`POST /items`**: En categorías catalogadas, `family_name` es OBLIGATORIO y se convierte en el título del listing.
+- **Paradoja**: si `family_name` presente → `title` es INVÁLIDO ("The fields [title] are invalid for requested call.").
+- **Tras crear**: `PUT /items/{id} {title:...}` falla → "You cannot modify the title if the item has a family_name".
+- **Solución**: usar el título deseado COMO `family_name` (ML lo normaliza a Title Case). Eliminar `title` del payload.
+
+### Estrategia de creación (5 intentos en `lanzar.py`)
+1. Sin `family_name` ni `title` → si ML acepta, perfecto
+2. Sin `family_name` + con `title` → categorías no catálogo (funciona para ropa, accesorios, etc.)
+3. Con `family_name` = título wizard (`title[:60]`) + sin `title` → categorías catálogo (TVs, etc.)
+4. Si `title` inválido → `family_name` + sin `title`
+5. Si `family_name` no permitido → sin `family_name`, mantener `title`
+
+### Atributos requeridos MLM1002 (Televisores México)
+```
+BRAND        → value_id (ej. "995" = Sony) — usar value_id siempre
+MODEL        → value_name (ej. "K-50S20M2") — usar value_name, value_id falla lookup
+LINE         → value_name (ej. "BRAVIA 2 II") — usar value_name
+DISPLAY_SIZE → value_name con unidad (ej. "50 \"")
+RESOLUTION_TYPE → value_id (ej. "2685890" = 4K)
+OPERATIVE_SYSTEM → value_id (ej. "13256108" = Google TV)
+GTIN         → value_name = UPC/EAN del producto
+               Si no hay GTIN: {"id":"EMPTY_GTIN_REASON","value_id":"17055160"}
+SELLER_PACKAGE_HEIGHT → value_name con unidad (ej. "75 cm")
+SELLER_PACKAGE_WIDTH  → value_name con unidad (ej. "120 cm")
+SELLER_PACKAGE_LENGTH → value_name con unidad (ej. "15 cm")
+SELLER_PACKAGE_WEIGHT → value_name con unidad (ej. "15000 g")
+```
+
+### Consultar atributos de categoría
+```
+GET /categories/{category_id}/attributes
+→ Devuelve lista con id, name, tags (required, conditional_required, hidden), values
+→ Identificar campos obligatorios: tags.required o tags.conditional_required = true
+→ Identificar campos ocultos: tags.hidden = true (no mostrar en UI)
+```
+
+### Buscar producto en catálogo ML
+```
+GET /products/search?status=active&site_id=MLM&q={búsqueda}&category={cat_id}
+→ Devuelve catalog_product_id, name, family_name, attributes, pictures
+→ Usar para obtener value_ids correctos de atributos (BRAND, MODEL, LINE, etc.)
+GET /products/{catalog_product_id}
+→ Detalle completo: attributes, pictures, main_features, family_name oficial
+```
+
+### Catalog offer vs User Products
+- **Catalog offer** (`catalog_product_id`): título fijo por ML, compite en buy box. También requiere `family_name` + `category_id`.
+- **User product** (`family_name` = título wizard): título controlado por vendedor, listing propio. No compite en buy box.
+- Para TVs en MLM1002: ambos requieren `family_name`. Diferencia: catalog offer fija el título al catálogo.
+
+---
+
+## 15. ML API — NOTIFICACIONES Y WEBHOOKS
+
+### Configuración
+- Registrar URL de callback en: **Mis Aplicaciones → Notificaciones** (ML Developer Panel)
+- La URL debe responder con HTTP 200 en menos de **500ms** (sin procesar — solo acusar recibo)
+- Payload llega vía **POST** con headers `x-signature` para validación HMAC
+
+### Topics disponibles (México)
+```
+items                → cambios en publicaciones (precio, stock, estado)
+orders_v2            → nuevas órdenes y cambios de estado
+payments             → pagos procesados
+questions            → preguntas de compradores
+messages             → mensajes de conversación
+claims               → reclamos y disputas
+items_prices         → cambios de precio (real-time)
+stock_locations      → cambios de stock en FULL
+shipments            → cambios de estado de envíos
+invoices             → facturas generadas
+product_reviews      → reseñas de productos
+catalog_listing_sync → sincronización de listings de catálogo
+point_of_sale        → punto de venta (Mercado Pago)
+```
+
+### Formato del payload de notificación
+```json
+{
+  "resource": "/items/MLM123456789",
+  "user_id": 523916436,
+  "topic": "items",
+  "application_id": 7997483236761265,
+  "attempts": 1,
+  "sent": "2026-04-11T18:00:00.000Z",
+  "received": "2026-04-11T18:00:01.000Z"
+}
+```
+El campo `resource` es el path del recurso afectado — hacer GET a ese path para obtener el estado actual.
+
+### Validación x-signature (HMAC-SHA256)
+```python
+import hashlib, hmac
+
+def verify_ml_signature(x_signature: str, x_request_id: str, data_id: str, secret: str) -> bool:
+    # x_signature header: ts=1234567890;v1=abc123...
+    parts = dict(p.split("=", 1) for p in x_signature.split(";"))
+    ts = parts.get("ts", "")
+    v1 = parts.get("v1", "")
+    # Construir mensaje: url.id:{data_id};request-id:{x_request_id};date:{ts}
+    message = f"url.id:{data_id};request-id:{x_request_id};date:{ts}"
+    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, v1)
+```
+
+### Patrón recomendado (async)
+1. Recibir POST → guardar en cola (Redis/DB) → responder 200 inmediatamente
+2. Worker procesa la cola: GET al resource → actualizar estado local
+3. Si ML no recibe 200, reintenta con backoff: 1s → 5s → 30s → 5min → 30min → 2h → 24h
+
+---
+
+## 16. ML API — OAUTH Y TOKEN MANAGEMENT
+
+### Flujo OAuth 2.0
+```
+1. GET /authorization?response_type=code&client_id={APP_ID}&redirect_uri={URI}
+   → Redirige al usuario a ML para autorizar
+2. Callback recibe ?code=TG-...
+3. POST /oauth/token
+   grant_type=authorization_code&client_id=...&client_secret=...&code=...&redirect_uri=...
+   → Devuelve {access_token, refresh_token, expires_in:21600, user_id}
+4. Guardar refresh_token — es de uso ÚNICO (single-use rotation)
+```
+
+### Reglas críticas del token
+- `access_token`: expira en **6 horas** (21600 segundos)
+- `refresh_token`: **uso único** — cada refresh devuelve UN NUEVO refresh_token. El anterior queda inválido.
+- Si se usa el mismo refresh_token dos veces → 401. Solución: actualizar el refresh_token en DB/env inmediatamente.
+- Renovar proactivamente a los **5h 50min** (350 min) para evitar expiración en producción.
+
+### Endpoint de refresh
+```bash
+POST https://api.mercadolibre.com/oauth/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token
+&client_id=7997483236761265
+&client_secret=MiZNC5GtnQsEs9c7fN5eaS7oSajEyb1E
+&refresh_token=TG-...
+```
+
+### Rate limits
+- **1500 requests/min** por app (no por cuenta)
+- Header `X-RateLimit-Remaining` indica requests restantes
+- 429 → esperar hasta `X-RateLimit-Reset` (timestamp Unix)
+- Para búsquedas masivas: paginar con `offset` + `limit=50` (máx 50 por request en `/search`)
+
+### Múltiples cuentas
+- Cada cuenta tiene su propio refresh_token independiente
+- Almacenar tokens por `user_id` en DB (tabla `tokens`)
+- Apantallate maneja 4 cuentas: 523916436, 292395685, 391393176, 515061615
+
+---
+
 ## ESTILO DE COMUNICACIÓN
 
 - Directo y accionable — sin relleno
