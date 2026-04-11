@@ -3607,9 +3607,7 @@ async def create_listing_endpoint(request: Request):
                     result = await _post_item(_p2)
                     logger.info(f"ML intento 2 family_name={_fn_cand!r}: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
                     if not result.get("_meli_error"):
-                        break  # éxito
-                    if "family_name" not in result["_meli_error"].lower():
-                        break  # error diferente — salir del loop y dejar que siga
+                        break  # éxito — salir del loop
 
         # Intento 3: title inválido en categoría catálogo → family_name + sin title
         if result.get("_meli_error"):
