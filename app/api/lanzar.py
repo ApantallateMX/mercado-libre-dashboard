@@ -3583,11 +3583,23 @@ async def create_listing_endpoint(request: Request):
                     _model_prefix,                                               # "K50" / "WR43"
                     brand_body,                                                  # "Sony" / "Westinghouse"
                     ((brand_body or "") + " " + _model_prefix).strip()[:30],   # "Sony K50"
-                    family_name,                                                 # último recurso: "BRAVIA 2", "ULED", etc.
+                    family_name,                                                 # frontend: "BRAVIA 2", "ULED", etc.
                 ] if c and c.strip() and len(c.strip()) >= 2]
                 # Deduplicar preservando orden
                 _seen_fn: set = set()
                 _fn_candidates = [x for x in _fn_candidates if x not in _seen_fn and not _seen_fn.add(x)]  # type: ignore
+                # ── Candidatos específicos por marca (independientes del frontend) ──────
+                # Sony: extraer "BRAVIA N" del título — ML solo acepta nombres de línea
+                # del catálogo (ej. "BRAVIA 2", "BRAVIA XR"). Sin esto el listing falla.
+                if "sony" in (brand_body or "").lower():
+                    _brm = _re_fn.search(r'bravia\s*(\d+)', (title or "").lower())
+                    _sony_candidates = []
+                    if _brm:
+                        _sony_candidates.append("BRAVIA " + _brm.group(1))   # "BRAVIA 2"
+                    _sony_candidates.append("BRAVIA")                         # genérico
+                    for _sc in _sony_candidates:
+                        if _sc not in _fn_candidates:
+                            _fn_candidates.append(_sc)
                 logger.info(f"ML intento 2: probando family_name candidatos: {_fn_candidates}")
                 for _fn_cand in _fn_candidates:
                     _p2 = _copy.deepcopy(item_payload)
