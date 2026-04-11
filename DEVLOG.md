@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-11 — FIX: Ganancia/Margen columnas — RetailPrice BM como costo fallback
+
+### Root cause
+- `_calc_margins()` usaba `_bm_avg_cost` (AvgCostQTY de BM) como único costo. Para la mayoría de productos, este campo es 0 → `_costo_mxn = 0` → `_ganancia_est = None` → columnas muestran `—`.
+
+### Fix
+- `_eff_cost = AvgCostQTY si >0, sino RetailPrice de BM`. El RetailPrice de BM = precio de adquisición (confirmado en comentario existente: "retail IS our acquisition cost").
+- Agrega `_bm_eff_cost_usd` y `_cost_source` ("avg" | "retail" | None) por producto.
+- Template muestra etiqueta "est." cuando costo viene de RetailPrice (no AvgCost), para informar al usuario.
+- `data-bm-cost` en Deals tab ahora usa `_bm_eff_cost_usd` → calculadora JS correcta.
+- Calculadora JS: reemplaza flat 17% de comisión por `mlFee(price)` escalonado (12-18% según precio).
+- Aplica automáticamente a todos los endpoints que llaman `_calc_margins()`: Deals, Inventario, Top Sellers, etc.
+
+---
+
 ## 2026-04-11 — FIX: Sony TVs (MLM1002) — family_name ES el título / listing live
 
 ### Root cause descubierto vía API directa
