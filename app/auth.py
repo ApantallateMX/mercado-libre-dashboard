@@ -643,6 +643,45 @@ async def amazon_export_token(pin: str = ""):
     })
 
 
+@router.post("/admin/mark-launched")
+async def admin_mark_launched(request: Request):
+    """
+    Marca un SKU como lanzado (protegido por PIN — accesible sin sesión de dashboard).
+    Body: {pin, user_id, sku, item_id, title, price, permalink, condition}
+    """
+    from app.config import APP_PIN
+    import aiosqlite
+    from app.config import DATABASE_PATH
+
+    body = await request.json()
+    pin = body.get("pin", "")
+    if not pin or pin != APP_PIN:
+        return JSONResponse({"error": "PIN incorrecto"}, status_code=401)
+
+    user_id   = body.get("user_id", "")
+    sku       = body.get("sku", "").upper()
+    item_id   = body.get("item_id", "")
+    ml_title  = body.get("title", "")
+    ml_price  = float(body.get("price", 0))
+    permalink = body.get("permalink", "")
+    condition = body.get("condition", "new")
+
+    if not all([user_id, sku, item_id]):
+        return JSONResponse({"error": "user_id, sku, item_id son requeridos"}, status_code=400)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """UPDATE bm_sku_gaps SET
+               status='launched',
+               ml_item_id=?, ml_title=?, ml_price=?,
+               ml_permalink=?, ml_condition=?, launched_at=CURRENT_TIMESTAMP
+               WHERE user_id=? AND sku=?""",
+            (item_id, ml_title, ml_price, permalink, condition, user_id, sku)
+        )
+        await db.commit()
+    return JSONResponse({"ok": True, "sku": sku, "item_id": item_id})
+
+
 @router.post("/amazon/disconnect")
 async def amazon_disconnect(request: Request):
     """
