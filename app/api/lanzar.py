@@ -2732,6 +2732,37 @@ async def restore_sku(sku: str, request: Request):
     return {"ok": True}
 
 
+@router.post("/mark-launched/{sku}")
+async def mark_launched_sku(sku: str, request: Request):
+    """Marca un SKU como lanzado con datos externos (publicado fuera del wizard)."""
+    from app.services.meli_client import _active_user_id as _ctx
+    user_id = _ctx.get()
+    if not user_id:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    body = await request.json()
+    item_id   = body.get("item_id", "")
+    ml_title  = body.get("title", "")
+    ml_price  = float(body.get("price", 0))
+    permalink = body.get("permalink", "")
+    condition = body.get("condition", "new")
+
+    if not item_id:
+        return JSONResponse({"error": "item_id required"}, status_code=400)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """UPDATE bm_sku_gaps SET
+               status='launched',
+               ml_item_id=?, ml_title=?, ml_price=?,
+               ml_permalink=?, ml_condition=?, launched_at=CURRENT_TIMESTAMP
+               WHERE user_id=? AND sku=?""",
+            (item_id, ml_title, ml_price, permalink, condition, user_id, sku.upper())
+        )
+        await db.commit()
+    return {"ok": True}
+
+
 @router.post("/relaunch/{sku}")
 async def relaunch_sku(sku: str, request: Request):
     """Resetea un SKU lanzado a unlaunched para poder relanzarlo desde el wizard."""
@@ -3564,20 +3595,21 @@ async def create_listing_endpoint(request: Request):
         result = await _post_item(item_payload)
         logger.info(f"ML intento 1 (sin family_name): {'ok' if not result.get('_meli_error') else result['_meli_error'][:120]}")
 
-        # Intento 2: family_name requerido → ciclar candidatos cortos hasta que ML acepte
-        # ML requiere family_name como identificador de línea de producto (NO un título largo)
-        # Candidatos en orden: modelo, prefijo del modelo, marca, marca+prefijo
+        # Intento 2: family_name requerido — para categorías tipo catálogo (ej. MLM1002 Televisores)
+        # ML usa family_name como TÍTULO del listing; el campo "title" es inválido cuando family_name está presente.
+        # Estrategia: usar el título del wizard como family_name (se convierte en el título en ML).
+        # ML normaliza capitalización (ej. "Sony TV" → "Sony Tv") pero preserva el contenido.
         if result.get("_meli_error"):
             err_lower = result["_meli_error"].lower()
             fn_required = "family_name" in err_lower
             if fn_required:
                 import re as _re_fn
                 # Limpiar modelo de caracteres especiales para extraer prefijo
-                # "K-50S20M2" → "K50S20M2" (guión rompía regex antes)
                 _model_clean = _re_fn.sub(r'[^A-Za-z0-9]', '', model_body or "")
                 _mp = _re_fn.match(r'^([A-Za-z]+\d+)', _model_clean)
                 _model_prefix = _mp.group(1).upper()[:8] if _mp else ""
                 _fn_candidates = [c.strip() for c in [
+                    (title or "")[:60],                                          # 1º: título wizard → se convierte en título ML
                     model_body,                                                  # "K-50S20M2" / "WR43QE2350"
                     _model_clean,                                                # "K50S20M2" (sin guiones)
                     _model_prefix,                                               # "K50" / "WR43"
@@ -3588,22 +3620,13 @@ async def create_listing_endpoint(request: Request):
                 # Deduplicar preservando orden
                 _seen_fn: set = set()
                 _fn_candidates = [x for x in _fn_candidates if x not in _seen_fn and not _seen_fn.add(x)]  # type: ignore
-                # ── Candidatos específicos por marca (independientes del frontend) ──────
-                # Sony: extraer "BRAVIA N" del título — ML solo acepta nombres de línea
-                # del catálogo (ej. "BRAVIA 2", "BRAVIA XR"). Sin esto el listing falla.
-                if "sony" in (brand_body or "").lower():
-                    _brm = _re_fn.search(r'bravia\s*(\d+)', (title or "").lower())
-                    _sony_candidates = []
-                    if _brm:
-                        _sony_candidates.append("BRAVIA " + _brm.group(1))   # "BRAVIA 2"
-                    _sony_candidates.append("BRAVIA")                         # genérico
-                    for _sc in _sony_candidates:
-                        if _sc not in _fn_candidates:
-                            _fn_candidates.append(_sc)
-                logger.info(f"ML intento 2: probando family_name candidatos: {_fn_candidates}")
+                logger.info(f"ML intento 2: family_name candidatos (1º=wizard title): {_fn_candidates}")
                 for _fn_cand in _fn_candidates:
                     _p2 = _copy.deepcopy(item_payload)
                     _p2["family_name"] = _fn_cand
+                    # CRÍTICO: title es campo inválido cuando family_name está presente en categorías catálogo
+                    # family_name SE CONVIERTE EN el título del listing en ML
+                    _p2.pop("title", None)
                     result = await _post_item(_p2)
                     logger.info(f"ML intento 2 family_name={_fn_cand!r}: {'ok' if not result.get('_meli_error') else result['_meli_error'][:80]}")
                     if not result.get("_meli_error"):
@@ -3659,22 +3682,11 @@ async def create_listing_endpoint(request: Request):
             err = result.get("message") or result.get("error") or str(result)
             return JSONResponse({"error": err}, status_code=400)
 
-        # Force title — User Products API puede haberlo reemplazado con título de catálogo
-        # Verificamos el título real que quedó en ML para detectar si fue ignorado
-        ml_actual_title = title  # asumimos éxito; se corrige si ML devuelve algo diferente
-        if title and not catalog_product_id:
-            try:
-                put_resp = await client.put(f"/items/{item_id}", json={"title": title})
-                if isinstance(put_resp, dict) and put_resp.get("title"):
-                    ml_actual_title = put_resp["title"]
-                    if ml_actual_title != title:
-                        logger.warning(f"Title PUT aceptado pero ML devolvió título diferente: {ml_actual_title!r} (queríamos {title!r})")
-                    else:
-                        logger.info(f"Title confirmado para {item_id}: {ml_actual_title!r}")
-                else:
-                    logger.info(f"Title forzado para {item_id}: {title!r}")
-            except Exception as _te:
-                logger.warning(f"Title patch falló para {item_id}: {_te}")
+        # Título real en ML — cuando se usó family_name, ML devuelve el título normalizado en el POST
+        # No intentar PUT /title porque ML lo rechaza ("cannot modify title if item has family_name")
+        ml_actual_title = result.get("title") or title
+        if ml_actual_title:
+            logger.info(f"Título en ML para {item_id}: {ml_actual_title!r} (wizard: {title!r})")
 
         # Add description separately (ML doesn't accept it in the initial POST)
         if description:
@@ -3697,7 +3709,7 @@ async def create_listing_endpoint(request: Request):
                    WHERE user_id=? AND sku=?""",
                 (
                     item_id,
-                    title,
+                    ml_actual_title,
                     float(price),
                     category_id,
                     result.get("permalink", ""),
@@ -3732,9 +3744,11 @@ async def create_listing_endpoint(request: Request):
                     logger.warning(f"Clip upload fallido para {item_id}: {ce}")
 
         logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
+        # title_warning solo si ML aplicó un título COMPLETAMENTE diferente al wizard
+        # (no por normalización de capitalización — ML siempre convierte a Title Case)
         title_warning = None
-        if ml_actual_title and ml_actual_title != title:
-            title_warning = f"ML aplicó el título: \"{ml_actual_title}\" (en lugar de tu título IA)"
+        if ml_actual_title and title and ml_actual_title.lower() != title.lower():
+            title_warning = f"ML aplicó el título: \"{ml_actual_title}\" (en lugar de tu título)"
         return {
             "ok": True,
             "item_id": item_id,

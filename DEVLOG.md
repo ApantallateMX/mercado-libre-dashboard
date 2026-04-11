@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-11 — FIX: Sony TVs (MLM1002) — family_name ES el título / listing live
+
+### Root cause descubierto vía API directa
+- Para MLM1002 (Televisores) en México, ML requiere `family_name` (campo raíz).
+- **CUANDO family_name está presente, el campo `title` es INVÁLIDO** — ML lo rechaza con `body.invalid_fields: [title]`.
+- Todos los intentos previos fallaban porque el payload tenía `title` + `family_name` simultáneamente.
+- Después de crear el item: **"You cannot modify the title if the item has a family_name"** — el PUT de título también falla.
+- `family_name` SE CONVIERTE en el título del listing en ML (con normalización de capitalización).
+
+### Solución
+- Intento 2 (family_name requerido): ahora elimina `title` del payload (`_p2.pop("title", None)`).
+- Primer candidato = `title[:60]` (título del wizard) → ML lo usa directamente como título del listing.
+- ML normaliza capitalización (ej. "Sony TV 4K" → "Sony Tv 4k") pero preserva el contenido.
+- `ml_actual_title` = `result.get("title")` (del POST response, no de un PUT que ya falla).
+- `title_warning` solo si los títulos difieren en contenido (ignorando mayúsculas).
+
+### Nuevo endpoint
+- `POST /api/lanzar/mark-launched/{sku}` — para marcar SKUs publicados fuera del wizard.
+
+### Listing SNTV007911 publicado manualmente
+- **ID**: MLM2858016657  
+- **Título**: Sony Televisor Bravia 2 Led 4k Uhd Smart Google Tv 50 (wizard title normalizado)
+- **URL**: https://articulo.mercadolibre.com.mx/MLM-2858016657-sony-televisor-bravia-2-led-4k-uhd-smart-google-tv-50-_JM
+
+---
+
 ## 2026-04-10 — FIX: family_name rechazado aunque estaba en el payload
 
 ### Análisis del problema
