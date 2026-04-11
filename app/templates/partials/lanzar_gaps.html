@@ -1212,20 +1212,27 @@
   window._relanzarLaunched = function(sku) {
     if (!confirm('¿Mover "' + sku + '" a Sin publicar para relanzarlo?\n\nEl listing en ML NO será tocado.')) return;
     fetch('/api/lanzar/relaunch/' + encodeURIComponent(sku), { method: 'POST' })
-      .then(function(r) { return r.json(); })
-      .then(function() { _loadGaps(); _loadFilters(); });
+      .then(function(r) {
+        if (!r.ok) { alert('Error al relanzar (' + r.status + ')'); return; }
+        _loadGaps(); _loadFilters();
+      })
+      .catch(function(e) { alert('Error de red: ' + e); });
   };
 
   window._eliminarLaunched = function(sku, mlItemId) {
     var mlInfo = mlItemId ? ' (' + mlItemId + ')' : '';
     if (!confirm('¿Eliminar el listing' + mlInfo + ' de MercadoLibre y quitar "' + sku + '" de Lanzados?\n\nEsto cerrará la publicación en ML y devolverá el SKU a Sin publicar.')) return;
     fetch('/api/lanzar/delete-launched/' + encodeURIComponent(sku), { method: 'POST' })
-      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        if (!r.ok) { alert('Error al eliminar (' + r.status + ')'); return; }
+        return r.json();
+      })
       .then(function(d) {
-        var msg = d.ml_closed ? 'Publicación cerrada en ML.' : 'Nota: no se pudo cerrar en ML (puede que ya no exista).';
-        alert(msg + '\nSKU devuelto a Sin publicar.');
+        if (!d) return;
+        if (!d.ml_closed) alert('Nota: no se pudo cerrar en ML (puede que ya no exista).');
         _loadGaps(); _loadFilters();
-      });
+      })
+      .catch(function(e) { alert('Error de red: ' + e); });
   };
 
   window._scanNow = function() {
