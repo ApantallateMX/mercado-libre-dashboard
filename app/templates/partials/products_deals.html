@@ -161,7 +161,7 @@
                     data-item-id="{{ p.id }}" data-title="{{ p.title }}"
                     data-price="{{ p.price }}"
                     data-original-price="{{ p.original_price or p.price }}"
-                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
@@ -245,8 +245,8 @@
                     <td class="px-3 py-2 text-right">
                         {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
                         <div class="flex flex-col items-end">
-                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
-                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_avg_cost', 0)) }} USD</span>
+                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}{% if p.get('_cost_source') == 'retail' %}<span class="text-orange-400 text-[9px] ml-0.5">est.</span>{% endif %}</span>
+                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_eff_cost_usd', 0)) }} USD</span>
                         </div>
                         {% elif p.get('_bm_has_data') %}
                         <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
@@ -317,7 +317,7 @@
                                 data-item-id="{{ p.id }}" data-title="{{ p.title }}"
                                 data-price="{{ p.price }}"
                                 data-original-price="{{ p.original_price or p.price }}"
-                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
@@ -453,7 +453,7 @@
                     data-item-id="{{ p.id }}" data-title="{{ p.title }}"
                     data-price="{{ p.price }}"
                     data-original-price="{{ p.original_price or p.price }}"
-                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
@@ -461,7 +461,7 @@
                     data-item-id="{{ p.id }}"
                     data-price="{{ p.price }}"
                     data-sku="{{ p.sku or '' }}"
-                    data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                    data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}"
                     data-title="{{ p.title }}">
@@ -525,8 +525,8 @@
                     <td class="px-3 py-2 text-right">
                         {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
                         <div class="flex flex-col items-end">
-                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
-                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_avg_cost', 0)) }} USD</span>
+                            <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p._costo_mxn) }}{% if p.get('_cost_source') == 'retail' %}<span class="text-orange-400 text-[9px] ml-0.5">est.</span>{% endif %}</span>
+                            <span class="text-[10px] text-gray-400">${{ '%.2f'|format(p.get('_bm_eff_cost_usd', 0)) }} USD</span>
                         </div>
                         {% elif p.get('_bm_has_data') %}
                         <span class="text-orange-500 text-[10px] font-medium">Sin costo</span>
@@ -593,7 +593,7 @@
                                 data-item-id="{{ p.id }}" data-title="{{ p.title }}"
                                 data-price="{{ p.price }}"
                                 data-original-price="{{ p.original_price or p.price }}"
-                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
@@ -601,7 +601,7 @@
                                 data-item-id="{{ p.id }}"
                                 data-price="{{ p.price }}"
                                 data-sku="{{ p.sku or '' }}"
-                                data-bm-cost="{{ p.get('_bm_avg_cost', 0) or 0 }}"
+                                data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}"
                                 data-title="{{ p.title }}">
@@ -816,6 +816,13 @@
 const USD_TO_MXN = {{ usd_to_mxn or 20 }};
 const PAGE_SIZE = 25;
 let _modalState = {};
+
+function mlFee(price) {
+    if (price >= 5000) return 0.12;
+    if (price >= 1500) return 0.14;
+    if (price >= 500)  return 0.16;
+    return 0.18;
+}
 let _adCurrentPage = 1;
 let _cdCurrentPage = 1;
 let _searchTerm = '';
@@ -1201,7 +1208,7 @@ function updateDealCalc() {
     document.getElementById('dm-discount').className = 'text-lg font-bold ' + (discount > 0 ? 'text-green-600' : 'text-gray-400');
 
     // Breakdown
-    var comision = dealPrice * 0.17;
+    var comision = dealPrice * mlFee(dealPrice);
     var ivaComision = comision * 0.16;
     var envio = 150;
     var ganancia = dealPrice - bmCostMxn - comision - ivaComision - envio;
@@ -1539,7 +1546,7 @@ function calcPromoMargin(idx) {
         discEl.className = 'text-sm font-bold ' + (discount > 0 ? 'text-green-600' : 'text-gray-400');
     }
 
-    var comision = dealPrice * 0.17;
+    var comision = dealPrice * mlFee(dealPrice);
     var iva = comision * 0.16;
     var envio = 150;
     var ganancia = dealPrice - bmCostMxn - comision - iva - envio;

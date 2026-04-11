@@ -153,8 +153,13 @@ def _calc_margins(products: list, usd_to_mxn: float):
         # Flag: BM tiene registro aunque costos sean sentinel (0 o 9999)
         p["_bm_has_data"] = bool(p.get("_bm_brand") or avg_cost > 0 or retail > 0)
 
+        # Costo efectivo: AvgCost tiene prioridad; RetailPrice de BM = precio de adquisición (fallback)
+        _eff_cost = avg_cost if (0 < avg_cost < 9999) else retail
+        p["_bm_eff_cost_usd"] = round(_eff_cost, 2) if (0 < _eff_cost < 9999) else 0
+        p["_cost_source"] = "avg" if (0 < avg_cost < 9999) else ("retail" if (0 < retail < 9999) else None)
+
         # Conversiones USD → MXN
-        p["_costo_mxn"] = round(avg_cost * usd_to_mxn, 2) if (0 < avg_cost < 9999) else 0
+        p["_costo_mxn"] = round(_eff_cost * usd_to_mxn, 2) if (0 < _eff_cost < 9999) else 0
         p["_retail_mxn"] = round(retail * usd_to_mxn, 2) if (0 < retail < 9999) else 0
         p["_retail_ph_mxn"] = round(retail_ph * usd_to_mxn, 2) if (0 < retail_ph < 9999) else 0
 
