@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-12 — FEAT: PRE_NEGOTIATED promos visibles + ML contribution en ganancia
+
+### Problema
+MLM2517306551 (y similares) tiene una promo `PRE_NEGOTIATED` activa donde ML paga 6% del precio original. El dashboard no la mostraba como deal activo porque `_auto_types` en `_enrich_with_promotions` los filtraba. Además, el cálculo de ganancia no contabilizaba lo que ML subsidia.
+
+### Fix
+- `_enrich_with_promotions`: separa `active_seller` (PRICE_DISCOUNT/DEAL) de `active_auto` (PRE_NEGOTIATED/SMART). Si no hay seller promo, usar auto promo para `_has_deal=True`. Flag `_deal_is_ml_auto=True` identifica estos casos.
+- Extrae `_meli_promo_pct` y `_seller_promo_pct` del objeto promo activo (ya existían en la API).
+- `_calc_margins`: `_meli_contribution_mxn = original_price × meli_pct / 100`. Luego `_ganancia_real = ganancia_est + contribution` y `_margen_real_pct` usando precio efectivo.
+- Template: badge "ML Auto" en azul + "+$XX ML" en ganancia column.
+- JS `calcPromoMargin`: suma `meliContrib` a ganancia; `margen = ganancia_real / (dealPrice + meliContrib)`.
+
+### Mecánica PRE_NEGOTIATED
+- Seller lista a $799; ML aplica 6% descuento → cliente paga $751
+- ML subsidia los $47.94 → vendedor efectivamente recibe ~$799 antes de comisión
+- Comisión se cobra sobre deal_price ($751), no sobre original
+
+---
+
 ## 2026-04-11 — FIX: Ganancia/Margen columnas — RetailPrice BM como costo fallback
 
 ### Root cause
