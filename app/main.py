@@ -177,6 +177,19 @@ def _calc_margins(products: list, usd_to_mxn: float):
             p["_ganancia_est"] = None
             p["_margen_pct"] = None
 
+        # ── Aportación MeLi (PRE_NEGOTIATED) — ML subsidia parte del descuento ──
+        _meli_pct = p.get("_meli_promo_pct", 0) or 0
+        _orig_p = p.get("original_price", 0) or 0
+        p["_meli_contribution_mxn"] = round(_orig_p * _meli_pct / 100, 2) if (_meli_pct > 0 and _orig_p > 0) else 0
+        # Ganancia real = ganancia_est + lo que ML aporta (gratis para el vendedor)
+        if p["_ganancia_est"] is not None:
+            p["_ganancia_real"] = round(p["_ganancia_est"] + p["_meli_contribution_mxn"], 2)
+            _eff_price = price + p["_meli_contribution_mxn"]
+            p["_margen_real_pct"] = round((p["_ganancia_real"] / _eff_price) * 100, 1) if _eff_price > 0 else None
+        else:
+            p["_ganancia_real"] = None
+            p["_margen_real_pct"] = None
+
         # ── Comparativa vs RetailPrice PH ──────────────────────────────────
         rph = p["_retail_ph_mxn"]
         if rph > 0:
@@ -826,25 +839,38 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
         iid, data = r
         if isinstance(data, list):
             p_map[iid] = data
-    # Tipos que NO cuentan como deal del vendedor (MeLi los gestiona solo)
     _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN"}
     for p in products:
         promos = p_map.get(p.get(id_key), [])
         p["_promotions"] = promos
-        active_promos = [
+        # Promos que gestiona el vendedor (PRICE_DISCOUNT, DEAL)
+        active_seller = [
             pr for pr in promos
             if pr.get("status") in ("started", "active", "pending")
             and pr.get("type") not in _auto_types
         ]
+        # Promos que gestiona ML automáticamente (PRE_NEGOTIATED, SMART, etc.)
+        active_auto = [
+            pr for pr in promos
+            if pr.get("status") in ("started", "active", "pending")
+            and pr.get("type") in _auto_types
+        ]
+        # Seller tiene prioridad; si no hay seller, usar auto (PRE_NEGOTIATED cuenta como deal activo)
+        active_promos = active_seller if active_seller else active_auto
         p["_has_deal"] = len(active_promos) > 0
+        p["_deal_is_ml_auto"] = len(active_seller) == 0 and len(active_auto) > 0
         p["_deal_types"] = list(set(pr.get("type", "") for pr in active_promos))
-        # Actualizar price/original_price desde la promo activa
+        p["_meli_promo_pct"] = 0
+        p["_seller_promo_pct"] = 0
+        # Actualizar price/original_price y contribución ML desde la promo activa
         if active_promos:
             ap = active_promos[0]
             if ap.get("price") and ap["price"] > 0:
                 p["price"] = ap["price"]
             if ap.get("original_price") and ap["original_price"] > 0:
                 p["original_price"] = ap["original_price"]
+            p["_meli_promo_pct"] = ap.get("meli_percentage", 0) or 0
+            p["_seller_promo_pct"] = ap.get("seller_percentage", 0) or 0
 
 
 async def _enrich_with_bm_product_info(products: list, sku_key="sku"):

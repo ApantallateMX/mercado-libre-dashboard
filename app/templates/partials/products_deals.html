@@ -124,7 +124,10 @@
                     </div>
                 </div>
             </div>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs">
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2 text-xs">
+                {% if p.get('_deal_is_ml_auto') %}
+                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML Auto</span>
+                {% endif %}
                 {% if p.original_price and p.original_price > p.price %}
                 <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
                 {% endif %}
@@ -132,10 +135,14 @@
                 {% if p.original_price and p.original_price > p.price %}
                 <span class="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold">-{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%</span>
                 {% endif %}
-                {% if p.get('_margen_pct') is not none %}
+                {% if p.get('_meli_promo_pct', 0) > 0 %}
+                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML paga {{ p._meli_promo_pct }}%</span>
+                {% endif %}
+                {% set _mg = p.get('_margen_real_pct') if p.get('_margen_real_pct') is not none else p.get('_margen_pct') %}
+                {% if _mg is not none %}
                 <span class="px-1.5 py-0.5 rounded font-semibold
-                    {% if p._margen_pct >= 20 %}bg-green-100 text-green-700{% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700{% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
-                    M: {{ "%.1f"|format(p._margen_pct) }}%
+                    {% if _mg >= 20 %}bg-green-100 text-green-700{% elif _mg >= 10 %}bg-yellow-100 text-yellow-700{% elif _mg >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                    M: {{ "%.1f"|format(_mg) }}%
                 </span>
                 {% endif %}
             </div>
@@ -150,9 +157,13 @@
                     <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}">{{ p.available_quantity }}</span>
                 </div>
                 <div>
-                    <span class="text-gray-400 block">Ganancia</span>
-                    {% if p.get('_ganancia_est') is not none %}
-                    <span class="font-semibold {{ 'text-green-600' if p._ganancia_est > 0 else 'text-red-600' }}">${{ "{:,.0f}".format(p._ganancia_est) }}</span>
+                    <span class="text-gray-400 block">Ganancia{% if p.get('_meli_contribution_mxn', 0) > 0 %} real{% endif %}</span>
+                    {% set _greal = p.get('_ganancia_real') %}
+                    {% if _greal is not none %}
+                    <span class="font-semibold {{ 'text-green-600' if _greal > 0 else 'text-red-600' }}">${{ "{:,.0f}".format(_greal) }}</span>
+                    {% if p.get('_meli_contribution_mxn', 0) > 0 %}
+                    <span class="text-blue-500 text-[9px] block">+${{ "{:,.0f}".format(p._meli_contribution_mxn) }} ML</span>
+                    {% endif %}
                     {% else %}<span class="text-gray-300">-</span>{% endif %}
                 </div>
             </div>
@@ -162,6 +173,7 @@
                     data-price="{{ p.price }}"
                     data-original-price="{{ p.original_price or p.price }}"
                     data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
+                    data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
@@ -207,9 +219,17 @@
                             {% endif %}
                             <div class="min-w-0">
                                 <span class="text-gray-800 truncate block max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title }}</span>
+                                <div class="flex items-center gap-1 mt-0.5">
                                 {% if p.permalink %}
                                 <a href="{{ p.permalink }}" target="_blank" class="text-[10px] text-blue-500 hover:underline">Ver en MeLi</a>
                                 {% endif %}
+                                {% if p.get('_deal_is_ml_auto') %}
+                                <span class="px-1 py-0.5 rounded bg-blue-100 text-blue-600 font-semibold text-[9px]">ML Auto</span>
+                                {% endif %}
+                                {% if p.get('_meli_promo_pct', 0) > 0 %}
+                                <span class="px-1 py-0.5 rounded bg-blue-50 text-blue-500 text-[9px]">ML {{ p._meli_promo_pct }}%</span>
+                                {% endif %}
+                                </div>
                                 {% if p.get('variations') %}
                                 <button onclick="toggleVariationsD('ad-{{ loop.index }}')"
                                         class="text-[10px] text-purple-600 hover:underline block">
@@ -267,22 +287,27 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right">
-                        {% if p.get('_ganancia_est') is not none %}
-                        <span class="{{ 'text-green-600' if p._ganancia_est > 0 else 'text-red-600' }} font-semibold text-xs">
-                            ${{ "{:,.0f}".format(p._ganancia_est) }}
-                        </span>
+                        {% set _gr = p.get('_ganancia_real') %}
+                        {% if _gr is not none %}
+                        <div class="flex flex-col items-end">
+                            <span class="{{ 'text-green-600' if _gr > 0 else 'text-red-600' }} font-semibold text-xs">${{ "{:,.0f}".format(_gr) }}</span>
+                            {% if p.get('_meli_contribution_mxn', 0) > 0 %}
+                            <span class="text-blue-500 text-[9px]">+${{ "{:,.0f}".format(p._meli_contribution_mxn) }} ML</span>
+                            {% endif %}
+                        </div>
                         {% else %}
                         <span class="text-gray-300 text-xs">-</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center">
-                        {% if p.get('_margen_pct') is not none %}
+                        {% set _mr = p.get('_margen_real_pct') if p.get('_margen_real_pct') is not none else p.get('_margen_pct') %}
+                        {% if _mr is not none %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
-                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                            {% if _mr >= 20 %}bg-green-100 text-green-700
+                            {% elif _mr >= 10 %}bg-yellow-100 text-yellow-700
+                            {% elif _mr >= 0 %}bg-orange-100 text-orange-700
                             {% else %}bg-red-100 text-red-700{% endif %}">
-                            {{ "%.1f"|format(p._margen_pct) }}%
+                            {{ "%.1f"|format(_mr) }}%
                         </span>
                         {% else %}
                         <span class="text-gray-300 text-xs">-</span>
@@ -318,6 +343,7 @@
                                 data-price="{{ p.price }}"
                                 data-original-price="{{ p.original_price or p.price }}"
                                 data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
+                                data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
@@ -454,6 +480,7 @@
                     data-price="{{ p.price }}"
                     data-original-price="{{ p.original_price or p.price }}"
                     data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
+                    data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
@@ -594,6 +621,7 @@
                                 data-price="{{ p.price }}"
                                 data-original-price="{{ p.original_price or p.price }}"
                                 data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
+                                data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
@@ -724,7 +752,7 @@
                     <span id="calc-cost" class="text-red-500">-$0</span>
                 </div>
                 <div class="flex justify-between">
-                    <span class="text-gray-500">- Comision MeLi (~17%)</span>
+                    <span class="text-gray-500">- Comision MeLi</span>
                     <span id="calc-comision" class="text-red-500">-$0</span>
                 </div>
                 <div class="flex justify-between">
@@ -1024,7 +1052,8 @@ document.addEventListener('click', function(e) {
             parseFloat(btnVerPromos.dataset.price) || 0,
             parseFloat(btnVerPromos.dataset.originalPrice) || 0,
             parseFloat(btnVerPromos.dataset.bmCost) || 0,
-            btnVerPromos.dataset.thumb || ''
+            btnVerPromos.dataset.thumb || '',
+            parseFloat(btnVerPromos.dataset.meliPct) || 0
         );
         return;
     }
@@ -1348,8 +1377,10 @@ async function deactivateDeal(itemId) {
 
 var _pdState = {};
 
-function openPromoDetail(itemId, title, currentPrice, originalPrice, bmCostUsd, thumb) {
-    _pdState = { itemId: itemId, currentPrice: currentPrice, originalPrice: originalPrice, bmCostUsd: bmCostUsd, bmCostMxn: bmCostUsd * USD_TO_MXN };
+function openPromoDetail(itemId, title, currentPrice, originalPrice, bmCostUsd, thumb, meliPct) {
+    meliPct = meliPct || 0;
+    var meliContribMxn = meliPct > 0 && originalPrice > 0 ? (originalPrice * meliPct / 100) : 0;
+    _pdState = { itemId: itemId, currentPrice: currentPrice, originalPrice: originalPrice, bmCostUsd: bmCostUsd, bmCostMxn: bmCostUsd * USD_TO_MXN, meliPct: meliPct, meliContribMxn: meliContribMxn };
 
     document.getElementById('pd-title').textContent = title || itemId;
     document.getElementById('pd-item-id').textContent = itemId;
@@ -1480,13 +1511,15 @@ function renderPromoCards(promos) {
                 '</div>';
 
             // Mini calculator
+            var hasMeliContrib = (_pdState.meliPct || 0) > 0;
             html += '<div class="bg-white rounded-lg p-3 space-y-1 text-xs border mb-3">' +
-                '<div class="flex justify-between"><span class="text-gray-500">Precio</span><span id="pd-cp-' + idx + '" class="font-medium">$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">Precio deal</span><span id="pd-cp-' + idx + '" class="font-medium">$0</span></div>' +
                 '<div class="flex justify-between"><span class="text-gray-500">- Costo BM</span><span id="pd-cc-' + idx + '" class="text-red-500">-$0</span></div>' +
-                '<div class="flex justify-between"><span class="text-gray-500">- Comision MeLi (~17%)</span><span id="pd-cm-' + idx + '" class="text-red-500">-$0</span></div>' +
+                '<div class="flex justify-between"><span class="text-gray-500">- Comision MeLi</span><span id="pd-cm-' + idx + '" class="text-red-500">-$0</span></div>' +
                 '<div class="flex justify-between"><span class="text-gray-500">- IVA Comision</span><span id="pd-ci-' + idx + '" class="text-red-500">-$0</span></div>' +
                 '<div class="flex justify-between"><span class="text-gray-500">- Envio est.</span><span class="text-red-500">-$150</span></div>' +
-                '<div class="flex justify-between border-t pt-1 mt-1"><span class="font-semibold">Ganancia</span><span id="pd-cg-' + idx + '" class="font-bold">$0</span></div>' +
+                (hasMeliContrib ? '<div class="flex justify-between text-blue-600"><span>+ ML aporta (' + (_pdState.meliPct||0) + '%)</span><span id="pd-cml-' + idx + '" class="font-medium">+$0</span></div>' : '') +
+                '<div class="flex justify-between border-t pt-1 mt-1"><span class="font-semibold">Ganancia neta</span><span id="pd-cg-' + idx + '" class="font-bold">$0</span></div>' +
                 '<div class="flex justify-between"><span class="font-semibold">Margen</span><span id="pd-cmg-' + idx + '" class="font-bold">0%</span></div>' +
             '</div>';
 
@@ -1549,13 +1582,16 @@ function calcPromoMargin(idx) {
     var comision = dealPrice * mlFee(dealPrice);
     var iva = comision * 0.16;
     var envio = 150;
-    var ganancia = dealPrice - bmCostMxn - comision - iva - envio;
-    var margen = dealPrice > 0 ? (ganancia / dealPrice * 100) : 0;
+    var meliContrib = _pdState.meliContribMxn || 0;
+    var ganancia = dealPrice - bmCostMxn - comision - iva - envio + meliContrib;
+    var effPrice = dealPrice + meliContrib;
+    var margen = effPrice > 0 ? (ganancia / effPrice * 100) : 0;
 
     var cpEl = document.getElementById('pd-cp-' + idx); if (cpEl) cpEl.textContent = fmt(dealPrice);
     var ccEl = document.getElementById('pd-cc-' + idx); if (ccEl) ccEl.textContent = bmCostMxn > 0 ? '-' + fmt(bmCostMxn) : '-$0';
     var cmEl = document.getElementById('pd-cm-' + idx); if (cmEl) cmEl.textContent = '-' + fmt(comision);
     var ciEl = document.getElementById('pd-ci-' + idx); if (ciEl) ciEl.textContent = '-' + fmt(iva);
+    var cmlEl = document.getElementById('pd-cml-' + idx); if (cmlEl) cmlEl.textContent = '+' + fmt(meliContrib);
 
     var gEl = document.getElementById('pd-cg-' + idx);
     if (gEl) {
