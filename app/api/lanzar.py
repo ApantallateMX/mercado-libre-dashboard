@@ -543,12 +543,15 @@ def _prog(pct: int, phase: str, label: str, detail: str = "") -> None:
     _scan_progress.update({"pct": pct, "phase": phase, "label": label, "detail": detail})
 
 
-async def _run_gap_scan():
-    """Core scan: compare BM inventory vs MeLi per account, store gaps."""
+async def _run_gap_scan(user_id: str | None = None):
+    """Core scan: compare BM inventory vs MeLi per account, store gaps.
+    Si user_id está especificado, solo escanea esa cuenta (scan manual).
+    Si es None, escanea todas las cuentas (scan nocturno).
+    """
     if _scan_lock.locked():
         return
     async with _scan_lock:
-        logger.info("BM gap scan iniciando...")
+        logger.info(f"BM gap scan iniciando... (cuenta: {user_id or 'todas'})")
         _prog(0, "starting", "Iniciando scan...", "")
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
@@ -558,11 +561,17 @@ async def _run_gap_scan():
             await db.commit()
 
         try:
-            # 1. Get all MeLi accounts
+            # 1. Get MeLi accounts — solo la cuenta activa si se especificó user_id
             _prog(3, "accounts", "Cargando cuentas MeLi...", "")
-            accounts = await token_store.get_all_tokens()
-            if not accounts:
+            all_accounts = await token_store.get_all_tokens()
+            if not all_accounts:
                 raise Exception("No MeLi accounts configured")
+            if user_id:
+                accounts = [a for a in all_accounts if str(a["user_id"]) == str(user_id)]
+                if not accounts:
+                    raise Exception(f"Cuenta {user_id} no encontrada")
+            else:
+                accounts = all_accounts
 
             # 2a. Get real USD→MXN FX rate from first MeLi account
             _prog(6, "fx", "Obteniendo tipo de cambio USD→MXN...", "")
@@ -1237,12 +1246,14 @@ async def get_gaps(
 
 
 @router.post("/scan-now")
-async def trigger_scan():
-    """Dispara el scan manualmente (no espera a que termine)."""
+async def trigger_scan(request: Request):
+    """Dispara el scan manualmente solo para la cuenta activa."""
     if _scan_lock.locked():
         return {"status": "already_running"}
-    asyncio.create_task(_run_gap_scan())
-    return {"status": "started"}
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
+    asyncio.create_task(_run_gap_scan(user_id=_uid if _uid else None))
+    return {"status": "started", "account": _uid or "all"}
 
 
 @router.get("/scan-status")
