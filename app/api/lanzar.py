@@ -663,13 +663,13 @@ async def _run_gap_scan():
                   f"{len(global_meli_skus)} SKUs en ML, {len(bm_map)} en BM")
 
             # ── FASE 2: Calcular gaps globales y guardar por cuenta ────────────
-            # Gap = SKU en BM con stock que NO está publicado en NINGUNA cuenta.
+            # Gap = SKU en BM con stock que NO está publicado en ESTA cuenta.
+            # Cada cuenta se evalúa de forma independiente — un SKU publicado en
+            # otra cuenta NO excluye que sea un gap en ésta.
             current_bm_skus = set(bm_map.keys())
 
-            global_gaps_base = []  # datos base sin user_id/nickname
+            global_gaps_base = []  # datos base sin user_id/nickname — filtro ML se aplica por cuenta
             for base_sku, prod in bm_map.items():
-                if base_sku in global_meli_skus:
-                    continue  # publicado en alguna cuenta → no es gap
                 retail    = float(prod.get("RetailPrice", 0) or prod.get("LastRetailPricePurchaseHistory", 0) or 0)
                 stock     = _bm_qty(prod)
                 score     = _priority_score(stock, retail, 0)
@@ -698,14 +698,12 @@ async def _run_gap_scan():
                 })
 
             total_gaps_before_verify = len(global_gaps_base)
-            logger.info(f"[Fase2] {total_gaps_before_verify} gap candidates antes de verificación seller_sku")
+            logger.info(f"[Fase2] {total_gaps_before_verify} BM SKUs con stock — evaluando por cuenta")
 
-            # ── FASE 2b: Verificación seller_sku — safety net definitivo ──────
-            # La Fase 1 puede fallar en extraer SKUs de items inactivos/cerrados
-            # porque el endpoint /items?ids= omite seller_custom_field para esos.
-            # Aquí hacemos la búsqueda INVERSA: para cada candidato a gap,
-            # buscamos ese SKU directamente en ML. Si ML lo tiene publicado en
-            # CUALQUIER estado en CUALQUIER cuenta → no es gap.
+            # ── FASE 2b: Verificación seller_sku — safety net por cuenta ──────
+            # La Fase 1 puede fallar en extraer SKUs de items inactivos/cerrados.
+            # Búsqueda INVERSA por seller_sku en ESTA cuenta únicamente.
+            # Un SKU encontrado en otra cuenta NO se excluye aquí — cada cuenta es independiente.
             _verify_sem = asyncio.Semaphore(5)  # max 5 búsquedas concurrentes por cuenta
 
             # Build search SKU set per gap: base SKU + raw BM SKU (might have suffix like -NEW)
@@ -754,14 +752,12 @@ async def _run_gap_scan():
                     except Exception:
                         return False
 
-            verified_not_gaps: set[str] = set()
-            gap_skus_list = [g["sku"] for g in global_gaps_base]
+            # verified_not_gaps_per_account: por cada cuenta, SKUs encontrados via seller_sku
+            # que existen en ML en esa cuenta (safety net para items que Phase 1 no capturó).
+            verified_not_gaps_per_account: dict[str, set[str]] = {}
 
-            logger.info(
-                f"[Fase2b] Verificando {len(gap_skus_list)} candidates via seller_sku "
-                f"en {len(accounts)} cuentas..."
-            )
-            _verify_total = max(len(gap_skus_list) * len(accounts), 1)
+            all_bm_skus_list = [g["sku"] for g in global_gaps_base]
+            _verify_total = max(len(all_bm_skus_list) * len(accounts), 1)
             _verify_done  = 0
 
             async def _sku_exists_tracked(sku, uid, cli):
@@ -774,37 +770,35 @@ async def _run_gap_scan():
                       f"{_verify_done} verificados de {_verify_total}")
                 return result
 
-            _prog(50, "verifying",
-                  f"Verificando {len(gap_skus_list)} SKUs en MeLi...",
-                  f"0/{_verify_total} verificados")
             for _acct in accounts:
                 _uid = _acct["user_id"]
                 _nick = _acct.get("nickname") or _uid
+                _own_skus = account_ml_data[_uid]["meli_skus"]
+                # Solo verificar candidatos que Phase 1 no capturó para esta cuenta
+                _acct_candidates = [s for s in all_bm_skus_list if s not in _own_skus]
+                _prog(50, "verifying",
+                      f"Verificando {len(_acct_candidates)} SKUs en {_nick}...",
+                      f"0/{len(_acct_candidates)} verificados")
                 _cli = await get_meli_client(user_id=_uid)
                 if not _cli:
+                    verified_not_gaps_per_account[_uid] = set()
                     continue
+                _acct_not_gaps: set[str] = set()
                 try:
-                    _tasks = [_sku_exists_tracked(sku, _uid, _cli) for sku in gap_skus_list]
+                    _tasks = [_sku_exists_tracked(sku, _uid, _cli) for sku in _acct_candidates]
                     _flags = await asyncio.gather(*_tasks, return_exceptions=True)
-                    for sku, flag in zip(gap_skus_list, _flags):
+                    for sku, flag in zip(_acct_candidates, _flags):
                         if flag is True:
-                            verified_not_gaps.add(sku)
-                            logger.info(f"[Fase2b] {sku} encontrado en {_nick} via seller_sku — no es gap")
+                            _acct_not_gaps.add(sku)
+                            logger.info(f"[Fase2b] {sku} encontrado en {_nick} via seller_sku — no es gap para {_nick}")
                 finally:
                     await _cli.close()
+                verified_not_gaps_per_account[_uid] = _acct_not_gaps
+                logger.info(f"[Fase2b] {_nick}: {len(_acct_not_gaps)} SKUs extra encontrados via seller_sku")
 
-            if verified_not_gaps:
-                logger.info(
-                    f"[Fase2b] {len(verified_not_gaps)} SKUs removidos de gaps "
-                    f"(encontrados via seller_sku): {sorted(verified_not_gaps)[:20]}"
-                )
-                global_gaps_base = [g for g in global_gaps_base if g["sku"] not in verified_not_gaps]
-                global_meli_skus |= verified_not_gaps  # asegurar limpieza en Fase 2
-
-            total_gaps = len(global_gaps_base)
-            logger.info(f"[Fase2] {total_gaps} gaps reales confirmados (de {total_gaps_before_verify} candidates)")
+            logger.info(f"[Fase2] {total_gaps_before_verify} BM SKUs evaluados — gaps finales se calculan por cuenta")
             _prog(88, "saving", "Guardando resultados en base de datos...",
-                  f"{total_gaps} gaps confirmados")
+                  f"{total_gaps_before_verify} BM SKUs procesados")
 
             # Guardar los mismos gaps para cada cuenta (el lanzamiento va a la cuenta activa)
             # + datos per-cuenta: reactivaciones, precios, calidad, competencia
@@ -818,6 +812,15 @@ async def _run_gap_scan():
 
                 async with aiosqlite.connect(DATABASE_PATH) as db:
 
+                    # Gaps para esta cuenta = BM SKUs con stock que NO están en ML de esta cuenta
+                    _acct_own_skus    = account_ml_data[user_id]["meli_skus"]
+                    _acct_not_by_api  = verified_not_gaps_per_account.get(user_id, set())
+                    account_gaps = [
+                        g for g in global_gaps_base
+                        if g["sku"] not in _acct_own_skus and g["sku"] not in _acct_not_by_api
+                    ]
+                    logger.info(f"  {nickname}: {len(account_gaps)} gaps para esta cuenta")
+
                     # ── Gaps: purgar obsoletos y upsert ────────────────────────
                     # 1. Eliminar gaps cuyo SKU ya no tiene stock en BM
                     await db.execute(
@@ -828,18 +831,19 @@ async def _run_gap_scan():
                         ),
                         [user_id] + list(current_bm_skus)
                     )
-                    # 2. Eliminar gaps que ahora están publicados en CUALQUIER cuenta
-                    if global_meli_skus:
-                        for chunk_start in range(0, len(global_meli_skus), 500):
-                            chunk = list(global_meli_skus)[chunk_start:chunk_start + 500]
+                    # 2. Eliminar gaps que ahora están publicados en ESTA cuenta
+                    _skus_to_remove = _acct_own_skus | _acct_not_by_api
+                    if _skus_to_remove:
+                        for chunk_start in range(0, len(_skus_to_remove), 500):
+                            chunk = list(_skus_to_remove)[chunk_start:chunk_start + 500]
                             await db.execute(
                                 """DELETE FROM bm_sku_gaps
                                    WHERE user_id=? AND status='unlaunched'
                                    AND sku IN ({})""".format(",".join("?" * len(chunk))),
                                 [user_id] + chunk
                             )
-                    # 3. Upsert gaps globales para esta cuenta
-                    for g_base in global_gaps_base:
+                    # 3. Upsert gaps de esta cuenta
+                    for g_base in account_gaps:
                         g = {**g_base, "user_id": user_id, "nickname": nickname}
                         await db.execute("""
                             INSERT INTO bm_sku_gaps
