@@ -1011,10 +1011,7 @@ async def _run_gap_scan(user_id: str | None = None):
 
 
 async def _nightly_gap_scan_loop():
-    """Runs nightly at 3am Mexico time (UTC-6 = 9am UTC). Runs immediately at startup too."""
-    await asyncio.sleep(30)  # short startup delay
-    # Run immediately on first start to populate data
-    asyncio.create_task(_run_gap_scan())
+    """Runs nightly at 3am Mexico time (UTC-6 = 9am UTC). Solo corre en horario nocturno."""
     while True:
         now_utc = datetime.now(timezone.utc)
         # Target: 9:00 UTC = 3:00 AM Mexico City (CST)

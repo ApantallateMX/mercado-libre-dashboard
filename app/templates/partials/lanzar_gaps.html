@@ -1267,7 +1267,19 @@
     var brandSel = document.getElementById('gaps-brand');
     if (brandSel) brandSel.innerHTML = '<option value="">Todas las marcas</option>';
 
-    fetch('/api/lanzar/scan-now', { method: 'POST' }).then(function() { _startScanPolling(); });
+    fetch('/api/lanzar/scan-now', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status === 'already_running') {
+          // Otro scan global está en curso — no mostrar su progreso
+          var btn = document.getElementById('btn-scan-now');
+          if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+          alert('Hay un scan en curso para otra cuenta. Por favor espera unos minutos e intenta de nuevo.');
+          return;
+        }
+        _startScanPolling();
+      })
+      .catch(function(e) { alert('Error de red: ' + e); });
   };
 
   var _scanStartTime = null;
