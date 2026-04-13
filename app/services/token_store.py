@@ -374,15 +374,16 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_return_flags_item ON return_flags(item_id)"
         )
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)"
-        )
         # Migración: agregar user_id si la tabla ya existía sin esa columna
         try:
             await db.execute("ALTER TABLE return_flags ADD COLUMN user_id TEXT DEFAULT ''")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)")
         except Exception:
             pass  # columna ya existe
+        # Índice sobre user_id — se crea después de asegurar que la columna existe
+        try:
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)")
+        except Exception:
+            pass
         await db.commit()
 
 
