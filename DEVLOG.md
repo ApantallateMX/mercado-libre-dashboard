@@ -31,6 +31,12 @@ Audit completo reveló que varias operaciones mezclaban datos entre cuentas ML:
 ### Arquitectura multi-cuenta (resultado del audit)
 El resto del dashboard (ventas, health, ads, productos, deals, planeación, Amazon) ya estaba correctamente aislado por cuenta mediante `ContextVar(_active_user_id)` + cookie `active_account_id`.
 
+### Scan local vs. global (2026-04-13 — adición)
+- `trigger_scan` (`/api/lanzar/scan-now`): escanea solo la cuenta activa (cookie `active_account_id`).
+- Nuevo endpoint `/api/lanzar/scan-all`: escanea todas las cuentas (`user_id=None`). Solo accesible para `role=admin`.
+- `lanzar_gaps.html`: botón "Escanear ahora" (amarillo) para cuenta activa. Botón "Scan Global" (púrpura) solo visible para admins. Ambos se re-habilitan al terminar polling.
+- Root cause del scan all-accounts: `_nightly_gap_scan_loop` corría un scan inmediato 30s después del boot, bloqueando el `_scan_lock`. Removido — nightly loop solo corre en horario nocturno.
+
 ---
 
 ## 2026-04-12 — FEAT: PRE_NEGOTIATED promos visibles + ML contribution en ganancia
