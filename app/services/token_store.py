@@ -294,12 +294,18 @@ async def init_db():
         # ── Multi-platform stock sync ──────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS sku_platform_rules (
+                user_id     TEXT NOT NULL DEFAULT '',
                 sku         TEXT NOT NULL,
                 platform_id TEXT NOT NULL,
                 enabled     INTEGER DEFAULT 1,
-                PRIMARY KEY (sku, platform_id)
+                PRIMARY KEY (user_id, sku, platform_id)
             )
         """)
+        # Migración: agregar user_id si la tabla ya existía sin esa columna
+        try:
+            await db.execute("ALTER TABLE sku_platform_rules ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass  # columna ya existe
         await db.execute("""
             CREATE TABLE IF NOT EXISTS multi_stock_sync_log (
                 id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -357,6 +363,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS return_flags (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT NOT NULL DEFAULT '',
                 item_id    TEXT NOT NULL,
                 flag_type  TEXT NOT NULL DEFAULT 'review',
                 note       TEXT DEFAULT '',
@@ -367,6 +374,15 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_return_flags_item ON return_flags(item_id)"
         )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)"
+        )
+        # Migración: agregar user_id si la tabla ya existía sin esa columna
+        try:
+            await db.execute("ALTER TABLE return_flags ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)")
+        except Exception:
+            pass  # columna ya existe
         await db.commit()
 
 
@@ -904,31 +920,38 @@ async def get_videos_for_items(item_ids: list, user_id: str) -> dict:
 # MULTI-PLATFORM STOCK SYNC — reglas y log
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def get_all_sku_platform_rules() -> dict:
+async def get_all_sku_platform_rules(user_id: str = "") -> dict:
     """
-    Retorna {sku_upper: [platform_id, ...]} donde enabled=1.
+    Retorna {sku_upper: [platform_id, ...]} donde enabled=1 para este user_id.
     Si un SKU no tiene reglas → no aparece aquí → todas las plataformas habilitadas.
     platform_id: "ml_{user_id}" o "amz_{seller_id}"
+    Para stock sync global (user_id="") retorna reglas de todos los usuarios.
     """
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        rows = await (await db.execute(
-            "SELECT sku, platform_id FROM sku_platform_rules WHERE enabled = 1"
-        )).fetchall()
+        if user_id:
+            rows = await (await db.execute(
+                "SELECT sku, platform_id FROM sku_platform_rules WHERE user_id=? AND enabled=1",
+                (user_id,)
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                "SELECT sku, platform_id FROM sku_platform_rules WHERE enabled=1"
+            )).fetchall()
     result: dict = {}
     for row in rows:
         result.setdefault(row["sku"].upper(), []).append(row["platform_id"])
     return result
 
 
-async def set_sku_platform_rule(sku: str, platform_id: str, enabled: bool) -> None:
-    """Habilita o deshabilita una plataforma para un SKU específico."""
+async def set_sku_platform_rule(user_id: str, sku: str, platform_id: str, enabled: bool) -> None:
+    """Habilita o deshabilita una plataforma para un SKU específico, por cuenta."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
-            """INSERT INTO sku_platform_rules (sku, platform_id, enabled)
-               VALUES (?, ?, ?)
-               ON CONFLICT(sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
-            (sku.upper(), platform_id, 1 if enabled else 0),
+            """INSERT INTO sku_platform_rules (user_id, sku, platform_id, enabled)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id, sku, platform_id) DO UPDATE SET enabled = excluded.enabled""",
+            (user_id, sku.upper(), platform_id, 1 if enabled else 0),
         )
         await db.commit()
 
@@ -1101,47 +1124,48 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
 
 # ─── return_flags helpers ────────────────────────────────────────────────────
 
-async def save_return_flag(item_id: str, flag_type: str, note: str = "") -> None:
+async def save_return_flag(user_id: str, item_id: str, flag_type: str, note: str = "") -> None:
     import time as _t
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        # Upsert: si ya hay una flag activa para este item, actualizarla
         await db.execute(
-            """INSERT INTO return_flags (item_id, flag_type, note, created_at)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO return_flags (user_id, item_id, flag_type, note, created_at)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT DO NOTHING""",
-            (item_id, flag_type, note, _t.time()),
+            (user_id, item_id, flag_type, note, _t.time()),
         )
-        # Si ya existía, actualizar
         await db.execute(
             """UPDATE return_flags SET flag_type=?, note=?, created_at=?, resolved=0
-               WHERE item_id=? AND resolved=0""",
-            (flag_type, note, _t.time(), item_id),
+               WHERE user_id=? AND item_id=? AND resolved=0""",
+            (flag_type, note, _t.time(), user_id, item_id),
         )
         await db.commit()
 
 
-async def get_return_flags() -> list[dict]:
+async def get_return_flags(user_id: str) -> list[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM return_flags WHERE resolved=0 ORDER BY created_at DESC"
+            "SELECT * FROM return_flags WHERE user_id=? AND resolved=0 ORDER BY created_at DESC",
+            (user_id,)
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
 
 
-async def get_flagged_item_ids() -> set:
+async def get_flagged_item_ids(user_id: str) -> set:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         async with db.execute(
-            "SELECT DISTINCT item_id FROM return_flags WHERE resolved=0"
+            "SELECT DISTINCT item_id FROM return_flags WHERE user_id=? AND resolved=0",
+            (user_id,)
         ) as cur:
             rows = await cur.fetchall()
     return {r[0] for r in rows}
 
 
-async def resolve_return_flag(item_id: str) -> None:
+async def resolve_return_flag(user_id: str, item_id: str) -> None:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
-            "UPDATE return_flags SET resolved=1 WHERE item_id=?", (item_id,)
+            "UPDATE return_flags SET resolved=1 WHERE user_id=? AND item_id=?",
+            (user_id, item_id)
         )
         await db.commit()

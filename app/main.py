@@ -1432,7 +1432,9 @@ async def stock_sync_page(request: Request):
     from app.services.stock_sync_multi import get_sync_status
     status = get_sync_status()
     history = await token_store.get_multi_sync_last_runs(limit=10)
-    rules = await token_store.get_all_sku_platform_rules()
+    from app.services.meli_client import _active_user_id as _ctx_uid
+    _active_uid = str(_ctx_uid.get() or "")
+    rules = await token_store.get_all_sku_platform_rules(user_id=_active_uid)
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "stock_sync.html", {
         "user": user,
@@ -8876,24 +8878,28 @@ async def multi_sync_history(limit: int = Query(20, ge=1, le=100)):
 @app.post("/api/stock/multi-sync/rules")
 async def set_platform_rule(request: Request):
     """
-    Define si un SKU está habilitado para una plataforma.
+    Define si un SKU está habilitado para una plataforma (cuenta activa).
     Body: {"sku": "SNFN000941", "platform_id": "ml_123456", "enabled": true}
     platform_id: "ml_{user_id}" o "amz_{seller_id}"
     """
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
     body = await request.json()
     sku         = (body.get("sku") or "").strip().upper()
     platform_id = (body.get("platform_id") or "").strip()
     enabled     = bool(body.get("enabled", True))
     if not sku or not platform_id:
         return JSONResponse({"error": "sku y platform_id requeridos"}, status_code=400)
-    await token_store.set_sku_platform_rule(sku, platform_id, enabled)
+    await token_store.set_sku_platform_rule(_uid, sku, platform_id, enabled)
     return {"ok": True, "sku": sku, "platform_id": platform_id, "enabled": enabled}
 
 
 @app.get("/api/stock/multi-sync/rules")
 async def get_platform_rules():
-    """Lista todas las reglas de plataforma por SKU."""
-    rules = await token_store.get_all_sku_platform_rules()
+    """Lista las reglas de plataforma por SKU para la cuenta activa."""
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
+    rules = await token_store.get_all_sku_platform_rules(user_id=_uid)
     return {"rules": rules}
 
 
@@ -9655,8 +9661,10 @@ async def returns_flag_item(request: Request):
     if not item_id:
         return {"ok": False, "error": "item_id requerido"}
 
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
     from app.services import token_store as _ts
-    await _ts.save_return_flag(item_id, flag_type, note)
+    await _ts.save_return_flag(_uid, item_id, flag_type, note)
     result: dict = {"ok": True, "flagged": item_id, "type": flag_type}
 
     if flag_type == "qty_zero":
@@ -9676,21 +9684,25 @@ async def returns_flag_item(request: Request):
 
 @app.get("/api/returns/flags")
 async def returns_get_flags():
-    """Retorna todos los listings marcados desde análisis de retornos."""
+    """Retorna los listings marcados de la cuenta activa."""
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
     from app.services import token_store as _ts
-    flags = await _ts.get_return_flags()
+    flags = await _ts.get_return_flags(_uid)
     return {"flags": flags}
 
 
 @app.post("/api/returns/resolve-flag")
 async def returns_resolve_flag(request: Request):
-    """Marca una flag de retorno como resuelta."""
+    """Marca una flag de retorno como resuelta (solo para la cuenta activa)."""
     body = await request.json()
     item_id = str(body.get("item_id", "")).strip()
     if not item_id:
         return {"ok": False, "error": "item_id requerido"}
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = str(_ctx.get() or "")
     from app.services import token_store as _ts
-    await _ts.resolve_return_flag(item_id)
+    await _ts.resolve_return_flag(_uid, item_id)
     return {"ok": True, "resolved": item_id}
 
 
