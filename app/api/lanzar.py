@@ -982,11 +982,11 @@ async def _run_gap_scan():
                     """UPDATE bm_gap_scan_status SET
                        status='done', finished_at=?, total_skus=?, gaps_found=?
                        WHERE id=1""",
-                    (datetime.utcnow().isoformat(), len(bm_map), total_gaps)
+                    (datetime.utcnow().isoformat(), len(bm_map), total_gaps_before_verify)
                 )
                 await db.commit()
-            _prog(100, "done", "Scan completado", f"{total_gaps} gaps encontrados")
-            logger.info(f"BM gap scan completado: {total_gaps} gaps en {len(accounts)} cuentas")
+            _prog(100, "done", "Scan completado", f"{total_gaps_before_verify} BM SKUs procesados")
+            logger.info(f"BM gap scan completado: {total_gaps_before_verify} BM SKUs en {len(accounts)} cuentas")
 
         except BaseException as e:
             tb = traceback.format_exc()
