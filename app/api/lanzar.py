@@ -1250,8 +1250,8 @@ async def trigger_scan(request: Request):
     """Dispara el scan manualmente solo para la cuenta activa."""
     if _scan_lock.locked():
         return {"status": "already_running"}
-    from app.services.meli_client import _active_user_id as _ctx
-    _uid = str(_ctx.get() or "")
+    # Leer directamente de la cookie — más confiable que el ContextVar en endpoints de router
+    _uid = request.cookies.get("active_account_id") or ""
     asyncio.create_task(_run_gap_scan(user_id=_uid if _uid else None))
     return {"status": "started", "account": _uid or "all"}
 
