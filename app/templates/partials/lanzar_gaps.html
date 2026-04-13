@@ -16,6 +16,16 @@
         </svg>
         Escanear ahora
       </button>
+      {% if dashboard_user and dashboard_user.role == 'admin' %}
+      <button onclick="window._scanAll()" id="btn-scan-all"
+              class="flex items-center gap-1.5 text-xs font-semibold bg-purple-500 hover:bg-purple-600 text-white px-3 py-1.5 rounded-lg transition">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
+                d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064"/>
+        </svg>
+        Scan Global
+      </button>
+      {% endif %}
     </div>
   </div>
 
@@ -1282,6 +1292,31 @@
       .catch(function(e) { alert('Error de red: ' + e); });
   };
 
+  window._scanAll = function() {
+    var btn = document.getElementById('btn-scan-all');
+    if (btn) { btn.disabled = true; btn.classList.add('opacity-50'); }
+
+    fetch('/api/lanzar/scan-all', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.status === 'already_running') {
+          if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+          alert('Hay un scan en curso. Por favor espera unos minutos e intenta de nuevo.');
+          return;
+        }
+        if (data.status === 'forbidden') {
+          if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+          alert('No tienes permisos para ejecutar el scan global.');
+          return;
+        }
+        _startScanPolling();
+      })
+      .catch(function(e) {
+        if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+        alert('Error de red: ' + e);
+      });
+  };
+
   var _scanStartTime = null;
   var _elapsedTimer  = null;
 
@@ -1327,6 +1362,8 @@
           if (bar) bar.classList.add('hidden');
           var btn = document.getElementById('btn-scan-now');
           if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+          var btnAll = document.getElementById('btn-scan-all');
+          if (btnAll) { btnAll.disabled = false; btnAll.classList.remove('opacity-50'); }
           if (s.status === 'done') { _loadGaps(); _loadFilters(); }
           else if (s.status === 'error') { alert('Error en el scan: ' + (s.error || 'desconocido')); }
         }

@@ -1253,6 +1253,19 @@ async def trigger_scan(request: Request):
     return {"status": "started", "account": _uid or "all"}
 
 
+@router.post("/scan-all")
+async def trigger_scan_all(request: Request):
+    """Scan global — todas las cuentas. Solo admin."""
+    du = getattr(request.state, "dashboard_user", None)
+    if not du or du.get("role") != "admin":
+        from fastapi.responses import JSONResponse as _JSONResponse
+        return _JSONResponse({"status": "forbidden"}, status_code=403)
+    if _scan_lock.locked():
+        return {"status": "already_running"}
+    asyncio.create_task(_run_gap_scan(user_id=None))
+    return {"status": "started", "account": "all"}
+
+
 @router.get("/scan-status")
 async def get_scan_status():
     """Estado del último scan, incluyendo progreso en tiempo real."""
