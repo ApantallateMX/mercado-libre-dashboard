@@ -303,7 +303,7 @@ async def init_db():
         """)
         # Migración: agregar user_id si la tabla ya existía sin esa columna
         try:
-            await db.execute("ALTER TABLE sku_platform_rules ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE sku_platform_rules ADD COLUMN user_id TEXT DEFAULT ''")
         except Exception:
             pass  # columna ya existe
         await db.execute("""
@@ -379,7 +379,7 @@ async def init_db():
         )
         # Migración: agregar user_id si la tabla ya existía sin esa columna
         try:
-            await db.execute("ALTER TABLE return_flags ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+            await db.execute("ALTER TABLE return_flags ADD COLUMN user_id TEXT DEFAULT ''")
             await db.execute("CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)")
         except Exception:
             pass  # columna ya existe
