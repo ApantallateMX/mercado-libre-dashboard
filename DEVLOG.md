@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-13 — FIX: Aislamiento multi-cuenta — gaps, retornos y sync rules independientes por cuenta
+
+### Problema
+Audit completo reveló que varias operaciones mezclaban datos entre cuentas ML:
+1. **Sin publicar (gaps)**: `global_meli_skus` era la unión de TODAS las cuentas. Un SKU publicado en Autobot quedaba excluido de "Sin publicar" en Lutema también. SNTV007841 (24 uds en MTY) no aparecía por este motivo.
+2. **return_flags**: tabla sin `user_id` — flags de retornos eran globales entre cuentas.
+3. **sku_platform_rules**: tabla sin `user_id` — reglas de sync visibles/modificables desde cualquier cuenta.
+4. **Scan manual "Escanear ahora"**: corría para TODAS las cuentas aunque se iniciara desde Lutema.
+
+### Fixes aplicados
+- `lanzar.py _run_gap_scan`: `global_gaps_base` ahora incluye todos los BM SKUs (sin filtro global). El filtro se aplica per-cuenta usando `account_ml_data[user_id]["meli_skus"]`. FASE 2b verifica seller_sku solo contra la cuenta en cuestión → `verified_not_gaps_per_account`.
+- `lanzar.py trigger_scan`: lee `_active_user_id` del ContextVar y pasa `user_id` al scan. Scan nocturno sigue siendo global (`user_id=None`).
+- `token_store.py return_flags`: agrega columna `user_id` (con migración `ALTER TABLE`). Funciones `save/get/resolve_return_flag` ahora filtran por `user_id`.
+- `token_store.py sku_platform_rules`: agrega `user_id` en schema y migración. `get_all_sku_platform_rules(user_id)` filtra por cuenta en UI; sin `user_id` sigue siendo global para el sync.
+- Endpoints `/api/returns/*` y `/api/stock/multi-sync/rules`: pasan `_active_user_id` del ContextVar.
+
+### Bugs resueltos en el proceso
+- `NOT NULL` en `ALTER TABLE ADD COLUMN` no soportado en SQLite < 3.37 (Railway 3.31) → removido.
+- `CREATE INDEX ON return_flags(user_id)` se ejecutaba antes del `ALTER TABLE` → reordenado.
+- `NameError: total_gaps` en scan → renombrado a `total_gaps_before_verify`.
+
+### Arquitectura multi-cuenta (resultado del audit)
+El resto del dashboard (ventas, health, ads, productos, deals, planeación, Amazon) ya estaba correctamente aislado por cuenta mediante `ContextVar(_active_user_id)` + cookie `active_account_id`.
+
+---
+
 ## 2026-04-12 — FEAT: PRE_NEGOTIATED promos visibles + ML contribution en ganancia
 
 ### Problema
