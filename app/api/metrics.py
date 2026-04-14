@@ -155,10 +155,11 @@ async def get_dashboard_data(
         # Productos activos (1 sola llamada rapida, limit=1)
         items_data = await client.get_items(limit=1)
 
-        # Metricas
-        paid_orders = [o for o in all_orders if o.get("status") in ["paid", "delivered"]]
-        # Enriquecer con costos de envío para que order_net_revenue descuente shipping + IVA envío
-        await client.enrich_orders_with_shipping(paid_orders)
+        # Metricas — misma definición que ML "Ventas brutas": todo excepto cancelado/pendiente pago
+        _EXCLUDED = {"cancelled", "payment_required", "payment_in_process"}
+        paid_orders = [o for o in all_orders if o.get("status") not in _EXCLUDED]
+        # NO llamar enrich_orders_with_shipping aquí — haría 1 llamada API por orden (>2000).
+        # Los KPIs usan el fallback de order_net_revenue (total - sale_fee - IVA), suficientemente preciso.
         metrics = {
             "total_orders": len(all_orders),
             "period_sales": len(paid_orders),
@@ -217,8 +218,9 @@ async def get_daily_sales(
             buckets[cur.strftime("%Y-%m-%d")] = {"units": 0, "revenue_gross": 0.0, "revenue_net": 0.0}
             cur += timedelta(days=1)
 
+        _EXCL = {"cancelled", "payment_required", "payment_in_process"}
         for order in all_orders:
-            if order.get("status") not in ["paid", "delivered"]:
+            if order.get("status") in _EXCL:
                 continue
             order_date_utc = datetime.fromisoformat(
                 order["date_created"].replace("Z", "+00:00")
@@ -280,8 +282,9 @@ def _build_chart_data(all_orders: list, date_from: str, date_to: str):
             d = (start + timedelta(days=i)).strftime("%Y-%m-%d")
             buckets[d]
 
+        _EXCL_C = {"cancelled", "payment_required", "payment_in_process"}
         for order in all_orders:
-            if order.get("status") not in ["paid", "delivered"]:
+            if order.get("status") in _EXCL_C:
                 continue
             order_date = datetime.fromisoformat(
                 order["date_created"].replace("Z", "+00:00")
@@ -306,8 +309,9 @@ def _build_chart_data(all_orders: list, date_from: str, date_to: str):
             else:
                 current = current.replace(month=current.month + 1)
 
+        _EXCL_M = {"cancelled", "payment_required", "payment_in_process"}
         for order in all_orders:
-            if order.get("status") not in ["paid", "delivered"]:
+            if order.get("status") in _EXCL_M:
                 continue
             order_date = datetime.fromisoformat(
                 order["date_created"].replace("Z", "+00:00")

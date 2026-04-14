@@ -586,13 +586,13 @@ function loadDashboard() {
 
     // Métricas + Chart (1 sola llamada)
     fetch('/api/metrics/dashboard-data?' + p)
-        .then(function(r){return r.json();})
+        .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
         .then(function(resp){
             renderMetrics(resp.metrics);
             renderChart(resp.chart);
         })
-        .catch(function(){
-            document.getElementById('metrics-cards').innerHTML = '<p class="text-red-500 py-4 text-center text-sm">Error cargando métricas</p>';
+        .catch(function(e){
+            document.getElementById('metrics-cards').innerHTML = '<p class="text-red-500 py-4 text-center text-sm">Error cargando métricas: ' + e.message + '</p>';
         });
 
     // Daily sales (sin goal param — lee de DB automáticamente)

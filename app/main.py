@@ -1518,9 +1518,10 @@ async def sku_compare_api(
         orders_a, orders_b = await asyncio.gather(orders_a_task, orders_b_task)
 
         def aggregate_skus(orders):
+            _EXCL = {"cancelled", "payment_required", "payment_in_process"}
             sku_map = {}
             for order in orders:
-                if order.get("status") not in ["paid", "delivered"]:
+                if order.get("status") in _EXCL:
                     continue
                 for oi in order.get("order_items", []):
                     item = oi.get("item", {})
@@ -5404,9 +5405,10 @@ async def sku_sales_table_partial(
         )
 
         # Paso 1: recolectar ventas por SKU crudo (tal cual viene de la orden)
+        _EXCL_SKU = {"cancelled", "payment_required", "payment_in_process"}
         raw_map = {}
         for order in all_orders:
-            if order.get("status") not in ["paid", "delivered"]:
+            if order.get("status") in _EXCL_SKU:
                 continue
 
             for order_item in order.get("order_items", []):
