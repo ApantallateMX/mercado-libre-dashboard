@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-14 — BUG CRÍTICO: item_sku_cache — SKUs múltiples por item se perdían
+
+### El problema
+SKUs como SNTV006296 aparecían en "Sin publicar" aunque la cuenta BLOWTECHNOLOGIES tenía 2 listings activos con ese SKU.
+
+### Root cause
+`item_sku_cache` tenía `item_id TEXT PRIMARY KEY` (solo 1 SKU por item). ML permite `seller_custom_field = "SNTV006296 / SNWM000001"` (dos SKUs combinados). El código hacía split correcto → 2 entries: `{item_id: MLM3637209388, sku: SNTV006296}` y `{item_id: MLM3637209388, sku: SNWM000001}`. Pero el segundo INSERT hacía `ON CONFLICT(item_id) DO UPDATE SET sku = SNWM000001`, sobreescribiendo el primero.
+
+**Resultado:** En el siguiente scan, `MLM3637209388` ya estaba en cache con `SNWM000001` → no se re-fetcheaba → `SNTV006296` no entraba al `sku_set` de BLOW → false gap "Sin publicar".
+
+### Fix
+- `item_sku_cache` migrado a `PRIMARY KEY (item_id, sku)` — migración automática en `init_db()` que droppea la tabla antigua (datos corrompidos) y la recrea
+- `save_skus_cache()`: `ON CONFLICT(item_id, sku)` en vez de `ON CONFLICT(item_id)` — ya no sobreescribe
+- `get_cached_skus()`: retorna `{item_id: [sku1, sku2, ...]}` en vez de `{item_id: str}`
+- `_get_meli_sku_set()`: comprehension actualizada para iterar listas
+- Debug endpoint: reverse-map `cached_by_sku` actualizado
+
+### Archivos afectados
+- `app/services/token_store.py` — schema, migración, `get_cached_skus()`, `save_skus_cache()`
+- `app/api/lanzar.py:378` — consumer de `get_cached_skus()` y debug endpoint
+
+### Efecto post-deploy
+Al arrancar, `init_db()` detecta el schema viejo y droppea la cache. El primer scan re-fetcha todos los items y popula correctamente con ambos SKUs por item. Los gaps falsos de SKUs combinados desaparecen.
+
+---
+
 ## 2026-04-13 — BUG CRÍTICO: Pack_id vs Order_id en MeLi API
 
 ### El problema
