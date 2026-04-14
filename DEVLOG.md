@@ -37,6 +37,29 @@ Documentado en `api-integration-specialist.md` — sección "Pack_id vs Order_id
 
 ---
 
+## 2026-04-14 — FIX: Portal cliente Facturación — Amazon muestra SKU/precio/total
+
+### Problema
+Al buscar una orden Amazon desde el portal del cliente (`/factura/{token}`), el sistema mostraba "Pedido confirmado" pero sin descripción, SKU, precio unitario ni total. MeLi funcionaba correctamente.
+
+### Root cause
+- `factura_lookup_order()` solo ejecutaba la rama MeLi, ignorando plataforma Amazon
+- `_build_order_summary()` solo parseaba el formato MeLi (`order_items`, `total_amount`, `date_closed`)
+- El formato Amazon es completamente distinto: `AmazonOrderId`, `_items`, `OrderTotal`, `PurchaseDate`
+
+### Fix
+1. `_is_amazon_order_id()` — detecta automáticamente por regex `^\d{3}-\d{7}-\d{7}$`
+2. `factura_lookup_order()` — si `platform == "amazon"`, usa `get_amazon_client()` + SP-API `/orders/v0/orders/{id}` y `/orderItems`; almacena ítems en `order["_items"]` y marca `order["_platform"] = "amazon"`
+3. `_build_order_summary()` — rama Amazon extrae `Title`, `SellerSKU`, `ASIN`, `QuantityOrdered`, `ItemPrice.Amount` de cada item; extrae `OrderTotal.Amount` como total
+
+### Archivos afectados
+- `app/main.py` — `_is_amazon_order_id()`, `factura_lookup_order()`, `_build_order_summary()`
+
+### Template
+`factura_cliente.html` ya usaba `it.unit_price` y `summary.total` — no requirió cambios.
+
+---
+
 ## 2026-04-14 — FEAT: Módulo de Facturación — portal self-service para clientes
 
 ### Qué se construyó
