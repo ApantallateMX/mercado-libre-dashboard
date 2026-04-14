@@ -283,38 +283,47 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
         return u
 
     def _skus_from_body(body: dict) -> list[str]:
-        """Extract all SKUs from a ML item body dict."""
+        """Extract primary SKU from a ML item body dict.
+        When the field contains combined SKUs (e.g. 'SNTV006296 / SNWM000001'),
+        splits by / \\ + , and returns the first part with exactly 10 chars
+        (BM SKU format). Falls back to the first non-empty part if none is 10 chars.
+        Always returns at most 1 SKU per field source.
+        """
+        def _primary(raw: str) -> str:
+            """Return the primary BM SKU from a potentially combined string."""
+            parts = [p.strip() for p in _re.split(r'\s*[/\\+,]\s*', raw) if p.strip()]
+            # BM SKUs are always exactly 10 characters — prefer those
+            return next((p for p in parts if len(p) == 10), parts[0] if parts else "")
+
         found = []
-        # seller_custom_field (most common — SKU set by seller at listing time)
+        # seller_custom_field
         scf = (body.get("seller_custom_field") or "").strip().upper()
         if scf:
-            for part in _re.split(r'\s*[/+,]\s*', scf):
-                if part.strip():
-                    found.append(part.strip())
+            sku = _primary(scf)
+            if sku:
+                found.append(sku)
         # attributes array → SELLER_SKU id
-        # NOTE: ML can store combined SKUs here too: "SNTV006296 / SNWM000001"
-        # Must split the same way as seller_custom_field.
         for a in (body.get("attributes") or []):
             if a.get("id") == "SELLER_SKU":
                 v = (a.get("value_name") or "").strip().upper()
                 if v:
-                    for part in _re.split(r'\s*[/+,]\s*', v):
-                        if part.strip():
-                            found.append(part.strip())
+                    sku = _primary(v)
+                    if sku:
+                        found.append(sku)
         # variations (multi-variant listings)
         for var in (body.get("variations") or []):
             vscf = (var.get("seller_custom_field") or "").strip().upper()
             if vscf:
-                for part in _re.split(r'\s*[/+,]\s*', vscf):
-                    if part.strip():
-                        found.append(part.strip())
+                sku = _primary(vscf)
+                if sku:
+                    found.append(sku)
             for a in (var.get("attributes") or []):
                 if a.get("id") == "SELLER_SKU":
                     v = (a.get("value_name") or "").strip().upper()
                     if v:
-                        for part in _re.split(r'\s*[/+,]\s*', v):
-                            if part.strip():
-                                found.append(part.strip())
+                        sku = _primary(v)
+                        if sku:
+                            found.append(sku)
         return found
 
     client = await get_meli_client(user_id=user_id)
@@ -379,13 +388,11 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
             return set(), {}, {}
 
         # ── Step 2: Check cache ───────────────────────────────────────────────
-        # cached: {item_id: [sku1, sku2, ...]} — múltiples SKUs por item posible
-        # (ej. seller_custom_field="SNTV006296 / SNWM000001" → dos entradas en cache)
         from app.services.token_store import get_cached_skus, save_skus_cache
         cached       = await get_cached_skus(item_ids)
-        cached_skus  = {_base(v) for vs in cached.values() for v in vs if v}
+        cached_skus  = {_base(v) for v in cached.values() if v}
         needs_fetch  = [iid for iid in item_ids if iid not in cached]
-        logger.info(f"{nickname}: {len(cached)} cached items ({len(cached_skus)} SKUs), {len(needs_fetch)} items to fetch")
+        logger.info(f"{nickname}: {len(cached)} cached SKUs, {len(needs_fetch)} items to fetch")
 
         # ── Step 3: Batch-fetch uncached items ───────────────────────────────
         # CRITICAL: Do NOT add ?attributes= filter here.
@@ -1620,8 +1627,7 @@ async def debug_scan(sku: str = ""):
                     # Check cache
                     from app.services.token_store import get_cached_skus
                     cached = await get_cached_skus(ids)
-                    # cached: {item_id: [sku1, sku2, ...]} — reverse to {sku: item_id}
-                    cached_by_sku = {s: iid for iid, skus in cached.items() for s in skus}
+                    cached_by_sku = {v: k for k, v in cached.items()}
                     result["cache"]["total_cached_for_page1"] = len(cached)
                     if sku_upper in cached_by_sku:
                         result["ml"]["sku_check"]["in_cache"] = True

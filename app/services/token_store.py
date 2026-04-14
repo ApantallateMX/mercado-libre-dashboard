@@ -862,11 +862,12 @@ async def get_amazon_stock_threshold(seller_id: str) -> int:
 # ─── ITEM SKU CACHE ───────────────────────────────────────────────────────────
 
 async def get_cached_skus(item_ids: list) -> dict:
-    """Retorna {item_id: [sku1, sku2, ...]} para los item_ids en caché (sku no vacío).
-    Un item puede tener múltiples SKUs (seller_custom_field con formato "SKU1 / SKU2")."""
+    """Retorna {item_id: sku} para los item_ids que están en caché (sku no vacío).
+    Con la PK compuesta (item_id, sku) puede haber múltiples filas por item,
+    pero en la práctica siempre es 1 (BM SKUs son exactamente 10 chars)."""
     if not item_ids:
         return {}
-    result: dict[str, list[str]] = {}
+    result: dict[str, str] = {}
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         # SQLite limit: 999 variables per query — chunk to be safe
@@ -878,7 +879,9 @@ async def get_cached_skus(item_ids: list) -> dict:
                 chunk,
             )
             for row in await cursor.fetchall():
-                result.setdefault(row["item_id"], []).append(row["sku"])
+                # First row wins — only 1 SKU per item expected
+                if row["item_id"] not in result:
+                    result[row["item_id"]] = row["sku"]
     return result
 
 
