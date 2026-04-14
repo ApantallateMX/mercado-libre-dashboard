@@ -384,6 +384,62 @@ async def init_db():
             await db.execute("CREATE INDEX IF NOT EXISTS idx_return_flags_user ON return_flags(user_id)")
         except Exception:
             pass
+
+        # ─────────────────────────────────────────────────────────────────
+        # TABLAS: Módulo de Facturación
+        # billing_requests   — solicitud creada por el equipo interno
+        # billing_fiscal_data— datos fiscales llenados por el cliente
+        # billing_invoices   — PDF de factura subido por contabilidad
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS billing_requests (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                token        TEXT UNIQUE NOT NULL,
+                ml_user_id   TEXT NOT NULL DEFAULT '',
+                platform     TEXT NOT NULL DEFAULT 'mercadolibre',
+                order_number TEXT NOT NULL DEFAULT '',
+                client_ref   TEXT NOT NULL DEFAULT '',
+                status       TEXT NOT NULL DEFAULT 'pending_data',
+                order_data   TEXT NOT NULL DEFAULT '{}',
+                created_by   TEXT NOT NULL DEFAULT '',
+                created_at   TEXT NOT NULL DEFAULT '',
+                notes        TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS billing_fiscal_data (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id       INTEGER UNIQUE NOT NULL,
+                rfc              TEXT NOT NULL DEFAULT '',
+                razon_social     TEXT NOT NULL DEFAULT '',
+                cfdi_use         TEXT NOT NULL DEFAULT '',
+                fiscal_regime    TEXT NOT NULL DEFAULT '',
+                zip_code         TEXT NOT NULL DEFAULT '',
+                forma_pago       TEXT NOT NULL DEFAULT '',
+                email            TEXT NOT NULL DEFAULT '',
+                phone            TEXT NOT NULL DEFAULT '',
+                street           TEXT NOT NULL DEFAULT '',
+                constancia_data  BLOB,
+                constancia_name  TEXT NOT NULL DEFAULT '',
+                submitted_at     TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS billing_invoices (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id  INTEGER UNIQUE NOT NULL,
+                filename    TEXT NOT NULL DEFAULT '',
+                file_data   BLOB NOT NULL,
+                uploaded_by TEXT NOT NULL DEFAULT '',
+                uploaded_at TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_requests_token ON billing_requests(token)"
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_requests_status ON billing_requests(status)"
+        )
         await db.commit()
 
 
@@ -1169,4 +1225,186 @@ async def resolve_return_flag(user_id: str, item_id: str) -> None:
             "UPDATE return_flags SET resolved=1 WHERE user_id=? AND item_id=?",
             (user_id, item_id)
         )
+        await db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MÓDULO DE FACTURACIÓN
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def create_billing_request(
+    token: str,
+    ml_user_id: str,
+    platform: str,
+    order_number: str,
+    client_ref: str,
+    created_by: str,
+    notes: str = "",
+) -> int:
+    """Crea una nueva solicitud de facturación. Retorna el id."""
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO billing_requests
+               (token, ml_user_id, platform, order_number, client_ref, created_by, created_at, notes)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (token, ml_user_id, platform, order_number, client_ref, created_by, now, notes),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_billing_request_by_token(token: str) -> Optional[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM billing_requests WHERE token=?", (token,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_billing_request_by_id(request_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM billing_requests WHERE id=?", (request_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def list_billing_requests(status: str = None) -> list:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        if status:
+            cursor = await db.execute(
+                "SELECT * FROM billing_requests WHERE status=? ORDER BY created_at DESC",
+                (status,),
+            )
+        else:
+            cursor = await db.execute(
+                "SELECT * FROM billing_requests ORDER BY created_at DESC"
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def update_billing_status(request_id: int, status: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE billing_requests SET status=? WHERE id=?", (status, request_id)
+        )
+        await db.commit()
+
+
+async def update_billing_order_data(request_id: int, order_data_json: str) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE billing_requests SET order_data=? WHERE id=?",
+            (order_data_json, request_id),
+        )
+        await db.commit()
+
+
+async def save_billing_fiscal_data(
+    request_id: int,
+    rfc: str,
+    razon_social: str,
+    cfdi_use: str,
+    fiscal_regime: str,
+    zip_code: str,
+    forma_pago: str,
+    email: str,
+    phone: str,
+    street: str,
+    constancia_data: bytes = None,
+    constancia_name: str = "",
+) -> None:
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO billing_fiscal_data
+               (request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
+                forma_pago, email, phone, street, constancia_data, constancia_name, submitted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(request_id) DO UPDATE SET
+                 rfc=excluded.rfc, razon_social=excluded.razon_social,
+                 cfdi_use=excluded.cfdi_use, fiscal_regime=excluded.fiscal_regime,
+                 zip_code=excluded.zip_code, forma_pago=excluded.forma_pago,
+                 email=excluded.email, phone=excluded.phone, street=excluded.street,
+                 constancia_data=excluded.constancia_data,
+                 constancia_name=excluded.constancia_name,
+                 submitted_at=excluded.submitted_at""",
+            (
+                request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
+                forma_pago, email, phone, street, constancia_data, constancia_name, now,
+            ),
+        )
+        await db.commit()
+
+
+async def get_billing_fiscal_data(request_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM billing_fiscal_data WHERE request_id=?", (request_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d.pop("constancia_data", None)  # never return binary in JSON context
+        return d
+
+
+async def get_billing_constancia(request_id: int) -> Optional[tuple]:
+    """Retorna (filename, bytes) o None."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT constancia_name, constancia_data FROM billing_fiscal_data WHERE request_id=?",
+            (request_id,),
+        )
+        row = await cursor.fetchone()
+        if row and row["constancia_data"]:
+            return (row["constancia_name"] or "constancia.pdf", bytes(row["constancia_data"]))
+        return None
+
+
+async def save_billing_invoice(
+    request_id: int, filename: str, file_data: bytes, uploaded_by: str
+) -> None:
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO billing_invoices (request_id, filename, file_data, uploaded_by, uploaded_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(request_id) DO UPDATE SET
+                 filename=excluded.filename, file_data=excluded.file_data,
+                 uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
+            (request_id, filename, file_data, uploaded_by, now),
+        )
+        await db.commit()
+
+
+async def get_billing_invoice(request_id: int) -> Optional[tuple]:
+    """Retorna (filename, bytes) o None."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT filename, file_data FROM billing_invoices WHERE request_id=?",
+            (request_id,),
+        )
+        row = await cursor.fetchone()
+        if row and row["file_data"]:
+            return (row["filename"] or "factura.pdf", bytes(row["file_data"]))
+        return None
+
+
+async def delete_billing_request(request_id: int) -> None:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("DELETE FROM billing_fiscal_data WHERE request_id=?", (request_id,))
+        await db.execute("DELETE FROM billing_invoices WHERE request_id=?", (request_id,))
+        await db.execute("DELETE FROM billing_requests WHERE id=?", (request_id,))
         await db.commit()

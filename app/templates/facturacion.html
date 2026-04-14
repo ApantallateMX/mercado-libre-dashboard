@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Facturación{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 py-6">
+
+  <!-- ── Header ───────────────────────────────────────────────────────────── -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Facturación</h1>
+      <p class="text-xs text-gray-500 mt-0.5">Gestiona solicitudes de factura de clientes</p>
+    </div>
+    <button onclick="window._openCreateModal()"
+            class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-4 py-2 rounded-lg transition">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+      </svg>
+      Nueva solicitud
+    </button>
+  </div>
+
+  <!-- ── Filtros ───────────────────────────────────────────────────────────── -->
+  <div class="flex items-center gap-2 mb-4 flex-wrap">
+    <span class="text-xs text-gray-500 font-medium">Filtrar:</span>
+    <button onclick="window._loadRequests('')"     id="f-all"      class="filter-btn active-filter text-xs px-3 py-1 rounded-full border transition">Todos</button>
+    <button onclick="window._loadRequests('pending_data')"  id="f-pending"  class="filter-btn text-xs px-3 py-1 rounded-full border transition">Esperando datos</button>
+    <button onclick="window._loadRequests('data_received')" id="f-received" class="filter-btn text-xs px-3 py-1 rounded-full border transition">Pendiente factura</button>
+    <button onclick="window._loadRequests('invoice_ready')" id="f-ready"    class="filter-btn text-xs px-3 py-1 rounded-full border transition">Factura lista</button>
+  </div>
+
+  <!-- ── Tabla de solicitudes ──────────────────────────────────────────────── -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+    <div id="requests-loading" class="px-6 py-10 text-center text-gray-400 text-sm">Cargando...</div>
+    <table id="requests-table" class="hidden w-full text-sm">
+      <thead class="bg-gray-50 border-b border-gray-100">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Referencia / Orden</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Plataforma</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Estado</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Creado por</th>
+          <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Fecha</th>
+          <th class="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="requests-tbody" class="divide-y divide-gray-50"></tbody>
+    </table>
+    <div id="requests-empty" class="hidden px-6 py-10 text-center text-gray-400 text-sm">Sin solicitudes para este filtro.</div>
+  </div>
+</div>
+
+<!-- ══ MODAL: Nueva solicitud ══════════════════════════════════════════════ -->
+<div id="modal-create" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+      <h2 class="font-bold text-gray-800">Nueva solicitud de factura</h2>
+      <button onclick="document.getElementById('modal-create').classList.add('hidden')" class="text-gray-400 hover:text-gray-600">✕</button>
+    </div>
+    <div class="px-6 py-5 space-y-4">
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Cuenta ML</label>
+        <select id="c-ml-user" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          <option value="">— Manual / Sin cuenta ML —</option>
+          {% for acc in accounts %}
+          <option value="{{ acc.user_id }}">{{ acc.nickname or acc.user_id }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Plataforma</label>
+        <select id="c-platform" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          <option value="mercadolibre">Mercado Libre</option>
+          <option value="amazon">Amazon</option>
+          <option value="manual">Venta directa / Manual</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Número de Orden</label>
+        <input id="c-order-number" type="text" placeholder="ej. 2000007123456789"
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Referencia interna (opcional)</label>
+        <input id="c-client-ref" type="text" placeholder="Nombre del cliente, ticket, etc."
+               class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+      </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">Notas (opcional)</label>
+        <textarea id="c-notes" rows="2" placeholder="Notas internas para contabilidad"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none"></textarea>
+      </div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+      <button onclick="document.getElementById('modal-create').classList.add('hidden')"
+              class="text-sm text-gray-500 hover:text-gray-700">Cancelar</button>
+      <button onclick="window._createRequest()" id="btn-create"
+              class="bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-5 py-2 rounded-lg transition">
+        Crear y copiar link
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: Ver detalles + subir factura ══════════════════════════════════ -->
+<div id="modal-detail" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
+      <h2 class="font-bold text-gray-800" id="detail-title">Detalle de solicitud</h2>
+      <button onclick="document.getElementById('modal-detail').classList.add('hidden')" class="text-gray-400 hover:text-gray-600">✕</button>
+    </div>
+    <div id="detail-body" class="px-6 py-5 space-y-5">
+      <div class="text-center text-gray-400 text-sm py-8">Cargando...</div>
+    </div>
+  </div>
+</div>
+
+<style>
+.filter-btn { background: white; color: #6b7280; border-color: #e5e7eb; }
+.filter-btn:hover { background: #fef9c3; }
+.active-filter { background: #fde047 !important; color: #1f2937 !important; font-weight: 600; border-color: #fde047 !important; }
+</style>
+
+<script>
+var _currentFilter = '';
+var _currentReqId = null;
+
+var _STATUS_LABELS = {
+  'pending_data':   '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">Esperando datos</span>',
+  'data_received':  '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">Pendiente factura</span>',
+  'invoice_ready':  '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Factura lista</span>',
+};
+
+var _PLATFORM_LABELS = {
+  'mercadolibre': 'Mercado Libre',
+  'amazon':       'Amazon',
+  'manual':       'Manual',
+};
+
+window._loadRequests = function(status) {
+  _currentFilter = status;
+  // Update active filter button
+  ['all','pending','received','ready'].forEach(function(k) {
+    var btn = document.getElementById('f-' + k);
+    if (btn) btn.classList.remove('active-filter');
+  });
+  var activeId = status === '' ? 'f-all' : status === 'pending_data' ? 'f-pending' : status === 'data_received' ? 'f-received' : 'f-ready';
+  var activeBtn = document.getElementById(activeId);
+  if (activeBtn) activeBtn.classList.add('active-filter');
+
+  var loading = document.getElementById('requests-loading');
+  var table   = document.getElementById('requests-table');
+  var empty   = document.getElementById('requests-empty');
+  loading.classList.remove('hidden'); table.classList.add('hidden'); empty.classList.add('hidden');
+
+  fetch('/api/facturacion/requests' + (status ? '?status=' + status : ''))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      loading.classList.add('hidden');
+      var rows = d.requests || [];
+      if (!rows.length) { empty.classList.remove('hidden'); return; }
+      var tbody = document.getElementById('requests-tbody');
+      tbody.innerHTML = rows.map(function(r) {
+        var ref   = r.client_ref || r.order_number || '#' + r.id;
+        var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + r.order_number + '</span>' : '';
+        var date  = (r.created_at || '').substring(0, 10);
+        var plat  = _PLATFORM_LABELS[r.platform] || r.platform;
+        var st    = _STATUS_LABELS[r.status] || r.status;
+        return '<tr class="hover:bg-gray-50 transition">' +
+          '<td class="px-4 py-3 font-medium text-gray-800">' + _esc(ref) + order + '</td>' +
+          '<td class="px-4 py-3 text-gray-600">' + plat + '</td>' +
+          '<td class="px-4 py-3">' + st + '</td>' +
+          '<td class="px-4 py-3 text-gray-500">' + _esc(r.created_by) + '</td>' +
+          '<td class="px-4 py-3 text-gray-400 font-mono text-xs">' + date + '</td>' +
+          '<td class="px-4 py-3 text-right">' +
+            '<div class="flex items-center justify-end gap-2">' +
+              '<button onclick="window._copyLink(\'' + r.token + '\')" title="Copiar link" class="text-blue-500 hover:text-blue-700 text-xs font-semibold px-2 py-1 rounded hover:bg-blue-50 transition">🔗 Link</button>' +
+              '<button onclick="window._openDetail(' + r.id + ')" title="Ver detalle" class="text-gray-500 hover:text-gray-700 text-xs font-semibold px-2 py-1 rounded hover:bg-gray-100 transition">Ver</button>' +
+            '</div>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      table.classList.remove('hidden');
+    })
+    .catch(function() { loading.classList.add('hidden'); empty.classList.remove('hidden'); });
+};
+
+window._openCreateModal = function() {
+  document.getElementById('c-order-number').value = '';
+  document.getElementById('c-client-ref').value = '';
+  document.getElementById('c-notes').value = '';
+  document.getElementById('modal-create').classList.remove('hidden');
+};
+
+window._createRequest = function() {
+  var btn = document.getElementById('btn-create');
+  btn.disabled = true; btn.textContent = 'Creando...';
+  var fd = new FormData();
+  fd.append('ml_user_id',   document.getElementById('c-ml-user').value);
+  fd.append('platform',     document.getElementById('c-platform').value);
+  fd.append('order_number', document.getElementById('c-order-number').value.trim());
+  fd.append('client_ref',   document.getElementById('c-client-ref').value.trim());
+  fd.append('notes',        document.getElementById('c-notes').value.trim());
+  fetch('/api/facturacion/requests', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false; btn.textContent = 'Crear y copiar link';
+      document.getElementById('modal-create').classList.add('hidden');
+      navigator.clipboard.writeText(d.link).catch(function(){});
+      alert('✅ Solicitud creada.\n\nLink copiado al portapapeles:\n' + d.link);
+      window._loadRequests(_currentFilter);
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Crear y copiar link';
+      alert('Error: ' + e);
+    });
+};
+
+window._copyLink = function(token) {
+  var link = window.location.origin + '/factura/' + token;
+  navigator.clipboard.writeText(link).then(function() {
+    alert('Link copiado:\n' + link);
+  }).catch(function() {
+    prompt('Copia este link:', link);
+  });
+};
+
+window._openDetail = function(reqId) {
+  _currentReqId = reqId;
+  var body = document.getElementById('detail-body');
+  body.innerHTML = '<div class="text-center text-gray-400 text-sm py-8">Cargando...</div>';
+  document.getElementById('modal-detail').classList.remove('hidden');
+  fetch('/api/facturacion/requests/' + reqId)
+    .then(function(r) { return r.json(); })
+    .then(function(d) { body.innerHTML = window._renderDetail(d); })
+    .catch(function() { body.innerHTML = '<p class="text-red-500 text-sm">Error cargando datos.</p>'; });
+};
+
+window._renderDetail = function(d) {
+  var r = d.request;
+  var f = d.fiscal_data;
+  var link = window.location.origin + '/factura/' + r.token;
+  var html = '';
+
+  // Solicitud info
+  html += '<div class="grid grid-cols-2 gap-3 text-sm">';
+  html += _dRow('Estado', (_STATUS_LABELS[r.status] || r.status));
+  html += _dRow('Plataforma', (_PLATFORM_LABELS[r.platform] || r.platform));
+  html += _dRow('# Orden', r.order_number || '—');
+  html += _dRow('Referencia', r.client_ref || '—');
+  html += _dRow('Creado por', r.created_by);
+  html += _dRow('Fecha', (r.created_at || '').substring(0, 10));
+  if (r.notes) html += _dRow('Notas', _esc(r.notes));
+  html += '</div>';
+
+  // Link del cliente
+  html += '<div class="bg-blue-50 rounded-xl p-4">';
+  html += '<p class="text-xs font-semibold text-blue-700 mb-1">Link del cliente</p>';
+  html += '<div class="flex items-center gap-2">';
+  html += '<input readonly value="' + link + '" class="flex-1 text-xs font-mono bg-white border border-blue-200 rounded px-2 py-1.5 text-blue-800">';
+  html += '<button onclick="window._copyLink(\'' + r.token + '\')" class="text-xs bg-blue-500 hover:bg-blue-600 text-white px-3 py-1.5 rounded font-semibold transition">Copiar</button>';
+  html += '</div></div>';
+
+  // Datos fiscales del cliente
+  if (f) {
+    html += '<div>';
+    html += '<p class="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Datos fiscales del cliente</p>';
+    html += '<div class="grid grid-cols-2 gap-2 text-sm">';
+    html += _dRow('RFC', f.rfc || '—');
+    html += _dRow('Razón Social', f.razon_social || '—');
+    html += _dRow('Régimen Fiscal', f.fiscal_regime || '—');
+    html += _dRow('Uso CFDI', f.cfdi_use || '—');
+    html += _dRow('Forma de Pago', f.forma_pago || '—');
+    html += _dRow('CP Fiscal', f.zip_code || '—');
+    html += _dRow('Email', f.email || '—');
+    html += _dRow('Teléfono', f.phone || '—');
+    if (f.street) html += _dRow('Domicilio', _esc(f.street));
+    html += '</div>';
+    if (f.constancia_name) {
+      html += '<a href="/api/facturacion/requests/' + r.id + '/constancia" target="_blank" class="inline-flex items-center gap-1.5 mt-3 text-xs text-blue-600 hover:underline font-semibold">📄 Descargar Constancia Fiscal (' + _esc(f.constancia_name) + ')</a>';
+    }
+    html += '</div>';
+  } else if (r.status === 'pending_data') {
+    html += '<div class="bg-gray-50 rounded-xl p-4 text-xs text-gray-500 text-center">El cliente aún no ha enviado sus datos fiscales.</div>';
+  }
+
+  // Subir factura
+  html += '<div>';
+  html += '<p class="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Factura PDF</p>';
+  if (d.has_invoice) {
+    html += '<div class="flex items-center gap-3">';
+    html += '<a href="/api/facturacion/requests/' + r.id + '/invoice" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-semibold hover:bg-green-100 transition">📥 Descargar factura (' + _esc(d.invoice_filename || 'factura.pdf') + ')</a>';
+    html += '<span class="text-xs text-gray-400">o sube una nueva versión:</span>';
+    html += '</div><div class="mt-2">';
+  }
+  html += '<div class="flex items-center gap-3 mt-2">';
+  html += '<input type="file" id="inv-file-' + r.id + '" accept=".pdf" class="text-xs text-gray-600 file:mr-2 file:text-xs file:font-semibold file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-yellow-400 file:text-gray-800 hover:file:bg-yellow-500">';
+  html += '<button onclick="window._uploadInvoice(' + r.id + ')" class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-3 py-1.5 rounded-lg transition" id="btn-upload-' + r.id + '">Subir</button>';
+  html += '</div>';
+  if (d.has_invoice) html += '</div>';
+  html += '</div>';
+
+  {% if dashboard_user and dashboard_user.role == 'admin' %}
+  html += '<div class="border-t border-gray-100 pt-4">';
+  html += '<button onclick="window._deleteRequest(' + r.id + ')" class="text-xs text-red-500 hover:text-red-700 font-semibold">Eliminar solicitud</button>';
+  html += '</div>';
+  {% endif %}
+
+  return html;
+};
+
+function _dRow(label, value) {
+  return '<div class="bg-gray-50 rounded-lg p-2.5"><p class="text-xs text-gray-400 mb-0.5">' + label + '</p><p class="text-xs font-semibold text-gray-800">' + value + '</p></div>';
+}
+
+window._uploadInvoice = function(reqId) {
+  var fileInput = document.getElementById('inv-file-' + reqId);
+  var btn = document.getElementById('btn-upload-' + reqId);
+  if (!fileInput || !fileInput.files.length) { alert('Selecciona un archivo PDF primero.'); return; }
+  var fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  btn.disabled = true; btn.textContent = 'Subiendo...';
+  fetch('/api/facturacion/requests/' + reqId + '/invoice', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false; btn.textContent = 'Subir';
+      if (d.ok) {
+        alert('✅ Factura subida. El cliente ya puede descargarla.');
+        window._openDetail(reqId);
+        window._loadRequests(_currentFilter);
+      } else {
+        alert('Error: ' + (d.detail || 'desconocido'));
+      }
+    })
+    .catch(function(e) { btn.disabled = false; btn.textContent = 'Subir'; alert('Error: ' + e); });
+};
+
+window._deleteRequest = function(reqId) {
+  if (!confirm('¿Eliminar esta solicitud? Se borrarán también los datos fiscales y la factura asociada.')) return;
+  fetch('/api/facturacion/requests/' + reqId, { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+      document.getElementById('modal-detail').classList.add('hidden');
+      window._loadRequests(_currentFilter);
+    })
+    .catch(function(e) { alert('Error: ' + e); });
+};
+
+function _esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Carga inicial
+window._loadRequests('');
+</script>
+{% endblock %}

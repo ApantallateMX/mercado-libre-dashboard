@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solicitud de Factura</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<div class="max-w-xl mx-auto px-4 py-10">
+
+  <!-- ── Logo / Header ──────────────────────────────────────────────────── -->
+  <div class="text-center mb-8">
+    <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-yellow-400 mb-3 shadow-sm">
+      <svg class="w-7 h-7 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+    </div>
+    <h1 class="text-xl font-bold text-gray-800">Solicitud de Factura</h1>
+    <p class="text-sm text-gray-500 mt-1">
+      {% if req.platform == 'amazon' %}Amazon
+      {% elif req.platform == 'mercadolibre' %}Mercado Libre
+      {% else %}Venta directa
+      {% endif %}
+      {% if req.order_number %}· Orden {{ req.order_number }}{% endif %}
+    </p>
+  </div>
+
+  <!-- ══ ESTADO: Factura lista para descarga ══════════════════════════════ -->
+  {% if req.status == 'invoice_ready' %}
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center space-y-4">
+    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-2">
+      <svg class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+      </svg>
+    </div>
+    <h2 class="text-lg font-bold text-gray-800">Tu factura está lista</h2>
+    <p class="text-sm text-gray-500">Descarga tu factura en PDF haciendo clic en el botón de abajo.</p>
+    <a href="/factura/{{ req.token }}/invoice"
+       class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl transition shadow-sm">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+      </svg>
+      Descargar Factura PDF
+    </a>
+  </div>
+
+  <!-- ══ ESTADO: Datos recibidos, esperando factura ══════════════════════ -->
+  {% elif req.status == 'data_received' %}
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center space-y-4">
+    <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-2">
+      <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+      </svg>
+    </div>
+    <h2 class="text-lg font-bold text-gray-800">Datos recibidos</h2>
+    <p class="text-sm text-gray-500">Tu información fiscal fue recibida correctamente.<br>Nuestro equipo de contabilidad está procesando tu factura.<br><strong>Vuelve a este link cuando esté lista.</strong></p>
+    {% if fiscal %}
+    <div class="bg-gray-50 rounded-xl p-4 text-left text-sm space-y-1">
+      <p class="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Datos registrados</p>
+      <p><span class="text-gray-400">RFC:</span> <span class="font-semibold text-gray-700">{{ fiscal.rfc }}</span></p>
+      <p><span class="text-gray-400">Razón Social:</span> <span class="font-semibold text-gray-700">{{ fiscal.razon_social }}</span></p>
+      <p><span class="text-gray-400">Email:</span> <span class="font-semibold text-gray-700">{{ fiscal.email }}</span></p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ══ ESTADO: Pendiente de datos (formulario activo) ══════════════════ -->
+  {% else %}
+  <!-- Paso 1: Verificar orden -->
+  <div id="step-lookup" class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+    <h2 class="font-bold text-gray-800">Paso 1 — Verifica tu pedido</h2>
+    <p class="text-sm text-gray-500">Ingresa tu número de orden para confirmar tu compra antes de continuar.</p>
+    <div class="flex gap-2">
+      <input id="inp-order" type="text"
+             value="{{ req.order_number }}"
+             placeholder="ej. 2000007123456789"
+             class="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+      <button onclick="window._lookupOrder()" id="btn-lookup"
+              class="bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-5 py-2.5 rounded-xl transition whitespace-nowrap">
+        Verificar
+      </button>
+    </div>
+    <p id="lookup-error" class="hidden text-xs text-red-500 font-semibold"></p>
+  </div>
+
+  <!-- Resumen del pedido (se muestra tras verificación) -->
+  <div id="order-summary" class="hidden bg-white rounded-2xl shadow-sm border border-yellow-200 p-5 space-y-3">
+    <div class="flex items-center gap-2">
+      <svg class="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+      </svg>
+      <span class="text-xs font-bold text-green-700">Pedido confirmado</span>
+    </div>
+    <div id="order-items" class="space-y-2"></div>
+    <div id="order-total" class="text-sm font-bold text-gray-800 border-t border-gray-100 pt-2"></div>
+  </div>
+
+  <!-- Paso 2: Datos fiscales (oculto hasta verificar orden) -->
+  <div id="step-form" class="hidden mt-4">
+    <form id="fiscal-form" onsubmit="return false">
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+        <h2 class="font-bold text-gray-800">Paso 2 — Datos de facturación</h2>
+        <p class="text-sm text-gray-500">Completa todos los campos requeridos. Asegúrate de que coincidan con tu <strong>Constancia de Situación Fiscal</strong>.</p>
+
+        <!-- RFC + Razón Social -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">RFC *</label>
+            <input name="rfc" id="f-rfc" type="text" maxlength="13" placeholder="XAXX010101000"
+                   class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                   oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Razón Social / Nombre *</label>
+            <input name="razon_social" id="f-razon" type="text" placeholder="Como aparece en el SAT"
+                   class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          </div>
+        </div>
+
+        <!-- Régimen + CFDI -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Régimen Fiscal *</label>
+            <select name="fiscal_regime" id="f-regime"
+                    class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+              <option value="">Selecciona...</option>
+              {% for code, label in fiscal_regimes %}
+              <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Uso de CFDI *</label>
+            <select name="cfdi_use" id="f-cfdi"
+                    class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+              <option value="">Selecciona...</option>
+              {% for code, label in cfdi_uses %}
+              <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <!-- CP + Forma de Pago -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Código Postal Fiscal *</label>
+            <input name="zip_code" id="f-zip" type="text" maxlength="5" placeholder="01234"
+                   class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Forma de Pago *</label>
+            <select name="forma_pago" id="f-pago"
+                    class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+              <option value="">Selecciona...</option>
+              {% for code, label in formas_pago %}
+              <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <!-- Email + Teléfono -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Correo electrónico *</label>
+            <input name="email" id="f-email" type="email" placeholder="tu@correo.com"
+                   class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Número de teléfono *</label>
+            <input name="phone" id="f-phone" type="tel" placeholder="55 1234 5678"
+                   class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+          </div>
+        </div>
+
+        <!-- Domicilio fiscal (opcional) -->
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Domicilio fiscal <span class="font-normal text-gray-400">(opcional)</span></label>
+          <input name="street" id="f-street" type="text" placeholder="Calle, colonia, ciudad"
+                 class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+        </div>
+
+        <!-- Constancia Fiscal -->
+        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+          <label class="block text-xs font-semibold text-gray-700 mb-1">
+            Constancia de Situación Fiscal *
+            <span class="font-normal text-gray-500 ml-1">(PDF o imagen, máx 5 MB)</span>
+          </label>
+          <p class="text-xs text-gray-500 mb-3">Descárgala del SAT en <strong>sat.gob.mx</strong> → Trámites → Constancia de Situación Fiscal.</p>
+          <input id="f-constancia" type="file" accept=".pdf,.jpg,.jpeg,.png"
+                 class="text-xs text-gray-600 file:mr-2 file:text-xs file:font-semibold file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-yellow-400 file:text-gray-800 hover:file:bg-yellow-500 w-full">
+        </div>
+
+        <!-- Error message -->
+        <p id="form-error" class="hidden text-xs text-red-500 font-semibold bg-red-50 rounded-lg px-3 py-2"></p>
+
+        <button onclick="window._submitForm()" id="btn-submit"
+                class="w-full bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-bold py-3 rounded-xl transition text-sm shadow-sm">
+          Enviar datos de facturación
+        </button>
+        <p class="text-xs text-gray-400 text-center">Tus datos son tratados con confidencialidad y usados únicamente para generar tu factura fiscal.</p>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  <p class="text-center text-xs text-gray-400 mt-8">¿Tienes dudas? Contáctanos por los canales de atención de tu orden.</p>
+</div>
+
+{% if req.status == 'pending_data' %}
+<script>
+var _token = '{{ req.token }}';
+var _orderVerified = false;
+
+// Si la orden ya estaba pre-cargada por el admin, hacer lookup automático
+{% if req.order_number %}
+window.addEventListener('DOMContentLoaded', function() {
+  window._lookupOrder();
+});
+{% endif %}
+
+window._lookupOrder = function() {
+  var orderInput = document.getElementById('inp-order');
+  var btn = document.getElementById('btn-lookup');
+  var errEl = document.getElementById('lookup-error');
+  var orderNum = (orderInput.value || '').trim();
+  if (!orderNum) { errEl.textContent = 'Ingresa tu número de orden.'; errEl.classList.remove('hidden'); return; }
+
+  btn.disabled = true; btn.textContent = 'Verificando...';
+  errEl.classList.add('hidden');
+
+  fetch('/factura/' + _token + '/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order_number: orderNum }),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    btn.disabled = false; btn.textContent = 'Verificar';
+    if (!d.ok) { errEl.textContent = d.error || 'Orden no encontrada.'; errEl.classList.remove('hidden'); return; }
+    _orderVerified = true;
+    window._renderOrderSummary(d.summary);
+    document.getElementById('step-form').classList.remove('hidden');
+    document.getElementById('step-lookup').classList.add('border-green-200');
+  })
+  .catch(function() {
+    btn.disabled = false; btn.textContent = 'Verificar';
+    // Si falla la API, igual permitimos continuar
+    _orderVerified = true;
+    document.getElementById('order-summary').classList.add('hidden');
+    document.getElementById('step-form').classList.remove('hidden');
+  });
+};
+
+window._renderOrderSummary = function(summary) {
+  var container = document.getElementById('order-summary');
+  var itemsEl = document.getElementById('order-items');
+  var totalEl = document.getElementById('order-total');
+
+  if (summary.items && summary.items.length) {
+    itemsEl.innerHTML = summary.items.map(function(it) {
+      var price = it.unit_price ? '$' + Number(it.unit_price).toLocaleString('es-MX', {minimumFractionDigits: 2}) + ' ' + (summary.currency || 'MXN') : '';
+      return '<div class="flex justify-between items-start text-sm">' +
+        '<span class="text-gray-700 flex-1 pr-2">' + _esc(it.title) + ' <span class="text-gray-400">x' + it.quantity + '</span></span>' +
+        '<span class="font-semibold text-gray-800 whitespace-nowrap">' + price + '</span>' +
+        '</div>';
+    }).join('');
+    if (summary.total) {
+      totalEl.textContent = 'Total: $' + Number(summary.total).toLocaleString('es-MX', {minimumFractionDigits: 2}) + ' ' + (summary.currency || 'MXN');
+    }
+    container.classList.remove('hidden');
+  } else {
+    // No hay datos del producto pero orden es válida
+    itemsEl.innerHTML = '<p class="text-sm text-gray-500">Orden #' + _esc(summary.order_number) + ' verificada.</p>';
+    container.classList.remove('hidden');
+  }
+};
+
+window._submitForm = function() {
+  var btn = document.getElementById('btn-submit');
+  var errEl = document.getElementById('form-error');
+  errEl.classList.add('hidden');
+
+  // Validaciones
+  var required = [
+    ['f-rfc', 'RFC'],
+    ['f-razon', 'Razón Social'],
+    ['f-regime', 'Régimen Fiscal'],
+    ['f-cfdi', 'Uso de CFDI'],
+    ['f-zip', 'Código Postal Fiscal'],
+    ['f-pago', 'Forma de Pago'],
+    ['f-email', 'Correo electrónico'],
+    ['f-phone', 'Número de teléfono'],
+  ];
+  for (var i = 0; i < required.length; i++) {
+    var el = document.getElementById(required[i][0]);
+    if (!el || !el.value.trim()) {
+      errEl.textContent = 'Campo requerido: ' + required[i][1];
+      errEl.classList.remove('hidden');
+      el && el.focus();
+      return;
+    }
+  }
+  var rfcVal = document.getElementById('f-rfc').value.trim();
+  if (rfcVal.length < 12 || rfcVal.length > 13) {
+    errEl.textContent = 'RFC inválido — debe tener 12 o 13 caracteres.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  var zipVal = document.getElementById('f-zip').value.trim();
+  if (!/^\d{5}$/.test(zipVal)) {
+    errEl.textContent = 'Código Postal Fiscal debe ser de 5 dígitos.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  var constanciaFile = document.getElementById('f-constancia');
+  if (!constanciaFile || !constanciaFile.files.length) {
+    errEl.textContent = 'La Constancia de Situación Fiscal es requerida.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Enviando...';
+
+  var fd = new FormData();
+  fd.append('rfc',           document.getElementById('f-rfc').value.trim().toUpperCase());
+  fd.append('razon_social',  document.getElementById('f-razon').value.trim());
+  fd.append('fiscal_regime', document.getElementById('f-regime').value);
+  fd.append('cfdi_use',      document.getElementById('f-cfdi').value);
+  fd.append('zip_code',      document.getElementById('f-zip').value.trim());
+  fd.append('forma_pago',    document.getElementById('f-pago').value);
+  fd.append('email',         document.getElementById('f-email').value.trim());
+  fd.append('phone',         document.getElementById('f-phone').value.trim());
+  fd.append('street',        document.getElementById('f-street').value.trim());
+  fd.append('constancia',    constanciaFile.files[0]);
+
+  fetch('/factura/' + _token + '/submit', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        window.location.reload();
+      } else {
+        btn.disabled = false; btn.textContent = 'Enviar datos de facturación';
+        errEl.textContent = d.error || 'Error al enviar. Intenta de nuevo.';
+        errEl.classList.remove('hidden');
+      }
+    })
+    .catch(function() {
+      btn.disabled = false; btn.textContent = 'Enviar datos de facturación';
+      errEl.textContent = 'Error de red. Verifica tu conexión e intenta de nuevo.';
+      errEl.classList.remove('hidden');
+    });
+};
+
+function _esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endif %}
+
+</body>
+</html>

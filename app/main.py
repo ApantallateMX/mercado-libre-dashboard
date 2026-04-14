@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, UploadFile, File, Form
 from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -30,6 +30,7 @@ from app.api.v1.sales import router as sales_v1_router
 from app.api.binmanager import router as binmanager_router
 from app.api.lanzar import router as lanzar_router, start_gap_scan_loop
 from app.api.productos import router as productos_router
+from app.api.facturacion import router as facturacion_router
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
@@ -475,7 +476,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -646,6 +647,7 @@ app.include_router(sales_v1_router)
 app.include_router(binmanager_router)
 app.include_router(lanzar_router)
 app.include_router(productos_router)
+app.include_router(facturacion_router)
 
 
 # ---------- Account switcher ----------
@@ -1170,6 +1172,178 @@ async def bm_unlaunched_page(request: Request):
         "active": "bm_unlaunched",
         **ctx,
     })
+
+
+@app.get("/facturacion", response_class=HTMLResponse)
+async def facturacion_page(request: Request):
+    """Dashboard de facturación — gestión de solicitudes."""
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    from app.api.facturacion import CFDI_USES, FISCAL_REGIMES, FORMAS_PAGO
+    return templates.TemplateResponse(request, "facturacion.html", {
+        "user": user,
+        "active": "facturacion",
+        "cfdi_uses": CFDI_USES,
+        "fiscal_regimes": FISCAL_REGIMES,
+        "formas_pago": FORMAS_PAGO,
+        **ctx,
+    })
+
+
+# ── Rutas públicas del portal de facturación (sin autenticación) ──────────────
+
+@app.get("/factura/{token}", response_class=HTMLResponse)
+async def factura_cliente_page(request: Request, token: str):
+    """Página pública para el cliente — sin login requerido."""
+    req = await token_store.get_billing_request_by_token(token)
+    if not req:
+        return HTMLResponse("<h2 style='font-family:sans-serif;padding:2rem'>Enlace no válido o expirado.</h2>", status_code=404)
+    from app.api.facturacion import CFDI_USES, FISCAL_REGIMES, FORMAS_PAGO
+    fiscal = await token_store.get_billing_fiscal_data(req["id"])
+    has_invoice = (await token_store.get_billing_invoice(req["id"])) is not None
+    return templates.TemplateResponse(request, "factura_cliente.html", {
+        "req": req,
+        "fiscal": fiscal,
+        "has_invoice": has_invoice,
+        "cfdi_uses": CFDI_USES,
+        "fiscal_regimes": FISCAL_REGIMES,
+        "formas_pago": FORMAS_PAGO,
+    })
+
+
+@app.post("/factura/{token}/lookup")
+async def factura_lookup_order(request: Request, token: str):
+    """Busca la orden en ML y devuelve el resumen del producto."""
+    req = await token_store.get_billing_request_by_token(token)
+    if not req:
+        return JSONResponse({"error": "Enlace no válido"}, status_code=404)
+    if req["status"] != "pending_data":
+        return JSONResponse({"error": "Esta solicitud ya no acepta datos"}, status_code=400)
+
+    body = await request.json()
+    order_number = (body.get("order_number") or "").strip()
+    if not order_number:
+        return JSONResponse({"error": "Ingresa tu número de orden"}, status_code=400)
+
+    # Validar que coincide con la orden registrada (si el admin la especificó)
+    if req["order_number"] and req["order_number"] != order_number:
+        return JSONResponse({"error": "Número de orden no encontrado"}, status_code=404)
+
+    # Buscar la orden en ML usando la cuenta asociada
+    order_data = {}
+    if req["ml_user_id"] and req["platform"] == "mercadolibre":
+        try:
+            from app.services.meli_client import get_meli_client
+            client = await get_meli_client(user_id=req["ml_user_id"])
+            order_data = await client.get_order(order_number)
+            await client.close()
+        except Exception as e:
+            # Si falla la API, continuamos sin datos del producto
+            order_data = {"_api_error": str(e)}
+
+    # Guardar snapshot
+    import json as _json
+    await token_store.update_billing_order_data(req["id"], _json.dumps(order_data))
+
+    # Construir resumen para el cliente
+    summary = _build_order_summary(order_data, order_number)
+    return JSONResponse({"ok": True, "summary": summary})
+
+
+def _build_order_summary(order_data: dict, order_number: str) -> dict:
+    """Extrae campos relevantes de la respuesta de ML para mostrar al cliente."""
+    if not order_data or order_data.get("_api_error") or "error" in order_data:
+        return {"order_number": order_number, "items": [], "total": None, "date": None}
+
+    items = []
+    for oi in order_data.get("order_items", []):
+        item = oi.get("item", {})
+        items.append({
+            "title": item.get("title", ""),
+            "quantity": oi.get("quantity", 1),
+            "unit_price": oi.get("unit_price") or oi.get("full_unit_price"),
+        })
+
+    return {
+        "order_number": order_number,
+        "items": items,
+        "total": order_data.get("total_amount"),
+        "currency": order_data.get("currency_id", "MXN"),
+        "date": (order_data.get("date_closed") or order_data.get("date_created") or "")[:10],
+        "status": order_data.get("status", ""),
+    }
+
+
+@app.post("/factura/{token}/submit")
+async def factura_submit_datos(
+    request: Request,
+    token: str,
+    rfc: str = Form(""),
+    razon_social: str = Form(""),
+    cfdi_use: str = Form(""),
+    fiscal_regime: str = Form(""),
+    zip_code: str = Form(""),
+    forma_pago: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
+    street: str = Form(""),
+    constancia: UploadFile = File(None),
+):
+    """El cliente envía sus datos fiscales."""
+    req = await token_store.get_billing_request_by_token(token)
+    if not req:
+        return JSONResponse({"error": "Enlace no válido"}, status_code=404)
+    if req["status"] not in ("pending_data",):
+        return JSONResponse({"error": "Esta solicitud ya fue procesada"}, status_code=400)
+
+    # Leer constancia si fue adjuntada
+    constancia_data = None
+    constancia_name = ""
+    if constancia and constancia.filename:
+        constancia_data = await constancia.read()
+        constancia_name = constancia.filename
+        if len(constancia_data) > 5 * 1024 * 1024:
+            return JSONResponse({"error": "La constancia fiscal no debe superar 5 MB"}, status_code=413)
+
+    await token_store.save_billing_fiscal_data(
+        request_id=req["id"],
+        rfc=rfc.strip().upper(),
+        razon_social=razon_social.strip(),
+        cfdi_use=cfdi_use,
+        fiscal_regime=fiscal_regime,
+        zip_code=zip_code.strip(),
+        forma_pago=forma_pago,
+        email=email.strip(),
+        phone=phone.strip(),
+        street=street.strip(),
+        constancia_data=constancia_data,
+        constancia_name=constancia_name,
+    )
+    await token_store.update_billing_status(req["id"], "data_received")
+    return JSONResponse({"ok": True})
+
+
+@app.get("/factura/{token}/invoice")
+async def factura_download_invoice(request: Request, token: str):
+    """Cliente descarga su factura PDF."""
+    req = await token_store.get_billing_request_by_token(token)
+    if not req:
+        return JSONResponse({"error": "Enlace no válido"}, status_code=404)
+    if req["status"] != "invoice_ready":
+        return JSONResponse({"error": "Tu factura aún no está disponible"}, status_code=404)
+
+    result = await token_store.get_billing_invoice(req["id"])
+    if not result:
+        return JSONResponse({"error": "Factura no encontrada"}, status_code=404)
+
+    filename, data = result
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/sku-sales", response_class=HTMLResponse)
