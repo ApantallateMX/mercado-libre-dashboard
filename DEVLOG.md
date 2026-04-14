@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-14 — FEAT: Facturación admin — datos del pedido en modal detalle
+
+### Qué se hizo
+El modal de administración de facturación ahora muestra la sección **"Datos del pedido"** con todos los items de la venta: título del producto, SKU, cantidad y precio unitario. Al final de la lista se muestra el total del pedido. Aplica a todas las solicitudes existentes y nuevas que tengan `order_data` almacenado.
+
+### Implementación
+- `_renderDetail()` en `facturacion.html` — nueva sección entre la grilla de info y el link del cliente
+- Itera `r.order_data.items[]` y renderiza tarjeta por producto con título, SKU (condicional), marca (condicional), modelo (condicional), cantidad y precio unitario
+- Total del pedido en fila separada al pie
+
+### Archivos afectados
+- `app/templates/facturacion.html` — `_renderDetail()` — commit `14a7e85`
+
+---
+
 ## 2026-04-14 — BUG CRÍTICO: item_sku_cache — SKUs múltiples por item se perdían
 
 ### El problema
