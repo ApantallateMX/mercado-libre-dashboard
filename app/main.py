@@ -9053,8 +9053,11 @@ async def debug_test_merchant(item_id: str = "", key: str = "", execute: int = 0
 
 
 @app.post("/api/stock/force-prewarm")
-async def force_prewarm():
-    """Fuerza un prewarm fresco: limpia caché BM stale y recalcula stock issues."""
+async def force_prewarm(full_clear: bool = False):
+    """Fuerza un prewarm fresco: limpia caché BM y recalcula stock issues.
+    full_clear=True → limpia TODO el cache BM (útil tras cambios de lógica de condiciones).
+    full_clear=False (default) → solo limpia entradas stale/fallidas.
+    """
     global _prewarm_task
     if _prewarm_running:
         return JSONResponse({"status": "already_running"})
@@ -9064,23 +9067,28 @@ async def force_prewarm():
     if _fp_client:
         await _fp_client.close()
 
-    # Eliminar entradas BM stale que causarían falsos resultados:
-    # 1) total=0 AND avail=0 sin _v → fetch fallido que guardó ceros
-    # 2) total>0 AND avail=0 → WH ok pero get_stock_with_reserve falló (fallo parcial)
-    stale_cleared = 0
-    for sku in list(_bm_stock_cache.keys()):
-        ts, data = _bm_stock_cache[sku]
-        all_zero_unverified = (data.get("total", 0) == 0 and data.get("avail_total", 0) == 0 and not data.get("_v"))
-        partial_failure = (data.get("total", 0) > 0 and data.get("avail_total", 0) == 0)
-        if all_zero_unverified or partial_failure:
-            del _bm_stock_cache[sku]
-            stale_cleared += 1
+    if full_clear:
+        # Limpiar TODO el cache BM para que el prewarm re-fetche con las condiciones actuales
+        stale_cleared = len(_bm_stock_cache)
+        _bm_stock_cache.clear()
+    else:
+        # Solo eliminar entradas stale:
+        # 1) total=0 AND avail=0 sin _v → fetch fallido que guardó ceros
+        # 2) total>0 AND avail=0 → WH ok pero get_stock_with_reserve falló (fallo parcial)
+        stale_cleared = 0
+        for sku in list(_bm_stock_cache.keys()):
+            ts, data = _bm_stock_cache[sku]
+            all_zero_unverified = (data.get("total", 0) == 0 and data.get("avail_total", 0) == 0 and not data.get("_v"))
+            partial_failure = (data.get("total", 0) > 0 and data.get("avail_total", 0) == 0)
+            if all_zero_unverified or partial_failure:
+                del _bm_stock_cache[sku]
+                stale_cleared += 1
 
     # Limpiar stock_issues_cache para forzar recalculo completo
     _stock_issues_cache.clear()
 
     _prewarm_task = asyncio.create_task(_prewarm_caches(user_id=_fp_uid))
-    return JSONResponse({"status": "started", "stale_cleared": stale_cleared})
+    return JSONResponse({"status": "started", "stale_cleared": stale_cleared, "full_clear": full_clear})
 
 
 @app.get("/api/stock/multi-sync/preview")

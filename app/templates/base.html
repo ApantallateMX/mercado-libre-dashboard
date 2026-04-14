@@ -293,6 +293,10 @@
                     <span class="text-blue-600">⇄</span> Sync Stock
                     <span id="bm-health-dot" title="BinManager: verificando..." class="inline-block w-2 h-2 rounded-full bg-gray-300 ml-1 flex-shrink-0"></span>
                 </a>
+                <button id="btn-bm-cache" onclick="window._clearBmCache()" title="Limpiar cache BM y recalcular stock"
+                        class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition flex items-center gap-0.5 whitespace-nowrap text-sm">
+                    ↺ BM
+                </button>
                 {% endif %}
 <script>
 (function() {
@@ -762,5 +766,39 @@ document.addEventListener('click', function(e) {
 {% block scripts %}{% endblock %}
 
 <script src="/static/js/notifications.js"></script>
+<script>
+window._clearBmCache = function() {
+  var btn = document.getElementById('btn-bm-cache');
+  if (!btn) return;
+  btn.textContent = '↻ Limpiando...';
+  btn.disabled = true;
+  fetch('/api/stock/force-prewarm?full_clear=true', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status === 'already_running') {
+        btn.textContent = '↺ BM (en curso)';
+        btn.disabled = false;
+      } else {
+        btn.textContent = '↻ Actualizando...';
+        // Sondear hasta que termine
+        var _poll = setInterval(function() {
+          fetch('/api/stock/prewarm-status')
+            .then(function(r) { return r.json(); })
+            .then(function(s) {
+              if (!s.running) {
+                clearInterval(_poll);
+                btn.textContent = '↺ BM';
+                btn.disabled = false;
+                // Recargar la página para ver los datos frescos
+                window.location.reload();
+              }
+            })
+            .catch(function() { clearInterval(_poll); btn.textContent = '↺ BM'; btn.disabled = false; });
+        }, 3000);
+      }
+    })
+    .catch(function() { btn.textContent = '↺ BM'; btn.disabled = false; });
+};
+</script>
 </body>
 </html>
