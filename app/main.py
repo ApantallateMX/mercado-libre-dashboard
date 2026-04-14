@@ -103,10 +103,8 @@ def _clean_sku_for_bm(sku: str) -> str:
         return ""
     # Tomar primera parte antes de " / " o " + " (MeLi concatena SKUs en packs)
     s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
-    # Quitar sufijos entre parentesis: (18), (2), etc.
-    s = _re.sub(r'\(\d+\)', '', s).strip()
-    # Quitar parentesis sobrantes
-    s = _re.sub(r'[()]', '', s).strip()
+    # Quitar cualquier sufijo entre paréntesis: (2), (cantidad:2), (18), etc.
+    s = _re.sub(r'\s*\([^)]*\)', '', s).strip()
     return s
 
 
@@ -2893,11 +2891,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         Con sem=12 + 1 request = 12 simultáneos máx → bien bajo el límite de 20 de httpx.
         MTY/CDMX/TJ breakdown = 0 (no disponible sin endpoint WH — solo avail total).
         """
-        clean = _clean_sku_for_bm(sku)
-        if not clean:
+        # normalize_to_bm_sku: split en primer espacio/guión → siempre 10 chars BM correctos.
+        # _clean_sku_for_bm + _extract_base_sku NO manejan "(cantidad:2)" porque \(\d+\)
+        # no matchea texto con letras/dos-puntos, dejando "SNHG000038 cantidad:2" → BM retorna 0.
+        base = normalize_to_bm_sku(sku)
+        if not base:
             _store_empty(sku)
             return
-        base = _extract_base_sku(clean)
         async with wh_sem:
             try:
                 # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta.
