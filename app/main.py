@@ -2881,7 +2881,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
                 # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
                 # timeout=25s: cubre re-login interno (3-5s) + retry + latencia de red.
-                _stock = await asyncio.wait_for(bm_cli.get_stock_with_reserve(base), timeout=25.0)
+                _stock = await asyncio.wait_for(
+                    bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
+                    timeout=25.0,
+                )
                 # _avail_ok=True: BM respondió (tuple) — dato verificado aunque sea (0,0) genuino.
                 # _avail_ok=False: retornó None (timeout/sesión) — no sabemos el stock real.
                 _avail_ok = _stock is not None
@@ -2916,24 +2919,47 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     bm_cli = await get_shared_bm()
 
     if len(to_fetch) > 30:
-        # BULK FETCH: 1 request → todos los SKUs (~5-10s vs 100-200s per-SKU)
+        # BULK FETCH: 2 requests paralelos (GR-only y ALL) → selección por condición por SKU
         _used_bulk = False
         try:
-            bulk_rows = await bm_cli.get_bulk_stock()
-            if bulk_rows:
+            _BM_COND_GR  = "GRA,GRB,GRC,NEW"
+            _BM_COND_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
+            bulk_gr, bulk_all = await asyncio.gather(
+                bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
+                bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
+                return_exceptions=True,
+            )
+            if isinstance(bulk_gr, Exception):
+                bulk_gr = []
+            if isinstance(bulk_all, Exception):
+                bulk_all = []
+
+            if bulk_gr or bulk_all:
                 global _bm_bulk_cache
-                _bm_bulk_cache = (_time.time(), bulk_rows)
-                # Construir lookup: exact {SKU: row} + by_base {base_sku: [rows]}
-                _exact_map = {}
-                _by_base = {}
-                for _brow in bulk_rows:
-                    _sk = ((_brow.get("SKU") or "")).upper().strip()
-                    if not _sk:
-                        continue
-                    _exact_map[_sk] = _brow
-                    _bbase = _extract_base_sku(_sk)
-                    _by_base.setdefault(_bbase, []).append(_brow)
-                # Procesar cada SKU pendiente desde el lookup
+                _bm_bulk_cache = (_time.time(), bulk_all or bulk_gr)
+
+                def _build_lookup(rows):
+                    exact, by_base = {}, {}
+                    for _brow in (rows or []):
+                        _sk = ((_brow.get("SKU") or "")).upper().strip()
+                        if not _sk:
+                            continue
+                        exact[_sk] = _brow
+                        by_base.setdefault(_extract_base_sku(_sk), []).append(_brow)
+                    return exact, by_base
+
+                _exact_gr,  _by_base_gr  = _build_lookup(bulk_gr)
+                _exact_all, _by_base_all = _build_lookup(bulk_all)
+
+                def _lookup(exact, by_base, fbase):
+                    row = exact.get(fbase)
+                    if row is not None:
+                        return int(row.get("AvailableQTY") or 0), int(row.get("Reserve") or 0)
+                    rows = by_base.get(fbase, [])
+                    return (sum(int(v.get("AvailableQTY") or 0) for v in rows),
+                            sum(int(v.get("Reserve") or 0) for v in rows))
+
+                # Procesar cada SKU pendiente eligiendo el mapa correcto por condición
                 for _fsku in to_fetch:
                     _clean = _clean_sku_for_bm(_fsku)
                     if not _clean:
@@ -2941,18 +2967,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
                         continue
                     _fbase = _extract_base_sku(_clean).upper()
-                    _frow = _exact_map.get(_fbase)
-                    if _frow is not None:
-                        _avail  = int(_frow.get("AvailableQTY") or 0)
-                        _res    = int(_frow.get("Reserve") or 0)
+                    # Elegir mapa según sufijo del SKU original de ML
+                    _use_all = _bm_conditions_for_sku(_fsku) == _BM_COND_ALL
+                    if _use_all:
+                        _avail, _res = _lookup(_exact_all, _by_base_all, _fbase)
                     else:
-                        _vars = _by_base.get(_fbase, [])
-                        _avail  = sum(int(v.get("AvailableQTY") or 0) for v in _vars)
-                        _res    = sum(int(v.get("Reserve") or 0) for v in _vars)
+                        _avail, _res = _lookup(_exact_gr, _by_base_gr, _fbase)
                     _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
                               avail_ok=True, wh_responded=False)
                     _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
-                logger.info(f"[BM-CACHE] Bulk fetch OK: {len(bulk_rows)} SKUs BM → {len(to_fetch)} mapeados")
+                logger.info(f"[BM-CACHE] Bulk fetch OK: gr={len(bulk_gr)} all={len(bulk_all)} SKUs BM → {len(to_fetch)} mapeados")
                 _used_bulk = True
         except Exception as _bulk_err:
             logger.warning(f"[BM-CACHE] Bulk fetch error: {_bulk_err} — fallback per-SKU")

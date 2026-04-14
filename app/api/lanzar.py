@@ -109,7 +109,7 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
             "WAREHOUSEID": None,
             "LOCATIONID": _BM_LOCATIONS,
             "BINID": None,
-            "CONDITION": "GRA,GRB,GRC,NEW,ICB,ICC",
+            "CONDITION": "GRA,GRB,GRC,NEW",
             "FORINVENTORY": 0,
             "BUSCADOR": False,
             "BRAND": None,
