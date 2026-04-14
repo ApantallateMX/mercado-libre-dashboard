@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-14 — FEAT: Módulo de Facturación — portal self-service para clientes
+
+### Qué se construyó
+Portal completo para que los clientes soliciten su factura CFDI 4.0 sin intervención manual del equipo interno.
+
+### Flujo
+1. Admin crea solicitud en `/facturacion` → selecciona cuenta ML, plataforma, # de orden → obtiene link único (UUID)
+2. Admin envía el link al cliente (copiar al portapapeles)
+3. Cliente abre link → ingresa # de orden → sistema busca en ML y muestra resumen del producto
+4. Cliente llena datos fiscales completos + sube Constancia Fiscal
+5. Contabilidad ve solicitud en estado "Pendiente factura" → genera CFDI en su sistema → sube PDF
+6. Estado cambia a "Factura lista" → cliente entra al mismo link → descarga PDF
+
+### Archivos creados/modificados
+- `app/services/token_store.py`: tablas `billing_requests`, `billing_fiscal_data`, `billing_invoices` + 10 funciones CRUD
+- `app/api/facturacion.py`: router admin con catálogos SAT completos (15 CFDI, 19 regímenes, 21 formas de pago)
+- `app/main.py`: rutas públicas `/factura/{token}/*`, ruta admin `/facturacion`, `/factura/` exento de auth
+- `app/templates/facturacion.html`: dashboard admin con tabla filtrable, modales de creación y detalle
+- `app/templates/factura_cliente.html`: página pública standalone (no hereda base.html), 3 estados visuales
+- `app/templates/base.html`: link "◈ Facturación" en nav MeLi
+
+### Campos del formulario del cliente
+RFC, Razón Social, Régimen Fiscal, Uso CFDI, CP Fiscal, Forma de Pago, Email, Teléfono, Domicilio (opcional), Constancia Fiscal (upload PDF/imagen)
+
+### Detalles técnicos
+- Multi-cuenta: cada solicitud lleva `ml_user_id` — el lookup usa el token del seller correcto
+- PDFs (factura + constancia) almacenados como BLOB en SQLite — sin dependencias externas
+- Validación RFC (12-13 chars), CP (5 dígitos numéricos), campos requeridos en frontend y backend
+- Constancia máx 5 MB; facturas máx 10 MB
+- Admin puede eliminar solicitudes completas (cascada: datos fiscales + PDF)
+
+---
+
 ## 2026-04-13 — FIX: Corte de día alineado con hora México (CST UTC-6)
 
 ### Problema
