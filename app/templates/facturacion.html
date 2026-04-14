@@ -199,10 +199,11 @@ window._loadRequests = function(status) {
         var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + r.order_number + '</span>' : '';
         var date  = (r.created_at || '').substring(0, 10);
         var plat  = _PLATFORM_LABELS[r.platform] || r.platform;
+        var acct  = r.account_nickname ? '<div class="text-xs text-gray-400 mt-0.5">' + _esc(r.account_nickname) + '</div>' : '';
         var st    = _STATUS_LABELS[r.status] || r.status;
         return '<tr class="hover:bg-gray-50 transition">' +
           '<td class="px-4 py-3 font-medium text-gray-800">' + _esc(ref) + order + '</td>' +
-          '<td class="px-4 py-3 text-gray-600">' + plat + '</td>' +
+          '<td class="px-4 py-3 text-gray-600"><div>' + plat + '</div>' + acct + '</td>' +
           '<td class="px-4 py-3">' + st + '</td>' +
           '<td class="px-4 py-3 text-gray-500">' + _esc(r.created_by) + '</td>' +
           '<td class="px-4 py-3 text-gray-400 font-mono text-xs">' + date + '</td>' +

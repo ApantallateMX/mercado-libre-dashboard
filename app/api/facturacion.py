@@ -242,9 +242,20 @@ async def get_catalogs():
 async def list_requests(request: Request, status: str = ""):
     _require_editor(request)
     rows = await token_store.list_billing_requests(status=status or None)
-    # Enriquecer con tiene_datos y tiene_factura
+
+    # Construir mapa user_id/seller_id → nickname
+    meli_accounts   = await token_store.get_all_tokens()
+    amazon_accounts = await token_store.get_all_amazon_accounts()
+    nick_map = {}
+    for a in meli_accounts:
+        nick_map[str(a["user_id"])] = a.get("nickname") or str(a["user_id"])
+    for a in amazon_accounts:
+        nick_map[str(a["seller_id"])] = a.get("nickname") or str(a["seller_id"])
+
     for r in rows:
         r["order_data"] = json.loads(r.get("order_data") or "{}")
+        uid = str(r.get("ml_user_id") or "")
+        r["account_nickname"] = nick_map.get(uid, "") if uid else ""
     return {"requests": rows}
 
 
