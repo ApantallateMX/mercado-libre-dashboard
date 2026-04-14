@@ -1262,9 +1262,14 @@ async def factura_cliente_page(request: Request, token: str):
     })
 
 
+def _is_amazon_order_id(order_id: str) -> bool:
+    import re
+    return bool(re.match(r'^\d{3}-\d{7}-\d{7}$', order_id.strip()))
+
+
 @app.post("/factura/{token}/lookup")
 async def factura_lookup_order(request: Request, token: str):
-    """Busca la orden en ML y devuelve el resumen del producto."""
+    """Busca la orden en ML o Amazon y devuelve el resumen del producto."""
     req = await token_store.get_billing_request_by_token(token)
     if not req:
         return JSONResponse({"error": "Enlace no válido"}, status_code=404)
@@ -1280,20 +1285,37 @@ async def factura_lookup_order(request: Request, token: str):
     if req["order_number"] and req["order_number"] != order_number:
         return JSONResponse({"error": "Número de orden no encontrado"}, status_code=404)
 
-    # Buscar la orden en ML usando la cuenta asociada
+    import json as _json
     order_data = {}
-    if req["ml_user_id"] and req["platform"] == "mercadolibre":
+    platform = req.get("platform") or ("amazon" if _is_amazon_order_id(order_number) else "mercadolibre")
+
+    if platform == "amazon":
+        # Buscar en Amazon
+        try:
+            from app.services.amazon_client import get_amazon_client
+            seller_id = req.get("ml_user_id") or None
+            client = await get_amazon_client(seller_id)
+            if client:
+                raw = await client._request("GET", f"/orders/v0/orders/{order_number}")
+                order = raw.get("payload", {})
+                if order and order.get("AmazonOrderId"):
+                    items_raw = await client._request("GET", f"/orders/v0/orders/{order_number}/orderItems")
+                    order["_items"] = items_raw.get("payload", {}).get("OrderItems", [])
+                    order["_platform"] = "amazon"
+                    order_data = order
+        except Exception as e:
+            order_data = {"_api_error": str(e)}
+    elif req["ml_user_id"] and platform == "mercadolibre":
+        # Buscar en MeLi
         try:
             from app.services.meli_client import get_meli_client
             client = await get_meli_client(user_id=req["ml_user_id"])
             order_data = await client.resolve_order(order_number)
             await client.close()
         except Exception as e:
-            # Si falla la API, continuamos sin datos del producto
             order_data = {"_api_error": str(e)}
 
     # Guardar snapshot
-    import json as _json
     await token_store.update_billing_order_data(req["id"], _json.dumps(order_data))
 
     # Construir resumen para el cliente
@@ -1302,26 +1324,55 @@ async def factura_lookup_order(request: Request, token: str):
 
 
 def _build_order_summary(order_data: dict, order_number: str) -> dict:
-    """Extrae campos relevantes de la respuesta de ML para mostrar al cliente."""
-    if not order_data or order_data.get("_api_error") or "error" in order_data:
+    """Extrae campos relevantes para mostrar al cliente. Soporta MeLi y Amazon."""
+    if not order_data or order_data.get("_api_error") or (
+        "error" in order_data and not order_data.get("AmazonOrderId")
+    ):
         return {"order_number": order_number, "items": [], "total": None, "date": None}
 
+    # ── Amazon ───────────────────────────────────────────────────────────────
+    if order_data.get("_platform") == "amazon" or order_data.get("AmazonOrderId"):
+        items = []
+        for it in order_data.get("_items", []):
+            price_obj = it.get("ItemPrice") or {}
+            items.append({
+                "title":      it.get("Title", ""),
+                "sku":        it.get("SellerSKU", ""),
+                "asin":       it.get("ASIN", ""),
+                "quantity":   it.get("QuantityOrdered", 1),
+                "unit_price": float(price_obj.get("Amount") or 0),
+                "currency":   price_obj.get("CurrencyCode", "MXN"),
+            })
+        total_obj = order_data.get("OrderTotal") or {}
+        return {
+            "order_number": order_number,
+            "platform":     "amazon",
+            "items":        items,
+            "total":        float(total_obj.get("Amount") or 0) or None,
+            "currency":     total_obj.get("CurrencyCode", "MXN"),
+            "date":         (order_data.get("PurchaseDate") or "")[:10],
+            "status":       order_data.get("OrderStatus", ""),
+        }
+
+    # ── MercadoLibre ─────────────────────────────────────────────────────────
     items = []
     for oi in order_data.get("order_items", []):
         item = oi.get("item", {})
         items.append({
-            "title": item.get("title", ""),
-            "quantity": oi.get("quantity", 1),
+            "title":      item.get("title", ""),
+            "sku":        item.get("seller_custom_field", "") or "",
+            "quantity":   oi.get("quantity", 1),
             "unit_price": oi.get("unit_price") or oi.get("full_unit_price"),
+            "currency":   order_data.get("currency_id", "MXN"),
         })
-
     return {
         "order_number": order_number,
-        "items": items,
-        "total": order_data.get("total_amount"),
-        "currency": order_data.get("currency_id", "MXN"),
-        "date": (order_data.get("date_closed") or order_data.get("date_created") or "")[:10],
-        "status": order_data.get("status", ""),
+        "platform":     "mercadolibre",
+        "items":        items,
+        "total":        order_data.get("total_amount"),
+        "currency":     order_data.get("currency_id", "MXN"),
+        "date":         (order_data.get("date_closed") or order_data.get("date_created") or "")[:10],
+        "status":       order_data.get("status", ""),
     }
 
 
