@@ -1244,10 +1244,12 @@ async def factura_cliente_page(request: Request, token: str):
     fiscal = await token_store.get_billing_fiscal_data(req["id"])
     _inv = await token_store.get_billing_invoice(req["id"])
     has_invoice = bool(_inv and _inv.get("pdf_data"))
+    has_xml     = bool(_inv and _inv.get("xml_data"))
     return templates.TemplateResponse(request, "factura_cliente.html", {
         "req": req,
         "fiscal": fiscal,
         "has_invoice": has_invoice,
+        "has_xml": has_xml,
         "cfdi_uses": CFDI_USES,
         "fiscal_regimes": FISCAL_REGIMES,
         "formas_pago": FORMAS_PAGO,
@@ -1433,6 +1435,26 @@ async def factura_download_invoice(request: Request, token: str):
         content=result["pdf_data"],
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{result["pdf_filename"]}"'},
+    )
+
+
+@app.get("/factura/{token}/invoice/xml")
+async def factura_download_invoice_xml(request: Request, token: str):
+    """Cliente descarga su factura XML."""
+    req = await token_store.get_billing_request_by_token(token)
+    if not req:
+        return JSONResponse({"error": "Enlace no válido"}, status_code=404)
+    if req["status"] != "invoice_ready":
+        return JSONResponse({"error": "Tu factura aún no está disponible"}, status_code=404)
+
+    result = await token_store.get_billing_invoice(req["id"])
+    if not result or not result.get("xml_data"):
+        return JSONResponse({"error": "XML no encontrado"}, status_code=404)
+
+    return Response(
+        content=result["xml_data"],
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{result["xml_filename"] or "factura.xml"}"'},
     )
 
 

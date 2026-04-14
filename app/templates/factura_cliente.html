@@ -37,14 +37,27 @@
       </svg>
     </div>
     <h2 class="text-lg font-bold text-gray-800">Tu factura está lista</h2>
-    <p class="text-sm text-gray-500">Descarga tu factura en PDF haciendo clic en el botón de abajo.</p>
-    <a href="/factura/{{ req.token }}/invoice"
-       class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl transition shadow-sm">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-      </svg>
-      Descargar Factura PDF
-    </a>
+    <p class="text-sm text-gray-500">Descarga los archivos de tu factura.</p>
+    <div class="flex flex-wrap items-center justify-center gap-3">
+      {% if has_invoice %}
+      <a href="/factura/{{ req.token }}/invoice"
+         class="inline-flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-3 rounded-xl transition shadow-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        Descargar Factura PDF
+      </a>
+      {% endif %}
+      {% if has_xml %}
+      <a href="/factura/{{ req.token }}/invoice/xml"
+         class="inline-flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-3 rounded-xl transition shadow-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+        </svg>
+        Descargar Factura XML
+      </a>
+      {% endif %}
+    </div>
   </div>
 
   <!-- ══ ESTADO: Datos recibidos, esperando factura ══════════════════════ -->
