@@ -1315,11 +1315,10 @@ async def factura_lookup_order(request: Request, token: str):
         except Exception as e:
             order_data = {"_api_error": str(e)}
 
-    # Guardar snapshot
-    await token_store.update_billing_order_data(req["id"], _json.dumps(order_data))
-
-    # Construir resumen para el cliente
+    # Construir resumen normalizado y guardarlo (en vez del raw de la API)
     summary = _build_order_summary(order_data, order_number)
+    await token_store.update_billing_order_data(req["id"], _json.dumps(summary))
+
     return JSONResponse({"ok": True, "summary": summary})
 
 

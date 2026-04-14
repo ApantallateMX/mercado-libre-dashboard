@@ -344,6 +344,19 @@ window._renderDetail = function(d) {
   // Datos del pedido (productos, precios, cantidades)
   var od = r.order_data || {};
   var odItems = od.items || [];
+  // Fallback: registros anteriores guardan el raw de ML (order_items[]) en vez del summary
+  if (!odItems.length && od.order_items && od.order_items.length) {
+    odItems = od.order_items.map(function(oi) {
+      var item = oi.item || {};
+      return {
+        title: item.title || '',
+        sku: item.seller_custom_field || '',
+        quantity: oi.quantity || 1,
+        unit_price: oi.unit_price || oi.full_unit_price || 0,
+      };
+    });
+    if (!od.total && od.total_amount) od = Object.assign({}, od, { total: od.total_amount, currency: od.currency_id || 'MXN' });
+  }
   if (odItems.length) {
     html += '<div class="bg-gray-50 rounded-xl p-4">';
     html += '<p class="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Datos del pedido</p>';
