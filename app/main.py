@@ -56,23 +56,14 @@ def _bm_conditions_for_sku(sku: str) -> str:
     """Retorna condiciones BM segun formato del SELLER_SKU.
 
     Reglas:
-    - SKU simple o -NEW (ej: SNTV002033) → GRA,GRB,GRC,NEW
-      (productos "nuevos" en BM pueden estar bajo cualquier condición física)
-    - SKU con sufijo -GRA               → solo GRA
-    - SKU con sufijo -GRB               → solo GRB
-    - SKU con sufijo -GRC               → solo GRC
     - SKU con sufijo -ICB o -ICC        → GRA,GRB,GRC,ICB,ICC,NEW
-    - SKU con "/" (bundle)              → GRA,GRB,GRC,ICB,ICC,NEW
+    - SKU bundle (contiene "/")         → GRA,GRB,GRC,ICB,ICC,NEW
+    - Cualquier otro formato            → GRA,GRB,GRC,NEW
+      (simple, -GRA, -GRB, -GRC, -NEW)
     """
     upper = sku.upper()
     if upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper:
         return "GRA,GRB,GRC,ICB,ICC,NEW"
-    if upper.endswith("-GRA"):
-        return "GRA"
-    if upper.endswith("-GRB"):
-        return "GRB"
-    if upper.endswith("-GRC"):
-        return "GRC"
     return "GRA,GRB,GRC,NEW"
 
 
