@@ -99,6 +99,71 @@ FORMAS_PAGO = [
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
 
+@router.get("/order-lookup")
+async def order_lookup(request: Request, order_number: str = ""):
+    """
+    Busca una orden en TODAS las cuentas ML en paralelo.
+    Retorna la cuenta que la tiene + resumen del producto.
+    Solo para uso interno (admin).
+    """
+    _require_editor(request)
+    order_number = order_number.strip()
+    if not order_number:
+        return {"found": False, "error": "Ingresa un número de orden"}
+
+    from app.services.meli_client import get_meli_client
+    import asyncio
+
+    accounts = await token_store.get_all_tokens()
+    if not accounts:
+        return {"found": False, "error": "No hay cuentas ML configuradas"}
+
+    async def _try_account(acc):
+        try:
+            client = await get_meli_client(user_id=acc["user_id"])
+            order = await client.get_order(order_number)
+            await client.close()
+            # ML devuelve {"error": "not_found"} si no existe
+            if "error" in order or order.get("status") == "error":
+                return None
+            return {"account": acc, "order": order}
+        except Exception:
+            return None
+
+    results = await asyncio.gather(*[_try_account(a) for a in accounts])
+    match = next((r for r in results if r is not None), None)
+
+    if not match:
+        return {"found": False, "error": "Orden no encontrada en ninguna cuenta ML"}
+
+    acc = match["account"]
+    order = match["order"]
+
+    # Armar resumen del producto
+    items = []
+    for oi in order.get("order_items", []):
+        item = oi.get("item", {})
+        items.append({
+            "title": item.get("title", ""),
+            "quantity": oi.get("quantity", 1),
+            "unit_price": oi.get("unit_price") or oi.get("full_unit_price"),
+        })
+
+    return {
+        "found": True,
+        "ml_user_id": acc["user_id"],
+        "nickname": acc.get("nickname") or acc["user_id"],
+        "platform": "mercadolibre",
+        "order": {
+            "total": order.get("total_amount"),
+            "currency": order.get("currency_id", "MXN"),
+            "date": (order.get("date_closed") or order.get("date_created") or "")[:10],
+            "status": order.get("status", ""),
+            "items": items,
+        },
+    }
+
+
 @router.get("/catalogs")
 async def get_catalogs():
     """Devuelve catálogos SAT para dropdowns."""
