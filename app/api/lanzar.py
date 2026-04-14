@@ -292,21 +292,29 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
                 if part.strip():
                     found.append(part.strip())
         # attributes array → SELLER_SKU id
+        # NOTE: ML can store combined SKUs here too: "SNTV006296 / SNWM000001"
+        # Must split the same way as seller_custom_field.
         for a in (body.get("attributes") or []):
             if a.get("id") == "SELLER_SKU":
                 v = (a.get("value_name") or "").strip().upper()
                 if v:
-                    found.append(v)
+                    for part in _re.split(r'\s*[/+,]\s*', v):
+                        if part.strip():
+                            found.append(part.strip())
         # variations (multi-variant listings)
         for var in (body.get("variations") or []):
             vscf = (var.get("seller_custom_field") or "").strip().upper()
             if vscf:
-                found.append(vscf)
+                for part in _re.split(r'\s*[/+,]\s*', vscf):
+                    if part.strip():
+                        found.append(part.strip())
             for a in (var.get("attributes") or []):
                 if a.get("id") == "SELLER_SKU":
                     v = (a.get("value_name") or "").strip().upper()
                     if v:
-                        found.append(v)
+                        for part in _re.split(r'\s*[/+,]\s*', v):
+                            if part.strip():
+                                found.append(part.strip())
         return found
 
     client = await get_meli_client(user_id=user_id)
