@@ -280,8 +280,9 @@ function fmtMoney(n) {
 }
 
 function setRange(days) {
-    var end = new Date();
-    var start = new Date();
+    // México CST = UTC-6 (sin DST desde 2022) — toDateStr usa .toISOString() que es UTC
+    var end = new Date(Date.now() - 6 * 3600 * 1000);
+    var start = new Date(Date.now() - 6 * 3600 * 1000);
     start.setDate(start.getDate() - (days - 1));
     document.getElementById('dash_date_from').value = toDateStr(start);
     document.getElementById('dash_date_to').value = toDateStr(end);
@@ -507,7 +508,8 @@ function renderDailyTable(data) {
         return;
     }
 
-    var todayStr = toDateStr(new Date());
+    // México CST = UTC-6 (sin DST desde 2022) — restar 6h para que .toISOString() dé fecha CDMX
+    var todayStr = toDateStr(new Date(Date.now() - 6 * 3600 * 1000));
     var todayGross = 0, todayNet = 0, todayUnits = 0;
 
     var _meliDailyRows = daily.map(function(day) {

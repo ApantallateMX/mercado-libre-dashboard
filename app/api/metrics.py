@@ -189,15 +189,24 @@ async def get_daily_sales(
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         now = datetime.utcnow()
+        # México CST = UTC-6 permanente (DST eliminado en 2022).
+        # Sin este ajuste, "hoy" se corta a las 6 PM México porque UTC ya es el día siguiente.
+        now_mx = now - timedelta(hours=6)
         if not date_from:
-            date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+            date_from = (now_mx - timedelta(days=29)).strftime("%Y-%m-%d")
         if not date_to:
-            date_to = now.strftime("%Y-%m-%d")
+            date_to = now_mx.strftime("%Y-%m-%d")
         # Leer meta de DB si no se pasa como parámetro
         if goal <= 0:
             goal = await token_store.get_daily_goal(client.user_id)
 
-        all_orders = await client.fetch_all_orders(date_from=date_from, date_to=date_to)
+        # +1 día en date_to para capturar órdenes de tarde/noche México
+        # que la API de ML ve como "mañana UTC" (p.ej. 11 PM CST = 5 AM UTC siguiente día).
+        # El filtro por date_key en buckets descarta cualquier orden fuera del rango real.
+        _fetch_date_to = (
+            datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        all_orders = await client.fetch_all_orders(date_from=date_from, date_to=_fetch_date_to)
 
         start = datetime.strptime(date_from, "%Y-%m-%d")
         end = datetime.strptime(date_to, "%Y-%m-%d")
@@ -211,10 +220,12 @@ async def get_daily_sales(
         for order in all_orders:
             if order.get("status") not in ["paid", "delivered"]:
                 continue
-            order_date = datetime.fromisoformat(
+            order_date_utc = datetime.fromisoformat(
                 order["date_created"].replace("Z", "+00:00")
             ).replace(tzinfo=None)
-            date_key = order_date.strftime("%Y-%m-%d")
+            # Convertir a hora México (CST UTC-6) — igual que multi-account dashboard
+            order_date_mx = order_date_utc - timedelta(hours=6)
+            date_key = order_date_mx.strftime("%Y-%m-%d")
             if date_key in buckets:
                 buckets[date_key]["units"] += sum(
                     oi.get("quantity", 1) for oi in order.get("order_items", [])
