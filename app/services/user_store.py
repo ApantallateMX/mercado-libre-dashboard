@@ -29,7 +29,7 @@ ROLES = {
 
 ROLE_CAN_WRITE_MELI       = {"admin", "editor", "editor_meli"}
 ROLE_CAN_WRITE_AMAZON     = {"admin", "editor", "editor_amazon"}
-ROLE_CAN_FACTURACION      = {"admin", "editor", "editor_meli", "editor_facturacion"}
+ROLE_CAN_FACTURACION      = {"admin", "editor", "editor_meli", "editor_amazon", "editor_facturacion"}
 ROLE_CAN_ADMIN            = {"admin"}
 
 # ─── Secciones disponibles (para control de acceso por sección) ───────────────
