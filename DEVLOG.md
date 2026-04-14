@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-13 — FIX: Corte de día alineado con hora México (CST UTC-6)
+
+### Problema
+La tabla de ventas diarias cortaba el día a las 6 PM CDMX en lugar de medianoche. A partir de esa hora el dashboard mostraba "Hoy" vacío ($0.00) y el día actual sin etiqueta, porque:
+1. `datetime.utcnow()` en defaults de fecha → a las 7 PM CDMX UTC ya es el día siguiente
+2. Órdenes de 6 PM–medianoche CDMX se bucketean en fecha UTC (mañana), que no existe en el rango → se pierden
+3. `new Date()` en JS usa `.toISOString()` (UTC) → `todayStr` incorrecto si navegador no es UTC-6
+
+### Fix
+- `metrics.py`: `now_mx = now - timedelta(hours=6)` para defaults de fecha
+- `metrics.py`: fetch con `date_to+1` para capturar órdenes de noche México (igual que multi-account dashboard en main.py); `if date_key in buckets` filtra naturalmente el día extra
+- `metrics.py`: bucketing convierte fecha de orden UTC→CST (`order_date_utc - timedelta(hours=6)`) antes de asignar `date_key`
+- `dashboard.html`: `todayStr` y `setRange` usan `new Date(Date.now() - 6*3600*1000)` para obtener fecha CDMX via `.toISOString()`
+
+### No tocado
+- `meli_client.py` — offset `-00:00` en API call se compensa con el +1d trick
+- `main.py` multi-account dashboard — ya estaba correcto con el mismo patrón
+
+---
+
 ## 2026-04-13 — FIX: Aislamiento multi-cuenta — gaps, retornos y sync rules independientes por cuenta
 
 ### Problema
