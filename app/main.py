@@ -1242,7 +1242,8 @@ async def factura_cliente_page(request: Request, token: str):
         return HTMLResponse("<h2 style='font-family:sans-serif;padding:2rem'>Enlace no válido o expirado.</h2>", status_code=404)
     from app.api.facturacion import CFDI_USES, FISCAL_REGIMES, FORMAS_PAGO
     fiscal = await token_store.get_billing_fiscal_data(req["id"])
-    has_invoice = (await token_store.get_billing_invoice(req["id"])) is not None
+    _inv = await token_store.get_billing_invoice(req["id"])
+    has_invoice = bool(_inv and _inv.get("pdf_data"))
     return templates.TemplateResponse(request, "factura_cliente.html", {
         "req": req,
         "fiscal": fiscal,
@@ -1425,14 +1426,13 @@ async def factura_download_invoice(request: Request, token: str):
         return JSONResponse({"error": "Tu factura aún no está disponible"}, status_code=404)
 
     result = await token_store.get_billing_invoice(req["id"])
-    if not result:
+    if not result or not result.get("pdf_data"):
         return JSONResponse({"error": "Factura no encontrada"}, status_code=404)
 
-    filename, data = result
     return Response(
-        content=data,
+        content=result["pdf_data"],
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{result["pdf_filename"]}"'},
     )
 
 
