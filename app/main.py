@@ -478,6 +478,40 @@ templates.env.globals["build_id"] = _BUILD_ID
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
 _AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/")
 
+# Mapeo de rutas de página a sección (para control de acceso por sección)
+_PATH_TO_SECTION: dict[str, str] = {
+    "/dashboard":        "dashboard",
+    "/multi-dashboard":  "dashboard",
+    "/inventory-global": "dashboard",
+    "/orders":           "ventas",
+    "/items":            "productos",
+    "/items-health":     "productos",
+    "/productos":        "productos",
+    "/sku-sales":        "sku",
+    "/sku-compare":      "sku",
+    "/sku-inventory":    "sku",
+    "/ads":              "ads",
+    "/health":           "salud",
+    "/returns":          "devoluciones",
+    "/planning":         "planning",
+    "/facturacion":      "facturacion",
+    "/stock-sync":       "sync",
+    "/amazon":           "amazon",
+}
+_SECTION_FIRST_URL: dict[str, str] = {
+    "dashboard":    "/dashboard",
+    "ventas":       "/orders",
+    "productos":    "/items",
+    "sku":          "/sku-sales",
+    "ads":          "/ads",
+    "salud":        "/health",
+    "devoluciones": "/returns",
+    "planning":     "/planning",
+    "facturacion":  "/facturacion",
+    "sync":         "/stock-sync",
+    "amazon":       "/amazon",
+}
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -493,6 +527,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Si debe cambiar contraseña, redirigir a set-password (excepto si ya está allí)
         if du.get("must_change_pw") and path != "/set-password":
             return RedirectResponse("/set-password", status_code=302)
+        # Control de acceso por sección (solo para usuarios no-admin con secciones restringidas)
+        allowed_sections = du.get("allowed_sections") or []
+        if allowed_sections and du.get("role") != "admin":
+            # Solo aplicar a rutas de página HTML (no API, no static)
+            if not path.startswith("/api/") and not path.startswith("/static/"):
+                section = _PATH_TO_SECTION.get(path)
+                if section and section not in allowed_sections:
+                    # Redirigir a la primera sección permitida
+                    first_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
+                    return RedirectResponse(first_url, status_code=302)
         request.state.dashboard_user = du
         return await call_next(request)
 
@@ -578,6 +622,11 @@ async def login_verify(request: Request):
         ip=request.client.host if request.client else "",
         user_id=user["id"],
     )
+    # Si el usuario tiene secciones restringidas y va al dashboard genérico,
+    # redirigir a su primera sección permitida
+    allowed_sections = user.get("allowed_sections") or []
+    if allowed_sections and user.get("role") != "admin" and next_url in ("/dashboard", "/"):
+        next_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
     response = RedirectResponse(next_url, status_code=302)
     response.set_cookie("dash_session", token, max_age=2592000, httponly=True, samesite="lax")
     # Pre-warm caches

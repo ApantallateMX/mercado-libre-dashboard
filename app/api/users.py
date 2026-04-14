@@ -6,7 +6,7 @@ Solo accesible para rol 'admin'.
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from app.services import user_store
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -50,28 +50,32 @@ class CreateUserRequest(BaseModel):
     username: str
     display_name: str
     role: str
+    allowed_sections: Optional[List[str]] = None
 
 
 class UpdateUserRequest(BaseModel):
     display_name: Optional[str] = None
     role: Optional[str] = None
     active: Optional[int] = None
+    allowed_sections: Optional[List[str]] = None
 
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
 @router.get("", response_class=HTMLResponse)
 async def list_users_api(request: Request):
+    import json as _json
     _require_admin(request)
     users = await user_store.list_users()
     rows_html = ""
     for u in users:
         role_label = user_store.ROLES.get(u["role"], u["role"])
         role_color = {
-            "admin": "bg-red-100 text-red-700",
-            "editor": "bg-blue-100 text-blue-700",
-            "editor_meli": "bg-yellow-100 text-yellow-700",
-            "editor_amazon": "bg-orange-100 text-orange-700",
-            "viewer": "bg-gray-100 text-gray-600",
+            "admin":               "bg-red-100 text-red-700",
+            "editor":              "bg-blue-100 text-blue-700",
+            "editor_meli":         "bg-yellow-100 text-yellow-700",
+            "editor_amazon":       "bg-orange-100 text-orange-700",
+            "editor_facturacion":  "bg-purple-100 text-purple-700",
+            "viewer":              "bg-gray-100 text-gray-600",
         }.get(u["role"], "bg-gray-100 text-gray-600")
         active_badge = (
             '<span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700">Activo</span>'
@@ -84,17 +88,34 @@ async def list_users_api(request: Request):
             else '<span class="text-xs text-green-600">OK</span>'
         )
         last_login = u.get("last_login") or "—"
+        # Secciones restringidas
+        raw_sections = u.get("allowed_sections")
+        sections_list = user_store._parse_allowed_sections(raw_sections)
+        if sections_list:
+            section_labels = {k: v for k, v in user_store.ALL_SECTIONS}
+            chips = "".join(
+                f'<span class="px-1.5 py-0.5 text-xs bg-purple-50 text-purple-600 rounded">{section_labels.get(s, s)}</span>'
+                for s in sections_list
+            )
+            sections_html = f'<div class="flex flex-wrap gap-1">{chips}</div>'
+            # Serializar para pasar al JS
+            sections_json = _json.dumps(sections_list).replace('"', '&quot;')
+        else:
+            sections_html = '<span class="text-xs text-gray-400">Todas</span>'
+            sections_json = "[]"
+        display_esc = (u['display_name'] or '').replace("'", "\\'")
         rows_html += f"""
         <tr class="hover:bg-gray-50 border-b border-gray-100" id="user-row-{u['id']}">
             <td class="px-4 py-3 text-sm font-mono font-semibold text-gray-700">{u['username']}</td>
             <td class="px-4 py-3 text-sm text-gray-700">{u['display_name'] or '—'}</td>
             <td class="px-4 py-3"><span class="px-2 py-0.5 text-xs rounded-full font-medium {role_color}">{role_label}</span></td>
+            <td class="px-4 py-3">{sections_html}</td>
             <td class="px-4 py-3">{active_badge}</td>
             <td class="px-4 py-3">{pw_badge}</td>
             <td class="px-4 py-3 text-xs text-gray-400">{last_login}</td>
             <td class="px-4 py-3 text-right">
                 <div class="flex items-center justify-end gap-2">
-                    <button onclick="openEditUser({u['id']}, '{u['username']}', '{u['display_name'] or ''}', '{u['role']}', {u['active']})"
+                    <button onclick="openEditUser({u['id']}, '{u['username']}', '{display_esc}', '{u['role']}', {u['active']}, {sections_json})"
                             class="text-xs px-2 py-1 bg-blue-50 text-blue-600 rounded hover:bg-blue-100">
                         Editar
                     </button>
@@ -106,7 +127,7 @@ async def list_users_api(request: Request):
                 </div>
             </td>
         </tr>"""
-    return rows_html or '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">No hay usuarios</td></tr>'
+    return rows_html or '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-400">No hay usuarios</td></tr>'
 
 
 @router.post("")
@@ -116,12 +137,15 @@ async def create_user_api(request: Request, data: CreateUserRequest):
         raise HTTPException(status_code=400, detail="Rol inválido")
     if not data.username.strip():
         raise HTTPException(status_code=400, detail="Username requerido")
+    # allowed_sections: None o lista vacía → sin restricción
+    sections = data.allowed_sections or []
     try:
         uid = await user_store.create_user(
             username=data.username.strip().lower(),
             display_name=data.display_name.strip(),
             role=data.role,
             created_by=du["username"],
+            allowed_sections=sections if sections else None,
         )
     except Exception as e:
         if "UNIQUE" in str(e):
@@ -130,7 +154,7 @@ async def create_user_api(request: Request, data: CreateUserRequest):
     await user_store.log_action(
         username=du["username"],
         action="create_user",
-        detail={"new_user": data.username, "role": data.role},
+        detail={"new_user": data.username, "role": data.role, "sections": sections},
         ip=_get_client_ip(request),
         user_id=du["id"],
     )
@@ -143,11 +167,15 @@ async def update_user_api(request: Request, user_id: int, data: UpdateUserReques
     kwargs = {k: v for k, v in data.dict().items() if v is not None}
     if "role" in kwargs and kwargs["role"] not in user_store.ROLES:
         raise HTTPException(status_code=400, detail="Rol inválido")
+    # allowed_sections puede ser lista vacía (sin restricción) — tratarla como None para limpiar
+    if "allowed_sections" in kwargs:
+        sections = kwargs["allowed_sections"]
+        kwargs["allowed_sections"] = sections if sections else None
     await user_store.update_user(user_id, **kwargs)
     await user_store.log_action(
         username=du["username"],
         action="update_user",
-        detail={"user_id": user_id, **kwargs},
+        detail={"user_id": user_id, **{k: v for k, v in kwargs.items() if k != "allowed_sections"}},
         ip=_get_client_ip(request),
         user_id=du["id"],
     )

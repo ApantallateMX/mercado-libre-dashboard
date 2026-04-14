@@ -19,16 +19,33 @@ from app.config import DATABASE_PATH
 
 # ─── Roles disponibles ───────────────────────────────────────────────────────
 ROLES = {
-    "admin":          "Administrador",
-    "editor":         "Editor (MeLi + Amazon)",
-    "editor_meli":    "Editor MeLi",
-    "editor_amazon":  "Editor Amazon",
-    "viewer":         "Solo Lectura",
+    "admin":                "Administrador",
+    "editor":               "Editor (MeLi + Amazon)",
+    "editor_meli":          "Editor MeLi",
+    "editor_amazon":        "Editor Amazon",
+    "editor_facturacion":   "Editor Facturación",
+    "viewer":               "Solo Lectura",
 }
 
-ROLE_CAN_WRITE_MELI    = {"admin", "editor", "editor_meli"}
-ROLE_CAN_WRITE_AMAZON  = {"admin", "editor", "editor_amazon"}
-ROLE_CAN_ADMIN         = {"admin"}
+ROLE_CAN_WRITE_MELI       = {"admin", "editor", "editor_meli"}
+ROLE_CAN_WRITE_AMAZON     = {"admin", "editor", "editor_amazon"}
+ROLE_CAN_FACTURACION      = {"admin", "editor", "editor_meli", "editor_facturacion"}
+ROLE_CAN_ADMIN            = {"admin"}
+
+# ─── Secciones disponibles (para control de acceso por sección) ───────────────
+ALL_SECTIONS = [
+    ("dashboard",    "Dashboard"),
+    ("ventas",       "Ventas"),
+    ("productos",    "Productos"),
+    ("sku",          "SKU"),
+    ("ads",          "Ads"),
+    ("salud",        "Salud"),
+    ("devoluciones", "Devoluciones"),
+    ("planning",     "Planning"),
+    ("facturacion",  "Facturación"),
+    ("sync",         "Sync Stock"),
+    ("amazon",       "Amazon"),
+]
 
 
 # ─── Password hashing ────────────────────────────────────────────────────────
@@ -45,24 +62,43 @@ def verify_password(password: str, stored_hash: str, salt: str) -> bool:
 
 
 # ─── Inicialización DB ───────────────────────────────────────────────────────
+def _parse_allowed_sections(raw) -> list:
+    """Convierte el campo allowed_sections de DB (JSON string o None) a lista Python."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return raw
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
 async def init_user_db(admin_password: str = "010817xD"):
     """Crea las tablas y el usuario admin inicial si no existe."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS dashboard_users (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                username        TEXT UNIQUE NOT NULL,
-                display_name    TEXT NOT NULL DEFAULT '',
-                password_hash   TEXT,
-                password_salt   TEXT,
-                role            TEXT NOT NULL DEFAULT 'viewer',
-                active          INTEGER NOT NULL DEFAULT 1,
-                must_change_pw  INTEGER NOT NULL DEFAULT 0,
-                created_by      TEXT DEFAULT 'system',
-                created_at      TEXT DEFAULT (datetime('now')),
-                last_login      TEXT
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                username          TEXT UNIQUE NOT NULL,
+                display_name      TEXT NOT NULL DEFAULT '',
+                password_hash     TEXT,
+                password_salt     TEXT,
+                role              TEXT NOT NULL DEFAULT 'viewer',
+                active            INTEGER NOT NULL DEFAULT 1,
+                must_change_pw    INTEGER NOT NULL DEFAULT 0,
+                created_by        TEXT DEFAULT 'system',
+                created_at        TEXT DEFAULT (datetime('now')),
+                last_login        TEXT,
+                allowed_sections  TEXT DEFAULT NULL
             )
         """)
+        # Migración: agregar allowed_sections si la tabla ya existía sin esa columna
+        try:
+            await db.execute("ALTER TABLE dashboard_users ADD COLUMN allowed_sections TEXT DEFAULT NULL")
+        except Exception:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,7 +141,11 @@ async def get_user_by_username(username: str) -> Optional[dict]:
             "SELECT * FROM dashboard_users WHERE username = ? AND active = 1", (username,)
         )
         row = await cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["allowed_sections"] = _parse_allowed_sections(d.get("allowed_sections"))
+        return d
 
 
 async def get_user_by_id(user_id: int) -> Optional[dict]:
@@ -120,28 +160,36 @@ async def list_users() -> list[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, username, display_name, role, active, must_change_pw, created_by, created_at, last_login "
+            "SELECT id, username, display_name, role, active, must_change_pw, created_by, created_at, last_login, allowed_sections "
             "FROM dashboard_users ORDER BY id"
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
 
-async def create_user(username: str, display_name: str, role: str, created_by: str) -> int:
+async def create_user(
+    username: str, display_name: str, role: str, created_by: str,
+    allowed_sections: list = None,
+) -> int:
     """Crea usuario sin contraseña (must_change_pw=1). Retorna el nuevo user_id."""
+    sections_json = json.dumps(allowed_sections) if allowed_sections else None
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute("""
-            INSERT INTO dashboard_users (username, display_name, role, must_change_pw, created_by)
-            VALUES (?, ?, ?, 1, ?)
-        """, (username, display_name, role, created_by))
+            INSERT INTO dashboard_users (username, display_name, role, must_change_pw, created_by, allowed_sections)
+            VALUES (?, ?, ?, 1, ?, ?)
+        """, (username, display_name, role, created_by, sections_json))
         await db.commit()
         return cur.lastrowid
 
 
 async def update_user(user_id: int, **kwargs) -> bool:
-    """Actualiza campos del usuario. Campos válidos: display_name, role, active."""
-    allowed = {"display_name", "role", "active"}
+    """Actualiza campos del usuario. Campos válidos: display_name, role, active, allowed_sections."""
+    allowed = {"display_name", "role", "active", "allowed_sections"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
+    # Serializar allowed_sections a JSON si viene como lista
+    if "allowed_sections" in fields:
+        val = fields["allowed_sections"]
+        fields["allowed_sections"] = json.dumps(val) if isinstance(val, list) else val
     if not fields:
         return False
     sets = ", ".join(f"{k} = ?" for k in fields)
@@ -202,13 +250,17 @@ async def get_session(token: str) -> Optional[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute("""
-            SELECT u.id, u.username, u.display_name, u.role, u.must_change_pw
+            SELECT u.id, u.username, u.display_name, u.role, u.must_change_pw, u.allowed_sections
             FROM user_sessions s
             JOIN dashboard_users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > ? AND u.active = 1
         """, (token, now))
         row = await cur.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        d = dict(row)
+        d["allowed_sections"] = _parse_allowed_sections(d.get("allowed_sections"))
+        return d
 
 
 async def delete_session(token: str):

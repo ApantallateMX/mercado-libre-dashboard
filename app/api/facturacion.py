@@ -24,7 +24,8 @@ def _get_du(request: Request) -> dict:
 
 def _require_editor(request: Request) -> dict:
     du = _get_du(request)
-    if du["role"] not in ("admin", "editor", "editor_meli"):
+    from app.services.user_store import ROLE_CAN_FACTURACION
+    if du["role"] not in ROLE_CAN_FACTURACION:
         raise HTTPException(status_code=403, detail="Sin permisos de facturación")
     return du
 
