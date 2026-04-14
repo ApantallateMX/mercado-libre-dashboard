@@ -299,8 +299,10 @@ async def get_request(request: Request, req_id: int):
     return {
         "request": req,
         "fiscal_data": fiscal,
-        "has_invoice": invoice is not None,
-        "invoice_filename": invoice[0] if invoice else None,
+        "has_invoice":    invoice is not None and bool(invoice.get("pdf_data") if invoice else False),
+        "invoice_filename": invoice["pdf_filename"] if invoice else None,
+        "has_xml":          bool(invoice and invoice.get("xml_data")),
+        "xml_filename":     invoice["xml_filename"] if invoice else None,
     }
 
 
@@ -308,38 +310,76 @@ async def get_request(request: Request, req_id: int):
 async def upload_invoice(
     request: Request,
     req_id: int,
-    file: UploadFile = File(...),
+    pdf_file: UploadFile = File(None),
+    xml_file: UploadFile = File(None),
 ):
     du = _require_editor(request)
     req = await token_store.get_billing_request_by_id(req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    if not pdf_file and not xml_file:
+        raise HTTPException(status_code=400, detail="Sube al menos un archivo (PDF o XML)")
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:  # 10 MB max
-        raise HTTPException(status_code=413, detail="Archivo muy grande (máx 10 MB)")
+    # Leer PDF
+    pdf_content, pdf_name = b"", ""
+    if pdf_file and pdf_file.filename:
+        pdf_content = await pdf_file.read()
+        if len(pdf_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="PDF muy grande (máx 10 MB)")
+        pdf_name = pdf_file.filename
+
+    # Leer XML
+    xml_content, xml_name = None, ""
+    if xml_file and xml_file.filename:
+        xml_content = await xml_file.read()
+        if len(xml_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="XML muy grande (máx 10 MB)")
+        xml_name = xml_file.filename
+
+    # Si solo subieron XML (sin PDF), necesitamos preservar el PDF anterior si existe
+    existing = await token_store.get_billing_invoice(req_id)
+    if not pdf_content and existing:
+        pdf_content = existing["pdf_data"]
+        pdf_name    = existing["pdf_filename"]
+    if xml_content is None and existing:
+        xml_content = existing["xml_data"]
+        xml_name    = existing["xml_filename"]
 
     await token_store.save_billing_invoice(
         request_id=req_id,
-        filename=file.filename or "factura.pdf",
-        file_data=content,
+        filename=pdf_name or "factura.pdf",
+        file_data=pdf_content or b"",
         uploaded_by=du["username"],
+        xml_filename=xml_name,
+        xml_data=xml_content,
     )
     await token_store.update_billing_status(req_id, "invoice_ready")
-    return {"ok": True, "filename": file.filename}
+    return {"ok": True, "pdf_filename": pdf_name, "xml_filename": xml_name}
 
 
 @router.get("/requests/{req_id}/invoice")
 async def download_invoice_admin(request: Request, req_id: int):
     _require_editor(request)
     result = await token_store.get_billing_invoice(req_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Factura no encontrada")
-    filename, data = result
+    if not result or not result["pdf_data"]:
+        raise HTTPException(status_code=404, detail="PDF no encontrado")
     return Response(
-        content=data,
+        content=result["pdf_data"],
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{result["pdf_filename"]}"'},
+    )
+
+
+@router.get("/requests/{req_id}/invoice/xml")
+async def download_invoice_xml_admin(request: Request, req_id: int):
+    _require_editor(request)
+    result = await token_store.get_billing_invoice(req_id)
+    if not result or not result["xml_data"]:
+        raise HTTPException(status_code=404, detail="XML no encontrado")
+    return Response(
+        content=result["xml_data"],
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{result["xml_filename"]}"'},
     )
 
 

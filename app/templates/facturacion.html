@@ -417,20 +417,32 @@ window._renderDetail = function(d) {
     html += '<div class="bg-gray-50 rounded-xl p-4 text-xs text-gray-500 text-center">El cliente aún no ha enviado sus datos fiscales.</div>';
   }
 
-  // Subir factura
-  html += '<div>';
-  html += '<p class="text-xs font-bold text-gray-700 uppercase tracking-wide mb-3">Factura PDF</p>';
-  if (d.has_invoice) {
-    html += '<div class="flex items-center gap-3">';
-    html += '<a href="/api/facturacion/requests/' + r.id + '/invoice" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-semibold hover:bg-green-100 transition">📥 Descargar factura (' + _esc(d.invoice_filename || 'factura.pdf') + ')</a>';
-    html += '<span class="text-xs text-gray-400">o sube una nueva versión:</span>';
-    html += '</div><div class="mt-2">';
+  // Subir factura (PDF + XML)
+  html += '<div class="space-y-3">';
+  html += '<p class="text-xs font-bold text-gray-700 uppercase tracking-wide">Factura</p>';
+
+  // Links de descarga si ya existen
+  if (d.has_invoice || d.has_xml) {
+    html += '<div class="flex flex-wrap gap-2">';
+    if (d.has_invoice)
+      html += '<a href="/api/facturacion/requests/' + r.id + '/invoice" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-green-50 text-green-700 border border-green-200 px-3 py-2 rounded-lg font-semibold hover:bg-green-100 transition">📥 PDF (' + _esc(d.invoice_filename || 'factura.pdf') + ')</a>';
+    if (d.has_xml)
+      html += '<a href="/api/facturacion/requests/' + r.id + '/invoice/xml" target="_blank" class="inline-flex items-center gap-1.5 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg font-semibold hover:bg-blue-100 transition">📄 XML (' + _esc(d.xml_filename || 'factura.xml') + ')</a>';
+    html += '</div>';
   }
-  html += '<div class="flex items-center gap-3 mt-2">';
-  html += '<input type="file" id="inv-file-' + r.id + '" accept=".pdf" class="text-xs text-gray-600 file:mr-2 file:text-xs file:font-semibold file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-yellow-400 file:text-gray-800 hover:file:bg-yellow-500">';
-  html += '<button onclick="window._uploadInvoice(' + r.id + ')" class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-3 py-1.5 rounded-lg transition" id="btn-upload-' + r.id + '">Subir</button>';
+
+  // Inputs de subida
+  html += '<div class="grid grid-cols-2 gap-3">';
+  html += '<div>';
+  html += '<p class="text-xs text-gray-400 mb-1">PDF</p>';
+  html += '<input type="file" id="inv-pdf-' + r.id + '" accept=".pdf" class="w-full text-xs text-gray-600 file:mr-2 file:text-xs file:font-semibold file:py-1 file:px-2 file:rounded file:border-0 file:bg-yellow-400 file:text-gray-800 hover:file:bg-yellow-500">';
   html += '</div>';
-  if (d.has_invoice) html += '</div>';
+  html += '<div>';
+  html += '<p class="text-xs text-gray-400 mb-1">XML</p>';
+  html += '<input type="file" id="inv-xml-' + r.id + '" accept=".xml" class="w-full text-xs text-gray-600 file:mr-2 file:text-xs file:font-semibold file:py-1 file:px-2 file:rounded file:border-0 file:bg-yellow-400 file:text-gray-800 hover:file:bg-yellow-500">';
+  html += '</div>';
+  html += '</div>';
+  html += '<button onclick="window._uploadInvoice(' + r.id + ')" class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-4 py-1.5 rounded-lg transition" id="btn-upload-' + r.id + '">Subir</button>';
   html += '</div>';
 
   {% if dashboard_user and dashboard_user.role == 'admin' %}
@@ -447,11 +459,15 @@ function _dRow(label, value) {
 }
 
 window._uploadInvoice = function(reqId) {
-  var fileInput = document.getElementById('inv-file-' + reqId);
+  var pdfInput = document.getElementById('inv-pdf-' + reqId);
+  var xmlInput = document.getElementById('inv-xml-' + reqId);
   var btn = document.getElementById('btn-upload-' + reqId);
-  if (!fileInput || !fileInput.files.length) { alert('Selecciona un archivo PDF primero.'); return; }
+  var hasPdf = pdfInput && pdfInput.files.length;
+  var hasXml = xmlInput && xmlInput.files.length;
+  if (!hasPdf && !hasXml) { alert('Selecciona al menos un archivo (PDF o XML).'); return; }
   var fd = new FormData();
-  fd.append('file', fileInput.files[0]);
+  if (hasPdf) fd.append('pdf_file', pdfInput.files[0]);
+  if (hasXml) fd.append('xml_file', xmlInput.files[0]);
   btn.disabled = true; btn.textContent = 'Subiendo...';
   fetch('/api/facturacion/requests/' + reqId + '/invoice', { method: 'POST', body: fd })
     .then(function(r) { return r.json(); })

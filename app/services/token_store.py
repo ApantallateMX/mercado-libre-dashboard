@@ -462,14 +462,25 @@ async def init_db():
         """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS billing_invoices (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                request_id  INTEGER UNIQUE NOT NULL,
-                filename    TEXT NOT NULL DEFAULT '',
-                file_data   BLOB NOT NULL,
-                uploaded_by TEXT NOT NULL DEFAULT '',
-                uploaded_at TEXT NOT NULL DEFAULT ''
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                request_id   INTEGER UNIQUE NOT NULL,
+                filename     TEXT NOT NULL DEFAULT '',
+                file_data    BLOB NOT NULL,
+                xml_filename TEXT NOT NULL DEFAULT '',
+                xml_data     BLOB,
+                uploaded_by  TEXT NOT NULL DEFAULT '',
+                uploaded_at  TEXT NOT NULL DEFAULT ''
             )
         """)
+        # Migration: add XML columns if table already exists without them
+        try:
+            await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_filename TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_data BLOB")
+        except Exception:
+            pass
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_billing_requests_token ON billing_requests(token)"
         )
@@ -1413,32 +1424,40 @@ async def get_billing_constancia(request_id: int) -> Optional[tuple]:
 
 
 async def save_billing_invoice(
-    request_id: int, filename: str, file_data: bytes, uploaded_by: str
+    request_id: int, filename: str, file_data: bytes, uploaded_by: str,
+    xml_filename: str = "", xml_data: Optional[bytes] = None,
 ) -> None:
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
-            """INSERT INTO billing_invoices (request_id, filename, file_data, uploaded_by, uploaded_at)
-               VALUES (?,?,?,?,?)
+            """INSERT INTO billing_invoices
+                 (request_id, filename, file_data, xml_filename, xml_data, uploaded_by, uploaded_at)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(request_id) DO UPDATE SET
                  filename=excluded.filename, file_data=excluded.file_data,
+                 xml_filename=excluded.xml_filename, xml_data=excluded.xml_data,
                  uploaded_by=excluded.uploaded_by, uploaded_at=excluded.uploaded_at""",
-            (request_id, filename, file_data, uploaded_by, now),
+            (request_id, filename, file_data, xml_filename or "", xml_data, uploaded_by, now),
         )
         await db.commit()
 
 
-async def get_billing_invoice(request_id: int) -> Optional[tuple]:
-    """Retorna (filename, bytes) o None."""
+async def get_billing_invoice(request_id: int) -> Optional[dict]:
+    """Retorna dict con pdf y xml, o None si no existe ninguno."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT filename, file_data FROM billing_invoices WHERE request_id=?",
+            "SELECT filename, file_data, xml_filename, xml_data FROM billing_invoices WHERE request_id=?",
             (request_id,),
         )
         row = await cursor.fetchone()
         if row and row["file_data"]:
-            return (row["filename"] or "factura.pdf", bytes(row["file_data"]))
+            return {
+                "pdf_filename": row["filename"] or "factura.pdf",
+                "pdf_data":     bytes(row["file_data"]),
+                "xml_filename": row["xml_filename"] or "",
+                "xml_data":     bytes(row["xml_data"]) if row["xml_data"] else None,
+            }
         return None
 
 
