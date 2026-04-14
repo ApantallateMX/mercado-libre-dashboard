@@ -288,6 +288,19 @@ async def init_db():
                 """)
         except Exception:
             pass
+        # ─── Migración: limpiar entradas con SKU combinado (ej. "SKU1 / SKU2") ──────
+        # Cuando ML almacena seller_custom_field o SELLER_SKU attribute como valor
+        # combinado, el código antiguo lo guardaba tal cual. Ahora _primary() extrae
+        # solo el primer SKU de 10 chars, pero si el entry corrupto ya estaba en cache
+        # el item no se re-fetcheaba. Se eliminan entradas con separadores para forzar
+        # re-fetch en el siguiente scan.
+        try:
+            await db.execute(
+                "DELETE FROM item_sku_cache WHERE sku LIKE ? OR sku LIKE ? OR sku LIKE ? OR sku LIKE ?",
+                ("% / %", "% + %", "% \\ %", "%/%")
+            )
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: product_videos — asocia videos generados con listings ML
         # Permite mostrar botón "Subir Clip" en cada listing donde hay video
