@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-13 — BUG CRÍTICO: Pack_id vs Order_id en MeLi API
+
+### El problema
+Al buscar la orden `2000012456820431` desde el portal de facturación y desde el buscador del dashboard, el sistema devolvía "Orden no encontrada" aunque la orden sí existía en la cuenta Apantallate.
+
+### Root cause
+Lo que MeLi muestra en su dashboard (y lo que los compradores ven en sus pedidos) es un **PACK_ID**, no un ORDER_ID.
+
+- `GET /orders/2000012456820431` → 404 (pack_id no funciona en este endpoint)
+- `GET /packs/2000012456820431` → 200 con `orders[0].id = 2000015930795100`
+- `GET /orders/2000015930795100` → 200 ✓ (el ORDER_ID real)
+
+### Fix
+Se agregó `resolve_order(display_id)` en `meli_client.py` que:
+1. Intenta `GET /orders/{id}` primero (para order_ids reales)
+2. Si 404 → intenta `GET /packs/{id}` → extrae `orders[0].id`
+3. Llama `GET /orders/{real_order_id}`
+
+### Archivos afectados
+- `app/services/meli_client.py` — `get_pack()` y `resolve_order()` agregados
+- `app/api/orders.py:33` — usa `resolve_order()` en lugar de `get_order()`
+- `app/api/facturacion.py:124` — `_try_account()` usa `resolve_order()`
+- `app/main.py:1240` — portal cliente `/factura/{token}/lookup` usa `resolve_order()`
+- `app/main.py:4772` — buscador general de órdenes usa `resolve_order()`
+
+### Aprendizaje
+Documentado en `api-integration-specialist.md` — sección "Pack_id vs Order_id — TRAMPA CRÍTICA DE MELI". Todos los lookups de órdenes en el dashboard ahora pasan por `resolve_order()`.
+
+---
+
 ## 2026-04-14 — FEAT: Módulo de Facturación — portal self-service para clientes
 
 ### Qué se construyó

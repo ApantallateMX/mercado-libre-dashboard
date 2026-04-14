@@ -121,10 +121,10 @@ async def order_lookup(request: Request, order_number: str = ""):
     async def _try_account(acc):
         try:
             client = await get_meli_client(user_id=acc["user_id"])
-            order = await client.get_order(order_number)
+            # resolve_order maneja pack_id → order_id automáticamente
+            order = await client.resolve_order(order_number)
             await client.close()
-            # ML devuelve {"error": "not_found"} si no existe
-            if "error" in order or order.get("status") == "error":
+            if "error" in order or not order.get("id"):
                 return None
             return {"account": acc, "order": order}
         except Exception:

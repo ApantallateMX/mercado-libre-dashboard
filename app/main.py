@@ -1237,7 +1237,7 @@ async def factura_lookup_order(request: Request, token: str):
         try:
             from app.services.meli_client import get_meli_client
             client = await get_meli_client(user_id=req["ml_user_id"])
-            order_data = await client.get_order(order_number)
+            order_data = await client.resolve_order(order_number)
             await client.close()
         except Exception as e:
             # Si falla la API, continuamos sin datos del producto
@@ -4769,7 +4769,8 @@ async def health_search_partial(
             # Try as Order ID and Claim ID in parallel
             async def _try_order():
                 try:
-                    order = await client.get(f"/orders/{query}")
+                    # resolve_order maneja pack_id → order_id automáticamente
+                    order = await client.resolve_order(query)
                     if order and order.get("id"):
                         return order
                 except Exception:

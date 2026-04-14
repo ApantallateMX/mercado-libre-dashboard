@@ -30,7 +30,7 @@ async def get_order(order_id: str):
         raise HTTPException(status_code=401, detail="No autenticado")
 
     try:
-        order = await client.get_order(order_id)
+        order = await client.resolve_order(order_id)
         return order
     finally:
         await client.close()

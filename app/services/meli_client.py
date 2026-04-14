@@ -283,8 +283,55 @@ class MeliClient:
         return all_orders
 
     async def get_order(self, order_id: str) -> dict:
-        """Obtiene el detalle de una orden."""
+        """Obtiene el detalle de una orden por su order_id real (no pack_id)."""
         return await self.get(f"/orders/{order_id}")
+
+    async def get_pack(self, pack_id: str) -> dict:
+        """Obtiene el detalle de un pack (agrupación de órdenes en ML)."""
+        return await self.get(f"/packs/{pack_id}")
+
+    async def resolve_order(self, display_id: str) -> dict:
+        """
+        Resuelve cualquier ID que el usuario ve en pantalla (pack_id o order_id)
+        y devuelve el detalle completo de la orden.
+
+        Contexto ML:
+          - Lo que sellers y buyers ven en el dashboard es el PACK_ID
+            (ej. 2000012456820431)
+          - El ORDER_ID real es distinto (ej. 2000015930795100) y vive
+            dentro de pack.orders[].id
+          - GET /orders/{pack_id} → 404
+          - GET /packs/{pack_id}  → 200, contiene los order_ids reales
+
+        Flujo:
+          1. GET /orders/{id}  — si responde, es un order_id directo ✓
+          2. Si 404 → GET /packs/{id} — extraer orders[0].id
+          3. GET /orders/{real_order_id} → devolver la orden
+        """
+        # 1. Intentar como order_id directo
+        try:
+            order = await self.get(f"/orders/{display_id}")
+            if order.get("id") and "error" not in order:
+                return order
+        except MeliApiError as e:
+            if e.status_code != 404:
+                raise
+        except Exception:
+            pass
+
+        # 2. Intentar como pack_id
+        try:
+            pack = await self.get(f"/packs/{display_id}")
+        except MeliApiError:
+            raise MeliApiError(404, f"/orders|packs/{display_id}", "No encontrado como order_id ni pack_id")
+
+        orders_in_pack = pack.get("orders", [])
+        if not orders_in_pack:
+            raise MeliApiError(404, f"/packs/{display_id}", "Pack sin órdenes asociadas")
+
+        # 3. Obtener la orden real
+        real_order_id = str(orders_in_pack[0]["id"])
+        return await self.get(f"/orders/{real_order_id}")
 
     # === Items ===
 

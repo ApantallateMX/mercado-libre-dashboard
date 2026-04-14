@@ -234,6 +234,65 @@ await asyncio.sleep(retry_after)
 # No hay workaround — requiere configuración ME1 del vendedor
 ```
 
+## Pack_id vs Order_id — TRAMPA CRÍTICA DE MELI
+
+### El problema
+Lo que los vendedores ven en el dashboard de MeLi (y lo que los clientes ven en sus pedidos) es un **PACK_ID**, NO un ORDER_ID. Ejemplo: `2000012456820431`.
+
+- `GET /orders/2000012456820431` → **404** aunque la orden existe
+- `GET /packs/2000012456820431` → **200** con `orders[0].id = 2000015930795100` (el ORDER_ID real)
+- `GET /orders/2000015930795100` → **200** ✓
+
+### Regla absoluta
+**NUNCA usar `GET /orders/{id}` directamente con un número que provenga del usuario o del dashboard ML.** Siempre usar `resolve_order()`.
+
+### Implementación en el dashboard (`meli_client.py`)
+```python
+async def get_pack(self, pack_id: str) -> dict:
+    """Obtiene el detalle de un pack (agrupación de órdenes en ML)."""
+    return await self.get(f"/packs/{pack_id}")
+
+async def resolve_order(self, display_id: str) -> dict:
+    """
+    Resuelve cualquier ID visible (pack_id o order_id) → detalle completo.
+    Flujo:
+      1. GET /orders/{id}  — si 200, es order_id directo
+      2. Si 404 → GET /packs/{id} → extraer orders[0].id
+      3. GET /orders/{real_order_id}
+    """
+    try:
+        order = await self.get(f"/orders/{display_id}")
+        if order.get("id") and "error" not in order:
+            return order
+    except MeliApiError as e:
+        if e.status_code != 404:
+            raise
+    except Exception:
+        pass
+    # Intentar como pack_id
+    try:
+        pack = await self.get(f"/packs/{display_id}")
+    except MeliApiError:
+        raise MeliApiError(404, f"/orders|packs/{display_id}", "No encontrado como order_id ni pack_id")
+    orders_in_pack = pack.get("orders", [])
+    if not orders_in_pack:
+        raise MeliApiError(404, f"/packs/{display_id}", "Pack sin órdenes asociadas")
+    real_order_id = str(orders_in_pack[0]["id"])
+    return await self.get(f"/orders/{real_order_id}")
+```
+
+### Endpoints de pack
+```
+GET /packs/{pack_id}
+→ {orders: [{id: ORDER_ID_REAL, ...}], shipments: [...]}
+
+# Todos los order lookups en el dashboard usan resolve_order():
+# - app/api/orders.py  → GET /api/orders/{order_id}
+# - app/api/facturacion.py  → order-lookup endpoint
+# - app/main.py  → /factura/{token}/lookup (portal cliente)
+# - app/main.py  → búsqueda general de órdenes
+```
+
 ## Comportamientos inesperados documentados
 
 1. **MeLi `order.items`** en Jinja2 → resuelve a `dict.items()` METHOD — usar SimpleNamespace
@@ -244,6 +303,7 @@ await asyncio.sleep(retry_after)
 6. **MeLi `sub_status: ["out_of_stock"]`** ≠ pausa manual — es pausa automática por stock=0
 7. **MeLi `catalog_listing: true`** NO significa stock inmanejable — no bloquear Sync por esto
 8. **Railway cold start**: `_seed_tokens()` debe correr en startup event de FastAPI
+9. **MeLi PACK_ID ≠ ORDER_ID** — el ID visible en el dashboard es un PACK_ID. `GET /orders/{pack_id}` → 404. Usar siempre `resolve_order()` que prueba ambos endpoints automáticamente.
 
 ## OAuth stateless — Arquitectura del state firmado
 
