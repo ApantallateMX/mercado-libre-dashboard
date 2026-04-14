@@ -100,29 +100,94 @@ FORMAS_PAGO = [
 
 # ─── Rutas ────────────────────────────────────────────────────────────────────
 
+def _is_amazon_order_id(order_id: str) -> bool:
+    """Detecta si el ID tiene formato Amazon: XXX-XXXXXXX-XXXXXXX"""
+    import re
+    return bool(re.match(r'^\d{3}-\d{7}-\d{7}$', order_id.strip()))
+
+
 @router.get("/order-lookup")
 async def order_lookup(request: Request, order_number: str = ""):
     """
-    Busca una orden en TODAS las cuentas ML en paralelo.
-    Retorna la cuenta que la tiene + resumen del producto.
-    Solo para uso interno (admin).
+    Busca una orden en TODAS las cuentas ML y Amazon en paralelo.
+    Detecta automáticamente la plataforma por el formato del ID.
+    Solo para uso interno (admin/editor).
     """
     _require_editor(request)
     order_number = order_number.strip()
     if not order_number:
         return {"found": False, "error": "Ingresa un número de orden"}
 
-    from app.services.meli_client import get_meli_client
     import asyncio
+
+    # ── Amazon (formato 702-XXXXXXX-XXXXXXX) ────────────────────────────────
+    if _is_amazon_order_id(order_number):
+        from app.services.amazon_client import get_amazon_client
+
+        amazon_accounts = await token_store.get_all_amazon_accounts()
+        if not amazon_accounts:
+            return {"found": False, "error": "No hay cuentas Amazon configuradas"}
+
+        async def _try_amazon(acc):
+            try:
+                client = await get_amazon_client(acc["seller_id"])
+                if not client:
+                    return None
+                # GET /orders/v0/orders/{orderId}
+                data = await client._request("GET", f"/orders/v0/orders/{order_number}")
+                order = data.get("payload", {})
+                if not order or not order.get("AmazonOrderId"):
+                    return None
+                # GET order items
+                items_data = await client._request("GET", f"/orders/v0/orders/{order_number}/orderItems")
+                items_raw = items_data.get("payload", {}).get("OrderItems", [])
+                return {"account": acc, "order": order, "items_raw": items_raw}
+            except Exception:
+                return None
+
+        results = await asyncio.gather(*[_try_amazon(a) for a in amazon_accounts])
+        match = next((r for r in results if r is not None), None)
+
+        if not match:
+            return {"found": False, "error": "Orden Amazon no encontrada en ninguna cuenta"}
+
+        acc = match["account"]
+        order = match["order"]
+        items = [
+            {
+                "title": it.get("Title", ""),
+                "quantity": it.get("QuantityOrdered", 1),
+                "unit_price": float((it.get("ItemPrice") or {}).get("Amount") or 0),
+                "sku": it.get("SellerSKU", ""),
+                "asin": it.get("ASIN", ""),
+            }
+            for it in match["items_raw"]
+        ]
+        total_obj = order.get("OrderTotal") or {}
+        return {
+            "found": True,
+            "ml_user_id": acc["seller_id"],
+            "nickname": acc.get("nickname") or acc["seller_id"],
+            "platform": "amazon",
+            "order": {
+                "total": float(total_obj.get("Amount") or 0),
+                "currency": total_obj.get("CurrencyCode", "MXN"),
+                "date": (order.get("PurchaseDate") or "")[:10],
+                "status": order.get("OrderStatus", ""),
+                "items": items,
+            },
+        }
+
+    # ── MercadoLibre (numérico / pack_id) ───────────────────────────────────
+    from app.services.meli_client import get_meli_client
 
     accounts = await token_store.get_all_tokens()
     if not accounts:
         return {"found": False, "error": "No hay cuentas ML configuradas"}
 
-    async def _try_account(acc):
+    async def _try_meli(acc):
         try:
             client = await get_meli_client(user_id=acc["user_id"])
-            # resolve_order maneja pack_id → order_id automáticamente
             order = await client.resolve_order(order_number)
             await client.close()
             if "error" in order or not order.get("id"):
@@ -131,7 +196,7 @@ async def order_lookup(request: Request, order_number: str = ""):
         except Exception:
             return None
 
-    results = await asyncio.gather(*[_try_account(a) for a in accounts])
+    results = await asyncio.gather(*[_try_meli(a) for a in accounts])
     match = next((r for r in results if r is not None), None)
 
     if not match:
@@ -139,8 +204,6 @@ async def order_lookup(request: Request, order_number: str = ""):
 
     acc = match["account"]
     order = match["order"]
-
-    # Armar resumen del producto
     items = []
     for oi in order.get("order_items", []):
         item = oi.get("item", {})
