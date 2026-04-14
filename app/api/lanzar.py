@@ -371,11 +371,13 @@ async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict
             return set(), {}, {}
 
         # ── Step 2: Check cache ───────────────────────────────────────────────
+        # cached: {item_id: [sku1, sku2, ...]} — múltiples SKUs por item posible
+        # (ej. seller_custom_field="SNTV006296 / SNWM000001" → dos entradas en cache)
         from app.services.token_store import get_cached_skus, save_skus_cache
         cached       = await get_cached_skus(item_ids)
-        cached_skus  = {_base(v) for v in cached.values() if v}
+        cached_skus  = {_base(v) for vs in cached.values() for v in vs if v}
         needs_fetch  = [iid for iid in item_ids if iid not in cached]
-        logger.info(f"{nickname}: {len(cached)} cached SKUs, {len(needs_fetch)} items to fetch")
+        logger.info(f"{nickname}: {len(cached)} cached items ({len(cached_skus)} SKUs), {len(needs_fetch)} items to fetch")
 
         # ── Step 3: Batch-fetch uncached items ───────────────────────────────
         # CRITICAL: Do NOT add ?attributes= filter here.
@@ -1610,7 +1612,8 @@ async def debug_scan(sku: str = ""):
                     # Check cache
                     from app.services.token_store import get_cached_skus
                     cached = await get_cached_skus(ids)
-                    cached_by_sku = {v: k for k, v in cached.items()}
+                    # cached: {item_id: [sku1, sku2, ...]} — reverse to {sku: item_id}
+                    cached_by_sku = {s: iid for iid, skus in cached.items() for s in skus}
                     result["cache"]["total_cached_for_page1"] = len(cached)
                     if sku_upper in cached_by_sku:
                         result["ml"]["sku_check"]["in_cache"] = True

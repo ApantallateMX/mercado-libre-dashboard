@@ -259,12 +259,35 @@ async def init_db():
                 pass  # column already exists
         await db.execute("""
             CREATE TABLE IF NOT EXISTS item_sku_cache (
-                item_id   TEXT PRIMARY KEY,
+                item_id   TEXT NOT NULL DEFAULT '',
                 user_id   TEXT NOT NULL DEFAULT '',
                 sku       TEXT NOT NULL DEFAULT '',
-                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (item_id, sku)
             )
         """)
+        # ─── Migración: item_sku_cache v2 — PRIMARY KEY (item_id, sku) ──────────
+        # La versión anterior tenía item_id TEXT PRIMARY KEY, lo que causaba que
+        # SKUs combinados ("SNTV006296 / SNWM000001") perdieran el primer SKU al
+        # hacer ON CONFLICT UPDATE con el segundo. Se migra a composite PK y se
+        # limpia la cache corrompida para que el siguiente scan repopule correctamente.
+        try:
+            cur = await db.execute("SELECT COUNT(*) FROM pragma_table_info('item_sku_cache') WHERE pk=1 AND name='item_id' AND (SELECT COUNT(*) FROM pragma_table_info('item_sku_cache') WHERE pk>0) = 1")
+            row = await cur.fetchone()
+            if row and row[0] == 1:
+                # Old schema detected (single PK on item_id) — migrate
+                await db.execute("DROP TABLE item_sku_cache")
+                await db.execute("""
+                    CREATE TABLE item_sku_cache (
+                        item_id   TEXT NOT NULL DEFAULT '',
+                        user_id   TEXT NOT NULL DEFAULT '',
+                        sku       TEXT NOT NULL DEFAULT '',
+                        synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (item_id, sku)
+                    )
+                """)
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: product_videos — asocia videos generados con listings ML
         # Permite mostrar botón "Subir Clip" en cada listing donde hay video
@@ -839,10 +862,11 @@ async def get_amazon_stock_threshold(seller_id: str) -> int:
 # ─── ITEM SKU CACHE ───────────────────────────────────────────────────────────
 
 async def get_cached_skus(item_ids: list) -> dict:
-    """Retorna {item_id: sku} para los item_ids que están en caché (sku no vacío)."""
+    """Retorna {item_id: [sku1, sku2, ...]} para los item_ids en caché (sku no vacío).
+    Un item puede tener múltiples SKUs (seller_custom_field con formato "SKU1 / SKU2")."""
     if not item_ids:
         return {}
-    result = {}
+    result: dict[str, list[str]] = {}
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         # SQLite limit: 999 variables per query — chunk to be safe
@@ -854,12 +878,13 @@ async def get_cached_skus(item_ids: list) -> dict:
                 chunk,
             )
             for row in await cursor.fetchall():
-                result[row["item_id"]] = row["sku"]
+                result.setdefault(row["item_id"], []).append(row["sku"])
     return result
 
 
 async def save_skus_cache(entries: list) -> None:
-    """Guarda [{item_id, user_id, sku}] en caché. Ignora entradas con sku vacío."""
+    """Guarda [{item_id, user_id, sku}] en caché. Soporta múltiples SKUs por item_id.
+    Ignora entradas con sku vacío. PK compuesta (item_id, sku) — no sobreescribe."""
     valid = [e for e in entries if e.get("sku") and e.get("item_id")]
     if not valid:
         return
@@ -868,8 +893,7 @@ async def save_skus_cache(entries: list) -> None:
             await db.execute(
                 """INSERT INTO item_sku_cache (item_id, user_id, sku, synced_at)
                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                   ON CONFLICT(item_id) DO UPDATE SET
-                       sku = excluded.sku,
+                   ON CONFLICT(item_id, sku) DO UPDATE SET
                        user_id = excluded.user_id,
                        synced_at = CURRENT_TIMESTAMP""",
                 (e["item_id"], e.get("user_id", ""), e["sku"]),
