@@ -7,56 +7,17 @@
 </div>
 {% else %}
 
-<!-- ─── FILTROS + ORDENAMIENTO ─────────────────────────────────────────────── -->
-<div class="bg-white rounded-xl shadow mb-4 p-4">
-    <div class="flex flex-col md:flex-row md:items-center gap-3">
-        <!-- Filtro por estado -->
-        <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-xs text-gray-500 font-medium">Estado:</span>
-            {% set filters = [
-                ('all',       'Todos',       total),
-                ('active',    'Activos',     none),
-                ('inactive',  'Inactivos',   none),
-                ('suppressed','Suprimidos',  none),
-            ] %}
-            {% for val, label, _ in filters %}
-            <a href="/api/amazon/products/catalog?status_filter={{ val }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
-               hx-get="/api/amazon/products/catalog?status_filter={{ val }}&sort_by={{ sort_by }}&sort_dir={{ sort_dir }}"
-               hx-target="#amz-tab-content"
-               hx-swap="innerHTML"
-               class="px-2.5 py-1 rounded-full text-xs font-medium transition
-               {{ 'bg-orange-500 text-white' if status_filter == val else 'bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700' }}">
-                {{ label }}
-            </a>
-            {% endfor %}
-        </div>
-        <!-- Separador -->
-        <div class="hidden md:block h-5 w-px bg-gray-200"></div>
-        <!-- Ordenamiento -->
-        <div class="flex items-center gap-2">
-            <span class="text-xs text-gray-500 font-medium">Ordenar:</span>
-            {% set sorts = [('fba_stock','FBA Stock'),('price','Precio'),('revenue30d','$ 30d'),('title','Título')] %}
-            {% for val, label in sorts %}
-            {% set new_dir = 'asc' if (sort_by == val and sort_dir == 'desc') else 'desc' %}
-            <a href="/api/amazon/products/catalog?status_filter={{ status_filter }}&sort_by={{ val }}&sort_dir={{ new_dir }}"
-               hx-get="/api/amazon/products/catalog?status_filter={{ status_filter }}&sort_by={{ val }}&sort_dir={{ new_dir }}"
-               hx-target="#amz-tab-content"
-               hx-swap="innerHTML"
-               class="px-2.5 py-1 rounded-full text-xs font-medium transition
-               {{ 'bg-orange-500 text-white' if sort_by == val else 'bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700' }}">
-                {% if sort_by == val %}
-                    {{ label }} {{ '↑' if sort_dir == 'asc' else '↓' }}
-                {% else %}
-                    {{ label }}
-                {% endif %}
-            </a>
-            {% endfor %}
-        </div>
-        <div class="md:ml-auto text-xs text-gray-400">
-            {{ total }} listings
-        </div>
-    </div>
-</div>
+<!-- ─── ACTUALIZAR CONTADORES DE TABS ─────────────────────────────────────── -->
+<script>
+(function() {
+  var cntEl = document.getElementById('amz-cnt-' + '{{ status_filter }}');
+  if (cntEl) cntEl.textContent = '{{ total }}';
+  // Actualizar stats-row si existe
+  if (typeof window.amzUpdateStatsFromCatalog === 'function') {
+    window.amzUpdateStatsFromCatalog('{{ status_filter }}', {{ total }});
+  }
+})();
+</script>
 
 <!-- ─── TABLA DE LISTINGS ─────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow overflow-hidden">
@@ -90,8 +51,21 @@
             <tbody>
                 {% for item in listings %}
                 {% set fba_color = 'text-green-600 font-bold' if item.fba_stock >= 10 else ('text-yellow-600 font-bold' if item.fba_stock > 0 else 'text-red-600 font-bold') %}
-                <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition">
-                    <td class="px-3"><input type="checkbox" class="amz-sku-check rounded border-gray-300" data-sku="{{ item.sku or item.get('sku','') }}"></td>
+                <tr class="border-b border-gray-50 hover:bg-orange-50/30 transition cursor-pointer"
+                    onclick="openAmzPanel(this.dataset)"
+                    data-sku="{{ item.sku|e }}"
+                    data-title="{{ item.title|e }}"
+                    data-asin="{{ item.asin or '' }}"
+                    data-status="{{ item.status }}"
+                    data-url="{{ item.amazon_url or '' }}"
+                    data-price="{{ item.price }}"
+                    data-fba="{{ item.fba_stock }}"
+                    data-reserved="{{ item.reserved }}"
+                    data-inbound="{{ item.inbound }}"
+                    data-unfulfillable="{{ item.unfulfillable }}"
+                    data-image="{{ item.image_url or '' }}"
+                    data-suggestion="{{ (item.suggestion or '')|e }}">
+                    <td class="px-3" onclick="event.stopPropagation()"><input type="checkbox" class="amz-sku-check rounded border-gray-300" data-sku="{{ item.sku or item.get('sku','') }}"></td>
                     <td class="py-2.5 px-4 text-gray-400 text-xs">{{ loop.index }}</td>
                     <td class="py-2.5 px-4">
                         <div class="flex items-center gap-2.5">
@@ -186,12 +160,12 @@
                         <span class="text-xs text-green-400">✓ OK</span>
                         {% endif %}
                     </td>
-                    <td class="py-2.5 px-3 text-center">
+                    <td class="py-2.5 px-3 text-center" onclick="event.stopPropagation()">
                         <div class="flex items-center justify-center gap-1.5 flex-wrap">
                             {% if item.amazon_url %}
                             <a href="{{ item.amazon_url }}" target="_blank"
                                class="text-xs text-orange-500 hover:text-orange-700 font-medium transition whitespace-nowrap">
-                                Ver →
+                                AMZ →
                             </a>
                             {% endif %}
                             <a href="https://sellercentral.amazon.com.mx/inventory?search={{ item.sku | urlencode }}" target="_blank"
