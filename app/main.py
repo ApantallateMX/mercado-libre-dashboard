@@ -945,10 +945,9 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             sku = p.get(sku_key, "")
             if not sku:
                 continue
-            clean = _clean_sku_for_bm(sku)
-            if not clean:
+            base = normalize_to_bm_sku(sku)
+            if not base:
                 continue
-            base = _extract_base_sku(clean).upper()
             base_to_skus.setdefault(base, []).append(sku)
 
         async def _fetch(base, http):
@@ -987,10 +986,9 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         sku = p.get(sku_key, "")
         if not sku:
             continue
-        clean = _clean_sku_for_bm(sku)
-        if not clean:
+        base = normalize_to_bm_sku(sku)
+        if not base:
             continue
-        base = _extract_base_sku(clean).upper()
         bm = base_map.get(base)
         if bm:
             retail_price = bm.get("RetailPrice", 0) or 0
@@ -1011,15 +1009,14 @@ async def _enrich_with_bm_stock(products: list, sku_key="sku"):
 
     async def _fetch(sku, http):
         async with sem:
-            clean_sku = _clean_sku_for_bm(sku)
-            base = _extract_base_sku(clean_sku)
+            base = normalize_to_bm_sku(sku)
             if not base:
                 return sku, None
             try:
                 resp = await http.post(BM_WH_URL, json={
                     "COMPANYID": 1, "SKU": base, "WarehouseID": None,
                     "LocationID": "47,62,68", "BINID": None,
-                    "Condition": _bm_conditions_for_sku(clean_sku), "ForInventory": 0, "SUPPLIERS": None,
+                    "Condition": _bm_conditions_for_sku(sku), "ForInventory": 0, "SUPPLIERS": None,
                 }, timeout=15.0)
                 if resp.status_code == 200:
                     rows = resp.json() or []
@@ -2074,7 +2071,7 @@ async def items_grid_partial(
             sku = _get_item_sku(body)
             item_id = body.get("id", "")
             if sku and item_id:
-                base = _extract_base_sku(sku)
+                base = normalize_to_bm_sku(sku)
                 sku_to_items.setdefault(base, {"sku": sku, "item_ids": []})
                 sku_to_items[base]["item_ids"].append(item_id)
 
@@ -2182,7 +2179,7 @@ async def get_item_bm_cost(item_id: str):
         sku = _get_item_sku(data) if data else ""
         if not sku:
             return JSONResponse({"avg_cost_usd": 0, "retail_price_usd": 0})
-        base = _extract_base_sku(sku).upper()
+        base = normalize_to_bm_sku(sku)
         async with httpx.AsyncClient() as http:
             resp = await http.post(BM_INV_URL, json={
                 "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
@@ -7386,10 +7383,9 @@ async def _run_global_scan(threshold: int):
                 sku = p.get("sku") or ""
                 if not sku:
                     continue
-                clean = _clean_sku_for_bm(sku)
-                if not clean:
+                base = normalize_to_bm_sku(sku)
+                if not base:
                     continue
-                base = _extract_base_sku(clean).upper()
                 if base not in sku_accounts:
                     sku_accounts[base] = {}
                     sku_titles[base] = p.get("title", "")

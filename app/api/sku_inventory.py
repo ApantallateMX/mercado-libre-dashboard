@@ -9,6 +9,7 @@ import httpx
 
 from app.services.meli_client import get_meli_client
 from app.services.product_researcher import research_product
+from app.services.sku_utils import base_sku as _bm_base_sku
 
 router = APIRouter(prefix="/api/sku-inventory", tags=["sku-inventory"])
 
@@ -90,7 +91,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     """
     import json as _json
     from app.services.binmanager_client import get_shared_bm
-    base = _extract_base_sku(sku)
+    base = _bm_base_sku(sku)
     conditions = _bm_conditions_for_sku(sku)
 
     wh_payload = {
