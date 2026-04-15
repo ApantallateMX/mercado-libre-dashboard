@@ -49,7 +49,7 @@ function _amzErrorBanner(msg) {
         '<button onclick="loadAmazonData()" class="mt-2 text-xs text-orange-500 underline">Reintentar</button>' +
         '</div>';
 }
-var amzTabLoaded = { ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false, deals: false };
+var amzTabLoaded = { dashboard: amzActiveTab === 'dashboard', ventas: amzActiveTab === 'ventas', salud: false, operaciones: amzActiveTab === 'operaciones', finanzas: amzActiveTab === 'finanzas', fba: false, listings: false, deals: false };
 
 // Usa fecha LOCAL (no UTC de toISOString) para que "Hoy" coincida con
 // la fecha del usuario aunque sea después de las 18h CST (medianoche UTC)
@@ -75,7 +75,7 @@ function fmtCompact(n) {
 
 // ─── Tab navigation ───────────────────────────────────────────────────────────
 function switchAmzTab(tabName) {
-    ['ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings', 'deals'].forEach(function(t) {
+    ['dashboard', 'ventas', 'salud', 'operaciones', 'finanzas', 'fba', 'listings', 'deals'].forEach(function(t) {
         var el = document.getElementById('amz-tab-' + t);
         if (el) el.classList.toggle('hidden', t !== tabName);
     });
@@ -92,13 +92,14 @@ function switchAmzTab(tabName) {
     amzActiveTab = tabName;
     if (!amzTabLoaded[tabName]) {
         amzTabLoaded[tabName] = true;
-        if (tabName === 'salud') loadAmzSaludTab();
+        if (tabName === 'dashboard') loadAmazonDashboard();
+        else if (tabName === 'salud') loadAmzSaludTab();
         else if (tabName === 'operaciones') loadAmzOperacionesTab();
         else if (tabName === 'finanzas') loadAmzFinanzasTab();
         else if (tabName === 'fba') loadFbaTab();
         else if (tabName === 'listings') loadListingsTab();
         else if (tabName === 'deals') loadDealsTab();
-        else if (tabName === 'ventas') { loadAmazonDashboard(); loadAmzBriefing(); loadAmzCompare(); }
+        else if (tabName === 'ventas') { loadAmzBriefing(); loadAmzCompare(); loadAmzRecentOrders(); loadTopProducts(); }
     } else if (tabName === 'ventas') {
         loadAmzBriefing();
     }
@@ -360,18 +361,17 @@ function loadAmazonDashboard() {
             updateAmazonTodayBar(0,0,0);
         })
         .finally(function(){ btn.disabled = false; btn.classList.remove('opacity-50'); });
+}
 
-    document.getElementById('amz-recent-orders').innerHTML =
-        '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
-    // Delay de 1.5s para que el caché se llene con la llamada de dashboard-data
-    // y así evitar un 3er request simultáneo a SP-API (429 QuotaExceeded)
-    setTimeout(function() {
-        var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
-        fetch('/api/metrics/amazon-recent-orders' + sellerParam)
-            .then(function(r){return r.text();})
-            .then(function(html){ document.getElementById('amz-recent-orders').innerHTML = html; })
-            .catch(function(){ document.getElementById('amz-recent-orders').innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
-    }, 1500);
+function loadAmzRecentOrders() {
+    var el = document.getElementById('amz-recent-orders');
+    if (!el) return;
+    el.innerHTML = '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
+    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
+    fetch('/api/metrics/amazon-recent-orders' + sellerParam)
+        .then(function(r){return r.text();})
+        .then(function(html){ el.innerHTML = html; })
+        .catch(function(){ el.innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
 }
 
 // ── Multi-cuenta comparativa ──────────────────────────────────────────────
@@ -982,16 +982,18 @@ if (amzActiveTab === 'salud') {
     loadAmzOperacionesTab();
 } else if (amzActiveTab === 'finanzas') {
     loadAmzFinanzasTab();
-} else {
-    loadAmazonDashboard();
+} else if (amzActiveTab === 'ventas') {
     loadAmzBriefing();
     loadAmzCompare();
+    loadAmzRecentOrders();
+    setTimeout(loadTopProducts, 1500);
+} else {
+    // dashboard (default)
+    loadAmazonDashboard();
 }
 loadAmzBalance();
 loadAmzAlerts();
 loadAmzStatsRow();
-// Pre-carga top products (datos pueden estar en caché)
-setTimeout(loadTopProducts, 2000);
 
 function saveManualAmazonToken() {
     var token = (document.getElementById('amz-manual-token') || {}).value || '';

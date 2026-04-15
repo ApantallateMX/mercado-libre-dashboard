@@ -108,31 +108,9 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: VENTAS
+     TAB: DASHBOARD (análisis de período: filtro, métricas, meta, gráfico)
      ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
-
-<!-- ─── Morning Briefing Card ──────────────────────────────────────────── -->
-<div id="amz-briefing-card" class="rounded-xl mb-5 overflow-hidden" style="background:#1a1a2e; border-left:4px solid #FF9900;">
-  <div class="px-5 py-4">
-    <div class="flex items-center justify-between mb-3">
-      <div class="flex items-center gap-2">
-        <span class="text-lg">☀️</span>
-        <div>
-          <h3 class="font-bold text-white text-sm">Resumen del día</h3>
-          <p class="text-xs" style="color:#FF9900" id="amz-briefing-date">—</p>
-        </div>
-      </div>
-      <button onclick="refreshAmzBriefing()" class="text-xs px-2 py-1 rounded-lg border border-orange-700 text-orange-400 hover:bg-orange-900/30 transition">↻ Actualizar</button>
-    </div>
-    <div id="amz-briefing-content" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
-      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
-      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
-      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
-    </div>
-  </div>
-</div>
+<div id="amz-tab-dashboard" {% if active_amazon_tab != 'dashboard' %}class="hidden"{% endif %}>
 
 <!-- ─── Filtro de fechas ───────────────────────────────────────────────── -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">
@@ -161,34 +139,6 @@
         </button>
     </div>
 </div>
-
-<!-- ─── Fondos pendientes Amazon ──────────────────────────────────────── -->
-<div id="amz-balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
-    <div class="flex items-center gap-2">
-        <span class="text-lg">💳</span>
-        <span class="text-sm font-semibold text-gray-700">Fondos pendientes Amazon (30d):</span>
-        <span id="amz-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
-    </div>
-    <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
-</div>
-
-{% if amazon_accounts|length > 1 %}
-<!-- ─── Comparativa multi-cuenta (solo si hay >1 cuenta Amazon) ──── -->
-<div id="amz-compare-section" class="mb-5">
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800 text-sm">📊 Comparativa de cuentas</h3>
-        <p class="text-xs text-gray-400">Mes actual · todas las cuentas Amazon</p>
-      </div>
-      <button onclick="loadAmzCompare()" class="text-xs text-orange-500 hover:text-orange-700 font-medium">↻</button>
-    </div>
-    <div id="amz-compare-content" class="p-4">
-      <div class="text-center py-4 text-gray-400 text-xs">Cargando comparativa...</div>
-    </div>
-  </div>
-</div>
-{% endif %}
 
 <!-- ─── Métricas principales ──────────────────────────────────────────── -->
 <div id="amz-metric-cards" class="mb-5">
@@ -273,6 +223,63 @@
         <canvas id="amzSalesChart" class="hidden" height="110"></canvas>
     </div>
 </div>
+
+</div><!-- /amz-tab-dashboard -->
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: VENTAS (actividad del día: briefing, fondos, órdenes, top productos)
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-ventas" {% if active_amazon_tab != 'ventas' %}class="hidden"{% endif %}>
+
+<!-- ─── Morning Briefing Card ──────────────────────────────────────────── -->
+<div id="amz-briefing-card" class="rounded-xl mb-5 overflow-hidden" style="background:#1a1a2e; border-left:4px solid #FF9900;">
+  <div class="px-5 py-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">☀️</span>
+        <div>
+          <h3 class="font-bold text-white text-sm">Resumen del día</h3>
+          <p class="text-xs" style="color:#FF9900" id="amz-briefing-date">—</p>
+        </div>
+      </div>
+      <button onclick="refreshAmzBriefing()" class="text-xs px-2 py-1 rounded-lg border border-orange-700 text-orange-400 hover:bg-orange-900/30 transition">↻ Actualizar</button>
+    </div>
+    <div id="amz-briefing-content" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+      <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Fondos pendientes Amazon ──────────────────────────────────────── -->
+<div id="amz-balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
+    <div class="flex items-center gap-2">
+        <span class="text-lg">💳</span>
+        <span class="text-sm font-semibold text-gray-700">Fondos pendientes Amazon (30d):</span>
+        <span id="amz-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
+    </div>
+    <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
+</div>
+
+{% if amazon_accounts|length > 1 %}
+<!-- ─── Comparativa multi-cuenta (solo si hay >1 cuenta Amazon) ──── -->
+<div id="amz-compare-section" class="mb-5">
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+      <div>
+        <h3 class="font-semibold text-gray-800 text-sm">📊 Comparativa de cuentas</h3>
+        <p class="text-xs text-gray-400">Mes actual · todas las cuentas Amazon</p>
+      </div>
+      <button onclick="loadAmzCompare()" class="text-xs text-orange-500 hover:text-orange-700 font-medium">↻</button>
+    </div>
+    <div id="amz-compare-content" class="p-4">
+      <div class="text-center py-4 text-gray-400 text-xs">Cargando comparativa...</div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
