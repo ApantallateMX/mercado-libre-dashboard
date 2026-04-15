@@ -482,12 +482,19 @@ async def ml_sin_bm(
             return_exceptions=True,
         )
 
+        _BM_SFX = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         bm_skus: set[str] = set()
         if not isinstance(bm_rows_r, Exception):
             for row in bm_rows_r:
                 sk = (row.get("SKU") or "").strip().upper()
-                if sk:
-                    bm_skus.add(sk)
+                if not sk:
+                    continue
+                bm_skus.add(sk)
+                # BM puede retornar "SNTV000872-GRA"; agregar también la base
+                for sfx in _BM_SFX:
+                    if sk.endswith(sfx):
+                        bm_skus.add(sk[:-len(sfx)])
+                        break
 
         # 2. Recolectar todos los IDs activos
         all_ids: list = []

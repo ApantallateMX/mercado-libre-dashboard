@@ -4254,12 +4254,18 @@ async def amazon_products_sin_bm(
             if isinstance(bm_rows, Exception):
                 bm_rows = []
 
-            # Build BM SKU set (base SKUs only)
+            # Build BM SKU set — BM puede retornar "SNTV000872-GRA"; agregar también la base
+            _BM_SFX = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
             bm_skus: set[str] = set()
             for row in bm_rows:
                 sk = (row.get("SKU") or "").strip().upper()
-                if sk:
-                    bm_skus.add(sk)
+                if not sk:
+                    continue
+                bm_skus.add(sk)
+                for sfx in _BM_SFX:
+                    if sk.endswith(sfx):
+                        bm_skus.add(sk[:-len(sfx)])
+                        break
 
             for item in listings:
                 sku      = item.get("sku", "")
