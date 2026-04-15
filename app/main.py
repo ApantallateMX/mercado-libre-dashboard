@@ -1969,7 +1969,7 @@ async def orders_table_partial(
             for oi in items:
                 oi_sku = (oi.get("item", {}).get("seller_sku")
                           or oi.get("item", {}).get("seller_custom_field") or "")
-                oi_sku_base = oi_sku.split("+")[0].strip() if oi_sku else ""
+                oi_sku_base = normalize_to_bm_sku(oi_sku) if oi_sku else ""
                 cost_unit = _sku_cost_map.get(oi_sku_base, 0) or 0
                 total_cost_est += cost_unit * oi.get("quantity", 1)
             ganancia_est = round(net - total_cost_est, 2) if total_cost_est > 0 else None
@@ -3116,7 +3116,7 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 v_sku = v.get("sku", "")
                 if v_sku:
                     any_var_sku = True
-                _bk = normalize_to_bm_sku(v_sku.split("/")[0].strip()) if v_sku else ""
+                _bk = normalize_to_bm_sku(v_sku) if v_sku else ""
                 _bm_key_vars[_bk].append(v)
 
             tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
@@ -3183,7 +3183,7 @@ def _enrich_sku_from_orders(products: list, orders: list):
             it = oi.get("item", {})
             raw_sku = it.get("seller_sku") or it.get("seller_custom_field") or ""
             if raw_sku and it.get("id"):
-                base = raw_sku.split("+")[0].strip()
+                base = normalize_to_bm_sku(raw_sku)
                 existing = sku_map.get(it["id"], "")
                 if not existing or len(base) < len(existing):
                     sku_map[it["id"]] = base

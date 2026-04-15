@@ -61,14 +61,6 @@ def _get_variation_sku(variation: dict) -> str:
     return ""
 
 
-def _extract_base_sku(sku: str) -> str:
-    """Devuelve el SKU base sin sufijo de variante."""
-    upper = sku.upper()
-    for sfx in _ALL_SUFFIXES:
-        if upper.endswith(sfx):
-            return sku[:-len(sfx)]
-    return sku
-
 
 def _wh_name_to_zone(wname: str) -> str:
     """Clasifica nombre de almacen en mty/cdmx/tj."""
@@ -436,7 +428,7 @@ async def compare_skus(skus: list[str]):
 
                 return {
                     "sku": sku,
-                    "base_sku": _extract_base_sku(sku),
+                    "base_sku": _bm_base_sku(sku),
                     "stock_gr": bm["stock_gr"],
                     "stock_ic": bm["stock_ic"],
                     "stock_other": bm.get("stock_other", 0),

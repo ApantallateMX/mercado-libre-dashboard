@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.services.meli_client import get_meli_client, _active_user_id as _ctx
+from app.services.sku_utils import base_sku as _base_sku
 from app.services.token_store import (
     DATABASE_PATH, save_product_video, update_clip_status, get_videos_for_items
 )
@@ -41,12 +42,6 @@ def _bm_conditions(sku: str) -> str:
         return "GRA,GRB,GRC,ICB,ICC,NEW"
     return "GRA,GRB,GRC,NEW"
 
-
-def _base_sku(sku: str) -> str:
-    for sfx in ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC"):
-        if sku.upper().endswith(sfx):
-            return sku[:-len(sfx)]
-    return sku
 
 
 def _parse_wh(rows) -> tuple:
