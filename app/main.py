@@ -8030,7 +8030,17 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
 
 @app.get("/amazon/products", response_class=HTMLResponse)
 async def amazon_products_page(request: Request):
-    return RedirectResponse(url="/amazon?tab=operaciones", status_code=302)
+    """Centro de Productos Amazon — Resumen, Inventario, Stock, Sin Publicar, Sin Lanzar."""
+    user = await get_current_user()
+    ctx = await _accounts_ctx(request)
+    active_amazon_id = ctx.get("active_amazon_id")
+    amazon_account = None
+    if active_amazon_id:
+        amazon_account = await token_store.get_amazon_account(active_amazon_id)
+    ctx["amazon_account"] = amazon_account
+    ctx["active_platform"] = "amazon"
+    ctx["active_amazon_tab"] = "productos"
+    return templates.TemplateResponse(request, "amazon_products.html", {"user": user, **ctx})
 
 
 @app.get("/amazon/orders", response_class=HTMLResponse)

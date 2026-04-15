@@ -44,6 +44,13 @@ Amazon Dashboard rediseñado para tener la misma estructura visual y UX que la s
 - `app/templates/partials/amazon_products_catalog.html`
 - `app/static/js/amazon_dashboard.js` (nuevo, 1982 líneas)
 
+**Fase 4 — Separación Dashboard / Ventas** (commit `277f0ac`):
+- Tab **Dashboard** (nuevo default `/amazon`): filtro de fechas, KPI metrics, meta diaria, gráfico de ventas
+- Tab **Ventas**: morning briefing, fondos pendientes, comparativa multi-cuenta, últimas órdenes, top 10 productos
+- `main.py`: `"dashboard"` agregado a tabs válidos; default de `/amazon` cambiado de `ventas` → `dashboard`
+- `amazon_dashboard.js`: `loadAmzRecentOrders()` extraído de `loadAmazonDashboard()`; `switchAmzTab()` y carga inicial actualizados
+- `base.html`: tab Dashboard agregado en nav desktop y mobile (grid 4+4); `/amazon` sin params → `/amazon?tab=dashboard`
+
 ---
 
 ## 2026-04-14 — FIX CRÍTICO: normalize_to_bm_sku en todos los lookups BM (7 ubicaciones)

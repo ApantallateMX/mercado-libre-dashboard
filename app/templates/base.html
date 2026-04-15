@@ -61,10 +61,10 @@
                           {% if active_amazon_tab == 'salud' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
                     💚 Salud
                 </a>
-                <a href="/amazon?tab=operaciones"
+                <a href="/amazon/products"
                    class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'operaciones' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    ⚙️ Operaciones
+                          {% if active_amazon_tab == 'productos' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    📦 Productos
                 </a>
                 <a href="/amazon?tab=finanzas"
                    class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
@@ -206,11 +206,11 @@
                 <span class="text-xl">💚</span>
                 <span class="text-xs {% if active_amazon_tab == 'salud' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Salud</span>
             </a>
-            <a href="/amazon?tab=operaciones"
+            <a href="/amazon/products"
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'operaciones' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">⚙️</span>
-                <span class="text-xs {% if active_amazon_tab == 'operaciones' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Ops</span>
+                      {% if active_amazon_tab == 'productos' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">📦</span>
+                <span class="text-xs {% if active_amazon_tab == 'productos' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Productos</span>
             </a>
         </div>
         <div class="grid grid-cols-4 gap-1.5 px-3 pb-3">
