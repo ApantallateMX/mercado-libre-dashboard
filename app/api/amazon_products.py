@@ -115,7 +115,7 @@ def _flx_cache_valid(seller_id: str) -> bool:
 # ─── BinManager (para tab Inventario) ────────────────────────────────────────
 _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
 # InventoryBySKUAndCondicion_Quantity está roto (SQL "Invalid column name 'binid'")
-# Usar GlobalStock_InventoryBySKU_Condition → devuelve status "Producto Vendible" / "Otro"
+# GlobalStock_InventoryBySKU_Condition — BROKEN: status siempre retorna "Otro", no usar para avail/reserved
 _BM_COND_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/GlobalStock_InventoryBySKU_Condition"
 _BM_INV_URL  = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 _BM_LOC_IDS  = "47,62,68"
@@ -1537,12 +1537,12 @@ async def _enrich_bm_amz(items: list) -> None:
             "LocationID": _BM_LOC_IDS, "BINID": None,
             "Condition": _BM_COND, "SUPPLIERS": None, "ForInventory": 0,
         }
-        # GlobalStock_InventoryBySKU_Condition: retorna Conditions_JSON con
-        # status "Producto Vendible" / "Otro" por bin — reemplaza endpoint roto
-        cond_payload = {
-            "COMPANYID": 1, "SKU": base, "WAREHOUSEID": None,
-            "LOCATIONID": _BM_LOC_IDS, "BINID": None,
-            "CONDITION": _BM_COND, "FORINVENTORY": 0, "SUPPLIERS": None,
+        # Get_GlobalStock_InventoryBySKU CONCEPTID=1: stock vendible con TotalQty y Reserve
+        stock_payload = {
+            "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 1,
+            "NUMBERPAGE": 1, "RECORDSPAGE": 5,
+            "NEEDRETAILPRICEPH": False, "NEEDRETAILPRICE": False, "NEEDAVGCOST": False,
+            "LOCATIONID": _BM_LOC_IDS,
         }
         # InventoryReport: RetailPH + AvgCost por SKU
         inv_payload = {
@@ -1551,14 +1551,14 @@ async def _enrich_bm_amz(items: list) -> None:
             "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True, "NEEDAVGCOST": True,
         }
         wh_rows: list = []
-        cond_rows: list = []
+        stock_rows: list = []
         inv_rows: list = []
         async with sem:
             try:
-                r_wh, r_cond, r_inv = await asyncio.gather(
-                    http.post(_BM_WH_URL,  json=wh_payload,  timeout=15.0),
-                    http.post(_BM_COND_URL, json=cond_payload, timeout=15.0),
-                    http.post(_BM_INV_URL,  json=inv_payload,  timeout=15.0),
+                r_wh, r_stock, r_inv = await asyncio.gather(
+                    http.post(_BM_WH_URL,  json=wh_payload,   timeout=15.0),
+                    http.post(_BM_INV_URL,  json=stock_payload, timeout=15.0),
+                    http.post(_BM_INV_URL,  json=inv_payload,   timeout=15.0),
                     return_exceptions=True,
                 )
                 if not isinstance(r_wh, Exception):
@@ -1570,15 +1570,15 @@ async def _enrich_bm_amz(items: list) -> None:
                         logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
                 else:
                     logger.warning(f"[BM-AMZ] WH excepcion para base={base}: {r_wh}")
-                if not isinstance(r_cond, Exception):
-                    if r_cond.status_code == 200:
-                        cond_rows = r_cond.json()
-                        if not isinstance(cond_rows, list):
-                            cond_rows = []
+                if not isinstance(r_stock, Exception):
+                    if r_stock.status_code == 200:
+                        stock_rows = r_stock.json()
+                        if not isinstance(stock_rows, list):
+                            stock_rows = []
                     else:
-                        logger.warning(f"[BM-AMZ] COND HTTP {r_cond.status_code} para base={base}")
+                        logger.warning(f"[BM-AMZ] STOCK HTTP {r_stock.status_code} para base={base}")
                 else:
-                    logger.warning(f"[BM-AMZ] COND excepcion para base={base}: {r_cond}")
+                    logger.warning(f"[BM-AMZ] STOCK excepcion para base={base}: {r_stock}")
                 if not isinstance(r_inv, Exception):
                     if r_inv.status_code == 200:
                         inv_rows = r_inv.json()
@@ -1591,29 +1591,18 @@ async def _enrich_bm_amz(items: list) -> None:
 
         mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
 
-        # Parsear Conditions_JSON — puede ser string JSON embebido o lista plana
+        # Get_GlobalStock_InventoryBySKU CONCEPTID=1: AvailableQTY y Reserve directos
         avail = reserved = 0
-        for row in cond_rows:
-            cj = row.get("Conditions_JSON")
-            if cj is not None:
-                if isinstance(cj, str):
-                    try:
-                        cj = json.loads(cj)
-                    except Exception:
-                        cj = []
-                for cond in (cj if isinstance(cj, list) else []):
-                    for item in (cond.get("SKUCondition_JSON") or []):
-                        qty = item.get("TotalQty", 0) or 0
-                        if item.get("status") == "Producto Vendible":
-                            avail += qty
-                        else:
-                            reserved += qty
-            else:
-                qty = row.get("TotalQty", 0) or 0
-                if row.get("status") == "Producto Vendible":
-                    avail += qty
-                else:
-                    reserved += qty
+        for row in stock_rows:
+            if row.get("SKU", "").upper() == base.upper():
+                avail    = int(row.get("AvailableQTY") or 0)
+                reserved = int(row.get("Reserve") or 0)
+                break
+        if not avail and not reserved and stock_rows:
+            # fallback: primer row si ninguno matchea exacto
+            row = stock_rows[0]
+            avail    = int(row.get("AvailableQTY") or 0)
+            reserved = int(row.get("Reserve") or 0)
 
         # Extraer RetailPH y AvgCost del InventoryReport
         retail_ph = avg_cost = 0.0

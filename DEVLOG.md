@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-15 — FIX: BM DISP/BM RES siempre 0 en Amazon Inventario
+
+### Problema
+En la tab Inventario de Amazon, las columnas **BM DISP** y **BM RES** mostraban 0 para todos los SKUs,
+aunque MTY/CDMX/TJ sí mostraban cantidades correctas.
+
+### Causa raíz
+`_enrich_bm_amz()` usaba el endpoint `GlobalStock_InventoryBySKU_Condition` y verificaba
+`status == "Producto Vendible"` — pero ese campo **siempre retorna "Otro"** (bug de BM),
+por lo que `avail` y `reserved` nunca sumaban nada.
+
+### Fix (`app/api/amazon_products.py`)
+- Reemplazado `_BM_COND_URL` + `cond_payload` con `_BM_INV_URL` + `stock_payload` (`CONCEPTID=1`)
+- El endpoint `Get_GlobalStock_InventoryBySKU CONCEPTID=1` retorna `AvailableQTY` y `Reserve` directamente
+- Parsing simplificado: buscar row con SKU == base, leer campos directamente (sin JSON anidado)
+- Fallback al primer row si ninguno matchea exacto
+- No se tocó código de ML en `main.py`
+
+---
+
 ## 2026-04-15 — FEAT: Rediseño Amazon — misma estructura que MercadoLibre
 
 ### Cambios realizados
