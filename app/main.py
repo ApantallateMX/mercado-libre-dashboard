@@ -36,7 +36,7 @@ from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
-from app.services.sku_utils import normalize_to_bm_sku as _normalize_sku_imported  # canónica
+from app.services.sku_utils import base_sku as _normalize_sku_imported  # canónica — base_sku maneja bundles, sufijos y paréntesis
 
 # ---------- SKU suffix helpers ----------
 _GR_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC")
@@ -72,7 +72,7 @@ import re as _re
 
 
 def normalize_to_bm_sku(sku: str) -> str:
-    """Proxy a sku_utils.normalize_to_bm_sku — fuente canónica en app/services/sku_utils.py."""
+    """Proxy a sku_utils.base_sku — fuente canónica en app/services/sku_utils.py."""
     return _normalize_sku_imported(sku)
 
 

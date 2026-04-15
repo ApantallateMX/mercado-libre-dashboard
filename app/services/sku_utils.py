@@ -100,11 +100,15 @@ def base_sku(sku: str) -> str:
       "SNTV001864 + SNPE000180"   → "SNTV001864"
       "SNTV001864 / SNWM000001"   → "SNTV001864"
       "SNAC000029"                → "SNAC000029"
+      "SNPE000003(10)"            → "SNPE000003"   (pack con cantidad)
+      "SNTV001764 (2)"            → "SNTV001764"   (pack con espacio)
     """
     if not sku:
         return ""
     upper = sku.upper().strip()
-    # Quitar sufijo de variante (e.g. -FLX01, -BLK)
+    # Quitar cantidad entre paréntesis: (2), (10), (cantidad:2), etc.
+    upper = re.sub(r'\s*\([^)]*\)', '', upper).strip()
+    # Quitar sufijo de variante (e.g. -FLX01, -BLK, -GRA, -NEW)
     base = upper.split("-")[0].strip()
     # Si quedan separadores de bundle, extraer primer token válido
     if re.search(r'[\s+/]', base):
