@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-15 — FEAT: Rediseño Amazon — misma estructura que MercadoLibre
+
+### Cambios realizados
+Amazon Dashboard rediseñado para tener la misma estructura visual y UX que la sección de MercadoLibre.
+
+**Fase 1 — Stats cards** (`amazon_dashboard.html`):
+- 4 tarjetas superiores: Activos, Inactivos, Suprimidos, Sin Stock / Low Stock
+- Clickeables: llevan directo al filtro correspondiente en Operaciones
+- Se cargan via `loadAmzStatsRow()` desde `/api/amazon/alerts`
+
+**Fase 1 — Tab bar** (`amazon_dashboard.html`):
+- Tabbar ahora dentro de card blanco `bg-white rounded-xl border overflow-hidden`
+- Indicador activo: `border-b-2 border-orange-500 bg-orange-50 text-orange-700` (mismo estilo que ML pero en naranja)
+- Todos los 7 tabs tienen el estado activo correcto (incluyendo fba, listings, deals que antes siempre aparecían inactivos)
+
+**Fase 1 — Catálogo Operaciones** (`amazon_dashboard.html` + `amazon_products_catalog.html`):
+- Reemplazado dropdown de filtro por tab bar al estilo ML: Todo | Activos | Inactivos | 🔴 Suprimidos
+- Búsqueda inline con filtrado en cliente
+- Contadores de estado en cada tab (`amz-cnt-all`, `amz-cnt-active`, etc.)
+- Removidos filtros redundantes del partial `amazon_products_catalog.html`
+
+**Fase 2 — Panel lateral** (`amazon_dashboard.html`):
+- Panel deslizable desde la derecha (igual a ML)
+- 5 subtabs: Info, Stock, Buy Box, Atributos, Imágenes
+- Se abre al hacer click en cualquier fila del catálogo
+- Buy Box hace lazy-load via API
+
+**Fase 3 — JS externo** (`app/static/js/amazon_dashboard.js`):
+- 1982 líneas extraídas de inline a archivo estático
+- Template solo tiene 2 vars inline (`amzActiveTab`, `amzActiveSellerId`)
+- HTML reducido de 2312 a 718 líneas
+
+### Archivos modificados
+- `app/templates/amazon_dashboard.html` (718 líneas, antes 2312)
+- `app/templates/partials/amazon_products_catalog.html`
+- `app/static/js/amazon_dashboard.js` (nuevo, 1982 líneas)
+
+---
+
 ## 2026-04-14 — FIX CRÍTICO: normalize_to_bm_sku en todos los lookups BM (7 ubicaciones)
 
 ### El problema
