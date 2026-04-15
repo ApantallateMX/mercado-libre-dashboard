@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-14 — FIX CRÍTICO: normalize_to_bm_sku en todos los lookups BM (7 ubicaciones)
+
+### El problema
+`_extract_base_sku` solo conoce sufijos estándar (`-NEW`, `-GRA`, `-GRB`, `-GRC`, `-ICB`, `-ICC`). SKUs con sufijos no estándar como `-NUEVO` o `(cantidad:2)` no se limpiaban correctamente, causando que BinManager retornara stock=0 y generando **falsas alertas de oversell** y **stock incorrecto** en todo el dashboard.
+
+Ejemplos afectados:
+- `SNPE000093-NUEVO` → BM recibía `SNPE000093-NUEVO` → 0 units → alerta falsa (real: 46 units)
+- `SNHG000038 (cantidad:2)` → BM recibía `SNHG000038 cantidad:2` → 0 units → alerta falsa (real: 480 units)
+
+### Root cause
+Dos funciones auxiliares con el mismo bug:
+1. `_extract_base_sku` en `main.py` y `sku_inventory.py` — tabla de sufijos incompleta
+2. `_clean_sku_for_bm` — regex `\(\d+\)` solo removía paréntesis con dígitos puros
+
+### Fix aplicado
+Reemplazadas 7 llamadas a `_extract_base_sku` con `normalize_to_bm_sku` (que usa split en primer `-`/espacio → primeros 10 chars):
+
+| Archivo | Función | Descripción |
+|---------|---------|-------------|
+| main.py | `_enrich_with_bm_base_data` | Fetch de precios + lookup en base_map |
+| main.py | `_enrich_with_bm_stock` | Fetch warehouse + condiciones |
+| main.py | warehouse-stock endpoint | Desglose MTY/CDMX/TJ |
+| main.py | bm-cost endpoint | Costo/precio retail por item |
+| main.py | `_run_global_scan` | Inventario global cross-cuenta |
+| sku_inventory.py | `_fetch_sellable_stock` | Stock vendible en tab SKU |
+
+También fijado `_clean_sku_for_bm`: regex `\(\d+\)` → `\([^)]*\)` para remover cualquier paréntesis.
+
+### Archivos afectados
+- `app/main.py` — commits `a207dbc`, `ff1469f`, `7cc5dce`
+- `app/api/sku_inventory.py` — commit `7cc5dce`
+
+### Acción requerida
+Clic en **↺ Actualizar BM** para invalidar caché y que el sistema re-fetchee con el código corregido.
+
+---
+
 ## 2026-04-14 — FEAT: Facturación admin — datos del pedido en modal detalle
 
 ### Qué se hizo
