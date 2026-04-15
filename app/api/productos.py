@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.services.meli_client import get_meli_client, _active_user_id as _ctx
-from app.services.sku_utils import base_sku as _base_sku
+from app.services.sku_utils import base_sku as _base_sku, normalize_to_bm_sku as _normalize_sku
 from app.services.token_store import (
     DATABASE_PATH, save_product_video, update_clip_status, get_videos_for_items
 )
@@ -461,7 +461,6 @@ async def ml_sin_bm(
 ):
     """Listings activos en ML cuyo SKU base no existe en BinManager."""
     from app.services.binmanager_client import get_shared_bm
-    from app.services.sku_utils import base_sku as _bm_base
 
     client = await get_meli_client()
     if not client:
@@ -525,7 +524,7 @@ async def ml_sin_bm(
             if not body or not body.get("id"):
                 continue
             sku  = _extract_sku(body)
-            base = _bm_base(sku) if sku else ""
+            base = _normalize_sku(sku) if sku else ""
             if base and base.upper() in bm_skus:
                 continue  # sí existe en BM → skip
             sin_bm.append({

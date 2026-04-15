@@ -8,10 +8,14 @@ Reglas de extracción (en orden de prioridad):
   1. Variaciones: seller_custom_field → attributes[SELLER_SKU]
   2. Item padre: seller_custom_field → attributes[SELLER_SKU]
 
-base_sku() — normaliza SKUs compuestos (bundles):
-  "SNTV001864 + SNPE000180"  → "SNTV001864"
-  "SNTV001864 / SNWM000001"  → "SNTV001864"
-  "SNFN000941-FLX01"         → "SNFN000941"
+normalize_to_bm_sku() — convierte cualquier variante de SKU ML al SKU base BM:
+  "SNTV001864 + SNPE000180"  → "SNTV001864"   (bundle)
+  "SNTV001864 / SNWM000001"  → "SNTV001864"   (bundle)
+  "SNFN000941-FLX01"         → "SNFN000941"   (sufijo condición)
+  "SNPE000003(10)"           → "SNPE000003"   (pack con cantidad)
+  "SNTV001764 (2)"           → "SNTV001764"   (pack con espacio)
+
+base_sku() — alias ligero que maneja bundles y sufijos, sin límite de 10 chars.
 """
 import re
 
@@ -57,6 +61,33 @@ def extract_item_sku(item: dict) -> str:
                 return v
 
     return ""
+
+
+def normalize_to_bm_sku(sku: str) -> str:
+    """Normaliza cualquier variante de SKU de MeLi al SKU base de BinManager.
+
+    Todos los SKUs de BM siguen el patrón: SN + 2 letras + 6 dígitos = 10 chars.
+
+    4 pasos:
+      1. Bundle: tomar primera parte antes de " / " o " + "
+      2. Packs: quitar sufijos entre paréntesis — (2), (10), (cantidad:2), etc.
+      3. Cortar en primer espacio o guión → elimina -GRA, -ICS, -NEW, etc.
+      4. Primeros 10 caracteres en mayúsculas = SKU BM
+
+    Casos verificados:
+      SNTV007270-ICS       → SNTV007270
+      SNTV007270 NEW       → SNTV007270
+      SNTV007270 / SNAC000029  → SNTV007270
+      SNTV001764 (2)       → SNTV001764
+      SNPE000003(10)       → SNPE000003
+      SNPE000214(10)       → SNPE000214
+    """
+    if not sku:
+        return ""
+    s = re.split(r'\s*[/+]\s*', sku)[0].strip()
+    s = re.sub(r'\s*\([^)]*\)', '', s).strip()
+    s = re.split(r'[\s\-]', s)[0].strip()
+    return s[:10].upper()
 
 
 def base_sku(sku: str) -> str:

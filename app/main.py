@@ -36,6 +36,7 @@ from app.services import token_store
 from app.services import user_store
 from app.services.meli_client import get_meli_client, _active_user_id as _meli_user_id_ctx
 from app import order_net_revenue
+from app.services.sku_utils import normalize_to_bm_sku as _normalize_sku_imported  # canónica
 
 # ---------- SKU suffix helpers ----------
 _GR_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC")
@@ -71,29 +72,8 @@ import re as _re
 
 
 def normalize_to_bm_sku(sku: str) -> str:
-    """Normaliza cualquier variante de SKU de MeLi al SKU base de BinManager.
-
-    Todos los SKUs de BM siguen el patrón: SN + 2 letras categoría + 6 dígitos = 10 chars.
-    Ejemplos: SNTV007270, SNHG000004, SNAC000029
-
-    Limpieza en 4 pasos:
-      1. Bundle: tomar primera parte antes de " / " o " + "
-      2. Packs: quitar sufijos entre paréntesis (2), (18), (N)
-      3. Cortar en primer espacio o guión → elimina -GRA, -ICS, -NEW, etc.
-      4. Primeros 10 caracteres en mayúsculas = SKU BM
-
-    Casos verificados:
-      SNTV007270-ICS  → SNTV007270
-      SNTV007270 NEW  → SNTV007270
-      SNTV007270 / SNAC000029  → SNTV007270  (bundle: primera parte)
-      SNTV001764 (2)  → SNTV001764  (pack x2)
-    """
-    if not sku:
-        return ""
-    s = _re.split(r'\s*[/+]\s*', sku)[0].strip()
-    s = _re.sub(r'\s*\(\w+\)', '', s).strip()
-    s = _re.split(r'[\s\-]', s)[0].strip()
-    return s[:10].upper()
+    """Proxy a sku_utils.normalize_to_bm_sku — fuente canónica en app/services/sku_utils.py."""
+    return _normalize_sku_imported(sku)
 
 
 def _clean_sku_for_bm(sku: str) -> str:
