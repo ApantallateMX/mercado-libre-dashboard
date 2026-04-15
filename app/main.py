@@ -2984,12 +2984,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
                 # Procesar cada SKU pendiente eligiendo el mapa correcto por condición
                 for _fsku in to_fetch:
-                    _clean = _clean_sku_for_bm(_fsku)
-                    if not _clean:
+                    # normalize_to_bm_sku: split en primer espacio/guión → 10 chars BM correctos.
+                    # Cubre: "SNPE000093-NUEVO" → "SNPE000093", "SNHG000038 (cantidad:2)" → "SNHG000038",
+                    # "SNFN000006 - GRB" → "SNFN000006". _extract_base_sku no manejaba -NUEVO ni otros
+                    # sufijos no estándar → falsos oversell_risk con BM=0.
+                    _fbase = normalize_to_bm_sku(_fsku)
+                    if not _fbase:
                         _store_empty(_fsku)
                         _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
                         continue
-                    _fbase = _extract_base_sku(_clean).upper()
                     # Elegir mapa según sufijo del SKU original de ML
                     _use_all = _bm_conditions_for_sku(_fsku) == _BM_COND_ALL
                     if _use_all:
