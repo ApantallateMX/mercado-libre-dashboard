@@ -44,22 +44,42 @@
                 </a>
             </div>
 
-            <!-- ── Tabs Amazon (desktop) ─────────────────────────────────── -->
-            <div class="hidden md:flex items-center h-full">
+            <!-- ── Tabs Amazon (desktop) — todos en el nav igual que ML ─── -->
+            <div class="hidden md:flex items-center h-full overflow-x-auto">
                 <a href="/amazon"
-                   class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
-                          {% if active_amazon_tab in ('ventas', 'salud') %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    📊 Dashboard
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'ventas' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    📊 Ventas
+                </a>
+                <a href="/amazon?tab=salud"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'salud' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    💚 Salud
                 </a>
                 <a href="/amazon?tab=operaciones"
-                   class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
                           {% if active_amazon_tab == 'operaciones' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
                     ⚙️ Operaciones
                 </a>
                 <a href="/amazon?tab=finanzas"
-                   class="flex items-center gap-1.5 px-5 h-full text-sm font-medium border-b-2 transition
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
                           {% if active_amazon_tab == 'finanzas' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
                     💰 Finanzas
+                </a>
+                <a href="/amazon?tab=fba"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'fba' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    📦 FBA & Stock
+                </a>
+                <a href="/amazon?tab=listings"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'listings' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    🏷️ Listings
+                </a>
+                <a href="/amazon?tab=deals"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'deals' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
+                    🎯 Deals
                 </a>
             </div>
 
@@ -161,25 +181,51 @@
 
     <!-- ── Mobile menu Amazon ─────────────────────────────────────────────── -->
     <div id="mobile-menu" class="hidden md:hidden border-t border-[#37475A]" style="background:#232F3E">
-        <!-- 3 tabs — grid 3x1 en móvil -->
-        <div class="grid grid-cols-3 gap-2 px-3 py-3">
+        <!-- 7 tabs — grid 4+3 en móvil -->
+        <div class="grid grid-cols-4 gap-1.5 px-3 pt-3 pb-1">
             <a href="/amazon"
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab in ('ventas', 'salud') %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-2xl">📊</span>
-                <span class="text-xs {% if active_amazon_tab in ('ventas', 'salud') %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Dashboard</span>
+                      {% if active_amazon_tab == 'ventas' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">📊</span>
+                <span class="text-xs {% if active_amazon_tab == 'ventas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Ventas</span>
+            </a>
+            <a href="/amazon?tab=salud"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'salud' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">💚</span>
+                <span class="text-xs {% if active_amazon_tab == 'salud' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Salud</span>
             </a>
             <a href="/amazon?tab=operaciones"
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
                       {% if active_amazon_tab == 'operaciones' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-2xl">⚙️</span>
-                <span class="text-xs {% if active_amazon_tab == 'operaciones' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Operaciones</span>
+                <span class="text-xl">⚙️</span>
+                <span class="text-xs {% if active_amazon_tab == 'operaciones' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Ops</span>
             </a>
             <a href="/amazon?tab=finanzas"
                class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
                       {% if active_amazon_tab == 'finanzas' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-2xl">💰</span>
+                <span class="text-xl">💰</span>
                 <span class="text-xs {% if active_amazon_tab == 'finanzas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Finanzas</span>
+            </a>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 px-3 pb-3">
+            <a href="/amazon?tab=fba"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'fba' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">📦</span>
+                <span class="text-xs {% if active_amazon_tab == 'fba' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">FBA</span>
+            </a>
+            <a href="/amazon?tab=listings"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'listings' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">🏷️</span>
+                <span class="text-xs {% if active_amazon_tab == 'listings' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Listings</span>
+            </a>
+            <a href="/amazon?tab=deals"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'deals' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
+                <span class="text-xl">🎯</span>
+                <span class="text-xs {% if active_amazon_tab == 'deals' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Deals</span>
             </a>
         </div>
         <!-- Selector de cuentas móvil Amazon -->

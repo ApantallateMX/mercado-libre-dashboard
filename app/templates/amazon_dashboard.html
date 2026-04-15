@@ -92,46 +92,6 @@
   </div>
 </div>
 
-<!-- ══ Tabs — mismo estilo que ML (card blanco + border-b indicator) ═════ -->
-<div class="bg-white rounded-xl border mb-4 overflow-hidden">
-  <div class="flex overflow-x-auto">
-    <button data-tab="ventas" onclick="switchAmzTab('ventas')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'ventas' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      📊 Ventas
-    </button>
-    <button data-tab="salud" onclick="switchAmzTab('salud')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'salud' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      💚 Salud
-    </button>
-    <button data-tab="operaciones" onclick="switchAmzTab('operaciones')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'operaciones' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      ⚙️ Operaciones
-    </button>
-    <button data-tab="finanzas" onclick="switchAmzTab('finanzas')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'finanzas' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      💰 Finanzas
-    </button>
-    <button data-tab="fba" onclick="switchAmzTab('fba')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'fba' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      📦 FBA & Stock
-    </button>
-    <button data-tab="listings" onclick="switchAmzTab('listings')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'listings' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      🏷️ Listings
-    </button>
-    <button data-tab="deals" onclick="switchAmzTab('deals')"
-            class="amz-tab-btn px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 transition
-                   {% if active_amazon_tab == 'deals' %}border-orange-500 text-orange-700 bg-orange-50{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50{% endif %}">
-      🎯 Deals
-    </button>
-  </div>
-</div>
 
 <!-- ── Panel de alertas críticas ──────────────────────────────────────────── -->
 <div id="amz-alerts-panel" class="mb-4">
