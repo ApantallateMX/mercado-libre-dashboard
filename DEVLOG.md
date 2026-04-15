@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-15 — FEAT: Tab "Sin BM" en ML y Amazon
+
+### Descripción
+Nueva sección disponible en ambas plataformas que muestra todos los listings
+activos cuyo SKU no tiene registro en BinManager. Ayuda a identificar productos
+que necesitan ser creados o corregidos en BM para tener trazabilidad completa.
+
+### Implementación
+- **ML**: `/productos/sin-bm` — nueva página bajo el subnav de Productos
+  - Endpoint `GET /api/productos/sin-bm` en `app/api/productos.py`
+  - Fetches todos los IDs activos (sin límite), luego detalles en batches de 20
+  - Compara contra `get_bulk_stock()` de BM (1 sola llamada bulk)
+  - Paginado 10 filas, búsqueda por SKU/título, filtro "SKU no en BM" vs "Sin SKU"
+- **Amazon**: Tab "⚠️ Sin BM" en `/amazon/products`
+  - Endpoint `GET /api/amazon/products/sin-bm` en `app/api/amazon_products.py`
+  - Usa `_get_listings_cached()` + `get_bulk_stock()` en paralelo
+  - Caché 15 min por seller_id, botón forzar recarga
+  - Paginado 10 filas, búsqueda, link a Seller Central
+- Ambas versiones aisladas por cuenta (no mezclan Lutema/Autobot)
+- Motivo distingue: **"Sin SKU"** (campo vacío) vs **"SKU no en BM"** (no encontrado)
+
+### Archivos nuevos
+- `app/templates/ml_sin_bm.html`
+- `app/templates/partials/ml_productos_sin_bm.html`
+- `app/templates/partials/amazon_products_sin_bm.html`
+
+---
+
 ## 2026-04-15 — FIX: BM DISP/BM RES siempre 0 en Amazon Inventario
 
 ### Problema
