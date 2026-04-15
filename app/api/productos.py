@@ -9,11 +9,13 @@ POST /api/productos/{item_id}/clip  — sube video clip a ML Clips
 """
 import asyncio
 import logging
+import math
 import aiosqlite
 import httpx
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 from app.services.meli_client import get_meli_client, _active_user_id as _ctx
 from app.services.token_store import (
@@ -22,6 +24,7 @@ from app.services.token_store import (
 
 router = APIRouter(prefix="/api/productos", tags=["productos"])
 logger = logging.getLogger(__name__)
+_templates = Jinja2Templates(directory="app/templates")
 
 # ── BM endpoints ───────────────────────────────────────────────────────────────
 _BM_WH_URL   = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
@@ -450,6 +453,124 @@ async def list_productos(
 
         return {"items": items, "total": total_filtered, "offset": offset, "limit": limit, "totals": totals}
 
+    finally:
+        await client.close()
+
+
+@router.get("/sin-bm", response_class=HTMLResponse)
+async def ml_sin_bm(
+    request: Request,
+    page:     int = Query(1, ge=1),
+    per_page: int = Query(10, ge=5, le=50),
+    q:        str = Query(""),
+):
+    """Listings activos en ML cuyo SKU base no existe en BinManager."""
+    from app.services.binmanager_client import get_shared_bm
+    from app.services.sku_utils import base_sku as _bm_base
+
+    client = await get_meli_client()
+    if not client:
+        return _templates.TemplateResponse(
+            request, "partials/ml_productos_sin_bm.html", {"no_account": True}
+        )
+    try:
+        # 1. BM bulk + primeros IDs en paralelo
+        bm_cli = await get_shared_bm()
+        bm_rows_r, first_page_r = await asyncio.gather(
+            bm_cli.get_bulk_stock(),
+            client.get_items(offset=0, limit=200, status="active"),
+            return_exceptions=True,
+        )
+
+        bm_skus: set[str] = set()
+        if not isinstance(bm_rows_r, Exception):
+            for row in bm_rows_r:
+                sk = (row.get("SKU") or "").strip().upper()
+                if sk:
+                    bm_skus.add(sk)
+
+        # 2. Recolectar todos los IDs activos
+        all_ids: list = []
+        if not isinstance(first_page_r, Exception):
+            all_ids.extend(first_page_r.get("results", []))
+            total_ml = first_page_r.get("paging", {}).get("total", 0)
+            fetch_offset = len(all_ids)
+            while fetch_offset < total_ml:
+                try:
+                    data = await client.get_items(offset=fetch_offset, limit=200, status="active")
+                    ids  = data.get("results", [])
+                    if not ids:
+                        break
+                    all_ids.extend(ids)
+                    fetch_offset += len(ids)
+                except Exception:
+                    break
+
+        # 3. Fetch detalles en batches (cap 600)
+        fetch_ids = all_ids[:600]
+        raw_items: list = []
+        for i in range(0, len(fetch_ids), 20):
+            try:
+                details = await client.get_items_details(fetch_ids[i:i+20])
+                raw_items.extend(details)
+            except Exception:
+                pass
+
+        # 4. Filtrar: sin SKU o SKU no en BM
+        sin_bm: list = []
+        for d in raw_items:
+            body = d.get("body", d)
+            if not body or not body.get("id"):
+                continue
+            sku  = _extract_sku(body)
+            base = _bm_base(sku) if sku else ""
+            if base and base.upper() in bm_skus:
+                continue  # sí existe en BM → skip
+            sin_bm.append({
+                "item_id":   body.get("id", ""),
+                "title":     body.get("title", "-")[:80],
+                "sku":       sku or "—",
+                "price":     body.get("price", 0),
+                "stock_ml":  body.get("available_quantity", 0),
+                "status":    body.get("status", ""),
+                "permalink": body.get("permalink", ""),
+                "thumbnail": body.get("thumbnail", ""),
+                "motivo":    "Sin SKU" if not sku else "SKU no en BM",
+            })
+
+        # 5. Filtro de búsqueda
+        q_lower = q.strip().lower()
+        if q_lower:
+            sin_bm = [
+                i for i in sin_bm
+                if q_lower in i["title"].lower()
+                or q_lower in i["sku"].lower()
+                or q_lower in i["item_id"].lower()
+            ]
+
+        # 6. Paginar
+        total  = len(sin_bm)
+        pages  = max(1, math.ceil(total / per_page))
+        page   = min(page, pages)
+        start  = (page - 1) * per_page
+        page_items = sin_bm[start:start + per_page]
+
+        ctx = {
+            "items":    page_items,
+            "total":    total,
+            "page":     page,
+            "pages":    pages,
+            "per_page": per_page,
+            "q":        q,
+            "nickname": getattr(client, "nickname", ""),
+        }
+        return _templates.TemplateResponse(request, "partials/ml_productos_sin_bm.html", ctx)
+
+    except Exception as e:
+        logger.exception("[SinBM-ML] Error")
+        return _templates.TemplateResponse(
+            request, "partials/ml_productos_sin_bm.html", {"error": str(e)[:200]}
+        )
     finally:
         await client.close()
 

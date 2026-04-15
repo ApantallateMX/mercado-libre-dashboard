@@ -1,0 +1,135 @@
+{% if no_account %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-yellow-600 font-semibold">Sin cuenta MercadoLibre conectada</p>
+</div>
+
+{% elif error %}
+<div class="bg-white rounded-xl border border-red-200 p-8 text-center">
+    <p class="text-red-500 font-semibold mb-1">Error al cargar</p>
+    <p class="text-gray-400 text-sm">{{ error }}</p>
+</div>
+
+{% else %}
+
+{% if total == 0 %}
+<div class="bg-white rounded-xl border p-10 text-center">
+    <div class="text-4xl mb-3">✅</div>
+    <h3 class="text-lg font-bold text-gray-700 mb-1">Todo en orden</h3>
+    <p class="text-gray-400 text-sm">Todos los listings activos tienen un SKU registrado en BinManager.</p>
+</div>
+
+{% else %}
+
+<!-- Header info -->
+<div class="flex items-center justify-between mb-3">
+    <div>
+        <span class="text-sm font-semibold text-gray-700">{{ total }} listing{{ 's' if total != 1 else '' }} sin match en BM</span>
+        {% if nickname %}<span class="ml-2 text-xs text-gray-400">— {{ nickname }}</span>{% endif %}
+    </div>
+    <!-- Buscador inline -->
+    <form method="get" action="" id="ml-sin-bm-form" class="flex items-center gap-2">
+        <input type="text" name="q" value="{{ q }}" placeholder="Buscar SKU o título..."
+               class="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-yellow-400 w-48"
+               onchange="document.getElementById('ml-sin-bm-form').submit()">
+        {% if q %}<button type="button" onclick="window._mlSinBmLoad(1,'')" class="text-xs text-gray-400 hover:text-gray-600">✕</button>{% endif %}
+    </form>
+</div>
+
+<!-- Tabla desktop -->
+<div class="hidden md:block bg-white rounded-xl border overflow-hidden mb-4">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide border-b">
+            <tr>
+                <th class="px-4 py-3 text-left">Producto</th>
+                <th class="px-3 py-3 text-left">SKU ML</th>
+                <th class="px-3 py-3 text-center">Motivo</th>
+                <th class="px-3 py-3 text-right">Precio</th>
+                <th class="px-3 py-3 text-right">Stock ML</th>
+                <th class="px-3 py-3 text-center w-24">Link</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for item in items %}
+            <tr class="hover:bg-gray-50 transition">
+                <td class="px-4 py-3">
+                    <p class="font-medium text-gray-800 text-sm truncate max-w-xs" title="{{ item.title }}">{{ item.title }}</p>
+                    <p class="text-xs text-gray-400 font-mono">{{ item.item_id }}</p>
+                </td>
+                <td class="px-3 py-3">
+                    <span class="font-mono text-xs {% if item.sku == '—' %}text-gray-300{% else %}text-gray-700{% endif %}">
+                        {{ item.sku }}
+                    </span>
+                </td>
+                <td class="px-3 py-3 text-center">
+                    {% if item.motivo == 'Sin SKU' %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Sin SKU</span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">SKU no en BM</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-right text-sm font-medium text-gray-700">
+                    ${{ "{:,.0f}".format(item.price) }}
+                </td>
+                <td class="px-3 py-3 text-right">
+                    <span class="text-sm font-medium {% if item.stock_ml == 0 %}text-red-500{% else %}text-gray-700{% endif %}">
+                        {{ item.stock_ml }}
+                    </span>
+                </td>
+                <td class="px-3 py-3 text-center">
+                    {% if item.permalink %}
+                    <a href="{{ item.permalink }}" target="_blank"
+                       class="inline-flex items-center gap-1 text-xs text-yellow-600 hover:text-yellow-700 hover:underline">
+                        Ver ↗
+                    </a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Cards mobile -->
+<div class="md:hidden space-y-2 mb-4">
+    {% for item in items %}
+    <div class="bg-white rounded-xl border p-3">
+        <div class="flex items-start justify-between gap-2 mb-2">
+            <p class="text-sm font-medium text-gray-800 leading-snug flex-1">{{ item.title }}</p>
+            {% if item.motivo == 'Sin SKU' %}
+            <span class="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Sin SKU</span>
+            {% else %}
+            <span class="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">SKU no en BM</span>
+            {% endif %}
+        </div>
+        <div class="flex items-center justify-between text-xs text-gray-500">
+            <span class="font-mono">{{ item.sku }}</span>
+            <span>${{ "{:,.0f}".format(item.price) }} · Stock {{ item.stock_ml }}</span>
+            {% if item.permalink %}
+            <a href="{{ item.permalink }}" target="_blank" class="text-yellow-600 hover:underline">Ver ↗</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Paginación -->
+{% if pages > 1 %}
+<div class="flex items-center justify-between text-sm text-gray-500">
+    <span>Página {{ page }} de {{ pages }} ({{ total }} total)</span>
+    <div class="flex gap-2">
+        <button onclick="window._mlSinBmLoad({{ page - 1 }}, '{{ q }}')"
+                {% if page <= 1 %}disabled{% endif %}
+                class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+            ← Anterior
+        </button>
+        <button onclick="window._mlSinBmLoad({{ page + 1 }}, '{{ q }}')"
+                {% if page >= pages %}disabled{% endif %}
+                class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+            Siguiente →
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
+{% endif %}

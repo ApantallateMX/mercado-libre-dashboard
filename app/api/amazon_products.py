@@ -4207,3 +4207,128 @@ async def amazon_sin_lanzar(
         "marketplace":   client.marketplace_name,
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIN BM — Listings activos sin SKU en BinManager
+# ─────────────────────────────────────────────────────────────────────────────
+_sin_bm_amz_cache: dict[str, tuple[float, list]] = {}  # {seller_id: (ts, items)}
+_SIN_BM_AMZ_TTL = 900  # 15 min
+
+
+@router.get("/products/sin-bm", response_class=HTMLResponse)
+async def amazon_products_sin_bm(
+    request:    Request,
+    seller_id:  Optional[str] = Query(None),
+    page:       int = Query(1, ge=1),
+    per_page:   int = Query(10, ge=5, le=50),
+    q:          str = Query(""),
+    force:      bool = Query(False),
+):
+    """Listings ACTIVOS en Amazon cuyo SKU base no existe en BinManager."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return _render_no_account(request, "partials/amazon_products_sin_bm.html")
+
+    cache_key = client.seller_id
+    now = _time.time()
+
+    sin_bm_all: list = []
+    if not force:
+        cached = _sin_bm_amz_cache.get(cache_key)
+        if cached and (now - cached[0]) < _SIN_BM_AMZ_TTL:
+            sin_bm_all = cached[1]
+
+    if not sin_bm_all:
+        try:
+            from app.services.binmanager_client import get_shared_bm
+            bm_cli = await get_shared_bm()
+
+            listings, bm_rows = await asyncio.gather(
+                _get_listings_cached(client),
+                bm_cli.get_bulk_stock(),
+                return_exceptions=True,
+            )
+            if isinstance(listings, Exception):
+                listings = []
+            if isinstance(bm_rows, Exception):
+                bm_rows = []
+
+            # Build BM SKU set (base SKUs only)
+            bm_skus: set[str] = set()
+            for row in bm_rows:
+                sk = (row.get("SKU") or "").strip().upper()
+                if sk:
+                    bm_skus.add(sk)
+
+            for item in listings:
+                sku      = item.get("sku", "")
+                summaries = item.get("summaries", [{}])
+                status    = _listing_status(summaries)
+                if status != "ACTIVE":
+                    continue
+
+                base = _amz_base_sku(sku).upper() if sku else ""
+                if base and base in bm_skus:
+                    continue  # existe en BM → skip
+
+                summary_0 = summaries[0] if summaries else {}
+                asin      = summary_0.get("asin") or ""
+                title     = summary_0.get("itemName") or sku or "—"
+                price_val = 0.0
+                for offer in (item.get("offers") or []):
+                    p = offer.get("listingPrice", {})
+                    price_val = float(p.get("amount") or 0)
+                    break
+
+                sin_bm_all.append({
+                    "sku":     sku or "—",
+                    "asin":    asin,
+                    "title":   title[:80],
+                    "price":   price_val,
+                    "motivo":  "Sin SKU" if not sku else "SKU no en BM",
+                    "sc_url":  (
+                        f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={asin}"
+                        if asin else "https://sellercentral.amazon.com.mx/inventory"
+                    ),
+                })
+
+            _sin_bm_amz_cache[cache_key] = (_time.time(), sin_bm_all)
+
+        except Exception as e:
+            logger.exception("[Amazon SinBM] Error")
+            return _templates.TemplateResponse(
+                request, "partials/amazon_products_sin_bm.html",
+                {"error": str(e)[:200], "items": [], "total": 0, "page": 1, "pages": 1,
+                 "per_page": per_page, "q": q, "nickname": client.nickname,
+                 "marketplace": client.marketplace_name}
+            )
+
+    # Filtro búsqueda
+    q_lower = q.strip().lower()
+    if q_lower:
+        sin_bm_all = [
+            i for i in sin_bm_all
+            if q_lower in i["title"].lower()
+            or q_lower in i["sku"].lower()
+            or q_lower in (i.get("asin") or "").lower()
+        ]
+
+    total  = len(sin_bm_all)
+    pages  = max(1, math.ceil(total / per_page))
+    page   = min(page, pages)
+    start  = (page - 1) * per_page
+    page_items = sin_bm_all[start:start + per_page]
+
+    ctx = {
+        "items":       page_items,
+        "total":       total,
+        "page":        page,
+        "pages":       pages,
+        "per_page":    per_page,
+        "q":           q,
+        "force":       force,
+        "nickname":    client.nickname,
+        "marketplace": client.marketplace_name,
+    }
+    return _templates.TemplateResponse(request, "partials/amazon_products_sin_bm.html", ctx)

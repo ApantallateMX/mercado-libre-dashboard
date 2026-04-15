@@ -1495,6 +1495,19 @@ async def productos_page(request: Request):
     })
 
 
+@app.get("/productos/sin-bm", response_class=HTMLResponse)
+async def productos_sin_bm_page(request: Request):
+    user = await get_current_user()
+    if not user:
+        return templates.TemplateResponse(request, "no_session.html", {})
+    ctx = await _accounts_ctx(request)
+    return templates.TemplateResponse(request, "ml_sin_bm.html", {
+        "user": user,
+        "active": "sin_bm",
+        **ctx
+    })
+
+
 @app.get("/api/sku-compare")
 async def sku_compare_api(
     a_from: str = Query(..., description="Periodo A inicio YYYY-MM-DD"),

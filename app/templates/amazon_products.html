@@ -58,6 +58,12 @@
             🚀 Sin Lanzar
         </button>
 
+        <button data-tab="sin-bm" data-url="/api/amazon/products/sin-bm"
+                class="amz-prod-tab flex-1 md:flex-none px-5 py-3 min-h-[44px] text-sm font-medium border-b-2 whitespace-nowrap transition
+                       border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+            ⚠️ Sin BM
+        </button>
+
     </div>
 </div>
 
@@ -563,6 +569,33 @@ window.switchAmzProdTab = function(tabName) {
         _amzProdActiveTab = null; // Forzar recarga
         loadAmzProdTab(tabName, btn.getAttribute('data-url'), btn);
     }
+};
+
+// ── Sin BM tab: paginación y búsqueda ────────────────────────────────────
+window._amzSinBmLoad = function(page, q, force) {
+    var params = new URLSearchParams({ page: page || 1, per_page: 10 });
+    if (q)     params.set('q', q);
+    if (force) params.set('force', '1');
+    var container = document.getElementById('amz-prod-tab-content');
+    container.innerHTML =
+        '<div class="bg-white rounded-xl shadow p-8 text-center text-gray-400 animate-pulse">' +
+        '<svg class="animate-spin h-7 w-7 mx-auto mb-3 text-[#FF9900]" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
+        'Consultando BinManager…</div>';
+    fetch('/api/amazon/products/sin-bm?' + params.toString())
+        .then(function(r) { return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl p-8 text-center">' +
+                '<p class="text-red-500 font-semibold">Error</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+};
+window._amzSinBmSearch = function(val) {
+    clearTimeout(window._amzSinBmST);
+    window._amzSinBmST = setTimeout(function() { window._amzSinBmLoad(1, val); }, 350);
 };
 
 // ── Tab switcher del modal de edición ────────────────────────────────────

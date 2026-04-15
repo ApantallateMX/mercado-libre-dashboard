@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Sin BM — Productos{% endblock %}
+{% block content %}
+<div class="max-w-7xl mx-auto px-3 py-4">
+  {% with active='sin_bm' %}
+  {% include "partials/productos_subnav.html" %}
+  {% endwith %}
+
+  <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+    <div>
+      <h1 class="text-xl font-bold text-gray-800">Sin BM — MercadoLibre</h1>
+      <p class="text-xs text-gray-500">Listings activos cuyo SKU no tiene registro en BinManager</p>
+    </div>
+  </div>
+
+  <!-- Contenedor del partial -->
+  <div id="ml-sin-bm-content">
+    <div class="flex items-center justify-center py-16 text-gray-400">
+      <svg class="w-7 h-7 animate-spin mr-3 text-yellow-400" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+      </svg>
+      Cargando… esto puede tomar unos segundos
+    </div>
+  </div>
+</div>
+
+<script>
+window._mlSinBmLoad = function(page, q, force) {
+    var params = new URLSearchParams({ page: page || 1, per_page: 10 });
+    if (q)     params.set('q', q);
+    if (force) params.set('force', '1');
+    var container = document.getElementById('ml-sin-bm-content');
+    container.innerHTML =
+        '<div class="flex items-center justify-center py-16 text-gray-400">' +
+        '<svg class="w-7 h-7 animate-spin mr-3 text-yellow-400" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>' +
+        'Cargando...</div>';
+    fetch('/api/productos/sin-bm?' + params.toString())
+        .then(function(r) { return r.text(); })
+        .then(function(html) { container.innerHTML = html; })
+        .catch(function(e) {
+            container.innerHTML =
+                '<div class="bg-white rounded-xl border border-red-200 p-8 text-center">' +
+                '<p class="text-red-500 font-semibold">Error al cargar</p>' +
+                '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
+        });
+};
+
+window._mlSinBmSearch = function(val) {
+    clearTimeout(window._mlSinBmST);
+    window._mlSinBmST = setTimeout(function() { window._mlSinBmLoad(1, val); }, 350);
+};
+
+// Carga inicial
+window._mlSinBmLoad(1, '');
+</script>
+{% endblock %}

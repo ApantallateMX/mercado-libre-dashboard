@@ -1,0 +1,126 @@
+{% if no_account or error %}
+<div class="flex flex-col items-center justify-center py-12 text-center">
+    <p class="text-orange-500 font-semibold">{{ error or 'Sin cuenta Amazon conectada' }}</p>
+    {% if no_account %}
+    <a href="/auth/amazon/connect" class="mt-3 bg-[#FF9900] text-white px-4 py-2 rounded-lg text-sm">Conectar Amazon</a>
+    {% endif %}
+</div>
+
+{% elif total == 0 %}
+<div class="bg-white rounded-xl shadow p-10 text-center">
+    <div class="text-4xl mb-3">✅</div>
+    <h3 class="text-lg font-bold text-gray-700 mb-1">Todo en orden</h3>
+    <p class="text-gray-400 text-sm">Todos los listings activos tienen un SKU registrado en BinManager.</p>
+    {% if nickname %}<p class="text-xs text-gray-400 mt-2">{{ nickname }} · {{ marketplace }}</p>{% endif %}
+</div>
+
+{% else %}
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-3">
+    <div>
+        <span class="text-sm font-semibold text-gray-700">{{ total }} listing{{ 's' if total != 1 else '' }} sin match en BM</span>
+        {% if nickname %}<span class="ml-2 text-xs text-gray-400">— {{ nickname }} · {{ marketplace }}</span>{% endif %}
+    </div>
+    <div class="flex items-center gap-2">
+        <!-- Buscador -->
+        <input type="text" id="amz-sin-bm-search" value="{{ q }}" placeholder="Buscar SKU o título…"
+               class="text-xs border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-[#FF9900] w-44"
+               oninput="window._amzSinBmSearch(this.value)">
+        <!-- Refresh -->
+        <button onclick="window._amzSinBmLoad(1, '', true)"
+                class="text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 transition"
+                title="Recargar datos frescos">↺</button>
+    </div>
+</div>
+
+<!-- Tabla desktop -->
+<div class="hidden md:block bg-white rounded-xl shadow overflow-hidden mb-4">
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide border-b border-gray-100">
+            <tr>
+                <th class="px-4 py-3 text-left">Producto</th>
+                <th class="px-3 py-3 text-left">SKU Amazon</th>
+                <th class="px-3 py-3 text-left">ASIN</th>
+                <th class="px-3 py-3 text-center">Motivo</th>
+                <th class="px-3 py-3 text-right">Precio</th>
+                <th class="px-3 py-3 text-center w-28">Acciones</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100">
+            {% for item in items %}
+            <tr class="hover:bg-gray-50 transition">
+                <td class="px-4 py-3">
+                    <p class="font-medium text-gray-800 text-sm truncate max-w-xs" title="{{ item.title }}">{{ item.title }}</p>
+                </td>
+                <td class="px-3 py-3">
+                    <span class="font-mono text-xs {% if item.sku == '—' %}text-gray-300{% else %}text-gray-700{% endif %}">
+                        {{ item.sku }}
+                    </span>
+                </td>
+                <td class="px-3 py-3">
+                    <span class="font-mono text-xs text-gray-500">{{ item.asin or '—' }}</span>
+                </td>
+                <td class="px-3 py-3 text-center">
+                    {% if item.motivo == 'Sin SKU' %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Sin SKU</span>
+                    {% else %}
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">SKU no en BM</span>
+                    {% endif %}
+                </td>
+                <td class="px-3 py-3 text-right text-sm font-medium text-gray-700">
+                    {% if item.price > 0 %}${{ "{:,.0f}".format(item.price) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                </td>
+                <td class="px-3 py-3 text-center">
+                    <a href="{{ item.sc_url }}" target="_blank"
+                       class="inline-flex items-center gap-1 text-xs text-[#FF9900] hover:underline">
+                        SC ↗
+                    </a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Cards mobile -->
+<div class="md:hidden space-y-2 mb-4">
+    {% for item in items %}
+    <div class="bg-white rounded-xl shadow p-3">
+        <div class="flex items-start justify-between gap-2 mb-2">
+            <p class="text-sm font-medium text-gray-800 leading-snug flex-1">{{ item.title }}</p>
+            {% if item.motivo == 'Sin SKU' %}
+            <span class="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">Sin SKU</span>
+            {% else %}
+            <span class="shrink-0 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">SKU no en BM</span>
+            {% endif %}
+        </div>
+        <div class="flex items-center justify-between text-xs text-gray-500">
+            <span class="font-mono">{{ item.sku }}</span>
+            {% if item.price > 0 %}<span>${{ "{:,.0f}".format(item.price) }}</span>{% endif %}
+            <a href="{{ item.sc_url }}" target="_blank" class="text-[#FF9900] hover:underline">SC ↗</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Paginación -->
+{% if pages > 1 %}
+<div class="flex items-center justify-between text-sm text-gray-500">
+    <span>Página {{ page }} de {{ pages }} ({{ total }} total)</span>
+    <div class="flex gap-2">
+        <button onclick="window._amzSinBmLoad({{ page - 1 }}, '{{ q }}')"
+                {% if page <= 1 %}disabled{% endif %}
+                class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+            ← Anterior
+        </button>
+        <button onclick="window._amzSinBmLoad({{ page + 1 }}, '{{ q }}')"
+                {% if page >= pages %}disabled{% endif %}
+                class="px-3 py-1.5 rounded-lg border text-sm hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+            Siguiente →
+        </button>
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
