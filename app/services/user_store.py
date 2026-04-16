@@ -331,3 +331,67 @@ async def get_audit_users() -> list[str]:
         )
         rows = await cur.fetchall()
         return [r[0] for r in rows]
+
+
+async def get_audit_users_summary(days: int = 7) -> list[dict]:
+    """Estadísticas de actividad por usuario para el panel de auditoría."""
+    from datetime import datetime, timedelta
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("""
+            SELECT
+                username,
+                COUNT(*) as total,
+                SUM(CASE WHEN action IN ('ml_item_created','ml_item_reactivated','ml_mark_launched') THEN 1 ELSE 0 END) as launches,
+                SUM(CASE WHEN action IN ('ml_price_update','amz_price_update','ml_price_synced') THEN 1 ELSE 0 END) as prices,
+                SUM(CASE WHEN action IN ('ml_stock_update','ml_variation_stock','amz_stock_update','amz_listing_update') THEN 1 ELSE 0 END) as stocks,
+                MAX(ts) as last_action
+            FROM audit_log
+            WHERE ts >= ? AND username != 'system'
+            GROUP BY username
+            ORDER BY total DESC
+        """, (date_from,))
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_audit_user_timeline(
+    username: str,
+    days: int = 7,
+    action_filter: str = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Timeline de actividad de un usuario específico con estadísticas."""
+    from datetime import datetime, timedelta
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    conditions = ["username = ?", "ts >= ?"]
+    params: list = [username, date_from]
+
+    if action_filter:
+        conditions.append("action = ?")
+        params.append(action_filter)
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(f"""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN action IN ('ml_item_created','ml_item_reactivated','ml_mark_launched') THEN 1 ELSE 0 END) as launches,
+                SUM(CASE WHEN action IN ('ml_price_update','amz_price_update','ml_price_synced') THEN 1 ELSE 0 END) as prices,
+                SUM(CASE WHEN action IN ('ml_stock_update','ml_variation_stock','amz_stock_update') THEN 1 ELSE 0 END) as stocks
+            FROM audit_log {where}
+        """, params)
+        stats_row = await cur.fetchone()
+        stats = dict(stats_row) if stats_row else {"total": 0, "launches": 0, "prices": 0, "stocks": 0}
+
+        cur = await db.execute(
+            f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        )
+        rows = await cur.fetchall()
+        return {"stats": stats, "rows": [dict(r) for r in rows]}

@@ -39,8 +39,26 @@ from pydantic import BaseModel
 
 from app.services.amazon_client import get_amazon_client
 from app.api.metrics import _get_cached_order_metrics
+from app.services import user_store as _user_store
 
 logger = logging.getLogger(__name__)
+
+
+async def _audit(request: Request, action: str, item_id: str = None, detail: dict = None):
+    """Fire-and-forget audit log. Nunca interrumpe la respuesta principal."""
+    try:
+        du = getattr(request.state, "dashboard_user", None)
+        if du:
+            await _user_store.log_action(
+                username=du["username"],
+                user_id=du.get("id"),
+                action=action,
+                item_id=item_id,
+                detail=detail,
+                ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+            )
+    except Exception:
+        pass
 
 router = APIRouter(prefix="/api/amazon", tags=["amazon-products"])
 
@@ -1093,6 +1111,7 @@ async def update_amazon_price(sku: str, request: Request):
         # Invalidar caché de listings
         _listings_cache.pop(client.seller_id, None)
         _buybox_cache.pop(f"{client.seller_id}:{sku}", None)
+        await _audit(request, "amz_price_update", sku, {"price": price})
         return {"ok": True, "sku": sku, "price": price, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1240,6 +1259,9 @@ async def update_amazon_listing(sku: str, request: Request):
     # Invalidar caché
     _listings_cache.pop(client.seller_id, None)
     _buybox_cache.pop(f"{client.seller_id}:{sku}", None)
+
+    if results:
+        await _audit(request, "amz_listing_update", sku, {"fields": list(results.keys())})
 
     if errors and not results:
         raise HTTPException(status_code=500, detail=" | ".join(errors))

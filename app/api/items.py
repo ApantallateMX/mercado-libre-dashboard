@@ -1,10 +1,28 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
 import httpx
 import asyncio
 from app.services.meli_client import get_meli_client, MeliApiError
+from app.services import user_store as _user_store
 import app.main as _main_module
+
+
+async def _audit(request: Request, action: str, item_id: str = None, detail: dict = None):
+    """Fire-and-forget audit log. Nunca interrumpe la respuesta principal."""
+    try:
+        du = getattr(request.state, "dashboard_user", None)
+        if du:
+            await _user_store.log_action(
+                username=du["username"],
+                user_id=du.get("id"),
+                action=action,
+                item_id=item_id,
+                detail=detail,
+                ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+            )
+    except Exception:
+        pass
 
 
 def _invalidate_user_products_cache(user_id: str):
@@ -357,7 +375,7 @@ async def get_inventory(web_sku: str):
 
 
 @router.delete("/{item_id}")
-async def close_item(item_id: str):
+async def close_item(item_id: str, request: Request):
     """Cierra (finaliza) una publicacion de MeLi poniendo status=closed.
     MeLi no permite eliminar items via API; 'closed' es el estado final disponible.
     """
@@ -367,6 +385,7 @@ async def close_item(item_id: str):
     try:
         result = await client.update_item(item_id, {"status": "closed"})
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_item_closed", item_id)
         return {"ok": True, "item_id": item_id, "status": "closed", "result": result}
     except MeliApiError as e:
         body = e.body
@@ -393,7 +412,7 @@ async def get_item(item_id: str):
 
 
 @router.put("/{item_id}/price")
-async def update_price(item_id: str, data: PriceUpdate):
+async def update_price(item_id: str, data: PriceUpdate, request: Request):
     """Actualiza el precio de un item."""
     client = await get_meli_client()
     if not client:
@@ -402,6 +421,7 @@ async def update_price(item_id: str, data: PriceUpdate):
     try:
         result = await client.update_item_price(item_id, data.price)
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_price_update", item_id, {"price": data.price})
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -410,7 +430,7 @@ async def update_price(item_id: str, data: PriceUpdate):
 
 
 @router.put("/{item_id}/stock")
-async def update_stock(item_id: str, data: StockUpdate):
+async def update_stock(item_id: str, data: StockUpdate, request: Request):
     """Actualiza el stock de un item."""
     client = await get_meli_client()
     if not client:
@@ -419,6 +439,7 @@ async def update_stock(item_id: str, data: StockUpdate):
     try:
         result = await client.update_item_stock(item_id, data.quantity)
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_stock_update", item_id, {"qty": data.quantity})
         # me1_warning: MeLi acepto el PUT pero puede revertir — devolver 200 con flag warning
         if isinstance(result, dict) and result.get("_me1_warning"):
             from fastapi.responses import JSONResponse
@@ -449,7 +470,7 @@ async def update_stock(item_id: str, data: StockUpdate):
 
 
 @router.put("/{item_id}/variations/{variation_id}/stock")
-async def update_variation_stock(item_id: str, variation_id: str, data: VariationStockUpdate):
+async def update_variation_stock(item_id: str, variation_id: str, data: VariationStockUpdate, request: Request):
     """Actualiza el stock de una variacion especifica sin afectar las demas."""
     client = await get_meli_client()
     if not client:
@@ -459,6 +480,7 @@ async def update_variation_stock(item_id: str, variation_id: str, data: Variatio
             item_id, [{"id": int(variation_id), "available_quantity": data.quantity}]
         )
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_variation_stock", item_id, {"variation_id": variation_id, "qty": data.quantity})
         return {"ok": True, "item_id": item_id, "variation_id": variation_id, "quantity": data.quantity, "result": result}
     except MeliApiError as e:
         body = e.body
@@ -471,13 +493,14 @@ async def update_variation_stock(item_id: str, variation_id: str, data: Variatio
 
 
 @router.put("/{item_id}/title")
-async def update_title(item_id: str, data: TitleUpdate):
+async def update_title(item_id: str, data: TitleUpdate, request: Request):
     """Actualiza el titulo de un item."""
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.update_item_title(item_id, data.title)
+        await _audit(request, "ml_title_update", item_id, {"title": data.title[:80]})
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -486,20 +509,21 @@ async def update_title(item_id: str, data: TitleUpdate):
 
 
 @router.put("/{item_id}/description")
-async def update_description(item_id: str, data: DescriptionUpdate):
+async def update_description(item_id: str, data: DescriptionUpdate, request: Request):
     """Actualiza la descripcion de un item."""
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.update_item_description(item_id, data.plain_text)
+        await _audit(request, "ml_description_update", item_id)
         return result
     finally:
         await client.close()
 
 
 @router.put("/{item_id}/status")
-async def update_status(item_id: str, data: StatusUpdate):
+async def update_status(item_id: str, data: StatusUpdate, request: Request):
     """Cambia el estado de un item (active/paused)."""
     if data.status not in ("active", "paused"):
         raise HTTPException(status_code=400, detail="Status debe ser 'active' o 'paused'")
@@ -509,6 +533,7 @@ async def update_status(item_id: str, data: StatusUpdate):
     try:
         result = await client.update_item_status(item_id, data.status)
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_status_update", item_id, {"status": data.status})
         return result
     except MeliApiError as e:
         body = e.body
@@ -524,7 +549,7 @@ async def update_status(item_id: str, data: StatusUpdate):
 
 
 @router.put("/{item_id}/shipping")
-async def update_shipping(item_id: str, data: ShippingUpdate):
+async def update_shipping(item_id: str, data: ShippingUpdate, request: Request):
     """Actualiza configuracion de envio."""
     client = await get_meli_client()
     if not client:
@@ -539,6 +564,7 @@ async def update_shipping(item_id: str, data: ShippingUpdate):
             shipping["logistic_type"] = data.logistic_type
         result = await client.update_item_shipping(item_id, shipping)
         _invalidate_user_products_cache(str(client.user_id))
+        await _audit(request, "ml_shipping_update", item_id, {k: v for k, v in shipping.items() if v is not None})
         return result
     except MeliApiError as e:
         body = e.body
@@ -560,26 +586,28 @@ async def update_shipping(item_id: str, data: ShippingUpdate):
 
 
 @router.put("/{item_id}/pictures")
-async def update_pictures(item_id: str, data: PicturesUpdate):
+async def update_pictures(item_id: str, data: PicturesUpdate, request: Request):
     """Actualiza las fotos de un item."""
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.update_item_pictures(item_id, data.pictures)
+        await _audit(request, "ml_pictures_update", item_id, {"count": len(data.pictures)})
         return result
     finally:
         await client.close()
 
 
 @router.put("/{item_id}/attributes")
-async def update_attributes(item_id: str, data: AttributesUpdate):
+async def update_attributes(item_id: str, data: AttributesUpdate, request: Request):
     """Actualiza los atributos de un item."""
     client = await get_meli_client()
     if not client:
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
         result = await client.update_item_attributes(item_id, data.attributes)
+        await _audit(request, "ml_attributes_update", item_id)
         return result
     finally:
         await client.close()

@@ -1364,6 +1364,21 @@ async def reactivate_listing(request: Request):
             await db.commit()
 
         permalink = item.get("permalink", "")
+        # Auditoría
+        try:
+            from app.services import user_store as _us
+            du = getattr(request.state, "dashboard_user", None)
+            if du:
+                await _us.log_action(
+                    username=du["username"],
+                    user_id=du.get("id"),
+                    action="ml_item_reactivated",
+                    item_id=item_id,
+                    detail={"qty": stock_bm},
+                    ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                )
+        except Exception:
+            pass
         return {"ok": True, "item_id": item_id, "new_status": "active", "permalink": permalink}
     except Exception as e:
         logger.error(f"reactivate error {item_id}: {e}")
@@ -1421,6 +1436,21 @@ async def sync_price(request: Request):
             )
             await db.commit()
 
+        # Auditoría
+        try:
+            from app.services import user_store as _us
+            du = getattr(request.state, "dashboard_user", None)
+            if du:
+                await _us.log_action(
+                    username=du["username"],
+                    user_id=du.get("id"),
+                    action="ml_price_synced",
+                    item_id=item_id,
+                    detail={"price": float(price)},
+                    ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                )
+        except Exception:
+            pass
         return {"ok": True, "item_id": item_id, "new_price": float(price)}
     except Exception as e:
         logger.error(f"sync-price error {item_id}: {e}")
@@ -2802,6 +2832,21 @@ async def mark_launched_sku(sku: str, request: Request):
             (item_id, ml_title, ml_price, permalink, condition, user_id, sku.upper())
         )
         await db.commit()
+    # Auditoría
+    try:
+        from app.services import user_store as _us
+        du = getattr(request.state, "dashboard_user", None)
+        if du:
+            await _us.log_action(
+                username=du["username"],
+                user_id=du.get("id"),
+                action="ml_mark_launched",
+                item_id=item_id,
+                detail={"sku": sku, "title": ml_title[:80] if ml_title else "", "price": ml_price},
+                ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+            )
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -3786,6 +3831,23 @@ async def create_listing_endpoint(request: Request):
                     logger.warning(f"Clip upload fallido para {item_id}: {ce}")
 
         logger.info(f"Listing created: {item_id} for SKU {sku} ({user_id})")
+
+        # Auditoría: registrar publicación
+        try:
+            from app.services import user_store as _us
+            du = getattr(request.state, "dashboard_user", None)
+            if du:
+                await _us.log_action(
+                    username=du["username"],
+                    user_id=du.get("id"),
+                    action="ml_item_created",
+                    item_id=item_id,
+                    detail={"sku": sku, "title": (ml_actual_title or title or "")[:80], "price": float(price)},
+                    ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                )
+        except Exception:
+            pass
+
         # title_warning solo si ML aplicó un título COMPLETAMENTE diferente al wizard
         # (no por normalización de capitalización — ML siempre convierte a Title Case)
         title_warning = None

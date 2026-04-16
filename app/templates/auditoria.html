@@ -1,157 +1,271 @@
 {% extends "base.html" %}
-{% block title %}Auditoria{% endblock %}
+{% block title %}Auditoría{% endblock %}
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-5">
 
-  <!-- Header -->
-  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-    <div>
-      <h1 class="text-xl font-bold text-gray-800">Registro de Actividad</h1>
-      <p class="text-sm text-gray-500 mt-0.5">Historial de cambios realizados en el dashboard</p>
-    </div>
-    <a href="/usuarios" class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition font-medium self-start">
-      Volver a Usuarios
-    </a>
-  </div>
+  <!-- ── Vista: Tarjetas de usuarios ──────────────────────────────────────── -->
+  <div id="view-cards">
 
-  <!-- Filtros -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-    <div class="flex flex-wrap gap-3 items-end">
-      <div class="flex flex-col gap-1 min-w-[150px]">
-        <label class="text-xs text-gray-500 font-medium">Usuario</label>
-        <input type="text" id="filter-username" placeholder="Todos"
-               class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-bold text-gray-800">Actividad por Usuario</h1>
+        <p class="text-sm text-gray-500 mt-0.5">Selecciona un usuario para ver su historial detallado</p>
       </div>
-      <div class="flex flex-col gap-1 min-w-[160px]">
-        <label class="text-xs text-gray-500 font-medium">Accion</label>
-        <select id="filter-action"
-                class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
-          <option value="">Todas</option>
-          <option value="login">Login</option>
-          <option value="logout">Logout</option>
-          <option value="price_change">Cambio precio</option>
-          <option value="stock_change">Cambio stock</option>
-          <option value="status_change">Cambio estado</option>
-          <option value="close_item">Cerrar publicacion</option>
-          <option value="sync_activate">Sync + Activar</option>
-          <option value="create_user">Crear usuario</option>
-          <option value="update_user">Editar usuario</option>
-          <option value="reset_password">Reset contrasena</option>
+      <div class="flex items-center gap-3">
+        <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm">
+          <span class="text-xs text-gray-500 font-medium">Período:</span>
+          <select id="cards-days" onchange="window._auditLoadCards()"
+                  class="text-sm text-gray-700 outline-none bg-transparent">
+            <option value="1">Hoy</option>
+            <option value="7" selected>7 días</option>
+            <option value="30">30 días</option>
+            <option value="90">90 días</option>
+          </select>
+        </div>
+        <button onclick="window._auditLoadCards()"
+                class="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+          ↻ Actualizar
+        </button>
+        <a href="/usuarios" class="px-3 py-1.5 text-xs bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition font-medium">
+          ← Usuarios
+        </a>
+      </div>
+    </div>
+
+    <!-- Cards grid (cargado vía fetch) -->
+    <div id="cards-container">
+      <div class="flex items-center justify-center py-16 text-gray-400 gap-2">
+        <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        Cargando actividad…
+      </div>
+    </div>
+
+  </div><!-- /view-cards -->
+
+
+  <!-- ── Vista: Detalle de un usuario ─────────────────────────────────────── -->
+  <div id="view-detail" class="hidden space-y-4">
+
+    <!-- Header detalle -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <button onclick="window._auditBackToCards()"
+                class="px-3 py-1.5 text-sm bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition">
+          ← Volver
+        </button>
+        <div>
+          <h2 class="text-lg font-bold text-gray-800" id="detail-username-label">Usuario</h2>
+          <p class="text-xs text-gray-400 font-mono" id="detail-username-mono"></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm">
+        <span class="text-xs text-gray-500 font-medium">Período:</span>
+        <select id="detail-days" onchange="window._auditReloadDetail()"
+                class="text-sm text-gray-700 outline-none bg-transparent">
+          <option value="1">Hoy</option>
+          <option value="7" selected>7 días</option>
+          <option value="30">30 días</option>
+          <option value="90">90 días</option>
         </select>
       </div>
-      <div class="flex flex-col gap-1 min-w-[160px]">
-        <label class="text-xs text-gray-500 font-medium">Desde</label>
-        <input type="date" id="filter-date"
-               class="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+    </div>
+
+    <!-- KPI cards -->
+    <div id="detail-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <!-- Filled by JS -->
+    </div>
+
+    <!-- Filtros de timeline -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-3 flex flex-wrap items-center gap-3">
+      <span class="text-xs text-gray-500 font-medium">Filtrar por tipo:</span>
+      <select id="detail-action-filter" onchange="window._auditReloadDetail()"
+              class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-blue-400">
+        <option value="">Todas las acciones</option>
+        <optgroup label="Mercado Libre">
+          <option value="ml_item_created">🚀 Publicó listing</option>
+          <option value="ml_item_reactivated">🔁 Reactivó listing</option>
+          <option value="ml_mark_launched">📌 Marcó lanzado</option>
+          <option value="ml_price_update">🏷 Cambio precio ML</option>
+          <option value="ml_price_synced">🔄 Sincronizó precio ML</option>
+          <option value="ml_stock_update">📦 Cambio stock ML</option>
+          <option value="ml_variation_stock">📦 Stock variación ML</option>
+          <option value="ml_title_update">🔤 Cambio título ML</option>
+          <option value="ml_status_update">⏸ Cambio estado ML</option>
+          <option value="ml_item_closed">🚫 Cerró listing</option>
+          <option value="ml_concentration">⚡ Concentración stock</option>
+        </optgroup>
+        <optgroup label="Amazon">
+          <option value="amz_price_update">🏷 Cambio precio Amazon</option>
+          <option value="amz_listing_update">✏️ Editó listing Amazon</option>
+        </optgroup>
+        <optgroup label="Sistema">
+          <option value="login">🔑 Inicio sesión</option>
+          <option value="logout">🚪 Cerró sesión</option>
+          <option value="create_user">👤 Creó usuario</option>
+          <option value="update_user">✏️ Editó usuario</option>
+          <option value="reset_password">🔐 Reset contraseña</option>
+        </optgroup>
+      </select>
+    </div>
+
+    <!-- Timeline tabla -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead>
+            <tr class="bg-gray-50 border-b border-gray-100">
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Fecha/Hora</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Acción</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Item / SKU</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalle</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">IP</th>
+            </tr>
+          </thead>
+          <tbody id="detail-tbody">
+            <tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">Cargando…</td></tr>
+          </tbody>
+        </table>
       </div>
-      <button onclick="loadAudit()" class="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition font-medium">
-        Filtrar
-      </button>
-      <button onclick="clearFilters()" class="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition">
-        Limpiar
-      </button>
-    </div>
-  </div>
 
-  <!-- Tabla de auditoria -->
-  <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead>
-          <tr class="bg-gray-50 border-b border-gray-100">
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Fecha/Hora</th>
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Usuario</th>
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Accion</th>
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Item</th>
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalle</th>
-            <th class="px-3 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">IP</th>
-          </tr>
-        </thead>
-        <tbody id="audit-tbody">
-          <tr>
-            <td colspan="6" class="px-4 py-8 text-center">
-              <div class="flex items-center justify-center gap-2 text-gray-400">
-                <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-                Cargando...
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- Paginacion -->
-    <div class="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
-      <p class="text-xs text-gray-400" id="audit-count"></p>
-      <div class="flex gap-2">
-        <button onclick="prevPage()" id="btn-prev"
-                class="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40">
-          Anterior
-        </button>
-        <button onclick="nextPage()" id="btn-next"
-                class="px-3 py-1.5 text-xs text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-40">
-          Siguiente
-        </button>
+      <!-- Paginación -->
+      <div class="px-4 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50">
+        <p class="text-xs text-gray-400" id="detail-count"></p>
+        <div class="flex gap-2">
+          <button onclick="window._auditPrev()" id="btn-detail-prev"
+                  class="px-3 py-1 text-xs text-gray-600 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition">
+            ← Anterior
+          </button>
+          <button onclick="window._auditNext()" id="btn-detail-next"
+                  class="px-3 py-1 text-xs text-gray-600 bg-white border border-gray-200 rounded-lg hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition">
+            Siguiente →
+          </button>
+        </div>
       </div>
     </div>
-  </div>
 
-</div>
+  </div><!-- /view-detail -->
+
+</div><!-- /space-y-5 -->
+
 <script>
-var _offset = 0;
-var _limit = 100;
-var _hasMore = false;
+(function(){
+  var _currentUser = '';
+  var _currentDisplay = '';
+  var _detailOffset = 0;
+  var _detailLimit = 50;
+  var _detailHasMore = false;
 
-async function loadAudit(){
-  var username = document.getElementById('filter-username').value.trim();
-  var action = document.getElementById('filter-action').value;
-  var date = document.getElementById('filter-date').value;
-  var params = new URLSearchParams({limit:_limit, offset:_offset});
-  if(username) params.set('username',username);
-  if(action) params.set('action',action);
-  if(date) params.set('date_from',date);
+  // ── Cargar tarjetas ──────────────────────────────────────────────────────
+  window._auditLoadCards = async function() {
+    var days = document.getElementById('cards-days').value;
+    var container = document.getElementById('cards-container');
+    container.innerHTML = '<div class="flex items-center justify-center py-16 text-gray-400 gap-2"><svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando…</div>';
+    try {
+      var resp = await fetch('/api/users/audit/summary?days=' + days);
+      container.innerHTML = await resp.text();
+    } catch(e) {
+      container.innerHTML = '<p class="text-center text-red-400 py-12">Error al cargar actividad.</p>';
+    }
+  };
 
-  var tbody = document.getElementById('audit-tbody');
-  tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">Cargando...</td></tr>';
+  // ── Mostrar detalle de un usuario ────────────────────────────────────────
+  window._auditShowUser = function(username, display) {
+    _currentUser = username;
+    _currentDisplay = display || username;
+    _detailOffset = 0;
+    document.getElementById('view-cards').classList.add('hidden');
+    document.getElementById('view-detail').classList.remove('hidden');
+    document.getElementById('detail-username-label').textContent = _currentDisplay;
+    document.getElementById('detail-username-mono').textContent = '@' + username;
+    document.getElementById('detail-action-filter').value = '';
+    document.getElementById('detail-days').value = document.getElementById('cards-days').value;
+    _loadDetailStats();
+    _loadDetailTimeline();
+  };
 
-  try{
-    var resp = await fetch('/api/users/audit/log?'+params.toString());
-    var html = await resp.text();
-    tbody.innerHTML = html;
+  // ── Volver a tarjetas ────────────────────────────────────────────────────
+  window._auditBackToCards = function() {
+    document.getElementById('view-detail').classList.add('hidden');
+    document.getElementById('view-cards').classList.remove('hidden');
+  };
 
-    // Contar filas
-    var rows = tbody.querySelectorAll('tr');
-    _hasMore = rows.length >= _limit;
-    document.getElementById('audit-count').textContent = rows.length + ' registros';
-    document.getElementById('btn-prev').disabled = _offset === 0;
-    document.getElementById('btn-next').disabled = !_hasMore;
-  }catch(e){
-    tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-red-400">Error al cargar</td></tr>';
+  // ── Recargar detalle al cambiar filtros ──────────────────────────────────
+  window._auditReloadDetail = function() {
+    _detailOffset = 0;
+    _loadDetailStats();
+    _loadDetailTimeline();
+  };
+
+  // ── Paginación detalle ───────────────────────────────────────────────────
+  window._auditPrev = function() {
+    if (_detailOffset === 0) return;
+    _detailOffset = Math.max(0, _detailOffset - _detailLimit);
+    _loadDetailTimeline();
+  };
+  window._auditNext = function() {
+    if (!_detailHasMore) return;
+    _detailOffset += _detailLimit;
+    _loadDetailTimeline();
+  };
+
+  // ── Cargar estadísticas KPI del usuario ──────────────────────────────────
+  async function _loadDetailStats() {
+    var days = document.getElementById('detail-days').value;
+    var kpiEl = document.getElementById('detail-kpis');
+    kpiEl.innerHTML = '';
+    try {
+      var resp = await fetch('/api/users/audit/user-stats?username=' + encodeURIComponent(_currentUser) + '&days=' + days);
+      var s = await resp.json();
+      var others = (s.total||0) - (s.launches||0) - (s.prices||0) - (s.stocks||0);
+      kpiEl.innerHTML = [
+        {icon:'🚀', val: s.launches||0, label:'Lanzados',   cls:'text-green-600'},
+        {icon:'🏷', val: s.prices||0,   label:'Precios',    cls:'text-yellow-600'},
+        {icon:'📦', val: s.stocks||0,   label:'Stocks',     cls:'text-blue-600'},
+        {icon:'⚙',  val: Math.max(0,others), label:'Otros', cls:'text-gray-500'},
+      ].map(function(k){
+        return '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex items-center gap-3">' +
+          '<span class="text-2xl">' + k.icon + '</span>' +
+          '<div><p class="text-2xl font-bold ' + k.cls + ' leading-none">' + k.val + '</p>' +
+          '<p class="text-xs text-gray-400 mt-0.5">' + k.label + '</p></div></div>';
+      }).join('');
+    } catch(e) {}
   }
-}
 
-function prevPage(){
-  if(_offset === 0) return;
-  _offset = Math.max(0, _offset - _limit);
-  loadAudit();
-}
-function nextPage(){
-  if(!_hasMore) return;
-  _offset += _limit;
-  loadAudit();
-}
-function clearFilters(){
-  document.getElementById('filter-username').value='';
-  document.getElementById('filter-action').value='';
-  document.getElementById('filter-date').value='';
-  _offset=0;
-  loadAudit();
-}
+  // ── Cargar timeline del usuario ──────────────────────────────────────────
+  async function _loadDetailTimeline() {
+    var days   = document.getElementById('detail-days').value;
+    var action = document.getElementById('detail-action-filter').value;
+    var tbody  = document.getElementById('detail-tbody');
+    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>';
+    var params = new URLSearchParams({
+      username: _currentUser,
+      days: days,
+      offset: _detailOffset,
+    });
+    if (action) params.set('action', action);
+    try {
+      var resp = await fetch('/api/users/audit/user-timeline?' + params.toString());
+      var html = await resp.text();
+      tbody.innerHTML = html;
+      var rows = tbody.querySelectorAll('tr');
+      _detailHasMore = rows.length >= _detailLimit;
+      var showing = _detailOffset + rows.length;
+      document.getElementById('detail-count').textContent =
+        rows.length === 1 && tbody.querySelector('td[colspan]')
+          ? '' : showing + ' registros';
+      document.getElementById('btn-detail-prev').disabled = _detailOffset === 0;
+      document.getElementById('btn-detail-next').disabled = !_detailHasMore;
+    } catch(e) {
+      tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-red-400">Error al cargar</td></tr>';
+    }
+  }
 
-// Cargar al iniciar
-loadAudit();
+  // Carga inicial
+  window._auditLoadCards();
+})();
 </script>
 {% endblock %}

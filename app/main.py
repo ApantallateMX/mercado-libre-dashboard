@@ -7966,6 +7966,22 @@ async def stock_concentration_execute_api(request: Request):
             "detail": "BinManager está caído. No se puede ejecutar concentración de stock hasta que BM responda.",
         }, status_code=503)
 
+    # Auditoría: solo registrar ejecuciones reales (dry_run=False)
+    if not dry_run:
+        try:
+            du = getattr(request.state, "dashboard_user", None)
+            if du:
+                await user_store.log_action(
+                    username=du["username"],
+                    user_id=du.get("id"),
+                    action="ml_concentration",
+                    item_id=sku,
+                    detail={"winner": winner_uid, "total_stock": total_stock},
+                    ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                )
+        except Exception:
+            pass
+
     from app.services.stock_concentrator import execute_concentration
     return await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
 

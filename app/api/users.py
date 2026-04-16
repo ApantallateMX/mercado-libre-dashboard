@@ -207,6 +207,84 @@ async def reset_password_api(request: Request, user_id: int):
 
 
 # ─── Auditoría ────────────────────────────────────────────────────────────────
+
+ACTION_META: dict = {
+    # ML acciones
+    "ml_item_created":    ("🚀", "bg-green-50 text-green-700",   "Publicó listing"),
+    "ml_item_reactivated":("🔁", "bg-teal-50 text-teal-700",     "Reactivó listing"),
+    "ml_mark_launched":   ("📌", "bg-green-50 text-green-600",   "Marcó lanzado"),
+    "ml_price_update":    ("🏷", "bg-yellow-50 text-yellow-700", "Cambio precio ML"),
+    "ml_price_synced":    ("🔄", "bg-yellow-50 text-yellow-600", "Sincronizó precio ML"),
+    "ml_stock_update":    ("📦", "bg-blue-50 text-blue-700",     "Cambio stock ML"),
+    "ml_variation_stock": ("📦", "bg-blue-50 text-blue-600",     "Stock variación ML"),
+    "ml_title_update":    ("🔤", "bg-purple-50 text-purple-700", "Cambio título ML"),
+    "ml_description_update": ("📝","bg-purple-50 text-purple-600","Cambio descripción ML"),
+    "ml_status_update":   ("⏸",  "bg-orange-50 text-orange-700","Cambio estado ML"),
+    "ml_shipping_update": ("🚚", "bg-gray-50 text-gray-600",     "Cambio envío ML"),
+    "ml_pictures_update": ("🖼",  "bg-indigo-50 text-indigo-600","Cambio fotos ML"),
+    "ml_attributes_update":("⚙", "bg-gray-50 text-gray-600",    "Cambio atributos ML"),
+    "ml_item_closed":     ("🚫", "bg-red-50 text-red-600",       "Cerró listing ML"),
+    "ml_concentration":   ("⚡", "bg-teal-50 text-teal-700",     "Concentración stock"),
+    # Amazon acciones
+    "amz_price_update":   ("🏷", "bg-yellow-50 text-yellow-700", "Cambio precio Amazon"),
+    "amz_listing_update": ("✏️", "bg-orange-50 text-orange-700", "Editó listing Amazon"),
+    "amz_stock_update":   ("📦", "bg-blue-50 text-blue-700",     "Cambio stock Amazon"),
+    # Sistema / usuarios
+    "login":              ("🔑", "bg-blue-50 text-blue-600",     "Inicio sesión"),
+    "logout":             ("🚪", "bg-gray-50 text-gray-500",     "Cerró sesión"),
+    "create_user":        ("👤", "bg-indigo-50 text-indigo-700", "Creó usuario"),
+    "update_user":        ("✏️", "bg-orange-50 text-orange-700", "Editó usuario"),
+    "reset_password":     ("🔐", "bg-pink-50 text-pink-700",     "Reset contraseña"),
+}
+
+
+def _render_timeline_rows(rows: list) -> str:
+    """Genera HTML de filas <tr> para el timeline de auditoría."""
+    import json as _json
+    if not rows:
+        return '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">Sin registros en este período</td></tr>'
+    html = ""
+    for r in rows:
+        icon, badge_cls, label = ACTION_META.get(r["action"], ("•", "bg-gray-50 text-gray-500", r["action"]))
+        detail_raw = r.get("detail") or ""
+        try:
+            d = _json.loads(detail_raw) if detail_raw else {}
+            parts = []
+            for k, v in d.items():
+                if v is None:
+                    continue
+                if k == "price":
+                    parts.append(f"${v:,.0f}" if isinstance(v, (int, float)) else str(v))
+                elif k == "qty":
+                    parts.append(f"qty: <b>{v}</b>")
+                elif k == "status":
+                    parts.append(f"→ <b>{v}</b>")
+                elif k == "title":
+                    parts.append(f'"{str(v)[:50]}"')
+                elif k == "fields":
+                    parts.append(f"campos: {', '.join(v) if isinstance(v, list) else v}")
+                else:
+                    parts.append(f"{k}: <b>{v}</b>")
+            detail_str = " · ".join(parts)
+        except Exception:
+            detail_str = detail_raw[:100] if detail_raw else ""
+        item_html = f'<span class="font-mono text-blue-500">{r["item_id"]}</span>' if r.get("item_id") else "—"
+        ts = (r.get("ts") or "")[:16].replace("T", " ")
+        html += f"""
+        <tr class="hover:bg-gray-50 border-b border-gray-100">
+            <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{ts}</td>
+            <td class="px-3 py-2">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {badge_cls}">
+                    {icon} {label}
+                </span>
+            </td>
+            <td class="px-3 py-2 text-xs">{item_html}</td>
+            <td class="px-3 py-2 text-xs text-gray-500">{detail_str}</td>
+            <td class="px-3 py-2 text-xs text-gray-400">{r.get('ip') or '—'}</td>
+        </tr>"""
+    return html
+
+
 @router.get("/audit/log", response_class=HTMLResponse)
 async def audit_log_api(
     request: Request,
@@ -223,42 +301,126 @@ async def audit_log_api(
         action=action or None,
         date_from=date_from or None,
     )
-    ACTION_LABELS = {
-        "login": ("🔑", "bg-blue-50 text-blue-600"),
-        "logout": ("🚪", "bg-gray-50 text-gray-500"),
-        "price_change": ("💲", "bg-yellow-50 text-yellow-700"),
-        "stock_change": ("📦", "bg-green-50 text-green-700"),
-        "status_change": ("🔄", "bg-purple-50 text-purple-700"),
-        "close_item": ("🚫", "bg-red-50 text-red-600"),
-        "sync_activate": ("⚡", "bg-teal-50 text-teal-700"),
-        "create_user": ("👤", "bg-indigo-50 text-indigo-700"),
-        "update_user": ("✏️", "bg-orange-50 text-orange-700"),
-        "reset_password": ("🔐", "bg-pink-50 text-pink-700"),
+    return _render_timeline_rows(rows)
+
+
+@router.get("/audit/summary", response_class=HTMLResponse)
+async def audit_users_summary(request: Request, days: int = 7):
+    """Tarjetas de actividad por usuario para la vista principal de auditoría."""
+    _require_admin(request)
+    users_data = await user_store.get_audit_users_summary(days=days)
+
+    if not users_data:
+        return '<p class="text-center text-gray-400 py-12">Sin actividad registrada en este período.</p>'
+
+    all_users = await user_store.list_users()
+    role_map = {u["username"]: u.get("role", "viewer") for u in all_users}
+    display_map = {u["username"]: u.get("display_name") or u["username"] for u in all_users}
+
+    ROLE_COLOR = {
+        "admin":               "bg-red-100 text-red-700",
+        "editor":              "bg-blue-100 text-blue-700",
+        "editor_meli":         "bg-yellow-100 text-yellow-700",
+        "editor_amazon":       "bg-orange-100 text-orange-700",
+        "editor_facturacion":  "bg-purple-100 text-purple-700",
+        "viewer":              "bg-gray-100 text-gray-500",
     }
-    if not rows:
-        return '<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">Sin registros</td></tr>'
-    html = ""
-    for r in rows:
-        icon, badge_cls = ACTION_LABELS.get(r["action"], ("•", "bg-gray-50 text-gray-500"))
-        detail = r.get("detail") or ""
-        try:
-            import json as _json
-            d = _json.loads(detail) if detail else {}
-            detail_str = " · ".join(f"{k}: <b>{v}</b>" for k, v in d.items() if v is not None)
-        except Exception:
-            detail_str = detail
-        item_html = f'<span class="text-xs font-mono text-blue-500">{r["item_id"]}</span>' if r.get("item_id") else "—"
+    ROLE_LABELS = user_store.ROLES
+
+    html = '<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">'
+    for u in users_data:
+        un = u["username"]
+        role = role_map.get(un, "viewer")
+        role_label = ROLE_LABELS.get(role, role)
+        role_cls = ROLE_COLOR.get(role, "bg-gray-100 text-gray-500")
+        display = display_map.get(un, un)
+        last_ts = (u.get("last_action") or "")[:16].replace("T", " ")
+        launches = u.get("launches", 0) or 0
+        prices   = u.get("prices", 0) or 0
+        stocks   = u.get("stocks", 0) or 0
+        total    = u.get("total", 0) or 0
+        others   = total - launches - prices - stocks
+
         html += f"""
-        <tr class="hover:bg-gray-50 border-b border-gray-100">
-            <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{r['ts']}</td>
-            <td class="px-3 py-2 text-sm font-semibold text-gray-700">{r['username']}</td>
-            <td class="px-3 py-2">
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {badge_cls}">
-                    {icon} {r['action']}
-                </span>
-            </td>
-            <td class="px-3 py-2">{item_html}</td>
-            <td class="px-3 py-2 text-xs text-gray-500">{detail_str}</td>
-            <td class="px-3 py-2 text-xs text-gray-400">{r.get('ip') or '—'}</td>
-        </tr>"""
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex flex-col gap-3">
+            <div class="flex items-start justify-between gap-2">
+                <div>
+                    <p class="font-semibold text-gray-800">{display}</p>
+                    <p class="text-xs text-gray-400 font-mono">{un}</p>
+                </div>
+                <span class="px-2 py-0.5 text-xs rounded-full font-medium shrink-0 {role_cls}">{role_label}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-sm">
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🚀</span>
+                    <div>
+                        <p class="font-bold text-gray-700 leading-none">{launches}</p>
+                        <p class="text-[10px] text-gray-400">lanzados</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-base">🏷</span>
+                    <div>
+                        <p class="font-bold text-gray-700 leading-none">{prices}</p>
+                        <p class="text-[10px] text-gray-400">precios</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-base">📦</span>
+                    <div>
+                        <p class="font-bold text-gray-700 leading-none">{stocks}</p>
+                        <p class="text-[10px] text-gray-400">stocks</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="text-base">⚙</span>
+                    <div>
+                        <p class="font-bold text-gray-700 leading-none">{others}</p>
+                        <p class="text-[10px] text-gray-400">otros</p>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center justify-between pt-1 border-t border-gray-50">
+                <p class="text-[10px] text-gray-400">Última acción: {last_ts or '—'}</p>
+                <button onclick="window._auditShowUser('{un}', '{display}')"
+                        class="text-xs px-3 py-1 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium transition">
+                    Ver detalle
+                </button>
+            </div>
+        </div>"""
+    html += "</div>"
     return html
+
+
+@router.get("/audit/user-timeline", response_class=HTMLResponse)
+async def audit_user_timeline_api(
+    request: Request,
+    username: str,
+    days: int = 7,
+    action: str = None,
+    offset: int = 0,
+):
+    """Timeline de actividad de un usuario específico."""
+    _require_admin(request)
+    data = await user_store.get_audit_user_timeline(
+        username=username,
+        days=days,
+        action_filter=action or None,
+        limit=50,
+        offset=offset,
+    )
+    return _render_timeline_rows(data["rows"])
+
+
+@router.get("/audit/user-stats")
+async def audit_user_stats_api(
+    request: Request,
+    username: str,
+    days: int = 7,
+):
+    """Estadísticas de un usuario para los KPI cards del panel de detalle."""
+    _require_admin(request)
+    data = await user_store.get_audit_user_timeline(
+        username=username, days=days, limit=1, offset=0
+    )
+    return data["stats"]
