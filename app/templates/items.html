@@ -202,6 +202,9 @@
                     });
                     // Re-process htmx in loaded content
                     if (window.htmx) htmx.process(content);
+                    // Refrescar alertas: el tab Stock popula _stock_issues_cache en el backend,
+                    // así que el banner debe actualizarse con los conteos reales.
+                    if (tabName === 'stock') loadAlertBar();
                 }
             })
             .catch(function(e) {
