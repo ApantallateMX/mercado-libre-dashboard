@@ -373,7 +373,7 @@ class BinManagerClient:
         _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         for attempt in range(2):
             try:
-                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=20)
+                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=7)
                 if self._session_expired(r):
                     self._logged_in = False
                     if attempt == 0:

@@ -2519,15 +2519,27 @@ _bm_health: dict = {
 }
 
 async def _check_bm_health():
-    """Ping rápido a BM (5s timeout). Actualiza _bm_health en memoria."""
+    """Verifica salud de BM testeando un endpoint de API real (no solo la página de login).
+    Un GET a /User/Index responde 200 incluso cuando las APIs de inventario están caídas o lentas.
+    Este check hace un POST real a Get_GlobalStock_InventoryBySKU para detectar el estado real.
+    """
     global _bm_health
-    import httpx as _httpx
     t0 = _time.time()
+    ok = False
     try:
-        async with _httpx.AsyncClient(timeout=5.0) as _hc:
-            r = await _hc.get("https://binmanager.mitechnologiesinc.com/User/Index")
-            elapsed_ms = round((_time.time() - t0) * 1000)
-            ok = r.status_code < 500
+        from app.services.binmanager_client import get_shared_bm as _get_shared_bm_health
+        _bm_cli_health = await _get_shared_bm_health()
+        # Testear endpoint real con un SKU conocido — timeout 5s.
+        # Si BM está lento (ej: post-mantenimiento) o caído, esto falla en ≤5s.
+        import asyncio as _asyncio_h
+        _result = await _asyncio_h.wait_for(
+            _bm_cli_health.get_stock_with_reserve("SNTV001764"),
+            timeout=5.0,
+        )
+        elapsed_ms = round((_time.time() - t0) * 1000)
+        # _result puede ser (avail, reserve) o None (sesión/error), pero si llegó aquí
+        # sin excepción el servidor respondió — incluso None significa BM contestó.
+        ok = True
     except Exception:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False
@@ -2893,10 +2905,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 # get_stock_with_reserve: CONCEPTID=1, LOCATIONID=47,62,68 — fuente única correcta.
                 # Retorna (AvailableQTY, Reserve) cuando BM responde con datos reales (incluyendo 0,0).
                 # Retorna None cuando hay fallo de sesión/red — diferente de 0 genuino.
-                # timeout=25s: cubre re-login interno (3-5s) + retry + latencia de red.
+                # timeout=8s: cubre re-login interno (3-5s) + latencia normal. Antes era 25s —
+                # con BM lento por mantenimiento, 2 rondas × 25s = 50s → timeout de 90s en el tab.
                 _stock = await asyncio.wait_for(
                     bm_cli.get_stock_with_reserve(base, conditions=_bm_conditions_for_sku(sku)),
-                    timeout=25.0,
+                    timeout=8.0,
                 )
                 # _avail_ok=True: BM respondió (tuple) — dato verificado aunque sea (0,0) genuino.
                 # _avail_ok=False: retornó None (timeout/sesión) — no sabemos el stock real.
