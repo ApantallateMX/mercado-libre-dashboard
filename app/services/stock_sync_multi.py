@@ -168,24 +168,16 @@ async def _fetch_bm_avail(sku_cond_map: dict[str, str]) -> dict[str, int | None]
     # BULK FETCH: 1 request → todos los SKUs (~5-10s vs N×1-2s per-SKU)
     bulk_rows = await bm_cli.get_bulk_stock()
     if not bulk_rows:
-        # BM vacío o error — fallback per-SKU para no fallar silenciosamente
-        logger.warning("[MULTI-SYNC-BM] get_bulk_stock vacío — fallback per-SKU")
-        sem = asyncio.Semaphore(10)
-
-        async def _one_fallback(key: str) -> None:
-            base = _bm_base_for_key(key)
-            async with sem:
-                try:
-                    avail = await bm_cli.get_available_qty(base)
-                    result[key.upper()] = avail
-                except Exception as exc:
-                    logger.warning(f"[MULTI-SYNC-BM] Error {key}: {exc} — skip SKU")
-                finally:
-                    if _sync_progress:
-                        _sync_progress["skus_done"] = _sync_progress.get("skus_done", 0) + 1
-
-        await asyncio.gather(*[_one_fallback(k) for k in sku_cond_map], return_exceptions=True)
-        return result
+        # BM devolvió lista vacía — puede ser caída total o mantenimiento.
+        # NUNCA hacer fallback per-SKU: get_available_qty retorna 0 tanto para
+        # stock genuino 0 como para errores de BM, y llenaría bm_stock con ceros
+        # falsos → sync pondría TODOS los listings en qty=0 en ML y Amazon.
+        # Retornar dict vacío: el caller ve "base not in bm_stock" → skip seguro.
+        logger.error(
+            "[MULTI-SYNC-BM] get_bulk_stock devolvió lista vacía — "
+            "BM posiblemente caído. Retornando vacío para proteger stock ML/Amazon."
+        )
+        return result  # {} vacío → loop principal salta todos los SKUs
 
     # Construir lookup desde bulk
     exact_map: dict = {}
@@ -664,6 +656,30 @@ async def run_multi_stock_sync() -> dict:
         from app.services import token_store
         from app.services.meli_client import get_meli_client
         from app.services.amazon_client import get_amazon_client
+
+        # ── Circuit breaker: verificar BM antes de tocar stock ────────────────
+        # Si BM está caído, _fetch_bm_avail cae en fallback per-SKU donde todos
+        # los avail retornan 0 (error silencioso) → sync pondría TODOS los
+        # listings en qty=0. Probar con get_stock_with_reserve: retorna tuple
+        # si BM responde (incluso (0,0) genuino), None si hay error/sesión rota.
+        try:
+            from app.services.binmanager_client import get_shared_bm as _get_shared_bm_cb
+            _cb_cli = await _get_shared_bm_cb()
+            _cb_probe = await asyncio.wait_for(
+                _cb_cli.get_stock_with_reserve("SNTV001764"),
+                timeout=5.0,
+            )
+            if _cb_probe is None:
+                raise RuntimeError("BM respondió pero con sesión inválida")
+        except Exception as _cb_exc:
+            logger.warning(
+                f"[MULTI-SYNC] BM no responde ({_cb_exc.__class__.__name__}: {_cb_exc}) "
+                f"— sync ABORTADO para proteger stock en ML/Amazon"
+            )
+            summary["status"] = "bm_down"
+            summary["skipped"] = True
+            return summary
+        # ── Fin circuit breaker ───────────────────────────────────────────────
 
         _sync_progress["phase"] = "Recopilando listings..."
         ml_accounts  = await token_store.get_all_tokens()
