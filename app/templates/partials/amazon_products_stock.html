@@ -46,9 +46,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-red-50">
+            <tbody id="tbl-sin-stock" class="divide-y divide-red-50">
                 {% for item in sin_stock %}
-                <tr class="hover:bg-red-50/30 transition">
+                <tr class="hover:bg-red-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[350px]">{{ item.title }}</p>
                         <div class="flex items-center gap-2 mt-0.5">
@@ -88,6 +88,14 @@
             </tbody>
         </table>
     </div>
+    {% if sin_stock|length > 10 %}
+    <div class="px-4 py-2 bg-red-50/50 border-t border-red-100 text-center">
+        <button onclick="_amzStockToggle('tbl-sin-stock', this, {{ sin_stock|length }})"
+                class="text-xs text-red-600 hover:text-red-800 font-medium underline">
+            Ver todos ({{ sin_stock|length }})
+        </button>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -116,9 +124,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-orange-50">
+            <tbody id="tbl-stock-bajo" class="divide-y divide-orange-50">
                 {% for item in stock_bajo %}
-                <tr class="hover:bg-orange-50/30 transition">
+                <tr class="hover:bg-orange-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.title }}</p>
                         <p class="text-xs text-gray-400">{{ item.sku }}</p>
@@ -158,6 +166,14 @@
             </tbody>
         </table>
     </div>
+    {% if stock_bajo|length > 10 %}
+    <div class="px-4 py-2 bg-orange-50/50 border-t border-orange-100 text-center">
+        <button onclick="_amzStockToggle('tbl-stock-bajo', this, {{ stock_bajo|length }})"
+                class="text-xs text-orange-600 hover:text-orange-800 font-medium underline">
+            Ver todos ({{ stock_bajo|length }})
+        </button>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -187,9 +203,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody class="divide-y divide-yellow-50">
+            <tbody id="tbl-restock" class="divide-y divide-yellow-50">
                 {% for item in restock_urgente %}
-                <tr class="hover:bg-yellow-50/30 transition">
+                <tr class="hover:bg-yellow-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.title }}</p>
                         <p class="text-xs text-gray-400">{{ item.sku }}</p>
@@ -235,9 +251,29 @@
             </tbody>
         </table>
     </div>
+    {% if restock_urgente|length > 10 %}
+    <div class="px-4 py-2 bg-yellow-50/50 border-t border-yellow-100 text-center">
+        <button onclick="_amzStockToggle('tbl-restock', this, {{ restock_urgente|length }})"
+                class="text-xs text-yellow-600 hover:text-yellow-800 font-medium underline">
+            Ver todos ({{ restock_urgente|length }})
+        </button>
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 
 {% endif %}
 
 {% endif %}
+
+<script>
+window._amzStockToggle = function(tbodyId, btn, total) {
+    var tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+    var extras = tbody.querySelectorAll('.amz-stock-extra');
+    var expanded = btn.dataset.expanded === '1';
+    extras.forEach(function(tr) { tr.classList.toggle('hidden', expanded); });
+    btn.dataset.expanded = expanded ? '0' : '1';
+    btn.textContent = expanded ? ('Ver todos (' + total + ')') : 'Ocultar';
+};
+</script>
