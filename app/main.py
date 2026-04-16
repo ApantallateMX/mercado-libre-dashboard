@@ -10054,8 +10054,9 @@ async def planning_bm_ping():
 
 @app.get("/planning", response_class=HTMLResponse)
 async def planning_page(request: Request):
+    user = await get_current_user()
     ctx = await _accounts_ctx(request)
-    return templates.TemplateResponse(request, "planning.html", {**ctx, "active": "planning"})
+    return templates.TemplateResponse(request, "planning.html", {**ctx, "user": user, "active": "planning"})
 
 
 async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) -> list:
