@@ -2555,6 +2555,13 @@ async def _check_bm_health():
         logger.warning(f"[BM-HEALTH] BM no responde — fallo #{_bm_health['consecutive_failures']} ({elapsed_ms}ms)")
 
 
+def _bm_is_confirmed_down() -> bool:
+    """True solo cuando el health loop confirmó que BM está caído (≥1 fallo conocido).
+    None (nunca chequeado) → False (no bloqueamos por incertidumbre).
+    True/False según último check real."""
+    return _bm_health.get("ok") is False
+
+
 async def _bm_health_loop():
     """Chequea BM cada 2 min en background."""
     await asyncio.sleep(10)   # primer check a los 10s del arranque
@@ -6916,6 +6923,15 @@ async def update_item_stock_api(item_id: str, request: Request):
     try:
         body = await request.json()
         quantity = int(body.get("quantity", 0))
+        # Protección BM caído: bloquear qty=0 cuando BM está confirmado down.
+        # Evita que un trabajador ponga listings en 0 basándose en alertas falsas
+        # generadas por datos stale de BM. qty>0 siempre se permite (no hay riesgo).
+        if quantity == 0 and _bm_is_confirmed_down():
+            return JSONResponse({
+                "ok": False,
+                "bm_down": True,
+                "detail": "BinManager está caído. No se puede poner en 0 hasta que BM responda — las alertas pueden ser incorrectas.",
+            }, status_code=503)
         result = await client.update_item_stock(item_id, quantity)
         # Invalidar cache en memoria y actualizar DB para reflejar nuevo stock
         uid = str(client.user_id)
@@ -7941,6 +7957,15 @@ async def stock_concentration_execute_api(request: Request):
     if not sku or not winner_uid:
         return JSONResponse({"detail": "sku y winner_user_id son requeridos"}, status_code=400)
 
+    # Protección BM caído: concentración real (dry_run=False) zerearías cuentas perdedoras
+    # basándose en stock BM que puede estar desactualizado o en cero por el corte.
+    if not dry_run and _bm_is_confirmed_down():
+        return JSONResponse({
+            "ok": False,
+            "bm_down": True,
+            "detail": "BinManager está caído. No se puede ejecutar concentración de stock hasta que BM responda.",
+        }, status_code=503)
+
     from app.services.stock_concentrator import execute_concentration
     return await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
 
@@ -8334,16 +8359,26 @@ async def get_sync_alerts_partial(request: Request):
     if (!confirm('Poner en 0 el stock de ' + ids.length + ' productos en riesgo de sobreventa?')) return;
     var btn = document.getElementById('btn-bulk-zero');
     if (btn) {{ btn.disabled = true; btn.textContent = 'Procesando...'; }}
-    var done = 0;
+    var done = 0; var blocked = 0;
     ids.forEach(function(id) {{
       fetch('/api/items/' + id + '/stock', {{
         method: 'PUT',
         headers: {{'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}},
         body: JSON.stringify({{quantity: 0}})
+      }}).then(function(r) {{
+        if (r.status === 503) {{
+          blocked++;
+          return r.json().then(function(d) {{
+            if (d.bm_down && blocked === 1) {{
+              alert('\u26a0\ufe0f BinManager est\u00e1 ca\u00eddo. No se puede poner en 0 hasta que BM responda — las alertas pueden ser incorrectas.');
+              if (btn) {{ btn.disabled = false; btn.textContent = 'BM ca\u00eddo \u2014 bloqueado'; }}
+            }}
+          }});
+        }}
       }}).finally(function() {{
         done++;
-        if (btn) btn.textContent = 'Procesando ' + done + '/' + ids.length + '...';
-        if (done === ids.length && btn) {{
+        if (btn && blocked === 0) btn.textContent = 'Procesando ' + done + '/' + ids.length + '...';
+        if (done === ids.length && btn && blocked === 0) {{
           btn.textContent = 'Completado \u2713';
           btn.className = btn.className.replace('bg-red-100 hover:bg-red-200 text-red-700', 'bg-green-100 text-green-700');
         }}
@@ -8366,6 +8401,11 @@ window.zeroAlertItem = function(itemId, btn) {{
       btn.className = btn.className.replace(/bg-red-\d00/g, 'bg-green-600').replace(/hover:bg-red-\d00/g, '').replace(/active:bg-red-\d00/g, '');
       var row = btn.closest('.alert-row');
       if (row) row.style.opacity = '0.4';
+    }} else if (res.status === 503 && res.data && res.data.bm_down) {{
+      btn.textContent = 'BM caído';
+      btn.title = res.data.detail || 'BinManager no disponible';
+      btn.disabled = false;
+      btn.className = btn.className.replace(/bg-red-\d00/g, 'bg-yellow-500').replace(/hover:bg-red-\d00/g, '').replace(/active:bg-red-\d00/g, '');
     }} else {{
       var errMsg = (res.data && res.data.detail) || ('HTTP ' + res.status);
       btn.textContent = 'Error';
