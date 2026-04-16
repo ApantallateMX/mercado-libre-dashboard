@@ -2520,10 +2520,14 @@ async def amazon_fulfillment_action(sku: str, body: FulfillmentActionBody, reque
 @router.get("/products/stock", response_class=HTMLResponse)
 async def amazon_products_stock_alerts(request: Request):
     """
-    Alertas de stock clasificadas por urgencia:
-    - Sin Stock: fulfillable=0 con ventas activas (ventas perdidas)
-    - Stock Bajo: fulfillable<10 con ventas activas (riesgo inminente)
-    - Restock Urgente: dias_supply<14 (basado en velocidad de ventas)
+    Alertas de stock Amazon — 7 categorías BM-correlacionadas (igual que ML):
+    - Sin Stock FBA: FBA=0, BM=0 también
+    - Reabastecer:   FBA=0, BM>0 → enviar a FBA
+    - Riesgo Sobreventa: FBA > BM disponible → riesgo de oversell
+    - Stock Bajo:    FBA 1–10 uds
+    - Restock Urgente: <14 días supply según velocidad
+    - Stock Crítico BM: BM < 10 uds
+    - Estancado:     BM>0, 0 ventas 30d, FBA>0
     """
     client = await get_amazon_client()
     if not client:
@@ -2534,94 +2538,147 @@ async def amazon_products_stock_alerts(request: Request):
             _get_fba_cached(client),
             _get_listings_cached(client),
         )
-        sku_sales, _sku_loading_stock = _get_sku_sales_cached(client)  # sync, nunca bloquea
+        sku_sales, _sku_loading_stock = _get_sku_sales_cached(client)
 
-        # Índice de listings por SKU — título, ASIN y status
-        listings_idx = {}
+        # Índice de listings por SKU
+        listings_idx: dict = {}
         for item in listings:
             sku = item.get("sku", "")
             summaries = item.get("summaries", [{}])
             summary_0 = summaries[0] if summaries else {}
+            price = 0.0
+            for offer in (item.get("offers") or []):
+                price = float((offer.get("price") or {}).get("amount") or 0)
+                if price > 0:
+                    break
             listings_idx[sku] = {
-                "title": summary_0.get("itemName", sku)[:65],
-                "asin": summary_0.get("asin") or "",
+                "title":  summary_0.get("itemName", sku)[:65],
+                "asin":   summary_0.get("asin") or "",
                 "status": _listing_status(summaries),
+                "price":  price,
             }
 
-        sin_stock = []
-        stock_bajo = []
-        restock_urgente = []
-
+        # Construir lista unificada para enriquecer con BM
+        all_items: list = []
         for s in fba_summaries:
-            sku = s.get("sellerSku", "")
-            asin = s.get("asin", "")
-            name = s.get("productName", sku)[:65]
-            details = s.get("inventoryDetails", {})
+            sku      = s.get("sellerSku", "")
+            asin     = s.get("asin", "")
+            name     = s.get("productName", sku)[:65]
+            details  = s.get("inventoryDetails", {})
             fulfillable = int(details.get("fulfillableQuantity") or 0)
             inbound = (
                 int(details.get("inboundWorkingQuantity") or 0)
                 + int(details.get("inboundShippedQuantity") or 0)
             )
-
-            sales = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
+            sales     = sku_sales.get(sku, {"units": 0, "revenue": 0.0})
             units_30d = sales["units"]
-            vel_dia = units_30d / 30.0
-
-            listing = listings_idx.get(sku, {"title": name, "asin": asin, "status": "ACTIVE"})
-            title = listing["title"] or name
-            listing_asin = listing["asin"] or asin
-            sc_url = (
-                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={listing_asin}"
-                if listing_asin else "https://sellercentral.amazon.com.mx/inventory"
+            vel_dia   = units_30d / 30.0
+            listing   = listings_idx.get(sku, {"title": name, "asin": asin, "status": "ACTIVE", "price": 0.0})
+            title     = listing["title"] or name
+            l_asin    = listing["asin"] or asin
+            sc_url    = (
+                f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={l_asin}"
+                if l_asin else "https://sellercentral.amazon.com.mx/inventory"
             )
-
-            base = {
-                "sku": sku,
-                "asin": listing_asin,
-                "title": title,
+            all_items.append({
+                "sku":        sku,
+                "asin":       l_asin,
+                "title":      title,
                 "fulfillable": fulfillable,
-                "inbound": inbound,
-                "units_30d": units_30d,
-                "vel_dia": round(vel_dia, 2) if vel_dia > 0 else None,
-                "sc_url": sc_url,
-            }
+                "inbound":    inbound,
+                "units_30d":  units_30d,
+                "vel_dia":    round(vel_dia, 2) if vel_dia > 0 else None,
+                "sc_url":     sc_url,
+                "price":      listing.get("price", 0.0),
+            })
 
-            # ── Sin Stock: fulfillable = 0 (sin condición de ventas)
+        # Enriquecer con BM (bm_avail, bm_reserved, bm_mty, bm_cdmx, bm_tj, _bm_retail_ph)
+        await _enrich_bm_amz(all_items)
+
+        # ── Clasificar en 7 categorías ───────────────────────────────────────
+        sin_stock        = []
+        reabastecer      = []
+        riesgo_sobreventa = []
+        stock_bajo       = []
+        restock_urgente  = []
+        stock_critico    = []
+        estancado        = []
+
+        for item in all_items:
+            fulfillable  = item["fulfillable"]
+            bm_avail     = int(item.get("bm_avail") or 0)
+            vel_v        = item.get("vel_dia") or 0
+            units_30d    = item["units_30d"]
+
+            # Sin Stock FBA / Reabastecer
             if fulfillable == 0:
-                sin_stock.append(base)
+                if bm_avail > 0:
+                    reabastecer.append(item)
+                else:
+                    sin_stock.append(item)
 
-            # ── Stock Bajo: 1–10 uds en FBA (sin condición de ventas)
+            # Stock Bajo (1–10 uds FBA)
             elif 0 < fulfillable <= 10:
-                dias_hasta_0 = round(fulfillable / vel_dia, 1) if vel_dia > 0 else None
-                entry = {**base, "dias_hasta_0": dias_hasta_0}
-                entry["recomendacion"] = (
-                    f"Enviar pronto — ~{round(vel_dia * 30)} uds/mes"
-                    if vel_dia > 0 else "Reabastece FBA — activa ventas para calcular velocidad"
+                item["dias_hasta_0"] = round(fulfillable / vel_v, 1) if vel_v > 0 else None
+                item["recomendacion"] = (
+                    f"Enviar ~{round(vel_v * 30)} uds/mes" if vel_v > 0
+                    else "Reabastece FBA pronto"
                 )
-                stock_bajo.append(entry)
+                stock_bajo.append(item)
 
-            # ── Restock Urgente: >10 uds pero se agotan en <14 días según velocidad
-            elif vel_dia > 0 and fulfillable > 10:
-                dias_supply = fulfillable / vel_dia
-                if dias_supply < 14:
-                    sugeridas = max(0, round(vel_dia * 60) - fulfillable - inbound)
-                    restock_urgente.append({
-                        **base,
-                        "dias_supply": round(dias_supply, 1),
-                        "sugeridas": sugeridas,
-                    })
+            # Restock Urgente (< 14 días supply)
+            elif vel_v > 0 and fulfillable > 10:
+                dias_s = fulfillable / vel_v
+                if dias_s < 14:
+                    item["dias_supply"] = round(dias_s, 1)
+                    item["sugeridas"]   = max(0, round(vel_v * 60) - fulfillable - item["inbound"])
+                    restock_urgente.append(item)
 
-        # Ordenar: sin stock por título, stock_bajo por días hasta 0, restock por días supply
+            # Riesgo Sobreventa: FBA > BM disponible
+            if fulfillable > 0 and bm_avail > 0 and fulfillable > bm_avail:
+                item["gap_units"] = fulfillable - bm_avail
+                riesgo_sobreventa.append(item)
+
+            # Stock Crítico BM: BM > 0 pero < 10
+            if 0 < bm_avail < 10:
+                stock_critico.append(item)
+
+            # Estancado: BM>0, 0 ventas 30d, FBA>0
+            if bm_avail > 0 and units_30d == 0 and fulfillable > 0:
+                estancado.append(item)
+
+        # Ordenar
         sin_stock.sort(key=lambda x: x["title"])
+        reabastecer.sort(key=lambda x: -(x.get("bm_avail") or 0))
+        riesgo_sobreventa.sort(key=lambda x: -(x.get("gap_units") or 0))
         stock_bajo.sort(key=lambda x: (x.get("dias_hasta_0") or 9999))
         restock_urgente.sort(key=lambda x: x.get("dias_supply", 9999))
+        stock_critico.sort(key=lambda x: x.get("bm_avail") or 0)
+        estancado.sort(key=lambda x: -(x.get("bm_avail") or 0))
+
+        total_alertas = (
+            len(sin_stock) + len(reabastecer) + len(riesgo_sobreventa) +
+            len(stock_bajo) + len(restock_urgente) + len(stock_critico) + len(estancado)
+        )
 
         ctx = {
-            "sin_stock": sin_stock,
-            "stock_bajo": stock_bajo,
-            "restock_urgente": restock_urgente,
-            "nickname": client.nickname,
-            "marketplace": client.marketplace_name,
+            "sin_stock":         sin_stock,
+            "reabastecer":       reabastecer,
+            "riesgo_sobreventa": riesgo_sobreventa,
+            "stock_bajo":        stock_bajo,
+            "restock_urgente":   restock_urgente,
+            "stock_critico":     stock_critico,
+            "estancado":         estancado,
+            "total_alertas":     total_alertas,
+            "sin_stock_count":   len(sin_stock),
+            "reabastecer_count": len(reabastecer),
+            "riesgo_count":      len(riesgo_sobreventa),
+            "bajo_count":        len(stock_bajo),
+            "urgente_count":     len(restock_urgente),
+            "critico_count":     len(stock_critico),
+            "estancado_count":   len(estancado),
+            "nickname":          client.nickname,
+            "marketplace":       client.marketplace_name,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_stock.html", ctx)
 
@@ -4190,7 +4247,12 @@ async def amazon_sin_lanzar(
     offset = (page - 1) * per_page
     gaps_page = gaps_filtered[offset: offset + per_page]
 
-    from datetime import datetime as _dt
+    # Enriquecer página actual con MTY/CDMX/TJ de BM (warehouse breakdown)
+    try:
+        await _enrich_bm_amz(gaps_page)
+    except Exception:
+        pass  # no bloquear si falla — los datos de avail_qty siguen disponibles
+
     cached_ago = int(now - cached_at) if cached_at else 0
 
     ctx = {

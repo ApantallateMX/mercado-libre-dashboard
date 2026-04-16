@@ -7,79 +7,128 @@
 </div>
 {% else %}
 
-{% set total_urgentes = sin_stock|length + stock_bajo|length + restock_urgente|length %}
+{% set total_urgentes = (sin_stock|length) + (reabastecer|length) + (riesgo_sobreventa|length) + (stock_bajo|length) + (restock_urgente|length) + (stock_critico|length) + (estancado|length) %}
 
 {% if total_urgentes == 0 %}
-<!-- Todo OK -->
 <div class="bg-white rounded-xl shadow p-10 text-center">
     <div class="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
         <span class="text-3xl">✅</span>
     </div>
     <h3 class="text-lg font-bold text-gray-700 mb-1">Sin alertas de stock</h3>
-    <p class="text-gray-400 text-sm">Todo tu inventario FBA tiene stock suficiente.</p>
-    <p class="text-gray-300 text-xs mt-2">Se revisan SKUs con 0 uds, 1–10 uds, o &lt;14 días de supply</p>
+    <p class="text-gray-400 text-sm">Todo tu inventario FBA y BM está en orden.</p>
 </div>
-
 {% else %}
 
-<!-- ─── SIN STOCK ────────────────────────────────────────────────────────── -->
-{% if sin_stock %}
-<div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-500">
-    <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
+<!-- ─── KPI CARDS ────────────────────────────────────────────────────────────── -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+
+    <div onclick="document.getElementById('sec-reabastecer').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-500 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+        <p class="text-xs text-gray-500">Reabastecer FBA</p>
+        <p class="text-2xl font-bold text-orange-600">{{ reabastecer_count }}</p>
+        <p class="text-[10px] text-gray-400">FBA=0, BM disponible</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-riesgo').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+        <p class="text-xs text-gray-500">Riesgo Sobreventa</p>
+        <p class="text-2xl font-bold text-red-600">{{ riesgo_count }}</p>
+        <p class="text-[10px] text-gray-400">FBA > BM disponible</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-stock-bajo').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-orange-400 cursor-pointer hover:shadow-md hover:bg-orange-50/30 transition">
+        <p class="text-xs text-gray-500">Stock Bajo FBA</p>
+        <p class="text-2xl font-bold text-orange-500">{{ bajo_count }}</p>
+        <p class="text-[10px] text-gray-400">1–10 uds en FBA</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-urgente').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-yellow-400 cursor-pointer hover:shadow-md hover:bg-yellow-50/30 transition">
+        <p class="text-xs text-gray-500">Restock Urgente</p>
+        <p class="text-2xl font-bold text-yellow-600">{{ urgente_count }}</p>
+        <p class="text-[10px] text-gray-400">&lt;14 días supply</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-critico').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-400 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+        <p class="text-xs text-gray-500">Stock Crítico BM</p>
+        <p class="text-2xl font-bold text-red-500">{{ critico_count }}</p>
+        <p class="text-[10px] text-gray-400">BM &lt; 10 uds</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-estancado').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-slate-400 cursor-pointer hover:shadow-md hover:bg-slate-50/30 transition">
+        <p class="text-xs text-gray-500">Estancado</p>
+        <p class="text-2xl font-bold text-slate-600">{{ estancado_count }}</p>
+        <p class="text-[10px] text-gray-400">BM stock, 0 ventas 30d</p>
+    </div>
+
+    <div onclick="document.getElementById('sec-sin-stock').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-400 cursor-pointer hover:shadow-md hover:bg-gray-50/30 transition">
+        <p class="text-xs text-gray-500">Sin Stock FBA + BM</p>
+        <p class="text-2xl font-bold text-gray-600">{{ sin_stock_count }}</p>
+        <p class="text-[10px] text-gray-400">FBA=0 y BM=0</p>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
+        <p class="text-xs text-gray-500">Total Alertas</p>
+        <p class="text-2xl font-bold text-gray-700">{{ total_alertas }}</p>
+        <p class="text-[10px] text-gray-400">Acciones pendientes</p>
+    </div>
+
+</div>
+
+<!-- ─── REABASTECER ──────────────────────────────────────────────────────────── -->
+{% if reabastecer %}
+<div id="sec-reabastecer" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-orange-500">
+    <div class="px-4 py-3 bg-orange-50 flex items-center justify-between border-b border-orange-100">
         <div class="flex items-center gap-2">
-            <span class="text-lg">🔴</span>
+            <span class="text-lg">🟠</span>
             <div>
-                <h3 class="text-sm font-bold text-red-800">Sin Stock en FBA</h3>
-                <p class="text-xs text-red-600">Ventas perdidas activamente — reabastece AHORA</p>
+                <h3 class="text-sm font-bold text-orange-800">Reabastecer FBA</h3>
+                <p class="text-xs text-orange-600">FBA agotado — BM tiene stock disponible para enviar</p>
             </div>
         </div>
-        <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ sin_stock|length }} SKUs</span>
+        <span class="px-3 py-1 bg-orange-500 text-white text-xs font-bold rounded-full">{{ reabastecer|length }} SKUs</span>
     </div>
     <div class="overflow-x-auto">
         <table class="w-full text-sm">
-            <thead class="bg-red-50/50">
-                <tr class="text-xs text-red-700 text-left border-b border-red-100">
+            <thead class="bg-orange-50/50">
+                <tr class="text-xs text-orange-700 text-left border-b border-orange-100">
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2 px-3 font-medium text-right">Ventas 30d</th>
-                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Vel./día</th>
-                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Entrante</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Ventas 30d</th>
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody id="amz-tbody-sin-stock" class="divide-y divide-red-50">
-                {% for item in sin_stock %}
-                <tr class="hover:bg-red-50/30 transition">
+            <tbody id="amz-tbody-reabastecer" class="divide-y divide-orange-50">
+                {% for item in reabastecer %}
+                <tr class="hover:bg-orange-50/30 transition">
                     <td class="py-3 px-4">
-                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[350px]">{{ item.title }}</p>
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
                         <div class="flex items-center gap-2 mt-0.5">
                             <p class="text-xs text-gray-400">{{ item.sku }}</p>
                             {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
                         </div>
                     </td>
                     <td class="py-3 px-3 text-right">
-                        {% if item.units_30d > 0 %}
-                        <span class="text-sm font-bold text-red-600">{{ item.units_30d }}</span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">Sin datos</span>
-                        {% endif %}
+                        <span class="text-sm font-bold text-green-600">{{ item.bm_avail or 0 }}</span>
+                        {% if item.bm_reserved %}<p class="text-[10px] text-orange-400">Res:{{ item.bm_reserved }}</p>{% endif %}
                     </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
-                        {% if item.vel_dia %}
-                        <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="py-3 px-3 text-right hidden md:table-cell">
-                        {% if item.inbound > 0 %}
-                        <span class="text-xs text-blue-500 font-medium">+{{ item.inbound }}</span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">0</span>
-                        {% endif %}
+                        {% if item.units_30d > 0 %}<span class="text-xs font-bold text-orange-600">{{ item.units_30d }}</span>
+                        {% else %}<span class="text-xs text-gray-300">Sin datos</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
                         <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition">
+                           class="inline-block px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
                             Seller Central →
                         </a>
                     </td>
@@ -88,18 +137,82 @@
             </tbody>
         </table>
     </div>
-    <div id="amz-pager-sin-stock" class="border-t border-red-100 bg-red-50/30"></div>
+    <div id="amz-pager-reabastecer" class="border-t border-orange-100 bg-orange-50/30"></div>
 </div>
 {% endif %}
 
-<!-- ─── STOCK BAJO ────────────────────────────────────────────────────────── -->
+<!-- ─── RIESGO SOBREVENTA ─────────────────────────────────────────────────────── -->
+{% if riesgo_sobreventa %}
+<div id="sec-riesgo" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-500">
+    <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🔴</span>
+            <div>
+                <h3 class="text-sm font-bold text-red-800">Riesgo Sobreventa</h3>
+                <p class="text-xs text-red-600">FBA reporta más stock que BM disponible — riesgo de oversell</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ riesgo_sobreventa|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-red-50/50">
+                <tr class="text-xs text-red-700 text-left border-b border-red-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right">Gap</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-riesgo" class="divide-y divide-red-50">
+                {% for item in riesgo_sobreventa %}
+                <tr class="hover:bg-red-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[300px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold text-gray-700">{{ item.fulfillable }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold text-red-600">{{ item.bm_avail or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">-{{ item.gap_units or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                            Seller Central →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-riesgo" class="border-t border-red-100 bg-red-50/30"></div>
+</div>
+{% endif %}
+
+<!-- ─── STOCK BAJO ────────────────────────────────────────────────────────────── -->
 {% if stock_bajo %}
-<div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-orange-400">
+<div id="sec-stock-bajo" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-orange-400">
     <div class="px-4 py-3 bg-orange-50 flex items-center justify-between border-b border-orange-100">
         <div class="flex items-center gap-2">
-            <span class="text-lg">🟠</span>
+            <span class="text-lg">🟡</span>
             <div>
-                <h3 class="text-sm font-bold text-orange-800">Stock Bajo (&lt; 10 uds)</h3>
+                <h3 class="text-sm font-bold text-orange-800">Stock Bajo FBA (&lt; 10 uds)</h3>
                 <p class="text-xs text-orange-600">Riesgo de agotamiento en días</p>
             </div>
         </div>
@@ -110,10 +223,12 @@
             <thead class="bg-orange-50/50">
                 <tr class="text-xs text-orange-700 text-left border-b border-orange-100">
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2 px-3 font-medium text-right">FBA Disp.</th>
-                    <th class="py-2 px-3 font-medium text-right">Vel./día</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
                     <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Días hasta 0</th>
-                    <th class="py-2 px-3 font-medium hidden md:table-cell">Recomendación</th>
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
@@ -128,12 +243,12 @@
                         <span class="text-sm font-bold text-orange-600">{{ item.fulfillable }}</span>
                     </td>
                     <td class="py-3 px-3 text-right">
-                        {% if item.vel_dia %}
-                        <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">—</span>
-                        {% endif %}
+                        {% if item.bm_avail %}<span class="text-xs font-medium text-green-600">{{ item.bm_avail }}</span>
+                        {% else %}<span class="text-xs text-gray-300">0</span>{% endif %}
                     </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
                         {% if item.dias_hasta_0 is not none %}
                         <span class="px-2 py-0.5 rounded-full text-xs font-bold
@@ -141,12 +256,7 @@
                             {% else %}bg-yellow-100 text-yellow-700{% endif %}">
                             {{ item.dias_hasta_0 }}d
                         </span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="py-3 px-3 hidden md:table-cell">
-                        <p class="text-xs text-gray-500">{{ item.recomendacion }}</p>
+                        {% else %}<span class="text-xs text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
                         <a href="{{ item.sc_url }}" target="_blank"
@@ -163,12 +273,12 @@
 </div>
 {% endif %}
 
-<!-- ─── RESTOCK URGENTE ──────────────────────────────────────────────────── -->
+<!-- ─── RESTOCK URGENTE ──────────────────────────────────────────────────────── -->
 {% if restock_urgente %}
-<div class="bg-white rounded-xl shadow overflow-hidden border-l-4 border-yellow-400">
+<div id="sec-urgente" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-yellow-400">
     <div class="px-4 py-3 bg-yellow-50 flex items-center justify-between border-b border-yellow-100">
         <div class="flex items-center gap-2">
-            <span class="text-lg">🟡</span>
+            <span class="text-lg">⏱</span>
             <div>
                 <h3 class="text-sm font-bold text-yellow-800">Restock Urgente (&lt; 14 días supply)</h3>
                 <p class="text-xs text-yellow-600">Basado en velocidad de ventas — planifica envío FBA</p>
@@ -181,11 +291,13 @@
             <thead class="bg-yellow-50/50">
                 <tr class="text-xs text-yellow-700 text-left border-b border-yellow-100">
                     <th class="py-2 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2 px-3 font-medium text-right">FBA Disp.</th>
-                    <th class="py-2 px-3 font-medium text-right">Vel./día</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
                     <th class="py-2 px-3 font-medium text-right">Días Supply</th>
-                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Entrante</th>
-                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Sugerido enviar</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Sugerido</th>
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
@@ -193,19 +305,19 @@
                 {% for item in restock_urgente %}
                 <tr class="hover:bg-yellow-50/30 transition">
                     <td class="py-3 px-4">
-                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.title }}</p>
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[180px] md:max-w-[260px]">{{ item.title }}</p>
                         <p class="text-xs text-gray-400">{{ item.sku }}</p>
                     </td>
                     <td class="py-3 px-3 text-right">
                         <span class="text-sm font-bold text-gray-700">{{ item.fulfillable }}</span>
                     </td>
                     <td class="py-3 px-3 text-right">
-                        {% if item.vel_dia %}
-                        <span class="text-xs text-gray-600">{{ item.vel_dia }}/d</span>
-                        {% else %}
-                        <span class="text-xs text-gray-300">—</span>
-                        {% endif %}
+                        {% if item.bm_avail %}<span class="text-xs font-medium text-green-600">{{ item.bm_avail }}</span>
+                        {% else %}<span class="text-xs text-gray-300">0</span>{% endif %}
                     </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
                     <td class="py-3 px-3 text-right">
                         <span class="px-2 py-0.5 rounded-full text-xs font-bold
                             {% if item.dias_supply <= 7 %}bg-red-100 text-red-700
@@ -214,17 +326,10 @@
                         </span>
                     </td>
                     <td class="py-3 px-3 text-right hidden md:table-cell">
-                        <span class="text-xs {% if item.inbound > 0 %}text-blue-500 font-medium{% else %}text-gray-300{% endif %}">
-                            {{ item.inbound }}
-                        </span>
-                    </td>
-                    <td class="py-3 px-3 text-right hidden md:table-cell">
                         {% if item.sugeridas > 0 %}
                         <span class="text-sm font-bold text-[#FF9900]">{{ item.sugeridas }}</span>
                         <span class="text-xs text-gray-400"> uds</span>
-                        {% else %}
-                        <span class="text-xs text-gray-400">Ya en camino</span>
-                        {% endif %}
+                        {% else %}<span class="text-xs text-gray-400">Ya en camino</span>{% endif %}
                     </td>
                     <td class="py-3 px-3 text-center">
                         <a href="{{ item.sc_url }}" target="_blank"
@@ -241,74 +346,233 @@
 </div>
 {% endif %}
 
+<!-- ─── STOCK CRÍTICO BM ──────────────────────────────────────────────────────── -->
+{% if stock_critico %}
+<div id="sec-critico" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-400">
+    <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">⚠️</span>
+            <div>
+                <h3 class="text-sm font-bold text-red-800">Stock Crítico BM (&lt; 10 uds)</h3>
+                <p class="text-xs text-red-600">Stock BM casi agotado — reabastece bodega</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-red-400 text-white text-xs font-bold rounded-full">{{ stock_critico|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-red-50/50">
+                <tr class="text-xs text-red-700 text-left border-b border-red-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Ventas 30d</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-critico" class="divide-y divide-red-50">
+                {% for item in stock_critico %}
+                <tr class="hover:bg-red-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[300px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">{{ item.bm_avail or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell">
+                        {% if item.units_30d > 0 %}<span class="text-xs font-bold text-gray-700">{{ item.units_30d }}</span>
+                        {% else %}<span class="text-xs text-gray-300">0</span>{% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-red-400 hover:bg-red-500 text-white text-xs font-medium rounded-lg transition">
+                            Ver →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-critico" class="border-t border-red-100 bg-red-50/30"></div>
+</div>
 {% endif %}
 
+<!-- ─── ESTANCADO ─────────────────────────────────────────────────────────────── -->
+{% if estancado %}
+<div id="sec-estancado" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-slate-400">
+    <div class="px-4 py-3 bg-slate-50 flex items-center justify-between border-b border-slate-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🧊</span>
+            <div>
+                <h3 class="text-sm font-bold text-slate-800">Inventario Estancado</h3>
+                <p class="text-xs text-slate-600">BM tiene stock pero 0 ventas en 30d — producto sin movimiento</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-slate-400 text-white text-xs font-bold rounded-full">{{ estancado|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-slate-50/50">
+                <tr class="text-xs text-slate-700 text-left border-b border-slate-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">FBA</th>
+                    <th class="py-2 px-3 font-medium text-right">BM Disp.</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">MTY</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">CDMX</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">TJ</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-estancado" class="divide-y divide-slate-50">
+                {% for item in estancado %}
+                <tr class="hover:bg-slate-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right text-xs text-gray-600">{{ item.fulfillable }}</td>
+                    <td class="py-3 px-3 text-right">
+                        <span class="text-sm font-bold text-slate-600">{{ item.bm_avail or 0 }}</span>
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_mty or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_cdmx or 0 }}</td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell text-xs text-gray-500">{{ item.bm_tj or 0 }}</td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-slate-400 hover:bg-slate-500 text-white text-xs font-medium rounded-lg transition">
+                            Ver →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-estancado" class="border-t border-slate-100 bg-slate-50/30"></div>
+</div>
+{% endif %}
+
+<!-- ─── SIN STOCK FBA + BM ──────────────────────────────────────────────────── -->
+{% if sin_stock %}
+<div id="sec-sin-stock" class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-gray-400">
+    <div class="px-4 py-3 bg-gray-50 flex items-center justify-between border-b border-gray-100">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">⬜</span>
+            <div>
+                <h3 class="text-sm font-bold text-gray-800">Sin Stock FBA y BM</h3>
+                <p class="text-xs text-gray-500">FBA=0 y BM=0 — requiere reabastecimiento desde proveedor</p>
+            </div>
+        </div>
+        <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ sin_stock|length }} SKUs</span>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50/50">
+                <tr class="text-xs text-gray-600 text-left border-b border-gray-100">
+                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
+                    <th class="py-2 px-3 font-medium text-right">Ventas 30d</th>
+                    <th class="py-2 px-3 font-medium text-right hidden md:table-cell">Entrante</th>
+                    <th class="py-2 px-3 font-medium text-center">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="amz-tbody-sin-stock" class="divide-y divide-gray-50">
+                {% for item in sin_stock %}
+                <tr class="hover:bg-gray-50/30 transition">
+                    <td class="py-3 px-4">
+                        <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[350px]">{{ item.title }}</p>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <p class="text-xs text-gray-400">{{ item.sku }}</p>
+                            {% if item.asin %}<p class="text-xs text-orange-400">{{ item.asin }}</p>{% endif %}
+                        </div>
+                    </td>
+                    <td class="py-3 px-3 text-right">
+                        {% if item.units_30d > 0 %}<span class="text-sm font-bold text-gray-700">{{ item.units_30d }}</span>
+                        {% else %}<span class="text-xs text-gray-300">Sin datos</span>{% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-right hidden md:table-cell">
+                        {% if item.inbound > 0 %}<span class="text-xs text-blue-500 font-medium">+{{ item.inbound }}</span>
+                        {% else %}<span class="text-xs text-gray-300">0</span>{% endif %}
+                    </td>
+                    <td class="py-3 px-3 text-center">
+                        <a href="{{ item.sc_url }}" target="_blank"
+                           class="inline-block px-3 py-1 bg-gray-400 hover:bg-gray-500 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
+                            Seller Central →
+                        </a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div id="amz-pager-sin-stock" class="border-t border-gray-100 bg-gray-50/30"></div>
+</div>
+{% endif %}
+
+{% endif %}
 {% endif %}
 
 <script>
 (function() {
     var PER = 10;
-
     function amzPaginate(tbodyId, pagerId) {
         var tbody = document.getElementById(tbodyId);
         var pager = document.getElementById(pagerId);
         if (!tbody || !pager) return;
         var rows = Array.from(tbody.querySelectorAll('tr'));
         if (rows.length <= PER) return;
-
         function render(page) {
             rows.forEach(function(r, i) {
-                r.style.display = (i >= (page - 1) * PER && i < page * PER) ? '' : 'none';
+                r.style.display = (i >= (page-1)*PER && i < page*PER) ? '' : 'none';
             });
             var pages = Math.ceil(rows.length / PER);
-            var from = (page - 1) * PER + 1;
-            var to = Math.min(page * PER, rows.length);
+            var from = (page-1)*PER+1, to = Math.min(page*PER, rows.length);
             var h = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap">';
-            h += '<span>Mostrando ' + from + '–' + to + ' de ' + rows.length + '</span>';
-            h += '<span class="mx-1 text-gray-300">|</span>';
-            if (page > 1) {
-                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + (page - 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
-            }
+            h += '<span>Mostrando '+from+'–'+to+' de '+rows.length+'</span><span class="mx-1 text-gray-300">|</span>';
+            if (page > 1) h += '<button onclick="_amzPgS(\''+tbodyId+'\',\''+pagerId+'\','+(page-1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
             for (var p = 1; p <= pages; p++) {
-                var cls = p === page ? 'bg-[#FF9900] text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
-                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + p + ')" class="px-2 py-0.5 rounded ' + cls + '">' + p + '</button>';
+                var cls = p===page ? 'bg-[#FF9900] text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
+                h += '<button onclick="_amzPgS(\''+tbodyId+'\',\''+pagerId+'\','+p+')" class="px-2 py-0.5 rounded '+cls+'">'+p+'</button>';
             }
-            if (page < pages) {
-                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + (page + 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
-            }
+            if (page < pages) h += '<button onclick="_amzPgS(\''+tbodyId+'\',\''+pagerId+'\','+(page+1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
             h += '</div>';
             pager.innerHTML = h;
         }
-
-        window._amzPg = function(tId, pId, page) {
-            var tb = document.getElementById(tId);
-            var pg = document.getElementById(pId);
-            if (!tb || !pg) return;
+        window._amzPgS = window._amzPgS || function(tId, pId, pg) {
+            var tb = document.getElementById(tId), pgEl = document.getElementById(pId);
+            if (!tb || !pgEl) return;
             var rs = Array.from(tb.querySelectorAll('tr'));
-            rs.forEach(function(r, i) {
-                r.style.display = (i >= (page - 1) * PER && i < page * PER) ? '' : 'none';
-            });
-            var pages = Math.ceil(rs.length / PER);
-            var from = (page - 1) * PER + 1;
-            var to = Math.min(page * PER, rs.length);
-            var h = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap">';
-            h += '<span>Mostrando ' + from + '–' + to + ' de ' + rs.length + '</span>';
-            h += '<span class="mx-1 text-gray-300">|</span>';
-            if (page > 1) h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + (page - 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
-            for (var p = 1; p <= pages; p++) {
-                var cls = p === page ? 'bg-[#FF9900] text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
-                h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + p + ')" class="px-2 py-0.5 rounded ' + cls + '">' + p + '</button>';
-            }
-            if (page < pages) h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + (page + 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
-            h += '</div>';
-            pg.innerHTML = h;
+            var tot = rs.length, pgs = Math.ceil(tot/PER);
+            rs.forEach(function(r,i){ r.style.display=(i>=(pg-1)*PER && i<pg*PER)?'':'none'; });
+            var from=(pg-1)*PER+1, to=Math.min(pg*PER,tot);
+            var h='<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap"><span>Mostrando '+from+'–'+to+' de '+tot+'</span><span class="mx-1 text-gray-300">|</span>';
+            if(pg>1) h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+(pg-1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+            for(var p=1;p<=pgs;p++){var c=p===pg?'bg-[#FF9900] text-white font-bold':'bg-gray-100 hover:bg-gray-200';h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+p+')" class="px-2 py-0.5 rounded '+c+'">'+p+'</button>';}
+            if(pg<pgs) h+='<button onclick="_amzPgS(\''+tId+'\',\''+pId+'\','+(pg+1)+')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+            h+='</div>'; pgEl.innerHTML=h;
         };
-
         render(1);
     }
-
-    amzPaginate('amz-tbody-sin-stock',  'amz-pager-sin-stock');
-    amzPaginate('amz-tbody-stock-bajo', 'amz-pager-stock-bajo');
-    amzPaginate('amz-tbody-restock',    'amz-pager-restock');
+    amzPaginate('amz-tbody-reabastecer',  'amz-pager-reabastecer');
+    amzPaginate('amz-tbody-riesgo',       'amz-pager-riesgo');
+    amzPaginate('amz-tbody-stock-bajo',   'amz-pager-stock-bajo');
+    amzPaginate('amz-tbody-restock',      'amz-pager-restock');
+    amzPaginate('amz-tbody-critico',      'amz-pager-critico');
+    amzPaginate('amz-tbody-estancado',    'amz-pager-estancado');
+    amzPaginate('amz-tbody-sin-stock',    'amz-pager-sin-stock');
 })();
 </script>

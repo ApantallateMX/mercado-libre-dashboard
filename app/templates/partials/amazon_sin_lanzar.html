@@ -70,9 +70,12 @@
             <thead>
                 <tr class="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
                     <th class="py-3 px-4 text-left font-semibold">Producto</th>
-                    <th class="py-3 px-3 text-right font-semibold">Stock BM</th>
-                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Costo USD</th>
-                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Costo MXN</th>
+                    <th class="py-3 px-3 text-right font-semibold">Disp.</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">MTY</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">CDMX</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">TJ</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Costo USD</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Costo MXN</th>
                     <th class="py-3 px-3 text-right font-semibold">Precio Sug.</th>
                     <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Margen</th>
                     <th class="py-3 px-3 text-center font-semibold">Acción</th>
@@ -89,7 +92,7 @@
                             <div class="w-9 h-9 rounded bg-orange-100 flex items-center justify-center shrink-0 text-orange-400 text-xs font-bold">BM</div>
                             {% endif %}
                             <div class="min-w-0">
-                                <p class="text-sm font-medium text-gray-800 truncate max-w-[280px]">
+                                <p class="text-sm font-medium text-gray-800 truncate max-w-[240px]">
                                     {{ g.title or g.sku }}
                                 </p>
                                 <div class="flex items-center gap-2 mt-0.5">
@@ -106,18 +109,28 @@
                         </div>
                     </td>
                     <td class="py-2.5 px-3 text-right">
-                        {% if g.avail_qty >= 10 %}
-                        <span class="font-bold text-green-600">{{ g.avail_qty }}</span>
-                        {% elif g.avail_qty > 0 %}
-                        <span class="font-bold text-yellow-600">{{ g.avail_qty }}</span>
+                        {% set disp = g.bm_avail if g.bm_avail is defined and g.bm_avail else g.avail_qty %}
+                        {% if disp >= 10 %}
+                        <span class="font-bold text-green-600">{{ disp }}</span>
+                        {% elif disp > 0 %}
+                        <span class="font-bold text-yellow-600">{{ disp }}</span>
                         {% else %}
                         <span class="text-gray-300">0</span>
                         {% endif %}
                     </td>
-                    <td class="py-2.5 px-3 text-right text-gray-500 hidden md:table-cell">
+                    <td class="py-2.5 px-3 text-right text-xs text-gray-500 hidden md:table-cell">
+                        {{ g.bm_mty if g.bm_mty is defined else '—' }}
+                    </td>
+                    <td class="py-2.5 px-3 text-right text-xs text-gray-500 hidden md:table-cell">
+                        {{ g.bm_cdmx if g.bm_cdmx is defined else '—' }}
+                    </td>
+                    <td class="py-2.5 px-3 text-right text-xs text-gray-500 hidden md:table-cell">
+                        {{ g.bm_tj if g.bm_tj is defined else '—' }}
+                    </td>
+                    <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
                         {% if g.cost_usd > 0 %}${{ "%.2f"|format(g.cost_usd) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
-                    <td class="py-2.5 px-3 text-right text-gray-500 hidden md:table-cell">
+                    <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
                         {% if g.cost_mxn > 0 %}${{ "{:,.0f}".format(g.cost_mxn) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right font-semibold text-gray-800">
