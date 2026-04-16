@@ -46,9 +46,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody id="tbl-sin-stock" class="divide-y divide-red-50">
+            <tbody id="amz-tbody-sin-stock" class="divide-y divide-red-50">
                 {% for item in sin_stock %}
-                <tr class="hover:bg-red-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
+                <tr class="hover:bg-red-50/30 transition">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[350px]">{{ item.title }}</p>
                         <div class="flex items-center gap-2 mt-0.5">
@@ -88,14 +88,7 @@
             </tbody>
         </table>
     </div>
-    {% if sin_stock|length > 10 %}
-    <div class="px-4 py-2 bg-red-50/50 border-t border-red-100 text-center">
-        <button onclick="_amzStockToggle('tbl-sin-stock', this, {{ sin_stock|length }})"
-                class="text-xs text-red-600 hover:text-red-800 font-medium underline">
-            Ver todos ({{ sin_stock|length }})
-        </button>
-    </div>
-    {% endif %}
+    <div id="amz-pager-sin-stock" class="border-t border-red-100 bg-red-50/30"></div>
 </div>
 {% endif %}
 
@@ -124,9 +117,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody id="tbl-stock-bajo" class="divide-y divide-orange-50">
+            <tbody id="amz-tbody-stock-bajo" class="divide-y divide-orange-50">
                 {% for item in stock_bajo %}
-                <tr class="hover:bg-orange-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
+                <tr class="hover:bg-orange-50/30 transition">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.title }}</p>
                         <p class="text-xs text-gray-400">{{ item.sku }}</p>
@@ -166,14 +159,7 @@
             </tbody>
         </table>
     </div>
-    {% if stock_bajo|length > 10 %}
-    <div class="px-4 py-2 bg-orange-50/50 border-t border-orange-100 text-center">
-        <button onclick="_amzStockToggle('tbl-stock-bajo', this, {{ stock_bajo|length }})"
-                class="text-xs text-orange-600 hover:text-orange-800 font-medium underline">
-            Ver todos ({{ stock_bajo|length }})
-        </button>
-    </div>
-    {% endif %}
+    <div id="amz-pager-stock-bajo" class="border-t border-orange-100 bg-orange-50/30"></div>
 </div>
 {% endif %}
 
@@ -203,9 +189,9 @@
                     <th class="py-2 px-3 font-medium text-center">Acción</th>
                 </tr>
             </thead>
-            <tbody id="tbl-restock" class="divide-y divide-yellow-50">
+            <tbody id="amz-tbody-restock" class="divide-y divide-yellow-50">
                 {% for item in restock_urgente %}
-                <tr class="hover:bg-yellow-50/30 transition{% if loop.index > 10 %} amz-stock-extra hidden{% endif %}">
+                <tr class="hover:bg-yellow-50/30 transition">
                     <td class="py-3 px-4">
                         <p class="text-sm font-medium text-gray-800 truncate max-w-[200px] md:max-w-[280px]">{{ item.title }}</p>
                         <p class="text-xs text-gray-400">{{ item.sku }}</p>
@@ -251,14 +237,7 @@
             </tbody>
         </table>
     </div>
-    {% if restock_urgente|length > 10 %}
-    <div class="px-4 py-2 bg-yellow-50/50 border-t border-yellow-100 text-center">
-        <button onclick="_amzStockToggle('tbl-restock', this, {{ restock_urgente|length }})"
-                class="text-xs text-yellow-600 hover:text-yellow-800 font-medium underline">
-            Ver todos ({{ restock_urgente|length }})
-        </button>
-    </div>
-    {% endif %}
+    <div id="amz-pager-restock" class="border-t border-yellow-100 bg-yellow-50/30"></div>
 </div>
 {% endif %}
 
@@ -267,13 +246,69 @@
 {% endif %}
 
 <script>
-window._amzStockToggle = function(tbodyId, btn, total) {
-    var tbody = document.getElementById(tbodyId);
-    if (!tbody) return;
-    var extras = tbody.querySelectorAll('.amz-stock-extra');
-    var expanded = btn.dataset.expanded === '1';
-    extras.forEach(function(tr) { tr.classList.toggle('hidden', expanded); });
-    btn.dataset.expanded = expanded ? '0' : '1';
-    btn.textContent = expanded ? ('Ver todos (' + total + ')') : 'Ocultar';
-};
+(function() {
+    var PER = 10;
+
+    function amzPaginate(tbodyId, pagerId) {
+        var tbody = document.getElementById(tbodyId);
+        var pager = document.getElementById(pagerId);
+        if (!tbody || !pager) return;
+        var rows = Array.from(tbody.querySelectorAll('tr'));
+        if (rows.length <= PER) return;
+
+        function render(page) {
+            rows.forEach(function(r, i) {
+                r.style.display = (i >= (page - 1) * PER && i < page * PER) ? '' : 'none';
+            });
+            var pages = Math.ceil(rows.length / PER);
+            var from = (page - 1) * PER + 1;
+            var to = Math.min(page * PER, rows.length);
+            var h = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap">';
+            h += '<span>Mostrando ' + from + '–' + to + ' de ' + rows.length + '</span>';
+            h += '<span class="mx-1 text-gray-300">|</span>';
+            if (page > 1) {
+                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + (page - 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+            }
+            for (var p = 1; p <= pages; p++) {
+                var cls = p === page ? 'bg-[#FF9900] text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
+                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + p + ')" class="px-2 py-0.5 rounded ' + cls + '">' + p + '</button>';
+            }
+            if (page < pages) {
+                h += '<button onclick="_amzPg(\'' + tbodyId + '\',\'' + pagerId + '\',' + (page + 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+            }
+            h += '</div>';
+            pager.innerHTML = h;
+        }
+
+        window._amzPg = function(tId, pId, page) {
+            var tb = document.getElementById(tId);
+            var pg = document.getElementById(pId);
+            if (!tb || !pg) return;
+            var rs = Array.from(tb.querySelectorAll('tr'));
+            rs.forEach(function(r, i) {
+                r.style.display = (i >= (page - 1) * PER && i < page * PER) ? '' : 'none';
+            });
+            var pages = Math.ceil(rs.length / PER);
+            var from = (page - 1) * PER + 1;
+            var to = Math.min(page * PER, rs.length);
+            var h = '<div class="flex items-center gap-1 text-xs text-gray-500 py-2 px-3 flex-wrap">';
+            h += '<span>Mostrando ' + from + '–' + to + ' de ' + rs.length + '</span>';
+            h += '<span class="mx-1 text-gray-300">|</span>';
+            if (page > 1) h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + (page - 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">‹</button>';
+            for (var p = 1; p <= pages; p++) {
+                var cls = p === page ? 'bg-[#FF9900] text-white font-bold' : 'bg-gray-100 hover:bg-gray-200';
+                h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + p + ')" class="px-2 py-0.5 rounded ' + cls + '">' + p + '</button>';
+            }
+            if (page < pages) h += '<button onclick="_amzPg(\'' + tId + '\',\'' + pId + '\',' + (page + 1) + ')" class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded">›</button>';
+            h += '</div>';
+            pg.innerHTML = h;
+        };
+
+        render(1);
+    }
+
+    amzPaginate('amz-tbody-sin-stock',  'amz-pager-sin-stock');
+    amzPaginate('amz-tbody-stock-bajo', 'amz-pager-stock-bajo');
+    amzPaginate('amz-tbody-restock',    'amz-pager-restock');
+})();
 </script>
