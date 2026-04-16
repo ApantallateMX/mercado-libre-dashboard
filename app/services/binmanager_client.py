@@ -176,12 +176,13 @@ class BinManagerClient:
                 return None
         return None
 
-    async def get_global_inventory(self, page: int = 1, per_page: int = 9999, min_qty: int = 0) -> list:
-        """Retorna inventario global de BM.
+    async def get_global_inventory(self, page: int = 1, per_page: int = 500, min_qty: int = 0) -> list:
+        """Retorna inventario global de BM paginando de 500 en 500.
 
-        Con per_page=9999 (default) trae los ~8,700 SKUs en una sola llamada.
         CONCEPTID=1 (Producto Vendible) — mismo que get_stock_with_reserve.
-        SEARCH=null retorna todos los SKUs (verificado: BUSCADOR=False requerido).
+        SEARCH="" retorna todos los SKUs (post-mantenimiento: SEARCH=null ya no funciona).
+        per_page máximo efectivo = 500 (límite BM post-mantenimiento 2026-04-16).
+        Si per_page=500 (default), trae UNA página. Para todos los SKUs usar get_bulk_stock().
         La respuesta incluye: SKU, CategoryName, Brand, Model, Title,
           TotalQty, AvailableQTY, Reserve, AvgCostQTY, LastRetailPricePurchaseHistory.
         """
@@ -189,9 +190,10 @@ class BinManagerClient:
             if not await self.login():
                 return []
         c = self._client()
+        _PAGE_SIZE = min(per_page, 500)  # BM no acepta más de 500 por página
         payload = {
-            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
-            "NUMBERPAGE": page, "RECORDSPAGE": per_page,
+            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
+            "NUMBERPAGE": page, "RECORDSPAGE": _PAGE_SIZE,
             "MinQty": min_qty if min_qty > 0 else None,
             "NEEDRETAILPRICEPH": False,
             "CATEGORYID": None, "WAREHOUSEID": None, "LOCATIONID": None,
@@ -207,7 +209,7 @@ class BinManagerClient:
             try:
                 r = await c.post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=payload, headers=_AJAX_HEADERS, timeout=45,
+                    json=payload, headers=_AJAX_HEADERS, timeout=60,
                 )
                 if self._session_expired(r):
                     self._logged_in = False
@@ -227,24 +229,30 @@ class BinManagerClient:
         return []
 
     async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW") -> list:
-        """Retorna TODOS los SKUs vendibles en 1 llamada — mismos filtros que _query_bm_stock.
+        """Retorna TODOS los SKUs vendibles paginando de 500 en 500.
 
         LOCATIONID=47,62,68 + CONCEPTID=1.
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
         Incluye AvgCostQTY y LastRetailPricePurchaseHistory.
-        Reemplaza N requests per-SKU → ~5-10s para todos los SKUs.
+
+        Cambio post-mantenimiento BM (2026-04-16):
+          - SEARCH=null ya no funciona → usar SEARCH=""
+          - RECORDSPAGE>500 retorna 0 → paginar con RECORDSPAGE=500
         """
         if not self._logged_in:
             if not await self.login():
                 return []
         c = self._client()
-        payload = {
-            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+        _BM_PAGE_SIZE = 500   # límite impuesto por BM post-mantenimiento
+        _BM_MAX_PAGES = 20    # tope de seguridad (20×500 = 10,000 SKUs máx)
+        url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        base_payload = {
+            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
             "LOCATIONID": "47,62,68",
             "CONDITION": conditions,
             "FORINVENTORY": 0, "BUSCADOR": False,
-            "NUMBERPAGE": 1, "RECORDSPAGE": 9999,
+            "RECORDSPAGE": _BM_PAGE_SIZE,
             "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
             "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
             "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
@@ -270,28 +278,40 @@ class BinManagerClient:
             "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
             "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
         }
-        for attempt in range(2):
-            try:
-                r = await c.post(
-                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=payload, headers=_AJAX_HEADERS, timeout=45,
-                )
-                if self._session_expired(r):
-                    self._logged_in = False
+        all_rows: list = []
+        for page in range(1, _BM_MAX_PAGES + 1):
+            payload = {**base_payload, "NUMBERPAGE": page}
+            fetched = False
+            for attempt in range(2):
+                try:
+                    r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=60)
+                    if self._session_expired(r):
+                        self._logged_in = False
+                        if attempt == 0:
+                            await self.login()
+                            continue
+                        return all_rows  # devolver lo que tenemos
+                    if r.status_code == 200:
+                        data = r.json()
+                        page_rows = data if isinstance(data, list) else []
+                        all_rows.extend(page_rows)
+                        fetched = True
+                        if len(page_rows) < _BM_PAGE_SIZE:
+                            # Última página — menos registros de los esperados
+                            logger.info(f"[BM] get_bulk_stock: {len(all_rows)} SKUs en {page} páginas")
+                            return all_rows
+                        break  # página completa, continuar con la siguiente
+                    else:
+                        return all_rows  # error HTTP — devolver lo acumulado
+                except Exception as e:
+                    logger.error(f"BinManager get_bulk_stock pág {page} error: {e}")
                     if attempt == 0:
-                        await self.login()
                         continue
-                    return []
-                if r.status_code == 200:
-                    data = r.json()
-                    return data if isinstance(data, list) else []
-                return []
-            except Exception as e:
-                logger.error(f"BinManager get_bulk_stock error: {e}")
-                if attempt == 0:
-                    continue
-                return []
-        return []
+                    return all_rows
+            if not fetched:
+                return all_rows
+        logger.info(f"[BM] get_bulk_stock: {len(all_rows)} SKUs en {_BM_MAX_PAGES} páginas (límite)")
+        return all_rows
 
     async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> tuple[int, int] | None:
         """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,62,68 (MTY+CDMX).

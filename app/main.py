@@ -10866,7 +10866,7 @@ async def bm_launch_opportunities(
 ):
     """Corrida inversa: SKUs en BM con stock NO lanzados en ninguna cuenta ML (activa o pausada).
 
-    Trae los ~8,700 SKUs de BM en 1 llamada (SEARCH=null, CONCEPTID=1, RECORDSPAGE=9999),
+    Trae todos los SKUs de BM paginando (SEARCH="", CONCEPTID=1, RECORDSPAGE=500 × N páginas),
     cruza contra todos los SKUs de ML (activos + pausados de todas las cuentas), y retorna
     los que no tienen listing. Resultado cacheado 15 min.
 

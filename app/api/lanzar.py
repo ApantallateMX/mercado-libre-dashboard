@@ -170,7 +170,7 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
             "Namefilters_Tags_Exlude": None,
             "Arrayfilters_Supplier": None,
             "Namefilters_Supplier": None,
-            "SEARCH": None,
+            "SEARCH": "",  # post-mantenimiento BM 2026-04-16: SEARCH=null ya no funciona
         }
         try:
             r = await http.post(_BM_INVENTORY_URL, json=payload, headers=_BM_AJAX, timeout=30)
