@@ -8990,13 +8990,7 @@ async def diag_cache_health(token: str = ""):
 
     now = _time.time()
     total = len(_bm_stock_cache)
-    expired = sum(1 for _, (ts, _) in _bm_stock_cache.items() if (now - ts) >= _BM_CACHE_TTL)
-    verified_zeros = sum(
-        1 for _, (_, d) in _bm_stock_cache.items()
-        if d.get("avail_total", 0) == 0 and d.get("_v") and (now - _) < _BM_CACHE_TTL
-        for _ in [0]  # dummy
-    )
-    # recalcular correctamente
+    expired = 0
     verified_zeros = 0
     suspicious = []
     bulk_rows_map = {}
@@ -9006,6 +9000,8 @@ async def diag_cache_health(token: str = ""):
 
     for bm_key, (ts, data) in _bm_stock_cache.items():
         age = now - ts
+        if age >= _BM_CACHE_TTL:
+            expired += 1
         if data.get("avail_total", 0) == 0 and data.get("_v") and age < _BM_CACHE_TTL:
             verified_zeros += 1
             bulk_match = bulk_rows_map.get(bm_key.upper())
