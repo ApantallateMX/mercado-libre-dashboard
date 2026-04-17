@@ -8887,7 +8887,8 @@ async def debug_bm_cache(sku: str = ""):
 
 
 _DEBUG_KEY = "mi-apantallate-debug-2025"
-_DIAG_TOKEN = os.getenv("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
+import os as _os_diag
+_DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
 
 
 @app.get("/api/diag/sku")
