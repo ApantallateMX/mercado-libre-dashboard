@@ -2917,7 +2917,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     # ahora sem=12 = 12 simultáneos. Sesión BM estable sin saturar el pool de conexiones.
     wh_sem = asyncio.Semaphore(12)
 
-    async def _wh_phase(sku, http, _track_progress=True):
+    async def _wh_phase(sku, http=None, _track_progress=True):
         """Consulta Get_GlobalStock_InventoryBySKU CONCEPTID=1 — fuente única de stock vendible.
         1 solo request HTTP por SKU (WH breakdown eliminado para reducir concurrencia BM).
 
@@ -3053,12 +3053,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             logger.warning(f"[BM-CACHE] Bulk fetch error: {_bulk_err} — fallback per-SKU")
 
         if not _used_bulk:
-            http = bm_cli._client()
-            await asyncio.gather(*[_wh_phase(s, http) for s in to_fetch], return_exceptions=True)
+            # Bulk falló — NO hacer fallback per-SKU (evita bloquear DB de BM con N queries paralelas).
+            # El caché stale es suficiente hasta el siguiente ciclo de auto-prewarm (2-10 min).
+            logger.warning(f"[BM-CACHE] Bulk falló — usando caché stale para {len(to_fetch)} SKUs. Retry en próximo ciclo.")
     else:
-        # Lote pequeño (≤30 SKUs): per-SKU sigue siendo eficiente
-        http = bm_cli._client()
-        await asyncio.gather(*[_wh_phase(s, http) for s in to_fetch], return_exceptions=True)
+        # Lote pequeño (≤30 SKUs): per-SKU directo sigue siendo eficiente
+        await asyncio.gather(*[_wh_phase(s) for s in to_fetch], return_exceptions=True)
 
     # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
     # Solo en prewarm (retry_stale=True). Se lanza como tarea background y prewarm continúa.
@@ -3069,8 +3069,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         ]
         _stale_to_retry = _stale_after_prewarm[:30]
         if _stale_to_retry:
-            _http_ref = http  # capturar referencia para el closure
-            async def _do_stale_retry(_skus=_stale_to_retry, _h=_http_ref):
+            async def _do_stale_retry(_skus=_stale_to_retry):
                 import logging as _log_retry
                 _log_retry.getLogger(__name__).info(
                     f"[BM-CACHE] Retry serial BG: {len(_skus)} SKUs STALE — esperando 10s para sesión BM"
@@ -3079,9 +3078,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 # y que el prewarm de la próxima cuenta no compita con estos retries.
                 await asyncio.sleep(10)
                 for _retry_sku in _skus:
-                    await _wh_phase(_retry_sku, _h, _track_progress=False)
+                    await _wh_phase(_retry_sku, _track_progress=False)
                     # 2s entre retries: breathing room para BM — evita saturar la sesión
-                    # en el retry serial igual que se saturaba en el parallel batch.
                     await asyncio.sleep(2)
                 _log_retry.getLogger(__name__).info(
                     f"[BM-CACHE] Retry serial BG completado: {len(_skus)} SKUs procesados"
