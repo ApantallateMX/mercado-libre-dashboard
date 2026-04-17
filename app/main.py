@@ -453,7 +453,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/")
 
 # Mapeo de rutas de página a sección (para control de acceso por sección)
 _PATH_TO_SECTION: dict[str, str] = {
@@ -8887,6 +8887,149 @@ async def debug_bm_cache(sku: str = ""):
 
 
 _DEBUG_KEY = "mi-apantallate-debug-2025"
+_DIAG_TOKEN = os.getenv("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
+
+
+@app.get("/api/diag/sku")
+async def diag_sku(sku: str = "", token: str = ""):
+    """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
+    No requiere sesión de dashboard — usa token DIAG_TOKEN.
+    Devuelve: cache (avail, reserve, edad, verificado, expirado),
+              bm_live (avail, reserve directo de BM),
+              bulk_cache (si el SKU aparece en el último bulk fetch),
+              discrepancy (True si cache=0 pero BM tiene stock).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    bm_key = normalize_to_bm_sku(sku.strip().upper())
+    now = _time.time()
+
+    # ── 1. Caché por SKU ──────────────────────────────────────────────────────
+    cached = _bm_stock_cache.get(bm_key)
+    if cached:
+        ts, data = cached
+        age_s = round(now - ts)
+        cache_info = {
+            "found": True,
+            "avail_total": data.get("avail_total", 0),
+            "reserved_total": data.get("reserved_total", 0),
+            "total_wh": data.get("total", 0),
+            "verified": data.get("_v", False),
+            "age_s": age_s,
+            "expired": age_s >= _BM_CACHE_TTL,
+        }
+    else:
+        cache_info = {"found": False}
+
+    # ── 2. Bulk cache (último get_bulk_stock) ─────────────────────────────────
+    bulk_info = {"found": False}
+    if _bm_bulk_cache:
+        bulk_ts, bulk_rows = _bm_bulk_cache
+        bulk_age = round(now - bulk_ts)
+        match = next((r for r in (bulk_rows or []) if (r.get("SKU") or "").upper().strip() == bm_key.upper()), None)
+        if match:
+            bulk_info = {
+                "found": True,
+                "avail": int(match.get("AvailableQTY") or 0),
+                "reserve": int(match.get("Reserve") or 0),
+                "total": int(match.get("TotalQty") or 0),
+                "condition": match.get("Condition") or match.get("condition", ""),
+                "bulk_age_s": bulk_age,
+            }
+        else:
+            bulk_info = {"found": False, "bulk_age_s": bulk_age, "bulk_total_rows": len(bulk_rows or [])}
+
+    # ── 3. BM en vivo ─────────────────────────────────────────────────────────
+    try:
+        from app.services.binmanager_client import get_shared_bm as _get_diag_bm
+        _bm = await _get_diag_bm()
+        _live = await asyncio.wait_for(
+            _bm.get_stock_with_reserve(bm_key),
+            timeout=10.0,
+        )
+        bm_live = {"avail": _live[0], "reserve": _live[1]} if _live is not None else {"error": "BM no respondió (None)"}
+    except Exception as _e:
+        bm_live = {"error": str(_e)[:120]}
+
+    # ── 4. Discrepancia ───────────────────────────────────────────────────────
+    cache_avail = cache_info.get("avail_total", 0) if cache_info.get("found") else None
+    live_avail  = bm_live.get("avail") if "avail" in bm_live else None
+    bulk_avail  = bulk_info.get("avail") if bulk_info.get("found") else None
+    discrepancy = bool(
+        cache_avail == 0 and (
+            (live_avail is not None and live_avail > 0) or
+            (bulk_avail is not None and bulk_avail > 0)
+        )
+    )
+
+    return JSONResponse({
+        "sku": bm_key,
+        "cache": cache_info,
+        "bulk_cache": bulk_info,
+        "bm_live": bm_live,
+        "discrepancy": discrepancy,
+        "summary": (
+            f"DISCREPANCIA: caché={cache_avail} pero BM_live={live_avail}, bulk={bulk_avail}"
+            if discrepancy else
+            f"OK: caché={cache_avail}, BM_live={live_avail}, bulk={bulk_avail}"
+        ),
+    })
+
+
+@app.get("/api/diag/cache-health")
+async def diag_cache_health(token: str = ""):
+    """Diagnóstico: salud general del caché BM.
+    Muestra total de SKUs, ceros verificados, expirados, y top SKUs sospechosos
+    (caché=0 pero aparecen en bulk con stock > 0).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    now = _time.time()
+    total = len(_bm_stock_cache)
+    expired = sum(1 for _, (ts, _) in _bm_stock_cache.items() if (now - ts) >= _BM_CACHE_TTL)
+    verified_zeros = sum(
+        1 for _, (_, d) in _bm_stock_cache.items()
+        if d.get("avail_total", 0) == 0 and d.get("_v") and (now - _) < _BM_CACHE_TTL
+        for _ in [0]  # dummy
+    )
+    # recalcular correctamente
+    verified_zeros = 0
+    suspicious = []
+    bulk_rows_map = {}
+    if _bm_bulk_cache:
+        _, bulk_rows = _bm_bulk_cache
+        bulk_rows_map = {(r.get("SKU") or "").upper().strip(): r for r in (bulk_rows or [])}
+
+    for bm_key, (ts, data) in _bm_stock_cache.items():
+        age = now - ts
+        if data.get("avail_total", 0) == 0 and data.get("_v") and age < _BM_CACHE_TTL:
+            verified_zeros += 1
+            bulk_match = bulk_rows_map.get(bm_key.upper())
+            if bulk_match and int(bulk_match.get("AvailableQTY") or 0) > 0:
+                suspicious.append({
+                    "sku": bm_key,
+                    "cache_avail": 0,
+                    "bulk_avail": int(bulk_match.get("AvailableQTY") or 0),
+                    "age_s": round(age),
+                })
+
+    suspicious.sort(key=lambda x: x["bulk_avail"], reverse=True)
+    bulk_age_s = round(now - _bm_bulk_cache[0]) if _bm_bulk_cache else None
+
+    return JSONResponse({
+        "cache_total_skus": total,
+        "cache_expired": expired,
+        "cache_verified_zeros": verified_zeros,
+        "suspicious_zeros": len(suspicious),
+        "top_suspicious": suspicious[:20],
+        "bulk_cache_age_s": bulk_age_s,
+        "bulk_cache_total_rows": len(_bm_bulk_cache[1]) if _bm_bulk_cache else 0,
+    })
+
 
 @app.get("/api/debug/item-stock")
 async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
