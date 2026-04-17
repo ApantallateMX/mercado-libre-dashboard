@@ -357,7 +357,9 @@ async def lifespan(app: FastAPI):
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
     async def _startup_prewarm():
         await asyncio.sleep(90)  # ml_listing_sync necesita ~60s para full sync inicial
+        _auto_fail_streak = 0   # fallos consecutivos del loop automático
         while True:
+            _prewarm_ok = False
             # Precalentar todas las cuentas — la deduplicación por normalize_to_bm_sku
             # garantiza que SKUs repetidos entre cuentas usen el cache existente.
             try:
@@ -367,19 +369,25 @@ async def lifespan(app: FastAPI):
                     if uid:
                         await _prewarm_caches(user_id=uid)
                         await asyncio.sleep(1)
+                _prewarm_ok = True
+                _auto_fail_streak = 0
             except Exception:
-                pass
+                _auto_fail_streak += 1
+                logger.warning(f"[AUTO-PREWARM] Fallo #{_auto_fail_streak} en loop automático")
             # Refrescar alertas de sobreventa con datos BM actualizados
-            try:
-                accounts = await token_store.get_all_tokens()
-                for acc in accounts:
-                    uid = acc.get("user_id", "")
-                    if uid:
-                        await _run_stock_sync_for_user(uid)
-                        await asyncio.sleep(2)
-            except Exception:
-                pass
-            await asyncio.sleep(600)   # 10 minutos
+            if _prewarm_ok:
+                try:
+                    accounts = await token_store.get_all_tokens()
+                    for acc in accounts:
+                        uid = acc.get("user_id", "")
+                        if uid:
+                            await _run_stock_sync_for_user(uid)
+                            await asyncio.sleep(2)
+                except Exception:
+                    pass
+            # Retry rápido en fallo (2 min); ciclo normal 10 min
+            _sleep = 120 if _auto_fail_streak > 0 else 600
+            await asyncio.sleep(_sleep)
     asyncio.create_task(_startup_prewarm())
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
     asyncio.create_task(_bm_health_loop())
@@ -2809,6 +2817,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             seen_skus.add(v_bm_key)
 
     if not to_fetch:
+        return result_map
+
+    # ── MODO CACHE-ONLY ────────────────────────────────────────────────────────
+    # Solo el prewarm (retry_stale=True) hace llamadas reales a BM.
+    # Requests de usuarios nunca tocan BM — sirven datos stale o vacíos del caché.
+    # Esto evita que múltiples usuarios simultáneos saturen BM con llamadas directas.
+    if not retry_stale:
+        for _sku in to_fetch:
+            _bk = normalize_to_bm_sku(_sku)
+            _stale = _bm_stock_cache.get(_bk)
+            if _stale:
+                result_map[_sku] = _stale[1]   # dato antiguo — mejor que 0 falso
+            # Si no hay nada en caché, result_map no tiene entrada → _bm_avail=None
+            # → no se genera alerta de oversell por dato desconocido
         return result_map
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
@@ -9159,11 +9181,15 @@ async def debug_test_merchant(item_id: str = "", key: str = "", execute: int = 0
 
 
 @app.post("/api/stock/force-prewarm")
-async def force_prewarm(full_clear: bool = False):
+async def force_prewarm(request: Request, full_clear: bool = False):
     """Fuerza un prewarm fresco: limpia caché BM y recalcula stock issues.
     full_clear=True → limpia TODO el cache BM (útil tras cambios de lógica de condiciones).
     full_clear=False (default) → solo limpia entradas stale/fallidas.
+    Solo permitido para roles admin y editor.
     """
+    _du = getattr(request.state, "dashboard_user", None)
+    if not _du or _du.get("role") not in ("admin", "editor"):
+        return JSONResponse({"error": "No autorizado — solo admin o editor pueden actualizar BM"}, status_code=403)
     global _prewarm_task
     if _prewarm_running:
         return JSONResponse({"status": "already_running"})
