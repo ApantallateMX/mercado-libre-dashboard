@@ -3009,6 +3009,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         _avail, _res = _lookup(_exact_all, _by_base_all, _fbase)
                     else:
                         _avail, _res = _lookup(_exact_gr, _by_base_gr, _fbase)
+                        # Fallback: si no encontró en GR (ej. paginación o condición),
+                        # buscar en ALL para no retornar 0 erróneamente
+                        if _avail == 0 and _res == 0:
+                            _avail, _res = _lookup(_exact_all, _by_base_all, _fbase)
                     _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
                               avail_ok=True, wh_responded=False)
                     _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1

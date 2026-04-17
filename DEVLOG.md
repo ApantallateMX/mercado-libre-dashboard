@@ -7,6 +7,88 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-16 — FIX: Stock BM = 0 en Inventario y Planeación para SKUs normales
+
+### Problema
+Las columnas "BM Disp." en Inventario ML y "Stock BM" en Planeación/Cobertura mostraban
+**0 para la mayoría de SKUs** (ej. SNAC000046 con 1,423 unidades reales), marcándolos como "AGOTADO".
+
+### Causa raíz
+En `_get_bm_stock_cached()` el bulk fetch hace dos llamadas paralelas a BM:
+- `bulk_gr` con condiciones `"GRA,GRB,GRC,NEW"`
+- `bulk_all` con condiciones `"GRA,GRB,GRC,ICB,ICC,NEW"`
+
+Para SKUs normales (sin sufijo -ICB/-ICC), el código buscaba **solo en `_exact_gr`**.
+Si el SKU no aparecía en esos resultados (por paginación, variación en condiciones, etc.)
+retornaba `(0, 0)` sin intentar buscar en `_exact_all`, donde el SKU sí existía.
+
+### Fix (`app/main.py` líneas 3011-3015)
+Agregado fallback: si la búsqueda en `_exact_gr` retorna `(0,0)`, se reintenta
+con `_lookup(_exact_all, _by_base_all, _fbase)` antes de almacenar el resultado.
+
+```python
+_avail, _res = _lookup(_exact_gr, _by_base_gr, _fbase)
+# Fallback: si no encontró en GR, buscar en ALL
+if _avail == 0 and _res == 0:
+    _avail, _res = _lookup(_exact_all, _by_base_all, _fbase)
+```
+
+### Impacto
+Afectaba Inventario ML, Planeación/Cobertura, y cualquier otro widget que consuma `_bm_stock_cache`.
+
+---
+
+## 2026-04-16 — FEAT: Sistema de Auditoría por Usuario
+
+### Descripción
+Nuevo panel de auditoría que muestra actividad por usuario con vista de tarjetas
+y detalle de timeline con filtros y paginación.
+
+### Implementación
+- **`app/services/user_store.py`**: `get_audit_users_summary()` y `get_audit_user_timeline()`
+- **`app/api/users.py`**: 3 nuevos endpoints (`/api/users/audit/summary`, `/api/users/audit/user-timeline`, `/api/users/audit/user-stats`)
+- **`app/templates/auditoria.html`**: Rediseño completo — tarjetas por usuario + detalle con KPIs y timeline
+- **`app/api/items.py`**: Auditoría en 10 endpoints write de ML (price, stock, title, status, etc.)
+- **`app/api/amazon_products.py`**: Auditoría en 2 endpoints write de Amazon
+- **`app/api/lanzar.py`**: Auditoría en create_listing, reactivate, sync_price, mark_launched
+- **`app/main.py`**: Auditoría en stock_concentration_execute
+
+### 16 tipos de acción registrados
+`ml_item_created`, `ml_item_reactivated`, `ml_mark_launched`, `ml_price_update`,
+`ml_price_synced`, `ml_stock_update`, `ml_variation_stock`, `ml_title_update`,
+`ml_status_update`, `ml_item_closed`, `ml_concentration`,
+`amz_price_update`, `amz_listing_update`
+
+---
+
+## 2026-04-16 — FIX: Alerta bar mostraba "sin alertas activas" con 205 riesgos
+
+### Problema
+El banner de alertas mostraba "sin alertas activas" aunque había 205 productos con
+riesgo de oversell. Al abrir la tab Stock se veían las alertas, pero el banner no refrescaba.
+
+### Causa raíz
+`loadAlertBar()` se llama al cargar la página, cuando `_stock_issues_cache` está vacío
+→ retorna `riesgo=0`. La tab Stock popula el caché al cargarse, pero el banner no se actualizaba.
+
+### Fix (`app/templates/items.html`)
+Agregada una línea en `switchTab()`: cuando se carga exitosamente la tab `stock`,
+se llama `loadAlertBar()` para refrescar el banner con el caché ya poblado.
+
+---
+
+## 2026-04-16 — FEAT: Modal "Ver lista" para productos sin SKU en Planeación
+
+### Descripción
+Botón "Ver lista" junto al aviso de N productos sin SKU excluidos en Planeación.
+Muestra modal con tabla (título, item ID, unidades/30d, link a ML) y botón de copia TSV.
+
+### Implementación
+- Nuevo endpoint `GET /api/planning/no-sku-items` en `app/main.py`
+- Botón y modal en `app/templates/planning.html`
+
+---
+
 ## 2026-04-15 — FEAT: Tab "Sin BM" en ML y Amazon
 
 ### Descripción
