@@ -2469,14 +2469,14 @@ async def _load_bm_cache_from_db():
     import json as _json, logging as _log
     logger = _log.getLogger(__name__)
     try:
-        rows = await token_store.load_bm_stock_cache(max_age_s=1800.0)
+        rows = await token_store.load_bm_stock_cache(max_age_s=7200.0)  # 2h — solo hay >0 en DB
         loaded = 0
         for row in rows:
             sku = row["sku"].upper()
             data = _json.loads(row["data_json"])
             synced_at = float(row["synced_at"])
-            # Solo cargar si aún no está en memoria (no sobrescribir datos más frescos)
-            if sku not in _bm_stock_cache:
+            # Solo cargar entradas con stock > 0 (DB solo debería tener >0, pero doble guarda)
+            if sku not in _bm_stock_cache and data.get("avail_total", 0) > 0:
                 _bm_stock_cache[sku] = (synced_at, data)
                 loaded += 1
         logger.info(f"[BM-DB] Cargados {loaded} SKUs desde DB (de {len(rows)} disponibles)")
@@ -2655,9 +2655,15 @@ async def _prewarm_caches(user_id: str = None):
                 bm_map = await _get_bm_stock_cached(bm_candidates, retry_stale=True)
                 _apply_bm_stock(products, bm_map)
 
-                # Persistir caché BM en DB para sobrevivir reinicios
+                # Persistir caché BM en DB para sobrevivir reinicios.
+                # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
+                # no deben sobrevivir un restart y generar falsas alarmas de sobreventa.
+                # Los ceros genuinos se re-verifican en el primer prewarm post-restart.
                 try:
-                    _bm_entries = [(s, d, t) for s, (t, d) in _bm_stock_cache.items()]
+                    _bm_entries = [
+                        (s, d, t) for s, (t, d) in _bm_stock_cache.items()
+                        if d.get("avail_total", 0) > 0
+                    ]
                     if _bm_entries:
                         await token_store.save_bm_stock_cache(_bm_entries)
                 except Exception:
