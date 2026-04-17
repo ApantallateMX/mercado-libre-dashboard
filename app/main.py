@@ -2973,6 +2973,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if bulk_gr or bulk_all:
                 global _bm_bulk_cache
                 _bm_bulk_cache = (_time.time(), bulk_all or bulk_gr)
+                # Bulk exitoso = BM está UP — limpiar alerta aunque health loop haya fallado
+                _bm_health["ok"] = True
+                _bm_health["last_ok_ts"] = _time.time()
+                _bm_health["consecutive_failures"] = 0
 
                 def _build_lookup(rows):
                     exact, by_base = {}, {}
