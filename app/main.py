@@ -320,6 +320,22 @@ async def _seed_tokens():
             # Cuenta existente sin nickname — rellenar desde MeLi API
             await _backfill_nickname(uid, existing.get("access_token", ""))
 
+    # Backfill nickname para TODAS las cuentas en DB que aún no lo tienen
+    # (incluye cuentas agregadas via OAuth que no están en env vars)
+    try:
+        import aiosqlite as _aio_seed
+        from app.services.token_store import DATABASE_PATH as _DB_PATH_SEED
+        async with _aio_seed.connect(_DB_PATH_SEED) as _db_seed:
+            _db_seed.row_factory = _aio_seed.Row
+            _cur = await _db_seed.execute(
+                "SELECT user_id, access_token FROM tokens WHERE nickname IS NULL OR nickname = ''"
+            )
+            _missing = await _cur.fetchall()
+        for _row in _missing:
+            await _backfill_nickname(_row["user_id"], _row["access_token"] or "")
+    except Exception as _e:
+        print(f"[SEED] Backfill nicknames error: {_e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
