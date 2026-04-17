@@ -937,23 +937,29 @@ function _updatePrewarmStatus(data) {
     var elapsed = p.elapsed_s || 0;
     if (total > 0) { _prewarm_last_total = total; _prewarm_last_elapsed = elapsed; }
 
-    // Detectar si está atorado (sin avance en 30s)
-    if (total > 0) {
+    // Detectar si está atorado — solo cuando ya empezó a procesar SKUs (done > 0).
+    // Cuando done=0 el bulk está descargando datos de BM (puede tardar 60-120s normal).
+    if (total > 0 && done > 0) {
       if (done !== _prewarmLastDone) {
         _prewarmLastDone = done;
         _prewarmStuckSince = null;
       } else if (_prewarmStuckSince === null) {
         _prewarmStuckSince = Date.now();
       }
+    } else {
+      _prewarmLastDone = 0;
+      _prewarmStuckSince = null;
     }
     var stuckSecs = _prewarmStuckSince ? Math.round((Date.now() - _prewarmStuckSince) / 1000) : 0;
-    var isStuck = stuckSecs >= 30 && total > 0 && done < total;
+    var isStuck = stuckSecs >= 60 && total > 0 && done > 0 && done < total;
 
     var html = '';
     if (total > 0) {
       var displayDone = Math.min(done, total);
       var pct = Math.min(100, Math.round((displayDone / total) * 100));
-      var statusText = isStuck
+      var statusText = (done === 0)
+        ? '<span class="text-blue-600">⬇ Descargando datos de BinManager... (' + elapsed + 's)</span>'
+        : isStuck
         ? '<span class="text-yellow-600">⚠ Sin avance en ' + stuckSecs + 's — puede estar lento</span>'
         : '<span class="text-blue-600">Consultando BM: <strong>' + displayDone + ' / ' + total + '</strong> SKUs (' + elapsed + 's)</span>';
       html = statusText +
