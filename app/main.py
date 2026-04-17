@@ -7190,7 +7190,9 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     return -1
 
             try:
-                conditions_primary = _bm_conditions_for_sku(primary_sku)
+                # Usar el SKU completo de la variación para determinar condiciones
+                # (ej: "SNTV003807 / SNWM000001" → ALL, no solo primary_sku → GR)
+                conditions_primary = _bm_conditions_for_sku(v_sku)
                 avail_tasks = [_query_bm_avail(s) for s in sku_parts]
                 r_wh, *avail_results = await asyncio.gather(
                     http.post(BM_WH_URL, json={
