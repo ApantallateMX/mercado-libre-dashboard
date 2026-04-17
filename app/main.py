@@ -54,16 +54,18 @@ def _extract_base_sku(sku: str) -> str:
 
 
 def _bm_conditions_for_sku(sku: str) -> str:
-    """Retorna condiciones BM segun formato del SELLER_SKU.
+    """Retorna condiciones BM según formato del SELLER_SKU y categoría.
 
     Reglas:
-    - SKU con sufijo -ICB o -ICC        → GRA,GRB,GRC,ICB,ICC,NEW
-    - SKU bundle (contiene "/")         → GRA,GRB,GRC,ICB,ICC,NEW
-    - Cualquier otro formato            → GRA,GRB,GRC,NEW
-      (simple, -GRA, -GRB, -GRC, -NEW)
+    - SNTV* con sufijo -ICB, -ICC o bundle ("/") → GRA,GRB,GRC,ICB,ICC,NEW
+      (televisiones pueden tener stock en condición In-Carton B/C)
+    - Todo lo demás → GRA,GRB,GRC,NEW
+      (simple, -NEW, -GRA, -GRB, -GRC, -ICB/-ICC fuera de SNTV, otras categorías)
     """
     upper = sku.upper()
-    if upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper:
+    if upper.startswith("SNTV") and (
+        upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper
+    ):
         return "GRA,GRB,GRC,ICB,ICC,NEW"
     return "GRA,GRB,GRC,NEW"
 
@@ -8948,7 +8950,7 @@ async def diag_sku(sku: str = "", token: str = ""):
         from app.services.binmanager_client import get_shared_bm as _get_diag_bm
         _bm = await _get_diag_bm()
         _live = await asyncio.wait_for(
-            _bm.get_stock_with_reserve(bm_key),
+            _bm.get_stock_with_reserve(bm_key, conditions=_bm_conditions_for_sku(bm_key)),
             timeout=10.0,
         )
         bm_live = {"avail": _live[0], "reserve": _live[1]} if _live is not None else {"error": "BM no respondió (None)"}

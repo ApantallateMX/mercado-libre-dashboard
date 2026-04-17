@@ -59,18 +59,15 @@ def _listing_key(sku: str) -> str:
 
 
 def _cond_for_key(key: str) -> str:
-    """Condiciones BM para un listing key."""
+    """Condiciones BM para un listing key.
+    - SNTV* con -ICB, -ICC o bundle ("/") → GRA,GRB,GRC,ICB,ICC,NEW
+    - Todo lo demás → GRA,GRB,GRC,NEW
+    """
     upper = key.upper()
-    if upper.endswith("-ICB") or upper.endswith("-ICC"):
+    if upper.startswith("SNTV") and (
+        upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper
+    ):
         return "GRA,GRB,GRC,ICB,ICC,NEW"
-    if upper.endswith("-GRA"):
-        return "GRA"
-    if upper.endswith("-GRB"):
-        return "GRB"
-    if upper.endswith("-GRC"):
-        return "GRC"
-    # Simple SKU o -NEW: consultar todas las condiciones porque BM puede almacenar
-    # productos "nuevos" bajo cualquier condición (GRA, GRB, GRC o NEW)
     return "GRA,GRB,GRC,NEW"
 
 
