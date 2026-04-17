@@ -2957,10 +2957,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         try:
             _BM_COND_GR  = "GRA,GRB,GRC,NEW"
             _BM_COND_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
-            bulk_gr, bulk_all = await asyncio.gather(
-                bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
-                bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
-                return_exceptions=True,
+            bulk_gr, bulk_all = await asyncio.wait_for(
+                asyncio.gather(
+                    bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
+                    bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
+                    return_exceptions=True,
+                ),
+                timeout=90.0,  # si BM está lento, caer al modo per-SKU
             )
             if isinstance(bulk_gr, Exception):
                 bulk_gr = []
