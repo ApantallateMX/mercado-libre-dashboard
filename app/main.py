@@ -2963,7 +2963,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
                     return_exceptions=True,
                 ),
-                timeout=90.0,  # si BM está lento, caer al modo per-SKU
+                timeout=270.0,  # bulk normal ~60s; BM lento puede tomar 3x — tope real sin caer a per-SKU
             )
             if isinstance(bulk_gr, Exception):
                 bulk_gr = []
