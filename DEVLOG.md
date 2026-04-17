@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-17 — FIX: SNWA000071 (y similares) mostraba stock ICB/ICC como vendible
+
+### Problema
+SKUs no-SNTV con unidades solo en condición ICB/ICC (ej. SNWA000071 = 25 unidades ICB)
+aparecían como "Activar" en el dashboard con 25 unidades disponibles.
+
+### Causa raíz (commit 1764ac3)
+El bulk único con `GRA,GRB,GRC,ICB,ICC,NEW` retornaba la fila con el stock total incluyendo ICB/ICC.
+El intento de post-filtrar con `r.get("Condition")` nunca funcionó porque BM retorna filas con
+SKU-sufijo (ej. `SNWA000071-ICB`), no un campo `Condition` separado.
+Al no haber ningún registro ICB/ICC en `_by_base_all`, todas las filas pasaban el filtro.
+
+### Fix (commit 0209a98)
+Reemplazado el único `_bm_bulk_cache` por dos caches separados:
+- `_bm_bulk_gr_cache`  → `GRA,GRB,GRC,NEW` — para todo SKU no-SNTV-ICB/ICC
+- `_bm_bulk_all_cache` → `GRA,GRB,GRC,ICB,ICC,NEW` — para SNTV-ICB/ICC/bundle
+
+BM filtra server-side por CONDITION, por lo que no se necesita post-filtrar.
+SNWA000071 ahora obtiene stock del `bulk_gr` (condición GR only) → 0 correcto.
+SNTV con sufijo -ICB/-ICC o bundle "/" → usa `bulk_all` → incluye ICB/ICC stock.
+
+### Archivos modificados
+- `app/main.py`: `_bm_bulk_gr_cache` + `_bm_bulk_all_cache`, prewarm dual-bulk,
+  `_enrich_with_bm_product_info`, variaciones, endpoints `/api/diag/sku` y `/api/diag/cache-health`
+
+---
+
 ## 2026-04-16 — FIX: Stock BM = 0 en Inventario y Planeación para SKUs normales
 
 ### Problema
