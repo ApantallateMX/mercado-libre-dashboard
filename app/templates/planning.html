@@ -488,9 +488,10 @@ function _renderCoverage(d) {
 
     // Note about items without SKU (shown at top)
     var noSkuNote = d.items_without_sku > 0
-        ? '<p class="text-xs text-blue-600 bg-blue-50 border border-blue-100 rounded px-3 py-1.5 mb-4">' +
-          '📋 ' + d.items_without_sku + ' producto(s) sin SKU excluidos del análisis — agrega <strong>seller_custom_field</strong> en esas publicaciones para incluirlos.' +
-          '</p>'
+        ? '<div class="flex items-center gap-3 bg-blue-50 border border-blue-100 rounded px-3 py-2 mb-4">' +
+          '<span class="text-xs text-blue-700 flex-1">📋 <strong>' + d.items_without_sku + '</strong> producto(s) sin SKU excluidos del análisis — agrega <strong>seller_custom_field</strong> en esas publicaciones para incluirlos.</span>' +
+          '<button onclick="window._openNoSkuModal()" class="shrink-0 text-xs px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">Ver lista</button>' +
+          '</div>'
         : '';
 
     // Summary chips
@@ -917,6 +918,75 @@ window.reloadAll = function() {
 loadProduction();
 loadVelocity();
 
+// ── Modal: listings sin SKU ──────────────────────────────────────────────────
+window._openNoSkuModal = async function() {
+    var modal = document.getElementById('no-sku-modal');
+    var body  = document.getElementById('no-sku-modal-body');
+    modal.classList.remove('hidden');
+    body.innerHTML = '<div class="flex items-center justify-center py-10 text-gray-400 gap-2"><svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando...</div>';
+    try {
+        var resp = await fetch('/api/planning/no-sku-items?days=30');
+        var d = await resp.json();
+        if (!d.items || d.items.length === 0) {
+            body.innerHTML = '<p class="text-center text-gray-400 py-8">Sin listings pendientes.</p>';
+            return;
+        }
+        var rows = d.items.map(function(item, i) {
+            var accts = (item.accounts || []).join(', ') || '—';
+            return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+                '<td class="px-3 py-2 text-xs text-gray-400 text-right">' + (i+1) + '</td>' +
+                '<td class="px-3 py-2 text-sm text-gray-800 max-w-xs truncate" title="' + item.title + '">' + item.title + '</td>' +
+                '<td class="px-3 py-2 text-xs font-mono text-blue-600">' +
+                    '<a href="' + item.ml_url + '" target="_blank" class="hover:underline">' + item.item_id + ' ↗</a>' +
+                '</td>' +
+                '<td class="px-3 py-2 text-xs text-center font-semibold text-gray-700">' + (item.units_30d || 0) + '</td>' +
+                '<td class="px-3 py-2 text-xs text-gray-500">' + accts + '</td>' +
+            '</tr>';
+        }).join('');
+        body.innerHTML =
+            '<p class="text-xs text-gray-500 mb-3">Ordenados por ventas (30d). Haz clic en el ID para ver el listing en ML.</p>' +
+            '<div class="overflow-x-auto"><table class="w-full text-sm">' +
+            '<thead><tr class="bg-gray-50 text-xs text-gray-500 uppercase">' +
+            '<th class="px-3 py-2 text-right">#</th>' +
+            '<th class="px-3 py-2 text-left">Título</th>' +
+            '<th class="px-3 py-2 text-left">Item ID</th>' +
+            '<th class="px-3 py-2 text-center">Ventas 30d</th>' +
+            '<th class="px-3 py-2 text-left">Cuenta</th>' +
+            '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+            '<button onclick="window._copyNoSkuList(' + JSON.stringify(d.items) + ')" ' +
+            'class="mt-4 px-4 py-2 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition">📋 Copiar lista</button>';
+    } catch(e) {
+        body.innerHTML = '<p class="text-center text-red-400 py-8">Error al cargar.</p>';
+    }
+};
+
+window._copyNoSkuList = function(items) {
+    var text = 'Item ID\tTítulo\tVentas 30d\tCuenta\tURL\n' +
+        items.map(function(x) {
+            return [x.item_id, x.title, x.units_30d||0, (x.accounts||[]).join('/'), x.ml_url].join('\t');
+        }).join('\n');
+    navigator.clipboard.writeText(text).then(function() {
+        var btn = event.target;
+        btn.textContent = '✓ Copiado';
+        setTimeout(function(){ btn.textContent = '📋 Copiar lista'; }, 2000);
+    });
+};
+
 })();
 </script>
+
+<!-- Modal: Listings sin SKU -->
+<div id="no-sku-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div>
+                <h3 class="font-semibold text-gray-800">Listings sin SKU</h3>
+                <p class="text-xs text-gray-400 mt-0.5">Agregar <code class="bg-gray-100 px-1 rounded">seller_custom_field</code> en cada uno para incluirlos en la planeación</p>
+            </div>
+            <button onclick="document.getElementById('no-sku-modal').classList.add('hidden')"
+                    class="text-gray-400 hover:text-gray-600 text-lg font-bold leading-none">✕</button>
+        </div>
+        <div id="no-sku-modal-body" class="overflow-y-auto flex-1 p-5"></div>
+    </div>
+</div>
 {% endblock %}

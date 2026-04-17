@@ -10454,6 +10454,21 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
     }
 
 
+@app.get("/api/planning/no-sku-items")
+async def planning_no_sku_items(days: int = Query(30, ge=7, le=90)):
+    """Listings de ML que aparecen en ventas pero no tienen seller_custom_field (SKU) asignado."""
+    vel = await planning_velocity(days=days)
+    if vel.get("error"):
+        return {"error": vel["error"], "items": []}
+    no_sku = [x for x in vel.get("items", []) if not x.get("sku")]
+    # Enriquecer con URL de ML
+    for item in no_sku:
+        iid = item.get("item_id", "")
+        item["ml_url"] = f"https://articulo.mercadolibre.com.mx/{iid.replace('MLM', 'MLM-')}" if iid else ""
+    no_sku.sort(key=lambda x: x.get("units_30d", 0), reverse=True)
+    return {"items": no_sku, "total": len(no_sku), "days": days}
+
+
 @app.post("/api/planning/sync-skus")
 async def planning_sync_skus():
     """
