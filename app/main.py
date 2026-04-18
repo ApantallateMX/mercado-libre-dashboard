@@ -2296,10 +2296,20 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         }
         // Alerta BM caído
         if (s.bm_down) {
-          if (msg) msg.innerHTML = '<span style="color:#dc2626">⚠ BinManager no responde</span> — mostrando datos del último cache' + (s.bm_down_min ? ' (hace ' + s.bm_down_min + 'min)' : '');
-          if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar</button>';
+          // Si hay datos stale en cache, cargarlos de inmediato — el operador verá el banner azul
+          if (s.stale_available) {
+            if (msg) msg.textContent = 'Cargando datos del último cache...';
+            if (sub) sub.textContent = '';
+            reload();
+            return;
+          }
+          // Sin datos stale: mostrar aviso pero SEGUIR polling — cuando prewarm termine con datos,
+          // stale_available pasará a true y en el siguiente ciclo se hará reload
           var sp2 = document.getElementById('stock-spinner');
           if (sp2) sp2.classList.add('hidden');
+          if (msg) msg.innerHTML = '<span style="color:#dc2626">⚠ BinManager no responde</span>' + (s.bm_down_min ? ' (hace ' + s.bm_down_min + 'min)' : '') + ' — reintentando...';
+          if (sub) sub.innerHTML = '<button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:#facc15;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Reintentar ahora</button>';
+          if (attempts < maxAttempts) setTimeout(poll, 15000);  // polling más lento cuando BM caído
           return;
         }
         var secs = attempts * 5;
@@ -8835,6 +8845,8 @@ async def prewarm_status():
     bm_down_min = None
     if bm_down and _bm_health.get("last_ok_ts", 0) > 0:
         bm_down_min = round((_time.time() - _bm_health["last_ok_ts"]) / 60)
+    # stale_available: hay datos en cache aunque estén expirados — permite mostrarlos mientras BM está caído
+    stale_available = bool(cache_entry)
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
@@ -8843,6 +8855,7 @@ async def prewarm_status():
         "progress": progress,
         "bm_down": bm_down,
         "bm_down_min": bm_down_min,
+        "stale_available": stale_available,
     })
 
 

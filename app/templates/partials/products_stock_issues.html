@@ -1,8 +1,42 @@
 {% if stale %}
-<div class="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3">
+<div id="stale-banner" class="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3">
   <svg class="animate-spin h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-  Actualizando datos BM en background&hellip; (mostrando caché anterior)
+  <span id="stale-banner-text">Actualizando datos BM en background&hellip; (mostrando caché anterior)</span>
 </div>
+<script>
+(function() {
+  var _stalePolling = true;
+  function _stalePoll() {
+    if (!_stalePolling) return;
+    fetch('/api/stock/prewarm-status')
+      .then(function(r) { return r.json(); })
+      .then(function(s) {
+        if (!_stalePolling) return;
+        if (s.ready && s.last_updated_s !== null && s.last_updated_s < 30) {
+          // Datos frescos listos — recargar el tab en lugar, sin flash de página
+          _stalePolling = false;
+          var banner = document.getElementById('stale-banner-text');
+          if (banner) banner.textContent = 'Datos actualizados — recargando...';
+          if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
+          else location.reload();
+          return;
+        }
+        if (!s.running && !s.bm_down) {
+          // Prewarm terminó pero sin datos frescos (error u otro motivo) — dejar de intentar
+          _stalePolling = false;
+          var b = document.getElementById('stale-banner');
+          if (b) b.classList.add('hidden');
+          return;
+        }
+        setTimeout(_stalePoll, 10000);
+      })
+      .catch(function() {
+        if (_stalePolling) setTimeout(_stalePoll, 15000);
+      });
+  }
+  setTimeout(_stalePoll, 10000);
+})();
+</script>
 {% endif %}
 <!-- KPIs -->
 <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
