@@ -57,15 +57,15 @@ def _bm_conditions_for_sku(sku: str) -> str:
     """Retorna condiciones BM según formato del SELLER_SKU y categoría.
 
     Reglas:
-    - SNTV* con sufijo -ICB, -ICC o bundle ("/") → GRA,GRB,GRC,ICB,ICC,NEW
-      (televisiones pueden tener stock en condición In-Carton B/C)
+    - SNTV* → GRA,GRB,GRC,ICB,ICC,NEW
+      (televisiones pueden tener stock en condición In-Carton B/C en cualquier SKU base;
+       el "/" de bundles se elimina al normalizar el SKU antes de llamar esta función,
+       por lo que no se puede depender del sufijo para detectar si hay ICB/ICC)
     - Todo lo demás → GRA,GRB,GRC,NEW
       (simple, -NEW, -GRA, -GRB, -GRC, -ICB/-ICC fuera de SNTV, otras categorías)
     """
     upper = sku.upper()
-    if upper.startswith("SNTV") and (
-        upper.endswith("-ICB") or upper.endswith("-ICC") or "/" in upper
-    ):
+    if upper.startswith("SNTV"):
         return "GRA,GRB,GRC,ICB,ICC,NEW"
     return "GRA,GRB,GRC,NEW"
 
@@ -3001,8 +3001,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
     if len(to_fetch) > 30:
         # BULK FETCH DUAL: dos caches separados por condición.
-        # _bm_bulk_gr_cache  → GRA,GRB,GRC,NEW  — para todo SKU no-SNTV-ICB/ICC
-        # _bm_bulk_all_cache → GRA,GRB,GRC,ICB,ICC,NEW — para SNTV-ICB/ICC/bundle
+        # _bm_bulk_gr_cache  → GRA,GRB,GRC,NEW  — para todo SKU no-SNTV
+        # _bm_bulk_all_cache → GRA,GRB,GRC,ICB,ICC,NEW — para SNTV* (cualquier TV puede ser ICB/ICC)
         # BM filtra server-side por CONDITION → no hace falta post-filtrar por campo.
         _BM_COND_GR  = "GRA,GRB,GRC,NEW"
         _BM_COND_ALL = "GRA,GRB,GRC,ICB,ICC,NEW"
