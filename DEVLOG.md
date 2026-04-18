@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-18 — FIX: SNTV base SKUs mostraban BM=0 cuando stock era ICB/ICC
+
+### Problema
+SKUs SNTV sin sufijo explícito (ej. `SNTV003390`, `SNTV004117`) mostraban BM=0 aunque
+BM tenía unidades en condición ICB/ICC. Causaba falsas alertas de sobreventa (21 items).
+
+### Causa raíz (commit ceff49a)
+`_bm_conditions_for_sku` solo devolvía `ALL` si el SKU contenía `"-ICB"`, `"-ICC"`, o `"/"`.
+Para bundles como `"SNTV003390 / SNWM000001"`, `normalize_to_bm_sku` extrae los primeros
+10 chars → `"SNTV003390"` — el `"/"` se pierde. Resultado: la función devolvía GR-only
+y el lookup usaba `_bm_bulk_gr_cache`, que no tiene filas ICB/ICC.
+
+### Fix (commit ceff49a)
+`_bm_conditions_for_sku`: cualquier SKU que comience con `SNTV*` retorna ALL
+(`GRA,GRB,GRC,ICB,ICC,NEW`). Los TVs pueden estar en cualquier condición
+independientemente del formato del SKU en el listing.
+
+---
+
 ## 2026-04-17 — FIX: SNWA000071 (y similares) mostraba stock ICB/ICC como vendible
 
 ### Problema
