@@ -446,14 +446,15 @@ class MeliClient:
             params = {
                 "seller_id": self.user_id,
                 "from": buyer_id,
-                "limit": 10,
-                "sort_fields": "date_created",
-                "sort_types": "DESC",
+                "limit": 20,
             }
             if item_id:
                 params["item"] = item_id
             data = await self.get("/questions/search", params=params)
-            return data.get("questions", [])
+            qs = data.get("questions", [])
+            # Sort by date descending client-side
+            qs.sort(key=lambda q: q.get("date_created", ""), reverse=True)
+            return qs
         except Exception:
             return []
 

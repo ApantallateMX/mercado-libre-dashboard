@@ -2578,6 +2578,55 @@ async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict
     return result
 
 
+# --- Seller catalog cache (for cross-sell in questions AI) ---
+# Keyed by str(client.user_id). Populated lazily from questions page + background refresh.
+_seller_catalog: dict = {}     # {uid: {item_id: {title, permalink, price}}}
+_seller_catalog_ts: dict = {}  # {uid: float (last refresh timestamp)}
+_CATALOG_CACHE_TTL = 900       # 15 min before background refresh
+_seller_catalog_refresh_tasks: set = set()  # active background tasks
+
+async def _refresh_seller_catalog(uid: str, access_token: str):
+    """Background: fetch all active items for seller uid and populate _seller_catalog."""
+    try:
+        from app.services.meli_client import MeliClient
+        cat_client = MeliClient(user_id=uid, access_token=access_token)
+        try:
+            # Fetch up to 200 active item IDs
+            all_ids = []
+            for offset in (0, 100):
+                resp = await cat_client.get(
+                    f"/users/{uid}/items/search",
+                    params={"status": "active", "offset": offset, "limit": 100},
+                )
+                batch_ids = resp.get("results", [])
+                all_ids.extend(batch_ids)
+                if len(batch_ids) < 100:
+                    break
+            if not all_ids:
+                return
+            # Fetch details in batches of 20
+            catalog = dict(_seller_catalog.get(uid, {}))
+            for i in range(0, len(all_ids), 20):
+                batch = all_ids[i:i+20]
+                details = await cat_client.get_items_details(batch)
+                for d in details:
+                    body = d.get("body", d) if isinstance(d, dict) else {}
+                    iid = str(body.get("id", ""))
+                    if iid and body.get("permalink"):
+                        catalog[iid] = {
+                            "title": body.get("title", ""),
+                            "permalink": body.get("permalink", ""),
+                            "price": body.get("price", 0),
+                        }
+            _seller_catalog[uid] = catalog
+            _seller_catalog_ts[uid] = _time.time()
+        finally:
+            await cat_client.close()
+    except Exception:
+        pass
+    finally:
+        _seller_catalog_refresh_tasks.discard(uid)
+
 # --- Background pre-warm ---
 _prewarm_task = None
 _prewarm_running: bool = False    # flag global — solo 1 prewarm a la vez
@@ -4941,6 +4990,28 @@ async def health_questions_partial(
             except Exception:
                 pass
 
+        # Populate seller catalog cache (for cross-sell related listings)
+        _uid_str = str(client.user_id)
+        # Merge current items_map into catalog (quick route)
+        if _uid_str not in _seller_catalog:
+            _seller_catalog[_uid_str] = {}
+        for _iid, _iprod in items_map.items():
+            if _iprod.get("permalink"):
+                _seller_catalog[_uid_str][_iid] = {
+                    "title": _iprod.get("title", ""),
+                    "permalink": _iprod.get("permalink", ""),
+                    "price": _iprod.get("price", 0),
+                }
+        # Kick off background refresh if stale or too small
+        _cat_age = _time.time() - _seller_catalog_ts.get(_uid_str, 0)
+        _cat_size = len(_seller_catalog.get(_uid_str, {}))
+        if (_cat_age > _CATALOG_CACHE_TTL or _cat_size < 10) and _uid_str not in _seller_catalog_refresh_tasks:
+            _token_row = await token_store.get_token(_uid_str)
+            _access_token = (_token_row.get("access_token") or "") if _token_row else ""
+            if _access_token:
+                _seller_catalog_refresh_tasks.add(_uid_str)
+                asyncio.create_task(_refresh_seller_catalog(_uid_str, _access_token))
+
         # Fetch buyer history for UNANSWERED questions only
         buyer_history_map = {}  # buyer_id -> list of past questions
         if status == "UNANSWERED":
@@ -5018,10 +5089,10 @@ async def health_questions_partial(
                     "answer": entry["answer_text"][:150] if entry["answer_text"] else "",
                 })
 
-            # Same-item history: only Q&A on this exact listing (answered, up to 5)
+            # Same-item history: all prior Q&A on this exact listing (answered or not)
             same_item_history = [
                 e for e in buyer_history
-                if e.get("item_id") == item_id and e.get("status") == "ANSWERED"
+                if e.get("item_id") == item_id
             ][:5]
             sih_for_json = []
             for e in same_item_history:
@@ -5031,15 +5102,19 @@ async def health_questions_partial(
                     "answer": e["answer_text"][:200] if e["answer_text"] else "",
                 })
 
-            # Related listings: other items_map entries matching keywords in question
+            # Related listings: search full seller catalog (not just current page items)
             _q_words = set((q.get("text", "") or "").lower().split())
-            _stop = {"de", "la", "el", "en", "es", "un", "lo", "me", "si", "se", "a", "y", "o", "que"}
+            _stop = {"de", "la", "el", "en", "es", "un", "lo", "me", "si", "se", "a", "y", "o", "que", "pero", "favor", "link"}
             _q_keywords = _q_words - _stop
             related_listings = []
-            if _q_keywords:
+            _catalog_to_search = {**_seller_catalog.get(_uid_str, {}), **{
+                k: {"title": v.get("title",""), "permalink": v.get("permalink",""), "price": v.get("price",0)}
+                for k, v in items_map.items() if v.get("permalink")
+            }}
+            if _q_keywords and _catalog_to_search:
                 _scored = []
-                for _iid, _iprod in items_map.items():
-                    if _iid == item_id:
+                for _iid, _iprod in _catalog_to_search.items():
+                    if str(_iid) == str(item_id):
                         continue
                     _t_words = set((_iprod.get("title", "") or "").lower().split())
                     _score = len(_q_keywords & _t_words)
