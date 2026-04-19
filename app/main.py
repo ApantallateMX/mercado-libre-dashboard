@@ -78,6 +78,26 @@ def normalize_to_bm_sku(sku: str) -> str:
     return _normalize_sku_imported(sku)
 
 
+def _extract_key_attributes(body: dict) -> list:
+    """Extract up to 20 key spec attributes from an ML item body for AI context."""
+    raw = body.get("attributes", []) or []
+    result = []
+    _skip = {"SELLER_SKU", "GTIN", "EAN", "ITEM_CONDITION", "ALPHANUMERIC_MODEL", "BRAND"}
+    for attr in raw:
+        if len(result) >= 20:
+            break
+        aid = (attr.get("id") or "").upper()
+        if aid in _skip:
+            continue
+        name = attr.get("name") or attr.get("id") or ""
+        vs = attr.get("value_struct") or {}
+        value = attr.get("value_name") or (str(vs.get("number", "")) if vs.get("number") is not None else "")
+        unit = vs.get("unit") or ""
+        if name and value:
+            result.append({"name": name, "value": f"{value}{(' ' + unit) if unit else ''}"})
+    return result
+
+
 def _clean_sku_for_bm(sku: str) -> str:
     """Limpia SKU de MeLi para consultar BinManager.
     Quita: (N), / segunda_parte, + segunda_parte, espacios extra, etc."""
@@ -4915,6 +4935,8 @@ async def health_questions_partial(
                                 "price": body.get("price", 0),
                                 "stock": body.get("available_quantity", 0),
                                 "seller_sku": body.get("seller_custom_field") or "",
+                                "permalink": body.get("permalink", ""),
+                                "attributes": _extract_key_attributes(body),
                             }
             except Exception:
                 pass
@@ -4996,6 +5018,45 @@ async def health_questions_partial(
                     "answer": entry["answer_text"][:150] if entry["answer_text"] else "",
                 })
 
+            # Same-item history: only Q&A on this exact listing (answered, up to 5)
+            same_item_history = [
+                e for e in buyer_history
+                if e.get("item_id") == item_id and e.get("status") == "ANSWERED"
+            ][:5]
+            sih_for_json = []
+            for e in same_item_history:
+                sih_for_json.append({
+                    "text": e["text"][:200],
+                    "date": e["date_created"],
+                    "answer": e["answer_text"][:200] if e["answer_text"] else "",
+                })
+
+            # Related listings: other items_map entries matching keywords in question
+            _q_words = set((q.get("text", "") or "").lower().split())
+            _stop = {"de", "la", "el", "en", "es", "un", "lo", "me", "si", "se", "a", "y", "o", "que"}
+            _q_keywords = _q_words - _stop
+            related_listings = []
+            if _q_keywords:
+                _scored = []
+                for _iid, _iprod in items_map.items():
+                    if _iid == item_id:
+                        continue
+                    _t_words = set((_iprod.get("title", "") or "").lower().split())
+                    _score = len(_q_keywords & _t_words)
+                    if _score > 0 and _iprod.get("permalink"):
+                        _scored.append((_score, _iid, _iprod))
+                _scored.sort(key=lambda x: -x[0])
+                for _, _, _iprod in _scored[:3]:
+                    related_listings.append({
+                        "title": _iprod.get("title", ""),
+                        "permalink": _iprod.get("permalink", ""),
+                        "price": _iprod.get("price", 0),
+                    })
+
+            # Attributes JSON for AI (top 20 specs)
+            _prod_attrs = prod.get("attributes", [])
+            _attrs_json = json.dumps(_prod_attrs, ensure_ascii=False) if _prod_attrs else "[]"
+
             # Classify question type
             q_text = q.get("text", "")
             q_type = _classify_question(q_text)
@@ -5018,6 +5079,13 @@ async def health_questions_partial(
                 product_price=prod.get("price", 0),
                 product_stock=prod.get("stock", 0),
                 product_sku=prod.get("seller_sku", ""),
+                product_permalink=prod.get("permalink", ""),
+                product_attributes=_prod_attrs,
+                product_attributes_json=_attrs_json,
+                same_item_history=same_item_history,
+                same_item_history_json=json.dumps(sih_for_json, ensure_ascii=False) if sih_for_json else "[]",
+                related_listings=related_listings,
+                related_listings_json=json.dumps(related_listings, ensure_ascii=False) if related_listings else "[]",
                 answer=answer,
                 buyer_id=buyer_id,
                 buyer_history=buyer_history,

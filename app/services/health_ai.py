@@ -25,7 +25,10 @@ def _bm_product_block(bm_product: dict) -> str:
     return "\nInformacion real del producto (BinManager):\n" + "\n".join(parts) + "\n"
 
 
-def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed, buyer_history=None, user_context=None, bm_product=None):
+def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed,
+                                  buyer_history=None, user_context=None, bm_product=None,
+                                  product_permalink=None, product_attributes=None,
+                                  same_item_history=None, related_listings=None):
     system = (
         "Eres un vendedor profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
         "ESTRUCTURA OBLIGATORIA de cada respuesta:\n"
@@ -35,7 +38,7 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
         "4. DESPEDIDA — cordial, 1 linea (ej: 'Quedamos al pendiente, saludos!')\n\n"
         "TIPOS DE PREGUNTA y como manejarlas:\n"
         "- OPERATIVA (envio, garantia, factura): responde con certeza, menciona beneficios de MeLi (envio gratis, Compra Protegida)\n"
-        "- TECNICA (especificaciones, compatibilidad): se preciso, si no estas seguro di 'te recomiendo verificar en la descripcion del producto'\n"
+        "- TECNICA (especificaciones, compatibilidad): se preciso usando las especificaciones del producto; si no hay datos di 'te recomiendo verificar en la descripcion del producto'\n"
         "- PROPOSICION (ofertas, descuentos, combos): redirige a compra directa, no ofrezcas descuentos fuera de MeLi\n"
         "- COMPUESTA (multiples preguntas): responde cada punto numerado\n"
         "- STOCK (disponibilidad): confirma stock y agrega urgencia sutil si hay poco\n\n"
@@ -46,25 +49,36 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
         "- Maximo 2000 caracteres (usa lo que necesites, no te limites innecesariamente)\n"
         "- Tono profesional pero cercano y humano\n"
         "- Responde SOLO con el texto de la respuesta, sin explicaciones adicionales ni comillas\n"
-        "- Si el comprador ya hizo preguntas antes, reconocelo brevemente y no repitas info ya dada"
+        "- Si el comprador ya hizo preguntas SOBRE ESTE MISMO PRODUCTO, NO repitas info ya respondida\n"
+        "- Solo incluye links de productos relacionados si el comprador pregunta explicitamente por alternativas o compatibilidad"
     )
 
     user = f'Pregunta del comprador: "{question_text}"\n\n'
 
-    # Buyer history context
-    if buyer_history:
-        user += "HISTORIAL DEL COMPRADOR (preguntas anteriores):\n"
+    # Same-item history (highest priority context — this listing specifically)
+    if same_item_history:
+        user += "CONVERSACION ANTERIOR EN ESTE MISMO PRODUCTO (MUY IMPORTANTE):\n"
+        for i, sh in enumerate(same_item_history[:5], 1):
+            user += f"  {i}. [{sh.get('date', '')}] Comprador: \"{sh.get('text', '')[:150]}\"\n"
+            if sh.get("answer"):
+                user += f"     Vendedor respondio: \"{sh['answer'][:150]}\"\n"
+        user += (
+            "INSTRUCCIONES CRITICAS PARA HISTORIAL DEL MISMO PRODUCTO:\n"
+            "- NO repitas informacion que ya se respondio en esta conversacion\n"
+            "- Si la nueva pregunta ya fue respondida antes, reconocelo brevemente y complementa si hay algo nuevo\n"
+            "- Mantén continuidad en el tono, como si fuera la misma conversacion\n\n"
+        )
+    elif buyer_history:
+        # General buyer history (other products)
+        user += "HISTORIAL DEL COMPRADOR (otros productos):\n"
         for i, h in enumerate(buyer_history[:5], 1):
-            user += f"  {i}. [{h.get('date', '')}] \"{h.get('text', '')}\""
+            user += f"  {i}. [{h.get('date', '')}] \"{h.get('text', '')[:120]}\""
             if h.get("answer"):
-                user += f" -> Respuesta: \"{h['answer']}\""
-            if h.get("item_id"):
-                user += f" (item: {h['item_id']})"
+                user += f" -> \"{h['answer'][:100]}\""
             user += "\n"
         user += (
             "INSTRUCCIONES PARA HISTORIAL:\n"
             "- Si es comprador recurrente, reconocelo brevemente (ej: 'Que gusto verte de nuevo')\n"
-            "- No repitas informacion ya proporcionada en respuestas anteriores\n"
             "- Si sus preguntas previas sugieren intencion de compra, refuerza el cierre\n\n"
         )
 
@@ -73,19 +87,43 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
         stock_note = " (SIN STOCK — sugiere que pregunte de nuevo pronto o vea productos similares)"
     elif product_stock <= 3:
         stock_note = " (POCO STOCK — menciona sutilmente que quedan pocas unidades)"
-    bm_block = _bm_product_block(bm_product or {})
+
     user += (
         f"Datos del producto:\n"
         f"- Titulo MeLi: {product_title}\n"
         f"- Precio: ${product_price}\n"
         f"- Stock disponible: {product_stock} unidades{stock_note}\n"
     )
+    if product_permalink:
+        user += f"- Link del producto: {product_permalink}\n"
+
+    # BinManager product data (brand, model, description)
+    bm_block = _bm_product_block(bm_product or {})
     if bm_block:
         user += bm_block
+
+    # ML listing attributes/specs
+    if product_attributes:
+        attrs_lines = []
+        for attr in product_attributes[:20]:
+            name = attr.get("name") or attr.get("id") or ""
+            value = attr.get("value") or attr.get("value_name") or ""
+            if name and value:
+                attrs_lines.append(f"  - {name}: {value}")
+        if attrs_lines:
+            user += "\nEspecificaciones tecnicas del producto (MercadoLibre):\n" + "\n".join(attrs_lines) + "\n"
+
     user += f"- Tiempo desde la pregunta: {elapsed}\n"
     if elapsed:
-        # Add urgency context
         user += "(Responde con tono acorde a la espera del comprador)\n"
+
+    # Related listings for cross-sell (only when buyer asks for alternatives)
+    if related_listings:
+        user += "\nProductos relacionados disponibles (usar SOLO si el comprador pide alternativas):\n"
+        for rl in related_listings[:3]:
+            user += f"  - {rl.get('title', '')[:60]} — ${rl.get('price', 0)} — {rl.get('permalink', '')}\n"
+        user += "(No menciones estos productos a menos que el comprador pregunte por alternativas o compatibilidad)\n"
+
     if user_context:
         user += f"\n\nINSTRUCCIONES DEL VENDEDOR: {user_context}\n(Incorpora estas instrucciones de forma natural en tu respuesta)"
 

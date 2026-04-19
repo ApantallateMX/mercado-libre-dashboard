@@ -122,6 +122,24 @@
             </div>
             {% endif %}
 
+            {% if q.same_item_history %}
+            <!-- Same-listing previous Q&A (always visible) -->
+            <div class="mb-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p class="text-[10px] font-semibold text-blue-700 uppercase tracking-wide mb-2">Conversacion anterior en este producto</p>
+                <div class="space-y-2">
+                    {% for sh in q.same_item_history %}
+                    <div class="text-xs">
+                        <div class="text-gray-400 mb-0.5">{{ sh.date_created }}</div>
+                        <p class="text-gray-700 font-medium">"{{ sh.text[:150] }}{{ '...' if sh.text|length > 150 else '' }}"</p>
+                        {% if sh.answer_text %}
+                        <p class="text-blue-600 mt-0.5 pl-2 border-l-2 border-blue-300 italic">{{ sh.answer_text[:150] }}{{ '...' if sh.answer_text|length > 150 else '' }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
             <!-- AI Suggest Button + Context Input -->
             <div class="mb-2">
                 <div class="flex items-center gap-2 mb-1.5">
@@ -133,7 +151,11 @@
                             data-stock="{{ q.product_stock }}"
                             data-sku="{{ q.product_sku }}"
                             data-elapsed="{{ q.elapsed }}"
+                            data-permalink="{{ q.product_permalink }}"
                             data-buyer-history='{{ q.buyer_history_json }}'
+                            data-same-item-history='{{ q.same_item_history_json }}'
+                            data-attributes='{{ q.product_attributes_json }}'
+                            data-related-listings='{{ q.related_listings_json }}'
                             class="text-xs bg-purple-100 text-purple-700 px-3 py-1.5 rounded-full hover:bg-purple-200 font-semibold transition-colors flex-shrink-0">
                         <svg class="w-4 h-4 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Sugerir con IA
                     </button>

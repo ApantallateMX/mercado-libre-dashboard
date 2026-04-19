@@ -173,6 +173,10 @@ async def suggest_answer(request: Request):
         buyer_history=body.get("buyer_history", []),
         user_context=body.get("user_context", ""),
         bm_product=bm_product,
+        product_permalink=body.get("product_permalink", ""),
+        product_attributes=body.get("product_attributes", []),
+        same_item_history=body.get("same_item_history", []),
+        related_listings=body.get("related_listings", []),
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),

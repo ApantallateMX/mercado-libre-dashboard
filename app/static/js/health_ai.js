@@ -140,6 +140,15 @@ window.suggestQuestionAnswer = function (btn) {
     var buyerHistory = [];
     try { buyerHistory = JSON.parse(btn.getAttribute('data-buyer-history') || '[]'); } catch (e) { }
 
+    var sameItemHistory = [];
+    try { sameItemHistory = JSON.parse(btn.getAttribute('data-same-item-history') || '[]'); } catch (e) { }
+
+    var productAttributes = [];
+    try { productAttributes = JSON.parse(btn.getAttribute('data-attributes') || '[]'); } catch (e) { }
+
+    var relatedListings = [];
+    try { relatedListings = JSON.parse(btn.getAttribute('data-related-listings') || '[]'); } catch (e) { }
+
     var contextInput = document.getElementById('ai-context-q-' + id);
     var userContext = contextInput ? contextInput.value.trim() : '';
 
@@ -150,6 +159,10 @@ window.suggestQuestionAnswer = function (btn) {
         product_stock: parseInt(btn.getAttribute('data-stock')) || 0,
         sku: btn.getAttribute('data-sku') || '',
         elapsed: btn.getAttribute('data-elapsed') || '',
+        product_permalink: btn.getAttribute('data-permalink') || '',
+        product_attributes: productAttributes,
+        same_item_history: sameItemHistory,
+        related_listings: relatedListings,
         buyer_history: buyerHistory,
         user_context: userContext
     };
