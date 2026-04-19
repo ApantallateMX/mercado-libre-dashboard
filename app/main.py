@@ -2585,11 +2585,11 @@ _seller_catalog_ts: dict = {}  # {uid: float (last refresh timestamp)}
 _CATALOG_CACHE_TTL = 900       # 15 min before background refresh
 _seller_catalog_refresh_tasks: set = set()  # active background tasks
 
-async def _refresh_seller_catalog(uid: str, access_token: str):
+async def _refresh_seller_catalog(uid: str, access_token: str, refresh_token: str = ""):
     """Background: fetch all active items for seller uid and populate _seller_catalog."""
     try:
         from app.services.meli_client import MeliClient
-        cat_client = MeliClient(user_id=uid, access_token=access_token)
+        cat_client = MeliClient(access_token=access_token, refresh_token=refresh_token, user_id=uid)
         try:
             # Fetch up to 200 active item IDs
             all_ids = []
@@ -5006,11 +5006,12 @@ async def health_questions_partial(
         _cat_age = _time.time() - _seller_catalog_ts.get(_uid_str, 0)
         _cat_size = len(_seller_catalog.get(_uid_str, {}))
         if (_cat_age > _CATALOG_CACHE_TTL or _cat_size < 10) and _uid_str not in _seller_catalog_refresh_tasks:
-            _token_row = await token_store.get_token(_uid_str)
+            _token_row = await token_store.get_tokens(_uid_str)
             _access_token = (_token_row.get("access_token") or "") if _token_row else ""
+            _refresh_token = (_token_row.get("refresh_token") or "") if _token_row else ""
             if _access_token:
                 _seller_catalog_refresh_tasks.add(_uid_str)
-                asyncio.create_task(_refresh_seller_catalog(_uid_str, _access_token))
+                asyncio.create_task(_refresh_seller_catalog(_uid_str, _access_token, _refresh_token))
 
         # Fetch buyer history for UNANSWERED questions only
         buyer_history_map = {}  # buyer_id -> list of past questions
