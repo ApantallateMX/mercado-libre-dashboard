@@ -1085,14 +1085,19 @@ def _aggregate_sales_by_item(orders: list) -> dict:
 
 
 def _get_item_sku(body: dict) -> str:
-    """Extrae SKU de un item body.
+    """Extrae SKU de un item body usando TODAS las fuentes disponibles en cascada.
 
-    PRIORIDAD: variaciones > padre.
-    El seller_custom_field del item padre puede ser incorrecto (otro SKU) cuando
-    el item tiene variaciones — ML permite que el padre tenga un campo distinto.
-    El SKU real siempre está en las variaciones para items con variaciones.
+    REGLA: nunca reemplazar una fuente por otra — siempre encadenar como fallback.
+    ML expone el SKU en múltiples campos según el tipo de listing y cómo fue creado;
+    eliminar una fuente rompe listings que solo usan esa fuente.
+
+    Cadena de prioridad:
+      1. seller_custom_field de la variación        (items con variaciones)
+      2. atributo SELLER_SKU de la variación        (items con variaciones, campo alternativo)
+      3. seller_custom_field del item padre          (items simples)
+      4. atributo SELLER_SKU del item padre          (items simples, campo alternativo)
     """
-    # Prioridad 1: SKU de la primera variación con SKU definido
+    # Fuente 1 y 2: variaciones (el padre puede tener SKU incorrecto cuando hay variaciones)
     for var in (body.get("variations") or []):
         sku = (var.get("seller_custom_field") or "").strip()
         if sku and sku not in ("None", "none"):
@@ -1100,7 +1105,7 @@ def _get_item_sku(body: dict) -> str:
         for va in (var.get("attributes") or []):
             if va.get("id") == "SELLER_SKU" and va.get("value_name"):
                 return va["value_name"].strip()
-    # Prioridad 2: item sin variaciones — campo del padre
+    # Fuente 3 y 4: item sin variaciones — campos del padre
     sku = (body.get("seller_custom_field") or "").strip()
     if sku and sku not in ("None", "none"):
         return sku
@@ -1162,9 +1167,10 @@ async def dashboard_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
-    # Pre-warm caches al entrar al dashboard
+    # Pre-warm caches — solo admin. Operadores consumen el cache existente.
     global _prewarm_task
-    if _prewarm_task is None or _prewarm_task.done():
+    _du_dash = getattr(request.state, "dashboard_user", None) or {}
+    if _du_dash.get("role") == "admin" and (_prewarm_task is None or _prewarm_task.done()):
         _prewarm_task = asyncio.create_task(_prewarm_caches())
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "dashboard.html", {
@@ -1191,9 +1197,10 @@ async def items_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
-    # Pre-warm caches al entrar a Centro de Productos
+    # Pre-warm caches — solo admin. Operadores consumen el cache existente.
     global _prewarm_task
-    if _prewarm_task is None or _prewarm_task.done():
+    _du_items = getattr(request.state, "dashboard_user", None) or {}
+    if _du_items.get("role") == "admin" and (_prewarm_task is None or _prewarm_task.done()):
         _prewarm_task = asyncio.create_task(_prewarm_caches())
     ctx = await _accounts_ctx(request)
     return templates.TemplateResponse(request, "items.html", {        "user": user,
@@ -2245,14 +2252,30 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             # include_paused: traer items pausados para seccion Activar
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
-        # Cache expirada: si hay datos viejos, mostrarlos inmediatamente y refrescar en BG.
-        # Si cache está completamente vacía (primer arranque), mostrar spinner.
-        asyncio.create_task(_prewarm_caches())
+        # Cache expirada — solo el admin puede disparar un nuevo prewarm.
+        # Operadores ven el cache disponible (stale) o mensaje de espera si no hay cache.
+        _du_stock = getattr(request.state, "dashboard_user", None) or {}
+        _is_admin_stock = _du_stock.get("role") == "admin"
+        if _is_admin_stock:
+            asyncio.create_task(_prewarm_caches())
         if entry:
             # Datos stale — mostrar con aviso de actualización en background
             ctx = entry[1].copy()
             ctx["stale"] = True
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
+        # Sin cache en absoluto
+        if not _is_admin_stock:
+            # Operador sin cache disponible — no puede iniciar prewarm
+            return HTMLResponse("""
+<div class="text-center py-16 text-gray-400">
+  <svg class="h-10 w-10 mx-auto mb-3 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+  </svg>
+  <p class="text-sm font-medium text-gray-500">Datos de stock no disponibles aún</p>
+  <p class="text-xs text-gray-400 mt-1">El administrador debe ejecutar el cache de stock primero.</p>
+</div>
+""")
         return HTMLResponse("""
 <div id="stock-loading" class="text-center py-16 text-gray-500">
   <svg id="stock-spinner" class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -2542,6 +2565,8 @@ _prewarm_queued: bool = False     # si True, lanzar otro prewarm al terminar el 
 _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = default)
 _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
+# Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
+_bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
 
 # --- BM Bulk Caches (dos: GR-only y ALL-conditions) ---
 _bm_bulk_gr_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows)
@@ -3081,11 +3106,48 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
             def _lookup(exact, by_base, fbase):
                 row = exact.get(fbase)
-                if row is not None:
-                    return int(row.get("AvailableQTY") or 0), int(row.get("Reserve") or 0)
-                rows = by_base.get(fbase, [])
-                return (sum(int(v.get("AvailableQTY") or 0) for v in rows),
-                        sum(int(v.get("Reserve") or 0) for v in rows))
+                rows_to_sum = [row] if row is not None else by_base.get(fbase, [])
+                if not rows_to_sum:
+                    return 0, 0
+                avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
+                reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
+                # Fallback: si BM devuelve AvailableQTY=null/0 pero TotalQty existe,
+                # calcularlo nosotros (bulk a veces omite el campo para ítems en ciertos estados).
+                if avail == 0 and reserve == 0:
+                    total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
+                    if total > 0:
+                        avail = total  # reserve desconocido → asumir todo disponible
+                return avail, reserve
+
+            _diag_found = 0   # SKUs con avail > 0
+            _diag_zero  = 0   # SKUs con avail = 0
+            _diag_zero_skus: list = []
+            _diag_fallback = 0  # SKUs donde se usó TotalQty fallback
+
+            # Wrapper de _lookup con diagnóstico integrado
+            def _lookup_diag(exact, by_base, fbase, fsku):
+                nonlocal _diag_found, _diag_zero, _diag_fallback
+                row = exact.get(fbase)
+                rows_to_sum = [row] if row is not None else by_base.get(fbase, [])
+                if not rows_to_sum:
+                    _diag_zero += 1
+                    if len(_diag_zero_skus) < 30:
+                        _diag_zero_skus.append(fsku)
+                    return 0, 0
+                avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
+                reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
+                if avail == 0 and reserve == 0:
+                    total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
+                    if total > 0:
+                        avail = total
+                        _diag_fallback += 1
+                if avail > 0:
+                    _diag_found += 1
+                else:
+                    _diag_zero += 1
+                    if len(_diag_zero_skus) < 30:
+                        _diag_zero_skus.append(fsku)
+                return avail, reserve
 
             for _fsku in to_fetch:
                 _fbase = normalize_to_bm_sku(_fsku)
@@ -3095,12 +3157,27 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     continue
                 # Usar el bulk correcto según las condiciones del SKU
                 if _bm_conditions_for_sku(_fsku) == _BM_COND_ALL:
-                    _avail, _res = _lookup(_exact_all, _by_base_all, _fbase)
+                    _avail, _res = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
                 else:
-                    _avail, _res = _lookup(_exact_gr, _by_base_gr, _fbase)
+                    _avail, _res = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
                 _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
                           avail_ok=True, wh_responded=False)
                 _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
+
+            # Guardar estadísticas de cobertura para diagnóstico en Sync Stock
+            global _bm_bulk_stats
+            _bm_bulk_stats = {
+                "bulk_gr_rows":   len(_bulk_gr_rows)  if _bulk_gr_rows  else 0,
+                "bulk_all_rows":  len(_bulk_all_rows) if _bulk_all_rows else 0,
+                "skus_total":     len(to_fetch),
+                "found":          _diag_found,
+                "zero":           _diag_zero,
+                "fallback_used":  _diag_fallback,
+                "zero_skus":      _diag_zero_skus,
+                "ts":             _time.time(),
+            }
+            logger.info(f"[BM-BULK] Cobertura: {_diag_found}/{len(to_fetch)} con stock, "
+                        f"{_diag_zero} en 0, {_diag_fallback} via TotalQty fallback")
             _used_bulk = True
 
         if not _used_bulk:
@@ -8847,6 +8924,19 @@ async def prewarm_status():
         bm_down_min = round((_time.time() - _bm_health["last_ok_ts"]) / 60)
     # stale_available: hay datos en cache aunque estén expirados — permite mostrarlos mientras BM está caído
     stale_available = bool(cache_entry)
+    # Estadísticas de cobertura BM del último bulk — para diagnóstico en Sync Stock
+    bulk_stats = {}
+    if _bm_bulk_stats and _bm_bulk_stats.get("ts"):
+        bulk_stats = {
+            "bulk_gr_rows":  _bm_bulk_stats.get("bulk_gr_rows", 0),
+            "bulk_all_rows": _bm_bulk_stats.get("bulk_all_rows", 0),
+            "skus_total":    _bm_bulk_stats.get("skus_total", 0),
+            "found":         _bm_bulk_stats.get("found", 0),
+            "zero":          _bm_bulk_stats.get("zero", 0),
+            "fallback_used": _bm_bulk_stats.get("fallback_used", 0),
+            "zero_skus":     _bm_bulk_stats.get("zero_skus", []),
+            "age_min":       round((_time.time() - _bm_bulk_stats["ts"]) / 60),
+        }
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
@@ -8856,6 +8946,7 @@ async def prewarm_status():
         "bm_down": bm_down,
         "bm_down_min": bm_down_min,
         "stale_available": stale_available,
+        "bulk_stats": bulk_stats,
     })
 
 
