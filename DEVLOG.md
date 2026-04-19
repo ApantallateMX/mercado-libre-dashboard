@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-19 — FIX+FEAT: 4 mejoras definitivas de stock y permisos (commit 90e9b69)
+
+### Fix 1: Bulk fallback TotalQty-Reserve
+SKUs como SHIL*, SNMN*, SNAC* mostraban BM=0 porque el bulk de BM devuelve
+`AvailableQTY=null` para algunos ítems (vs la consulta individual que sí lo computa).
+`_lookup` ahora calcula `max(0, TotalQty-Reserve)` cuando `AvailableQTY=0`.
+No toca el código de fetch de inventario — solo el helper de 6 líneas.
+
+### Fix 2: Admin-only prewarm
+`/dashboard`, `/items` y `products_stock_issues_partial` ya no disparan
+`_prewarm_caches()` para operadores. Al cambiar de cuenta, operadores ven el cache
+existente o mensaje "Datos no disponibles, contacta al administrador" si no hay cache.
+Elimina el problema de "BinManager no responde" al cambiar de cuenta.
+
+### Fix 3: SKU dual extraction documentada
+`_get_item_sku` documenta explícitamente que NUNCA se reemplaza una fuente por otra —
+siempre se encadenan las 4 fuentes ML como fallback en orden de prioridad.
+
+### Fix 4: Panel de cobertura BM en Sync Stock
+Después de cada bulk, `_bm_bulk_stats` registra cobertura completa: filas GR/ALL,
+SKUs con stock, SKUs=0, fallbacks usados, lista de SKUs con 0.
+El Sync Stock muestra el panel automáticamente tras completar el prewarm.
+
+---
+
 ## 2026-04-18 — FIX: SNTV base SKUs mostraban BM=0 cuando stock era ICB/ICC
 
 ### Problema
