@@ -7,6 +7,47 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-17 — FEAT: Preguntas AI — specs, historial mismo listing, cross-sell (commit f2c2aa0)
+
+### Contexto de la mejora
+La IA respondía sin conocer las especificaciones técnicas del listing ni si el
+comprador ya había hecho preguntas sobre ese mismo producto. Tampoco podía
+sugerir productos relacionados.
+
+### Cambio 1: items_map enriquecido (`app/main.py`)
+`items_map` ahora guarda `permalink` y `attributes` (resultado de `_extract_key_attributes`)
+además de title/thumbnail/price/stock/seller_sku. Nuevo helper `_extract_key_attributes`
+extrae hasta 20 specs de `body["attributes"]` omitiendo IDs de sistema (GTIN, SELLER_SKU, etc).
+
+### Cambio 2: SimpleNamespace enriquecido (`app/main.py`)
+Cada pregunta ahora lleva:
+- `same_item_history`: Q&A anteriores respondidas del MISMO comprador en ESTE listing (max 5)
+- `related_listings`: hasta 3 otros listings del mismo seller que coinciden por keyword con la pregunta
+- `product_permalink`, `product_attributes`, `product_attributes_json`
+- `same_item_history_json`, `related_listings_json`
+
+### Cambio 3: UI historial mismo producto (`app/templates/partials/health_questions.html`)
+Panel azul visible (siempre, sin accordion) encima del botón IA cuando existe
+historial de este listing: muestra pregunta previa + respuesta del vendedor.
+Botón IA recibe `data-permalink`, `data-attributes`, `data-same-item-history`, `data-related-listings`.
+
+### Cambio 4: Payload JS (`app/static/js/health_ai.js`)
+`suggestQuestionAnswer` incluye los 4 nuevos campos en el POST a `/api/health-ai/suggest-answer`.
+
+### Cambio 5: API router (`app/api/health_ai.py`)
+`suggest-answer` acepta y reenvía `product_permalink`, `product_attributes`,
+`same_item_history`, `related_listings` a `build_question_answer_prompt`.
+
+### Cambio 6: Prompt builder (`app/services/health_ai.py`)
+- Sección de specs ML: lista hasta 20 especificaciones técnicas del listing
+- Historial mismo listing tiene prioridad sobre historial general; instrucción explícita
+  de NO repetir info ya respondida en este producto
+- Cross-sell: listings relacionados incluidos en contexto solo si el comprador
+  pregunta explícitamente por alternativas; la IA tiene instrucción de no mencionarlos
+  de otra forma
+
+---
+
 ## 2026-04-19 — FIX+FEAT: 4 mejoras definitivas de stock y permisos (commit 90e9b69)
 
 ### Fix 1: Bulk fallback TotalQty-Reserve
