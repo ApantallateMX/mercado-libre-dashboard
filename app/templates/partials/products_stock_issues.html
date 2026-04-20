@@ -1,7 +1,7 @@
 {% if stale %}
 <div id="stale-banner" class="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3">
   <svg id="stale-banner-icon" class="animate-spin h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-  <span id="stale-banner-text">Actualizando datos BM en background&hellip; (mostrando caché anterior)</span>
+  <span id="stale-banner-text">Actualizando datos en background&hellip; (mostrando último ciclo del admin)</span>
 </div>
 <script>
 (function() {
@@ -24,8 +24,8 @@
           else location.reload();
           return;
         }
-        // BM caído — parar polling y mostrar mensaje apropiado
-        if (s.bm_down) {
+        // Inventario no disponible — parar polling y mostrar mensaje sin mencionar BM
+        if (!s.running && !s.ready) {
           _stalePolling = false;
           var bannerEl = document.getElementById('stale-banner');
           var iconEl = document.getElementById('stale-banner-icon');
@@ -36,9 +36,9 @@
             bannerEl.classList.add('bg-amber-50', 'border-amber-200', 'text-amber-700');
           }
           if (s.last_updated_s !== null && s.last_updated_s > 1800) {
-            if (textEl) textEl.textContent = 'Cache desactualizado — contacta al administrador para actualizar el inventario';
+            if (textEl) textEl.textContent = 'Datos desactualizados — contacta al administrador para actualizar el inventario';
           } else {
-            if (textEl) textEl.textContent = 'BinManager no disponible — mostrando datos del caché anterior';
+            if (textEl) textEl.textContent = 'Mostrando datos del último ciclo del administrador';
           }
           return;
         }

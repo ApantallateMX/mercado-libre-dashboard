@@ -388,26 +388,25 @@
     var _bmCanUpdate = {{ 'true' if dashboard_user and dashboard_user.role in ('admin', 'editor') else 'false' }};
     window._bmCanUpdate = _bmCanUpdate;
 
-    function _updateBmDot(d) {
+    function _updateBmDot(last_updated_s) {
+        // El dot muestra antigüedad del último cache descargado por el admin,
+        // NO la conectividad directa con BM (los operadores no contactan BM).
         var dot = document.getElementById('bm-health-dot');
         if (!dot) return;
-        if (d.ok === true) {
-            dot.style.background = d.latency_ms > 3000 ? '#f59e0b' : '#22c55e';
-            dot.title = 'BinManager: OK (' + d.latency_ms + 'ms)';
-        } else if (d.ok === false) {
-            dot.style.background = '#ef4444';
-            var msg = 'BinManager: CAÍDO';
-            if (d.down_since_min) msg += ' (hace ' + d.down_since_min + 'min)';
-            dot.title = msg;
-        } else {
+        if (last_updated_s == null) {
             dot.style.background = '#d1d5db';
-            dot.title = 'BinManager: verificando...';
+            dot.title = 'Inventario: sin datos del admin aún';
+        } else if (last_updated_s < 600) {    // < 10 min → verde
+            dot.style.background = '#22c55e';
+            var _m1 = Math.round(last_updated_s / 60);
+            dot.title = 'Inventario actualizado' + (_m1 < 1 ? ' ahora' : ' hace ' + _m1 + 'min');
+        } else if (last_updated_s < 1800) {   // 10-30 min → amarillo
+            dot.style.background = '#f59e0b';
+            dot.title = 'Inventario: hace ' + Math.round(last_updated_s / 60) + 'min';
+        } else {                               // > 30 min → rojo
+            dot.style.background = '#ef4444';
+            dot.title = 'Inventario desactualizado (hace ' + Math.round(last_updated_s / 60) + 'min) — contacta al administrador';
         }
-        var prev = dot.dataset.prevOk;
-        if (prev === 'true' && d.ok === false) {
-            if (typeof showToast === 'function') showToast('⚠ BinManager no responde — stock puede estar desactualizado', true);
-        }
-        dot.dataset.prevOk = String(d.ok);
     }
 
     function _updateCacheAge(s) {
@@ -455,17 +454,13 @@
             }).catch(function(){});
     };
 
-    function _checkBmHealth() {
-        fetch('/api/bm/status').then(function(r){ return r.json(); }).then(_updateBmDot).catch(function(){});
-    }
     function _checkCacheAge() {
         fetch('/api/stock/prewarm-status').then(function(r){ return r.json(); }).then(function(d){
+            _updateBmDot(d.last_updated_s);
             _updateCacheAge(d.last_updated_s);
         }).catch(function(){});
     }
-    _checkBmHealth();
     _checkCacheAge();
-    setInterval(_checkBmHealth, 120000);   // cada 2 min
     setInterval(_checkCacheAge, 120000);   // cada 2 min
 })();
 </script>
