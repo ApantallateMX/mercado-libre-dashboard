@@ -245,6 +245,39 @@
     </div>
   </div>
 
+  <!-- ── Historial de conectividad BM ───────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Historial de conectividad BM</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Últimos checks del health loop (cada 2 min, timeout 20s)</p>
+      </div>
+      <button onclick="_toggleBmLog()" id="bm-log-toggle-btn"
+              class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1.5 rounded-lg transition">
+        Ver historial
+      </button>
+    </div>
+    <div id="bm-log-panel" class="hidden mt-3">
+      <div id="bm-log-table-wrap" class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="border-b border-gray-100 text-left text-gray-400 font-medium">
+              <th class="pb-1.5 pr-3">Hora (UTC)</th>
+              <th class="pb-1.5 pr-3">Estado</th>
+              <th class="pb-1.5 pr-3">Latencia</th>
+              <th class="pb-1.5 pr-3">Tipo</th>
+              <th class="pb-1.5">Detalle</th>
+            </tr>
+          </thead>
+          <tbody id="bm-log-tbody">
+            <tr><td colspan="5" class="py-3 text-gray-400 text-center">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-[10px] text-gray-400 mt-2">Se actualiza al recargar la página &mdash; máx. 20 registros</p>
+    </div>
+  </div>
+
   <!-- ── Reglas ──────────────────────────────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-4">
@@ -446,7 +479,15 @@
       if (detail) {
         var msg = 'El servicio de inventario no responde';
         if (d.down_since_min) msg += ' (caído hace ' + d.down_since_min + ' min)';
-        msg += '. Los datos de stock pueden estar desactualizados.';
+        if (d.error_type === 'timeout') {
+          msg += '. Responde lento (timeout >20s) — puede ser momentáneo.';
+        } else if (d.error_type === 'auth') {
+          msg += '. Error de autenticación con BinManager.';
+        } else if (d.error_type === 'connection') {
+          msg += '. No se puede alcanzar el servidor.';
+        } else {
+          msg += '. Los datos de stock pueden estar desactualizados.';
+        }
         detail.textContent = msg;
       }
       var previewBtn = document.getElementById('btn-preview');
@@ -457,6 +498,8 @@
         previewBtn.classList.add('bg-gray-300', 'text-gray-400', 'cursor-not-allowed');
       }
     }
+    // Cargar log de conectividad al inicio
+    _loadBmHealthLog();
   }).catch(function(){});
 })();
 
@@ -1119,6 +1162,67 @@ window.forcePrewarm = function() {
 
 // Estado inicial al cargar la página
 _pollPrewarmStatus();
+
+// ── Log de conectividad BM ────────────────────────────────────────────────────
+var _bmLogVisible = false;
+
+window._toggleBmLog = function() {
+  var panel = document.getElementById('bm-log-panel');
+  var btn = document.getElementById('bm-log-toggle-btn');
+  _bmLogVisible = !_bmLogVisible;
+  if (_bmLogVisible) {
+    panel.classList.remove('hidden');
+    btn.textContent = 'Ocultar historial';
+    _loadBmHealthLog();
+  } else {
+    panel.classList.add('hidden');
+    btn.textContent = 'Ver historial';
+  }
+};
+
+function _loadBmHealthLog() {
+  fetch('/api/bm/health-log')
+    .then(function(r) { return r.json(); })
+    .then(function(entries) {
+      var tbody = document.getElementById('bm-log-tbody');
+      if (!tbody) return;
+      if (!entries || entries.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="py-3 text-gray-400 text-center">Sin registros aún — el primer check ocurre 10s después del arranque</td></tr>';
+        return;
+      }
+      var _typeLabel = { 'timeout': 'Timeout', 'auth': 'Auth', 'connection': 'Conexión', 'error': 'Error' };
+      var _typeColor = { 'timeout': '#d97706', 'auth': '#dc2626', 'connection': '#dc2626', 'error': '#dc2626' };
+      var html = '';
+      entries.forEach(function(e) {
+        var stateHtml = e.ok
+          ? '<span style="color:#16a34a;font-weight:600">✓ OK</span>'
+          : '<span style="color:#dc2626;font-weight:600">✗ Fallo</span>';
+        var latStr = e.latency_ms >= 20000
+          ? '<span style="color:#dc2626">>20s</span>'
+          : (e.latency_ms >= 3000
+              ? '<span style="color:#d97706">' + (e.latency_ms / 1000).toFixed(1) + 's</span>'
+              : '<span style="color:#16a34a">' + (e.latency_ms / 1000).toFixed(1) + 's</span>');
+        var typeStr = e.error_type
+          ? '<span style="color:' + (_typeColor[e.error_type] || '#dc2626') + '">' + (_typeLabel[e.error_type] || e.error_type) + '</span>'
+          : '<span class="text-gray-300">—</span>';
+        var detailStr = e.error_msg
+          ? '<span style="color:#6b7280;font-family:monospace">' + e.error_msg.substring(0, 80) + '</span>'
+          : '<span class="text-gray-300">—</span>';
+        html += '<tr class="border-b border-gray-50">'
+          + '<td class="py-1.5 pr-3 font-mono text-gray-500">' + e.time_label + '</td>'
+          + '<td class="py-1.5 pr-3">' + stateHtml + '</td>'
+          + '<td class="py-1.5 pr-3">' + latStr + '</td>'
+          + '<td class="py-1.5 pr-3">' + typeStr + '</td>'
+          + '<td class="py-1.5">' + detailStr + '</td>'
+          + '</tr>';
+      });
+      tbody.innerHTML = html;
+    })
+    .catch(function() {
+      var tbody = document.getElementById('bm-log-tbody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="5" class="py-3 text-red-400 text-center">Error al cargar historial</td></tr>';
+    });
+}
 
 window.lookupBmCache = function() {
   var sku = document.getElementById('bm-sku-input').value.trim().toUpperCase();

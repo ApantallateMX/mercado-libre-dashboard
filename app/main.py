@@ -2645,43 +2645,75 @@ _bm_health: dict = {
     "last_check_ts": 0.0,
     "last_ok_ts": 0.0,
     "consecutive_failures": 0,
+    "error_type": None,   # "timeout" | "auth" | "connection" | "error"
+    "last_error": "",
 }
+_bm_health_log: list = []   # últimos 20 registros de health checks
 
 async def _check_bm_health():
-    """Verifica salud de BM testeando un endpoint de API real (no solo la página de login).
-    Un GET a /User/Index responde 200 incluso cuando las APIs de inventario están caídas o lentas.
-    Este check hace un POST real a Get_GlobalStock_InventoryBySKU para detectar el estado real.
+    """Verifica salud de BM testeando un endpoint de API real.
+    Timeout 20s — evita falsos positivos cuando BM está lento pero funcional.
+    Clasifica el error para diagnóstico: timeout / auth / connection / error.
     """
-    global _bm_health
+    global _bm_health, _bm_health_log
     t0 = _time.time()
     ok = False
+    error_type: str | None = None
+    error_msg = ""
+    elapsed_ms = 0
     try:
         from app.services.binmanager_client import get_shared_bm as _get_shared_bm_health
         _bm_cli_health = await _get_shared_bm_health()
-        # Testear endpoint real con un SKU conocido — timeout 5s.
-        # Si BM está lento (ej: post-mantenimiento) o caído, esto falla en ≤5s.
-        import asyncio as _asyncio_h
-        _result = await _asyncio_h.wait_for(
+        _result = await asyncio.wait_for(
             _bm_cli_health.get_stock_with_reserve("SNTV001764"),
-            timeout=5.0,
+            timeout=20.0,
         )
         elapsed_ms = round((_time.time() - t0) * 1000)
-        # _result puede ser (avail, reserve) o None (sesión/error), pero si llegó aquí
-        # sin excepción el servidor respondió — incluso None significa BM contestó.
         ok = True
-    except Exception:
+    except asyncio.TimeoutError:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False
+        error_type = "timeout"
+        error_msg = f"Timeout después de {round(_time.time() - t0)}s (umbral: 20s)"
+    except Exception as _exc:
+        elapsed_ms = round((_time.time() - t0) * 1000)
+        ok = False
+        _estr = str(_exc).lower()
+        if "401" in _estr or "403" in _estr or "unauthorized" in _estr or "login" in _estr:
+            error_type = "auth"
+        elif "connect" in _estr or "refused" in _estr or "unreachable" in _estr or "name or service" in _estr:
+            error_type = "connection"
+        else:
+            error_type = "error"
+        error_msg = str(_exc)[:200]
+
+    # Registrar en log (máx 20 entradas)
+    from datetime import datetime as _dt_h
+    _bm_health_log.append({
+        "ts": _time.time(),
+        "time_label": _dt_h.utcfromtimestamp(_time.time()).strftime("%H:%M:%S"),
+        "ok": ok,
+        "latency_ms": elapsed_ms,
+        "error_type": error_type,
+        "error_msg": error_msg,
+    })
+    if len(_bm_health_log) > 20:
+        _bm_health_log.pop(0)
+
     _bm_health["last_check_ts"] = _time.time()
     if ok:
         _bm_health["ok"] = True
         _bm_health["latency_ms"] = elapsed_ms
         _bm_health["last_ok_ts"] = _time.time()
         _bm_health["consecutive_failures"] = 0
+        _bm_health["error_type"] = None
+        _bm_health["last_error"] = ""
     else:
         _bm_health["ok"] = False
         _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
-        logger.warning(f"[BM-HEALTH] BM no responde — fallo #{_bm_health['consecutive_failures']} ({elapsed_ms}ms)")
+        _bm_health["error_type"] = error_type
+        _bm_health["last_error"] = error_msg
+        logger.warning(f"[BM-HEALTH] BM no responde — fallo #{_bm_health['consecutive_failures']} ({elapsed_ms}ms) [{error_type}] {error_msg[:80]}")
 
 
 def _bm_is_confirmed_down() -> bool:
@@ -9121,7 +9153,15 @@ async def bm_health_status():
         "last_check_iso": last_check_iso,
         "consecutive_failures": h["consecutive_failures"],
         "down_since_min": down_since_min,
+        "error_type": h.get("error_type"),
+        "last_error": h.get("last_error", ""),
     })
+
+
+@app.get("/api/bm/health-log")
+async def bm_health_log_endpoint():
+    """Historial de los últimos checks del health loop de BM (más reciente primero)."""
+    return JSONResponse(list(reversed(_bm_health_log)))
 
 
 @app.get("/api/debug/bm-cache")
