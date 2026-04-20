@@ -429,6 +429,19 @@ async def init_db():
                 synced_at REAL NOT NULL DEFAULT 0
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_issues_cache — persiste alertas/stock pre-computados
+        # Sobrevive deploys de Railway: el Stock tab muestra datos inmediatos
+        # en lugar de "Calculando..." mientras corre el prewarm en background.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_issues_cache (
+                cache_key TEXT PRIMARY KEY,
+                ts        REAL NOT NULL,
+                data_json TEXT NOT NULL,
+                saved_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS return_flags (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1468,6 +1481,46 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
             [min_ts],
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── stock_issues_cache helpers ─────────────────────────────────────────────
+
+async def save_stock_issues_snapshot(key: str, ts: float, data: dict) -> None:
+    """Persiste un resultado de prewarm (alertas + stock) en SQLite.
+    Sobrevive deploys de Railway: el Stock tab muestra datos sin esperar el prewarm.
+    """
+    import json as _json, time as _t
+    try:
+        data_str = _json.dumps(data, default=str, ensure_ascii=False)
+    except Exception:
+        return  # no persistir si no es serializable
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO stock_issues_cache (cache_key, ts, data_json, saved_at)
+               VALUES (?, ?, ?, ?)""",
+            (key, ts, data_str, _t.time()),
+        )
+        await db.commit()
+
+
+async def load_all_stock_issues_snapshots() -> dict:
+    """Carga todos los snapshots de stock_issues_cache desde DB.
+    Retorna dict[cache_key, (ts, data)] — mismo formato que _stock_issues_cache en memoria.
+    """
+    import json as _json
+    result: dict = {}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT cache_key, ts, data_json FROM stock_issues_cache"
+        )).fetchall()
+    for r in rows:
+        try:
+            data = _json.loads(r["data_json"])
+            result[r["cache_key"]] = (float(r["ts"]), data)
+        except Exception:
+            pass
+    return result
 
 
 # ─── return_flags helpers ────────────────────────────────────────────────────

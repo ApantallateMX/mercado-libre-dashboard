@@ -390,6 +390,8 @@ async def lifespan(app: FastAPI):
     await price_monitor.start()
     # Cargar caché BM desde DB inmediatamente (evita refetch completo en BM tras restart)
     asyncio.create_task(_load_bm_cache_from_db())
+    # Cargar stock_issues_cache desde DB (sobrevive deploys — Stock tab muestra datos sin prewarm)
+    asyncio.create_task(_load_stock_issues_from_db())
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -2551,6 +2553,26 @@ async def _load_bm_cache_from_db():
         _log2.getLogger(__name__).warning(f"[BM-DB] Error cargando desde DB: {_e}")
 
 
+async def _load_stock_issues_from_db():
+    """Carga stock_issues_cache desde SQLite al arrancar.
+    El Stock tab muestra datos inmediatamente post-deploy en vez de 'Calculando...'
+    El prewarm sigue corriendo en background y sobreescribe con datos frescos al terminar.
+    """
+    try:
+        snapshots = await token_store.load_all_stock_issues_snapshots()
+        loaded = 0
+        for key, (ts, data) in snapshots.items():
+            if key not in _stock_issues_cache:
+                _stock_issues_cache[key] = (ts, data)
+                loaded += 1
+        if loaded:
+            logger.info(f"[STOCK-DB] {loaded} snapshots cargados desde DB (post-deploy, stale OK)")
+        else:
+            logger.info("[STOCK-DB] Sin snapshots en DB — esperando primer prewarm")
+    except Exception as _e:
+        logger.warning(f"[STOCK-DB] Error cargando snapshots: {_e}")
+
+
 async def _get_sale_prices_cached(client, item_ids: list[str]) -> dict[str, dict]:
     """Fetch /items/{id}/sale_price para detectar deals activos. Cache 5min.
     Retorna {item_id: {amount, regular_amount, ...}} solo para items CON descuento."""
@@ -2895,7 +2917,9 @@ async def _prewarm_caches(user_id: str = None):
                 ]
                 imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail") or 0), reverse=True)
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
-                _stock_issues_cache[f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"] = (_time.time(), {
+                _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
+                _sic_ts   = _time.time()
+                _sic_data = {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
                     "stagnant": stagnant, "price_risk": price_risk,
@@ -2908,7 +2932,13 @@ async def _prewarm_caches(user_id: str = None):
                     "stagnant_count": len(stagnant), "stagnant_bm": sum(p.get("_bm_avail", 0) for p in stagnant),
                     "price_risk_count": len(price_risk), "price_risk_gap": sum(p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in price_risk),
                     "threshold": _DEFAULT_THRESHOLD,
-                })
+                }
+                _stock_issues_cache[_sic_key] = (_sic_ts, _sic_data)
+                # Persistir en SQLite — sobrevive deploys de Railway
+                try:
+                    await token_store.save_stock_issues_snapshot(_sic_key, _sic_ts, _sic_data)
+                except Exception as _e:
+                    logger.warning(f"[STOCK-DB] Error guardando snapshot: {_e}")
 
             # Timeout de 600s — BM puede tener cientos de SKUs sin caché
             await asyncio.wait_for(_do_prewarm(), timeout=600.0)
