@@ -171,19 +171,33 @@
         <h2 class="text-sm font-semibold text-gray-700">Estado por cuenta — último ciclo</h2>
         <p class="text-xs text-gray-400 mt-0.5">Desglose de updates y errores por plataforma y cuenta</p>
       </div>
+      <span id="per-acct-ts" class="text-[10px] text-gray-400 font-mono"></span>
+    </div>
+    <div id="per-acct-body">
+      <p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo completo</p>
+    </div>
+  </div>
+
+  <!-- ── Listings en cache ──────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Listings en cache</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Listados descargados de ML y Amazon — solo lectura, sin modificaciones</p>
+      </div>
       <div class="flex items-center gap-2">
-        <span id="per-acct-ts" class="text-[10px] text-gray-400 font-mono"></span>
-        <button id="btn-run-now" onclick="runCycleNow()"
-                class="px-3 py-1.5 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white text-xs font-medium rounded-lg transition flex items-center gap-1.5">
+        <span id="listings-sync-ts" class="text-[10px] text-gray-400 font-mono"></span>
+        <button id="btn-sync-listings" onclick="syncListingsNow()"
+                class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-medium rounded-lg transition flex items-center gap-1.5">
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/>
           </svg>
-          Correr ciclo
+          Sync Listings
         </button>
       </div>
     </div>
-    <div id="per-acct-body">
-      <p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo o presiona Correr ciclo</p>
+    <div id="listings-summary-body">
+      <p class="text-xs text-gray-400 text-center py-3">Cargando...</p>
     </div>
   </div>
 
@@ -731,45 +745,8 @@ function triggerSync() {
   runPreview();
 }
 
-window.runCycleNow = function() {
-  var btn = document.getElementById('btn-run-now');
-  if (btn) { btn.disabled = true; btn.textContent = 'Iniciando...'; }
-  fetch('/api/stock/multi-sync/trigger', { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.status === 'already_running') {
-        showToast('Ya hay un ciclo corriendo', false);
-        if (btn) { btn.disabled = false; btn.innerHTML = '▶ Correr ciclo'; }
-        _showProgress(true);
-        _startElapsedTimer();
-        pollStatus();
-        return;
-      }
-      showToast('Ciclo iniciado — todas las cuentas', false);
-      _showProgress(true);
-      _startElapsedTimer();
-      pollStatus();
-      // Rehabilitar botón cuando termine el ciclo (pollStatus lo detecta)
-      var _waitDone = setInterval(function() {
-        fetch('/api/stock/multi-sync/status')
-          .then(function(r) { return r.json(); })
-          .then(function(s) {
-            if (!s.running) {
-              clearInterval(_waitDone);
-              if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg> Correr ciclo';
-              }
-              _loadPerAccountStatus();
-            }
-          }).catch(function() { clearInterval(_waitDone); });
-      }, 4000);
-    })
-    .catch(function() {
-      showToast('Error al iniciar ciclo', true);
-      if (btn) { btn.disabled = false; btn.innerHTML = '▶ Correr ciclo'; }
-    });
-};
+// runCycleNow eliminado — el ciclo se maneja exclusivamente desde el flujo
+// Ver cambios → confirmar (botón principal de la página).
 
 function pollStatus() {
   var interval = setInterval(function() {
@@ -809,10 +786,7 @@ function pollStatus() {
             showToast('\u2713 Sync completado: ' + (r.updates || 0) + ' updates, ' + (r.skus_processed || 0) + ' SKUs', false);
           }
 
-          var btn = document.getElementById('btn-run-now');
-          if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg> Correr ciclo'; }
-
-          // Recargar historial
+          // Recargar para reflejar nuevo estado en badge + stats
           setTimeout(function() { location.reload(); }, 1500);
         }
       });
@@ -826,8 +800,7 @@ function pollStatus() {
 {% if running %}
 _showProgress(true);
 _startElapsedTimer();
-var _autoBtn = document.getElementById('btn-run-now');
-if (_autoBtn) { _autoBtn.disabled = true; _autoBtn.textContent = 'Corriendo...'; }
+// ciclo ya corriendo al cargar página — no hay botón que deshabilitar
 pollStatus();
 {% endif %}
 
@@ -1232,6 +1205,7 @@ window.forcePrewarm = function() {
 // Estado inicial al cargar la página
 _pollPrewarmStatus();
 _loadPerAccountStatus();
+_loadListingsSummary();
 
 // ── Estado por cuenta ─────────────────────────────────────────────────────────
 function _loadPerAccountStatus() {
@@ -1243,7 +1217,9 @@ function _loadPerAccountStatus() {
       if (!body) return;
       var accounts = d.per_account || [];
       if (!accounts.length) {
-        body.innerHTML = '<p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo completo</p>';
+        body.innerHTML = d.running
+          ? '<p class="text-xs text-blue-500 text-center py-3">Ciclo en progreso — datos disponibles al completar</p>'
+          : '<p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo completo</p>';
         return;
       }
       // Timestamp del ciclo
@@ -1295,6 +1271,96 @@ function _loadPerAccountStatus() {
 }
 
 function _now() { return Date.now() / 1000; }
+
+// ── Listings en cache ──────────────────────────────────────────────────────
+function _loadListingsSummary() {
+  fetch('/api/listings/summary')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var body = document.getElementById('listings-summary-body');
+      var tsEl = document.getElementById('listings-sync-ts');
+      if (!body) return;
+
+      var accounts = d.accounts || [];
+      if (!accounts.length) {
+        body.innerHTML = '<p class="text-xs text-gray-400 text-center py-3">Sin datos — presiona Sync Listings para descargar</p>';
+        return;
+      }
+
+      if (tsEl && d.last_sync_ts) {
+        var ago = Math.round((_now() - d.last_sync_ts) / 60);
+        tsEl.textContent = ago < 1 ? 'actualizado hace <1min' : 'hace ' + ago + 'min';
+      }
+
+      var totListings = accounts.reduce(function(s, a) { return s + (a.count || 0); }, 0);
+      var html = '<div class="overflow-x-auto"><table class="w-full text-xs">'
+        + '<thead><tr class="border-b border-gray-100 text-left text-gray-400 font-medium">'
+        + '<th class="pb-1.5 pr-3">Cuenta</th>'
+        + '<th class="pb-1.5 pr-3">Plataforma</th>'
+        + '<th class="pb-1.5 text-right">Listings</th>'
+        + '</tr></thead><tbody>';
+
+      accounts.forEach(function(a) {
+        var platBadge = a.platform === 'ml'
+          ? '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-700">ML</span>'
+          : '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">AMZ</span>';
+        var cntCell = a.count > 0
+          ? '<span class="font-semibold text-gray-700">' + a.count.toLocaleString() + '</span>'
+          : '<span class="text-gray-300">0</span>';
+        html += '<tr class="border-b border-gray-50 hover:bg-gray-50">'
+          + '<td class="py-1.5 pr-3 font-medium text-gray-700">' + (a.nickname || a.account_id) + '</td>'
+          + '<td class="py-1.5 pr-3">' + platBadge + '</td>'
+          + '<td class="py-1.5 text-right">' + cntCell + '</td>'
+          + '</tr>';
+      });
+
+      html += '<tr class="border-t-2 border-gray-200 bg-gray-50">'
+        + '<td class="py-1.5 pr-3 font-semibold text-gray-700" colspan="2">TOTAL</td>'
+        + '<td class="py-1.5 text-right font-semibold text-gray-700">' + totListings.toLocaleString() + '</td>'
+        + '</tr>';
+      html += '</tbody></table></div>';
+      body.innerHTML = html;
+    })
+    .catch(function() {
+      var body = document.getElementById('listings-summary-body');
+      if (body) body.innerHTML = '<p class="text-xs text-red-400 text-center py-3">Error al cargar</p>';
+    });
+}
+
+window.syncListingsNow = function() {
+  var btn = document.getElementById('btn-sync-listings');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sincronizando...'; }
+
+  fetch('/api/listings/refresh', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.status === 'already_running') {
+        showToast('Sync ya está corriendo', false);
+      } else {
+        showToast('Descargando listings de ML y Amazon...', false);
+      }
+      // Polling hasta que termine
+      var _poll = setInterval(function() {
+        fetch('/api/listings/summary')
+          .then(function(r) { return r.json(); })
+          .then(function(s) {
+            if (!s.running) {
+              clearInterval(_poll);
+              if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg> Sync Listings';
+              }
+              _loadListingsSummary();
+              showToast('\u2713 Listings actualizados: ' + (s.total_listings || 0).toLocaleString() + ' en total', false);
+            }
+          }).catch(function() { clearInterval(_poll); });
+      }, 3000);
+    })
+    .catch(function() {
+      showToast('Error al iniciar sync de listings', true);
+      if (btn) { btn.disabled = false; btn.textContent = 'Sync Listings'; }
+    });
+};
 
 // ── Log de conectividad BM ────────────────────────────────────────────────────
 var _bmLogVisible = false;

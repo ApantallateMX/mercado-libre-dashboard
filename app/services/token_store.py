@@ -386,6 +386,28 @@ async def init_db():
         except Exception:
             pass  # column already exists
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: amazon_listings — caché local de listings Amazon
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amazon_listings (
+                seller_id     TEXT NOT NULL,
+                sku           TEXT NOT NULL,
+                base_sku      TEXT DEFAULT '',
+                asin          TEXT DEFAULT '',
+                title         TEXT DEFAULT '',
+                status        TEXT DEFAULT 'ACTIVE',
+                price         REAL DEFAULT 0,
+                available_qty INTEGER DEFAULT 0,
+                can_update    INTEGER DEFAULT 1,
+                fulfillment   TEXT DEFAULT '',
+                synced_at     REAL DEFAULT 0,
+                PRIMARY KEY (seller_id, sku)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_amz_listings_seller ON amazon_listings(seller_id)"
+        )
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_stock_cache — persiste el caché de BM entre reinicios
         # Permite que el prewarm lea BM en <100ms después de un restart
         # ─────────────────────────────────────────────────────────────────
@@ -1196,6 +1218,100 @@ async def update_ml_listing_qty(item_id: str, new_qty: int) -> None:
                     [new_qty, _time2.time(), item_id],
                 )
         await db.commit()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AMAZON LISTINGS CACHE
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def upsert_amazon_listings(rows: list[dict]) -> None:
+    """Inserta o actualiza listings Amazon en la tabla local."""
+    if not rows:
+        return
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT OR REPLACE INTO amazon_listings
+               (seller_id, sku, base_sku, asin, title, status, price,
+                available_qty, can_update, fulfillment, synced_at)
+               VALUES (:seller_id,:sku,:base_sku,:asin,:title,:status,:price,
+                       :available_qty,:can_update,:fulfillment,:synced_at)""",
+            rows,
+        )
+        await db.commit()
+
+
+async def count_amazon_listings(seller_id: str) -> int:
+    """Retorna cuántos listings tiene la cuenta Amazon en DB."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=? AND synced_at > 0",
+            [seller_id],
+        )).fetchone()
+    return row[0] if row else 0
+
+
+async def get_listings_summary() -> dict:
+    """Retorna conteo de listings por cuenta — ML + Amazon — para el card de Sync Stock."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # ML: conteo + último sync por cuenta
+        ml_counts: dict = {}
+        for r in await (await db.execute(
+            "SELECT account_id, COUNT(*) as cnt, MAX(synced_at) as last_ts "
+            "FROM ml_listings GROUP BY account_id"
+        )).fetchall():
+            ml_counts[r["account_id"]] = {"count": r["cnt"], "last_ts": float(r["last_ts"] or 0)}
+
+        # ML: nicknames
+        tokens_rows = await (await db.execute("SELECT user_id, nickname FROM tokens")).fetchall()
+        ml_accounts = []
+        for t in tokens_rows:
+            uid = t["user_id"]
+            info = ml_counts.get(uid, {"count": 0, "last_ts": 0.0})
+            ml_accounts.append({
+                "account_id":  uid,
+                "nickname":    t["nickname"] or uid,
+                "platform":    "ml",
+                "count":       info["count"],
+                "last_sync_ts": info["last_ts"],
+            })
+
+        # Amazon: conteo + último sync por cuenta
+        amz_counts: dict = {}
+        try:
+            for r in await (await db.execute(
+                "SELECT seller_id, COUNT(*) as cnt, MAX(synced_at) as last_ts "
+                "FROM amazon_listings GROUP BY seller_id"
+            )).fetchall():
+                amz_counts[r["seller_id"]] = {"count": r["cnt"], "last_ts": float(r["last_ts"] or 0)}
+        except Exception:
+            pass
+
+        # Amazon: nicknames
+        amz_rows = await (await db.execute(
+            "SELECT seller_id, nickname FROM amazon_accounts"
+        )).fetchall()
+        amz_accounts = []
+        for t in amz_rows:
+            sid = t["seller_id"]
+            info = amz_counts.get(sid, {"count": 0, "last_ts": 0.0})
+            amz_accounts.append({
+                "account_id":  sid,
+                "nickname":    t["nickname"] or sid,
+                "platform":    "amz",
+                "count":       info["count"],
+                "last_sync_ts": info["last_ts"],
+            })
+
+    all_accounts = ml_accounts + amz_accounts
+    all_ts = [a["last_sync_ts"] for a in all_accounts if a["last_sync_ts"]]
+    return {
+        "accounts":       all_accounts,
+        "last_sync_ts":   max(all_ts) if all_ts else 0,
+        "total_listings": sum(a["count"] for a in all_accounts),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

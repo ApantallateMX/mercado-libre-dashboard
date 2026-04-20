@@ -808,7 +808,9 @@ async def run_multi_stock_sync() -> dict:
             _sync_progress["errors"]    += err_n
             # Acumular stats por cuenta
             for r in res:
-                _rk = f"{r.get('platform', 'ml')}/{r.get('account_id', '')}"
+                _plt = r.get('platform', 'ml')
+                _plt = 'amz' if _plt == 'amazon' else _plt  # normalizar "amazon" → "amz"
+                _rk = f"{_plt}/{r.get('account_id', '')}"
                 if _rk in _per_acct:
                     if r["ok"]:
                         _per_acct[_rk]["updates"] += 1

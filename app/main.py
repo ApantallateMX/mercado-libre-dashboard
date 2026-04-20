@@ -445,6 +445,9 @@ async def lifespan(app: FastAPI):
 
     register_listings_updated_callback(_invalidate_products_on_sync)
     start_ml_listing_sync()
+    # Sync de listings Amazon → DB local (descarga solo, sin modificar Amazon)
+    from app.services.amazon_listing_sync import start_amazon_listing_sync
+    start_amazon_listing_sync()
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
     from app.api.lanzar import router as _lanzar_router_ref
     try:
@@ -9171,6 +9174,58 @@ async def bm_health_status():
 async def bm_health_log_endpoint():
     """Historial de los últimos checks del health loop de BM (más reciente primero)."""
     return JSONResponse(list(reversed(_bm_health_log)))
+
+
+# ── Listings Cache — descarga y resumen de listings ML + Amazon ────────────
+
+@app.get("/api/listings/summary")
+async def listings_summary_endpoint(request: Request):
+    """Retorna conteo de listings por cuenta (ML + Amazon) + estado del sync."""
+    _du = getattr(request.state, "dashboard_user", None) or {}
+    if _du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    from app.services.token_store import get_listings_summary
+    from app.services.ml_listing_sync import get_sync_status as _ml_status
+    from app.services.amazon_listing_sync import get_sync_status as _amz_status
+
+    summary = await get_listings_summary()
+    ml_st   = _ml_status()
+    amz_st  = _amz_status()
+
+    return JSONResponse({
+        **summary,
+        "ml_running":       ml_st.get("running", False),
+        "amz_running":      amz_st.get("running", False),
+        "running":          ml_st.get("running", False) or amz_st.get("running", False),
+        "ml_last_full_ts":  ml_st.get("last_full_sync_ts", 0),
+        "amz_last_sync_ts": amz_st.get("last_sync_ts", 0),
+    })
+
+
+@app.post("/api/listings/refresh")
+async def listings_refresh_endpoint(request: Request):
+    """Dispara un full sync de listings ML + Amazon en background (solo lectura)."""
+    _du = getattr(request.state, "dashboard_user", None) or {}
+    if _du.get("role") != "admin":
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
+    from app.services.ml_listing_sync import run_ml_listing_sync as _ml_sync
+    from app.services.amazon_listing_sync import run_amazon_listing_sync as _amz_sync
+    from app.services.ml_listing_sync import get_sync_status as _ml_st
+    from app.services.amazon_listing_sync import get_sync_status as _amz_st
+
+    if _ml_st().get("running") or _amz_st().get("running"):
+        return JSONResponse({"status": "already_running"})
+
+    # Lanzar en background — retornar inmediatamente
+    async def _bg():
+        await _ml_sync(full=True)
+        await _amz_sync()
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_bg())
+    return JSONResponse({"status": "started"})
 
 
 @app.get("/api/debug/bm-cache")
