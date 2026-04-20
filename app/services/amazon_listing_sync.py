@@ -3,6 +3,7 @@ amazon_listing_sync.py — Sincronización de listings Amazon → DB local
 
 Estrategia:
   - Arranque: sync completo para todas las cuentas Amazon (60s después del arranque)
+  - Cada 10 min: qty-only sync — solo fulfillmentAvailability para listings conocidos
   - Cada 6h: reconciliación completa automática
   - Manual: trigger via POST /api/listings/refresh
 
@@ -14,9 +15,12 @@ import time as _time
 
 logger = logging.getLogger(__name__)
 
-_FULL_INTERVAL = 6 * 3600   # 6 horas entre syncs automáticos
-_sync_running  = False
-_last_sync_ts  = 0.0
+_FULL_INTERVAL     = 6 * 3600   # 6 horas entre syncs completos
+_QTY_SYNC_INTERVAL = 10 * 60   # 10 minutos entre qty-only syncs
+_sync_running      = False
+_qty_sync_running  = False
+_last_sync_ts      = 0.0
+_last_qty_sync_ts  = 0.0
 _sync_error    = ""
 _sync_status: dict = {"accounts_synced": 0, "items_total": 0, "last_run_iso": None, "elapsed_s": 0}
 
@@ -159,22 +163,101 @@ async def run_amazon_listing_sync() -> dict:
         _sync_running = False
 
 
+async def _sync_qty_only_account(seller_id: str, client) -> int:
+    """Sync ligero: solo fulfillmentAvailability para listings conocidos de esta cuenta.
+    Usa get_all_listings con includedData=fulfillmentAvailability únicamente.
+    Retorna número de listings cuya qty cambió en DB.
+    """
+    from app.services import token_store
+    try:
+        current = {sku: qty for sku, qty in await token_store.get_amazon_skus_and_qtys(seller_id)}
+        if not current:
+            return 0  # Sin listings en DB — esperar al full sync
+
+        items = await client.get_all_listings(included_data=["fulfillmentAvailability"])
+        updates: list[tuple[str, str, int]] = []
+        for item in items:
+            sku = item.get("sku", "")
+            if not sku or sku not in current:
+                continue
+            fa  = (item.get("fulfillmentAvailability") or [{}])[0]
+            qty = int(fa.get("quantity") or 0)
+            if current.get(sku, -1) != qty:
+                updates.append((seller_id, sku, qty))
+
+        if not updates:
+            return 0
+
+        changed = await token_store.update_amazon_qty_batch(updates)
+        if changed > 0:
+            logger.info(f"[AMZ-QTY] seller={seller_id}: {changed}/{len(updates)} listings qty actualizada")
+        return changed
+    except Exception as e:
+        logger.warning(f"[AMZ-QTY] Error seller={seller_id}: {e}")
+        return 0
+
+
+async def run_amazon_qty_sync() -> dict:
+    """Sync ligero de qty para todas las cuentas Amazon."""
+    global _qty_sync_running, _last_qty_sync_ts
+    if _qty_sync_running or _sync_running:
+        return {"status": "skipped"}
+    _qty_sync_running = True
+    t0 = _time.time()
+    total_changed = 0
+    try:
+        from app.services import token_store
+        from app.services.amazon_client import get_amazon_client
+        accounts = await token_store.get_all_amazon_accounts()
+        for acc in (accounts or []):
+            sid = acc.get("seller_id", "")
+            if not sid:
+                continue
+            client = await get_amazon_client(seller_id=sid)
+            if not client:
+                continue
+            n = await _sync_qty_only_account(sid, client)
+            total_changed += n
+        _last_qty_sync_ts = _time.time()
+        logger.debug(f"[AMZ-QTY] {total_changed} cambios en {round(_time.time()-t0,1)}s")
+        return {"status": "ok", "changed": total_changed, "elapsed_s": round(_time.time() - t0, 1)}
+    except Exception as e:
+        logger.warning(f"[AMZ-QTY] Fatal: {e}")
+        return {"status": "error", "error": str(e)[:200]}
+    finally:
+        _qty_sync_running = False
+
+
 async def _loop():
-    """Loop periódico: sync al arranque + cada 6h."""
+    """Loop periódico:
+    - Arranque (60s): full sync
+    - Cada 10 min: qty-only sync
+    - Cada 6h: full reconciliation
+    """
     await asyncio.sleep(60)   # esperar a que el servidor esté listo
     await run_amazon_listing_sync()
     while True:
-        await asyncio.sleep(_FULL_INTERVAL)
+        await asyncio.sleep(_QTY_SYNC_INTERVAL)   # despertar cada 10 min
+        # qty-only sync (siempre)
         try:
-            await run_amazon_listing_sync()
+            await run_amazon_qty_sync()
         except Exception as e:
-            logger.error(f"[AMZ-LISTING-SYNC-LOOP] Error: {e}")
+            logger.error(f"[AMZ-QTY-LOOP] Error: {e}")
+        # full sync si pasaron ≥6h
+        if (_time.time() - _last_sync_ts) >= _FULL_INTERVAL:
+            try:
+                await run_amazon_listing_sync()
+            except Exception as e:
+                logger.error(f"[AMZ-LISTING-SYNC-LOOP] Error: {e}")
 
 
 def start_amazon_listing_sync():
     """Inicia el loop en background. Llamar desde lifespan de FastAPI."""
     asyncio.create_task(_loop())
-    logger.info(f"[AMZ-LISTING-SYNC] Iniciado — full sync cada {_FULL_INTERVAL // 3600}h")
+    logger.info(
+        f"[AMZ-LISTING-SYNC] Iniciado — qty cada {_QTY_SYNC_INTERVAL//60}min, "
+        f"full sync cada {_FULL_INTERVAL//3600}h"
+    )
 
 
 def get_sync_status() -> dict:

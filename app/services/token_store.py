@@ -1387,6 +1387,60 @@ async def count_amazon_listings(seller_id: str) -> int:
     return row[0] if row else 0
 
 
+async def update_ml_qty_batch(updates: list[tuple[str, int]]) -> int:
+    """Actualiza available_qty en lote para items ML conocidos.
+    updates = [(item_id, new_qty), ...]
+    Solo actualiza filas cuyo qty realmente cambió. Retorna nº de filas cambiadas.
+    """
+    if not updates:
+        return 0
+    import time as _t
+    ts = _t.time()
+    changed = 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for item_id, new_qty in updates:
+            cur = await db.execute(
+                "UPDATE ml_listings SET available_qty=?, synced_at=? "
+                "WHERE item_id=? AND available_qty!=?",
+                (new_qty, ts, item_id, new_qty),
+            )
+            changed += cur.rowcount
+        await db.commit()
+    return changed
+
+
+async def get_amazon_skus_and_qtys(seller_id: str) -> list[tuple[str, int]]:
+    """Retorna [(sku, available_qty), ...] para el qty-only sync de Amazon."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            "SELECT sku, available_qty FROM amazon_listings WHERE seller_id=?",
+            [seller_id],
+        )).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+async def update_amazon_qty_batch(updates: list[tuple[str, str, int]]) -> int:
+    """Actualiza available_qty en lote para listings Amazon.
+    updates = [(seller_id, sku, new_qty), ...]
+    Solo actualiza filas cuyo qty realmente cambió. Retorna nº de filas cambiadas.
+    """
+    if not updates:
+        return 0
+    import time as _t
+    ts = _t.time()
+    changed = 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for seller_id, sku, new_qty in updates:
+            cur = await db.execute(
+                "UPDATE amazon_listings SET available_qty=?, synced_at=? "
+                "WHERE seller_id=? AND sku=? AND available_qty!=?",
+                (new_qty, ts, seller_id, sku, new_qty),
+            )
+            changed += cur.rowcount
+        await db.commit()
+    return changed
+
+
 async def get_listings_summary() -> dict:
     """Retorna conteo de listings por cuenta — ML + Amazon — para el card de Sync Stock."""
     import time as _t

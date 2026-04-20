@@ -3,11 +3,12 @@ ml_listing_sync.py — Sincronización incremental de listings ML → DB local
 
 Estrategia:
   - Arranque: sync completo de active+paused para todas las cuentas (background)
-  - Cada 10 min: sync incremental (top-50 por last_updated) — solo lo nuevo/cambiado
-  - Cada 6h: reconciliación completa para capturar cerrados/inactivos
+  - Cada 3 min: qty-only sync — solo available_quantity para todos los item_ids conocidos
+  - Cada 10 min: sync incremental (top-50 por last_updated) — actualiza metadata de los más recientes
+  - Cada 6h: reconciliación completa para capturar listings nuevos/cerrados/inactivos
 
-Beneficio: el tab Stock lee de DB local (instantáneo) en lugar de llamar ML API
-cada vez (60-150s). El spinner desaparece para siempre.
+El qty-only sync (3 min) es ligero: 1 llamada ML API por lote de 20 items, solo trae
+id+available_quantity. Detecta caídas de stock rápido para prevenir sobreventa.
 """
 import asyncio
 import json
@@ -19,12 +20,16 @@ from app.services.sku_utils import extract_item_sku
 
 logger = logging.getLogger(__name__)
 
-_INCREMENTAL_INTERVAL = 10 * 60   # 10 minutos
-_FULL_RECONCILE_INTERVAL = 6 * 3600  # 6 horas
-_sync_running = False
-_last_full_sync_ts = 0.0
-_last_incremental_ts = 0.0
-_sync_error = ""
+_QTY_SYNC_INTERVAL      = 3 * 60     # 3 minutos — qty-only (ligero)
+_INCREMENTAL_INTERVAL   = 10 * 60    # 10 minutos — metadata de los más recientes
+_FULL_RECONCILE_INTERVAL = 6 * 3600  # 6 horas — reconciliación completa
+
+_sync_running      = False
+_qty_sync_running  = False
+_last_full_sync_ts        = 0.0
+_last_incremental_ts      = 0.0
+_last_qty_sync_ts         = 0.0
+_sync_error  = ""
 _sync_status = {"accounts_synced": 0, "items_total": 0, "last_run_iso": None}
 
 # Callback registrado por main.py para invalidar _products_cache + _stock_issues_cache
@@ -224,24 +229,128 @@ async def run_ml_listing_sync(full: bool = False) -> dict:
         _sync_running = False
 
 
+async def _sync_qty_only_account(uid: str, client) -> int:
+    """Sync ligero: solo available_quantity para todos los item_ids conocidos de esta cuenta.
+    Usa GET /items?ids=...&attributes=id,available_quantity — 1 llamada por lote de 20.
+    Retorna número de items cuya qty cambió en DB.
+    """
+    from app.services import token_store
+    try:
+        rows = await token_store.get_ml_listings(uid)
+        if not rows:
+            return 0
+
+        current_qtys = {r["item_id"]: r["available_qty"] for r in rows}
+        item_ids = list(current_qtys.keys())
+        updates: list[tuple[str, int]] = []
+
+        for i in range(0, len(item_ids), 20):
+            batch = item_ids[i:i + 20]
+            ids_str = ",".join(batch)
+            try:
+                resp = await client.get(f"/items?ids={ids_str}&attributes=id,available_quantity")
+                entries = resp if isinstance(resp, list) else []
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    body = entry.get("body") if "body" in entry else entry
+                    if not isinstance(body, dict):
+                        continue
+                    iid = str(body.get("id", ""))
+                    qty = int(body.get("available_quantity") or 0)
+                    if iid and current_qtys.get(iid, -1) != qty:
+                        updates.append((iid, qty))
+            except Exception as e:
+                logger.warning(f"[ML-QTY] batch error uid={uid} offset={i}: {e}")
+
+        if not updates:
+            return 0
+
+        changed = await token_store.update_ml_qty_batch(updates)
+        if changed > 0:
+            logger.info(f"[ML-QTY] uid={uid}: {changed}/{len(updates)} items qty actualizada")
+            if _on_listings_updated:
+                try:
+                    _on_listings_updated(uid)
+                except Exception:
+                    pass
+        return changed
+    except Exception as e:
+        logger.warning(f"[ML-QTY] Error cuenta {uid}: {e}")
+        return 0
+
+
+async def run_ml_qty_sync() -> dict:
+    """Sync ligero de qty para todas las cuentas ML.
+    No corre si ya hay un sync completo/incremental en progreso.
+    """
+    global _qty_sync_running, _last_qty_sync_ts
+    if _qty_sync_running or _sync_running:
+        return {"status": "skipped"}
+    _qty_sync_running = True
+    t0 = _time.time()
+    total_changed = 0
+    accounts_done = 0
+    try:
+        from app.services import token_store
+        from app.services.meli_client import get_meli_client
+        accounts = await token_store.get_all_tokens()
+        for acc in accounts:
+            uid = acc.get("user_id", "")
+            if not uid:
+                continue
+            client = await get_meli_client(user_id=uid)
+            if not client:
+                continue
+            try:
+                n = await _sync_qty_only_account(uid, client)
+                total_changed += n
+                accounts_done += 1
+            finally:
+                await client.close()
+        _last_qty_sync_ts = _time.time()
+        logger.debug(f"[ML-QTY] {accounts_done} cuentas, {total_changed} cambios, {round(_time.time()-t0,1)}s")
+        return {"status": "ok", "changed": total_changed, "elapsed_s": round(_time.time() - t0, 1)}
+    except Exception as e:
+        logger.warning(f"[ML-QTY] Fatal: {e}")
+        return {"status": "error", "error": str(e)[:200]}
+    finally:
+        _qty_sync_running = False
+
+
 async def _loop():
-    """Loop periódico del sync."""
+    """Loop periódico del sync.
+    - Cada 3 min: qty-only (ligero)
+    - Cada 10 min: incremental (metadata top-50)
+    - Cada 6h: full reconciliation
+    """
     # Primer run: full sync al arranque (delay de 30s para que el servidor esté listo)
     await asyncio.sleep(30)
     await run_ml_listing_sync(full=True)
 
     while True:
-        await asyncio.sleep(_INCREMENTAL_INTERVAL)
+        await asyncio.sleep(_QTY_SYNC_INTERVAL)   # despertar cada 3 min
+        # qty-only sync (siempre)
         try:
-            await run_ml_listing_sync(full=False)
+            await run_ml_qty_sync()
         except Exception as e:
-            logger.error(f"[ML-SYNC-LOOP] Error: {e}")
+            logger.error(f"[ML-QTY-LOOP] Error: {e}")
+        # incremental sync si pasaron ≥10 min desde el último
+        if (_time.time() - _last_incremental_ts) >= _INCREMENTAL_INTERVAL:
+            try:
+                await run_ml_listing_sync(full=False)
+            except Exception as e:
+                logger.error(f"[ML-SYNC-LOOP] Error: {e}")
 
 
 def start_ml_listing_sync():
     """Inicia el loop en background. Llamar desde lifespan de FastAPI."""
     asyncio.create_task(_loop())
-    logger.info(f"[ML-SYNC] Iniciado — incremental cada {_INCREMENTAL_INTERVAL//60}min, full cada {_FULL_RECONCILE_INTERVAL//3600}h")
+    logger.info(
+        f"[ML-SYNC] Iniciado — qty cada {_QTY_SYNC_INTERVAL//60}min, "
+        f"incremental cada {_INCREMENTAL_INTERVAL//60}min, "
+        f"full cada {_FULL_RECONCILE_INTERVAL//3600}h"
+    )
 
 
 def get_sync_status() -> dict:
