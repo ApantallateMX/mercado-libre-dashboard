@@ -219,6 +219,22 @@
     </div>
     <div id="prewarm-status-row" class="text-xs text-gray-500 mb-3">Cargando estado...</div>
 
+    <!-- Historial de syncs BM -->
+    <div id="bm-sync-log-wrap" class="mb-3">
+      <table class="w-full text-xs" id="bm-sync-log-table">
+        <thead>
+          <tr class="text-left text-gray-400 border-b border-gray-100">
+            <th class="pb-1 font-medium">Actualización</th>
+            <th class="pb-1 font-medium text-right">SKUs</th>
+            <th class="pb-1 font-medium text-right">Duración</th>
+          </tr>
+        </thead>
+        <tbody id="bm-sync-log-body">
+          <tr><td colspan="3" class="py-2 text-gray-400 text-center">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <!-- Diagnóstico por SKU -->
     <div class="border-t border-gray-100 pt-3">
       <p class="text-xs text-gray-400 mb-2">Consultar SKU en caché:</p>
@@ -1170,6 +1186,7 @@ function _pollPrewarmStatus() {
         _prewarmPollTimer = null;
         if (d.ready) showToast('Caché BM actualizado — recarga el tab de Stock para ver cambios');
         _loadPerAccountStatus();  // refrescar desglose por cuenta al completar ciclo
+        _loadBmSyncLog();          // refrescar historial BM
       }
       // Llenar cobertura si ya tenemos stats (primera carga o prewarm previo)
       if (!d.running && d.ready && d.bulk_stats && d.bulk_stats.skus_total > 0) {
@@ -1206,6 +1223,36 @@ window.forcePrewarm = function() {
 _pollPrewarmStatus();
 _loadPerAccountStatus();
 _loadListingsSummary();
+_loadBmSyncLog();
+
+// ── Historial de syncs BM ─────────────────────────────────────────────────────
+function _loadBmSyncLog() {
+  fetch('/api/stock/bm-sync-log', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var tbody = document.getElementById('bm-sync-log-body');
+      if (!tbody) return;
+      var rows = d.log || [];
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="py-2 text-gray-400 text-center">Sin datos — presiona Actualizar ahora</td></tr>';
+        return;
+      }
+      tbody.innerHTML = rows.map(function(r) {
+        var srcBadge = r.source === 'manual'
+          ? '<span class="ml-1 px-1 bg-indigo-50 text-indigo-500 rounded text-[10px]">manual</span>'
+          : '';
+        return '<tr class="border-b border-gray-50 last:border-0">' +
+          '<td class="py-1 text-gray-500">' + r.age_str + srcBadge + '</td>' +
+          '<td class="py-1 text-right font-mono text-gray-700">' + r.sku_count.toLocaleString() + '</td>' +
+          '<td class="py-1 text-right text-gray-400">' + r.elapsed_s + 's</td>' +
+          '</tr>';
+      }).join('');
+    })
+    .catch(function() {
+      var tbody = document.getElementById('bm-sync-log-body');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="3" class="py-2 text-red-400 text-center">Error cargando historial</td></tr>';
+    });
+}
 
 // ── Estado por cuenta ─────────────────────────────────────────────────────────
 function _loadPerAccountStatus() {

@@ -430,6 +430,19 @@ async def init_db():
             )
         """)
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_sync_log — historial de ejecuciones del prewarm BM
+        # Muestra en UI cuándo se actualizó el caché, cuántos SKUs, duración.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_sync_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                synced_at  REAL    NOT NULL DEFAULT 0,
+                sku_count  INTEGER NOT NULL DEFAULT 0,
+                elapsed_s  REAL    NOT NULL DEFAULT 0,
+                source     TEXT    NOT NULL DEFAULT 'auto'
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: stock_issues_cache — persiste alertas/stock pre-computados
         # Sobrevive deploys de Railway: el Stock tab muestra datos inmediatos
         # en lugar de "Calculando..." mientras corre el prewarm en background.
@@ -1533,6 +1546,38 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
         rows = await (await db.execute(
             "SELECT sku, data_json, synced_at FROM bm_stock_cache WHERE synced_at >= ?",
             [min_ts],
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ─── bm_sync_log helpers ────────────────────────────────────────────────────
+
+async def log_bm_sync_event(sku_count: int, elapsed_s: float, source: str = "auto") -> None:
+    """Registra una ejecución del prewarm BM en el historial.
+    Mantiene solo los últimos 50 registros para no crecer indefinidamente.
+    """
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO bm_sync_log (synced_at, sku_count, elapsed_s, source) VALUES (?, ?, ?, ?)",
+            (_t.time(), sku_count, round(elapsed_s, 1), source),
+        )
+        # Limpiar entradas viejas — conservar solo los 50 más recientes
+        await db.execute(
+            "DELETE FROM bm_sync_log WHERE id NOT IN "
+            "(SELECT id FROM bm_sync_log ORDER BY id DESC LIMIT 50)"
+        )
+        await db.commit()
+
+
+async def get_bm_sync_log(limit: int = 10) -> list[dict]:
+    """Retorna los últimos `limit` eventos del historial BM, del más reciente al más antiguo."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT id, synced_at, sku_count, elapsed_s, source "
+            "FROM bm_sync_log ORDER BY id DESC LIMIT ?",
+            [limit],
         )).fetchall()
     return [dict(r) for r in rows]
 

@@ -36,7 +36,9 @@ def _listing_to_row(item: dict, seller_id: str) -> dict | None:
 
     fa  = item.get("fulfillmentAvailability") or [{}]
     fa0 = fa[0] if fa else {}
-    channel = (fa0.get("fulfillmentChannelCode") or "").upper()
+    # Amazon puede devolver "fulfillmentChannelCode" como lista o como string
+    _fc = fa0.get("fulfillmentChannelCode") or ""
+    channel = (_fc if isinstance(_fc, str) else (_fc[0] if _fc else "")).upper()
     qty     = int(fa0.get("quantity") or 0)
 
     price = 0.0
@@ -48,7 +50,9 @@ def _listing_to_row(item: dict, seller_id: str) -> dict | None:
                 pass
             break
 
-    status    = (summary.get("status") or "ACTIVE").upper()
+    # "status" también puede llegar como lista en algunos endpoints Amazon
+    _st = summary.get("status") or "ACTIVE"
+    status = (_st if isinstance(_st, str) else (_st[0] if _st else "ACTIVE")).upper()
     asin      = summary.get("asin") or ""
     item_name = (summary.get("itemName") or "")[:200]
 

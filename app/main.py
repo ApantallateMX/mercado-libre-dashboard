@@ -2669,6 +2669,7 @@ _prewarm_queued: bool = False     # si True, lanzar otro prewarm al terminar el 
 _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = default)
 _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
+_prewarm_source: str = "auto"     # "auto" | "manual" — para el historial de BM sync log
 # Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
 
@@ -2843,6 +2844,17 @@ async def _prewarm_caches(user_id: str = None):
                     ]
                     if _bm_entries:
                         await token_store.save_bm_stock_cache(_bm_entries)
+                        # Registrar en historial BM — para la tarjeta de Caché de Stock BM
+                        _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
+                        try:
+                            await token_store.log_bm_sync_event(
+                                sku_count=len(_bm_entries),
+                                elapsed_s=_bm_elapsed,
+                                source=_prewarm_source,
+                            )
+                        except Exception:
+                            pass
+                        _prewarm_source = "auto"  # reset para el siguiente ciclo
                 except Exception:
                     pass
 
@@ -9188,6 +9200,31 @@ async def prewarm_status():
     })
 
 
+@app.get("/api/stock/bm-sync-log")
+async def bm_sync_log_endpoint():
+    """Historial de ejecuciones del prewarm BM — para la tarjeta Caché de Stock BM."""
+    rows = await token_store.get_bm_sync_log(limit=10)
+    import time as _t
+    now = _t.time()
+    entries = []
+    for r in rows:
+        age_s = now - r["synced_at"]
+        if age_s < 120:
+            age_str = f"hace {int(age_s)}s"
+        elif age_s < 3600:
+            age_str = f"hace {int(age_s//60)}min"
+        else:
+            age_str = f"hace {int(age_s//3600)}h"
+        entries.append({
+            "synced_at":  r["synced_at"],
+            "age_str":    age_str,
+            "sku_count":  r["sku_count"],
+            "elapsed_s":  r["elapsed_s"],
+            "source":     r["source"],
+        })
+    return JSONResponse({"log": entries})
+
+
 @app.get("/api/bm/status")
 async def bm_health_status():
     """Estado de salud de BinManager — para el indicador en navbar."""
@@ -9814,9 +9851,10 @@ async def force_prewarm(request: Request, full_clear: bool = False):
     _du = getattr(request.state, "dashboard_user", None)
     if not _du or _du.get("role") not in ("admin", "editor"):
         return JSONResponse({"error": "No autorizado — solo admin o editor pueden actualizar BM"}, status_code=403)
-    global _prewarm_task
+    global _prewarm_task, _prewarm_source
     if _prewarm_running:
         return JSONResponse({"status": "already_running"})
+    _prewarm_source = "manual"  # marcar como manual para el historial BM
     # Capturar user_id activo para precalentar la cuenta correcta
     _fp_client = await get_meli_client()
     _fp_uid = _fp_client.user_id if _fp_client else None
