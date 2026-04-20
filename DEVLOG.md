@@ -48,6 +48,35 @@ Botón IA recibe `data-permalink`, `data-attributes`, `data-same-item-history`, 
 
 ---
 
+## 2026-04-19 — FIX: Stock cache resilience cuando BM está caído (commit 1903ce5)
+
+### Contexto
+Cuando BM se caía temporalmente, el dashboard mostraba alertas falsas de oversell
+y el banner de "Actualizando..." nunca paraba de girar. Los operadores no sabían
+si los datos eran confiables ni a quién contactar.
+
+### Cambio 1: `_STOCK_ISSUES_TTL` extendido a 1800s
+El cache de stock issues ahora dura 30 min en lugar de 8. Los operadores trabajan
+con datos del último prewarm del admin sin que expiren prematuramente.
+
+### Cambio 2: Bulk cache GR+ALL sin expiración cuando BM caído
+`_bm_bulk_gr_cache` y `_bm_bulk_all_cache` se reutilizan indefinidamente cuando
+`consecutive_failures >= 2`, con log `[STALE-BM-DOWN]`. Si falla el fetch, hay
+fallback automático al cache anterior en lugar de devolver vacío.
+
+### Cambio 3: `_cache_is_valid` — TTL doble cuando BM caído (`app/main.py`)
+La función interna `_cache_is_valid` (per-SKU) usa TTL efectivo de 30 min (doble)
+cuando BM tiene 2+ fallos consecutivos. Evita re-intentar fetches individuales
+que van a fallar por timeout y devolver 0 falso.
+
+### Cambio 4: Stale banner inteligente (`app/templates/partials/products_stock_issues.html`)
+- Cuando BM caído: para el polling, quita el spinner, cambia a color ámbar
+- Si cache > 30 min: "Cache desactualizado — contacta al administrador para actualizar"
+- Si cache reciente: "BinManager no disponible — mostrando datos del caché anterior"
+- Límite de 5 reintentos máximo para no hacer polling infinito
+
+---
+
 ## 2026-04-19 — FIX+FEAT: 4 mejoras definitivas de stock y permisos (commit 90e9b69)
 
 ### Fix 1: Bulk fallback TotalQty-Reserve
