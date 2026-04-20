@@ -1758,6 +1758,9 @@ async def stock_sync_page(request: Request):
     user = await get_current_user()
     if not user:
         return templates.TemplateResponse(request, "no_session.html", {})
+    _du_sync = getattr(request.state, "dashboard_user", None) or {}
+    if _du_sync.get("role") != "admin":
+        return RedirectResponse("/dashboard", status_code=302)
     from app.services.stock_sync_multi import get_sync_status
     status = get_sync_status()
     history = await token_store.get_multi_sync_last_runs(limit=10)

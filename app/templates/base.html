@@ -345,7 +345,7 @@
                     <span class="text-purple-600">◈</span> Facturación
                 </a>
                 {% endif %}
-                {% if not _sec or 'sync' in _sec %}
+                {% if (not _sec or 'sync' in _sec) and dashboard_user and dashboard_user.role == 'admin' %}
                 <a href="/stock-sync" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'stock_sync' %}font-semibold bg-yellow-500{% endif %} flex items-center gap-0.5 whitespace-nowrap">
                     <span class="text-blue-600">⇄</span> Sync Stock
                     <span id="bm-health-dot" title="BinManager: verificando..." class="inline-block w-2 h-2 rounded-full bg-gray-300 ml-1 flex-shrink-0"></span>
@@ -683,7 +683,7 @@
                 <span class="text-sm text-gray-800">Facturación</span>
             </a>
             {% endif %}
-            {% if not _sec or 'sync' in _sec %}
+            {% if (not _sec or 'sync' in _sec) and dashboard_user and dashboard_user.role == 'admin' %}
             <a href="/stock-sync" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'stock_sync' %}bg-yellow-500 font-semibold{% endif %}">
                 <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 <span class="text-sm text-gray-800">Sync Stock</span>
