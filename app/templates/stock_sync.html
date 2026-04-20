@@ -164,6 +164,20 @@
     {% endif %}
   </div>
 
+  <!-- ── Estado por cuenta ────────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Estado por cuenta — último ciclo</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Desglose de updates y errores por plataforma y cuenta</p>
+      </div>
+      <span id="per-acct-ts" class="text-[10px] text-gray-400 font-mono"></span>
+    </div>
+    <div id="per-acct-body">
+      <p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo o presiona Ver cambios</p>
+    </div>
+  </div>
+
   <!-- ── Caché BM / Forzar Prewarm ──────────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-3">
@@ -1128,6 +1142,7 @@ function _pollPrewarmStatus() {
         clearInterval(_prewarmPollTimer);
         _prewarmPollTimer = null;
         if (d.ready) showToast('Caché BM actualizado — recarga el tab de Stock para ver cambios');
+        _loadPerAccountStatus();  // refrescar desglose por cuenta al completar ciclo
       }
       // Llenar cobertura si ya tenemos stats (primera carga o prewarm previo)
       if (!d.running && d.ready && d.bulk_stats && d.bulk_stats.skus_total > 0) {
@@ -1162,6 +1177,70 @@ window.forcePrewarm = function() {
 
 // Estado inicial al cargar la página
 _pollPrewarmStatus();
+_loadPerAccountStatus();
+
+// ── Estado por cuenta ─────────────────────────────────────────────────────────
+function _loadPerAccountStatus() {
+  fetch('/api/stock/multi-sync/status', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var body = document.getElementById('per-acct-body');
+      var tsEl = document.getElementById('per-acct-ts');
+      if (!body) return;
+      var accounts = d.per_account || [];
+      if (!accounts.length) {
+        body.innerHTML = '<p class="text-xs text-gray-400 text-center py-3">Sin datos — espera el primer ciclo completo</p>';
+        return;
+      }
+      // Timestamp del ciclo
+      if (tsEl && d.last_sync_iso) {
+        var ago = d.last_sync_ts ? Math.round((_now() - d.last_sync_ts) / 60) : null;
+        tsEl.textContent = ago !== null ? (ago < 1 ? 'hace <1min' : 'hace ' + ago + 'min') : d.last_sync_iso.substring(0, 16).replace('T', ' ');
+      }
+      // Totales
+      var totUpdates = accounts.reduce(function(s, a) { return s + (a.updates || 0); }, 0);
+      var totErrors  = accounts.reduce(function(s, a) { return s + (a.errors || 0); }, 0);
+      // Tabla
+      var html = '<div class="overflow-x-auto"><table class="w-full text-xs">'
+        + '<thead><tr class="border-b border-gray-100 text-left text-gray-400 font-medium">'
+        + '<th class="pb-1.5 pr-3">Cuenta</th>'
+        + '<th class="pb-1.5 pr-3">Plataforma</th>'
+        + '<th class="pb-1.5 pr-3 text-right">Updates</th>'
+        + '<th class="pb-1.5 text-right">Errores</th>'
+        + '</tr></thead><tbody>';
+      accounts.forEach(function(a) {
+        var platBadge = a.platform === 'ml'
+          ? '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-700">ML</span>'
+          : '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">AMZ</span>';
+        var errCell = a.errors > 0
+          ? '<span class="font-semibold text-red-500" title="' + (a.last_error || '') + '">⚠ ' + a.errors + '</span>'
+          : '<span class="text-gray-300">—</span>';
+        var updCell = a.updates > 0
+          ? '<span class="font-semibold text-green-600">' + a.updates + '</span>'
+          : '<span class="text-gray-400">0</span>';
+        html += '<tr class="border-b border-gray-50 hover:bg-gray-50">'
+          + '<td class="py-1.5 pr-3 font-medium text-gray-700">' + (a.nickname || a.account_id) + '</td>'
+          + '<td class="py-1.5 pr-3">' + platBadge + '</td>'
+          + '<td class="py-1.5 pr-3 text-right">' + updCell + '</td>'
+          + '<td class="py-1.5 text-right">' + errCell + '</td>'
+          + '</tr>';
+      });
+      // Fila de totales
+      var totErrCell = totErrors > 0
+        ? '<span class="font-semibold text-red-500">⚠ ' + totErrors + '</span>'
+        : '<span class="text-gray-300">—</span>';
+      html += '<tr class="border-t-2 border-gray-200 bg-gray-50">'
+        + '<td class="py-1.5 pr-3 font-semibold text-gray-700" colspan="2">TOTAL</td>'
+        + '<td class="py-1.5 pr-3 text-right font-semibold text-green-600">' + totUpdates + '</td>'
+        + '<td class="py-1.5 text-right">' + totErrCell + '</td>'
+        + '</tr>';
+      html += '</tbody></table></div>';
+      body.innerHTML = html;
+    })
+    .catch(function() {});
+}
+
+function _now() { return Date.now() / 1000; }
 
 // ── Log de conectividad BM ────────────────────────────────────────────────────
 var _bmLogVisible = false;

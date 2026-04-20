@@ -140,6 +140,7 @@ _sync_progress: dict = {}   # progreso en tiempo real mientras corre
 _cannibalization_data: list = []  # último resultado de canibalización (de último sync)
 _nocturnal_protection: bool = True  # reduce-only 10pm–6am CST por defecto
 _last_bm_stock: dict = {}  # {sku_upper: avail_int} del último sync — para prewarm cache
+_last_sync_per_account: list = []  # [{platform, account_id, nickname, updates, errors, last_error, ts}]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -633,7 +634,7 @@ async def run_multi_stock_sync() -> dict:
     Ejecuta el ciclo completo de sincronización multi-plataforma.
     Retorna resumen: {status, skus_processed, updates, errors, elapsed_s}.
     """
-    global _sync_running, _last_sync_ts, _last_sync_result, _sync_progress
+    global _sync_running, _last_sync_ts, _last_sync_result, _sync_progress, _last_sync_per_account
 
     if _sync_running:
         return {"status": "already_running"}
@@ -688,6 +689,23 @@ async def run_multi_stock_sync() -> dict:
         logger.info(
             f"[MULTI-SYNC] Inicio — {len(ml_accounts)} ML, {len(amz_accounts)} Amazon"
         )
+
+        # Inicializar stats por cuenta (todas las cuentas, aunque no tengan updates)
+        _per_acct: dict = {}
+        for _a in ml_accounts:
+            _k = f"ml/{_a.get('user_id', '')}"
+            _per_acct[_k] = {
+                "platform": "ml", "account_id": _a.get("user_id", ""),
+                "nickname": _a.get("nickname", _a.get("user_id", ""))[:20],
+                "updates": 0, "errors": 0, "last_error": None, "ts": t0,
+            }
+        for _a in amz_accounts:
+            _k = f"amz/{_a.get('seller_id', '')}"
+            _per_acct[_k] = {
+                "platform": "amz", "account_id": _a.get("seller_id", ""),
+                "nickname": _a.get("nickname", _a.get("seller_id", ""))[:20],
+                "updates": 0, "errors": 0, "last_error": None, "ts": t0,
+            }
 
         # Recopilar listings ML y Amazon en paralelo
         ml_by_sku, amz_by_sku = await asyncio.gather(
@@ -788,6 +806,16 @@ async def run_multi_stock_sync() -> dict:
             _sync_progress["skus_done"] += 1
             _sync_progress["updates"]   += ok_n
             _sync_progress["errors"]    += err_n
+            # Acumular stats por cuenta
+            for r in res:
+                _rk = f"{r.get('platform', 'ml')}/{r.get('account_id', '')}"
+                if _rk in _per_acct:
+                    if r["ok"]:
+                        _per_acct[_rk]["updates"] += 1
+                    else:
+                        _per_acct[_rk]["errors"] += 1
+                        if not _per_acct[_rk]["last_error"]:
+                            _per_acct[_rk]["last_error"] = str(r.get("error", ""))[:100]
             if err_n:
                 for r in res:
                     if not r["ok"]:
@@ -813,6 +841,11 @@ async def run_multi_stock_sync() -> dict:
             f"[MULTI-SYNC] Completado en {summary['elapsed_s']}s — "
             f"{summary['skus_processed']} SKUs, {summary['updates']} updates, "
             f"{summary['errors']} errores"
+        )
+        # Guardar desglose por cuenta (ML primero, luego Amazon, ordenado por nombre)
+        _last_sync_per_account = sorted(
+            _per_acct.values(),
+            key=lambda x: (0 if x["platform"] == "ml" else 1, x["nickname"].lower()),
         )
 
     except Exception as exc:
@@ -973,4 +1006,5 @@ def get_sync_status() -> dict:
         "interval_min": _SYNC_INTERVAL // 60,
         "threshold":    STOCK_THRESHOLD,
         "progress":     _sync_progress if _sync_running else {},
+        "per_account":  list(_last_sync_per_account),
     }
