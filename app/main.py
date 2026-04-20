@@ -2692,9 +2692,15 @@ async def _check_bm_health():
 
     # Registrar en log (máx 20 entradas)
     from datetime import datetime as _dt_h
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        _tj_tz = _ZI("America/Tijuana")
+        _time_label = _dt_h.now(_tj_tz).strftime("%H:%M:%S")
+    except Exception:
+        _time_label = _dt_h.utcfromtimestamp(_time.time()).strftime("%H:%M:%S") + " UTC"
     _bm_health_log.append({
         "ts": _time.time(),
-        "time_label": _dt_h.utcfromtimestamp(_time.time()).strftime("%H:%M:%S"),
+        "time_label": _time_label,
         "ok": ok,
         "latency_ms": elapsed_ms,
         "error_type": error_type,
