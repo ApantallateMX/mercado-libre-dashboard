@@ -123,8 +123,8 @@
     <div class="flex items-center justify-between mb-4">
       <span class="text-sm font-semibold text-gray-700">Estado del último ciclo</span>
       <span id="status-badge" class="text-xs px-2.5 py-0.5 rounded-full font-medium
-            {% if running %}bg-blue-100 text-blue-700{% elif last_result.status == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
-        {% if running %}Corriendo...{% elif last_result.status == 'error' %}Error{% elif last_result.status %}Completado{% else %}Pendiente{% endif %}
+            {% if running %}bg-blue-100 text-blue-700{% elif last_result.status == 'bm_down' %}bg-amber-100 text-amber-700{% elif last_result.status == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
+        {% if running %}Corriendo...{% elif last_result.status == 'bm_down' %}BM caído{% elif last_result.status == 'error' %}Error{% elif last_result.status %}Completado{% else %}Pendiente{% endif %}
       </span>
     </div>
 
@@ -793,7 +793,13 @@ function pollStatus() {
           document.getElementById('stat-elapsed').textContent = (r.elapsed_s || '—') + (r.elapsed_s ? 's' : '');
 
           var badge = document.getElementById('status-badge');
-          if (r.status === 'error') {
+          if (r.status === 'bm_down') {
+            badge.textContent = 'BM caído';
+            badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700';
+            showToast('BM no responde — ciclo abortado para proteger stock', true);
+            var paBody = document.getElementById('per-account-body');
+            if (paBody) paBody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-amber-600 text-sm">Ciclo abortado — BM no respondió. No se procesaron SKUs.</td></tr>';
+          } else if (r.status === 'error') {
             badge.textContent = 'Error';
             badge.className = 'text-xs px-2.5 py-0.5 rounded-full font-medium bg-red-100 text-red-700';
             showToast('Sync completado con errores', true);
@@ -803,9 +809,8 @@ function pollStatus() {
             showToast('\u2713 Sync completado: ' + (r.updates || 0) + ' updates, ' + (r.skus_processed || 0) + ' SKUs', false);
           }
 
-          var btn = document.getElementById('btn-trigger');
-          btn.disabled = false;
-          btn.innerHTML = _syncBtn;
+          var btn = document.getElementById('btn-run-now');
+          if (btn) { btn.disabled = false; btn.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z"/></svg> Correr ciclo'; }
 
           // Recargar historial
           setTimeout(function() { location.reload(); }, 1500);
@@ -821,8 +826,8 @@ function pollStatus() {
 {% if running %}
 _showProgress(true);
 _startElapsedTimer();
-document.getElementById('btn-trigger').disabled = true;
-document.getElementById('btn-trigger').textContent = 'Corriendo...';
+var _autoBtn = document.getElementById('btn-run-now');
+if (_autoBtn) { _autoBtn.disabled = true; _autoBtn.textContent = 'Corriendo...'; }
 pollStatus();
 {% endif %}
 

@@ -665,7 +665,7 @@ async def run_multi_stock_sync() -> dict:
             _cb_cli = await _get_shared_bm_cb()
             _cb_probe = await asyncio.wait_for(
                 _cb_cli.get_stock_with_reserve("SNTV001764"),
-                timeout=5.0,
+                timeout=20.0,
             )
             if _cb_probe is None:
                 raise RuntimeError("BM respondió pero con sesión inválida")
