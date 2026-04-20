@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-19 — FIX: Correr ciclo — circuit breaker timeout, badge bm_down, btn ID (commit 9aa8aec)
+
+### Problema
+Al presionar "▶ Correr ciclo" en Sync Stock, el ciclo mostraba "Iniciando..." y terminaba
+inmediatamente con 0 SKUs, 0 updates, badge "Completado" — sin procesar nada.
+
+### Causas raíz (3 bugs independientes)
+1. **Circuit breaker timeout 5s** (`stock_sync_multi.py` línea ~668): BM responde lento (~10s).
+   El probe `asyncio.wait_for(..., timeout=5.0)` siempre expiraba → sync abortaba con `status="bm_down"`.
+2. **Badge Jinja2 y JS** (`stock_sync.html`): `status=="bm_down"` caía en el `else` → mostraba "Completado"
+   en verde, sin indicar que el ciclo se había abortado.
+3. **ID de botón incorrecto** (`stock_sync.html`): `pollStatus` y el bloque auto-start usaban
+   `getElementById('btn-trigger')` pero el botón real tiene id `btn-run-now` → el botón nunca
+   se rehabilitaba al terminar. También `_syncBtn` estaba indefinido.
+
+### Fixes aplicados
+- `stock_sync_multi.py`: timeout 5s → 20s (igual que health check)
+- `stock_sync.html` Jinja2 badge: agrega caso `bm_down` → amber "BM caído"
+- `stock_sync.html` `pollStatus` JS: maneja `bm_down` con badge amber + toast + mensaje en per-account
+- `stock_sync.html`: corregido `btn-trigger` → `btn-run-now` en `pollStatus` y auto-start block
+- `stock_sync.html`: reemplazado `_syncBtn` (nunca definido) con HTML inline del botón
+
+---
+
 ## 2026-04-17 — FEAT: Preguntas AI — specs, historial mismo listing, cross-sell (commit f2c2aa0)
 
 ### Contexto de la mejora
