@@ -2406,7 +2406,7 @@ _stock_issues_cache: dict[str, tuple[float, dict]] = {}
 # Cache cross-account para dashboard general (independiente de cuenta activa)
 _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
-_STOCK_ISSUES_TTL = 480      # 8 min — menor que ciclo ml_listing_sync (10 min) para evitar alertas stale
+_STOCK_ISSUES_TTL = 1800     # 30 min — operadores trabajan con cache; admin renueva; BM down = servir stale
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 _synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
 
@@ -2896,7 +2896,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     _seen_bm_keys: set = set()
 
     def _cache_is_valid(c):
-        if not c or (_time.time() - c[0]) >= _BM_CACHE_TTL:
+        # BM caído → TTL doble para no re-intentar fetches que van a fallar
+        _bm_down_now = _bm_health.get("consecutive_failures", 0) >= 2
+        _effective_ttl = _BM_CACHE_TTL * 2 if _bm_down_now else _BM_CACHE_TTL
+        if not c or (_time.time() - c[0]) >= _effective_ttl:
             return False
         data = c[1]
         # Entradas con total=0 y avail=0 solo son válidas si el fetch fue verificado (_v=True).
@@ -3115,14 +3118,17 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
         _need_all = any(_bm_conditions_for_sku(s) == _BM_COND_ALL for s in to_fetch)
 
-        # ── GR bulk (15 min TTL) ──────────────────────────────────────────────
+        # ── GR bulk (15 min TTL normal; ilimitado cuando BM está caído) ────────
+        _bm_is_down_now = _bm_health.get("consecutive_failures", 0) >= 2
         _bulk_gr_rows = None
         if _bm_bulk_gr_cache:
             _age_gr = _time.time() - _bm_bulk_gr_cache[0]
-            if _age_gr < 900:
+            if _age_gr < 900 or _bm_is_down_now:
+                # BM caído → servir cache sin importar antigüedad (mejor que 0 falso)
                 _bulk_gr_rows = _bm_bulk_gr_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({round(_age_gr)}s)")
-        if _bulk_gr_rows is None:
+                _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= 900 else "")
+                logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({_age_label})")
+        if _bulk_gr_rows is None and not _bm_is_down_now:
             try:
                 _fresh_gr = await asyncio.wait_for(
                     bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
@@ -3137,16 +3143,21 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas")
             except Exception as _bulk_err:
                 logger.warning(f"[BM-CACHE] GR bulk fetch error: {_bulk_err} — usando stale")
+                # Si falla el fetch, intentar usar cache aunque sea antiguo
+                if _bm_bulk_gr_cache:
+                    _bulk_gr_rows = _bm_bulk_gr_cache[1]
+                    logger.warning(f"[BM-CACHE] GR fallback a cache stale tras error fetch")
 
         # ── ALL bulk (solo si hay SKUs SNTV-ICB/ICC/bundle) ──────────────────
         _bulk_all_rows = None
         if _need_all:
             if _bm_bulk_all_cache:
                 _age_all = _time.time() - _bm_bulk_all_cache[0]
-                if _age_all < 900:
+                if _age_all < 900 or _bm_is_down_now:
                     _bulk_all_rows = _bm_bulk_all_cache[1]
-                    logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({round(_age_all)}s)")
-            if _bulk_all_rows is None:
+                    _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= 900 else "")
+                    logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({_age_label_all})")
+            if _bulk_all_rows is None and not _bm_is_down_now:
                 try:
                     _fresh_all = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
@@ -3158,6 +3169,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
                 except Exception as _bulk_err:
                     logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_bulk_err} — usando stale")
+                    if _bm_bulk_all_cache:
+                        _bulk_all_rows = _bm_bulk_all_cache[1]
 
         if _bulk_gr_rows is not None or _bulk_all_rows is not None:
             def _build_lookup(rows):
