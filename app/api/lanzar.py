@@ -655,10 +655,9 @@ async def _run_gap_scan(user_id: str | None = None):
                 if base not in bm_map or qty > _bm_qty(bm_map[base]):
                     bm_map[base] = prod
 
-            # ── FASE 1: Recolectar datos ML de TODAS las cuentas ──────────────
-            # Clave: los gaps se calculan contra el set GLOBAL (union de todas
-            # las cuentas). Un SKU publicado en Autobot NO debe aparecer como
-            # gap en Apantállate y viceversa. BM es inventario compartido.
+            # ── FASE 1: Recolectar datos ML desde caché DB ────────────────────
+            # Lee ml_listings (sync cada 10 min) en vez de llamar la ML API.
+            # Elimina ~1000+ llamadas HTTP por scan. Fallback a API si DB vacía.
             now_iso = datetime.utcnow().isoformat()
 
             account_ml_data: dict = {}  # user_id → {meli_skus, inactive_map, active_prices, nickname}
@@ -668,10 +667,18 @@ async def _run_gap_scan(user_id: str | None = None):
                 user_id  = account["user_id"]
                 nickname = account.get("nickname") or user_id
                 _pct_ml = 30 + int(_ai / max(len(accounts), 1) * 15)
-                _prog(_pct_ml, "ml_fetch", f"Leyendo publicaciones ML — {nickname}...",
+                _prog(_pct_ml, "ml_fetch", f"Leyendo listings ML (caché) — {nickname}...",
                       f"Cuenta {_ai+1} de {len(accounts)}")
-                logger.info(f"[Fase1] Obteniendo items ML de {nickname} ({user_id})...")
-                skus, inactive_map, active_prices = await _get_meli_sku_set(user_id, nickname)
+                logger.info(f"[Fase1] Leyendo listings desde DB para {nickname} ({user_id})...")
+                skus, inactive_map, active_prices = await token_store.get_ml_listings_for_gap_scan(str(user_id))
+                if not skus:
+                    # DB vacía para esta cuenta — fallback a ML API
+                    logger.warning(f"[Fase1] {nickname}: sin datos en caché DB, usando ML API como fallback")
+                    _prog(_pct_ml, "ml_fetch", f"Leyendo publicaciones ML (API) — {nickname}...",
+                          f"Cuenta {_ai+1} de {len(accounts)}")
+                    skus, inactive_map, active_prices = await _get_meli_sku_set(user_id, nickname)
+                else:
+                    logger.info(f"[Fase1] {nickname}: {len(skus)} SKUs desde caché DB")
                 account_ml_data[user_id] = {
                     "nickname":      nickname,
                     "meli_skus":     skus,
@@ -726,103 +733,13 @@ async def _run_gap_scan(user_id: str | None = None):
             total_gaps_before_verify = len(global_gaps_base)
             logger.info(f"[Fase2] {total_gaps_before_verify} BM SKUs con stock — evaluando por cuenta")
 
-            # ── FASE 2b: Verificación seller_sku — safety net por cuenta ──────
-            # La Fase 1 puede fallar en extraer SKUs de items inactivos/cerrados.
-            # Búsqueda INVERSA por seller_sku en ESTA cuenta únicamente.
-            # Un SKU encontrado en otra cuenta NO se excluye aquí — cada cuenta es independiente.
-            _verify_sem = asyncio.Semaphore(5)  # max 5 búsquedas concurrentes por cuenta
+            # Fase 2b eliminada: ml_listings DB (sync cada 10 min) es la fuente de verdad.
+            # verified_not_gaps_per_account queda vacío — la DB cubre todos los estados.
+            verified_not_gaps_per_account: dict[str, set[str]] = {
+                a["user_id"]: set() for a in accounts
+            }
 
-            # Build search SKU set per gap: base SKU + raw BM SKU (might have suffix like -NEW)
-            # If ML has seller_custom_field="SNTV007910-NEW", searching for base "SNTV007910" misses it.
-            gap_sku_variants: dict[str, set[str]] = {}  # base_sku → {sku, raw_sku, ...}
-            for g in global_gaps_base:
-                base = g["sku"]
-                variants = {base}
-                raw_bm = (bm_map.get(base, {}).get("SKU") or base).upper().strip()
-                if raw_bm and raw_bm != base:
-                    variants.add(raw_bm)
-                gap_sku_variants[base] = variants
-
-            async def _sku_exists_in_account(base_sku: str, uid: str, cli) -> bool:
-                """True si el SKU (o alguna variante) existe en ML para esta cuenta.
-                Si encontrado, cachea el item_id→sku para que futuros scans usen Phase 1.
-                """
-                async with _verify_sem:
-                    try:
-                        skus_to_try = list(gap_sku_variants.get(base_sku, {base_sku}))
-                        # For each SKU variant, search all relevant statuses
-                        search_calls = []
-                        for s in skus_to_try:
-                            search_calls += [
-                                cli.get(f"/users/{uid}/items/search",
-                                        params={"seller_sku": s, "limit": 3}),
-                                cli.get(f"/users/{uid}/items/search",
-                                        params={"seller_sku": s, "status": "inactive", "limit": 3}),
-                                cli.get(f"/users/{uid}/items/search",
-                                        params={"seller_sku": s, "status": "closed", "limit": 3}),
-                            ]
-                        results = await asyncio.gather(*search_calls, return_exceptions=True)
-                        for r, s in zip(results, [s for s in skus_to_try for _ in range(3)]):
-                            if isinstance(r, dict) and r.get("results"):
-                                # Self-heal: cache item_id→sku so Phase 1 works next scan
-                                entries = [
-                                    {"item_id": str(iid), "user_id": uid, "sku": s}
-                                    for iid in r["results"][:3]
-                                ]
-                                try:
-                                    await token_store.save_skus_cache(entries)
-                                except Exception:
-                                    pass
-                                return True
-                        return False
-                    except Exception:
-                        return False
-
-            # verified_not_gaps_per_account: por cada cuenta, SKUs encontrados via seller_sku
-            # que existen en ML en esa cuenta (safety net para items que Phase 1 no capturó).
-            verified_not_gaps_per_account: dict[str, set[str]] = {}
-
-            all_bm_skus_list = [g["sku"] for g in global_gaps_base]
-            _verify_total = max(len(all_bm_skus_list) * len(accounts), 1)
-            _verify_done  = 0
-
-            async def _sku_exists_tracked(sku, uid, cli):
-                nonlocal _verify_done
-                result = await _sku_exists_in_account(sku, uid, cli)
-                _verify_done += 1
-                _pct_v = 50 + int((_verify_done / _verify_total) * 38)
-                _prog(_pct_v, "verifying",
-                      f"Verificando SKUs en MeLi ({_verify_done}/{_verify_total})...",
-                      f"{_verify_done} verificados de {_verify_total}")
-                return result
-
-            for _acct in accounts:
-                _uid = _acct["user_id"]
-                _nick = _acct.get("nickname") or _uid
-                _own_skus = account_ml_data[_uid]["meli_skus"]
-                # Solo verificar candidatos que Phase 1 no capturó para esta cuenta
-                _acct_candidates = [s for s in all_bm_skus_list if s not in _own_skus]
-                _prog(50, "verifying",
-                      f"Verificando {len(_acct_candidates)} SKUs en {_nick}...",
-                      f"0/{len(_acct_candidates)} verificados")
-                _cli = await get_meli_client(user_id=_uid)
-                if not _cli:
-                    verified_not_gaps_per_account[_uid] = set()
-                    continue
-                _acct_not_gaps: set[str] = set()
-                try:
-                    _tasks = [_sku_exists_tracked(sku, _uid, _cli) for sku in _acct_candidates]
-                    _flags = await asyncio.gather(*_tasks, return_exceptions=True)
-                    for sku, flag in zip(_acct_candidates, _flags):
-                        if flag is True:
-                            _acct_not_gaps.add(sku)
-                            logger.info(f"[Fase2b] {sku} encontrado en {_nick} via seller_sku — no es gap para {_nick}")
-                finally:
-                    await _cli.close()
-                verified_not_gaps_per_account[_uid] = _acct_not_gaps
-                logger.info(f"[Fase2b] {_nick}: {len(_acct_not_gaps)} SKUs extra encontrados via seller_sku")
-
-            logger.info(f"[Fase2] {total_gaps_before_verify} BM SKUs evaluados — gaps finales se calculan por cuenta")
+            logger.info(f"[Fase2] {total_gaps_before_verify} BM SKUs evaluados — gaps calculados desde caché DB")
             _prog(88, "saving", "Guardando resultados en base de datos...",
                   f"{total_gaps_before_verify} BM SKUs procesados")
 

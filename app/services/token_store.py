@@ -385,6 +385,17 @@ async def init_db():
             await db.execute("ALTER TABLE ml_listings ADD COLUMN data_json TEXT DEFAULT ''")
         except Exception:
             pass  # column already exists
+        # Migration: add base_sku column (normalized BM SKU for gap scan without API calls)
+        try:
+            await db.execute("ALTER TABLE ml_listings ADD COLUMN base_sku TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
+        try:
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ml_listings_base_sku ON ml_listings(account_id, base_sku)"
+            )
+        except Exception:
+            pass
         # ─────────────────────────────────────────────────────────────────
         # TABLA: amazon_listings — caché local de listings Amazon
         # ─────────────────────────────────────────────────────────────────
@@ -1129,13 +1140,17 @@ async def upsert_ml_listings(rows: list[dict]) -> None:
     """Inserta o actualiza listings ML en la tabla local."""
     if not rows:
         return
+    from app.services.sku_utils import normalize_to_bm_sku
+    for row in rows:
+        if not row.get("base_sku"):
+            row["base_sku"] = normalize_to_bm_sku(row.get("sku", "")) or ""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO ml_listings
                (item_id, account_id, title, status, price, available_qty, sold_qty,
-                sku, logistic_type, catalog_listing, is_full, last_updated, synced_at, data_json)
+                sku, base_sku, logistic_type, catalog_listing, is_full, last_updated, synced_at, data_json)
                VALUES (:item_id,:account_id,:title,:status,:price,:available_qty,:sold_qty,
-                       :sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at,
+                       :sku,:base_sku,:logistic_type,:catalog_listing,:is_full,:last_updated,:synced_at,
                        :data_json)""",
             rows,
         )
@@ -1183,6 +1198,75 @@ async def count_ml_listings_synced(account_id: str) -> int:
             [account_id],
         )).fetchone()
     return row[0] if row else 0
+
+
+async def get_ml_listings_for_gap_scan(account_id: str) -> tuple[set, dict, dict]:
+    """Lee ml_listings DB para construir las mismas estructuras que _get_meli_sku_set.
+
+    Retorna:
+        (skus_set, inactive_map, active_prices_map)
+        - skus_set: set de base_skus de todos los listings (todos los estados)
+        - inactive_map: base_sku → [item_id, ...] para items inactive/paused/closed
+        - active_prices_map: base_sku → [{item_id, price, title, pics, has_gtin, has_brand, quality_score}]
+
+    Sustituye las llamadas a ML API en Phase 1 del gap scan, eliminando ~1000+ llamadas HTTP.
+    Fallback: si la DB está vacía para la cuenta, la llamada original a _get_meli_sku_set sigue disponible.
+    """
+    import json as _json
+
+    skus_set: set = set()
+    inactive_map: dict = {}
+    active_prices_map: dict = {}
+
+    _REACTIVATABLE = {"inactive", "paused", "closed"}
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT item_id, status, price, title, base_sku, data_json "
+            "FROM ml_listings WHERE account_id=? AND base_sku != ''",
+            [account_id],
+        )).fetchall()
+
+    for r in rows:
+        base = r["base_sku"]
+        if not base:
+            continue
+        skus_set.add(base)
+        status = (r["status"] or "").lower()
+        iid = r["item_id"]
+
+        if status in _REACTIVATABLE:
+            inactive_map.setdefault(base, [])
+            if iid not in inactive_map[base]:
+                inactive_map[base].append(iid)
+
+        elif status == "active":
+            price = float(r["price"] or 0)
+            if price > 0:
+                title = r["title"] or ""
+                pics, has_gtin, has_brand = 0, False, False
+                try:
+                    body = _json.loads(r["data_json"] or "{}")
+                    pics = len(body.get("pictures") or [])
+                    attrs = body.get("attributes") or []
+                    has_gtin  = any(a.get("id") in ("GTIN", "EAN", "UPC") for a in attrs)
+                    has_brand = any(a.get("id") == "BRAND" for a in attrs)
+                except Exception:
+                    pass
+                title_score   = min(len(title), 60) / 60 * 25
+                pics_score    = min(pics, 6) / 6 * 25
+                attr_score    = (10 if has_brand else 0) + (15 if has_gtin else 0)
+                quality_score = int(title_score + pics_score + attr_score + (25 if price > 0 else 0))
+                active_prices_map.setdefault(base, [])
+                if not any(e["item_id"] == iid for e in active_prices_map[base]):
+                    active_prices_map[base].append({
+                        "item_id": iid, "price": price, "title": title,
+                        "pics": pics, "has_gtin": has_gtin, "has_brand": has_brand,
+                        "quality_score": quality_score,
+                    })
+
+    return skus_set, inactive_map, active_prices_map
 
 
 async def get_ml_listings_max_synced_at(account_id: str) -> float:
