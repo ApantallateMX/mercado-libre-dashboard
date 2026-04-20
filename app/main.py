@@ -9178,6 +9178,8 @@ async def bm_health_log_endpoint():
 
 # ── Listings Cache — descarga y resumen de listings ML + Amazon ────────────
 
+_listings_refresh_running = False   # flag global para el botón Sync Listings
+
 @app.get("/api/listings/summary")
 async def listings_summary_endpoint(request: Request):
     """Retorna conteo de listings por cuenta (ML + Amazon) + estado del sync."""
@@ -9197,7 +9199,9 @@ async def listings_summary_endpoint(request: Request):
         **summary,
         "ml_running":       ml_st.get("running", False),
         "amz_running":      amz_st.get("running", False),
-        "running":          ml_st.get("running", False) or amz_st.get("running", False),
+        "running":          _listings_refresh_running,   # flag cubre ML + Amazon completos
+        "ml_error":         ml_st.get("error", ""),
+        "amz_error":        amz_st.get("error", ""),
         "ml_last_full_ts":  ml_st.get("last_full_sync_ts", 0),
         "amz_last_sync_ts": amz_st.get("last_sync_ts", 0),
     })
@@ -9206,24 +9210,31 @@ async def listings_summary_endpoint(request: Request):
 @app.post("/api/listings/refresh")
 async def listings_refresh_endpoint(request: Request):
     """Dispara un full sync de listings ML + Amazon en background (solo lectura)."""
+    global _listings_refresh_running
     _du = getattr(request.state, "dashboard_user", None) or {}
     if _du.get("role") != "admin":
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
-    from app.services.ml_listing_sync import run_ml_listing_sync as _ml_sync
-    from app.services.amazon_listing_sync import run_amazon_listing_sync as _amz_sync
-    from app.services.ml_listing_sync import get_sync_status as _ml_st
-    from app.services.amazon_listing_sync import get_sync_status as _amz_st
-
-    if _ml_st().get("running") or _amz_st().get("running"):
+    if _listings_refresh_running:
         return JSONResponse({"status": "already_running"})
 
-    # Lanzar en background — retornar inmediatamente
-    async def _bg():
-        await _ml_sync(full=True)
-        await _amz_sync()
-
+    from app.services.ml_listing_sync import run_ml_listing_sync as _ml_sync
+    from app.services.amazon_listing_sync import run_amazon_listing_sync as _amz_sync
     import asyncio as _asyncio
+
+    # ML y Amazon en paralelo — flag global cubre ambos
+    async def _bg():
+        global _listings_refresh_running
+        _listings_refresh_running = True
+        try:
+            await _asyncio.gather(
+                _ml_sync(full=True),
+                _amz_sync(),
+                return_exceptions=True,
+            )
+        finally:
+            _listings_refresh_running = False
+
     _asyncio.create_task(_bg())
     return JSONResponse({"status": "started"})
 

@@ -73,20 +73,23 @@ def _listing_to_row(item: dict, seller_id: str) -> dict | None:
     }
 
 
-async def _sync_account_full(seller_id: str, client) -> int:
-    """Descarga todos los listings de una cuenta Amazon y los guarda en DB."""
+async def _sync_account_full(seller_id: str, client) -> tuple[int, str]:
+    """Descarga todos los listings de una cuenta Amazon y los guarda en DB.
+    Retorna (count, error_msg)."""
     from app.services import token_store
     try:
         listings = await client.get_all_listings()
+        logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: get_all_listings devolvió {len(listings)} items")
         rows = [_listing_to_row(item, seller_id) for item in listings]
         rows = [r for r in rows if r]
         if rows:
             await token_store.upsert_amazon_listings(rows)
-        logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(rows)} listings guardados")
-        return len(rows)
+        logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(rows)} listings guardados en DB")
+        return len(rows), ""
     except Exception as e:
-        logger.warning(f"[AMZ-LISTING-SYNC] Error seller={seller_id}: {e}")
-        return 0
+        err = str(e)[:200]
+        logger.warning(f"[AMZ-LISTING-SYNC] Error seller={seller_id}: {err}")
+        return 0, err
 
 
 async def run_amazon_listing_sync() -> dict:
@@ -111,6 +114,7 @@ async def run_amazon_listing_sync() -> dict:
             logger.info("[AMZ-LISTING-SYNC] Sin cuentas Amazon registradas")
             return {"status": "no_accounts"}
 
+        first_error = ""
         for acc in amz_accounts:
             sid = acc.get("seller_id", "")
             if not sid:
@@ -118,12 +122,20 @@ async def run_amazon_listing_sync() -> dict:
             try:
                 client = await get_amazon_client(seller_id=sid)
                 if not client:
+                    logger.warning(f"[AMZ-LISTING-SYNC] No se pudo crear cliente para {sid}")
                     continue
-                n = await _sync_account_full(sid, client)
+                n, err = await _sync_account_full(sid, client)
                 total_items   += n
                 accounts_done += 1
+                if err and not first_error:
+                    first_error = f"{sid}: {err}"
             except Exception as e:
-                logger.warning(f"[AMZ-LISTING-SYNC] Error cuenta {sid}: {e}")
+                err = str(e)[:200]
+                logger.warning(f"[AMZ-LISTING-SYNC] Error cuenta {sid}: {err}")
+                if not first_error:
+                    first_error = f"{sid}: {err}"
+        if first_error:
+            _sync_error = first_error
 
         _last_sync_ts = _time.time()
         from datetime import datetime
