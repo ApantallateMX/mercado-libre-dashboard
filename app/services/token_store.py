@@ -1195,6 +1195,46 @@ async def get_ml_listings_max_synced_at(account_id: str) -> float:
     return float(row[0]) if row and row[0] else 0.0
 
 
+async def bulk_update_ml_listing_qtys(updates: list[tuple[str, int]]) -> None:
+    """Actualiza available_qty + data_json en batch tras un ciclo de stock sync.
+    updates = [(item_id, new_qty), ...]. Usa 2 queries SQL sin importar el tamaño del lote."""
+    if not updates:
+        return
+    import json as _json, time as _t
+    ts = _t.time()
+    qty_map = {item_id: new_qty for item_id, new_qty in updates}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        placeholders = ",".join("?" * len(qty_map))
+        rows = await (await db.execute(
+            f"SELECT item_id, data_json FROM ml_listings WHERE item_id IN ({placeholders})",
+            list(qty_map.keys()),
+        )).fetchall()
+        json_rows: list = []
+        simple_rows: list = []
+        for item_id, data_json in rows:
+            new_qty = qty_map[item_id]
+            if data_json:
+                try:
+                    data = _json.loads(data_json)
+                    data["available_quantity"] = new_qty
+                    json_rows.append((new_qty, _json.dumps(data, ensure_ascii=False), ts, item_id))
+                    continue
+                except Exception:
+                    pass
+            simple_rows.append((new_qty, ts, item_id))
+        if json_rows:
+            await db.executemany(
+                "UPDATE ml_listings SET available_qty=?, data_json=?, synced_at=? WHERE item_id=?",
+                json_rows,
+            )
+        if simple_rows:
+            await db.executemany(
+                "UPDATE ml_listings SET available_qty=?, synced_at=? WHERE item_id=?",
+                simple_rows,
+            )
+        await db.commit()
+
+
 async def update_ml_listing_qty(item_id: str, new_qty: int) -> None:
     """Actualiza available_qty y data_json tras sincronizar stock a ML.
     Evita que la DB sirva datos stale (0) cuando ML ya tiene el stock nuevo."""

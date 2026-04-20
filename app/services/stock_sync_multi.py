@@ -141,6 +141,13 @@ _cannibalization_data: list = []  # último resultado de canibalización (de úl
 _nocturnal_protection: bool = True  # reduce-only 10pm–6am CST por defecto
 _last_bm_stock: dict = {}  # {sku_upper: avail_int} del último sync — para prewarm cache
 _last_sync_per_account: list = []  # [{platform, account_id, nickname, updates, errors, last_error, ts}]
+_on_sync_complete = None           # callback registrado por main.py para invalidar caches post-sync
+
+
+def register_sync_complete_callback(fn):
+    """main.py registra aquí una función async para invalidar _products_cache y _stock_issues_cache."""
+    global _on_sync_complete
+    _on_sync_complete = fn
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -844,6 +851,27 @@ async def run_multi_stock_sync() -> dict:
             f"{summary['skus_processed']} SKUs, {summary['updates']} updates, "
             f"{summary['errors']} errores"
         )
+        # Actualizar ml_listings DB con qty empujadas a ML — evita que el prewarm
+        # calcule alertas falsas (Riesgo Sobreventa) con datos ML stale.
+        _ml_db_updates = [
+            (r["ref"], r["new_qty"])
+            for r in all_results
+            if r.get("ok") and r.get("platform") == "ml" and r.get("ref")
+        ]
+        if _ml_db_updates:
+            try:
+                await token_store.bulk_update_ml_listing_qtys(_ml_db_updates)
+                logger.info(f"[MULTI-SYNC] ml_listings DB actualizada: {len(_ml_db_updates)} items")
+            except Exception as _e:
+                logger.warning(f"[MULTI-SYNC] Error actualizando ml_listings DB: {_e}")
+
+        # Notificar a main.py para que invalide _products_cache + _stock_issues_cache
+        if _on_sync_complete:
+            try:
+                await _on_sync_complete()
+            except Exception as _cb_e:
+                logger.warning(f"[MULTI-SYNC] Error en sync_complete callback: {_cb_e}")
+
         # Guardar desglose por cuenta (ML primero, luego Amazon, ordenado por nombre)
         _last_sync_per_account = sorted(
             _per_acct.values(),

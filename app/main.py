@@ -448,6 +448,16 @@ async def lifespan(app: FastAPI):
     # Sync de listings Amazon → DB local (descarga solo, sin modificar Amazon)
     from app.services.amazon_listing_sync import start_amazon_listing_sync
     start_amazon_listing_sync()
+    # Callback post stock-sync: invalida _products_cache + _stock_issues_cache
+    # para que el prewarm recalcule alertas con qty ML correctas (no stale)
+    from app.services.stock_sync_multi import register_sync_complete_callback
+
+    async def _invalidate_caches_post_sync():
+        _products_cache.clear()
+        _stock_issues_cache.clear()
+        logger.info("[SYNC-CB] products_cache + stock_issues_cache invalidados post stock-sync")
+
+    register_sync_complete_callback(_invalidate_caches_post_sync)
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
     from app.api.lanzar import router as _lanzar_router_ref
     try:
