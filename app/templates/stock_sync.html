@@ -1021,6 +1021,16 @@ function _updatePrewarmStatus(data) {
     spinner.classList.add('hidden');
     label.textContent = '🔄 Actualizar ahora';
     if (_prewarmPollTimer) { clearInterval(_prewarmPollTimer); _prewarmPollTimer = null; }
+    // BM volvió — esconder banner rojo y re-habilitar Preview
+    var bmBannerReady = document.getElementById('bm-down-banner');
+    if (bmBannerReady) bmBannerReady.classList.add('hidden');
+    var previewBtnReady = document.getElementById('btn-preview');
+    if (previewBtnReady) {
+      previewBtnReady.disabled = false;
+      previewBtnReady.title = '';
+      previewBtnReady.classList.remove('bg-gray-300', 'text-gray-400', 'cursor-not-allowed');
+      previewBtnReady.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
+    }
     // Mostrar panel de cobertura si hay estadísticas del bulk
     if (data.bulk_stats && data.bulk_stats.skus_total > 0) _fillCoveragePanel(data.bulk_stats);
   } else {
@@ -1079,6 +1089,11 @@ function _pollPrewarmStatus() {
       // Llenar cobertura si ya tenemos stats (primera carga o prewarm previo)
       if (!d.running && d.ready && d.bulk_stats && d.bulk_stats.skus_total > 0) {
         _fillCoveragePanel(d.bulk_stats);
+      }
+      // Sincronizar banner BM: si BM se recuperó desde que cargó la página, esconder alerta
+      if (d.bm_down === false) {
+        var _bmBPoll = document.getElementById('bm-down-banner');
+        if (_bmBPoll && !_bmBPoll.classList.contains('hidden')) _bmBPoll.classList.add('hidden');
       }
     })
     .catch(function() {});
