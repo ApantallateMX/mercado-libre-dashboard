@@ -11833,6 +11833,7 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
 
     from datetime import datetime, timedelta
     import httpx as _hx
+    import aiosqlite as _aiosqlite
 
     now_dt = datetime.utcnow()
     cutoff_30 = (now_dt - timedelta(days=30)).isoformat() + ".000Z"
@@ -11854,8 +11855,8 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
     # Mapear item_id → sku desde ml_listings (más rápido que parsear orders)
     listing_rows = []
     try:
-        async with aiosqlite.connect(token_store.DATABASE_PATH) as _db:
-            _db.row_factory = aiosqlite.Row
+        async with _aiosqlite.connect(token_store.DATABASE_PATH) as _db:
+            _db.row_factory = _aiosqlite.Row
             listing_rows = await (await _db.execute(
                 "SELECT item_id, sku FROM ml_listings WHERE sku LIKE ? AND sku != ''",
                 (f"{sku_prefix}%",)
