@@ -9970,9 +9970,10 @@ async def multi_sync_trigger():
 
 @app.get("/api/listings/orphans")
 async def listings_orphans_endpoint(request: Request, platform: str = None, account_id: str = None):
-    """Retorna listings presentes en DB pero eliminados de la plataforma."""
+    """Retorna listings presentes en DB pero eliminados de la plataforma.
+    Accesible para cualquier usuario autenticado — filtrado por account_id."""
     _du = getattr(request.state, "dashboard_user", None) or {}
-    if _du.get("role") not in ("admin", "editor"):
+    if not _du.get("role"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     rows = await token_store.get_orphan_listings(platform=platform, account_id=account_id)
     import time as _t
@@ -9991,9 +9992,9 @@ async def listings_orphans_endpoint(request: Request, platform: str = None, acco
 async def delete_orphans_endpoint(request: Request):
     """Elimina listings huérfanos de DB local (orphan_listings + ml_listings/amazon_listings).
     Body: {ids: [1,2,3]} — IDs de orphan_listings.
-    """
+    Accesible para cualquier usuario autenticado — solo borra de DB local, no de la plataforma."""
     _du = getattr(request.state, "dashboard_user", None) or {}
-    if _du.get("role") not in ("admin", "editor"):
+    if not _du.get("role"):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     try:
         body = await request.json()

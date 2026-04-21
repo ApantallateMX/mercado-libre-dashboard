@@ -187,10 +187,6 @@
       </div>
       <div class="flex items-center gap-2">
         <span id="listings-sync-ts" class="text-[10px] text-gray-400 font-mono"></span>
-        <button id="btn-orphans" onclick="window._openOrphansModal()"
-                class="hidden items-center gap-1 px-2.5 py-1.5 bg-red-50 border border-red-200 text-red-600 text-xs font-semibold rounded-lg hover:bg-red-100 transition">
-          <span id="btn-orphans-count"></span> Eliminados
-        </button>
         <button id="btn-sync-listings" onclick="syncListingsNow()"
                 class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-medium rounded-lg transition flex items-center gap-1.5">
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
@@ -530,47 +526,6 @@
 <div id="toast" class="fixed bottom-4 right-4 z-50 hidden px-4 py-3 rounded-xl shadow-lg text-sm font-medium
      bg-green-50 text-green-700 border border-green-200"></div>
 
-<!-- ── Modal: Listings Eliminados (Huérfanos) ─────────────────────── -->
-<div id="modal-orphans" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
-    <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-      <div>
-        <h2 class="font-bold text-gray-800">Listings eliminados de plataforma</h2>
-        <p class="text-xs text-gray-400 mt-0.5">Estos listings existen en nuestra DB pero ya no están en ML/Amazon</p>
-      </div>
-      <button onclick="document.getElementById('modal-orphans').classList.add('hidden')" class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
-    </div>
-    <div class="overflow-y-auto flex-1 px-6 py-4">
-      <div id="orphans-loading" class="text-center text-gray-400 text-sm py-8">Cargando...</div>
-      <table id="orphans-table" class="hidden w-full text-xs">
-        <thead class="bg-gray-50 border-b border-gray-100">
-          <tr>
-            <th class="px-3 py-2 text-left">
-              <input type="checkbox" id="orphans-check-all" onchange="window._orphansToggleAll(this.checked)" class="rounded">
-            </th>
-            <th class="px-3 py-2 text-left text-gray-500 font-semibold uppercase tracking-wide">ID / SKU</th>
-            <th class="px-3 py-2 text-left text-gray-500 font-semibold uppercase tracking-wide">Título</th>
-            <th class="px-3 py-2 text-left text-gray-500 font-semibold uppercase tracking-wide">Plataforma</th>
-            <th class="px-3 py-2 text-left text-gray-500 font-semibold uppercase tracking-wide">Detectado</th>
-          </tr>
-        </thead>
-        <tbody id="orphans-tbody" class="divide-y divide-gray-50"></tbody>
-      </table>
-      <div id="orphans-empty" class="hidden text-center text-gray-400 text-sm py-8">No hay listings eliminados detectados.</div>
-    </div>
-    <div class="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
-      <span id="orphans-selected-count" class="text-xs text-gray-400">0 seleccionados</span>
-      <div class="flex gap-2">
-        <button onclick="document.getElementById('modal-orphans').classList.add('hidden')"
-                class="px-4 py-2 text-sm border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 transition">Cerrar</button>
-        <button id="btn-delete-orphans" onclick="window._deleteSelectedOrphans()" disabled
-                class="px-4 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed font-semibold">
-          Eliminar seleccionados de DB
-        </button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <script>
 // ── BM Health check al cargar página ─────────────────────────────────────────
@@ -1531,7 +1486,6 @@ window.syncListingsNow = function() {
                 btn.innerHTML = '<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg> Sync Listings';
               }
               _loadListingsSummary();
-              _loadOrphansBadge();
               showToast('\u2713 Listings actualizados: ' + (s.total_listings || 0).toLocaleString() + ' en total', false);
             }
           }).catch(function() { clearInterval(_poll); });
@@ -1753,103 +1707,6 @@ window.lookupMlmStock = function() {
     });
 };
 
-// ── Listings huérfanos ────────────────────────────────────────────────────────
-var _orphanRows = [];
-
-function _loadOrphansBadge() {
-  fetch('/api/listings/orphans', {headers: {'ngrok-skip-browser-warning': 'true'}})
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var btn = document.getElementById('btn-orphans');
-      var cnt = document.getElementById('btn-orphans-count');
-      if (!btn) return;
-      var n = d.count || 0;
-      if (n > 0) {
-        if (cnt) cnt.textContent = n;
-        btn.classList.remove('hidden');
-        btn.classList.add('flex');
-      } else {
-        btn.classList.add('hidden');
-        btn.classList.remove('flex');
-      }
-    })
-    .catch(function() {});
-}
-
-window._openOrphansModal = function() {
-  document.getElementById('modal-orphans').classList.remove('hidden');
-  document.getElementById('orphans-loading').classList.remove('hidden');
-  document.getElementById('orphans-table').classList.add('hidden');
-  document.getElementById('orphans-empty').classList.add('hidden');
-  document.getElementById('orphans-tbody').innerHTML = '';
-  document.getElementById('btn-delete-orphans').disabled = true;
-  document.getElementById('orphans-selected-count').textContent = '0 seleccionados';
-  document.getElementById('orphans-check-all').checked = false;
-
-  fetch('/api/listings/orphans', {headers: {'ngrok-skip-browser-warning': 'true'}})
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      document.getElementById('orphans-loading').classList.add('hidden');
-      _orphanRows = d.orphans || [];
-      if (!_orphanRows.length) {
-        document.getElementById('orphans-empty').classList.remove('hidden');
-        return;
-      }
-      var platLabel = {'ml': '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-700">ML</span>',
-                       'amz': '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">AMZ</span>'};
-      document.getElementById('orphans-tbody').innerHTML = _orphanRows.map(function(r) {
-        return '<tr class="hover:bg-gray-50">' +
-          '<td class="px-3 py-2"><input type="checkbox" class="orphan-cb rounded" data-id="' + r.id + '" onchange="window._orphansUpdateCount()"></td>' +
-          '<td class="px-3 py-2 font-mono text-gray-700">' + (r.item_id || '—') + '</td>' +
-          '<td class="px-3 py-2 text-gray-600 max-w-[200px] truncate" title="' + (r.title || '') + '">' + (r.title || '—') + '</td>' +
-          '<td class="px-3 py-2">' + (platLabel[r.platform] || r.platform) + '</td>' +
-          '<td class="px-3 py-2 text-gray-400">' + (r.age_str || '—') + '</td>' +
-          '</tr>';
-      }).join('');
-      document.getElementById('orphans-table').classList.remove('hidden');
-    })
-    .catch(function() {
-      document.getElementById('orphans-loading').classList.add('hidden');
-      document.getElementById('orphans-empty').classList.remove('hidden');
-    });
-};
-
-window._orphansToggleAll = function(checked) {
-  document.querySelectorAll('.orphan-cb').forEach(function(cb) { cb.checked = checked; });
-  window._orphansUpdateCount();
-};
-
-window._orphansUpdateCount = function() {
-  var sel = document.querySelectorAll('.orphan-cb:checked').length;
-  document.getElementById('orphans-selected-count').textContent = sel + ' seleccionado' + (sel !== 1 ? 's' : '');
-  document.getElementById('btn-delete-orphans').disabled = sel === 0;
-};
-
-window._deleteSelectedOrphans = function() {
-  var ids = Array.from(document.querySelectorAll('.orphan-cb:checked')).map(function(cb) { return parseInt(cb.dataset.id); });
-  if (!ids.length) return;
-  if (!confirm('¿Eliminar ' + ids.length + ' listing(s) de la base de datos local? Esta acción no modifica ML ni Amazon.')) return;
-  var btn = document.getElementById('btn-delete-orphans');
-  btn.disabled = true; btn.textContent = 'Eliminando...';
-  fetch('/api/listings/orphans', {
-    method: 'DELETE',
-    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-    body: JSON.stringify({ids: ids}),
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    showToast('Eliminados ' + (d.deleted || 0) + ' listings de DB');
-    document.getElementById('modal-orphans').classList.add('hidden');
-    _loadOrphansBadge();
-    _loadListingsSummary();
-  })
-  .catch(function() {
-    showToast('Error al eliminar', true);
-    btn.disabled = false; btn.textContent = 'Eliminar seleccionados de DB';
-  });
-};
-
-// Cargar badge de huérfanos al cargar la página y al terminar un sync
-_loadOrphansBadge();
+// (Listings huérfanos — gestionados desde Productos / tab Stock)
 </script>
 {% endblock %}
