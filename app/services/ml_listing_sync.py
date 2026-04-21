@@ -108,6 +108,34 @@ async def _sync_account_full(uid: str, client) -> int:
                     _on_listings_updated(uid)
                 except Exception:
                     pass
+
+        # ── Detección de huérfanos ──────────────────────────────────────────
+        # Comparar item_ids devueltos por API vs los que están en DB para esta cuenta.
+        # Los que están en DB pero no en la respuesta API = eliminados en ML.
+        try:
+            fresh_ids = {r["item_id"] for r in rows}
+            db_rows = await token_store.get_ml_listings(uid)
+            db_ids  = {r["item_id"] for r in db_rows}
+            orphan_ids = db_ids - fresh_ids
+            await token_store.clear_orphans_for_account("ml", uid)
+            if orphan_ids:
+                # Lookup title/sku de los huérfanos desde DB
+                db_map = {r["item_id"]: r for r in db_rows}
+                orphan_entries = [
+                    {
+                        "platform":   "ml",
+                        "account_id": uid,
+                        "item_id":    iid,
+                        "title":      db_map.get(iid, {}).get("title", ""),
+                        "sku":        db_map.get(iid, {}).get("sku", ""),
+                    }
+                    for iid in orphan_ids
+                ]
+                await token_store.save_orphan_listings(orphan_entries)
+                logger.info(f"[ML-SYNC] uid={uid}: {len(orphan_ids)} listings huérfanos detectados")
+        except Exception as _oe:
+            logger.warning(f"[ML-SYNC] Error detectando huérfanos uid={uid}: {_oe}")
+
         logger.info(f"[ML-SYNC] Full sync uid={uid}: {len(rows)} items")
         return len(rows)
     except Exception as e:

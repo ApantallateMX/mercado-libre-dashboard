@@ -93,6 +93,33 @@ async def _sync_account_full(seller_id: str, client) -> tuple[int, str]:
         if rows:
             await token_store.upsert_amazon_listings(rows)
         logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(rows)} listings guardados en DB")
+
+        # ── Detección de huérfanos ──────────────────────────────────────────
+        try:
+            fresh_skus = {r["sku"] for r in rows}
+            db_skus_qtys = await token_store.get_amazon_skus_and_qtys(seller_id)
+            db_skus = {s for s, _ in db_skus_qtys}
+            orphan_skus = db_skus - fresh_skus
+            await token_store.clear_orphans_for_account("amz", seller_id)
+            if orphan_skus:
+                # Buscar title desde db
+                amz_db = await token_store.get_amazon_listings_for_account(seller_id)
+                db_map = {r.get("sku", ""): r for r in amz_db}
+                orphan_entries = [
+                    {
+                        "platform":   "amz",
+                        "account_id": seller_id,
+                        "item_id":    sku,
+                        "title":      db_map.get(sku, {}).get("title", ""),
+                        "sku":        sku,
+                    }
+                    for sku in orphan_skus
+                ]
+                await token_store.save_orphan_listings(orphan_entries)
+                logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(orphan_skus)} listings huérfanos detectados")
+        except Exception as _oe:
+            logger.warning(f"[AMZ-LISTING-SYNC] Error detectando huérfanos seller={seller_id}: {_oe}")
+
         return len(rows), ""
     except Exception as e:
         err = str(e)[:200]

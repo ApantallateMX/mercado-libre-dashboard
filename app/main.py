@@ -9955,6 +9955,44 @@ async def multi_sync_trigger():
     return {"status": "triggered"}
 
 
+@app.get("/api/listings/orphans")
+async def listings_orphans_endpoint(request: Request, platform: str = None, account_id: str = None):
+    """Retorna listings presentes en DB pero eliminados de la plataforma."""
+    _du = getattr(request.state, "dashboard_user", None) or {}
+    if _du.get("role") not in ("admin", "editor"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    rows = await token_store.get_orphan_listings(platform=platform, account_id=account_id)
+    import time as _t
+    now = _t.time()
+    for r in rows:
+        age_s = now - r.get("detected_at", now)
+        r["age_str"] = (
+            f"hace {int(age_s)}s" if age_s < 120
+            else f"hace {int(age_s//60)}min" if age_s < 3600
+            else f"hace {int(age_s//3600)}h"
+        )
+    return JSONResponse({"orphans": rows, "count": len(rows)})
+
+
+@app.delete("/api/listings/orphans")
+async def delete_orphans_endpoint(request: Request):
+    """Elimina listings huérfanos de DB local (orphan_listings + ml_listings/amazon_listings).
+    Body: {ids: [1,2,3]} — IDs de orphan_listings.
+    """
+    _du = getattr(request.state, "dashboard_user", None) or {}
+    if _du.get("role") not in ("admin", "editor"):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body JSON inválido"}, status_code=400)
+    ids = body.get("ids", [])
+    if not ids or not isinstance(ids, list):
+        return JSONResponse({"error": "ids requerido (lista de enteros)"}, status_code=400)
+    deleted = await token_store.delete_orphan_listings([int(i) for i in ids])
+    return JSONResponse({"deleted": deleted})
+
+
 @app.post("/api/stock/multi-sync/trigger-single")
 async def trigger_single_account_sync(request: Request):
     """Dispara el sync de stock para una sola cuenta (ML o Amazon).

@@ -419,6 +419,26 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_amz_listings_seller ON amazon_listings(seller_id)"
         )
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: orphan_listings — listings presentes en DB pero eliminados
+        # de la plataforma. Detectados en cada full sync.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS orphan_listings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform    TEXT NOT NULL,
+                account_id  TEXT NOT NULL,
+                item_id     TEXT NOT NULL,
+                title       TEXT DEFAULT '',
+                sku         TEXT DEFAULT '',
+                detected_at REAL NOT NULL DEFAULT 0,
+                UNIQUE(platform, account_id, item_id)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orphan_listings_acct "
+            "ON orphan_listings(platform, account_id)"
+        )
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: bm_stock_cache — persiste el caché de BM entre reinicios
         # Permite que el prewarm lea BM en <100ms después de un restart
         # ─────────────────────────────────────────────────────────────────
@@ -1427,6 +1447,17 @@ async def update_ml_qty_batch(updates: list[tuple[str, int]]) -> int:
     return changed
 
 
+async def get_amazon_listings_for_account(seller_id: str) -> list[dict]:
+    """Retorna [{sku, title, asin, available_qty}] para una cuenta Amazon."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT sku, title, asin, available_qty FROM amazon_listings WHERE seller_id=?",
+            [seller_id],
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
 async def get_amazon_skus_and_qtys(seller_id: str) -> list[tuple[str, int]]:
     """Retorna [(sku, available_qty), ...] para el qty-only sync de Amazon."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -1553,6 +1584,88 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
             [min_ts],
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── orphan_listings helpers ─────────────────────────────────────────────────
+
+async def save_orphan_listings(entries: list[dict]) -> int:
+    """Inserta o actualiza listings huérfanos. entries: [{platform,account_id,item_id,title,sku}]
+    Retorna el número de filas insertadas/actualizadas."""
+    if not entries:
+        return 0
+    import time as _t
+    now = _t.time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            "INSERT INTO orphan_listings (platform, account_id, item_id, title, sku, detected_at) "
+            "VALUES (:platform, :account_id, :item_id, :title, :sku, :detected_at) "
+            "ON CONFLICT(platform, account_id, item_id) DO UPDATE SET "
+            "title=excluded.title, sku=excluded.sku, detected_at=excluded.detected_at",
+            [{**e, "detected_at": now} for e in entries],
+        )
+        # Limpiar huérfanos que ya no existen (se re-detectan en cada full sync)
+        # — si ya no está en la lista fresca del mismo account, lo dejamos, se limpia al confirmar
+        await db.commit()
+    return len(entries)
+
+
+async def clear_orphans_for_account(platform: str, account_id: str) -> None:
+    """Limpia los huérfanos detectados previamente para una cuenta (antes de re-detectar)."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM orphan_listings WHERE platform=? AND account_id=?",
+            (platform, account_id),
+        )
+        await db.commit()
+
+
+async def get_orphan_listings(platform: str = None, account_id: str = None) -> list[dict]:
+    """Retorna listings huérfanos. Filtra por platform y/o account_id si se especifican."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        where, params = [], []
+        if platform:
+            where.append("platform=?"); params.append(platform)
+        if account_id:
+            where.append("account_id=?"); params.append(account_id)
+        sql = "SELECT * FROM orphan_listings"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY detected_at DESC"
+        rows = await (await db.execute(sql, params)).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def delete_orphan_listings(ids: list[int]) -> int:
+    """Elimina de DB local los listings huérfanos Y los registros en ml_listings/amazon_listings."""
+    if not ids:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Leer las filas antes de borrar para saber qué limpiar en ml_listings/amazon_listings
+        placeholders = ",".join("?" for _ in ids)
+        rows = await (await db.execute(
+            f"SELECT platform, account_id, item_id FROM orphan_listings WHERE id IN ({placeholders})",
+            ids,
+        )).fetchall()
+        # Borrar de orphan_listings
+        await db.execute(
+            f"DELETE FROM orphan_listings WHERE id IN ({placeholders})", ids
+        )
+        # Borrar de ml_listings / amazon_listings
+        for r in rows:
+            if r["platform"] == "ml":
+                await db.execute(
+                    "DELETE FROM ml_listings WHERE item_id=? AND account_id=?",
+                    (r["item_id"], r["account_id"]),
+                )
+            else:
+                await db.execute(
+                    "DELETE FROM amazon_listings WHERE seller_id=? AND sku=?",
+                    (r["account_id"], r["item_id"]),
+                )
+        await db.commit()
+    return len(rows)
 
 
 # ─── bm_sync_log helpers ────────────────────────────────────────────────────
