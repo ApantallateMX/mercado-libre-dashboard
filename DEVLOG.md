@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FIX: Planeación mostraba listings con SKU como "sin SKU" (commit 8b3bd42)
+
+### Problema
+La sección "Listings sin SKU" en Planeación incluía items que sí tenían SKU en ML (e.g. MLM4618869888 con SKU SNTV007615). El usuario lo detectó al verificar el listing directamente en ML.
+
+### Causa raíz
+`get_cached_skus` solo se invocaba para `top_ids[:100]` (los 100 items más vendidos). Items fuera del top 100 nunca recibían su SKU aunque estuvieran en `item_sku_cache`. La segunda fuente disponible (`ml_listings`, sincronizada cada 3 min) ni siquiera se consultaba.
+
+Datos al momento del fix:
+- `item_sku_cache`: 7,987 items con SKU
+- `ml_listings`: 13,835 items con SKU
+- Items en `ml_listings` con SKU pero sin entrada en `item_sku_cache`: **6,334**
+
+### Solución
+3 fuentes en cascada, todas locales (sin llamadas ML extra):
+1. **Step 1a** — `item_sku_cache` consultado para **todos** los items (no solo top 100)
+2. **Step 1b** (nuevo) — `ml_listings` como fallback para items aún sin SKU → resuelve los 6,334 restantes
+3. **Step 2** — live ML API fetch sin cambios, solo para top 100 que ninguna fuente local pudo resolver
+
+Archivos: `app/main.py`, `app/services/token_store.py` (nueva función `get_skus_from_listings`)
+
+---
+
 ## 2026-04-21 — FEAT: orphan badge en navbar + banner por cuenta en Productos (commit 69e19ce)
 
 ### Problema
