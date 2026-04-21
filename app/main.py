@@ -11835,7 +11835,7 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
     import httpx as _hx
 
     now_dt = datetime.utcnow()
-    cutoff_30 = (now_dt - timedelta(days=30)).isoformat() + ".000Z"
+    cutoff_30 = (now_dt - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     # ── Obtener todos los tokens ML ──────────────────────────────────────────
     accounts = await token_store.get_all_tokens()
@@ -11913,9 +11913,11 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
 
     all_order_lists = await asyncio.gather(*tasks, return_exceptions=True)
 
+    total_orders_fetched = 0
     for order_list in all_order_lists:
         if isinstance(order_list, Exception):
             continue
+        total_orders_fetched += len(order_list)
         for order in order_list:
             # Parse date
             date_str = order.get("date_created", "") or order.get("date_closed", "")
@@ -11953,6 +11955,7 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
         "sku_prefix": sku_prefix,
         "skus_with_sales": len(result),
         "skus_mapped": len(item_to_sku),
+        "total_orders_fetched": total_orders_fetched,
         "accounts": len(accounts),
         "cutoff_30d": cutoff_30,
         "sales": result,
