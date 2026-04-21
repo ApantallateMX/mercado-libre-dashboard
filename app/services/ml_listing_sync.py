@@ -225,6 +225,11 @@ async def run_ml_listing_sync(full: bool = False) -> dict:
                         needs_full = True  # DB vacía → siempre full
 
                     if needs_full:
+                        # Guardar count actual como "prev" antes de modificar la DB
+                        try:
+                            await token_store.snapshot_listings_count("ml", uid, db_count)
+                        except Exception:
+                            pass
                         n = await _sync_account_full(uid, client)
                     else:
                         n = await _sync_account_incremental(uid, client)

@@ -419,6 +419,19 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_amz_listings_seller ON amazon_listings(seller_id)"
         )
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: listings_count_prev — snapshot del count ANTES de cada sync
+        # Permite calcular el delta (↑↓=) comparado con el sync anterior.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS listings_count_prev (
+                platform    TEXT NOT NULL,
+                account_id  TEXT NOT NULL,
+                count       INTEGER NOT NULL DEFAULT 0,
+                recorded_at REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (platform, account_id)
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: orphan_listings — listings presentes en DB pero eliminados
         # de la plataforma. Detectados en cada full sync.
         # ─────────────────────────────────────────────────────────────────
@@ -1504,17 +1517,25 @@ async def get_listings_summary() -> dict:
         )).fetchall():
             ml_counts[r["account_id"]] = {"count": r["cnt"], "last_ts": float(r["last_ts"] or 0)}
 
+        # Prev counts para calcular delta (↑↓=)
+        prev_rows = await (await db.execute(
+            "SELECT platform, account_id, count FROM listings_count_prev"
+        )).fetchall()
+        prev_map = {(r["platform"], r["account_id"]): r["count"] for r in prev_rows}
+
         # ML: nicknames
         tokens_rows = await (await db.execute("SELECT user_id, nickname FROM tokens")).fetchall()
         ml_accounts = []
         for t in tokens_rows:
             uid = t["user_id"]
             info = ml_counts.get(uid, {"count": 0, "last_ts": 0.0})
+            prev = prev_map.get(("ml", uid))
             ml_accounts.append({
                 "account_id":  uid,
                 "nickname":    t["nickname"] or uid,
                 "platform":    "ml",
                 "count":       info["count"],
+                "prev_count":  prev,
                 "last_sync_ts": info["last_ts"],
             })
 
@@ -1537,11 +1558,13 @@ async def get_listings_summary() -> dict:
         for t in amz_rows:
             sid = t["seller_id"]
             info = amz_counts.get(sid, {"count": 0, "last_ts": 0.0})
+            prev = prev_map.get(("amz", sid))
             amz_accounts.append({
                 "account_id":  sid,
                 "nickname":    t["nickname"] or sid,
                 "platform":    "amz",
                 "count":       info["count"],
+                "prev_count":  prev,
                 "last_sync_ts": info["last_ts"],
             })
 
@@ -1584,6 +1607,31 @@ async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
             [min_ts],
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─── listings_count_prev helpers ─────────────────────────────────────────────
+
+async def snapshot_listings_count(platform: str, account_id: str, count: int) -> None:
+    """Guarda el count actual como 'prev' ANTES de que corra el sync.
+    Llamar desde run_ml_listing_sync / run_amazon_listing_sync antes del upsert."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT INTO listings_count_prev (platform, account_id, count, recorded_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(platform, account_id) DO UPDATE SET "
+            "count=excluded.count, recorded_at=excluded.recorded_at",
+            (platform, account_id, count, _t.time()),
+        )
+        await db.commit()
+
+
+async def get_listings_count_prevs() -> dict:
+    """Retorna {(platform, account_id): prev_count} para todos los registros."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            "SELECT platform, account_id, count FROM listings_count_prev"
+        )).fetchall()
+    return {(r[0], r[1]): r[2] for r in rows}
 
 
 # ─── orphan_listings helpers ─────────────────────────────────────────────────

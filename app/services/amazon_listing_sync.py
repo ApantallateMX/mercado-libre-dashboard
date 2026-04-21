@@ -159,6 +159,12 @@ async def run_amazon_listing_sync() -> dict:
                 if not client:
                     logger.warning(f"[AMZ-LISTING-SYNC] No se pudo crear cliente para {sid}")
                     continue
+                # Guardar count actual como "prev" antes de modificar la DB
+                try:
+                    _amz_prev = await token_store.count_amazon_listings(sid)
+                    await token_store.snapshot_listings_count("amz", sid, _amz_prev)
+                except Exception:
+                    pass
                 n, err = await _sync_account_full(sid, client)
                 total_items   += n
                 accounts_done += 1

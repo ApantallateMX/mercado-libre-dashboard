@@ -1454,8 +1454,16 @@ function _loadListingsSummary() {
         var platBadge = a.platform === 'ml'
           ? '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-700">ML</span>'
           : '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-700">AMZ</span>';
+        var trendHtml = '';
+        if (a.prev_count !== null && a.prev_count !== undefined) {
+          var delta = a.count - a.prev_count;
+          if (delta > 0)
+            trendHtml = ' <span class="text-green-500 text-[10px] font-bold">↑' + delta.toLocaleString() + '</span>';
+          else if (delta < 0)
+            trendHtml = ' <span class="text-red-500 text-[10px] font-bold">↓' + Math.abs(delta).toLocaleString() + '</span>';
+        }
         var cntCell = a.count > 0
-          ? '<span class="font-semibold text-gray-700">' + a.count.toLocaleString() + '</span>'
+          ? '<span class="font-semibold text-gray-700">' + a.count.toLocaleString() + '</span>' + trendHtml
           : '<span class="text-amber-500 font-medium" title="Presiona Sync Listings">Pendiente</span>';
         var syncAgo = '';
         if (a.last_sync_ts) {
