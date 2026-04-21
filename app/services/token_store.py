@@ -1006,6 +1006,27 @@ async def get_cached_skus(item_ids: list) -> dict:
     return result
 
 
+async def get_skus_from_listings(item_ids: list) -> dict:
+    """Retorna {item_id: sku} consultando ml_listings para los item_ids dados.
+    Fallback para items que no están en item_sku_cache pero sí en ml_listings."""
+    if not item_ids:
+        return {}
+    result: dict[str, str] = {}
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        for i in range(0, len(item_ids), 500):
+            chunk = item_ids[i:i+500]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = await db.execute(
+                f"SELECT item_id, sku FROM ml_listings WHERE item_id IN ({placeholders}) AND sku != '' AND sku IS NOT NULL",
+                chunk,
+            )
+            for row in await cursor.fetchall():
+                if row["item_id"] not in result:
+                    result[row["item_id"]] = row["sku"]
+    return result
+
+
 async def save_skus_cache(entries: list) -> None:
     """Guarda [{item_id, user_id, sku}] en caché. Soporta múltiples SKUs por item_id.
     Ignora entradas con sku vacío. PK compuesta (item_id, sku) — no sobreescribe."""

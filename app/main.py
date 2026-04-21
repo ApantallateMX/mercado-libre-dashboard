@@ -11092,16 +11092,27 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
                 if is_7d:
                     item_agg[iid]["units_7d"] += qty
 
-    # ── Step 1: Load cached SKUs from DB ──────────────────────────────────────
+    # ── Step 1a: Load cached SKUs from item_sku_cache (ALL items, not just top-100) ──
     from app.services import token_store as _ts_planning
+    all_ids = list(item_agg.keys())
     top_ids = sorted(item_agg, key=lambda x: item_agg[x]["units"], reverse=True)[:100]
 
-    cached_skus = await _ts_planning.get_cached_skus(top_ids)
+    cached_skus = await _ts_planning.get_cached_skus(all_ids)
     for iid, sku in cached_skus.items():
         if iid in item_agg:
             item_agg[iid]["sku"] = sku
 
-    # ── Step 2: Live-fetch SKUs only for items still without SKU ───────────────
+    # ── Step 1b: Fallback — ml_listings for items still without SKU ───────────
+    # ml_listings is synced every 3 min and covers ~14k items with SKU.
+    # This resolves items outside the top-100 that were never live-fetched.
+    still_no_sku = [iid for iid in all_ids if not item_agg[iid].get("sku")]
+    if still_no_sku:
+        listing_skus = await _ts_planning.get_skus_from_listings(still_no_sku)
+        for iid, sku in listing_skus.items():
+            if iid in item_agg:
+                item_agg[iid]["sku"] = sku
+
+    # ── Step 2: Live-fetch SKUs only for top-100 items still without SKU ──────
     # CRITICAL: seller_custom_field only visible with the listing owner's token.
     needs_sku = [iid for iid in top_ids if not item_agg[iid].get("sku")]
 
