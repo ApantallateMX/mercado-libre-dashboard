@@ -77,6 +77,18 @@
     </table>
     <div id="requests-empty" class="hidden px-6 py-10 text-center text-gray-400 text-sm">Sin solicitudes para este filtro.</div>
   </div>
+
+  <!-- ── Paginación ──────────────────────────────────────────────────────────── -->
+  <div id="fac-pagination" class="hidden flex items-center justify-between mt-3 px-1">
+    <span id="fac-page-info" class="text-xs text-gray-400"></span>
+    <div class="flex items-center gap-1">
+      <button id="fac-prev" onclick="window._facGoPage(_facPage - 1)"
+              class="px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition text-gray-500 disabled:opacity-40 disabled:cursor-not-allowed">← Anterior</button>
+      <span id="fac-page-btns" class="flex items-center gap-1"></span>
+      <button id="fac-next" onclick="window._facGoPage(_facPage + 1)"
+              class="px-3 py-1.5 text-xs border border-gray-200 rounded-lg hover:bg-gray-50 transition text-gray-500 disabled:opacity-40 disabled:cursor-not-allowed">Siguiente →</button>
+    </div>
+  </div>
 </div>
 
 <!-- ══ MODAL: Nueva solicitud ══════════════════════════════════════════════ -->
@@ -205,6 +217,9 @@ var _currentReqId = null;
 var _currentSort  = 'date_desc';
 var _dupLink      = '';
 var _dupReqId     = null;
+var _allRows      = [];
+var _facPage      = 1;
+var _FAC_PAGE_SIZE = 10;
 
 var _STATUS_LABELS = {
   'pending_data':   '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">Esperando datos</span>',
@@ -240,44 +255,93 @@ window._loadRequests = function() {
   var table   = document.getElementById('requests-table');
   var empty   = document.getElementById('requests-empty');
   loading.classList.remove('hidden'); table.classList.add('hidden'); empty.classList.add('hidden');
+  document.getElementById('fac-pagination').classList.add('hidden');
   document.getElementById('f-count').textContent = '';
 
   fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(d) {
       loading.classList.add('hidden');
-      var rows = d.requests || [];
-      document.getElementById('f-count').textContent = rows.length + ' resultado' + (rows.length !== 1 ? 's' : '');
+      _allRows = d.requests || [];
+      document.getElementById('f-count').textContent = _allRows.length + ' resultado' + (_allRows.length !== 1 ? 's' : '');
 
       // Poblar dropdown de usuarios con valores únicos de la carga actual
-      if (!userVal) _populateUserFilter(rows);
+      if (!userVal) _populateUserFilter(_allRows);
 
-      if (!rows.length) { empty.classList.remove('hidden'); return; }
-      var tbody = document.getElementById('requests-tbody');
-      tbody.innerHTML = rows.map(function(r) {
-        var ref   = r.client_ref || r.order_number || '#' + r.id;
-        var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + _esc(r.order_number) + '</span>' : '';
-        var date  = (r.created_at || '').substring(0, 10);
-        var plat  = _PLATFORM_LABELS[r.platform] || r.platform;
-        var acct  = r.account_nickname ? '<div class="text-xs text-gray-400 mt-0.5">' + _esc(r.account_nickname) + '</div>' : '';
-        var st    = _STATUS_LABELS[r.status] || r.status;
-        return '<tr class="hover:bg-gray-50 transition">' +
-          '<td class="px-4 py-3 font-medium text-gray-800">' + _esc(ref) + order + '</td>' +
-          '<td class="px-4 py-3 text-gray-600"><div>' + plat + '</div>' + acct + '</td>' +
-          '<td class="px-4 py-3">' + st + '</td>' +
-          '<td class="px-4 py-3 text-gray-500">' + _esc(r.created_by) + '</td>' +
-          '<td class="px-4 py-3 text-gray-400 font-mono text-xs">' + date + '</td>' +
-          '<td class="px-4 py-3 text-right">' +
-            '<div class="flex items-center justify-end gap-2">' +
-              '<button onclick="window._copyLink(\'' + r.token + '\')" title="Copiar link" class="text-blue-500 hover:text-blue-700 text-xs font-semibold px-2 py-1 rounded hover:bg-blue-50 transition">🔗 Link</button>' +
-              '<button onclick="window._openDetail(' + r.id + ')" title="Ver detalle" class="text-gray-500 hover:text-gray-700 text-xs font-semibold px-2 py-1 rounded hover:bg-gray-100 transition">Ver</button>' +
-            '</div>' +
-          '</td>' +
-        '</tr>';
-      }).join('');
+      if (!_allRows.length) {
+        empty.classList.remove('hidden');
+        document.getElementById('fac-pagination').classList.add('hidden');
+        return;
+      }
+      _facPage = 1;
+      window._renderFacPage(1);
       table.classList.remove('hidden');
     })
     .catch(function() { loading.classList.add('hidden'); empty.classList.remove('hidden'); });
+};
+
+// ── Pagination helpers ─────────────────────────────────────────────────────
+window._renderFacPage = function(page) {
+  var totalPages = Math.max(1, Math.ceil(_allRows.length / _FAC_PAGE_SIZE));
+  page = Math.max(1, Math.min(page, totalPages));
+  _facPage = page;
+
+  var start  = (page - 1) * _FAC_PAGE_SIZE;
+  var slice  = _allRows.slice(start, start + _FAC_PAGE_SIZE);
+
+  var tbody = document.getElementById('requests-tbody');
+  tbody.innerHTML = slice.map(function(r) {
+    var ref   = r.client_ref || r.order_number || '#' + r.id;
+    var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + _esc(r.order_number) + '</span>' : '';
+    var date  = (r.created_at || '').substring(0, 10);
+    var plat  = _PLATFORM_LABELS[r.platform] || r.platform;
+    var acct  = r.account_nickname ? '<div class="text-xs text-gray-400 mt-0.5">' + _esc(r.account_nickname) + '</div>' : '';
+    var st    = _STATUS_LABELS[r.status] || r.status;
+    return '<tr class="hover:bg-gray-50 transition">' +
+      '<td class="px-4 py-3 font-medium text-gray-800">' + _esc(ref) + order + '</td>' +
+      '<td class="px-4 py-3 text-gray-600"><div>' + plat + '</div>' + acct + '</td>' +
+      '<td class="px-4 py-3">' + st + '</td>' +
+      '<td class="px-4 py-3 text-gray-500">' + _esc(r.created_by) + '</td>' +
+      '<td class="px-4 py-3 text-gray-400 font-mono text-xs">' + date + '</td>' +
+      '<td class="px-4 py-3 text-right">' +
+        '<div class="flex items-center justify-end gap-2">' +
+          '<button onclick="window._copyLink(\'' + r.token + '\')" title="Copiar link" class="text-blue-500 hover:text-blue-700 text-xs font-semibold px-2 py-1 rounded hover:bg-blue-50 transition">🔗 Link</button>' +
+          '<button onclick="window._openDetail(' + r.id + ')" title="Ver detalle" class="text-gray-500 hover:text-gray-700 text-xs font-semibold px-2 py-1 rounded hover:bg-gray-100 transition">Ver</button>' +
+        '</div>' +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  // Pagination controls
+  var pag = document.getElementById('fac-pagination');
+  if (totalPages <= 1) { pag.classList.add('hidden'); return; }
+  pag.classList.remove('hidden');
+
+  document.getElementById('fac-page-info').textContent =
+    'Mostrando ' + (start + 1) + '–' + Math.min(start + _FAC_PAGE_SIZE, _allRows.length) + ' de ' + _allRows.length;
+
+  var prevBtn = document.getElementById('fac-prev');
+  var nextBtn = document.getElementById('fac-next');
+  prevBtn.disabled = (page <= 1);
+  nextBtn.disabled = (page >= totalPages);
+
+  // Page number buttons (show up to 5 around current)
+  var btnsEl = document.getElementById('fac-page-btns');
+  var range = [], lo = Math.max(1, page - 2), hi = Math.min(totalPages, page + 2);
+  for (var i = lo; i <= hi; i++) range.push(i);
+  btnsEl.innerHTML = range.map(function(p) {
+    var active = p === page
+      ? 'bg-yellow-400 text-gray-800 border-yellow-400 font-semibold'
+      : 'text-gray-500 hover:bg-gray-50';
+    return '<button onclick="window._facGoPage(' + p + ')" class="w-8 h-8 text-xs border border-gray-200 rounded-lg transition ' + active + '">' + p + '</button>';
+  }).join('');
+};
+
+window._facGoPage = function(page) {
+  window._renderFacPage(page);
+  // Scroll table into view
+  var tbl = document.getElementById('requests-table');
+  if (tbl) tbl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
 
 function _populateUserFilter(rows) {
