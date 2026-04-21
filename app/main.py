@@ -2845,16 +2845,19 @@ async def _prewarm_caches(user_id: str = None):
                     ]
                     if _bm_entries:
                         await token_store.save_bm_stock_cache(_bm_entries)
-                        # Registrar en historial BM — para la tarjeta de Caché de Stock BM
-                        _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
-                        try:
-                            await token_store.log_bm_sync_event(
-                                sku_count=len(_bm_entries),
-                                elapsed_s=_bm_elapsed,
-                                source=_prewarm_source,
-                            )
-                        except Exception:
-                            pass
+                    # Registrar en historial BM SIEMPRE (fuera del if) — aunque no haya entradas
+                    # con avail>0. El log debe reflejar cada ejecución del prewarm, no solo
+                    # las exitosas. sku_count = total en cache (incluyendo 0s) para ver cobertura.
+                    _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
+                    _bm_total_skus = len(_bm_stock_cache)
+                    try:
+                        await token_store.log_bm_sync_event(
+                            sku_count=_bm_total_skus,
+                            elapsed_s=_bm_elapsed,
+                            source=_prewarm_source,
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
