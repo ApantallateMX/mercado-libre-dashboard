@@ -11824,6 +11824,139 @@ async def bm_launch_opportunities(
     })
 
 
+@app.get("/api/diag/sku-sales")
+async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
+    """Diagnóstico: ventas de los últimos 7/15/30 días agrupadas por SKU (prefix).
+    Suma todas las cuentas ML. Solo accesible con diag token."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    from datetime import datetime, timedelta
+    import httpx as _hx
+
+    now_dt = datetime.utcnow()
+    cutoff_30 = (now_dt - timedelta(days=30)).isoformat() + ".000Z"
+
+    # ── Obtener todos los tokens ML ──────────────────────────────────────────
+    accounts = await token_store.get_all_tokens()
+    if not accounts:
+        return JSONResponse({"error": "no accounts"})
+
+    # ── Recolectar órdenes de todos los sellers ──────────────────────────────
+    # sales_by_sku[sku] = {"d7": units, "d15": units, "d30": units}
+    from collections import defaultdict
+    sales: dict = defaultdict(lambda: {"d7": 0, "d15": 0, "d30": 0})
+
+    ts_now  = now_dt.timestamp()
+    ts_7    = (now_dt - timedelta(days=7)).timestamp()
+    ts_15   = (now_dt - timedelta(days=15)).timestamp()
+
+    # Mapear item_id → sku desde ml_listings (más rápido que parsear orders)
+    listing_rows = []
+    try:
+        async with aiosqlite.connect(token_store.DATABASE_PATH) as _db:
+            _db.row_factory = aiosqlite.Row
+            listing_rows = await (await _db.execute(
+                "SELECT item_id, sku FROM ml_listings WHERE sku LIKE ? AND sku != ''",
+                (f"{sku_prefix}%",)
+            )).fetchall()
+    except Exception as _e:
+        return JSONResponse({"error": f"DB error: {_e}"})
+
+    item_to_sku: dict[str, str] = {r["item_id"]: r["sku"] for r in listing_rows}
+    if not item_to_sku:
+        return JSONResponse({"skus": [], "note": f"No listings found with sku prefix {sku_prefix}"})
+
+    # ── Fetch órdenes de cada cuenta ─────────────────────────────────────────
+    async def _fetch_orders_for_account(uid: str, access_token: str) -> list:
+        collected = []
+        offset = 0
+        limit  = 50
+        url    = "https://api.mercadolibre.com/orders/search"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with _hx.AsyncClient(timeout=20.0) as http:
+            while True:
+                params = {
+                    "seller":                   uid,
+                    "order.status":             "paid",
+                    "order.date_created.from":  cutoff_30,
+                    "sort":                     "date_desc",
+                    "limit":                    limit,
+                    "offset":                   offset,
+                }
+                try:
+                    r = await http.get(url, params=params, headers=headers)
+                    if r.status_code != 200:
+                        break
+                    data = r.json()
+                    results = data.get("results", [])
+                    if not results:
+                        break
+                    collected.extend(results)
+                    if len(results) < limit:
+                        break
+                    offset += limit
+                    if offset >= 500:   # cap: 10 pages
+                        break
+                except Exception:
+                    break
+        return collected
+
+    tasks = []
+    for acc in accounts:
+        uid   = acc.get("user_id", "")
+        tok   = acc.get("access_token", "")
+        if uid and tok:
+            tasks.append(_fetch_orders_for_account(str(uid), tok))
+
+    all_order_lists = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for order_list in all_order_lists:
+        if isinstance(order_list, Exception):
+            continue
+        for order in order_list:
+            # Parse date
+            date_str = order.get("date_created", "") or order.get("date_closed", "")
+            try:
+                # "2026-03-15T10:30:00.000-06:00" → strip tz
+                order_ts = datetime.fromisoformat(date_str.replace("Z", "+00:00")).timestamp()
+            except Exception:
+                continue
+
+            for oi in order.get("order_items", []):
+                item_id = str(oi.get("item", {}).get("id", ""))
+                sku = item_to_sku.get(item_id)
+                if not sku:
+                    continue
+                qty = int(oi.get("quantity") or 0)
+                amount = float(oi.get("unit_price") or 0) * qty
+                # 30d always (we already filtered by 30d in the query)
+                sales[sku]["d30"] += amount
+                if order_ts >= ts_15:
+                    sales[sku]["d15"] += amount
+                if order_ts >= ts_7:
+                    sales[sku]["d7"] += amount
+
+    # ── Build response ───────────────────────────────────────────────────────
+    result = []
+    for sku, v in sorted(sales.items()):
+        result.append({
+            "sku":  sku,
+            "d7":   round(v["d7"]),
+            "d15":  round(v["d15"]),
+            "d30":  round(v["d30"]),
+        })
+
+    return JSONResponse({
+        "sku_prefix": sku_prefix,
+        "skus_with_sales": len(result),
+        "skus_mapped": len(item_to_sku),
+        "accounts": len(accounts),
+        "cutoff_30d": cutoff_30,
+        "sales": result,
+    })
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
