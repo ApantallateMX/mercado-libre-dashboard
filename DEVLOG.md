@@ -7,6 +7,94 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FIX: falsas alertas "Riesgo Sobreventa" por bulk miss BM (commit aacd186)
+
+### Problema
+8 SKUs (SHIL000098, SNTV007040, SNTV004196, SNWA000001, SNPE000295, SNSB000015, SNFN000930,
+SNTY000018) mostraban "Riesgo Sobreventa" con BM=0 aunque BM tenía stock real. SHIL000098
+confirmado: 67 unidades en BM (MTY:57, CDMX:10).
+
+### Raíz del bug
+En el path de bulk fetch (>30 SKUs — siempre en producción), `_lookup_diag` retornaba `(0,0)`
+cuando un SKU no aparecía en el bulk de BM. Se llamaba `_store_wh(avail_ok=True)` aunque el
+SKU simplemente no estaba en el bulk — no porque BM confirmara 0 stock. Consecuencia:
+- `verified = avail_ok = True` → `_v=True`
+- Cache: `{avail:0, _v:True}`
+- `_cache_is_valid` → True (total=0, avail=0 pero _v=True)
+- Stale retry: `_v=True` → no se retomaba
+- `_store_wh` con `verified=True` → entraba en `result_map` con avail=0
+- `_apply_bm_stock` seteaba `_bm_avail=0` → falso positivo permanente
+
+### Solución (2 fixes)
+
+**Fix 1** — Distinguir "no en bulk" de "BM confirmó 0":
+- Nueva estructura `_bulk_miss_set: set` — SKUs no encontrados en bulk
+- `_lookup_diag`: cuando `rows_to_sum` vacío, agrega a `_bulk_miss_set` (≤50)
+- Main loop: `avail_ok=(_fsku not in _bulk_miss_set)` — bulk miss → `avail_ok=False`
+- Con `avail_ok=False`: `verified=False` → `_v=False` → no en result_map → `_bm_avail` no seteado → **ninguna alerta oversell**
+- Fix A (existente) previene sobreescribir entradas buenas `{avail:67, _v:True}`
+- Stale retry detecta `_v:False` → per-SKU → retorna valor correcto
+
+**Fix 2** — Stale retry cap: 30 → 100 SKUs (evita dejar bulk misses sin resolver)
+
+### Nuevo diagnóstico
+`_bm_bulk_stats` ahora incluye:
+- `zero_in_bulk`: SKUs encontrados en bulk con AvailableQTY=0 (BM confirmó 0 — correcto)
+- `not_in_bulk`: SKUs no en bulk → retried per-SKU (los problemáticos)
+- `zero_skus`: ahora solo los `not_in_bulk_skus` (más accionables)
+- Panel UI Sync Stock muestra split "BM confirmó 0 | No en bulk (retry)"
+
+### Flujo post-fix
+- Bulk miss → `_v:False` → no en result_map → sin alerta
+- Stale retry (10s después, bg) → per-SKU → `{avail:67, _v:True}` en cache
+- Siguiente prewarm: Fix A preserva `{avail:67}` si bulk sigue sin incluirlo
+
+---
+
+## 2026-04-20 — FIX: stock_issues_cache persiste en SQLite — sobrevive deploys Railway (commit 042ccc6)
+
+### Problema
+Cada deploy en Railway mata el proceso Python → todos los caches en memoria se pierden →
+al reiniciar, el Stock tab muestra "Calculando stock en background..." durante 30-600s o
+"Datos de inventario no disponibles" si el prewarm fallaba.
+
+### Solución
+- **`token_store.py`**: nueva tabla `stock_issues_cache (cache_key PK, ts, data_json, saved_at)`
+- **`save_stock_issues_snapshot(key, ts, data)`**: serializa el resultado del prewarm a JSON + upsert en DB
+- **`load_all_stock_issues_snapshots()`**: carga todos los snapshots al arrancar → dict[key, (ts, data)]
+- **`main.py` lifespan**: `_load_stock_issues_from_db()` llamado antes del prewarm → popula `_stock_issues_cache` desde DB inmediatamente
+- **`main.py` `_do_prewarm()`**: al terminar, guarda el nuevo snapshot en SQLite
+
+### Resultado
+Post-deploy: Stock tab muestra datos del último prewarm instantáneamente (badge "stale" existente indica actualización en curso). El prewarm refresca en background y sobrescribe con datos frescos.
+
+---
+
+## 2026-04-20 — PERF: Gap scan usa ml_listings DB — elimina ~1000+ llamadas ML API (commit 380dd1a)
+
+### Problema
+La página "No Lanzados en ML" tardaba ~2 min por scan porque Phase 1 llamaba la ML API
+para cada cuenta (item IDs + item details) y Phase 2b verificaba cada SKU candidato via
+seller_sku search (hasta N_SKUs × N_cuentas × 3 llamadas HTTP por SKU).
+
+### Solución
+- **`token_store.py`**: migración `base_sku TEXT DEFAULT ''` en `ml_listings` + índice
+  `(account_id, base_sku)`. `upsert_ml_listings` ahora computa
+  `base_sku = normalize_to_bm_sku(sku)` al insertar.
+- **Nueva función `get_ml_listings_for_gap_scan(account_id)`**: lee DB y devuelve
+  `(skus_set, inactive_map, active_prices_map)` — misma estructura que `_get_meli_sku_set`
+  pero sin ninguna llamada HTTP. Calcula quality_score desde `data_json`.
+- **`lanzar.py` Fase 1**: reemplazada llamada a `_get_meli_sku_set` por
+  `token_store.get_ml_listings_for_gap_scan`. Fallback a API solo si DB vacía para la cuenta.
+- **`lanzar.py` Fase 2b**: eliminada completamente — la DB cubre active/paused/inactive,
+  la verificación API ya no es necesaria.
+
+### Resultado
+Scan pasa de ~2 min a ~20s para cuentas con caché DB poblada. Los gaps "No Lanzados en ML"
+son per-cuenta (un SKU publicado en Autobot sigue siendo gap para Lutema).
+
+---
+
 ## 2026-04-19 — FIX: Correr ciclo — circuit breaker timeout, badge bm_down, btn ID (commit 9aa8aec)
 
 ### Problema
