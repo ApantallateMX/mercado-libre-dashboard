@@ -11833,7 +11833,6 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
 
     from datetime import datetime, timedelta
     import httpx as _hx
-    import aiosqlite as _aiosqlite
 
     now_dt = datetime.utcnow()
     cutoff_30 = (now_dt - timedelta(days=30)).isoformat() + ".000Z"
@@ -11852,19 +11851,21 @@ async def diag_sku_sales(token: str = "", sku_prefix: str = "SNAC"):
     ts_7    = (now_dt - timedelta(days=7)).timestamp()
     ts_15   = (now_dt - timedelta(days=15)).timestamp()
 
-    # Mapear item_id → sku desde ml_listings (más rápido que parsear orders)
-    listing_rows = []
+    # Mapear item_id → sku desde ml_listings para todas las cuentas
+    item_to_sku: dict[str, str] = {}
     try:
-        async with _aiosqlite.connect(token_store.DATABASE_PATH) as _db:
-            _db.row_factory = _aiosqlite.Row
-            listing_rows = await (await _db.execute(
-                "SELECT item_id, sku FROM ml_listings WHERE sku LIKE ? AND sku != ''",
-                (f"{sku_prefix}%",)
-            )).fetchall()
+        for acc in accounts:
+            uid = acc.get("user_id", "")
+            if not uid:
+                continue
+            rows = await token_store.get_ml_listings(str(uid))
+            for r in rows:
+                sku = r.get("sku", "") or ""
+                if sku.startswith(sku_prefix):
+                    item_to_sku[r.get("item_id", "")] = sku
     except Exception as _e:
         return JSONResponse({"error": f"DB error: {_e}"})
 
-    item_to_sku: dict[str, str] = {r["item_id"]: r["sku"] for r in listing_rows}
     if not item_to_sku:
         return JSONResponse({"skus": [], "note": f"No listings found with sku prefix {sku_prefix}"})
 
