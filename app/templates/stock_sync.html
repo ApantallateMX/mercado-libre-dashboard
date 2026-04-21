@@ -1293,8 +1293,7 @@ function _loadPerAccountStatus() {
         + '<th class="pb-1.5 pr-3">Cuenta</th>'
         + '<th class="pb-1.5 pr-3">Plataforma</th>'
         + '<th class="pb-1.5 pr-3 text-right">Updates</th>'
-        + '<th class="pb-1.5 pr-3 text-right">Errores</th>'
-        + '<th class="pb-1.5 text-right">Acción</th>'
+        + '<th class="pb-1.5 text-right">Errores</th>'
         + '</tr></thead><tbody>';
       accounts.forEach(function(a) {
         var platBadge = a.platform === 'ml'
@@ -1306,16 +1305,11 @@ function _loadPerAccountStatus() {
         var updCell = a.updates > 0
           ? '<span class="font-semibold text-green-600">' + a.updates + '</span>'
           : '<span class="text-gray-400">0</span>';
-        var btnId = 'sync-btn-' + a.platform + '-' + a.account_id;
-        var syncBtn = '<button id="' + btnId + '" '
-          + 'onclick="window._syncSingleAccount(\'' + a.platform + '\',\'' + a.account_id + '\')" '
-          + 'class="px-2 py-1 text-[10px] font-medium border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 transition whitespace-nowrap">Sync</button>';
         html += '<tr class="border-b border-gray-50 hover:bg-gray-50">'
           + '<td class="py-1.5 pr-3 font-medium text-gray-700">' + (a.nickname || a.account_id) + '</td>'
           + '<td class="py-1.5 pr-3">' + platBadge + '</td>'
           + '<td class="py-1.5 pr-3 text-right">' + updCell + '</td>'
-          + '<td class="py-1.5 pr-3 text-right">' + errCell + '</td>'
-          + '<td class="py-1.5 text-right">' + syncBtn + '</td>'
+          + '<td class="py-1.5 text-right">' + errCell + '</td>'
           + '</tr>';
       });
       // Fila de totales
@@ -1325,8 +1319,7 @@ function _loadPerAccountStatus() {
       html += '<tr class="border-t-2 border-gray-200 bg-gray-50">'
         + '<td class="py-1.5 pr-3 font-semibold text-gray-700" colspan="2">TOTAL</td>'
         + '<td class="py-1.5 pr-3 text-right font-semibold text-green-600">' + totUpdates + '</td>'
-        + '<td class="py-1.5 pr-3 text-right">' + totErrCell + '</td>'
-        + '<td></td>'
+        + '<td class="py-1.5 text-right">' + totErrCell + '</td>'
         + '</tr>';
       html += '</tbody></table></div>';
       body.innerHTML = html;
@@ -1335,7 +1328,7 @@ function _loadPerAccountStatus() {
 }
 
 window._syncSingleAccount = function(platform, accountId) {
-  var btnId = 'sync-btn-' + platform + '-' + accountId;
+  var btnId = 'ls-sync-btn-' + platform + '-' + accountId;
   var btn = document.getElementById(btnId);
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
   fetch('/api/stock/multi-sync/trigger-single', {
@@ -1407,7 +1400,8 @@ function _loadListingsSummary() {
         + '<th class="pb-1.5 pr-3">Cuenta</th>'
         + '<th class="pb-1.5 pr-3">Plataforma</th>'
         + '<th class="pb-1.5 pr-3">Últ. sync</th>'
-        + '<th class="pb-1.5 text-right">Listings</th>'
+        + '<th class="pb-1.5 pr-3 text-right">Listings</th>'
+        + '<th class="pb-1.5 text-right">Acción</th>'
         + '</tr></thead><tbody>';
 
       accounts.forEach(function(a) {
@@ -1424,17 +1418,23 @@ function _loadListingsSummary() {
         } else {
           syncAgo = '<span class="text-amber-400">Nunca</span>';
         }
+        var btnId = 'ls-sync-btn-' + a.platform + '-' + a.account_id;
+        var syncBtn = '<button id="' + btnId + '" '
+          + 'onclick="window._syncSingleAccount(\'' + a.platform + '\',\'' + a.account_id + '\')" '
+          + 'class="px-2 py-1 text-[10px] font-medium border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 transition whitespace-nowrap">Sync</button>';
         html += '<tr class="border-b border-gray-50 hover:bg-gray-50">'
           + '<td class="py-1.5 pr-3 font-medium text-gray-700">' + (a.nickname || a.account_id) + '</td>'
           + '<td class="py-1.5 pr-3">' + platBadge + '</td>'
           + '<td class="py-1.5 pr-3">' + syncAgo + '</td>'
-          + '<td class="py-1.5 text-right">' + cntCell + '</td>'
+          + '<td class="py-1.5 pr-3 text-right">' + cntCell + '</td>'
+          + '<td class="py-1.5 text-right">' + syncBtn + '</td>'
           + '</tr>';
       });
 
       html += '<tr class="border-t-2 border-gray-200 bg-gray-50">'
         + '<td class="py-1.5 pr-3 font-semibold text-gray-700" colspan="3">TOTAL</td>'
-        + '<td class="py-1.5 text-right font-semibold text-gray-700">' + totListings.toLocaleString() + '</td>'
+        + '<td class="py-1.5 pr-3 text-right font-semibold text-gray-700">' + totListings.toLocaleString() + '</td>'
+        + '<td></td>'
         + '</tr>';
       html += '</tbody></table></div>';
 

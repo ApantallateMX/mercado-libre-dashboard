@@ -2851,13 +2851,15 @@ async def _prewarm_caches(user_id: str = None):
                 # Registrar en historial BM SIEMPRE — independiente del save anterior
                 try:
                     _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
+                    logger.info(f"[PREWARM] Escribiendo BM sync log: skus={len(_bm_stock_cache)}, elapsed={_bm_elapsed}s, source={_prewarm_source}")
                     await token_store.log_bm_sync_event(
                         sku_count=len(_bm_stock_cache),
                         elapsed_s=_bm_elapsed,
                         source=_prewarm_source,
                     )
-                except Exception:
-                    pass
+                    logger.info("[PREWARM] BM sync log escrito OK")
+                except Exception as _log_exc:
+                    logger.warning(f"[PREWARM] Error escribiendo BM sync log: {_log_exc!r}")
 
                 # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
                 await _enrich_with_bm_product_info(bm_candidates)
