@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FEAT: detección y limpieza de listings eliminados (commit 67d5d92)
+
+### Problema
+Listings eliminados de ML/Amazon seguían en la DB local indefinidamente. El sync solo hacía upserts, nunca deletions.
+
+### Solución
+- Nueva tabla `orphan_listings (platform, account_id, item_id, title, sku, detected_at)` con UNIQUE constraint
+- Detección automática al final de cada **full sync** ML y Amazon:
+  `orphans = set(item_ids en DB) - set(item_ids devueltos por API)`
+- La detección limpia y re-genera la lista por cuenta en cada sync (siempre fresca)
+- `GET /api/listings/orphans` — lista filtrable por platform/account_id
+- `DELETE /api/listings/orphans` — body `{ids:[...]}` elimina de `orphan_listings` + `ml_listings`/`amazon_listings`
+- UI en "Listings en cache":
+  - Badge rojo **"N Eliminados"** aparece automáticamente si hay huérfanos
+  - Modal con tabla (checkbox por fila + select-all)
+  - Botón "Eliminar seleccionados de DB" con confirm() de confirmación
+  - Badge se refresca al cargar página y al terminar Sync Listings
+
+---
+
 ## 2026-04-21 — FIX+FEAT: BM sync log + botón sync por cuenta (commit 4bc416f)
 
 ### Fix: BM sync log "Sin datos"
