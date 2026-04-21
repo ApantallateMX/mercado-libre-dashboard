@@ -7,6 +7,17 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FEAT: orphan badge en navbar + banner por cuenta en Productos (commit 69e19ce)
+
+### Problema
+Las alertas de listings eliminados solo eran visibles en la página de Stock Sync. El usuario necesitaba visibilidad inmediata desde cualquier parte del dashboard, con aislamiento estricto por cuenta (no mostrar listings de una cuenta en otra).
+
+### Solución
+- **`base.html`**: badge rojo `#orphans-nav-badge` junto al link "Productos" en el navbar. Polling cada 2 min via `GET /api/listings/orphans`. Mismo patrón que el badge de salud existente.
+- **`items.html`**: banner de alerta `#orphans-banner` (rojo, antes de la barra de alertas) filtrado **estrictamente por cuenta activa** usando `{{ active_user_id }}`. Fetch a `/api/listings/orphans?platform=ml&account_id=<uid>` — nunca muestra datos de otra cuenta. Incluye link "Ver y limpiar →" a `/stock-sync` y botón de dismiss.
+
+---
+
 ## 2026-04-21 — FEAT: detección y limpieza de listings eliminados (commit 67d5d92)
 
 ### Problema
