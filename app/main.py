@@ -3295,20 +3295,26 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         avail = total  # reserve desconocido → asumir todo disponible
                 return avail, reserve
 
-            _diag_found = 0   # SKUs con avail > 0
-            _diag_zero  = 0   # SKUs con avail = 0
-            _diag_zero_skus: list = []
-            _diag_fallback = 0  # SKUs donde se usó TotalQty fallback
+            _diag_found = 0           # SKUs con avail > 0
+            _diag_zero_in_bulk  = 0   # encontrados en bulk con avail=0 (BM confirmó 0)
+            _diag_not_in_bulk   = 0   # no encontrados en bulk → retry per-SKU
+            _diag_zero_in_bulk_skus: list = []
+            _diag_not_in_bulk_skus:  list = []
+            _diag_fallback = 0        # SKUs donde se usó TotalQty fallback
+            _bulk_miss_set: set = set()  # SKUs no en bulk → avail_ok=False → _v=False → retry
 
             # Wrapper de _lookup con diagnóstico integrado
             def _lookup_diag(exact, by_base, fbase, fsku):
-                nonlocal _diag_found, _diag_zero, _diag_fallback
+                nonlocal _diag_found, _diag_zero_in_bulk, _diag_not_in_bulk, _diag_fallback
                 row = exact.get(fbase)
                 rows_to_sum = [row] if row is not None else by_base.get(fbase, [])
                 if not rows_to_sum:
-                    _diag_zero += 1
-                    if len(_diag_zero_skus) < 30:
-                        _diag_zero_skus.append(fsku)
+                    # SKU no está en bulk — el bulk no lo incluyó, NO significa 0 stock.
+                    # Marcarlo como miss: avail_ok=False → _v=False → stale retry hace per-SKU.
+                    _diag_not_in_bulk += 1
+                    if len(_diag_not_in_bulk_skus) < 50:
+                        _diag_not_in_bulk_skus.append(fsku)
+                    _bulk_miss_set.add(fsku)
                     return 0, 0
                 avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
                 reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
@@ -3320,9 +3326,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 if avail > 0:
                     _diag_found += 1
                 else:
-                    _diag_zero += 1
-                    if len(_diag_zero_skus) < 30:
-                        _diag_zero_skus.append(fsku)
+                    # BM confirmó explícitamente 0 (SKU en bulk, AvailableQTY=0)
+                    _diag_zero_in_bulk += 1
+                    if len(_diag_zero_in_bulk_skus) < 30:
+                        _diag_zero_in_bulk_skus.append(fsku)
                 return avail, reserve
 
             for _fsku in to_fetch:
@@ -3336,24 +3343,31 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _avail, _res = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
                 else:
                     _avail, _res = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
+                # avail_ok=True solo si BM encontró el SKU en bulk (confirmó el valor, sea 0 o >0).
+                # avail_ok=False si no estaba en bulk → _v=False → stale retry hace per-SKU fetch.
                 _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
-                          avail_ok=True, wh_responded=False)
+                          avail_ok=(_fsku not in _bulk_miss_set), wh_responded=False)
                 _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
 
             # Guardar estadísticas de cobertura para diagnóstico en Sync Stock
             global _bm_bulk_stats
+            _diag_zero = _diag_zero_in_bulk + _diag_not_in_bulk  # total para compat UI
             _bm_bulk_stats = {
-                "bulk_gr_rows":   len(_bulk_gr_rows)  if _bulk_gr_rows  else 0,
-                "bulk_all_rows":  len(_bulk_all_rows) if _bulk_all_rows else 0,
-                "skus_total":     len(to_fetch),
-                "found":          _diag_found,
-                "zero":           _diag_zero,
-                "fallback_used":  _diag_fallback,
-                "zero_skus":      _diag_zero_skus,
-                "ts":             _time.time(),
+                "bulk_gr_rows":       len(_bulk_gr_rows)  if _bulk_gr_rows  else 0,
+                "bulk_all_rows":      len(_bulk_all_rows) if _bulk_all_rows else 0,
+                "skus_total":         len(to_fetch),
+                "found":              _diag_found,
+                "zero":               _diag_zero,
+                "zero_in_bulk":       _diag_zero_in_bulk,
+                "not_in_bulk":        _diag_not_in_bulk,
+                "fallback_used":      _diag_fallback,
+                "zero_skus":          _diag_not_in_bulk_skus,    # los que serán retried per-SKU
+                "zero_in_bulk_skus":  _diag_zero_in_bulk_skus,   # BM confirmó 0 (no retried)
+                "ts":                 _time.time(),
             }
             logger.info(f"[BM-BULK] Cobertura: {_diag_found}/{len(to_fetch)} con stock, "
-                        f"{_diag_zero} en 0, {_diag_fallback} via TotalQty fallback")
+                        f"{_diag_zero_in_bulk} BM confirmó 0, {_diag_not_in_bulk} no en bulk (retry per-SKU), "
+                        f"{_diag_fallback} via TotalQty fallback")
             _used_bulk = True
 
         if not _used_bulk:
@@ -3371,7 +3385,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             s for s in to_fetch
             if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
         ]
-        _stale_to_retry = _stale_after_prewarm[:30]
+        _stale_to_retry = _stale_after_prewarm[:100]
         if _stale_to_retry:
             async def _do_stale_retry(_skus=_stale_to_retry):
                 import logging as _log_retry
@@ -9179,14 +9193,17 @@ async def prewarm_status():
     bulk_stats = {}
     if _bm_bulk_stats and _bm_bulk_stats.get("ts"):
         bulk_stats = {
-            "bulk_gr_rows":  _bm_bulk_stats.get("bulk_gr_rows", 0),
-            "bulk_all_rows": _bm_bulk_stats.get("bulk_all_rows", 0),
-            "skus_total":    _bm_bulk_stats.get("skus_total", 0),
-            "found":         _bm_bulk_stats.get("found", 0),
-            "zero":          _bm_bulk_stats.get("zero", 0),
-            "fallback_used": _bm_bulk_stats.get("fallback_used", 0),
-            "zero_skus":     _bm_bulk_stats.get("zero_skus", []),
-            "age_min":       round((_time.time() - _bm_bulk_stats["ts"]) / 60),
+            "bulk_gr_rows":      _bm_bulk_stats.get("bulk_gr_rows", 0),
+            "bulk_all_rows":     _bm_bulk_stats.get("bulk_all_rows", 0),
+            "skus_total":        _bm_bulk_stats.get("skus_total", 0),
+            "found":             _bm_bulk_stats.get("found", 0),
+            "zero":              _bm_bulk_stats.get("zero", 0),
+            "zero_in_bulk":      _bm_bulk_stats.get("zero_in_bulk", 0),
+            "not_in_bulk":       _bm_bulk_stats.get("not_in_bulk", 0),
+            "fallback_used":     _bm_bulk_stats.get("fallback_used", 0),
+            "zero_skus":         _bm_bulk_stats.get("zero_skus", []),
+            "zero_in_bulk_skus": _bm_bulk_stats.get("zero_in_bulk_skus", []),
+            "age_min":           round((_time.time() - _bm_bulk_stats["ts"]) / 60),
         }
     return JSONResponse({
         "running": _prewarm_running,

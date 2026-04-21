@@ -264,18 +264,23 @@
         </div>
         <div class="text-center bg-red-50 rounded-lg p-2">
           <div id="cov-zero" class="text-lg font-bold text-red-500">—</div>
-          <div class="text-[10px] text-gray-400">BM=0 (sin stock)</div>
+          <div class="text-[10px] text-gray-400">BM=0 total</div>
         </div>
       </div>
-      <div class="flex gap-2 mb-1">
+      <div class="flex flex-wrap gap-2 mb-1">
         <span class="text-[10px] text-gray-400">Filas GR bulk: <span id="cov-gr-rows" class="font-mono">—</span></span>
         <span class="text-[10px] text-gray-300">|</span>
         <span class="text-[10px] text-gray-400">Filas ALL bulk: <span id="cov-all-rows" class="font-mono">—</span></span>
         <span class="text-[10px] text-gray-300">|</span>
         <span class="text-[10px] text-blue-500">TotalQty fallback: <span id="cov-fallback" class="font-mono">—</span></span>
       </div>
+      <div class="flex flex-wrap gap-2 mb-1">
+        <span class="text-[10px] text-gray-400">BM confirmó 0: <span id="cov-zero-in-bulk" class="font-mono text-gray-500">—</span></span>
+        <span class="text-[10px] text-gray-300">|</span>
+        <span class="text-[10px] text-orange-500">No en bulk (retry): <span id="cov-not-in-bulk" class="font-mono font-bold">—</span></span>
+      </div>
       <div id="cov-zero-skus" class="hidden mt-1">
-        <p class="text-[10px] text-gray-400 mb-1">SKUs con BM=0 (primeros 30):</p>
+        <p class="text-[10px] text-gray-400 mb-1">No en bulk → retry per-SKU (primeros 50):</p>
         <div id="cov-zero-skus-list" class="flex flex-wrap gap-1"></div>
       </div>
       <button onclick="document.getElementById('cov-zero-skus').classList.toggle('hidden')"
@@ -1146,26 +1151,31 @@ function _fillCoveragePanel(stats) {
   if (!panel) return;
   panel.classList.remove('hidden');
   var el = function(id) { return document.getElementById(id); };
-  if (el('cov-total'))    el('cov-total').textContent    = stats.skus_total || 0;
-  if (el('cov-found'))    el('cov-found').textContent    = stats.found || 0;
-  if (el('cov-zero'))     el('cov-zero').textContent     = stats.zero || 0;
-  if (el('cov-gr-rows'))  el('cov-gr-rows').textContent  = stats.bulk_gr_rows || 0;
-  if (el('cov-all-rows')) el('cov-all-rows').textContent = stats.bulk_all_rows || 0;
-  if (el('cov-fallback')) el('cov-fallback').textContent = stats.fallback_used || 0;
-  // Colorear zero: rojo si hay SKUs con 0
+  if (el('cov-total'))         el('cov-total').textContent         = stats.skus_total || 0;
+  if (el('cov-found'))         el('cov-found').textContent         = stats.found || 0;
+  if (el('cov-zero'))          el('cov-zero').textContent          = stats.zero || 0;
+  if (el('cov-gr-rows'))       el('cov-gr-rows').textContent       = stats.bulk_gr_rows || 0;
+  if (el('cov-all-rows'))      el('cov-all-rows').textContent      = stats.bulk_all_rows || 0;
+  if (el('cov-fallback'))      el('cov-fallback').textContent      = stats.fallback_used || 0;
+  if (el('cov-zero-in-bulk'))  el('cov-zero-in-bulk').textContent  = stats.zero_in_bulk != null ? stats.zero_in_bulk : (stats.zero || 0);
+  if (el('cov-not-in-bulk'))   el('cov-not-in-bulk').textContent   = stats.not_in_bulk || 0;
+  // Colorear zero total: rojo si hay alguno
   var zeroEl = el('cov-zero');
   if (zeroEl) zeroEl.className = 'text-lg font-bold ' + ((stats.zero || 0) > 0 ? 'text-red-500' : 'text-gray-400');
+  // Colorear not_in_bulk: naranja si hay alguno (estos son retried per-SKU — potencial falso positivo)
+  var nibEl = el('cov-not-in-bulk');
+  if (nibEl) nibEl.className = 'font-mono font-bold ' + ((stats.not_in_bulk || 0) > 0 ? 'text-orange-500' : 'text-gray-400');
   // Colorear fallback: azul si fue usado
   var fbEl = el('cov-fallback');
   if (fbEl) fbEl.className = 'font-mono ' + ((stats.fallback_used || 0) > 0 ? 'text-blue-600 font-bold' : 'text-gray-500');
-  // Llenar lista de SKUs con BM=0
+  // Llenar lista de SKUs no en bulk (los que serán retried per-SKU)
   var list = el('cov-zero-skus-list');
   if (list && stats.zero_skus && stats.zero_skus.length > 0) {
     list.innerHTML = stats.zero_skus.map(function(s) {
-      return '<span class="px-1.5 py-0.5 bg-red-50 border border-red-200 rounded text-[10px] font-mono text-red-700">' + s + '</span>';
+      return '<span class="px-1.5 py-0.5 bg-orange-50 border border-orange-200 rounded text-[10px] font-mono text-orange-700">' + s + '</span>';
     }).join('');
     var btn = el('cov-toggle-btn');
-    if (btn) btn.textContent = 'Ver SKUs con BM=0 (' + stats.zero_skus.length + ')';
+    if (btn) btn.textContent = 'Ver no en bulk (' + stats.zero_skus.length + ')';
   } else {
     var btn2 = el('cov-toggle-btn');
     if (btn2) btn2.classList.add('hidden');
