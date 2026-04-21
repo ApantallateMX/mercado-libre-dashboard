@@ -892,6 +892,176 @@ async def run_multi_stock_sync() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SINGLE-ACCOUNT SYNC
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_single_account_stock_sync(platform: str, account_id: str) -> dict:
+    """Ejecuta el sync de stock para UNA sola cuenta.
+    platform: "ml" | "amz"
+    account_id: user_id (ML) o seller_id (Amazon)
+    Usa el mismo circuit-breaker BM y reglas que run_multi_stock_sync.
+    Solo actualiza la entrada de esa cuenta en _last_sync_per_account.
+    """
+    global _sync_running, _last_sync_per_account
+
+    if _sync_running:
+        return {"status": "already_running"}
+
+    _sync_running = True
+    t0 = _time.time()
+    summary = {
+        "status": "ok", "platform": platform,
+        "account_id": account_id, "updates": 0, "errors": 0,
+    }
+
+    try:
+        from app.services import token_store
+        from app.services.meli_client import get_meli_client
+        from app.services.amazon_client import get_amazon_client
+
+        # ── Circuit breaker ───────────────────────────────────────────────────
+        try:
+            from app.services.binmanager_client import get_shared_bm as _get_shared_bm_cb
+            _cb_cli = await _get_shared_bm_cb()
+            _cb_probe = await asyncio.wait_for(
+                _cb_cli.get_stock_with_reserve("SNTV001764"),
+                timeout=20.0,
+            )
+            if _cb_probe is None:
+                raise RuntimeError("BM respondió pero con sesión inválida")
+        except Exception as _cb_exc:
+            logger.warning(
+                f"[SINGLE-SYNC] BM no responde ({_cb_exc.__class__.__name__}: {_cb_exc}) "
+                f"— sync ABORTADO para {platform}/{account_id}"
+            )
+            summary["status"] = "bm_down"
+            return summary
+
+        # ── Recopilar listings solo de la cuenta seleccionada ─────────────────
+        acc = None
+        if platform == "ml":
+            all_ml = await token_store.get_all_tokens()
+            acc = next((a for a in all_ml if a.get("user_id") == account_id), None)
+            if not acc:
+                return {"status": "account_not_found"}
+            ml_by_sku  = await _collect_ml_listings([acc])
+            amz_by_sku = {}
+        else:  # amz
+            all_amz = await token_store.get_all_amazon_accounts()
+            acc = next((a for a in all_amz if a.get("seller_id") == account_id), None)
+            if not acc:
+                return {"status": "account_not_found"}
+            ml_by_sku  = {}
+            amz_by_sku = await _collect_amz_listings([acc])
+
+        all_bases = set(ml_by_sku.keys()) | set(amz_by_sku.keys())
+        if not all_bases:
+            summary["status"] = "no_skus"
+            return summary
+
+        # ── BM stock para estos SKUs ───────────────────────────────────────────
+        sku_cond_map = {k: _cond_for_key(k) for k in all_bases}
+        bm_stock = await _fetch_bm_avail(sku_cond_map)
+
+        # ── Reglas de plataforma ───────────────────────────────────────────────
+        try:
+            all_rules = await token_store.get_all_sku_platform_rules()
+        except Exception:
+            all_rules = {}
+
+        # ── Clientes ──────────────────────────────────────────────────────────
+        if platform == "ml":
+            try:
+                c = await get_meli_client(user_id=account_id)
+                ml_clients  = {account_id: c} if c else {}
+            except Exception:
+                ml_clients  = {}
+            amz_clients = {}
+        else:
+            ml_clients  = {}
+            try:
+                c = await get_amazon_client(seller_id=account_id)
+                amz_clients = {account_id: c} if c else {}
+            except Exception:
+                amz_clients = {}
+
+        ro = _is_reduce_only_mode()
+        all_results: list = []
+
+        for base in sorted(all_bases):
+            if base not in bm_stock:
+                continue
+            bm_avail = bm_stock[base]
+            listings = (ml_by_sku.get(base) or []) + (amz_by_sku.get(base) or [])
+            enabled  = set(all_rules.get(base, []))
+            updates  = _plan(base, bm_avail, listings, enabled, reduce_only=ro)
+            if not updates:
+                continue
+            res = await _execute(updates, ml_clients, amz_clients)
+            all_results.extend(res)
+            summary["updates"] += sum(1 for r in res if r["ok"])
+            summary["errors"]  += sum(1 for r in res if not r["ok"])
+
+        # ── Actualizar solo la entrada de esta cuenta en _last_sync_per_account ─
+        plat_key = "ml" if platform == "ml" else "amz"
+        nickname  = (
+            acc.get("nickname") or acc.get("user_id") or acc.get("seller_id") or account_id
+        )[:20]
+        last_err = None
+        if summary["errors"] > 0:
+            bad = next((r for r in all_results if not r["ok"]), None)
+            if bad:
+                last_err = str(bad.get("error", ""))[:100]
+        new_entry = {
+            "platform": plat_key, "account_id": account_id,
+            "nickname": nickname,
+            "updates": summary["updates"], "errors": summary["errors"],
+            "last_error": last_err, "ts": t0,
+        }
+        existing = list(_last_sync_per_account)
+        found = False
+        for i, entry in enumerate(existing):
+            if entry.get("platform") == plat_key and entry.get("account_id") == account_id:
+                existing[i] = new_entry
+                found = True
+                break
+        if not found:
+            existing.append(new_entry)
+        _last_sync_per_account = sorted(
+            existing,
+            key=lambda x: (0 if x["platform"] == "ml" else 1, x["nickname"].lower()),
+        )
+
+        # Actualizar ml_listings DB si fue ML
+        if platform == "ml":
+            _ml_db_updates = [
+                (r["ref"], r["new_qty"])
+                for r in all_results
+                if r.get("ok") and r.get("platform") == "ml" and r.get("ref")
+            ]
+            if _ml_db_updates:
+                try:
+                    await token_store.bulk_update_ml_listing_qtys(_ml_db_updates)
+                except Exception:
+                    pass
+
+        summary["elapsed_s"] = round(_time.time() - t0, 1)
+        logger.info(
+            f"[SINGLE-SYNC] {platform}/{account_id} completado en {summary['elapsed_s']}s "
+            f"— {summary['updates']} updates, {summary['errors']} errores"
+        )
+
+    except Exception as exc:
+        logger.exception(f"[SINGLE-SYNC] Error fatal {platform}/{account_id}: {exc}")
+        summary["status"] = "error"
+        summary["error"]  = str(exc)[:200]
+    finally:
+        _sync_running = False
+
+    return summary
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PREVIEW / DRY-RUN
 # ─────────────────────────────────────────────────────────────────────────────
 

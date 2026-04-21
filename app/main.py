@@ -2838,26 +2838,24 @@ async def _prewarm_caches(user_id: str = None):
                 # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
                 # no deben sobrevivir un restart y generar falsas alarmas de sobreventa.
                 # Los ceros genuinos se re-verifican en el primer prewarm post-restart.
+                # Persistir entradas con stock > 0 en DB
                 try:
                     _bm_entries = [
                         (s, d, t) for s, (t, d) in _bm_stock_cache.items()
                         if d.get("avail_total", 0) > 0
                     ]
                     if _bm_entries:
-                        await token_store.save_bm_stock_cache(_bm_entries)
-                    # Registrar en historial BM SIEMPRE (fuera del if) — aunque no haya entradas
-                    # con avail>0. El log debe reflejar cada ejecución del prewarm, no solo
-                    # las exitosas. sku_count = total en cache (incluyendo 0s) para ver cobertura.
+                        await token_store.upsert_bm_stock_batch(_bm_entries)
+                except Exception as _save_exc:
+                    logger.warning(f"[PREWARM] Error persistiendo caché BM: {_save_exc}")
+                # Registrar en historial BM SIEMPRE — independiente del save anterior
+                try:
                     _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
-                    _bm_total_skus = len(_bm_stock_cache)
-                    try:
-                        await token_store.log_bm_sync_event(
-                            sku_count=_bm_total_skus,
-                            elapsed_s=_bm_elapsed,
-                            source=_prewarm_source,
-                        )
-                    except Exception:
-                        pass
+                    await token_store.log_bm_sync_event(
+                        sku_count=len(_bm_stock_cache),
+                        elapsed_s=_bm_elapsed,
+                        source=_prewarm_source,
+                    )
                 except Exception:
                     pass
 
@@ -9953,6 +9951,31 @@ async def multi_sync_trigger():
 
     asyncio.create_task(_run_sync_and_alerts())
     return {"status": "triggered"}
+
+
+@app.post("/api/stock/multi-sync/trigger-single")
+async def trigger_single_account_sync(request: Request):
+    """Dispara el sync de stock para una sola cuenta (ML o Amazon).
+    Body: {platform: "ml"|"amz", account_id: "..."}
+    Usa el mismo circuit-breaker BM que el sync global.
+    Solo actualiza la entrada de esa cuenta en el estado por cuenta.
+    """
+    from app.services.stock_sync_multi import run_single_account_stock_sync, get_sync_status
+    _du = getattr(request.state, "dashboard_user", None)
+    if not _du or _du.get("role") not in ("admin", "editor"):
+        return JSONResponse({"error": "No autorizado — solo admin o editor"}, status_code=403)
+    if get_sync_status()["running"]:
+        return JSONResponse({"status": "already_running"})
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body JSON inválido"}, status_code=400)
+    platform   = body.get("platform", "").strip()
+    account_id = body.get("account_id", "").strip()
+    if not platform or not account_id or platform not in ("ml", "amz"):
+        return JSONResponse({"error": "platform (ml|amz) y account_id son requeridos"}, status_code=400)
+    asyncio.create_task(run_single_account_stock_sync(platform, account_id))
+    return JSONResponse({"status": "started", "platform": platform, "account_id": account_id})
 
 
 @app.get("/api/cannibalization")
