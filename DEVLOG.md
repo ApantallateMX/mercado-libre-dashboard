@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FEAT: paginación 10 filas/página en tabla de Facturación (commit 5de64f2)
+
+### Cambio
+Tabla de solicitudes de facturación mostraba todos los resultados sin paginar (hasta 71 filas visibles simultáneamente).
+
+### Solución
+- `_allRows` guarda la respuesta completa del API
+- `_renderFacPage(page)` renderiza el slice correcto (10 filas/página)
+- Controles: ← Anterior / botones de página numerados (ventana ±2) / Siguiente →
+- Info: "Mostrando X–Y de Z"
+- Barra oculta si total ≤ 10 resultados
+- Al cambiar filtros/sort se resetea a página 1 automáticamente
+
+---
+
 ## 2026-04-21 — FIX: falsas alertas "Riesgo Sobreventa" por bulk miss BM (commit aacd186)
 
 ### Problema
