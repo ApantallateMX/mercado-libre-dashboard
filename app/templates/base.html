@@ -315,7 +315,10 @@
                 <a href="/orders" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'orders' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Ventas</a>
                 {% endif %}
                 {% if not _sec or 'productos' in _sec %}
-                <a href="/items" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active in ['items', 'items_health', 'sku_inventory', 'productos'] %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">Productos</a>
+                <a href="/items" class="relative text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active in ['items', 'items_health', 'sku_inventory', 'productos'] %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
+                  Productos
+                  <span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
+                </a>
                 {% endif %}
                 {% if not _sec or 'sku' in _sec %}
                 <a href="/sku-sales" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active in ['sku_sales', 'sku_compare'] %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">SKU</a>
@@ -380,6 +383,19 @@
     }
     _refreshHealthBadge();
     setInterval(_refreshHealthBadge, 60000);
+})();
+(function() {
+    function _refreshOrphansBadge() {
+        fetch('/api/listings/orphans').then(function(r){ return r.json(); }).then(function(d) {
+            var b = document.getElementById('orphans-nav-badge');
+            if (!b) return;
+            var n = d.count || 0;
+            if (n > 0) { b.textContent = n > 9 ? '9+' : n; b.classList.remove('hidden'); }
+            else { b.classList.add('hidden'); }
+        }).catch(function(){});
+    }
+    _refreshOrphansBadge();
+    setInterval(_refreshOrphansBadge, 120000);
 })();
 </script>
 <script>

@@ -10,6 +10,20 @@
 </div>
 {% include "partials/productos_subnav.html" %}
 
+<!-- Banner: listings eliminados de esta cuenta -->
+<div id="orphans-banner" class="hidden mb-3 flex items-center justify-between gap-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl">
+  <div class="flex items-center gap-2">
+    <svg class="w-4 h-4 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+    </svg>
+    <span class="text-sm text-red-700 font-medium"><span id="orphans-banner-count"></span> listings de esta cuenta fueron eliminados de MercadoLibre y siguen en nuestra base de datos</span>
+  </div>
+  <div class="flex items-center gap-2 shrink-0">
+    <a href="/stock-sync" class="text-xs font-semibold text-red-600 hover:text-red-800 underline underline-offset-2">Ver y limpiar →</a>
+    <button onclick="document.getElementById('orphans-banner').classList.add('hidden')" class="text-red-400 hover:text-red-600 text-lg leading-none">✕</button>
+  </div>
+</div>
+
 <!-- Barra de alertas unificada -->
 <div id="alerts-bar" class="mb-3">
     <div class="flex items-center gap-2 px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl animate-pulse">
@@ -958,6 +972,23 @@
             btn.disabled = false;
         });
     };
+})();
+
+// ── Banner listings eliminados (filtrado por cuenta activa) ───────────────────
+(function() {
+    var _uid = '{{ active_user_id or "" }}';
+    if (!_uid) return;
+    fetch('/api/listings/orphans?platform=ml&account_id=' + encodeURIComponent(_uid))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            var n = d.count || 0;
+            if (n === 0) return;
+            var banner = document.getElementById('orphans-banner');
+            var cntEl  = document.getElementById('orphans-banner-count');
+            if (cntEl) cntEl.textContent = n;
+            if (banner) banner.classList.remove('hidden');
+        })
+        .catch(function() {});
 })();
 </script>
 {% endblock %}
