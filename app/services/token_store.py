@@ -546,6 +546,11 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_billing_requests_status ON billing_requests(status)"
         )
+        # Índice para filtros: (platform, order_number) — mejora queries de filtrado y anti-dup
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_requests_platform_order "
+            "ON billing_requests(platform, order_number)"
+        )
         await db.commit()
 
 
@@ -1717,20 +1722,47 @@ async def get_billing_request_by_id(request_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-async def list_billing_requests(status: str = None) -> list:
+async def list_billing_requests(
+    status: str = None,
+    platform: str = None,
+    ml_user_id: str = None,
+    created_by: str = None,
+    sort: str = "date_desc",
+) -> list:
+    conditions, params = [], []
+    if status:
+        conditions.append("status=?"); params.append(status)
+    if platform:
+        conditions.append("platform=?"); params.append(platform)
+    if ml_user_id:
+        conditions.append("ml_user_id=?"); params.append(ml_user_id)
+    if created_by:
+        conditions.append("created_by=?"); params.append(created_by)
+    where     = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    order_dir = "ASC" if sort == "date_asc" else "DESC"
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        if status:
-            cursor = await db.execute(
-                "SELECT * FROM billing_requests WHERE status=? ORDER BY created_at DESC",
-                (status,),
-            )
-        else:
-            cursor = await db.execute(
-                "SELECT * FROM billing_requests ORDER BY created_at DESC"
-            )
+        cursor = await db.execute(
+            f"SELECT * FROM billing_requests {where} ORDER BY created_at {order_dir}",
+            params,
+        )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+async def get_billing_request_by_order(platform: str, order_number: str) -> Optional[dict]:
+    """Retorna la solicitud más reciente para (platform, order_number) o None.
+    Usado para detectar duplicados antes de crear una nueva solicitud."""
+    if not order_number or not order_number.strip():
+        return None
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM billing_requests WHERE platform=? AND order_number=? ORDER BY id DESC LIMIT 1",
+            (platform, order_number.strip()),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
 
 async def update_billing_status(request_id: int, status: str) -> None:

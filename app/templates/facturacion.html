@@ -19,12 +19,44 @@
   </div>
 
   <!-- ── Filtros ───────────────────────────────────────────────────────────── -->
-  <div class="flex items-center gap-2 mb-4 flex-wrap">
-    <span class="text-xs text-gray-500 font-medium">Filtrar:</span>
-    <button onclick="window._loadRequests('')"     id="f-all"      class="filter-btn active-filter text-xs px-3 py-1 rounded-full border transition">Todos</button>
-    <button onclick="window._loadRequests('pending_data')"  id="f-pending"  class="filter-btn text-xs px-3 py-1 rounded-full border transition">Esperando datos</button>
-    <button onclick="window._loadRequests('data_received')" id="f-received" class="filter-btn text-xs px-3 py-1 rounded-full border transition">Pendiente factura</button>
-    <button onclick="window._loadRequests('invoice_ready')" id="f-ready"    class="filter-btn text-xs px-3 py-1 rounded-full border transition">Factura lista</button>
+  <div class="flex items-center gap-2 mb-4 flex-wrap bg-white rounded-xl px-4 py-2.5 border border-gray-100 shadow-sm">
+    <span class="text-xs text-gray-400 font-medium mr-1">Filtrar:</span>
+
+    <!-- Estado -->
+    <select id="f-status" onchange="window._loadRequests()"
+            class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-white text-gray-600">
+      <option value="">Estado: Todos</option>
+      <option value="pending_data">Esperando datos</option>
+      <option value="data_received">Pendiente factura</option>
+      <option value="invoice_ready">Factura lista</option>
+    </select>
+
+    <!-- Tienda/Cuenta -->
+    <select id="f-account" onchange="window._loadRequests()"
+            class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-white text-gray-600">
+      <option value="">Tienda: Todas</option>
+      {% for acc in accounts %}<option value="{{ acc.user_id }}">{{ acc.nickname or acc.user_id }}</option>{% endfor %}
+      {% for acc in amazon_accounts %}<option value="{{ acc.seller_id }}">{{ acc.nickname or acc.seller_id }}</option>{% endfor %}
+    </select>
+
+    <!-- Usuario (poblado dinámicamente) -->
+    <select id="f-user" onchange="window._loadRequests()"
+            class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-white text-gray-600">
+      <option value="">Usuario: Todos</option>
+    </select>
+
+    <!-- Ordenar por fecha -->
+    <button onclick="window._toggleSort()" id="f-sort-btn"
+            class="flex items-center gap-1 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 transition text-gray-500 font-medium">
+      <span id="f-sort-label">Fecha ↓</span>
+    </button>
+
+    <!-- Limpiar filtros -->
+    <button onclick="window._clearFilters()" id="f-clear-btn"
+            class="hidden text-xs text-red-400 hover:text-red-600 transition font-medium">✕ Limpiar</button>
+
+    <!-- Contador de resultados -->
+    <span id="f-count" class="ml-auto text-xs text-gray-400"></span>
   </div>
 
   <!-- ── Tabla de solicitudes ──────────────────────────────────────────────── -->
@@ -82,6 +114,25 @@
         </div>
         <div id="c-order-notfound" class="hidden mt-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-500">
           Orden no encontrada — puedes completar los campos manualmente.
+        </div>
+        <!-- Alerta de solicitud duplicada -->
+        <div id="c-duplicate-warning" class="hidden mt-2 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 text-xs space-y-1.5">
+          <div class="flex items-center gap-1.5 font-semibold text-amber-700">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            Ya existe una solicitud para esta orden
+          </div>
+          <div class="text-amber-600 pl-5">
+            Estado: <span id="c-dup-status" class="font-semibold"></span>
+            &nbsp;·&nbsp; Creada por: <span id="c-dup-user"></span>
+            &nbsp;·&nbsp; <span id="c-dup-date"></span>
+          </div>
+          <div class="pl-5 flex items-center gap-2">
+            <button onclick="window._copyDupLink()" class="underline text-amber-700 hover:text-amber-900 font-semibold">Copiar link existente</button>
+            <span class="text-amber-400">·</span>
+            <button onclick="window._openDupDetail()" class="underline text-amber-700 hover:text-amber-900">Ver solicitud</button>
+          </div>
         </div>
       </div>
 
@@ -149,54 +200,63 @@
   </div>
 </div>
 
-<style>
-.filter-btn { background: white; color: #6b7280; border-color: #e5e7eb; }
-.filter-btn:hover { background: #fef9c3; }
-.active-filter { background: #fde047 !important; color: #1f2937 !important; font-weight: 600; border-color: #fde047 !important; }
-</style>
-
 <script>
-var _currentFilter = '';
 var _currentReqId = null;
+var _currentSort  = 'date_desc';
+var _dupLink      = '';
+var _dupReqId     = null;
 
 var _STATUS_LABELS = {
   'pending_data':   '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">Esperando datos</span>',
   'data_received':  '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">Pendiente factura</span>',
   'invoice_ready':  '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Factura lista</span>',
 };
-
 var _PLATFORM_LABELS = {
   'mercadolibre': 'Mercado Libre',
   'amazon':       'Amazon',
   'manual':       'Manual',
 };
 
-window._loadRequests = function(status) {
-  _currentFilter = status;
-  // Update active filter button
-  ['all','pending','received','ready'].forEach(function(k) {
-    var btn = document.getElementById('f-' + k);
-    if (btn) btn.classList.remove('active-filter');
-  });
-  var activeId = status === '' ? 'f-all' : status === 'pending_data' ? 'f-pending' : status === 'data_received' ? 'f-received' : 'f-ready';
-  var activeBtn = document.getElementById(activeId);
-  if (activeBtn) activeBtn.classList.add('active-filter');
+// ── Filtros ────────────────────────────────────────────────────────────────
+window._loadRequests = function() {
+  var statusVal  = (document.getElementById('f-status')  || {}).value || '';
+  var accountVal = (document.getElementById('f-account') || {}).value || '';
+  var userVal    = (document.getElementById('f-user')    || {}).value || '';
+
+  // Mostrar/ocultar botón "Limpiar"
+  var anyFilter = statusVal || accountVal || userVal;
+  var clearBtn = document.getElementById('f-clear-btn');
+  if (clearBtn) clearBtn.classList.toggle('hidden', !anyFilter);
+
+  var params = [];
+  if (statusVal)  params.push('status='     + encodeURIComponent(statusVal));
+  if (accountVal) params.push('ml_user_id=' + encodeURIComponent(accountVal));
+  if (userVal)    params.push('created_by=' + encodeURIComponent(userVal));
+  if (_currentSort === 'date_asc') params.push('sort=date_asc');
+
+  var url = '/api/facturacion/requests' + (params.length ? '?' + params.join('&') : '');
 
   var loading = document.getElementById('requests-loading');
   var table   = document.getElementById('requests-table');
   var empty   = document.getElementById('requests-empty');
   loading.classList.remove('hidden'); table.classList.add('hidden'); empty.classList.add('hidden');
+  document.getElementById('f-count').textContent = '';
 
-  fetch('/api/facturacion/requests' + (status ? '?status=' + status : ''))
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(d) {
       loading.classList.add('hidden');
       var rows = d.requests || [];
+      document.getElementById('f-count').textContent = rows.length + ' resultado' + (rows.length !== 1 ? 's' : '');
+
+      // Poblar dropdown de usuarios con valores únicos de la carga actual
+      if (!userVal) _populateUserFilter(rows);
+
       if (!rows.length) { empty.classList.remove('hidden'); return; }
       var tbody = document.getElementById('requests-tbody');
       tbody.innerHTML = rows.map(function(r) {
         var ref   = r.client_ref || r.order_number || '#' + r.id;
-        var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + r.order_number + '</span>' : '';
+        var order = r.order_number ? '<span class="text-xs text-gray-400 font-mono ml-1">' + _esc(r.order_number) + '</span>' : '';
         var date  = (r.created_at || '').substring(0, 10);
         var plat  = _PLATFORM_LABELS[r.platform] || r.platform;
         var acct  = r.account_nickname ? '<div class="text-xs text-gray-400 mt-0.5">' + _esc(r.account_nickname) + '</div>' : '';
@@ -220,14 +280,53 @@ window._loadRequests = function(status) {
     .catch(function() { loading.classList.add('hidden'); empty.classList.remove('hidden'); });
 };
 
+function _populateUserFilter(rows) {
+  var sel = document.getElementById('f-user');
+  if (!sel) return;
+  var current = sel.value;
+  var seen = {}, users = [];
+  rows.forEach(function(r) {
+    if (r.created_by && !seen[r.created_by]) { seen[r.created_by] = true; users.push(r.created_by); }
+  });
+  users.sort();
+  // Rebuild options preserving selection
+  var html = '<option value="">Usuario: Todos</option>';
+  users.forEach(function(u) {
+    html += '<option value="' + _esc(u) + '"' + (u === current ? ' selected' : '') + '>' + _esc(u) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+window._toggleSort = function() {
+  _currentSort = (_currentSort === 'date_desc') ? 'date_asc' : 'date_desc';
+  var lbl = document.getElementById('f-sort-label');
+  if (lbl) lbl.textContent = _currentSort === 'date_asc' ? 'Fecha ↑' : 'Fecha ↓';
+  window._loadRequests();
+};
+
+window._clearFilters = function() {
+  var statusSel  = document.getElementById('f-status');
+  var accountSel = document.getElementById('f-account');
+  var userSel    = document.getElementById('f-user');
+  if (statusSel)  statusSel.value  = '';
+  if (accountSel) accountSel.value = '';
+  if (userSel)    userSel.value    = '';
+  window._loadRequests();
+};
+
+// ── Modal crear solicitud ──────────────────────────────────────────────────
 window._openCreateModal = function() {
   document.getElementById('c-order-number').value = '';
-  document.getElementById('c-client-ref').value = '';
-  document.getElementById('c-notes').value = '';
-  document.getElementById('c-ml-user').value = '';
-  document.getElementById('c-platform').value = 'mercadolibre';
+  document.getElementById('c-client-ref').value   = '';
+  document.getElementById('c-notes').value         = '';
+  document.getElementById('c-ml-user').value       = '';
+  document.getElementById('c-platform').value      = 'mercadolibre';
   document.getElementById('c-order-preview').classList.add('hidden');
   document.getElementById('c-order-notfound').classList.add('hidden');
+  document.getElementById('c-duplicate-warning').classList.add('hidden');
+  document.getElementById('btn-create').disabled   = false;
+  document.getElementById('btn-create').textContent = 'Crear y copiar link';
+  _dupLink = ''; _dupReqId = null;
   document.getElementById('modal-create').classList.remove('hidden');
   setTimeout(function() { document.getElementById('c-order-number').focus(); }, 100);
 };
@@ -239,7 +338,11 @@ window._debounceLookup = function() {
   var val = (document.getElementById('c-order-number').value || '').trim();
   document.getElementById('c-order-preview').classList.add('hidden');
   document.getElementById('c-order-notfound').classList.add('hidden');
-  if (val.length < 6) return;  // espera al menos 6 chars
+  document.getElementById('c-duplicate-warning').classList.add('hidden');
+  document.getElementById('btn-create').disabled   = false;
+  document.getElementById('btn-create').textContent = 'Crear y copiar link';
+  _dupLink = ''; _dupReqId = null;
+  if (val.length < 6) return;
   _lookupTimer = setTimeout(function() { window._doOrderLookup(val); }, 650);
 };
 
@@ -247,6 +350,7 @@ window._doOrderLookup = function(orderNumber) {
   var spinner  = document.getElementById('c-lookup-spinner');
   var preview  = document.getElementById('c-order-preview');
   var notfound = document.getElementById('c-order-notfound');
+  var dupWarn  = document.getElementById('c-duplicate-warning');
   spinner.classList.remove('hidden');
 
   fetch('/api/facturacion/order-lookup?order_number=' + encodeURIComponent(orderNumber))
@@ -255,8 +359,8 @@ window._doOrderLookup = function(orderNumber) {
       spinner.classList.add('hidden');
       if (!d.found) { notfound.classList.remove('hidden'); return; }
 
-      // Auto-rellenar Cuenta ML y Plataforma
-      var mlSel = document.getElementById('c-ml-user');
+      // Auto-rellenar Cuenta y Plataforma
+      var mlSel   = document.getElementById('c-ml-user');
       var platSel = document.getElementById('c-platform');
       for (var i = 0; i < mlSel.options.length; i++) {
         if (mlSel.options[i].value === d.ml_user_id) { mlSel.selectedIndex = i; break; }
@@ -265,7 +369,7 @@ window._doOrderLookup = function(orderNumber) {
         if (platSel.options[j].value === d.platform) { platSel.selectedIndex = j; break; }
       }
 
-      // Mostrar mini preview
+      // Mostrar mini preview de la orden
       var platLabel = d.platform === 'amazon' ? 'Amazon' : 'Mercado Libre';
       document.getElementById('c-preview-account').textContent = d.nickname + ' · ' + platLabel;
       var items = (d.order && d.order.items) || [];
@@ -277,8 +381,35 @@ window._doOrderLookup = function(orderNumber) {
         : '';
       document.getElementById('c-preview-total').textContent = total;
       preview.classList.remove('hidden');
+
+      // Verificar duplicado
+      if (d.existing_request) {
+        var er = d.existing_request;
+        _dupLink  = er.link;
+        _dupReqId = er.id;
+        document.getElementById('c-dup-status').textContent = er.status_label || er.status;
+        document.getElementById('c-dup-user').textContent   = er.created_by;
+        document.getElementById('c-dup-date').textContent   = er.created_at;
+        dupWarn.classList.remove('hidden');
+        // No bloquear el botón — permitir crear de todas formas si el usuario quiere,
+        // pero advertir claramente.
+      }
     })
     .catch(function() { spinner.classList.add('hidden'); });
+};
+
+window._copyDupLink = function() {
+  if (!_dupLink) return;
+  navigator.clipboard.writeText(_dupLink).then(function() {
+    alert('Link copiado:\n' + _dupLink);
+    document.getElementById('modal-create').classList.add('hidden');
+  }).catch(function() { prompt('Copia este link:', _dupLink); });
+};
+
+window._openDupDetail = function() {
+  if (!_dupReqId) return;
+  document.getElementById('modal-create').classList.add('hidden');
+  window._openDetail(_dupReqId);
 };
 
 window._createRequest = function() {
@@ -291,17 +422,32 @@ window._createRequest = function() {
   fd.append('client_ref',   document.getElementById('c-client-ref').value.trim());
   fd.append('notes',        document.getElementById('c-notes').value.trim());
   fetch('/api/facturacion/requests', { method: 'POST', body: fd })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (r.status === 409) return r.json().then(function(e) { throw {is409: true, data: e}; });
+      return r.json();
+    })
     .then(function(d) {
       btn.disabled = false; btn.textContent = 'Crear y copiar link';
       document.getElementById('modal-create').classList.add('hidden');
       navigator.clipboard.writeText(d.link).catch(function(){});
       alert('✅ Solicitud creada.\n\nLink copiado al portapapeles:\n' + d.link);
-      window._loadRequests(_currentFilter);
+      window._loadRequests();
     })
     .catch(function(e) {
       btn.disabled = false; btn.textContent = 'Crear y copiar link';
-      alert('Error: ' + e);
+      if (e && e.is409) {
+        // Duplicado detectado a nivel backend — mostrar en el modal
+        var er = e.data;
+        _dupLink  = er.existing_link;
+        _dupReqId = er.existing_id;
+        document.getElementById('c-dup-status').textContent = er.existing_status_label || er.existing_status;
+        document.getElementById('c-dup-user').textContent   = er.existing_created_by;
+        document.getElementById('c-dup-date').textContent   = er.existing_created_at || '';
+        document.getElementById('c-duplicate-warning').classList.remove('hidden');
+        document.getElementById('modal-create').classList.remove('hidden');
+      } else {
+        alert('Error al crear solicitud.');
+      }
     });
 };
 
@@ -476,7 +622,7 @@ window._uploadInvoice = function(reqId) {
       if (d.ok) {
         alert('✅ Factura subida. El cliente ya puede descargarla.');
         window._openDetail(reqId);
-        window._loadRequests(_currentFilter);
+        window._loadRequests();
       } else {
         alert('Error: ' + (d.detail || 'desconocido'));
       }
@@ -490,7 +636,7 @@ window._deleteRequest = function(reqId) {
     .then(function(r) { return r.json(); })
     .then(function() {
       document.getElementById('modal-detail').classList.add('hidden');
-      window._loadRequests(_currentFilter);
+      window._loadRequests();
     })
     .catch(function(e) { alert('Error: ' + e); });
 };
@@ -501,6 +647,6 @@ function _esc(s) {
 }
 
 // Carga inicial
-window._loadRequests('');
+window._loadRequests();
 </script>
 {% endblock %}

@@ -106,6 +106,26 @@ def _is_amazon_order_id(order_id: str) -> bool:
     return bool(re.match(r'^\d{3}-\d{7}-\d{7}$', order_id.strip()))
 
 
+async def _check_existing_request(platform: str, order_number: str, base_url: str) -> Optional[dict]:
+    """Verifica si ya existe una solicitud de factura para esta orden. Retorna dict o None."""
+    existing = await token_store.get_billing_request_by_order(platform, order_number)
+    if not existing:
+        return None
+    _STATUS_LABELS = {
+        "pending_data":  "Esperando datos",
+        "data_received": "Pendiente factura",
+        "invoice_ready": "Factura lista",
+    }
+    return {
+        "id":           existing["id"],
+        "link":         f"{base_url}/factura/{existing['token']}",
+        "status":       existing["status"],
+        "status_label": _STATUS_LABELS.get(existing["status"], existing["status"]),
+        "created_by":   existing["created_by"],
+        "created_at":   (existing.get("created_at") or "")[:10],
+    }
+
+
 @router.get("/order-lookup")
 async def order_lookup(request: Request, order_number: str = ""):
     """
@@ -117,6 +137,7 @@ async def order_lookup(request: Request, order_number: str = ""):
     order_number = order_number.strip()
     if not order_number:
         return {"found": False, "error": "Ingresa un número de orden"}
+    base_url = str(request.base_url).rstrip("/")
 
     import asyncio
 
@@ -164,11 +185,13 @@ async def order_lookup(request: Request, order_number: str = ""):
             for it in match["items_raw"]
         ]
         total_obj = order.get("OrderTotal") or {}
+        existing_req = await _check_existing_request("amazon", order_number, base_url)
         return {
             "found": True,
             "ml_user_id": acc["seller_id"],
             "nickname": acc.get("nickname") or acc["seller_id"],
             "platform": "amazon",
+            "existing_request": existing_req,
             "order": {
                 "total": float(total_obj.get("Amount") or 0),
                 "currency": total_obj.get("CurrencyCode", "MXN"),
@@ -213,11 +236,13 @@ async def order_lookup(request: Request, order_number: str = ""):
             "unit_price": oi.get("unit_price") or oi.get("full_unit_price"),
         })
 
+    existing_req = await _check_existing_request("mercadolibre", order_number, base_url)
     return {
         "found": True,
         "ml_user_id": acc["user_id"],
         "nickname": acc.get("nickname") or acc["user_id"],
         "platform": "mercadolibre",
+        "existing_request": existing_req,
         "order": {
             "total": order.get("total_amount"),
             "currency": order.get("currency_id", "MXN"),
@@ -239,9 +264,22 @@ async def get_catalogs():
 
 
 @router.get("/requests")
-async def list_requests(request: Request, status: str = ""):
+async def list_requests(
+    request: Request,
+    status:     str = "",
+    platform:   str = "",
+    ml_user_id: str = "",
+    created_by: str = "",
+    sort:       str = "date_desc",
+):
     _require_editor(request)
-    rows = await token_store.list_billing_requests(status=status or None)
+    rows = await token_store.list_billing_requests(
+        status=status or None,
+        platform=platform or None,
+        ml_user_id=ml_user_id or None,
+        created_by=created_by or None,
+        sort=sort,
+    )
 
     # Construir mapa user_id/seller_id → nickname
     meli_accounts   = await token_store.get_all_tokens()
@@ -262,13 +300,38 @@ async def list_requests(request: Request, status: str = ""):
 @router.post("/requests")
 async def create_request(
     request: Request,
-    ml_user_id: str = Form(""),
-    platform: str = Form("mercadolibre"),
+    ml_user_id:   str = Form(""),
+    platform:     str = Form("mercadolibre"),
     order_number: str = Form(""),
-    client_ref: str = Form(""),
-    notes: str = Form(""),
+    client_ref:   str = Form(""),
+    notes:        str = Form(""),
 ):
     du = _require_editor(request)
+    base_url = str(request.base_url).rstrip("/")
+
+    # Anti-duplicado: si hay order_number, verificar que no exista solicitud previa
+    if order_number and order_number.strip():
+        existing = await token_store.get_billing_request_by_order(platform, order_number.strip())
+        if existing:
+            _STATUS_LABELS = {
+                "pending_data":  "Esperando datos",
+                "data_received": "Pendiente factura",
+                "invoice_ready": "Factura lista",
+            }
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error":              "duplicate",
+                    "message":            f"Ya existe una solicitud para la orden {order_number.strip()}",
+                    "existing_id":        existing["id"],
+                    "existing_link":      f"{base_url}/factura/{existing['token']}",
+                    "existing_status":    existing["status"],
+                    "existing_status_label": _STATUS_LABELS.get(existing["status"], existing["status"]),
+                    "existing_created_by": existing["created_by"],
+                    "existing_created_at": (existing.get("created_at") or "")[:10],
+                },
+            )
+
     token = str(uuid.uuid4())
     req_id = await token_store.create_billing_request(
         token=token,
@@ -279,11 +342,10 @@ async def create_request(
         created_by=du["username"],
         notes=notes,
     )
-    base_url = str(request.base_url).rstrip("/")
     return {
-        "id": req_id,
+        "id":    req_id,
         "token": token,
-        "link": f"{base_url}/factura/{token}",
+        "link":  f"{base_url}/factura/{token}",
     }
 
 
