@@ -140,6 +140,14 @@
         <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
+    {% if orphan_count %}
+    <div onclick="document.getElementById('orphans-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-red-500 cursor-pointer hover:shadow-md hover:bg-red-50/30 transition">
+        <p class="text-xs text-gray-500">Listings Eliminados</p>
+        <p class="text-2xl font-bold text-red-600">{{ orphan_count }}</p>
+        <p class="text-[10px] text-gray-400">Eliminados de MercadoLibre</p>
+    </div>
+    {% endif %}
 </div>
 
 <!-- ===== Seccion A: Reabastecer ===== -->
@@ -2078,3 +2086,127 @@ window.syncOneImbalanced = function(itemId, bmQty) {
     });
 };
 </script>
+
+{% if orphan_count %}
+<!-- ===== Seccion: Listings Eliminados ===== -->
+<div class="mb-8" id="orphans-section">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-red-500 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Listings Eliminados</h3>
+            <span class="text-xs text-gray-400">(Eliminados de MercadoLibre, siguen en DB local)</span>
+        </div>
+        <button onclick="window._deleteAllOrphansSI()" id="delete-all-orphans-btn"
+                class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition">
+            Eliminar todos ({{ orphan_count }})
+        </button>
+    </div>
+    <div id="orphans-section-body" class="bg-white rounded-lg shadow overflow-hidden border border-red-100">
+        <div class="flex items-center justify-center gap-2 p-6 text-sm text-gray-400">
+            <svg class="animate-spin h-4 w-4 text-red-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            Cargando listings eliminados...
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var _uid = '{{ active_user_id or "" }}';
+
+    function _renderOrphansTable(orphans) {
+        var body = document.getElementById('orphans-section-body');
+        if (!body) return;
+        if (!orphans.length) {
+            body.innerHTML = '<div class="p-6 text-sm text-gray-400 text-center">Sin listings pendientes de eliminar.</div>';
+            return;
+        }
+        var rows = orphans.map(function(o) {
+            var age = o.age_str || '—';
+            var sku = o.sku
+                ? '<span class="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">' + o.sku + '</span>'
+                : '<span class="text-gray-300 text-xs">—</span>';
+            return '<tr class="border-b border-gray-100 hover:bg-red-50/20" id="orphan-row-' + o.id + '">' +
+                '<td class="py-2.5 px-4 max-w-[220px]"><span class="text-xs text-gray-700 block truncate" title="' + (o.title||'').replace(/"/g,'&quot;') + '">' + (o.title || '—').substring(0, 65) + '</span></td>' +
+                '<td class="py-2.5 px-4 whitespace-nowrap"><span class="font-mono text-[11px] text-blue-600">' + o.item_id + '</span><br>' + sku + '</td>' +
+                '<td class="py-2.5 px-4 text-xs text-gray-400 whitespace-nowrap">' + age + '</td>' +
+                '<td class="py-2.5 px-4">' +
+                '<button onclick="window._deleteOrphanSI(' + o.id + ', this)" ' +
+                '        class="px-2.5 py-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition">' +
+                'Eliminar de DB</button></td>' +
+                '</tr>';
+        }).join('');
+        body.innerHTML = '<table class="w-full text-sm">' +
+            '<thead><tr class="bg-gray-50 border-b border-gray-200 text-left">' +
+            '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">Producto</th>' +
+            '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">ID / SKU</th>' +
+            '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">Detectado hace</th>' +
+            '<th class="py-2 px-4 text-xs text-gray-500 font-semibold">Acciones</th>' +
+            '</tr></thead>' +
+            '<tbody>' + rows + '</tbody>' +
+            '</table>';
+    }
+
+    function _loadOrphans() {
+        fetch('/api/listings/orphans?platform=ml&account_id=' + encodeURIComponent(_uid))
+            .then(function(r) { return r.json(); })
+            .then(function(d) { _renderOrphansTable(d.orphans || []); })
+            .catch(function() {
+                var b = document.getElementById('orphans-section-body');
+                if (b) b.innerHTML = '<div class="p-4 text-sm text-red-500">Error cargando listings eliminados.</div>';
+            });
+    }
+
+    window._deleteOrphanSI = function(id, btn) {
+        if (!confirm('¿Eliminar este listing de la base de datos local?')) return;
+        btn.textContent = '...'; btn.disabled = true;
+        fetch('/api/listings/orphans', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ids: [id]})
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            var row = document.getElementById('orphan-row-' + id);
+            if (row) { row.style.opacity = '0.4'; setTimeout(function() { row.remove(); }, 400); }
+            if (window.showToast) showToast('Listing eliminado de DB local', 'success');
+        })
+        .catch(function() {
+            btn.textContent = 'Eliminar de DB'; btn.disabled = false;
+            if (window.showToast) showToast('Error al eliminar', 'error');
+        });
+    };
+
+    window._deleteAllOrphansSI = function() {
+        if (!confirm('¿Eliminar TODOS los listings eliminados de la base de datos local?\n\nEsta acción no se puede deshacer.')) return;
+        var btn = document.getElementById('delete-all-orphans-btn');
+        if (btn) { btn.textContent = 'Eliminando...'; btn.disabled = true; }
+        fetch('/api/listings/orphans?platform=ml&account_id=' + encodeURIComponent(_uid))
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var ids = (d.orphans || []).map(function(o) { return o.id; });
+                if (!ids.length) { if (btn) btn.textContent = 'Eliminar todos (0)'; return Promise.resolve(null); }
+                return fetch('/api/listings/orphans', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ids: ids})
+                });
+            })
+            .then(function(r) { if (r) return r.json(); })
+            .then(function() {
+                var b = document.getElementById('orphans-section-body');
+                if (b) b.innerHTML = '<div class="p-6 text-sm text-gray-400 text-center">Todos los listings fueron eliminados de la base de datos local.</div>';
+                if (btn) { btn.textContent = 'Todos eliminados ✓'; btn.disabled = true; }
+                if (window.showToast) showToast('Listings eliminados de DB local', 'success');
+            })
+            .catch(function() {
+                if (btn) { btn.textContent = 'Eliminar todos (' + '{{ orphan_count }}' + ')'; btn.disabled = false; }
+                if (window.showToast) showToast('Error al eliminar', 'error');
+            });
+    };
+
+    _loadOrphans();
+})();
+</script>
+{% endif %}

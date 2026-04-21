@@ -2286,9 +2286,19 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
         # Cache de resultado completo (evita re-computar cada vez)
         key = f"stock_issues:{client.user_id}:t{threshold}"
         entry = _stock_issues_cache.get(key)
+        # Helper: añade orphan_count y active_user_id al ctx (siempre fresco, fuera del cache)
+        async def _add_orphan_ctx(c: dict) -> dict:
+            c["active_user_id"] = client.user_id
+            try:
+                from app.services import token_store as _ts
+                _orows = await _ts.get_orphan_listings(platform="ml", account_id=client.user_id)
+                c["orphan_count"] = len(_orows)
+            except Exception:
+                c["orphan_count"] = 0
+            return c
+
         if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
-            ctx = entry[1].copy()
-            # include_paused: traer items pausados para seccion Activar
+            ctx = await _add_orphan_ctx(entry[1].copy())
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
 
         # Cache expirada — solo el admin puede disparar un nuevo prewarm.
@@ -2299,7 +2309,7 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             asyncio.create_task(_prewarm_caches())
         if entry:
             # Datos stale — mostrar con aviso de actualización en background
-            ctx = entry[1].copy()
+            ctx = await _add_orphan_ctx(entry[1].copy())
             ctx["stale"] = True
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
         # Sin cache en absoluto
