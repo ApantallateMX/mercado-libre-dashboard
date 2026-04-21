@@ -1,13 +1,13 @@
 {% if stale %}
-<div id="stale-banner" class="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3">
+<div id="stale-banner" class="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-1.5 mb-3">
   <svg id="stale-banner-icon" class="animate-spin h-3 w-3 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-  <span id="stale-banner-text">Actualizando datos en background&hellip; (mostrando último ciclo del admin)</span>
+  <span id="stale-banner-text">Datos de hace {{ data_age_min }} min — actualizando en background&hellip;</span>
 </div>
 <script>
 (function() {
   var _stalePolling = true;
   var _retries = 0;
-  var _maxRetries = 5;
+  var _maxRetries = 36;  // 36 × 10s = 6 min de polling máx
   function _stalePoll() {
     if (!_stalePolling) return;
     _retries++;
@@ -15,41 +15,21 @@
       .then(function(r) { return r.json(); })
       .then(function(s) {
         if (!_stalePolling) return;
-        // Datos frescos listos — recargar el tab
-        if (s.ready && s.last_updated_s !== null && s.last_updated_s < 30) {
+        // Datos frescos listos — recargar el tab silenciosamente
+        if (s.ready && s.last_updated_s !== null && s.last_updated_s < 60) {
           _stalePolling = false;
-          var banner = document.getElementById('stale-banner-text');
-          if (banner) banner.textContent = 'Datos actualizados — recargando...';
           if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
           else location.reload();
           return;
         }
-        // Inventario no disponible — parar polling y mostrar mensaje sin mencionar BM
-        if (!s.running && !s.ready) {
-          _stalePolling = false;
-          var bannerEl = document.getElementById('stale-banner');
-          var iconEl = document.getElementById('stale-banner-icon');
-          var textEl = document.getElementById('stale-banner-text');
-          if (iconEl) iconEl.classList.remove('animate-spin');
-          if (bannerEl) {
-            bannerEl.classList.remove('bg-blue-50', 'border-blue-200', 'text-blue-600');
-            bannerEl.classList.add('bg-amber-50', 'border-amber-200', 'text-amber-700');
-          }
-          if (s.last_updated_s !== null && s.last_updated_s > 1800) {
-            if (textEl) textEl.textContent = 'Datos desactualizados — contacta al administrador para actualizar el inventario';
-          } else {
-            if (textEl) textEl.textContent = 'Mostrando datos del último ciclo del administrador';
-          }
-          return;
-        }
-        // Prewarm terminó pero sin datos frescos — ocultar banner
+        // Prewarm no corriendo y datos no frescos — ocultar banner (ya mostramos lo que hay)
         if (!s.running) {
           _stalePolling = false;
           var b = document.getElementById('stale-banner');
           if (b) b.classList.add('hidden');
           return;
         }
-        // Aún corriendo — seguir hasta max reintentos
+        // Sigue corriendo — actualizar texto con tiempo transcurrido
         if (_retries < _maxRetries) setTimeout(_stalePoll, 10000);
         else {
           _stalePolling = false;

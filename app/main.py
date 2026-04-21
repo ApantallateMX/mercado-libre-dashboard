@@ -438,13 +438,13 @@ async def lifespan(app: FastAPI):
     from app.services.ml_listing_sync import start_ml_listing_sync, register_listings_updated_callback
 
     def _invalidate_products_on_sync(uid: str):
-        """Limpia _products_cache + _stock_issues_cache cuando ml_listing_sync actualiza la DB.
-        Evita que las alertas muestren Stock MeLi=0 cuando ML ya tiene stock."""
+        """Limpia _products_cache cuando ml_listing_sync actualiza la DB.
+        NO limpia _stock_issues_cache: el prewarm la reconstruye con datos frescos.
+        Borrarla aquí causaba spinner en el tab Stock después de cada deploy."""
         uid_prefix = f"{uid}:"
         for k in [k for k in _products_cache if k.startswith(uid_prefix)]:
             del _products_cache[k]
-        _stock_issues_cache.clear()
-        logger.debug(f"[ML-SYNC-CB] Cache invalidado para uid={uid} post-sync")
+        logger.debug(f"[ML-SYNC-CB] products_cache invalidado para uid={uid} post-sync")
 
     register_listings_updated_callback(_invalidate_products_on_sync)
     start_ml_listing_sync()
@@ -457,8 +457,9 @@ async def lifespan(app: FastAPI):
 
     async def _invalidate_caches_post_sync():
         _products_cache.clear()
-        _stock_issues_cache.clear()
-        logger.info("[SYNC-CB] products_cache + stock_issues_cache invalidados post stock-sync")
+        # NO limpiar _stock_issues_cache: el prewarm post-sync la reconstruye con datos nuevos.
+        # Limpiarla aquí causaba spinner en el tab Stock durante/después de un sync.
+        logger.info("[SYNC-CB] products_cache invalidado post stock-sync")
 
     register_sync_complete_callback(_invalidate_caches_post_sync)
     # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
@@ -2297,20 +2298,18 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
                 c["orphan_count"] = 0
             return c
 
-        if entry and (_time.time() - entry[0]) < _STOCK_ISSUES_TTL:
-            ctx = await _add_orphan_ctx(entry[1].copy())
-            return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
-
-        # Cache expirada — solo el admin puede disparar un nuevo prewarm.
-        # Operadores ven el cache disponible (stale) o mensaje de espera si no hay cache.
         _du_stock = getattr(request.state, "dashboard_user", None) or {}
         _is_admin_stock = _du_stock.get("role") == "admin"
-        if _is_admin_stock:
-            asyncio.create_task(_prewarm_caches())
+
         if entry:
-            # Datos stale — mostrar con aviso de actualización en background
+            _data_age_s = _time.time() - entry[0]
             ctx = await _add_orphan_ctx(entry[1].copy())
-            ctx["stale"] = True
+            # Stale banner solo si datos tienen más de 10 min — si no, todo perfecto
+            ctx["stale"]        = _data_age_s > 600
+            ctx["data_age_min"] = int(_data_age_s // 60)
+            # Trigger prewarm en background solo si admin y datos > TTL (30 min)
+            if _is_admin_stock and _data_age_s > _STOCK_ISSUES_TTL:
+                asyncio.create_task(_prewarm_caches())
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
         # Sin cache en absoluto
         if not _is_admin_stock:
@@ -2858,18 +2857,8 @@ async def _prewarm_caches(user_id: str = None):
                         await token_store.upsert_bm_stock_batch(_bm_entries)
                 except Exception as _save_exc:
                     logger.warning(f"[PREWARM] Error persistiendo caché BM: {_save_exc}")
-                # Registrar en historial BM SIEMPRE — independiente del save anterior
-                try:
-                    _bm_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
-                    logger.info(f"[PREWARM] Escribiendo BM sync log: skus={len(_bm_stock_cache)}, elapsed={_bm_elapsed}s, source={_prewarm_source}")
-                    await token_store.log_bm_sync_event(
-                        sku_count=len(_bm_stock_cache),
-                        elapsed_s=_bm_elapsed,
-                        source=_prewarm_source,
-                    )
-                    logger.info("[PREWARM] BM sync log escrito OK")
-                except Exception as _log_exc:
-                    logger.warning(f"[PREWARM] Error escribiendo BM sync log: {_log_exc!r}")
+                # Nota: log_bm_sync_event se escribe en el finally externo
+                # para garantizar que se escriba incluso en timeout.
 
                 # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
                 await _enrich_with_bm_product_info(bm_candidates)
@@ -2970,6 +2959,20 @@ async def _prewarm_caches(user_id: str = None):
         except asyncio.TimeoutError:
             _prewarm_error = "Timeout: el calculo tardo mas de 600s."
         finally:
+            # Escribir BM sync log SIEMPRE — incluso en timeout o error parcial.
+            # Fuera de _do_prewarm() para que sobreviva asyncio.TimeoutError.
+            try:
+                _bm_log_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
+                _bm_log_skus    = len(_bm_stock_cache)
+                logger.info(f"[PREWARM] BM sync log: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}")
+                await token_store.log_bm_sync_event(
+                    sku_count=_bm_log_skus,
+                    elapsed_s=_bm_log_elapsed,
+                    source=_prewarm_source,
+                )
+                logger.info("[PREWARM] BM sync log escrito OK")
+            except Exception as _bm_log_exc:
+                logger.warning(f"[PREWARM] Error escribiendo BM sync log: {_bm_log_exc!r}")
             await client.close()
     except Exception as _e:
         import traceback as _tb
