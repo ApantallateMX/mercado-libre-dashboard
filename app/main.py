@@ -388,10 +388,11 @@ async def lifespan(app: FastAPI):
     start_health_check_loop()
     # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
     await price_monitor.start()
-    # Cargar caché BM desde DB inmediatamente (evita refetch completo en BM tras restart)
-    asyncio.create_task(_load_bm_cache_from_db())
-    # Cargar stock_issues_cache desde DB (sobrevive deploys — Stock tab muestra datos sin prewarm)
-    asyncio.create_task(_load_stock_issues_from_db())
+    # Cargar caché BM + stock_issues_cache desde DB de forma síncrona antes del prewarm.
+    # await garantiza que los datos estén en memoria antes de que arranque _startup_prewarm
+    # (que tiene 90s de delay, pero asyncio.create_task podría interleavearse de todas formas).
+    await _load_bm_cache_from_db()
+    await _load_stock_issues_from_db()
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -2854,7 +2855,6 @@ async def _prewarm_caches(user_id: str = None):
                             )
                         except Exception:
                             pass
-                        _prewarm_source = "auto"  # reset para el siguiente ciclo
                 except Exception:
                     pass
 
@@ -2963,6 +2963,7 @@ async def _prewarm_caches(user_id: str = None):
         _prewarm_error = _tb.format_exc()
     finally:
         _prewarm_running = False
+        _prewarm_source  = "auto"   # reset siempre — incluso si hubo error/timeout
         # Si hubo un prewarm en cola (p.ej. de "Sync ahora"), lanzarlo preservando el user_id
         if _prewarm_queued:
             _prewarm_queued = False
