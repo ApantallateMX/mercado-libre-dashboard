@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-21 — FIX+FEAT: BM sync log + botón sync por cuenta (commit 4bc416f)
+
+### Fix: BM sync log "Sin datos"
+- Causa raíz: `token_store.save_bm_stock_cache` no existía — función real es `upsert_bm_stock_batch`
+- El `AttributeError` era capturado por `except Exception: pass` externo, impidiendo que `log_bm_sync_event` corriera
+- Solución: separar el bloque de persistencia del bloque de log — el log ahora corre siempre, independiente de errores en el save
+
+### Feat: Sync por cuenta individual
+- Nueva función `run_single_account_stock_sync(platform, account_id)` en `stock_sync_multi.py`
+  - Mismo circuit-breaker BM que el sync global
+  - Recopila listings solo de esa cuenta
+  - Actualiza únicamente la entrada de esa cuenta en `_last_sync_per_account`
+- Nuevo endpoint `POST /api/stock/multi-sync/trigger-single` (body: `{platform, account_id}`)
+- Botón **Sync** por fila en la tabla "Estado por cuenta"
+  - Spinner visual mientras corre (botón deshabilitado con "...")
+  - Polling cada 3s hasta que termina
+  - Toast de confirmación al completar
+  - Refresca la tabla automáticamente
+
+---
+
 ## 2026-04-21 — FEAT: paginación 10 filas/página en tabla de Facturación (commit 5de64f2)
 
 ### Cambio
