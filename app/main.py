@@ -377,10 +377,11 @@ async def lifespan(app: FastAPI):
     """
     await token_store.init_db()
     await user_store.init_user_db()
-    await _seed_tokens()
-    # Sembrar cuentas Amazon desde .env.production (igual que MeLi)
+    # Seeding en background — no bloquea el startup (evita exit 137 por timeout en Coolify)
+    import asyncio as _asyncio_lifespan
     from app.services.amazon_client import _seed_amazon_accounts
-    await _seed_amazon_accounts()
+    _asyncio_lifespan.create_task(_seed_tokens())
+    _asyncio_lifespan.create_task(_seed_amazon_accounts())
     # Sync periódico de Onsite (cada 25 min en background)
     from app.api.amazon_products import start_onsite_background_sync
     start_onsite_background_sync()
