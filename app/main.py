@@ -2433,7 +2433,7 @@ _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
 _STOCK_ISSUES_TTL = 1800     # 30 min — operadores trabajan con cache; admin renueva; BM down = servir stale
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
-_synced_alert_items: set[str] = set()  # items ya sincronizados (excluidos de alertas hasta cache refresh)
+_synced_alert_items: dict[str, float] = {}  # item_id → timestamp de sync; TTL 10 min — excluidos de alertas hasta qty-sync ML
 
 
 _ALL_MELI_STATUSES = ["active", "paused", "closed", "inactive", "under_review"]
@@ -2874,15 +2874,25 @@ async def _prewarm_caches(user_id: str = None):
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
-                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full")]
+                # Items sincronizados recientemente (TTL 10 min): excluirlos de todas las alertas
+                # hasta que el qty-sync de ML (cada 3 min) actualice ml_listings y el siguiente
+                # prewarm refleje el estado real. Evita que otros usuarios vean items ya gestionados.
+                _SYNCED_TTL = 600
+                _now_sync_ts = _time.time()
+                _synced_ids = {iid for iid, ts in list(_synced_alert_items.items()) if _now_sync_ts - ts < _SYNCED_TTL}
+                # Limpiar entradas expiradas para que el dict no crezca indefinidamente
+                for _exp_id in [iid for iid, ts in list(_synced_alert_items.items()) if _now_sync_ts - ts >= _SYNCED_TTL]:
+                    _synced_alert_items.pop(_exp_id, None)
+
+                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
                 # porque (None or 0)==0. Solo flaggear cuando BM confirmó explícitamente avail=0.
-                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and not p.get("is_full") and p.get("sku")]
+                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
-                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full")]
+                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 critical = [
                     p for p in products
@@ -2890,9 +2900,10 @@ async def _prewarm_caches(user_id: str = None):
                     and 0 < (p.get("_bm_avail") or 0) <= _DEFAULT_THRESHOLD
                     and not p.get("is_full")
                     and p.get("sku")
+                    and p.get("id") not in _synced_ids
                 ]
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
-                full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0]
+                full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
                 stagnant = [
@@ -3829,12 +3840,14 @@ async def products_inventory_partial(
 
         # --- Stock alerts from cached BM data (no waiting) ---
         # Muestra items con ventas, sin stock MeLi, y BM disponible>0 para alertar al usuario
+        _sa_now = _time.time()
+        _sa_synced = {iid for iid, ts in _synced_alert_items.items() if _sa_now - ts < 600}
         stock_alerts = [
             p for p in products
             if p.get("units", 0) > 0
             and p.get("available_quantity", 0) == 0
             and (p.get("_bm_avail") or 0) > 0  # tiene stock disponible (excluye reservados)
-            and p.get("id") not in _synced_alert_items
+            and p.get("id") not in _sa_synced
         ]
         stock_alerts.sort(key=lambda x: x.get("units", 0), reverse=True)
 
@@ -4090,7 +4103,7 @@ async def products_inventory_partial(
 @app.post("/partials/mark-synced/{item_id}")
 async def mark_alert_synced(item_id: str):
     """Registra un item como sincronizado; se excluye de alertas hasta que la cache expire."""
-    _synced_alert_items.add(item_id)
+    _synced_alert_items[item_id] = _time.time()
     return Response(status_code=204)
 
 
@@ -7661,7 +7674,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     if r["variation_id"] in updated_ids:
                         r["updated"] = True
                 # Invalidar cache de stock issues y productos para reflejar cambio
-                _synced_alert_items.add(item_id)
+                _synced_alert_items[item_id] = _time.time()
                 _stock_issues_cache.clear()
                 uid = str(client.user_id)
                 for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
