@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-22 — FIX: Sync variaciones usaba conditions incorrectas y bulk cache equivocado (commit 5407251)
+
+### Problema
+Al hacer Sync BM en listings con variaciones, algunas variaciones recibían stock incorrecto — especialmente TVs (SNTV) con stock en condición ICB/ICC recibían 0, y bundles con un componente sin respuesta de BM recibían el stock del componente sano.
+
+### Causa raíz (3 bugs)
+- **Bug 1**: `_query_bm_avail` llamaba `get_available_qty(sku)` con conditions default `GRA,GRB,GRC,NEW`. Para SNTV con stock ICB/ICC, BM devuelve 0 (no encuentra GR stock).
+- **Bug 2**: `_bulk_avail_map` usaba `_bm_bulk_gr_cache or _bm_bulk_all_cache` → siempre el GR bulk aunque el SKU fuera SNTV. Cache miss → caía a HTTP fallback con Bug 1.
+- **Bug 3**: bundle `SKU_A / SKU_B` donde SKU_B daba error (-1): `min(valid_avails)` solo consideraba SKU_A (ignorando el error) → bundle recibía stock de SKU_A cuando debería ser 0.
+
+### Solución
+- **Fix 1**: `_query_bm_avail(sku, conds)` — pasa `conditions_primary` calculado del SKU completo de la variación
+- **Fix 2**: mapas separados `_bulk_avail_map_gr` / `_bulk_avail_map_all`; cada variación elige el mapa según `_bm_conditions_for_sku(v_sku)`
+- **Fix 3**: si algún componente del bundle retorna -1 → `bm_avail=0` (safe, no sobre-venta)
+
+Archivos: `app/main.py`
+
+---
+
 ## 2026-04-22 — FIX: Concentración no actualizaba DB ni cache en cuentas perdedoras (commit 0526b68)
 
 ### Problema
