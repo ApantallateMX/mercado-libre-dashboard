@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-22 — FIX: KPIs Stock tab todos en 0 por bulk BM retornando vacío sin excepción (commit a61088a)
+
+### Problema
+Todos los KPIs del tab Stock (Sin Stock, Revenue Perdido, Oportunidad Activar, Stock BM Disponible, Stock Crítico) mostraban 0 para todas las cuentas. Único KPI con valor: "Riesgo Sobreventa: 90" — pero eran falsos positivos.
+
+### Causa raíz
+`_get_bm_stock_cached` tiene 3 caminos para poplar `result_map` con datos BM:
+1. Stale bulk cache (si `age < 900s` o BM detectado caído)
+2. Fresh bulk fetch → actualiza cache → usa datos frescos
+3. Fallback a stale en `except Exception`
+
+El fallo ocurrió cuando el bulk cache tenía `age=27567s` (7.6h, > TTL de 900s) y BM respondía al health check (consecutive_failures < 2) pero `get_bulk_stock()` devolvía `None`/`[]` sin lanzar excepción. En ese caso:
+- Condición 1: falsa (`age >= 900` y no `_bm_is_down_now`)
+- Condición 2: `if _fresh_gr:` → False → `_bulk_gr_rows` queda None
+- Condición 3: `except Exception` → no se ejecuta
+- Resultado: `_used_bulk=False`, `result_map` vacío → `_apply_bm_stock({})` → `_bm_avail` nunca asignado → todos los KPIs con filtro `_bm_avail > 0` dan 0.
+
+Los 90 falsos positivos de oversell: `_apply_bm_stock` para variaciones siempre escribe `p["_bm_avail"]=0` aunque `bm_map` esté vacío (el `else` del loop de variaciones asigna la key al padre), lo que bypasaba el guard `"_bm_avail" in p` del filtro de oversell.
+
+### Solución (4 fixes en un commit)
+- **Fix B1**: `else` clause para `if _fresh_gr` — cuando bulk GR retorna falsy sin excepción, usa stale + incrementa `consecutive_failures`
+- **Fix B2**: mismo `else` para bulk ALL (`_fresh_all` falsy → stale de `_bm_bulk_all_cache`)
+- **Fix B3**: `if not _used_bulk:` — en lugar de solo loggear, itera `to_fetch` y sirve `_bm_stock_cache` per-SKU aunque esté expirado (último recurso)
+- **Fix B4**: `_apply_bm_stock` variaciones — flag `_any_inv_found`; solo asigna `p["_bm_avail"]` al padre cuando al menos una variación tuvo dato BM real (previene falsos positivos de oversell cuando bm_map está vacío)
+
+Archivos: `app/main.py`
+
+---
+
 ## 2026-04-21 — FIX: Planeación mostraba listings con SKU como "sin SKU" (commit 8b3bd42)
 
 ### Problema
