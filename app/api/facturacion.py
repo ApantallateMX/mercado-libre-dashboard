@@ -72,6 +72,11 @@ FISCAL_REGIMES = [
     ("626", "626 — Régimen Simplificado de Confianza (RESICO)"),
 ]
 
+METODOS_PAGO = [
+    ("PUE", "PUE — Pago en una sola exhibición"),
+    ("PPD", "PPD — Pago en parcialidades o diferido"),
+]
+
 FORMAS_PAGO = [
     ("01", "01 — Efectivo"),
     ("02", "02 — Cheque nominativo"),
@@ -260,6 +265,7 @@ async def get_catalogs():
         "cfdi_uses": CFDI_USES,
         "fiscal_regimes": FISCAL_REGIMES,
         "formas_pago": FORMAS_PAGO,
+        "metodos_pago": METODOS_PAGO,
     }
 
 

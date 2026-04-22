@@ -1294,7 +1294,7 @@ async def factura_cliente_page(request: Request, token: str):
     req = await token_store.get_billing_request_by_token(token)
     if not req:
         return HTMLResponse("<h2 style='font-family:sans-serif;padding:2rem'>Enlace no válido o expirado.</h2>", status_code=404)
-    from app.api.facturacion import CFDI_USES, FISCAL_REGIMES, FORMAS_PAGO
+    from app.api.facturacion import CFDI_USES, FISCAL_REGIMES, FORMAS_PAGO, METODOS_PAGO
     fiscal = await token_store.get_billing_fiscal_data(req["id"])
     _inv = await token_store.get_billing_invoice(req["id"])
     has_invoice = bool(_inv and _inv.get("pdf_data"))
@@ -1307,6 +1307,7 @@ async def factura_cliente_page(request: Request, token: str):
         "cfdi_uses": CFDI_USES,
         "fiscal_regimes": FISCAL_REGIMES,
         "formas_pago": FORMAS_PAGO,
+        "metodos_pago": METODOS_PAGO,
     })
 
 
@@ -1433,6 +1434,7 @@ async def factura_submit_datos(
     fiscal_regime: str = Form(""),
     zip_code: str = Form(""),
     forma_pago: str = Form(""),
+    metodo_pago: str = Form(""),
     email: str = Form(""),
     phone: str = Form(""),
     street: str = Form(""),
@@ -1462,6 +1464,7 @@ async def factura_submit_datos(
         fiscal_regime=fiscal_regime,
         zip_code=zip_code.strip(),
         forma_pago=forma_pago,
+        metodo_pago=metodo_pago,
         email=email.strip(),
         phone=phone.strip(),
         street=street.strip(),

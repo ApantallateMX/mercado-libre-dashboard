@@ -116,7 +116,7 @@
     <form id="fiscal-form" onsubmit="return false">
       <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
         <h2 class="font-bold text-gray-800">Paso 2 — Datos de facturación</h2>
-        <p class="text-sm text-gray-500">Completa todos los campos requeridos. Asegúrate de que coincidan con tu <strong>Constancia de Situación Fiscal</strong>.</p>
+        <p class="text-sm text-gray-500">Completa todos los campos requeridos. Si tienes RFC registrado, asegúrate de que coincidan con tu <strong>Constancia de Situación Fiscal</strong>.</p>
 
         <!-- RFC + Razón Social -->
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -137,7 +137,7 @@
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Régimen Fiscal *</label>
-            <select name="fiscal_regime" id="f-regime"
+            <select name="fiscal_regime" id="f-regime" onchange="window._onRegimeChange(this.value)"
                     class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
               <option value="">Selecciona...</option>
               {% for code, label in fiscal_regimes %}
@@ -157,8 +157,8 @@
           </div>
         </div>
 
-        <!-- CP + Forma de Pago -->
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <!-- CP + Forma de Pago + Método de Pago -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
             <label class="block text-xs font-semibold text-gray-600 mb-1">Código Postal Fiscal *</label>
             <input name="zip_code" id="f-zip" type="text" maxlength="5" placeholder="01234"
@@ -170,6 +170,16 @@
                     class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
               <option value="">Selecciona...</option>
               {% for code, label in formas_pago %}
+              <option value="{{ code }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Método de Pago *</label>
+            <select name="metodo_pago" id="f-metodo"
+                    class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
+              <option value="">Selecciona...</option>
+              {% for code, label in metodos_pago %}
               <option value="{{ code }}">{{ label }}</option>
               {% endfor %}
             </select>
@@ -197,8 +207,8 @@
                  class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400">
         </div>
 
-        <!-- Constancia Fiscal -->
-        <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+        <!-- Constancia Fiscal (oculta para régimen 616) -->
+        <div id="constancia-block" class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
           <label class="block text-xs font-semibold text-gray-700 mb-1">
             Constancia de Situación Fiscal *
             <span class="font-normal text-gray-500 ml-1">(PDF o imagen, máx 5 MB)</span>
@@ -293,10 +303,41 @@ window._renderOrderSummary = function(summary) {
   }
 };
 
+// Auto-fill para régimen 616 — Sin obligaciones fiscales
+window._onRegimeChange = function(val) {
+  var is616 = (val === '616');
+  var rfcEl    = document.getElementById('f-rfc');
+  var razonEl  = document.getElementById('f-razon');
+  var cfdiEl   = document.getElementById('f-cfdi');
+  var constDiv = document.getElementById('constancia-block');
+
+  if (is616) {
+    rfcEl.value = 'XAXX010101000';
+    rfcEl.readOnly = true;
+    rfcEl.classList.add('bg-gray-100', 'text-gray-500');
+    razonEl.value = 'PÚBLICO EN GENERAL';
+    razonEl.readOnly = true;
+    razonEl.classList.add('bg-gray-100', 'text-gray-500');
+    cfdiEl.value = 'S01';
+    constDiv.classList.add('hidden');
+  } else {
+    if (rfcEl.value === 'XAXX010101000') rfcEl.value = '';
+    rfcEl.readOnly = false;
+    rfcEl.classList.remove('bg-gray-100', 'text-gray-500');
+    if (razonEl.value === 'PÚBLICO EN GENERAL') razonEl.value = '';
+    razonEl.readOnly = false;
+    razonEl.classList.remove('bg-gray-100', 'text-gray-500');
+    if (cfdiEl.value === 'S01') cfdiEl.value = '';
+    constDiv.classList.remove('hidden');
+  }
+};
+
 window._submitForm = function() {
   var btn = document.getElementById('btn-submit');
   var errEl = document.getElementById('form-error');
   errEl.classList.add('hidden');
+
+  var is616 = (document.getElementById('f-regime').value === '616');
 
   // Validaciones
   var required = [
@@ -306,6 +347,7 @@ window._submitForm = function() {
     ['f-cfdi', 'Uso de CFDI'],
     ['f-zip', 'Código Postal Fiscal'],
     ['f-pago', 'Forma de Pago'],
+    ['f-metodo', 'Método de Pago'],
     ['f-email', 'Correo electrónico'],
     ['f-phone', 'Número de teléfono'],
   ];
@@ -332,7 +374,7 @@ window._submitForm = function() {
   }
 
   var constanciaFile = document.getElementById('f-constancia');
-  if (!constanciaFile || !constanciaFile.files.length) {
+  if (!is616 && (!constanciaFile || !constanciaFile.files.length)) {
     errEl.textContent = 'La Constancia de Situación Fiscal es requerida.';
     errEl.classList.remove('hidden');
     return;
@@ -347,10 +389,13 @@ window._submitForm = function() {
   fd.append('cfdi_use',      document.getElementById('f-cfdi').value);
   fd.append('zip_code',      document.getElementById('f-zip').value.trim());
   fd.append('forma_pago',    document.getElementById('f-pago').value);
+  fd.append('metodo_pago',   document.getElementById('f-metodo').value);
   fd.append('email',         document.getElementById('f-email').value.trim());
   fd.append('phone',         document.getElementById('f-phone').value.trim());
   fd.append('street',        document.getElementById('f-street').value.trim());
-  fd.append('constancia',    constanciaFile.files[0]);
+  if (constanciaFile && constanciaFile.files.length) {
+    fd.append('constancia', constanciaFile.files[0]);
+  }
 
   fetch('/factura/' + _token + '/submit', { method: 'POST', body: fd })
     .then(function(r) { return r.json(); })

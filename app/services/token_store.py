@@ -544,6 +544,7 @@ async def init_db():
                 fiscal_regime    TEXT NOT NULL DEFAULT '',
                 zip_code         TEXT NOT NULL DEFAULT '',
                 forma_pago       TEXT NOT NULL DEFAULT '',
+                metodo_pago      TEXT NOT NULL DEFAULT '',
                 email            TEXT NOT NULL DEFAULT '',
                 phone            TEXT NOT NULL DEFAULT '',
                 street           TEXT NOT NULL DEFAULT '',
@@ -571,6 +572,11 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE billing_invoices ADD COLUMN xml_data BLOB")
+        except Exception:
+            pass
+        # Migration: add metodo_pago to billing_fiscal_data
+        try:
+            await db.execute("ALTER TABLE billing_fiscal_data ADD COLUMN metodo_pago TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
         await db.execute(
@@ -1977,25 +1983,27 @@ async def save_billing_fiscal_data(
     street: str,
     constancia_data: bytes = None,
     constancia_name: str = "",
+    metodo_pago: str = "",
 ) -> None:
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute(
             """INSERT INTO billing_fiscal_data
                (request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
-                forma_pago, email, phone, street, constancia_data, constancia_name, submitted_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                forma_pago, metodo_pago, email, phone, street, constancia_data, constancia_name, submitted_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(request_id) DO UPDATE SET
                  rfc=excluded.rfc, razon_social=excluded.razon_social,
                  cfdi_use=excluded.cfdi_use, fiscal_regime=excluded.fiscal_regime,
                  zip_code=excluded.zip_code, forma_pago=excluded.forma_pago,
+                 metodo_pago=excluded.metodo_pago,
                  email=excluded.email, phone=excluded.phone, street=excluded.street,
                  constancia_data=excluded.constancia_data,
                  constancia_name=excluded.constancia_name,
                  submitted_at=excluded.submitted_at""",
             (
                 request_id, rfc, razon_social, cfdi_use, fiscal_regime, zip_code,
-                forma_pago, email, phone, street, constancia_data, constancia_name, now,
+                forma_pago, metodo_pago, email, phone, street, constancia_data, constancia_name, now,
             ),
         )
         await db.commit()
