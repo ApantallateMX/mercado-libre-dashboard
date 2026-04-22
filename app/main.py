@@ -3251,6 +3251,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bm_health["consecutive_failures"] = 0
                     _bulk_gr_rows = _fresh_gr
                     logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas")
+                else:
+                    # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
+                    # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
+                    logger.warning("[BM-CACHE] GR bulk fetch devolvió vacío — fallback a stale cache")
+                    if _bm_bulk_gr_cache:
+                        _bulk_gr_rows = _bm_bulk_gr_cache[1]
+                        logger.warning(f"[BM-CACHE] GR usando stale ({len(_bulk_gr_rows)} rows) tras bulk vacío")
+                    _bm_health["consecutive_failures"] = _bm_health.get("consecutive_failures", 0) + 1
             except Exception as _bulk_err:
                 logger.warning(f"[BM-CACHE] GR bulk fetch error: {_bulk_err} — usando stale")
                 # Si falla el fetch, intentar usar cache aunque sea antiguo
@@ -3277,6 +3285,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         _bm_bulk_all_cache = (_time.time(), _fresh_all)
                         _bulk_all_rows = _fresh_all
                         logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
+                    else:
+                        # Fix B2: mismo caso que GR — bulk vacío sin excepción → stale fallback
+                        logger.warning("[BM-CACHE] ALL bulk fetch devolvió vacío — fallback a stale cache")
+                        if _bm_bulk_all_cache:
+                            _bulk_all_rows = _bm_bulk_all_cache[1]
                 except Exception as _bulk_err:
                     logger.warning(f"[BM-CACHE] ALL bulk fetch error: {_bulk_err} — usando stale")
                     if _bm_bulk_all_cache:
@@ -3387,9 +3400,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             _used_bulk = True
 
         if not _used_bulk:
-            # Bulk falló — NO hacer fallback per-SKU (evita bloquear DB de BM con N queries paralelas).
-            # El caché stale es suficiente hasta el siguiente ciclo de auto-prewarm (2-10 min).
-            logger.warning(f"[BM-CACHE] Bulk falló — usando caché stale para {len(to_fetch)} SKUs. Retry en próximo ciclo.")
+            # Fix B3: último recurso — servir desde _bm_stock_cache per-SKU aunque esté expirado.
+            # Cuando ambos bulk fallan (stale también ausente), mejor datos viejos que result_map vacío.
+            # result_map vacío → _apply_bm_stock no puede set _bm_avail → KPIs todos en 0.
+            logger.warning(f"[BM-CACHE] Bulk falló — sirviendo _bm_stock_cache stale per-SKU para {len(to_fetch)} SKUs. Retry en próximo ciclo.")
+            for _fsku in to_fetch:
+                _fbase = normalize_to_bm_sku(_fsku)
+                _stale_cached = _bm_stock_cache.get(_fbase)
+                if _stale_cached:
+                    result_map[_fsku] = _stale_cached[1]
     else:
         # Lote pequeño (≤30 SKUs): per-SKU directo sigue siendo eficiente
         await asyncio.gather(*[_wh_phase(s) for s in to_fetch], return_exceptions=True)
@@ -3487,6 +3506,7 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 _bm_key_vars[_bk].append(v)
 
             tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
+            _any_inv_found = False  # Fix B4: rastrear si al menos una variación tuvo dato BM real
             for _bk, _vars in _bm_key_vars.items():
                 # Look up BM data: try each variation's raw SKU until we find a match
                 inv = None
@@ -3496,6 +3516,7 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                         if inv:
                             break
                 if inv:
+                    _any_inv_found = True
                     _n = len(_vars)
                     _pool = inv.get("avail_total", 0)
                     _quot, _rem = divmod(_pool, _n)
@@ -3515,7 +3536,11 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                         v["_bm_avail"] = 0
                         v["_bm_reserved"] = 0
 
-            if any_var_sku:
+            # Fix B4: solo asignar _bm_avail al padre si al menos una variación tuvo dato BM real.
+            # Sin esta guarda, _apply_bm_stock asigna _bm_avail=0 cuando bm_map está vacío (bulk falló),
+            # lo cual hace que el filtro oversell_risk (que usa `"_bm_avail" in p` como guarda) genere
+            # falsos positivos — productos con available_quantity>0 aparecen como riesgo de sobreventa.
+            if any_var_sku and _any_inv_found:
                 p["_bm_mty"] = tot_mty
                 p["_bm_cdmx"] = tot_cdmx
                 p["_bm_tj"] = tot_tj
