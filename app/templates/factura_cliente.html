@@ -319,6 +319,8 @@ window._onRegimeChange = function(val) {
     razonEl.readOnly = true;
     razonEl.classList.add('bg-gray-100', 'text-gray-500');
     cfdiEl.value = 'S01';
+    cfdiEl.disabled = true;
+    cfdiEl.classList.add('bg-gray-100', 'text-gray-500');
     constDiv.classList.add('hidden');
   } else {
     if (rfcEl.value === 'XAXX010101000') rfcEl.value = '';
@@ -328,6 +330,8 @@ window._onRegimeChange = function(val) {
     razonEl.readOnly = false;
     razonEl.classList.remove('bg-gray-100', 'text-gray-500');
     if (cfdiEl.value === 'S01') cfdiEl.value = '';
+    cfdiEl.disabled = false;
+    cfdiEl.classList.remove('bg-gray-100', 'text-gray-500');
     constDiv.classList.remove('hidden');
   }
 };
