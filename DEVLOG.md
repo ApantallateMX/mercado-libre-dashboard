@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-22 — FIX: Concentración no actualizaba DB ni cache en cuentas perdedoras (commit 0526b68)
+
+### Problema
+Después de ejecutar "Concentrar", ML API recibía qty=0 para los losers y el nuevo stock para el winner correctamente. Pero otros usuarios seguían viendo los losers con inventario activo en Stock Crítico porque `ml_listings` DB y `_stock_issues_cache` no se actualizaban.
+
+### Causa raíz
+`execute_concentration` retornaba el resultado directamente sin post-processing. `stock_concentration_execute_api` tampoco hacía nada después de recibir el resultado — no limpiaba cache, no actualizaba DB, no registraba en `_synced_alert_items`.
+
+### Solución
+En `stock_concentration_execute_api`, después de `execute_concentration` exitoso y `dry_run=False`:
+1. `update_ml_listing_qty(loser_item_id, 0)` para cada loser OK
+2. `update_ml_listing_qty(winner_item_id, total_stock)` para el winner
+3. `_stock_issues_cache.clear()` — invalida para todos los usuarios
+4. `_synced_alert_items[item_id] = timestamp` para winner + losers (excluye 10 min)
+
+Archivos: `app/main.py`
+
+---
+
 ## 2026-04-22 — FIX: Items sincronizados siguen visibles para otros usuarios (commit 9807cff)
 
 ### Problema
