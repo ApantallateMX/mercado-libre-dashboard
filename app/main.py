@@ -7512,17 +7512,31 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
 
         # 2. Pre-construir mapas desde caché BM (evita HTTP calls por variación)
         import re as _re_var
-        _bulk_avail_map: dict = {}   # base_sku -> AvailableQTY (desde bulk cache)
-        _wh_cache_map: dict = {}     # base_sku -> {mty, cdmx, total} (desde per-SKU cache)
-        _var_bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
-        if _var_bulk and (_time.time() - _var_bulk[0]) < _BM_CACHE_TTL:
-            for _br in _var_bulk[1]:
-                _bsk = (_br.get("SKU") or "").upper().strip()
-                if not _bsk:
-                    continue
-                _bb = _extract_base_sku(_bsk)
-                if _bb not in _bulk_avail_map:
-                    _bulk_avail_map[_bb] = int(_br.get("AvailableQTY") or 0)
+        # Fix 2: mapas separados por condición — GR (no-SNTV) y ALL (SNTV con ICB/ICC).
+        # Antes: _var_bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache → siempre GR aunque
+        # el SKU sea SNTV, causando cache miss → HTTP fallback con conditions incorrectas.
+        _bulk_avail_map_gr:  dict = {}   # base_sku -> AvailableQTY (GR bulk)
+        _bulk_avail_map_all: dict = {}   # base_sku -> AvailableQTY (ALL bulk, ICB/ICC)
+        _bulk_avail_map: dict = {}       # legacy alias — apunta a GR; se usa solo si ALL no aplica
+        _wh_cache_map: dict = {}         # base_sku -> {mty, cdmx, total} (desde per-SKU cache)
+
+        def _build_bulk_map(bulk_tuple):
+            m: dict = {}
+            if bulk_tuple and (_time.time() - bulk_tuple[0]) < _BM_CACHE_TTL:
+                for _br in bulk_tuple[1]:
+                    _bsk = (_br.get("SKU") or "").upper().strip()
+                    if not _bsk:
+                        continue
+                    _bb = _extract_base_sku(_bsk)
+                    if _bb not in m:
+                        m[_bb] = int(_br.get("AvailableQTY") or 0)
+            return m
+
+        if _bm_bulk_gr_cache:
+            _bulk_avail_map_gr = _build_bulk_map(_bm_bulk_gr_cache)
+        if _bm_bulk_all_cache:
+            _bulk_avail_map_all = _build_bulk_map(_bm_bulk_all_cache)
+        _bulk_avail_map = _bulk_avail_map_gr  # legacy alias para código existente
         for _bkey, (_bts, _bcdata) in list(_bm_stock_cache.items()):
             if (_time.time() - _bts) < _BM_CACHE_TTL:
                 _wh_cache_map[_bkey.upper()] = {
@@ -7573,12 +7587,17 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             primary_base = _extract_base_sku(primary_sku).upper()
 
             # --- Intentar resolver desde caché (sin HTTP) ---
+            # Fix 2: usar bulk map correcto según condiciones del SKU.
+            # SNTV→ _bulk_avail_map_all (incluye ICB/ICC); resto → _bulk_avail_map_gr.
+            _conds_v = _bm_conditions_for_sku(v_sku)
+            _BM_COND_ALL_V = "GRA,GRB,GRC,ICB,ICC,NEW"
+            _active_bulk_map = _bulk_avail_map_all if _conds_v == _BM_COND_ALL_V else _bulk_avail_map_gr
             avails_from_cache = []
             all_in_cache = True
             for sp in sku_parts:
                 sp_base = _extract_base_sku(sp).upper()
-                if sp_base in _bulk_avail_map:
-                    avails_from_cache.append(_bulk_avail_map[sp_base])
+                if sp_base in _active_bulk_map:
+                    avails_from_cache.append(_active_bulk_map[sp_base])
                 else:
                     all_in_cache = False
                     break
@@ -7593,11 +7612,13 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 return result
 
             # --- Fallback: HTTP a BM (si caché vacío o no encontrado) ---
-            async def _query_bm_avail(sku: str) -> int:
+            # Fix 1: pasar conditions por SKU — sin esto, SKUs SNTV con stock ICB/ICC
+            # reciben conditions=GRA,GRB,GRC,NEW y BM devuelve 0 (no encuentra GR stock).
+            async def _query_bm_avail(sku: str, conds: str = "GRA,GRB,GRC,NEW") -> int:
                 from app.services.binmanager_client import get_shared_bm
                 try:
                     bm = await get_shared_bm()
-                    return await bm.get_available_qty(sku)
+                    return await bm.get_available_qty(sku, conditions=conds)
                 except Exception:
                     return -1
 
@@ -7605,7 +7626,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 # Usar el SKU completo de la variación para determinar condiciones
                 # (ej: "SNTV003807 / SNWM000001" → ALL, no solo primary_sku → GR)
                 conditions_primary = _bm_conditions_for_sku(v_sku)
-                avail_tasks = [_query_bm_avail(s) for s in sku_parts]
+                avail_tasks = [_query_bm_avail(s, conds=conditions_primary) for s in sku_parts]
                 r_wh, *avail_results = await asyncio.gather(
                     http.post(BM_WH_URL, json={
                         "COMPANYID": 1, "SKU": primary_sku, "WarehouseID": None,
@@ -7631,10 +7652,15 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     result["bm_cdmx"] = cdmx
                     result["bm_total"] = mty + cdmx
                 valid_avails = [a for a in avail_results if isinstance(a, int) and a >= 0]
-                if valid_avails:
-                    result["bm_avail"] = min(valid_avails)
-                elif any(isinstance(a, int) and a == -1 for a in avail_results):
+                # Fix 3: si algún componente del bundle falló (-1), no podemos saber
+                # su stock real. Usar 0 (seguro) en lugar de min(válidos) que ignoraría
+                # el componente fallido y daría stock incorrecto al bundle.
+                _has_errors = any(isinstance(a, int) and a == -1 for a in avail_results)
+                if _has_errors:
+                    result["bm_avail"] = 0
                     result["error"] = "BM no respondió para uno de los componentes"
+                elif valid_avails:
+                    result["bm_avail"] = min(valid_avails)
             except Exception as ex:
                 result["error"] = f"BM error: {ex}"
             return result
