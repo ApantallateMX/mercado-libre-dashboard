@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-22 — FIX: Items sincronizados siguen visibles para otros usuarios (commit 9807cff)
+
+### Problema
+Cuando Usuario A hacía Sync en Reabastecer, el item desaparecía para A pero Usuario B seguía viéndolo como pendiente hasta el siguiente ciclo de prewarm (~30 min). Mismo problema en Activar, Crítico, Oversell y Stock Alerts.
+
+### Causa raíz
+`_synced_alert_items` era un `set` sin TTL. Solo filtraba `stock_alerts` — las otras 4 listas (restock, activate, critical, oversell_risk, full_no_stock) no lo consultaban. Además, al ser un set sin expiración, los items sincronizados quedaban excluidos permanentemente hasta reinicio del servidor.
+
+### Solución
+- `_synced_alert_items`: `set` → `dict[item_id, timestamp]` con TTL de 10 min
+- Filtro `_synced_ids` aplicado a las 5 listas en `_do_prewarm`
+- Limpieza automática de entradas expiradas en cada ciclo
+- `stock_alerts` actualizado para respetar el TTL
+
+Resultado: item desaparece para **todos** los usuarios inmediatamente tras el sync. Reaparece automáticamente en 10 min si no fue actualizado en ML (safety net).
+
+Archivos: `app/main.py`
+
+---
+
 ## 2026-04-22 — FIX: KPIs Stock tab todos en 0 por bulk BM retornando vacío sin excepción (commit a61088a)
 
 ### Problema
