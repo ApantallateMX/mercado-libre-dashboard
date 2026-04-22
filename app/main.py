@@ -8466,7 +8466,30 @@ async def stock_concentration_execute_api(request: Request):
             pass
 
     from app.services.stock_concentrator import execute_concentration
-    return await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
+    result = await execute_concentration(sku, winner_uid, total_stock, dry_run=dry_run, trigger=trigger)
+
+    # Post-execution: sincronizar DB local + cache para que todos los usuarios vean
+    # el estado correcto inmediatamente, sin esperar el qty-sync de 3 min.
+    if not dry_run and result.get("ok"):
+        from app.services.token_store import update_ml_listing_qty as _upd_qty
+        _conc_tasks = []
+
+        # 1. Actualizar ml_listings para losers (qty → 0)
+        for _loser in result.get("losers", []):
+            if _loser.get("ok") and _loser.get("item_id"):
+                _conc_tasks.append(asyncio.create_task(_upd_qty(_loser["item_id"], 0)))
+                _synced_alert_items[_loser["item_id"]] = _time.time()
+
+        # 2. Actualizar ml_listings para winner (qty → total_stock)
+        _winner = result.get("winner") or {}
+        if _winner.get("ok") and _winner.get("item_id"):
+            _conc_tasks.append(asyncio.create_task(_upd_qty(_winner["item_id"], total_stock)))
+            _synced_alert_items[_winner["item_id"]] = _time.time()
+
+        # 3. Limpiar cache de stock issues para todos los usuarios
+        _stock_issues_cache.clear()
+
+    return result
 
 
 @app.post("/api/stock/concentration/scan")
