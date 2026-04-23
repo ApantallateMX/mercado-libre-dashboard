@@ -387,13 +387,18 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio_lifespan
     from app.services.amazon_client import _seed_amazon_accounts
 
+    _BM_DISABLED = os.getenv("DISABLE_BM_MONITOR", "").lower() in ("1", "true", "yes")
+    if _BM_DISABLED:
+        logger.info("[BM] DISABLE_BM_MONITOR=true — polling BM deshabilitado en este ambiente")
+
     async def _deferred_init():
         """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
         # 1. Refrescar tokens ML + Amazon
         await _seed_tokens()
         await _seed_amazon_accounts()
-        # 2. Monitor de precios BM
-        await price_monitor.start()
+        # 2. Monitor de precios BM (skip si DISABLE_BM_MONITOR=true)
+        if not _BM_DISABLED:
+            await price_monitor.start()
         # 3. Cargar cachés desde DB
         await _load_bm_cache_from_db()
         await _load_stock_issues_from_db()
@@ -467,9 +472,11 @@ async def lifespan(app: FastAPI):
             # Retry rápido en fallo (2 min); ciclo normal 20 min
             _sleep = 120 if _auto_fail_streak > 0 else 1200
             await asyncio.sleep(_sleep)
-    asyncio.create_task(_startup_prewarm())
+    if not _BM_DISABLED:
+        asyncio.create_task(_startup_prewarm())
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
-    asyncio.create_task(_bm_health_loop())
+    if not _BM_DISABLED:
+        asyncio.create_task(_bm_health_loop())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
