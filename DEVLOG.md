@@ -7,6 +7,77 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-22 — FEAT: Facturación — régimen 616 auto-fill + campo Método de Pago
+
+### Cambio
+Dos mejoras en `/facturacion`:
+
+**1. Régimen 616 auto-fill**
+Al seleccionar régimen fiscal 616 (Sin obligaciones fiscales):
+- RFC se llena automáticamente con `XAXX010101000` y queda `readOnly`
+- Razón Social se llena con `PÚBLICO EN GENERAL` y queda `readOnly`
+- CFDI se fuerza a `S01` (Sin efectos fiscales) y queda `disabled`
+- Bloque de constancia fiscal se oculta (`hidden`) — no es obligatoria para régimen 616
+Al cambiar a otro régimen, todos los campos se restauran y constancia vuelve a ser requerida.
+
+**2. Campo Método de Pago**
+Nuevo campo `metodo_pago` (PUE/PPD) en el formulario, en grid de 3 columnas junto a CP y Forma de Pago.
+- PUE = Pago en una sola exhibición
+- PPD = Pago en parcialidades o diferido
+
+### Archivos
+- `app/templates/factura_cliente.html` — JS `_onRegimeChange()`, select Método de Pago, validación
+- `app/api/facturacion.py` — `METODOS_PAGO` constant, expuesto en `/catalogs`
+- `app/services/token_store.py` — nueva columna `metodo_pago` en `billing_fiscal_data` + migration
+
+---
+
+## 2026-04-22 — FIX: BM conditions ICB/ICC solo para SNTV* (no fans, snacks, otros)
+
+### Problema
+`_bm_conditions_for_sku()` aplicaba `GRA,GRB,GRC,ICB,ICC,NEW` a todos los SKUs (regla genérica). Las condiciones ICB e ICC son específicas para TVs Samsung/Hisense que se venden como open-box. Otros productos (fans, snacks, etc.) no tienen ICB/ICC en BM y el fetch devolvía 0.
+
+### Solución
+- SKUs `SNTV*` → `GRA,GRB,GRC,ICB,ICC,NEW`
+- Todos los demás → `GRA,GRB,GRC,NEW`
+
+Archivos: `app/main.py`, `.claude/agents/binmanager-specialist.md`
+
+---
+
+## 2026-04-22 — OPERACION: Migración Coolify — exit 137 + health check + tokens ML
+
+### Contexto
+Se levantó segundo ambiente en Coolify (`ecomops.mi2.com.mx`) como ambiente de pruebas. Railway sigue siendo el principal para todo el equipo.
+
+### Problema 1: exit 137 al iniciar (Coolify mataba el contenedor)
+`lifespan()` hacía decenas de llamadas HTTP (seed tokens, Amazon, BM cache, price recalc) antes del `yield`. Coolify tenía un timeout de startup y mandaba SIGKILL antes de que uvicorn emitiera "Application startup complete".
+
+**Fix**: `yield` inmediato (<2s). Todo el trabajo pesado movido a `asyncio.create_task(_deferred_init())` que corre en background después de que el servidor ya está sirviendo.
+
+```python
+asyncio.create_task(_deferred_init())  # non-blocking
+# periodic loops (non-blocking)...
+yield  # uvicorn ready en <2s
+```
+
+### Problema 2: health check 404
+AuthMiddleware interceptaba `/health` y devolvía redirect al login. Coolify marcaba el servicio como unhealthy.
+
+**Fix**: nuevo endpoint `/api/ping` agregado a `_AUTH_EXEMPT`, siempre retorna `{"ok": True}`. Amir configuró Coolify para usar `/api/ping`.
+
+### Problema 3: "Sesion no disponible" — tokens ML expirados
+Los tokens en la DB de Coolify eran copia de Railway y expiraron (ML rota refresh tokens en cada uso). `_seed_tokens()` no refrescaba cuentas ya existentes.
+
+**Fix**: `_seed_tokens()` detecta tokens expirados via `token_store.is_token_expired()` y los refresca con el RT disponible (env var tiene prioridad sobre DB).
+
+### Resultado
+Dashboard operativo en `ecomops.mi2.com.mx`. Cuentas conectadas via `/auth/connect`.
+
+Archivos: `app/main.py`
+
+---
+
 ## 2026-04-22 — FIX: Sync variaciones usaba conditions incorrectas y bulk cache equivocado (commit 5407251)
 
 ### Problema
