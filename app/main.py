@@ -12027,6 +12027,31 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
     return JSONResponse({"ok": True, "imported": imported})
 
 
+@app.get("/api/diag/amazon-accounts")
+async def diag_amazon_accounts(token: str = ""):  # noqa
+    """Muestra las cuentas Amazon en DB (para diagnóstico — client_id y token parciales)."""
+    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite
+    results = []
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT seller_id, nickname, client_id, refresh_token FROM amazon_accounts")
+        rows = await cur.fetchall()
+        for r in rows:
+            rt = r["refresh_token"] or ""
+            cid = r["client_id"] or ""
+            results.append({
+                "seller_id": r["seller_id"],
+                "nickname": r["nickname"],
+                "client_id_prefix": cid[:50],
+                "refresh_token_prefix": rt[:30],
+                "refresh_token_len": len(rt),
+            })
+    return JSONResponse({"accounts": results})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
