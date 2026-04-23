@@ -331,11 +331,15 @@ async def amazon_connect():
     # SP-API región NA — la autorización va por sellercentral.amazon.com (US/NA)
     # aunque el marketplace sea MX. Usar .com.mx causa error MD9100.
     # version=beta requerido para apps en estado Draft.
+    # redirect_uri explícito: Amazon elige el primero registrado si no se especifica,
+    # lo que causa que Coolify redirija a Railway. Pasarlo fuerza el callback correcto.
+    from urllib.parse import quote as _quote
     auth_url = (
         f"https://sellercentral.amazon.com/apps/authorize/consent"
         f"?application_id={AMAZON_APP_SOLUTION_ID}"
         f"&state={state}"
         f"&version=beta"
+        f"&redirect_uri={_quote(AMAZON_REDIRECT_URI, safe='')}"
     )
 
     logger.info(f"[Amazon OAuth] Iniciando autorización → {auth_url[:80]}...")
