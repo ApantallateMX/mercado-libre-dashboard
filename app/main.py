@@ -11944,6 +11944,87 @@ async def bm_launch_opportunities(
     })
 
 
+# ── Config export/import (migración entre ambientes) ─────────────────────────
+
+@app.get("/api/diag/export-config")
+async def diag_export_config(token: str = ""):
+    """Exporta configuración migrable: metas y datos fiscales.
+    Usar para copiar Railway → Coolify (o viceversa).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    async with aiosqlite.connect(token_store.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Metas diarias (ML y Amazon)
+        async with db.execute("SELECT user_id, daily_goal FROM account_settings") as cur:
+            goals = [dict(r) for r in await cur.fetchall()]
+
+        # Datos fiscales
+        async with db.execute(
+            "SELECT user_id, rfc, razon_social, regimen_fiscal, uso_cfdi, "
+            "calle, num_ext, num_int, colonia, cp, ciudad, estado, pais, "
+            "forma_pago, metodo_pago FROM billing_fiscal_data"
+        ) as cur:
+            fiscal = [dict(r) for r in await cur.fetchall()]
+
+    return JSONResponse({
+        "account_settings": goals,
+        "billing_fiscal_data": fiscal,
+        "exported_at": str(__import__("datetime").datetime.utcnow()),
+    })
+
+
+@app.post("/api/diag/import-config")
+async def diag_import_config(request: Request, token: str = ""):
+    """Importa configuración exportada desde otro ambiente.
+    Body: JSON retornado por /api/diag/export-config
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    data = await request.json()
+    goals  = data.get("account_settings", [])
+    fiscal = data.get("billing_fiscal_data", [])
+    imported = {"goals": 0, "fiscal": 0}
+
+    async with aiosqlite.connect(token_store.DB_PATH) as db:
+        for row in goals:
+            await db.execute(
+                "INSERT INTO account_settings (user_id, daily_goal, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET daily_goal=excluded.daily_goal, updated_at=excluded.updated_at",
+                (row["user_id"], row["daily_goal"], __import__("time").time())
+            )
+            imported["goals"] += 1
+
+        for row in fiscal:
+            await db.execute(
+                """INSERT INTO billing_fiscal_data
+                   (user_id, rfc, razon_social, regimen_fiscal, uso_cfdi,
+                    calle, num_ext, num_int, colonia, cp, ciudad, estado, pais,
+                    forma_pago, metodo_pago)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET
+                     rfc=excluded.rfc, razon_social=excluded.razon_social,
+                     regimen_fiscal=excluded.regimen_fiscal, uso_cfdi=excluded.uso_cfdi,
+                     calle=excluded.calle, num_ext=excluded.num_ext, num_int=excluded.num_int,
+                     colonia=excluded.colonia, cp=excluded.cp, ciudad=excluded.ciudad,
+                     estado=excluded.estado, pais=excluded.pais,
+                     forma_pago=excluded.forma_pago, metodo_pago=excluded.metodo_pago""",
+                (row.get("user_id"), row.get("rfc"), row.get("razon_social"),
+                 row.get("regimen_fiscal"), row.get("uso_cfdi"), row.get("calle"),
+                 row.get("num_ext"), row.get("num_int"), row.get("colonia"),
+                 row.get("cp"), row.get("ciudad"), row.get("estado"), row.get("pais"),
+                 row.get("forma_pago"), row.get("metodo_pago",""))
+            )
+            imported["fiscal"] += 1
+
+        await db.commit()
+
+    return JSONResponse({"ok": True, "imported": imported})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
