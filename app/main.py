@@ -341,9 +341,11 @@ async def _seed_tokens():
             # (más actualizado que el del archivo de env)
             is_expired = await token_store.is_token_expired(uid)
             if is_expired:
-                db_rt = existing.get("refresh_token") or rt
-                print(f"[SEED] Token expirado para {label} — refrescando...")
-                await _seed_one(uid, db_rt, label)
+                # Preferir RT del archivo/env (más fresco en deployments nuevos como Coolify)
+                # Solo cae al RT del DB si el archivo no trae uno para esta cuenta
+                refresh_rt = rt or existing.get("refresh_token")
+                print(f"[SEED] Token expirado para {label} — refrescando con RT {'env' if rt else 'db'}...")
+                await _seed_one(uid, refresh_rt, label)
             elif not existing.get("nickname"):
                 # Cuenta existente sin nickname — rellenar desde MeLi API
                 await _backfill_nickname(uid, existing.get("access_token", ""))
