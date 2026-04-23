@@ -474,6 +474,31 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
+    else:
+        # Modo backup: sync BM una vez al día a las 2am México (8am UTC)
+        async def _daily_bm_sync():
+            from datetime import datetime as _dt, timezone as _tz
+            while True:
+                _now = _dt.now(_tz.utc)
+                # Próximas 8:00 UTC (= 2am México CST)
+                _next = _now.replace(hour=8, minute=0, second=0, microsecond=0)
+                if _next <= _now:
+                    _next = _next.replace(day=_now.day + 1)
+                _secs = (_next - _now).total_seconds()
+                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (2am México)")
+                await asyncio.sleep(_secs)
+                logger.info("[BM-BACKUP] Iniciando sync diario BM...")
+                try:
+                    accounts = await token_store.get_all_tokens()
+                    for acc in accounts:
+                        uid = acc.get("user_id", "")
+                        if uid:
+                            await _prewarm_caches(user_id=uid)
+                            await asyncio.sleep(2)
+                    logger.info("[BM-BACKUP] Sync diario BM completado")
+                except Exception as _e:
+                    logger.warning(f"[BM-BACKUP] Error en sync diario: {_e}")
+        asyncio.create_task(_daily_bm_sync())
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
