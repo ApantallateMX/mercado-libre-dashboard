@@ -11964,9 +11964,9 @@ async def diag_export_config(token: str = ""):  # noqa
 
         # Datos fiscales
         async with db.execute(
-            "SELECT user_id, rfc, razon_social, regimen_fiscal, uso_cfdi, "
-            "calle, num_ext, num_int, colonia, cp, ciudad, estado, pais, "
-            "forma_pago, metodo_pago FROM billing_fiscal_data"
+            "SELECT id, request_id, rfc, razon_social, cfdi_use, fiscal_regime, "
+            "zip_code, forma_pago, metodo_pago, email, phone, street, "
+            "constancia_name, submitted_at FROM billing_fiscal_data"
         ) as cur:
             fiscal = [dict(r) for r in await cur.fetchall()]
 
@@ -12003,22 +12003,22 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
         for row in fiscal:
             await db.execute(
                 """INSERT INTO billing_fiscal_data
-                   (user_id, rfc, razon_social, regimen_fiscal, uso_cfdi,
-                    calle, num_ext, num_int, colonia, cp, ciudad, estado, pais,
-                    forma_pago, metodo_pago)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(user_id) DO UPDATE SET
+                   (request_id, rfc, razon_social, cfdi_use, fiscal_regime,
+                    zip_code, forma_pago, metodo_pago, email, phone, street,
+                    constancia_name, submitted_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(request_id) DO UPDATE SET
                      rfc=excluded.rfc, razon_social=excluded.razon_social,
-                     regimen_fiscal=excluded.regimen_fiscal, uso_cfdi=excluded.uso_cfdi,
-                     calle=excluded.calle, num_ext=excluded.num_ext, num_int=excluded.num_int,
-                     colonia=excluded.colonia, cp=excluded.cp, ciudad=excluded.ciudad,
-                     estado=excluded.estado, pais=excluded.pais,
-                     forma_pago=excluded.forma_pago, metodo_pago=excluded.metodo_pago""",
-                (row.get("user_id"), row.get("rfc"), row.get("razon_social"),
-                 row.get("regimen_fiscal"), row.get("uso_cfdi"), row.get("calle"),
-                 row.get("num_ext"), row.get("num_int"), row.get("colonia"),
-                 row.get("cp"), row.get("ciudad"), row.get("estado"), row.get("pais"),
-                 row.get("forma_pago"), row.get("metodo_pago",""))
+                     cfdi_use=excluded.cfdi_use, fiscal_regime=excluded.fiscal_regime,
+                     zip_code=excluded.zip_code, forma_pago=excluded.forma_pago,
+                     metodo_pago=excluded.metodo_pago, email=excluded.email,
+                     phone=excluded.phone, street=excluded.street,
+                     constancia_name=excluded.constancia_name""",
+                (row.get("request_id"), row.get("rfc"), row.get("razon_social"),
+                 row.get("cfdi_use"), row.get("fiscal_regime"), row.get("zip_code"),
+                 row.get("forma_pago"), row.get("metodo_pago",""), row.get("email"),
+                 row.get("phone"), row.get("street"), row.get("constancia_name"),
+                 row.get("submitted_at",""))
             )
             imported["fiscal"] += 1
 
