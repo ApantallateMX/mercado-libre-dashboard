@@ -11970,9 +11970,17 @@ async def diag_export_config(token: str = ""):  # noqa
         ) as cur:
             fiscal = [dict(r) for r in await cur.fetchall()]
 
+        # Solicitudes de factura
+        async with db.execute(
+            "SELECT id, token, ml_user_id, platform, order_number, client_ref, "
+            "status, order_data, created_by, created_at, notes FROM billing_requests"
+        ) as cur:
+            requests = [dict(r) for r in await cur.fetchall()]
+
     return JSONResponse({
         "account_settings": goals,
         "billing_fiscal_data": fiscal,
+        "billing_requests": requests,
         "exported_at": str(__import__("datetime").datetime.utcnow()),
     })
 
@@ -11987,9 +11995,10 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
     data = await request.json()
-    goals  = data.get("account_settings", [])
-    fiscal = data.get("billing_fiscal_data", [])
-    imported = {"goals": 0, "fiscal": 0}
+    goals    = data.get("account_settings", [])
+    fiscal   = data.get("billing_fiscal_data", [])
+    requests = data.get("billing_requests", [])
+    imported = {"goals": 0, "fiscal": 0, "requests": 0}
 
     async with aiosqlite.connect(DATABASE_PATH) as db:
         for row in goals:
@@ -11999,6 +12008,26 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
                 (row["user_id"], row["daily_goal"], __import__("time").time())
             )
             imported["goals"] += 1
+
+        for row in requests:
+            await db.execute(
+                """INSERT INTO billing_requests
+                   (id, token, ml_user_id, platform, order_number, client_ref,
+                    status, order_data, created_by, created_at, notes)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(token) DO UPDATE SET
+                     ml_user_id=excluded.ml_user_id, platform=excluded.platform,
+                     order_number=excluded.order_number, client_ref=excluded.client_ref,
+                     status=excluded.status, order_data=excluded.order_data,
+                     created_by=excluded.created_by, created_at=excluded.created_at,
+                     notes=excluded.notes""",
+                (row.get("id"), row.get("token"), row.get("ml_user_id",""),
+                 row.get("platform","mercadolibre"), row.get("order_number",""),
+                 row.get("client_ref",""), row.get("status","pending_data"),
+                 row.get("order_data","{}"), row.get("created_by",""),
+                 row.get("created_at",""), row.get("notes",""))
+            )
+            imported["requests"] += 1
 
         for row in fiscal:
             await db.execute(
