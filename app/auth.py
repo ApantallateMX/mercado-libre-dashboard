@@ -410,24 +410,24 @@ async def amazon_callback(
         effective_seller_id == (AMAZON2_SELLER_ID or _file_vars.get("AMAZON2_SELLER_ID", ""))
     )
 
+    # El token exchange SIEMPRE usa las credenciales de la app que inició el OAuth
+    # (VECKTOR app = AMAZON_CLIENT_ID/SECRET). El seller_id determina cómo se guarda.
+    _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
+    _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
+    _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
+
     if _is_acct2:
-        _client_id     = _file_vars.get("AMAZON2_CLIENT_ID")     or AMAZON2_CLIENT_ID
-        _client_secret = _file_vars.get("AMAZON2_CLIENT_SECRET") or AMAZON2_CLIENT_SECRET
-        _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")   or AMAZON_REDIRECT_URI
-        _nickname      = _file_vars.get("AMAZON2_NICKNAME")      or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
-        _mkt_id        = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
-        _mkt_name      = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
-        _app_sol_id    = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
-        _rt_env_key    = "AMAZON2_REFRESH_TOKEN"
+        _nickname   = _file_vars.get("AMAZON2_NICKNAME")      or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
+        _mkt_id     = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
+        _mkt_name   = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
+        _app_sol_id = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
+        _rt_env_key = "AMAZON2_REFRESH_TOKEN"
     else:
-        _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
-        _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
-        _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
-        _nickname      = _file_vars.get("AMAZON_NICKNAME")      or AMAZON_NICKNAME or "VECKTOR IMPORTS"
-        _mkt_id        = _file_vars.get("AMAZON_MARKETPLACE_ID")   or AMAZON_MARKETPLACE_ID
-        _mkt_name      = _file_vars.get("AMAZON_MARKETPLACE_NAME") or AMAZON_MARKETPLACE_NAME
-        _app_sol_id    = _file_vars.get("AMAZON_APP_SOLUTION_ID")  or AMAZON_APP_SOLUTION_ID
-        _rt_env_key    = "AMAZON_REFRESH_TOKEN"
+        _nickname   = _file_vars.get("AMAZON_NICKNAME")      or AMAZON_NICKNAME or "VECKTOR IMPORTS"
+        _mkt_id     = _file_vars.get("AMAZON_MARKETPLACE_ID")   or AMAZON_MARKETPLACE_ID
+        _mkt_name   = _file_vars.get("AMAZON_MARKETPLACE_NAME") or AMAZON_MARKETPLACE_NAME
+        _app_sol_id = _file_vars.get("AMAZON_APP_SOLUTION_ID")  or AMAZON_APP_SOLUTION_ID
+        _rt_env_key = "AMAZON_REFRESH_TOKEN"
 
     # ── Intercambiar código por tokens ──────────────────────────────────
     async with httpx.AsyncClient(timeout=15) as http:
