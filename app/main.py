@@ -377,33 +377,60 @@ async def lifespan(app: FastAPI):
     2. _seed_tokens()      → Siembra cuentas MeLi desde .env.production
     3. _seed_amazon_accounts() → Siembra cuentas Amazon desde .env.production
     """
+    # ── Esenciales síncronos — deben completar antes de aceptar requests ──────
     await token_store.init_db()
     await user_store.init_user_db()
-    # Seeding en background — no bloquea el startup (evita exit 137 por timeout en Coolify)
+
+    # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
+    # Así uvicorn emite "Application startup complete" en <2s y el contenedor
+    # no recibe SIGKILL por timeout (exit 137).
     import asyncio as _asyncio_lifespan
     from app.services.amazon_client import _seed_amazon_accounts
-    _asyncio_lifespan.create_task(_seed_tokens())
-    _asyncio_lifespan.create_task(_seed_amazon_accounts())
-    # Sync periódico de Onsite (cada 25 min en background)
+
+    async def _deferred_init():
+        """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
+        # 1. Refrescar tokens ML + Amazon
+        await _seed_tokens()
+        await _seed_amazon_accounts()
+        # 2. Monitor de precios BM
+        await price_monitor.start()
+        # 3. Cargar cachés desde DB
+        await _load_bm_cache_from_db()
+        await _load_stock_issues_from_db()
+        # 4. Recalcular precios sugeridos en bm_sku_gaps
+        try:
+            import aiosqlite as _aio_init
+            from app.config import DATABASE_PATH as _DB_INIT
+            updated = 0
+            async with _aio_init.connect(_DB_INIT) as _db:
+                _rows = await (await _db.execute(
+                    "SELECT rowid, retail_price_usd FROM bm_sku_gaps"
+                )).fetchall()
+                for _row in _rows:
+                    _rowid, _retail = _row[0], float(_row[1] or 0)
+                    _new_sug  = round(_retail * 18 * 1.20, 0) if _retail > 0 else 0
+                    _new_cost = round(_retail * 18, 0) if _retail > 0 else 0
+                    await _db.execute(
+                        "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=?, cost_usd=? WHERE rowid=?",
+                        (_new_sug, _new_cost, _retail, _rowid)
+                    )
+                    updated += 1
+                await _db.commit()
+            logger.info(f"Startup: recalculated prices for {updated} gap records")
+        except Exception as _e:
+            logger.warning(f"Startup price recalc failed: {_e}")
+
+    _asyncio_lifespan.create_task(_deferred_init())
+
+    # Loops periódicos (no bloquean — solo registran tareas de fondo)
     from app.api.amazon_products import start_onsite_background_sync
     start_onsite_background_sync()
-    # Sync periódico de stock MeLi vs BM (cada 4 horas) — alertas de sobreventa
     start_stock_sync()
-    # Sync multi-plataforma BM → ML + Amazon (cada 5 min) — distribuye stock óptimo
     from app.services.stock_sync_multi import start_multi_stock_sync
     start_multi_stock_sync()
-    # Auto-refresh de tokens MeLi cada 5 horas — evita expiración silenciosa
     start_token_refresh()
-    # Health checker automático (cada 10 min) — verifica que todo el sistema funcione
     from app.api.system_health import start_health_check_loop
     start_health_check_loop()
-    # Monitor de precios BinManager — detecta cambios en RetailPrice PH en vivo
-    await price_monitor.start()
-    # Cargar caché BM + stock_issues_cache desde DB de forma síncrona antes del prewarm.
-    # await garantiza que los datos estén en memoria antes de que arranque _startup_prewarm
-    # (que tiene 90s de delay, pero asyncio.create_task podría interleavearse de todas formas).
-    await _load_bm_cache_from_db()
-    await _load_stock_issues_from_db()
     # Pre-warm caches en background (90s delay — espera a que ml_listing_sync llene la DB primero)
     # Loop periódico: refresca cada 10 min para que el Stock tab nunca espere en frío.
     # Con la DB local de listings el prewarm tarda <10s en lugar de 130s+.
@@ -473,31 +500,6 @@ async def lifespan(app: FastAPI):
         logger.info("[SYNC-CB] products_cache invalidado post stock-sync")
 
     register_sync_complete_callback(_invalidate_caches_post_sync)
-    # Recalcular precios sugeridos en DB con fórmula actual (retail × 18 × 1.20)
-    from app.api.lanzar import router as _lanzar_router_ref
-    try:
-        import aiosqlite
-        from app.config import DATABASE_PATH
-        updated = 0
-        async with aiosqlite.connect(DATABASE_PATH) as _db:
-            _rows = await (await _db.execute(
-                "SELECT rowid, retail_price_usd FROM bm_sku_gaps"
-            )).fetchall()
-            for _row in _rows:
-                _rowid, _retail = _row[0], float(_row[1] or 0)
-                _new_sug  = round(_retail * 18 * 1.20, 0) if _retail > 0 else 0
-                _new_cost = round(_retail * 18, 0) if _retail > 0 else 0  # retail IS our acquisition cost
-                await _db.execute(
-                    "UPDATE bm_sku_gaps SET suggested_price_mxn=?, cost_price_mxn=?, cost_usd=? WHERE rowid=?",
-                    (_new_sug, _new_cost, _retail, _rowid)
-                )
-                updated += 1
-            await _db.commit()
-        import logging as _logging
-        _logging.getLogger(__name__).info(f"Startup: recalculated prices for {updated} gap records")
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger(__name__).warning(f"Startup price recalc failed: {_e}")
     yield
     await price_monitor.stop()
 
