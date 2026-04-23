@@ -302,7 +302,7 @@ def _verify_amazon_state(state: str) -> bool:
 
 
 @router.get("/amazon/connect")
-async def amazon_connect():
+async def amazon_connect(request: Request):
     """
     Inicia el flujo OAuth de Amazon SP-API.
 
@@ -334,15 +334,17 @@ async def amazon_connect():
     # SP-API región NA — la autorización va por sellercentral.amazon.com (US/NA)
     # aunque el marketplace sea MX. Usar .com.mx causa error MD9100.
     # version=beta requerido para apps en estado Draft.
-    # redirect_uri explícito: Amazon elige el primero registrado si no se especifica,
-    # lo que causa que Coolify redirija a Railway. Pasarlo fuerza el callback correcto.
+    # redirect_uri dinámico: usa el host actual para que el callback llegue
+    # al mismo servidor que inició el OAuth (Railway o Coolify).
     from urllib.parse import quote as _quote
+    _base = str(request.base_url).rstrip("/")
+    _dynamic_redirect_uri = f"{_base}/auth/amazon/callback"
     auth_url = (
         f"https://sellercentral.amazon.com/apps/authorize/consent"
         f"?application_id={AMAZON_APP_SOLUTION_ID}"
         f"&state={state}"
         f"&version=beta"
-        f"&redirect_uri={_quote(AMAZON_REDIRECT_URI, safe='')}"
+        f"&redirect_uri={_quote(_dynamic_redirect_uri, safe='')}"
     )
 
     logger.info(f"[Amazon OAuth] Iniciando autorización → {auth_url[:80]}...")
