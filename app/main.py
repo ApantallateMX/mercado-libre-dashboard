@@ -11947,7 +11947,8 @@ async def bm_launch_opportunities(
 # ── Config export/import (migración entre ambientes) ─────────────────────────
 
 @app.get("/api/diag/export-config")
-async def diag_export_config(token: str = ""):
+async def diag_export_config(token: str = ""):  # noqa
+    import aiosqlite
     """Exporta configuración migrable: metas y datos fiscales.
     Usar para copiar Railway → Coolify (o viceversa).
     """
@@ -11977,7 +11978,8 @@ async def diag_export_config(token: str = ""):
 
 
 @app.post("/api/diag/import-config")
-async def diag_import_config(request: Request, token: str = ""):
+async def diag_import_config(request: Request, token: str = ""):  # noqa
+    import aiosqlite
     """Importa configuración exportada desde otro ambiente.
     Body: JSON retornado por /api/diag/export-config
     """
