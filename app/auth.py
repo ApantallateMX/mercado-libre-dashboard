@@ -37,6 +37,9 @@ from app.config import (
     AMAZON_CLIENT_ID, AMAZON_CLIENT_SECRET, AMAZON_REDIRECT_URI,
     AMAZON_APP_SOLUTION_ID, AMAZON_SELLER_ID, AMAZON_MARKETPLACE_ID,
     AMAZON_MARKETPLACE_NAME, AMAZON_NICKNAME,
+    AMAZON2_CLIENT_ID, AMAZON2_CLIENT_SECRET, AMAZON2_SELLER_ID,
+    AMAZON2_MARKETPLACE_ID, AMAZON2_MARKETPLACE_NAME,
+    AMAZON2_APP_SOLUTION_ID, AMAZON2_NICKNAME,
 )
 from app.services import token_store
 from app.services import user_store
@@ -402,9 +405,29 @@ async def amazon_callback(
                 _k, _, _v = _line.partition("=")
                 _file_vars[_k.strip()] = _v.strip()
 
-    _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
-    _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
-    _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
+    # ── Detectar qué cuenta se autorizó por seller_id ───────────────────
+    _is_acct2 = (
+        effective_seller_id == (AMAZON2_SELLER_ID or _file_vars.get("AMAZON2_SELLER_ID", ""))
+    )
+
+    if _is_acct2:
+        _client_id     = _file_vars.get("AMAZON2_CLIENT_ID")     or AMAZON2_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON2_CLIENT_SECRET") or AMAZON2_CLIENT_SECRET
+        _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")   or AMAZON_REDIRECT_URI
+        _nickname      = _file_vars.get("AMAZON2_NICKNAME")      or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
+        _mkt_id        = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
+        _mkt_name      = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
+        _app_sol_id    = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
+        _rt_env_key    = "AMAZON2_REFRESH_TOKEN"
+    else:
+        _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
+        _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
+        _nickname      = _file_vars.get("AMAZON_NICKNAME")      or AMAZON_NICKNAME or "VECKTOR IMPORTS"
+        _mkt_id        = _file_vars.get("AMAZON_MARKETPLACE_ID")   or AMAZON_MARKETPLACE_ID
+        _mkt_name      = _file_vars.get("AMAZON_MARKETPLACE_NAME") or AMAZON_MARKETPLACE_NAME
+        _app_sol_id    = _file_vars.get("AMAZON_APP_SOLUTION_ID")  or AMAZON_APP_SOLUTION_ID
+        _rt_env_key    = "AMAZON_REFRESH_TOKEN"
 
     # ── Intercambiar código por tokens ──────────────────────────────────
     async with httpx.AsyncClient(timeout=15) as http:
@@ -435,20 +458,18 @@ async def amazon_callback(
             detail="Amazon no devolvió refresh_token. Verificar que la app tenga scope offline_access."
         )
 
-    logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id}")
+    logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id} (acct{'2' if _is_acct2 else '1'})")
 
     # ── Guardar en DB ────────────────────────────────────────────────────
-    # IMPORTANTE: usar _client_id/_client_secret (leídos de .env.production)
-    # no AMAZON_CLIENT_ID/SECRET (os.getenv que puede tener valores viejos de Railway)
     await token_store.save_amazon_account(
         seller_id=effective_seller_id,
-        nickname=AMAZON_NICKNAME or "VECKTOR IMPORTS",
+        nickname=_nickname,
         client_id=_client_id,
         client_secret=_client_secret,
         refresh_token=refresh_token,
-        marketplace_id=AMAZON_MARKETPLACE_ID,
-        marketplace_name=AMAZON_MARKETPLACE_NAME,
-        app_solution_id=AMAZON_APP_SOLUTION_ID,
+        marketplace_id=_mkt_id,
+        marketplace_name=_mkt_name,
+        app_solution_id=_app_sol_id,
     )
 
     # ── Persistir refresh_token en .env.production (Railway) ────────────
@@ -464,17 +485,17 @@ async def amazon_callback(
                 continue
             try:
                 text = open(env_path, encoding="utf-8").read()
-                # Actualizar o agregar AMAZON_REFRESH_TOKEN
-                if "AMAZON_REFRESH_TOKEN=" in text:
+                # Actualizar o agregar la key correcta según la cuenta
+                if f"{_rt_env_key}=" in text:
                     text = _re.sub(
-                        r"(?m)^AMAZON_REFRESH_TOKEN=.*$",
-                        f"AMAZON_REFRESH_TOKEN={refresh_token}",
+                        rf"(?m)^{_rt_env_key}=.*$",
+                        f"{_rt_env_key}={refresh_token}",
                         text,
                     )
                 else:
-                    text += f"\nAMAZON_REFRESH_TOKEN={refresh_token}\n"
+                    text += f"\n{_rt_env_key}={refresh_token}\n"
                 open(env_path, "w", encoding="utf-8").write(text)
-                logger.info(f"[Amazon OAuth] refresh_token guardado en {env_file}")
+                logger.info(f"[Amazon OAuth] {_rt_env_key} guardado en {env_file}")
             except Exception as e:
                 logger.warning(f"[Amazon OAuth] No se pudo actualizar {env_file}: {e}")
 
@@ -500,7 +521,7 @@ async def amazon_callback(
                         "projectId": _railway_proj_id,
                         "serviceId": _railway_svc_id,
                         "environmentId": _railway_env_id,
-                        "name": "AMAZON_REFRESH_TOKEN",
+                        "name": _rt_env_key,
                         "value": refresh_token,
                     }
                 }
@@ -512,7 +533,7 @@ async def amazon_callback(
                                  "Content-Type": "application/json"},
                     )
                 if _r.status_code == 200:
-                    logger.info("[Amazon OAuth] AMAZON_REFRESH_TOKEN actualizado en Railway env vars via API")
+                    logger.info(f"[Amazon OAuth] {_rt_env_key} actualizado en Railway env vars via API")
                 else:
                     logger.warning(f"[Amazon OAuth] Railway API respondió {_r.status_code}: {_r.text[:200]}")
             except Exception as _re_err:
