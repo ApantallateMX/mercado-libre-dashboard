@@ -1506,7 +1506,7 @@ async def _seed_amazon_accounts():
     _rt2_env    = (_os2.getenv("AMAZON2_REFRESH_TOKEN") or "").strip().replace("\n","").replace("\r","").replace(" ","")
     refresh_rt2 = _rt2_file or _rt2_env or ""
 
-    if seller_id2 and client_id2 and refresh_rt2:
+    if seller_id2 and refresh_rt2:
         existing2 = await token_store.get_amazon_account(seller_id2)
         stored_rt2 = (existing2 or {}).get("refresh_token", "")
         # AMAZON2 siempre usa el env var como fuente de verdad.
@@ -1514,9 +1514,15 @@ async def _seed_amazon_accounts():
         # Si el env var tiene un token DIFERENTE al almacenado → actualizar (nueva autorización).
         # Si son iguales → preservar (no overwrite innecesario).
         token_to_save2 = refresh_rt2 if refresh_rt2 != stored_rt2 else ""
+        # IMPORTANTE: el refresh_token de AUTOBOT fue obtenido via OAuth con VeKtorClaude app
+        # (AMAZON_CLIENT_ID/SECRET). Usar AMAZON2_CLIENT_ID/SECRET causaría 400 en LWA.
+        # Siempre usamos las credenciales de la app que generó el token (cuenta 1).
+        _lwa_client_id  = client_id  or client_id2
+        _lwa_client_sec = client_sec or client_sec2
         await token_store.save_amazon_account(
-            seller_id=seller_id2, nickname=nickname2, client_id=client_id2,
-            client_secret=client_sec2, refresh_token=token_to_save2,
+            seller_id=seller_id2, nickname=nickname2,
+            client_id=_lwa_client_id, client_secret=_lwa_client_sec,
+            refresh_token=token_to_save2,
             marketplace_id=mkt_id2, marketplace_name=mkt_name2,
             app_solution_id=app_sol_id2,
         )
