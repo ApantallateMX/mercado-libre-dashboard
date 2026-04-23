@@ -521,7 +521,7 @@ templates.env.globals["build_id"] = _BUILD_ID
 
 # ---------- Auth middleware ----------
 # /api/v1/ usa su propio auth por API Key — exento del middleware de sesión de dashboard
-_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/")
+_AUTH_EXEMPT = ("/login", "/set-password", "/static", "/favicon.ico", "/auth/", "/api/v1/", "/api/health-ai/debug-key", "/api/debug/item-stock", "/api/debug/test-merchant", "/factura/", "/api/diag/", "/api/ping")
 
 # Mapeo de rutas de página a sección (para control de acceso por sección)
 _PATH_TO_SECTION: dict[str, str] = {
@@ -1180,6 +1180,12 @@ async def get_current_user():
 
 
 # === Rutas de paginas ===
+
+@app.get("/api/ping")
+async def ping():
+    """Health check público — siempre devuelve 200. Usado por Coolify/proxies."""
+    return {"ok": True}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
