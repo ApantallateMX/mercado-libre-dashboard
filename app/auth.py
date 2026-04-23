@@ -337,8 +337,15 @@ async def amazon_connect(request: Request):
     # redirect_uri dinámico: usa el host actual para que el callback llegue
     # al mismo servidor que inició el OAuth (Railway o Coolify).
     from urllib.parse import quote as _quote
-    _base = str(request.base_url).rstrip("/")
-    _dynamic_redirect_uri = f"{_base}/auth/amazon/callback"
+    import os as _os_auth
+    # APP_BASE_URL env var permite forzar el scheme correcto (necesario cuando
+    # Traefik hace TLS termination y request.base_url devuelve http://).
+    _app_base = (_os_auth.getenv("APP_BASE_URL") or "").rstrip("/")
+    if not _app_base:
+        # Fallback: usar base_url pero forzar https si viene de host conocido
+        _base = str(request.base_url).rstrip("/").replace("http://", "https://")
+        _app_base = _base
+    _dynamic_redirect_uri = f"{_app_base}/auth/amazon/callback"
     auth_url = (
         f"https://sellercentral.amazon.com/apps/authorize/consent"
         f"?application_id={AMAZON_APP_SOLUTION_ID}"
