@@ -14,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.config import MELI_USER_ID, MELI_REFRESH_TOKEN
+from app.config import MELI_USER_ID, MELI_REFRESH_TOKEN, DATABASE_PATH
 from app.auth import router as auth_router
 from app.api.orders import router as orders_router
 from app.api.items import router as items_router
@@ -11955,7 +11955,7 @@ async def diag_export_config(token: str = ""):  # noqa
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
 
-    async with aiosqlite.connect(token_store.DB_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
 
         # Metas diarias (ML y Amazon)
@@ -11991,7 +11991,7 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
     fiscal = data.get("billing_fiscal_data", [])
     imported = {"goals": 0, "fiscal": 0}
 
-    async with aiosqlite.connect(token_store.DB_PATH) as db:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
         for row in goals:
             await db.execute(
                 "INSERT INTO account_settings (user_id, daily_goal, updated_at) VALUES (?,?,?) "
