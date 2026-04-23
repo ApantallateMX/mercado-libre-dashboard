@@ -387,7 +387,8 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio_lifespan
     from app.services.amazon_client import _seed_amazon_accounts
 
-    _BM_DISABLED = os.getenv("DISABLE_BM_MONITOR", "").lower() in ("1", "true", "yes")
+    import os as _os_bm
+    _BM_DISABLED = _os_bm.getenv("DISABLE_BM_MONITOR", "").lower() in ("1", "true", "yes")
     if _BM_DISABLED:
         logger.info("[BM] DISABLE_BM_MONITOR=true — polling BM deshabilitado en este ambiente")
 
