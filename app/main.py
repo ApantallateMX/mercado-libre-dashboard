@@ -8305,6 +8305,64 @@ async def get_multi_account_dashboard(
     return result
 
 
+@app.get("/api/dashboard/multi-account-launches")
+async def get_multi_account_launches(
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Cuenta cuántos items publicó cada cuenta en el período dado.
+    Usa /users/{uid}/items/search con filtro de fechas (sólo paging.total, sin paginar).
+    """
+    now = datetime.utcnow()
+    now_mx = now - timedelta(hours=6)
+    if not date_from:
+        date_from = now_mx.replace(day=1).strftime("%Y-%m-%d")
+    if not date_to:
+        date_to = now_mx.strftime("%Y-%m-%d")
+
+    cache_key = f"launches:{date_from}:{date_to}"
+    cached = _multi_account_cache.get(cache_key)
+    if cached and (_time_module.time() - cached[0]) < _MULTI_ACCOUNT_CACHE_TTL:
+        return cached[1]
+
+    accounts_list = await token_store.get_all_tokens()
+    _LAUNCH_ACC_COLORS = {
+        "523916436": "#3B82F6",
+        "292395685": "#10B981",
+        "391393176": "#8B5CF6",
+        "515061615": "#F97316",
+    }
+
+    async def _fetch_launches(account):
+        uid = account["user_id"]
+        nickname = account.get("nickname") or uid
+        color = _LAUNCH_ACC_COLORS.get(uid, "#6B7280")
+        try:
+            client = await get_meli_client(user_id=uid)
+            # Intenta con date_created filter; algunos sellers puede que no lo tengan indexado
+            iso_from = f"{date_from}T00:00:00.000Z"
+            iso_to = f"{date_to}T23:59:59.000Z"
+            resp = await client.get(
+                f"/users/{uid}/items/search",
+                params={
+                    "status": "active",
+                    "date_created.from": iso_from,
+                    "date_created.to": iso_to,
+                    "limit": 1,
+                }
+            )
+            await client.close()
+            launches = resp.get("paging", {}).get("total", 0)
+            return {"user_id": uid, "nickname": nickname, "color": color, "launches": launches, "error": None}
+        except Exception as e:
+            return {"user_id": uid, "nickname": nickname, "color": color, "launches": 0, "error": str(e)}
+
+    results = list(await asyncio.gather(*[_fetch_launches(a) for a in accounts_list]))
+    result = {"date_from": date_from, "date_to": date_to, "accounts": results}
+    _multi_account_cache[cache_key] = (_time_module.time(), result)
+    return result
+
+
 @app.get("/api/dashboard/morning-briefing")
 async def morning_briefing():
     """Resumen matutino de todas las cuentas: ventas hoy, alertas, estado."""
