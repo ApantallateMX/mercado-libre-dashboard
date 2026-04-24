@@ -380,6 +380,10 @@ async def lifespan(app: FastAPI):
     # ── Esenciales síncronos — deben completar antes de aceptar requests ──────
     await token_store.init_db()
     await user_store.init_user_db()
+    # Cargar cache de stock desde DB inmediatamente — operadores ven datos del
+    # deploy anterior desde el primer request, sin esperar el prewarm (90s).
+    await _load_bm_cache_from_db()
+    await _load_stock_issues_from_db()
 
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
@@ -400,9 +404,8 @@ async def lifespan(app: FastAPI):
         # 2. Monitor de precios BM (skip si DISABLE_BM_MONITOR=true)
         if not _BM_DISABLED:
             await price_monitor.start()
-        # 3. Cargar cachés desde DB
+        # 3. Cachés ya cargados en startup síncrono — solo refrescar BM global
         await _load_bm_cache_from_db()
-        await _load_stock_issues_from_db()
         # 4. Recalcular precios sugeridos en bm_sku_gaps
         try:
             import aiosqlite as _aio_init
