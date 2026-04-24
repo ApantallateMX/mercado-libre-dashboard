@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-24 — FEAT: Gral — Rendimiento por Cuenta (Ranking + Lanzamientos + Score)
+
+### Cambios
+**1. Inv.Global oculto para no-admin**
+- Nav desktop y móvil: `Inv.Global` solo visible cuando `dashboard_user.role == 'admin'`
+- Operadores por cuenta solo ven sus propias secciones
+
+**2. Panel "Rendimiento por Cuenta" en `/multi-dashboard`**
+Nuevo bloque con 3 tabs, visible debajo de las Account Cards:
+
+- **Ranking** — tabla con todas las cuentas ordenadas por revenue del período. Incluye barras proporcionales (la cuenta líder = 100%), % del total, órdenes y unidades. Fila de totales al final.
+
+- **Lanzamientos** — nuevo endpoint `GET /api/dashboard/multi-account-launches` que consulta `ML /users/{uid}/items/search?status=active&date_created.from=...&date_created.to=...&limit=1` para obtener `paging.total` (solo 1 request por cuenta, sin paginar). Muestra ranking visual con barras.
+
+- **Score de Actividad** — índice compuesto: ventas(50%) + lanzamientos(30%) + órdenes(20%). Normalizado al 100% del total de todas las cuentas. Muestra quién contribuyó más al negocio en el período.
+
+### Archivos
+- `app/main.py` — endpoint `/api/dashboard/multi-account-launches`
+- `app/templates/multi_dashboard.html` — nuevo panel HTML + JS completo
+
+---
+
 ## 2026-04-22 — FEAT: Facturación — régimen 616 auto-fill + campo Método de Pago
 
 ### Cambio
