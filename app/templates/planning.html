@@ -144,6 +144,21 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 4.5 — Stock Detenido
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6" id="plan-stagnant-section" style="display:none">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+        <svg class="w-4 h-4 text-orange-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Stock Detenido</h2>
+        <span class="text-xs text-gray-400">— capital inmovilizado con movimiento casi nulo (&lt;0.05 uds/día)</span>
+        <span id="stagnant-count-badge" class="ml-auto text-xs font-bold bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full border border-orange-200"></span>
+    </div>
+    <div id="plan-stagnant-content" class="p-5"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
      BLOQUE 5 — Radar de Oportunidad
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6">
@@ -174,6 +189,7 @@ var _productionKpis = {};
 // Pagination state
 var _velPage = 1, _velPageSize = 10, _velFiltered = [];
 var _covPage = 1, _covPageSize = 10;
+var _covUsdToMxn = 0;  // tipo de cambio del último load de cobertura
 
 var _sectionStates = { 'plan-coverage': false, 'plan-unlaunched': false };
 
@@ -457,8 +473,10 @@ window.loadCoverage = function() {
         .then(function(r){ return r.json(); })
         .then(function(d){
             _coverageData = d.items || [];
+            _covUsdToMxn = d.usd_to_mxn || 0;
             _renderCoverage(d);
             _renderOrderSection(d);
+            _renderStagnant();
             _renderRadar();
         })
         .catch(function(e){
@@ -513,6 +531,12 @@ function _renderCoverage(d) {
     _renderCoverageTable(d.items, hasAmzCov, html, el);
 }
 
+function _abcClass(rate) {
+    if (rate >= 1)   return { letter:'A', cls:'bg-red-500 text-white' };
+    if (rate >= 0.3) return { letter:'B', cls:'bg-yellow-400 text-gray-800' };
+    return                  { letter:'C', cls:'bg-gray-300 text-gray-700' };
+}
+
 function _buildCovRow(p, hasAmzCov) {
     var cfg = STATUS_CFG[p.status] || STATUS_CFG.ok;
     var covText = p.coverage_days != null ? p.coverage_days + 'd' : '—';
@@ -526,10 +550,42 @@ function _buildCovRow(p, hasAmzCov) {
         ? '<span class="text-[8px] text-gray-400">(' + p.item_ids.length + ' publicaciones)</span>'
         : '';
     var totalRate = p.total_daily_rate || p.daily_rate;
+
+    // ABC badge
+    var abc = _abcClass(totalRate);
+    var abcBadge = '<span class="w-4 h-4 rounded text-[9px] font-black flex items-center justify-center ' + abc.cls + '">' + abc.letter + '</span>';
+
+    // Tendencia ↑→↓
+    var rate7d  = (p.units_7d || 0) / 7;
+    var rate30d = p.daily_rate || 0;
+    var trendHtml;
+    if (rate30d === 0) {
+        trendHtml = '<span class="text-gray-300 text-sm">—</span>';
+    } else if (rate7d > rate30d * 1.2) {
+        trendHtml = '<span class="text-green-600 font-bold text-sm" title="Acelerando">↑</span>';
+    } else if (rate7d < rate30d * 0.8) {
+        trendHtml = '<span class="text-red-500 font-bold text-sm" title="Desacelerando">↓</span>';
+    } else {
+        trendHtml = '<span class="text-gray-400 text-sm" title="Estable">→</span>';
+    }
+
+    // % Recuperación vs precio de referencia retail
+    var recHtml;
+    if (p.recovery_pct != null) {
+        var recCls = p.recovery_pct >= 120 ? 'text-green-700 font-bold'
+                   : p.recovery_pct >= 80  ? 'text-yellow-600 font-semibold'
+                   : 'text-red-700 font-bold';
+        var tooltip = 'Precio prom. ML: $' + (p.avg_price_mxn || '—') + ' MXN vs Ref. retail: $' + Math.round((p.retail_ph_usd || 0) * (_covUsdToMxn || 17.5)) + ' MXN';
+        recHtml = '<span class="' + recCls + '" title="' + tooltip + '">' + p.recovery_pct + '%</span>';
+    } else {
+        recHtml = '<span class="text-gray-300">—</span>';
+    }
+
     return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
         '<td class="py-2.5 pr-3">' +
             '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
-            '<div class="flex flex-wrap gap-1 mt-0.5">' +
+            '<div class="flex flex-wrap items-center gap-1 mt-0.5">' +
+            abcBadge +
             (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
             (p.brand ? '<span class="text-[9px] text-gray-400">' + (p.brand || '') + (p.size ? ' ' + p.size + '"' : '') + '</span>' : '') +
             covAccts + covItemIds +
@@ -538,10 +594,11 @@ function _buildCovRow(p, hasAmzCov) {
         (hasAmzCov ? '<td class="py-2.5 pr-3 text-right text-gray-600">' + (p.daily_rate || 0) + '</td>' +
             '<td class="py-2.5 pr-3 text-right ' + ((p.amz_daily_rate || 0) > 0 ? 'text-orange-500 font-semibold' : 'text-gray-300') + '">' + ((p.amz_daily_rate || 0) > 0 ? p.amz_daily_rate : '—') + '</td>' : '') +
         '<td class="py-2.5 pr-3 text-right font-black text-gray-900">' + totalRate + '</td>' +
+        '<td class="py-2.5 pr-3 text-center">' + trendHtml + '</td>' +
         '<td class="py-2.5 pr-3 text-right ' + (p.stock_bm === 0 ? 'text-red-600 font-bold' : 'text-gray-700') + '">' + p.stock_bm + '</td>' +
         '<td class="py-2.5 pr-3 text-right ' + (p.coverage_days != null && p.coverage_days < 7 ? 'text-red-600 font-bold' : 'text-gray-600') + '">' + covText + '</td>' +
         '<td class="py-2.5 pr-3 text-right">' + reqText + '</td>' +
-        '<td class="py-2.5 pr-3 text-right text-gray-500">' + (p.retail_price ? '$' + p.retail_price : '—') + '</td>' +
+        '<td class="py-2.5 pr-3 text-right">' + recHtml + '</td>' +
         '<td class="py-2.5 pr-3"><span class="px-1.5 py-0.5 text-[10px] rounded border font-semibold ' + cfg.cls + '">' + cfg.label + '</span></td>' +
         '</tr>';
 }
@@ -570,10 +627,11 @@ function _renderCovPage(el) {
         '<th class="pb-2 pr-3">Producto / SKU</th>' +
         (hasAmzCov ? '<th class="pb-2 pr-3 text-right">ML/día</th><th class="pb-2 pr-3 text-right text-orange-500">AMZ/día</th>' : '') +
         '<th class="pb-2 pr-3 text-right font-bold">Total/día</th>' +
+        '<th class="pb-2 pr-3 text-center">Tend.</th>' +
         '<th class="pb-2 pr-3 text-right">Stock BM</th>' +
         '<th class="pb-2 pr-3 text-right">Cobertura</th>' +
         '<th class="pb-2 pr-3 text-right">A solicitar</th>' +
-        '<th class="pb-2 pr-3 text-right">Precio USD</th>' +
+        '<th class="pb-2 pr-3 text-right" title="Precio promedio de venta ML vs precio de referencia retail BM">vs Ref.</th>' +
         '<th class="pb-2 pr-3">Estado</th>' +
         '</tr></thead><tbody>';
 
@@ -892,6 +950,68 @@ function _renderRadar() {
 
     html += '</div>';
     el.innerHTML = html;
+}
+
+// ============================================================
+// STOCK DETENIDO
+// ============================================================
+function _renderStagnant() {
+    var section = document.getElementById('plan-stagnant-section');
+    var stagnant = _coverageData.filter(function(x) {
+        return (x.stock_bm || 0) > 5 && (x.total_daily_rate || x.daily_rate || 0) < 0.05;
+    });
+    if (!stagnant.length) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+    document.getElementById('stagnant-count-badge').textContent = stagnant.length + ' SKUs';
+
+    // Sort by stock_bm desc (más capital inmovilizado primero)
+    stagnant.sort(function(a, b) { return (b.stock_bm || 0) - (a.stock_bm || 0); });
+
+    var html = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="border-b border-gray-200 text-[10px] text-gray-500 uppercase tracking-wide">' +
+        '<th class="pb-2 pr-3 text-left">Producto / SKU</th>' +
+        '<th class="pb-2 pr-3 text-right">Stock BM</th>' +
+        '<th class="pb-2 pr-3 text-right">Venta/día</th>' +
+        '<th class="pb-2 pr-3 text-right">vs Ref.</th>' +
+        '<th class="pb-2 pr-3 text-left">Acción sugerida</th>' +
+        '</tr></thead><tbody>';
+
+    stagnant.forEach(function(p) {
+        var rate = p.total_daily_rate || p.daily_rate || 0;
+        var u30 = p.units_30d || 0;
+        var u7  = p.units_7d  || 0;
+        var action, actionCls;
+        if (u30 === 0) {
+            action = 'Sin ventas en 30+ días — evaluar liquidación';
+            actionCls = 'text-red-700';
+        } else if (u7 === 0) {
+            action = 'Sin ventas esta semana — revisar precio vs competidores';
+            actionCls = 'text-orange-700';
+        } else {
+            action = 'Movimiento muy lento — activar cupón digital 15%';
+            actionCls = 'text-yellow-700';
+        }
+        var recHtml = p.recovery_pct != null
+            ? '<span class="' + (p.recovery_pct >= 120 ? 'text-green-700 font-bold' : p.recovery_pct >= 80 ? 'text-yellow-600' : 'text-red-700 font-bold') + '">' + p.recovery_pct + '%</span>'
+            : '<span class="text-gray-300">—</span>';
+
+        html += '<tr class="border-b border-gray-50 hover:bg-orange-50">' +
+            '<td class="py-2 pr-3">' +
+                '<p class="font-semibold text-gray-800 truncate max-w-xs" title="' + p.title + '">' + p.title + '</p>' +
+                (p.sku ? '<span class="font-mono text-[9px] bg-blue-50 text-blue-600 px-1 rounded border border-blue-100">' + p.sku + '</span>' : '') +
+            '</td>' +
+            '<td class="py-2 pr-3 text-right font-bold text-orange-700">' + p.stock_bm + '</td>' +
+            '<td class="py-2 pr-3 text-right text-gray-500">' + rate.toFixed(2) + '</td>' +
+            '<td class="py-2 pr-3 text-right">' + recHtml + '</td>' +
+            '<td class="py-2 pr-3 text-xs ' + actionCls + ' font-medium">' + action + '</td>' +
+            '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    document.getElementById('plan-stagnant-content').innerHTML = html;
 }
 
 function _abcRow(letter, count, desc, barCls, note) {

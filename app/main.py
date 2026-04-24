@@ -11633,6 +11633,39 @@ async def planning_coverage(
     bm_map = await _get_bm_stock_cached(items_with_sku)
     _apply_bm_stock(items_with_sku, bm_map)
 
+    # ── FX rate: manual override → ML API → fallback 20 ──────────────────────
+    usd_to_mxn: float = _manual_fx_rate if _manual_fx_rate > 0 else 0.0
+    if usd_to_mxn == 0:
+        try:
+            from app.services.meli_client import token_store as _ts_cov
+            _accts = await _ts_cov.get_all_tokens()
+            if _accts:
+                _cov_client = await get_meli_client(user_id=_accts[0]["user_id"])
+                if _cov_client:
+                    usd_to_mxn = await _get_usd_to_mxn(_cov_client)
+                    await _cov_client.close()
+        except Exception:
+            pass
+    if usd_to_mxn == 0:
+        usd_to_mxn = 20.0
+
+    # ── RetailPH del bulk cache — sin llamadas directas a BM ─────────────────
+    retail_ph_map: dict = {}
+    try:
+        _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
+        if _bulk and (_time.time() - _bulk[0]) < _BM_CACHE_TTL:
+            for _row in _bulk[1]:
+                _bsk = (_row.get("SKU") or "").upper().strip()
+                if not _bsk:
+                    continue
+                _rph = _row.get("LastRetailPricePurchaseHistory") or 0
+                _rp  = _row.get("RetailPrice") or 0
+                _val = _rph if (0 < _rph < 9000) else (_rp if (0 < _rp < 9000) else 0)
+                if _val:
+                    retail_ph_map[_bsk] = float(_val)
+    except Exception:
+        pass
+
     result = []
     for item in items_with_sku:
         stock = item.get("_bm_avail", 0)
@@ -11655,6 +11688,15 @@ async def planning_coverage(
         stock_target     = daily * target_days
         units_to_request = max(0, round(stock_target - stock)) if daily > 0 else 0
 
+        # % Recuperación vs precio de referencia retail (bulk cache)
+        _bm_base      = normalize_to_bm_sku(item.get("sku", ""))
+        retail_ph_usd = retail_ph_map.get(_bm_base, 0) if _bm_base else 0
+        units_30d     = item.get("units_30d", 0) or 0
+        revenue_30d   = item.get("revenue_30d", 0) or 0
+        avg_price_mxn = round(revenue_30d / units_30d) if units_30d > 0 else 0
+        retail_ref_mxn = round(retail_ph_usd * usd_to_mxn) if retail_ph_usd > 0 else 0
+        recovery_pct   = round(avg_price_mxn / retail_ref_mxn * 100) if retail_ref_mxn > 0 else None
+
         result.append({
             **item,
             "stock_bm": stock,
@@ -11665,6 +11707,9 @@ async def planning_coverage(
             "brand": item.get("_bm_brand", ""),
             "model": item.get("_bm_model", ""),
             "bm_category": item.get("_bm_category", ""),
+            "retail_ph_usd": retail_ph_usd,
+            "avg_price_mxn": avg_price_mxn,
+            "recovery_pct": recovery_pct,
         })
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
@@ -11675,6 +11720,7 @@ async def planning_coverage(
         "days": days,
         "items_without_sku": items_without_sku_count,
         "has_amazon": vel.get("has_amazon", False),
+        "usd_to_mxn": round(usd_to_mxn, 2),
     }
 
 
