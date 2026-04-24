@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-24 — AGENT: mercadolibre-strategist optimizado a versión Pro
+
+### Cambios
+Agente `mercadolibre-strategist` ampliado con 6 nuevas secciones (17-22):
+
+- **17. WAR ROOM** — formato de output diario: top 50 SKUs → 5 acciones que mueven dinero. Criterios: stop bleeding → capture wins → fix leaks → plant seeds → clean house.
+- **18. BULKY / TVs grandes** — decisión FULL vs Flex vs propio por tamaño de TV (32"→75"+). Fórmula de rentabilidad con flete BULKY. Reglas de stock mínimo en FULL por tamaño.
+- **19. Cosas que casi nadie te dice de ML** — 10 lecciones de operación real no documentadas oficialmente (FULL ≠ 1er lugar, pausar ≠ perder historial, precio de referencia de 90 días, etc.).
+- **20. Detección de stock detenido** — criterios (>5 uds, <1 venta/mes, >90 días), framework diagnóstico 4 pasos, árbol de decisión según antigüedad.
+- **21. Explorador de oportunidades** — 5 tipos (A-E), score 0-100 con pesos, patrones de búsqueda web para detectar tendencias.
+- **22. Score de salud de publicación** — 7 factores ponderados, umbrales para decidir cuándo hacer ads y cuándo optimizar primero.
+
+### Archivo
+- `.claude/agents/mercadolibre-strategist.md`
+
+---
+
 ## 2026-04-24 — FEAT: Gral — Rendimiento por Cuenta (Ranking + Lanzamientos + Score)
 
 ### Cambios

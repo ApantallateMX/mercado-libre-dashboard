@@ -949,6 +949,383 @@ grant_type=refresh_token
 
 ---
 
+## 17. WAR ROOM — LAS 5 ACCIONES DIARIAS QUE MUEVEN DINERO
+
+El War Room es la revisión diaria de los top 50 SKUs por ventas de los últimos 30 días. No es un reporte — es un output accionable. Cada sesión termina con exactamente **5 acciones concretas** que muevan dinero hoy.
+
+### Formato de output War Room
+
+```
+=== WAR ROOM — [FECHA] ===
+
+TOP 50 REVISADOS: X publicaciones / Y SKUs únicos
+
+ALERTAS CRÍTICAS (atender HOY):
+  🔴 [MLM-ID] [Título] — [problema: stock 0 / reclamo / precio pérdida / pausado]
+
+LAS 5 ACCIONES DE HOY:
+  1. [ACCIÓN ESPECÍFICA] → [impacto esperado]
+     Qué hacer: [instrucción exacta, API o manual]
+     Por qué ahora: [razón urgente]
+
+  2. [ACCIÓN ESPECÍFICA] → [impacto esperado]
+     ...
+
+  3. [ACCIÓN ESPECÍFICA] → [impacto esperado]
+
+  4. [ACCIÓN ESPECÍFICA] → [impacto esperado]
+
+  5. [ACCIÓN ESPECÍFICA] → [impacto esperado]
+
+PRÓXIMA REVISIÓN: [fecha/evento que justifica revisar antes del ciclo normal]
+```
+
+### Criterios de selección de acciones (en orden de prioridad)
+
+```
+1. STOP BLEEDING (detener pérdidas activas)
+   - Publicación con margen < 0% con ventas activas → ajustar precio urgente
+   - SKU con reclamo abierto > 24h → resolver antes de que penalice reputación
+   - Stock llegando a 0 en top seller → reposición urgente o activar Flex
+
+2. CAPTURE WINS (capturar oportunidades inmediatas)
+   - SKU con alta conversión y bajo stock FULL → enviar reposición
+   - Publicación orgánica sin ads con CVR > 3% → activar ads ya
+   - Competidor principal sin stock → subir presupuesto ads en ese SKU
+
+3. FIX LEAKS (reparar fugas de dinero silenciosas)
+   - SKU con > 100 visitas/mes y CVR < 0.5% → problema de listing
+   - Publicación CLÁSICA con volumen → migrar a PREMIUM
+   - Precio fijado hace > 60 días → revisar vs mercado actual
+
+4. PLANT SEEDS (siembra de resultados futuros)
+   - SKU nuevo con > 10 ventas en primeros 7 días → aumentar stock FULL
+   - Temporada en 4+ semanas → preparar inventario y deals
+
+5. CLEAN HOUSE (limpieza operativa)
+   - Preguntas sin responder > 24h → responder
+   - Publicaciones pausadas revisables → relist si aplica
+   - Stock detenido (> 90 días sin venta) → evaluar liquidación
+```
+
+### Métricas mínimas a revisar en el War Room
+
+```
+Por SKU:
+  - Ventas últimos 7d y 30d (y tendencia: ↑ ↓ →)
+  - CVR (visitas → ventas)
+  - Stock disponible (días de cobertura)
+  - Margen neto actual
+  - Estado de la publicación (activa, pausada, penalizada)
+  - Reclamos abiertos
+  - Precio vs competidor top 3
+
+Global:
+  - Reputación de cada cuenta (color actual)
+  - Presupuesto de ads gastado vs plan del mes
+  - % del catálogo activo vs pausado
+```
+
+---
+
+## 18. LOGÍSTICA BULKY — TVs 55"+ Y PRODUCTOS GRANDES
+
+### ¿Qué es BULKY?
+
+ML tiene una categoría logística especial para productos de alto volumen/peso. Los TVs de 55" en adelante generalmente caen en BULKY o quedan fuera de FULL estándar.
+
+```
+Clasificación por dimensiones del paquete:
+  Normal (FULL estándar): hasta ~50cm × 40cm × 30cm, ≤ 25 kg
+  OVERSIZED (FULL Large): hasta ~120cm × 80cm × 50cm, ≤ 50 kg
+  BULKY: > los límites anteriores, requiere manejo especial
+
+TVs por tamaño:
+  32" – 43": FULL estándar (paquete ~90×60×15 cm, ~8-12 kg) → aplica sin problemas
+  50" – 55": FULL Large / límite (paquete ~130×80×20 cm, ~15-18 kg) → verificar tarifa
+  58" – 65": BULKY probable (paquete ~155×95×22 cm, ~20-28 kg) → tarifa especial
+  75"+:      BULKY confirmado → cotizar individualmente con ML
+```
+
+### Decisión FULL vs Flex vs Propio para TVs grandes
+
+```
+TV 32"–43":
+  → FULL recomendado si ventas > 10/mes
+  → Costo FULL razonable, badge "FULL" mejora conversión en electrónica
+
+TV 50"–55":
+  → FULL posible, verificar tarifa OVERSIZED
+  → Si tarifa excede ~$400 MXN por envío, evaluar Flex
+  → Flex permite competir en precio sin pagar storage
+
+TV 58"–65":
+  → BULKY: negociar con ejecutivo de ML o usar Flex
+  → Con Flex: ML recoge en almacén, el comprador paga envío diferenciado
+  → Con propio: solo si el margen lo permite y zona cubierta
+
+TV 75"+:
+  → Propio o Flex obligatorio (FULL no aplica en práctica)
+  → Precio de envío visible en listing puede desincentivar compra
+  → Considerar "envío gratis incluido en precio" para mejorar conversión
+```
+
+### Reglas de rentabilidad para BULKY
+
+```
+Para TVs 58"+, el costo de envío puede ser $600–$1,500 MXN.
+Siempre calcular:
+  Margen = precio_venta - costo_tv - comisión_ML×(1.16) - costo_envío - costo_envío×0.16
+
+Si margen < $500 MXN por unidad en TV grande:
+  → No vale la pena con envío gratis
+  → Opciones: subir precio, cobrar envío, o vender solo en CDMX/Monterrey/GDL
+
+Regla de oro para BULKY: calcular el envío ANTES de fijar el precio de venta.
+Los vendedores que pierden dinero en TVs grandes casi siempre subestimaron el flete.
+```
+
+### Stock FULL para TVs — reglas operativas
+
+```
+Dimensiones y peso correctos son OBLIGATORIOS en el payload de creación:
+  SELLER_PACKAGE_HEIGHT, SELLER_PACKAGE_WIDTH, SELLER_PACKAGE_LENGTH → en cm (enteros)
+  SELLER_PACKAGE_WEIGHT → en gramos (entero)
+
+Si las dimensiones están mal → ML cobra tarifa incorrecta → pérdida oculta.
+Siempre verificar contra la caja del proveedor, no el producto desnudo.
+
+Stock mínimo recomendado al enviar a FULL para TVs:
+  32"–43": 3-5 unidades (bajo riesgo de sobre-stock en FULL)
+  50"–55": 2-3 unidades
+  58"+:    1-2 unidades (storage caro para BULKY)
+```
+
+---
+
+## 19. COSAS QUE CASI NADIE TE DICE DE ML
+
+Lecciones aprendidas de operación real que no están en la documentación oficial:
+
+```
+1. FULL no garantiza el 1er lugar — es requisito, no suficiente
+   El algoritmo pesa FULL como señal, pero si tu CVR es baja y tu precio
+   no es competitivo, un vendedor sin FULL pero con 500 ventas te supera.
+   FULL es el piso, no el techo.
+
+2. Pausar una publicación NO pierde su historial
+   Si pausas con qty=0, el ranking se "congela" pero no se destruye.
+   Al reactivar, recupera posición. Esto es crítico para manejar quiebres
+   de stock sin destruir meses de trabajo de posicionamiento.
+   NUNCA elimines un item con historial — solo pausa.
+
+3. El precio de referencia de ML es tu precio de los últimos 90 días
+   Para dar un descuento "real" en Hot Sale/Buen Fin, ML verifica que
+   el precio original haya estado activo por X días. Si subes el precio
+   3 semanas antes del evento, ese es el nuevo precio de referencia.
+   Los vendedores que no hacen esto no pueden participar en las campañas oficiales.
+
+4. Una pregunta sin responder cuesta más que responderla mal
+   ML muestra a los compradores cuánto tarda el vendedor en responder.
+   Un tiempo de respuesta > 2h reduce conversión notoriamente.
+   Si no puedes monitorear, usa respuestas automáticas desde Seller Central.
+
+5. Más fotos ≠ mejor ranking, pero más fotos = mejor CVR
+   ML no rankea por cantidad de imágenes, pero el CTR (que sí rankea)
+   mejora cuando el comprador puede ver el producto desde varios ángulos.
+   6-8 fotos bien producidas superan a 12 fotos mediocres.
+
+6. La descripción larga no es para el comprador — es para ML
+   Los compradores rara vez leen más de 3 bullets.
+   Pero ML usa la descripción para indexar palabras clave adicionales.
+   Inclúyelas de forma natural en los primeros 200 palabras.
+
+7. El seller_custom_field es invisible desde tokens de otras cuentas
+   Un error de token silencioso que rompe el mapeo BinManager.
+   Siempre leer publicaciones de cuenta A con el token de cuenta A.
+
+8. Un item "relanzado" hereda visitas pero no ventas
+   Para el algoritmo, las visitas acumuladas dan contexto histórico.
+   Pero el contador de ventas empieza en 0. En el primero mes el item
+   puede rankear bien por visitas heredadas, pero necesita vender rápido
+   para no caer cuando las visitas históricas "envejezcan".
+
+9. Reducir precio baja el ranking a corto plazo antes de mejorarlo
+   Cuando bajas precio, tu CVR mejora, pero ML tarda 24-72h en "ver" el
+   impacto. Hay un efecto de lag. No desesperes si bajas precio y en
+   las primeras 24h el posicionamiento no mejora de inmediato.
+
+10. El stock en FULL "seguro" es el que tiene 15+ días de cobertura
+    Si tu FULL llega a < 5 unidades, ML automáticamente reduce tu visibilidad
+    aunque no te pause. El algoritmo prefiere no mostrar lo que puede quedarse
+    sin stock. 15 días de cobertura es el mínimo operativo para mantener ranking.
+```
+
+---
+
+## 20. DETECCIÓN DE STOCK DETENIDO
+
+Stock detenido = unidades en BinManager con stock disponible pero ventas cercanas a cero. Cada semana que pasa es capital inmovilizado + riesgo de obsolescencia.
+
+### Señales de stock detenido
+
+```
+Criterios para marcar un SKU como "detenido":
+  - AvailableQTY > 5 unidades
+  - Ventas últimos 30 días: 0 o < 1 unidad/mes
+  - Días en inventario estimados: > 90
+
+Señales adicionales de alerta:
+  - Publicación activa pero CVR < 0.1% (hay visitas pero nadie compra)
+  - Publicación pausada con stock sin razón obvia
+  - SKU sin publicación activa en ninguna cuenta
+```
+
+### Framework de diagnóstico para stock detenido
+
+```
+Paso 1 — ¿Tiene publicación activa?
+  NO → publicar o revisar si fue eliminado/suprimido
+  SÍ → continuar
+
+Paso 2 — ¿Tiene visitas en los últimos 30 días?
+  NO (0 visitas) → problema de visibilidad
+    → Revisar: título mal optimizado, categoría incorrecta, atributos faltantes
+  SÍ (>50 visitas) → problema de conversión
+    → Revisar: precio vs competidores, fotos, descripción, garantía
+
+Paso 3 — ¿El precio es competitivo?
+  → GET /sites/MLM/search?q={modelo}&category={cat} → ver precio de ganador
+  → Si el ganador está 20%+ más barato → problema de precio o costo
+
+Paso 4 — ¿Es un producto obsoleto?
+  → El modelo tiene > 2 años de antigüedad en el mercado
+  → Nuevo modelo del fabricante lo reemplazó
+  → En ese caso: liquidación agresiva es mejor que seguir esperando
+```
+
+### Decisión: ¿qué hacer con stock detenido?
+
+```
+< 3 meses parado:
+  → Optimizar listing (título, fotos, precio) → observar 2 semanas
+  → Si no reacciona: activar DIGITAL_COUPON 15% para generar impulso
+
+3-6 meses parado:
+  → Reducir precio al mínimo rentable (margen 5%)
+  → Activar promoción agresiva (20%+)
+  → Considerar cross-selling con producto de volumen
+
+> 6 meses parado:
+  → Liquidación: precio por debajo de costo si es necesario
+  → El costo de seguir almacenando > pérdida en liquidación
+  → Opciones: oferta especial en ML, oferta a distribuidores, venta a empleados
+
+Regla: 1 peso recuperado hoy > 2 pesos esperados mañana cuando hay riesgo de obsolescencia.
+```
+
+---
+
+## 21. EXPLORADOR DE OPORTUNIDADES
+
+Identifica oportunidades de negocio antes de que sean obvias. Busca dónde hay demanda sin oferta competitiva.
+
+### Señales de oportunidad en ML
+
+```
+TIPO A — Categoría creciente sin vendedor dominante
+  Señal: búsquedas de un término con < 5 sellers con > 100 ventas/mes
+  Cómo detectar: buscar el término → ver "vendidos" en los top results
+  Oportunidad: entrar con listing optimizado + FULL + precio competitivo
+
+TIPO B — Competidor principal sin stock
+  Señal: el top seller de una categoría llegó a qty=0 o está pausado
+  Cómo detectar: monitorear top 5 sellers de categorías clave
+  Ventana: 48-72h (hasta que repongan)
+  Acción: subir presupuesto ads agresivamente en ese período
+
+TIPO C — Producto estacional antes del pico
+  Señal: temporada estacional en < 6 semanas, precio aún no subió
+  Calendario: ver sección 8 (Calendario Estacional)
+  Acción: comprar inventario antes del alza de demanda
+
+TIPO D — Gap de precio en el mercado
+  Señal: hay demanda de producto X a precio Y, pero nadie vende exactamente a Y
+  Ejemplo: todos los TVs 65" están en $15,000+, hay búsquedas a $12,000-13,000
+  Oportunidad: buscar un SKU que permita cubrir ese gap con margen real
+
+TIPO E — Publicación con demanda pero mal listing
+  Señal: item con 200+ visitas/mes pero CVR < 0.5%
+  Esto puede ser un competidor tuyo… o tuyo propio
+  Acción: si es tuyo → optimizar. Si es competidor → tu listing bien hecho los supera.
+```
+
+### Score de oportunidad (0-100)
+
+```
+Calcular antes de invertir tiempo/dinero en una oportunidad:
+
+Factor                        Peso   Criterio
+───────────────────────────────────────────────────
+Volumen de búsqueda/demanda   30%    >1000 ventas/mes categoría = 30pts
+Competencia débil             25%    <3 sellers dominantes = 25pts
+Margen neto disponible        20%    >25% = 20pts | 15-25% = 15pts | <15% = 5pts
+Alineación con inventario BM  15%    SKU ya en BM con stock = 15pts
+Facilidad de entrada          10%    Publicación sencilla = 10pts | FULL requerido = 5pts
+
+Score > 70: Alta prioridad — actuar esta semana
+Score 50-70: Media prioridad — planear para próximo mes
+Score < 50: Pasar — no vale el esfuerzo ahora
+```
+
+### Búsquedas web para detectar tendencias ML
+
+```
+Cuando uses WebSearch para investigar oportunidades:
+
+Tendencias de demanda:
+  "site:mercadolibre.com.mx [categoría] más vendido"
+  "[producto] precio México 2026"
+  "[marca modelo] disponibilidad México"
+
+Benchmarks de precio:
+  "GET /sites/MLM/search?q={modelo}&limit=5&sort=price_asc"
+  → Revisar precio del top 5 y su cantidad de ventas
+
+Señales de gap:
+  Buscar en Google Trends MX el término del producto
+  Si la tendencia sube en los últimos 90 días → oportunidad activa
+```
+
+---
+
+## 22. SCORE DE SALUD DE PUBLICACIÓN
+
+Antes de hacer ads o invertir tiempo en optimizar, calcular el score de salud:
+
+```
+Factor                     Peso   Señal positiva
+──────────────────────────────────────────────────────────
+Título optimizado           20%   60-80 chars, marca al inicio, atributos clave
+Fotos ≥ 6                   15%   Primera en blanco, resolución ≥ 1200px
+Descripción ≥ 300 palabras  10%   Bullets + specs + garantía
+Atributos completos         15%   BRAND, MODEL, SELLER_SKU + específicos categoría
+Precio competitivo          20%   Dentro del top 3 en precio para su búsqueda
+Stock suficiente (>15 días)  10%  No riesgo de quiebre inminente
+Sin reclamos abiertos        10%  0 reclamos abiertos
+
+Score 90-100: Lista para escalar con ads
+Score 70-89:  Arreglar los factores en rojo, luego ads
+Score 50-69:  Optimización necesaria antes de invertir
+Score < 50:   No anunciar — primero reparar el listing
+```
+
+### Aplicar el score antes de cada War Room
+
+Antes de proponer acciones en el War Room, calcular el score de salud de los candidatos a ads. Un listing con score < 70 que recibe ads desperdicia presupuesto — los ads amplifican lo que ya funciona, no rescatan lo que no vende.
+
+---
+
 ## ESTILO DE COMUNICACIÓN
 
 - Directo y accionable — sin relleno
