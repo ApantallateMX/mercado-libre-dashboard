@@ -479,19 +479,19 @@ async def lifespan(app: FastAPI):
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
     else:
-        # Modo backup: sync BM una vez al día a las 2am México (8am UTC)
+        # Modo backup: sync BM una vez al día a las 8:30 PM Monterrey (02:30 UTC)
         async def _daily_bm_sync():
-            from datetime import datetime as _dt, timezone as _tz
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
             while True:
                 _now = _dt.now(_tz.utc)
-                # Próximas 8:00 UTC (= 2am México CST)
-                _next = _now.replace(hour=8, minute=0, second=0, microsecond=0)
+                # 8:30 PM Monterrey CST (UTC-6) = 02:30 UTC del día siguiente
+                _next = _now.replace(hour=2, minute=30, second=0, microsecond=0)
                 if _next <= _now:
-                    _next = _next.replace(day=_now.day + 1)
+                    _next = _next + _td(days=1)
                 _secs = (_next - _now).total_seconds()
-                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (2am México)")
+                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (8:30 PM Monterrey)")
                 await asyncio.sleep(_secs)
-                logger.info("[BM-BACKUP] Iniciando sync diario BM...")
+                logger.info("[BM-BACKUP] Iniciando sync diario BM (8:30 PM Monterrey)...")
                 try:
                     accounts = await token_store.get_all_tokens()
                     for acc in accounts:
