@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-24 — FEAT: Planeación — Tendencia, ABC, vs Ref%, Stock Detenido
+
+### Cambios
+
+**Backend** (`app/main.py` — `planning_coverage`):
+- Fetch `usd_to_mxn` sin nuevo endpoint: usa `_manual_fx_rate` override → ML API → fallback 20
+- Lee `retail_ph_map` del `_bm_bulk_gr_cache` en memoria — sin llamadas directas a BM
+- Calcula por SKU: `retail_ph_usd`, `avg_price_mxn` (revenue/units de órdenes ML), `recovery_pct`
+- Expone `usd_to_mxn` en la respuesta para que el frontend pueda mostrarlo en tooltips
+
+**Frontend** (`app/templates/planning.html`):
+- **Badge ABC** en cada fila de cobertura: A≥1/día (rojo), B≥0.3 (amarillo), C<0.3 (gris)
+- **Columna Tendencia**: ↑ si rate_7d > rate_30d×1.2, ↓ si rate_7d < rate_30d×0.8, → estable
+- **Columna "vs Ref."**: `precio_prom_ml / (retail_ph_bm × TC) × 100%` — verde>120%, amarillo>80%, rojo<80%. Tooltip muestra precio absoluto en MXN.
+- **Sección "Stock Detenido"** (bloque 4.5): aparece automáticamente al cargar cobertura si hay SKUs con `stock_bm>5 AND daily_rate<0.05`. Muestra acción sugerida según antigüedad: sin ventas 30d → liquidación, sin ventas 7d → revisar precio, muy lento → cupón digital.
+
+### Archivos
+- `app/main.py` — endpoint `/api/planning/coverage`
+- `app/templates/planning.html` — tabla cobertura + sección stock detenido
+
+---
+
 ## 2026-04-24 — AGENT: mercadolibre-strategist optimizado a versión Pro
 
 ### Cambios
