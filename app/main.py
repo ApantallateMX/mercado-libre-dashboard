@@ -1092,6 +1092,9 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             p["_bm_model"] = bm.get("Model", "")
             p["_bm_title"] = bm.get("Title", "")
             p["_bm_retail_ph"] = retail_ph
+            # Poblar _bm_retail_ph_cache para que coverage lo use sin tocar BM
+            if 0 < retail_ph < 9000:
+                _bm_retail_ph_cache[base] = (_time.time(), float(retail_ph))
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
@@ -11649,22 +11652,32 @@ async def planning_coverage(
     if usd_to_mxn == 0:
         usd_to_mxn = 20.0
 
-    # ── RetailPH del bulk cache — sin llamadas directas a BM ─────────────────
+    # ── RetailPH de _bm_retail_ph_cache (poblado por prewarm, sin llamadas a BM) ──
+    # Fallback: intentar leer del bulk cache si está caliente
+    _now_cov = _time.time()
     retail_ph_map: dict = {}
     try:
-        _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
-        if _bulk and (_time.time() - _bulk[0]) < _BM_CACHE_TTL:
-            for _row in _bulk[1]:
-                _bsk = (_row.get("SKU") or "").upper().strip()
-                if not _bsk:
-                    continue
-                _rph = _row.get("LastRetailPricePurchaseHistory") or 0
-                _rp  = _row.get("RetailPrice") or 0
-                _val = _rph if (0 < _rph < 9000) else (_rp if (0 < _rp < 9000) else 0)
-                if _val:
-                    retail_ph_map[_bsk] = float(_val)
+        for _bsk, (_rts, _rval) in _bm_retail_ph_cache.items():
+            if (_now_cov - _rts) < _BM_RETAIL_PH_TTL:
+                retail_ph_map[_bsk] = _rval
     except Exception:
         pass
+    # Fallback secundario: bulk cache si está caliente (cubre cold start antes del prewarm)
+    if not retail_ph_map:
+        try:
+            _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
+            if _bulk and (_now_cov - _bulk[0]) < _BM_CACHE_TTL:
+                for _row in _bulk[1]:
+                    _bsk = (_row.get("SKU") or "").upper().strip()
+                    if not _bsk:
+                        continue
+                    _rph = _row.get("LastRetailPricePurchaseHistory") or 0
+                    _rp  = _row.get("RetailPrice") or 0
+                    _val = _rph if (0 < _rph < 9000) else (_rp if (0 < _rp < 9000) else 0)
+                    if _val:
+                        retail_ph_map[_bsk] = float(_val)
+        except Exception:
+            pass
 
     result = []
     for item in items_with_sku:
