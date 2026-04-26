@@ -2564,60 +2564,44 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     logger.info(f"[CATALOG-SYNC] Iniciando sync de {len(skus_to_fetch)} SKUs (concurrencia=3)")
     from app.services.binmanager_client import get_shared_bm as _get_bm_cat
     bm_cat = await _get_bm_cat()
+    if not bm_cat._logged_in:
+        await bm_cat.login()
     sem_cat = asyncio.Semaphore(3)
     results: list[dict] = []
 
-    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS
+    # Mapa base_sku → fila del bulk (para brand/model/title sin llamadas extra a BM)
+    _bulk_meta: dict = {}
+    _bulk_src = _bm_bulk_gr_cache or _bm_bulk_all_cache
+    if _bulk_src:
+        for _br in _bulk_src[1]:
+            _bsk = normalize_to_bm_sku((_br.get("SKU") or "").upper().strip())
+            if _bsk and _bsk not in _bulk_meta:
+                _bulk_meta[_bsk] = _br
+
+    _debug_logged = {"n": 0}  # mutable para nonlocal-equivalente
 
     async def _fetch_one(sku: str):
-        # 1 sola llamada por SKU — CONCEPTID=1 + LOCATIONID=47,62,68 + SEARCH=sku
-        # Igual que bulk pero con SEARCH=sku específico para obtener LastRetailPricePurchaseHistory
-        _payload = {
-            "COMPANYID": 1, "SEARCH": sku, "CONCEPTID": 1,
-            "LOCATIONID": "47,62,68",
-            "CONDITION": "GRA,GRB,GRC,NEW",
-            "FORINVENTORY": 0, "BUSCADOR": False,
-            "RECORDSPAGE": 10, "NUMBERPAGE": 1,
-            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
-            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
-            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
-            "OPENCELL": "", "OCCOMPTABILITY": "",
-            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
-            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
-            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
-            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
-            "ORDERBYNAME": None, "ORDERBYTYPE": None,
-            "PorcentajeFloor": 20, "StatusConcept": None,
-            "RetailBalance": None, "RetailAvailable": None,
-            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
-            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
-            "SUPPLIERS": None, "filterUPC": None,
-            "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
-            "Jsonfilter": "[]",
-        }
+        # Precio: get_retail_price_ph() — función verificada, maneja auth+retry.
+        # Brand/model/title: del bulk cache ya descargado (sin llamadas extras a BM).
         async with sem_cat:
             try:
-                c = bm_cat._client()
-                r = await c.post(
-                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json=_payload,
-                    headers=_AJAX_HEADERS, timeout=30,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    if isinstance(data, list) and data:
-                        row = next((x for x in data if (x.get("SKU") or "").upper() == sku), data[0])
-                        rph = float(row.get("LastRetailPricePurchaseHistory") or 0)
-                        return {
-                            "sku":       sku,
-                            "retail_ph": rph if 0 < rph < 9000 else 0,
-                            "brand":     row.get("Brand") or "",
-                            "model":     row.get("Model") or "",
-                            "title":     row.get("Title") or row.get("SKUDescription") or "",
-                        }
-            except Exception:
-                pass
-            return None
+                rph_raw = await bm_cat.get_retail_price_ph(sku)
+                rph = float(rph_raw or 0)
+                # Debug: loguear los primeros 5 resultados para diagnóstico
+                if _debug_logged["n"] < 5:
+                    _debug_logged["n"] += 1
+                    logger.info(f"[CATALOG-SYNC-DEBUG] SKU={sku} rph_raw={rph_raw!r} rph={rph}")
+                _meta = _bulk_meta.get(sku, {})
+                return {
+                    "sku":       sku,
+                    "retail_ph": rph if 0 < rph < 9000 else 0,
+                    "brand":     _meta.get("Brand") or "",
+                    "model":     _meta.get("Model") or "",
+                    "title":     _meta.get("Title") or _meta.get("SKUDescription") or "",
+                }
+            except Exception as _ex:
+                logger.warning(f"[CATALOG-SYNC] _fetch_one error SKU={sku}: {_ex}")
+                return None
 
     try:
         tasks = await asyncio.gather(*[_fetch_one(s) for s in skus_to_fetch], return_exceptions=True)
@@ -10112,6 +10096,89 @@ async def diag_cache_health(token: str = ""):
         "bulk_all_age_s":  all_age_s,
         "bulk_all_rows":   len(_bm_bulk_all_cache[1]) if _bm_bulk_all_cache else 0,
     })
+
+
+@app.get("/api/diag/bm-sku-probe")
+async def diag_bm_sku_probe(sku: str = "", token: str = ""):
+    """Diagnóstico: llama BM con _GS_BASE_PAYLOAD (CONCEPTID=8) + SEARCH=sku
+    y retorna la respuesta raw. Permite verificar si LastRetailPricePurchaseHistory
+    tiene valor real para un SKU específico.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD, get_shared_bm as _gsb
+    bm = await _gsb()
+    if not bm._logged_in:
+        if not await bm.login():
+            return JSONResponse({"error": "BM login failed"}, status_code=503)
+
+    sku_up = sku.strip().upper()
+    results = {}
+
+    # Test 1: CONCEPTID=8 (método original _GS_BASE_PAYLOAD)
+    try:
+        c = bm._client()
+        payload_c8 = {**_GS_BASE_PAYLOAD, "SEARCH": sku_up}
+        r = await c.post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                         json=payload_c8, headers=_AJAX_HEADERS, timeout=30)
+        raw_c8 = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
+        results["conceptid8"] = {
+            "status": r.status_code,
+            "url": str(r.url),
+            "rows": len(raw_c8) if isinstance(raw_c8, list) else 0,
+            "raw_first": raw_c8[0] if isinstance(raw_c8, list) and raw_c8 else raw_c8,
+        }
+    except Exception as e:
+        results["conceptid8"] = {"error": str(e)}
+
+    # Test 2: CONCEPTID=1 + LOCATIONID=47,62,68 (método nuevo)
+    try:
+        c = bm._client()
+        payload_c1 = {
+            "COMPANYID": 1, "SEARCH": sku_up, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68", "CONDITION": "GRA,GRB,GRC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": 10, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
+            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+            "OPENCELL": "", "OCCOMPTABILITY": "",
+            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
+            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "PorcentajeFloor": 20, "StatusConcept": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
+            "Jsonfilter": "[]",
+        }
+        r = await c.post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                         json=payload_c1, headers=_AJAX_HEADERS, timeout=30)
+        raw_c1 = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
+        results["conceptid1_loc47"] = {
+            "status": r.status_code,
+            "url": str(r.url),
+            "rows": len(raw_c1) if isinstance(raw_c1, list) else 0,
+            "raw_first": raw_c1[0] if isinstance(raw_c1, list) and raw_c1 else raw_c1,
+        }
+    except Exception as e:
+        results["conceptid1_loc47"] = {"error": str(e)}
+
+    # También prueba el método oficial get_retail_price_ph
+    try:
+        rph = await bm.get_retail_price_ph(sku_up)
+        results["get_retail_price_ph"] = rph
+    except Exception as e:
+        results["get_retail_price_ph"] = f"error: {e}"
+
+    return JSONResponse({"sku": sku_up, "results": results})
 
 
 @app.get("/api/debug/item-stock")
