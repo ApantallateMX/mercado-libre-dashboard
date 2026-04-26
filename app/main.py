@@ -517,13 +517,14 @@ async def lifespan(app: FastAPI):
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         while True:
             _now = _dt.now(_tz.utc)
-            # Próximo domingo (weekday=6) a las 02:00 UTC (= domingo 9pm Monterrey CDT)
-            days_until_sunday = (6 - _now.weekday()) % 7
-            if days_until_sunday == 0 and _now.hour >= 2:
-                days_until_sunday = 7  # ya pasó este domingo, esperar al siguiente
-            _next = (_now + _td(days=days_until_sunday)).replace(hour=2, minute=0, second=0, microsecond=0)
+            # Domingo 9pm Monterrey CDT (UTC-5) = lunes 02:00 UTC
+            # weekday: lunes=0, martes=1, ..., domingo=6
+            days_until_monday = (0 - _now.weekday()) % 7
+            if days_until_monday == 0 and _now.hour >= 2:
+                days_until_monday = 7  # ya pasó el lunes 02:00 UTC de esta semana
+            _next = (_now + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
             _secs = (_next - _now).total_seconds()
-            logger.info(f"[CATALOG-SYNC] Próximo sync semanal en {_secs/3600:.1f}h (domingo 9pm MTY)")
+            logger.info(f"[CATALOG-SYNC] Próximo sync semanal en {_secs/3600:.1f}h (domingo 9pm MTY = lunes 02:00 UTC)")
             await asyncio.sleep(_secs)
             logger.info("[CATALOG-SYNC] Iniciando sync semanal de catálogo BM...")
             try:
@@ -9721,10 +9722,11 @@ async def catalog_status_endpoint(request: Request):
     # Próximo domingo 9pm Monterrey (02:00 UTC lunes)
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     _dnow = _dt.now(_tz.utc)
-    days_until_sunday = (6 - _dnow.weekday()) % 7
-    if days_until_sunday == 0 and _dnow.hour >= 2:
-        days_until_sunday = 7
-    _next = (_dnow + _td(days=days_until_sunday)).replace(hour=2, minute=0, second=0, microsecond=0)
+    # Domingo 9pm MTY CDT = lunes 02:00 UTC
+    days_until_monday = (0 - _dnow.weekday()) % 7
+    if days_until_monday == 0 and _dnow.hour >= 2:
+        days_until_monday = 7
+    _next = (_dnow + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
     next_run_h = round((_next - _dnow).total_seconds() / 3600, 1)
 
     def _fmt(h):
