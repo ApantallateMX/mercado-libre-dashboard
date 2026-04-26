@@ -2516,10 +2516,11 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     Fuente: lista de SKUs del bulk cache actual + DB existente.
     Retorna cantidad de SKUs sincronizados.
     """
-    global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history
+    global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history, _catalog_sync_task
     if _catalog_sync_running:
         return 0
     _catalog_sync_running = True
+    _catalog_sync_task = asyncio.current_task()
     _t0 = _time.time()
     # Obtener lista de SKUs base del bulk cache (ya los tenemos, sin nuevas llamadas)
     skus_to_fetch: list[str] = []
@@ -2603,6 +2604,16 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
         })
         if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
         return saved
+    except asyncio.CancelledError:
+        elapsed = round(_time.time() - _t0, 1)
+        _catalog_sync_history.append({
+            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "skus_saved": 0, "with_price": 0,
+            "elapsed_s": elapsed, "source": source, "ok": False, "error": "Cancelado por usuario",
+        })
+        if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
+        logger.info(f"[CATALOG-SYNC] Cancelado por usuario tras {elapsed}s")
+        return 0
     except Exception as _err:
         elapsed = round(_time.time() - _t0, 1)
         _catalog_sync_history.append({
@@ -2615,6 +2626,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
         return 0
     finally:
         _catalog_sync_running = False
+        _catalog_sync_task = None
 
 
 async def _load_catalog_from_db() -> int:
@@ -2899,6 +2911,7 @@ _prewarm_source: str = "auto"     # "auto" | "manual" — para el historial de B
 _prewarm_history: list = []       # historial en memoria: últimas 20 ejecuciones del prewarm
 # ── Catálogo BM semanal — estado en memoria ──────────────────────────────────
 _catalog_sync_running: bool = False
+_catalog_sync_task: object = None  # asyncio.Task actual — para poder cancelarlo
 _catalog_sync_history: list = []   # últimas 10 corridas: {ts, skus, elapsed_s, source, ok, error}
 # Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
@@ -9742,6 +9755,21 @@ async def catalog_sync_trigger(request: Request):
         return JSONResponse({"ok": False, "error": "Ya está corriendo un sync"})
     asyncio.create_task(_sync_bm_product_catalog(source="manual"))
     return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
+
+
+@app.post("/api/catalog/cancel")
+async def catalog_sync_cancel(request: Request):
+    """Cancela el sync en curso del catálogo BM. Solo admin."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "Acceso denegado"}, status_code=403)
+    if not _catalog_sync_running or _catalog_sync_task is None:
+        return JSONResponse({"ok": False, "error": "No hay sync en curso"})
+    try:
+        _catalog_sync_task.cancel()
+        return JSONResponse({"ok": True, "message": "Cancelación enviada"})
+    except Exception as _e:
+        return JSONResponse({"ok": False, "error": str(_e)})
 
 
 @app.get("/api/bm/health-log")

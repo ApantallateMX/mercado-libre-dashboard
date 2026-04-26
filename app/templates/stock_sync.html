@@ -318,14 +318,20 @@
         <h2 class="text-sm font-semibold text-gray-700">Catálogo BM — Precios & Info de SKUs</h2>
         <p class="text-xs text-gray-400 mt-0.5">Sync semanal: domingo 9pm Monterrey · retail_ph, brand, model, title</p>
       </div>
-      <button id="catalog-sync-btn" onclick="triggerCatalogSync()"
-              class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-1.5">
-        <svg id="catalog-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-        <span id="catalog-btn-label">Sincronizar ahora</span>
-      </button>
+      <div class="flex gap-2">
+        <button id="catalog-sync-btn" onclick="triggerCatalogSync()"
+                class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-1.5">
+          <svg id="catalog-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+          <span id="catalog-btn-label">Sincronizar ahora</span>
+        </button>
+        <button id="catalog-cancel-btn" onclick="cancelCatalogSync()" style="display:none"
+                class="px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-lg hover:bg-red-700 transition">
+          Cancelar
+        </button>
+      </div>
     </div>
 
     <!-- Estado actual -->
@@ -1806,15 +1812,20 @@ function _loadCatalogStatus() {
       var btn = document.getElementById('catalog-sync-btn');
       var spinner = document.getElementById('catalog-spinner');
       var label = document.getElementById('catalog-btn-label');
+      var cancelBtn = document.getElementById('catalog-cancel-btn');
       if (btn && spinner && label) {
         if (d.running) {
           btn.disabled = true;
           spinner.classList.remove('hidden');
           label.textContent = 'Sincronizando...';
+          if (cancelBtn) cancelBtn.style.display = '';
         } else {
           btn.disabled = false;
           spinner.classList.add('hidden');
           label.textContent = 'Sincronizar ahora';
+          if (cancelBtn) cancelBtn.style.display = 'none';
+          _catalogRunning = false;
+          if (_catalogPollTimer) { clearInterval(_catalogPollTimer); _catalogPollTimer = null; }
         }
       }
       // Historial
@@ -1854,6 +1865,23 @@ function _loadCatalogStatus() {
 
 var _catalogRunning = false;
 function _catalogSyncIsRunning() { return _catalogRunning; }
+
+function cancelCatalogSync() {
+  if (!confirm('¿Cancelar el sync en curso?\n\nLos SKUs ya procesados NO se guardarán. Tendrás que correrlo de nuevo.')) return;
+  var cancelBtn = document.getElementById('catalog-cancel-btn');
+  if (cancelBtn) cancelBtn.disabled = true;
+  fetch('/api/catalog/cancel', {method: 'POST', headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (cancelBtn) cancelBtn.disabled = false;
+      if (!d.ok) { alert('Error: ' + (d.error || JSON.stringify(d))); return; }
+      setTimeout(_loadCatalogStatus, 1500);
+    })
+    .catch(function(e) {
+      if (cancelBtn) cancelBtn.disabled = false;
+      alert('Error: ' + e.message);
+    });
+}
 
 function triggerCatalogSync() {
   if (!confirm('¿Iniciar sync manual del catálogo BM?\n\nEsto descargará retail_ph, brand, model y title para todos los SKUs del bulk cache.\nConcurrencia=3 para no saturar BM. Puede tardar varios minutos.')) return;
