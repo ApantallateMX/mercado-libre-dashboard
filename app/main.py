@@ -10178,6 +10178,32 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
     except Exception as e:
         results["get_retail_price_ph"] = f"error: {e}"
 
+    # Revisa bulk cache en memoria — ¿el campo ya viene en los datos descargados?
+    _bulk_in_mem = _bm_bulk_gr_cache or _bm_bulk_all_cache
+    if _bulk_in_mem:
+        _bulk_rows = _bulk_in_mem[1]
+        _bulk_match = next((r for r in _bulk_rows
+                            if (r.get("SKU") or "").upper().startswith(sku_up)), None)
+        results["bulk_cache"] = {
+            "total_rows": len(_bulk_rows),
+            "match_found": _bulk_match is not None,
+            "row": {k: _bulk_match.get(k) for k in
+                    ["SKU", "AvailableQTY", "LastRetailPricePurchaseHistory",
+                     "RetailPrice", "Brand", "Model", "Title", "SKUDescription"]}
+            if _bulk_match else None,
+        }
+        # Muestra sample de 5 SKUs con LastRetailPricePurchaseHistory > 0
+        _with_price = [r for r in _bulk_rows if float(r.get("LastRetailPricePurchaseHistory") or 0) > 0]
+        results["bulk_skus_with_rph"] = {
+            "count": len(_with_price),
+            "sample5": [{
+                "sku": r.get("SKU"), "rph": r.get("LastRetailPricePurchaseHistory"),
+                "avail": r.get("AvailableQTY")
+            } for r in _with_price[:5]],
+        }
+    else:
+        results["bulk_cache"] = {"error": "bulk cache vacío — prewarm no ha corrido"}
+
     return JSONResponse({"sku": sku_up, "results": results})
 
 
