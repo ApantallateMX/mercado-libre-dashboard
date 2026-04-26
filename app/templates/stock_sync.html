@@ -217,7 +217,8 @@
         <span id="prewarm-btn-label">🔄 Actualizar ahora</span>
       </button>
     </div>
-    <div id="prewarm-status-row" class="text-xs text-gray-500 mb-3">Cargando estado...</div>
+    <div id="prewarm-status-row" class="text-xs text-gray-500 mb-2">Cargando estado...</div>
+    <div id="retail-ph-status" class="text-[10px] text-gray-400 mb-3 font-mono hidden"></div>
 
     <!-- Historial de syncs BM -->
     <div id="bm-sync-log-wrap" class="mb-3">
@@ -1193,20 +1194,21 @@ function _fillCoveragePanel(stats) {
 }
 
 function _fillRetailPhDiag(diag) {
-  var el = document.getElementById('retail-ph-diag');
+  var el = document.getElementById('retail-ph-status');
   if (!el) return;
   var count = diag.cache_count || 0;
   var bulkSample = diag.bulk_sample_retail_ph;
   var cacheSample = diag.sample;
   var parts = [];
-  parts.push('Cache: <span class="' + (count > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold') + '">' + count + ' SKUs</span>');
-  if (cacheSample) parts.push('Ej: ' + cacheSample[0] + ' = $' + cacheSample[1]);
+  parts.push('RetailPH cache: <span class="' + (count > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold') + '">' + count + ' SKUs</span>');
+  if (cacheSample) parts.push(cacheSample[0] + '=$' + cacheSample[1]);
   if (bulkSample) {
-    parts.push('Bulk tiene precio: ' + bulkSample.sku + ' = $' + bulkSample.value);
+    parts.push('✓ Bulk tiene precios (' + bulkSample.sku + '=$' + bulkSample.value + ')');
   } else {
-    parts.push('<span class="text-orange-500">Bulk: sin precios RetailPH</span>');
+    parts.push('<span class="text-orange-500">✗ Bulk sin precios RetailPH</span>');
   }
-  el.innerHTML = parts.join(' &nbsp;|&nbsp; ');
+  el.innerHTML = parts.join(' | ');
+  el.classList.remove('hidden');
 }
 
 function _pollPrewarmStatus() {
@@ -1214,6 +1216,7 @@ function _pollPrewarmStatus() {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       _updatePrewarmStatus(d);
+      if (d.retail_ph_diag) _fillRetailPhDiag(d.retail_ph_diag);
       // Si el prewarm estaba corriendo al cargar la página, arrancar polling para detectar el fin.
       if (d.running && !_prewarmPollTimer) {
         _prewarmPollTimer = setInterval(_pollPrewarmStatus, 3000);
