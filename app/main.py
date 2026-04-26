@@ -2523,12 +2523,12 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     _catalog_sync_running = True
     _catalog_sync_task = asyncio.current_task()
     _t0 = _time.time()
-    # Obtener lista de SKUs base del bulk cache (ya los tenemos, sin nuevas llamadas)
+    # Obtener lista de SKUs base — fuente 1: bulk cache en memoria (prewarm)
     skus_to_fetch: list[str] = []
+    seen: set = set()
     try:
         _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
         if _bulk:
-            seen: set = set()
             for _row in _bulk[1]:
                 _rsk = (_row.get("SKU") or "").upper().strip()
                 if _rsk:
@@ -2536,14 +2536,28 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                     if _base and _base not in seen:
                         seen.add(_base)
                         skus_to_fetch.append(_base)
+            logger.info(f"[CATALOG-SYNC] Fuente: bulk cache → {len(skus_to_fetch)} SKUs")
     except Exception as _e:
         logger.warning(f"[CATALOG-SYNC] Error leyendo bulk cache: {_e}")
 
+    # Fuente 2 fallback: _bm_stock_cache (cargado de DB al arrancar — siempre disponible)
     if not skus_to_fetch:
-        logger.warning("[CATALOG-SYNC] Sin SKUs en bulk cache — abortando sync")
+        try:
+            for _csk in list(_bm_stock_cache.keys()):
+                _base = _extract_base_sku(_csk.upper())
+                if _base and _base not in seen:
+                    seen.add(_base)
+                    skus_to_fetch.append(_base)
+            logger.info(f"[CATALOG-SYNC] Fuente: stock cache DB → {len(skus_to_fetch)} SKUs")
+        except Exception as _e:
+            logger.warning(f"[CATALOG-SYNC] Error leyendo stock cache: {_e}")
+
+    if not skus_to_fetch:
+        logger.warning("[CATALOG-SYNC] Sin SKUs disponibles — prewarm aún no corrió y DB vacía")
         _catalog_sync_running = False
-        _catalog_sync_history.append({"ts": _time.time(), "skus": 0, "elapsed_s": 0,
-                                       "source": source, "ok": False, "error": "Sin SKUs en bulk cache"})
+        _catalog_sync_history.append({"ts": _time.time(), "skus_total": 0, "elapsed_s": 0,
+                                       "source": source, "ok": False,
+                                       "error": "Sin SKUs — espera que corra el prewarm (~90s post-deploy)"})
         if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
         return 0
 
