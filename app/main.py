@@ -2567,16 +2567,40 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     sem_cat = asyncio.Semaphore(3)
     results: list[dict] = []
 
-    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS
 
     async def _fetch_one(sku: str):
-        # 1 sola llamada por SKU — CONCEPTID=8 + SEARCH=sku + NEEDRETAILPRICEPH=True
+        # 1 sola llamada por SKU — CONCEPTID=1 + LOCATIONID=47,62,68 + SEARCH=sku
+        # Igual que bulk pero con SEARCH=sku específico para obtener LastRetailPricePurchaseHistory
+        _payload = {
+            "COMPANYID": 1, "SEARCH": sku, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68",
+            "CONDITION": "GRA,GRB,GRC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": 10, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
+            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+            "OPENCELL": "", "OCCOMPTABILITY": "",
+            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
+            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "PorcentajeFloor": 20, "StatusConcept": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
+            "Jsonfilter": "[]",
+        }
         async with sem_cat:
             try:
                 c = bm_cat._client()
                 r = await c.post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-                    json={**_GS_BASE_PAYLOAD, "SEARCH": sku},
+                    json=_payload,
                     headers=_AJAX_HEADERS, timeout=30,
                 )
                 if r.status_code == 200:
