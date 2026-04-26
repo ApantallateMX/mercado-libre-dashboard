@@ -10178,6 +10178,55 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
     except Exception as e:
         results["get_retail_price_ph"] = f"error: {e}"
 
+    # Test 3: Scan completo CONCEPTID=8 + NEEDRETAILPRICE=True (sin SEARCH filter, primeras 5 filas)
+    try:
+        c = bm._client()
+        payload_scan = {
+            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 8,
+            "LOCATIONID": None, "CONDITION": None,
+            "FORINVENTORY": None, "BUSCADOR": False,
+            "RECORDSPAGE": 5, "NUMBERPAGE": 1,
+            "NEEDRETAILPRICE": True, "NEEDRETAILPRICEPH": True,
+            "NEEDAVGCOST": False, "NEEDFLOORPRICE": False,
+            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+            "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+            "OPENCELL": False, "OCCOMPTABILITY": False,
+            "ORDERBYNAME": None, "ORDERBYTYPE": None,
+            "PorcentajeFloor": 20, "StatusConcept": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "NEEDLASTREPORTEDSALESPRICE": False, "StartDate": None, "EndDate": None,
+            "Jsonfilter": "[]",
+            "Arrayfilters_Condition": None, "Namefilters_Condition": None,
+            "Arrayfilters_Brand": None, "Namefilters_Brand": None,
+            "Arrayfilters_Model": None, "Namefilters_Model": None,
+            "Arrayfilters_Size": None, "Namefilters_Size": None,
+            "Arrayfilters_Category": None, "Namefilters_Category": None,
+            "Arrayfilters_Tags": None, "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
+        }
+        r = await c.post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                         json=payload_scan, headers=_AJAX_HEADERS, timeout=30)
+        raw_scan = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
+        results["scan_c8_no_filter"] = {
+            "status": r.status_code,
+            "rows": len(raw_scan) if isinstance(raw_scan, list) else 0,
+            "sample": [{
+                "SKU": x.get("SKU"),
+                "RetailPrice": x.get("RetailPrice"),
+                "LastRetailPricePurchaseHistory": x.get("LastRetailPricePurchaseHistory"),
+                "AvailableQTY": x.get("AvailableQTY"),
+            } for x in (raw_scan[:5] if isinstance(raw_scan, list) else [])],
+        }
+    except Exception as e:
+        results["scan_c8_no_filter"] = {"error": str(e)}
+
     # Revisa bulk cache en memoria — ¿el campo ya viene en los datos descargados?
     _bulk_in_mem = _bm_bulk_gr_cache or _bm_bulk_all_cache
     if _bulk_in_mem:
