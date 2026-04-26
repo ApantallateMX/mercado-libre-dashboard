@@ -221,16 +221,18 @@
 
     <!-- Historial de syncs BM -->
     <div id="bm-sync-log-wrap" class="mb-3">
+      <p class="text-xs font-semibold text-gray-600 mb-1">Historial de actualizaciones</p>
       <table class="w-full text-xs" id="bm-sync-log-table">
         <thead>
           <tr class="text-left text-gray-400 border-b border-gray-100">
-            <th class="pb-1 font-medium">Actualización</th>
+            <th class="pb-1 font-medium">Cuándo</th>
             <th class="pb-1 font-medium text-right">SKUs</th>
+            <th class="pb-1 font-medium text-right">Precios</th>
             <th class="pb-1 font-medium text-right">Duración</th>
           </tr>
         </thead>
         <tbody id="bm-sync-log-body">
-          <tr><td colspan="3" class="py-2 text-gray-400 text-center">Cargando...</td></tr>
+          <tr><td colspan="4" class="py-2 text-gray-400 text-center">Cargando...</td></tr>
         </tbody>
       </table>
     </div>
@@ -1245,16 +1247,18 @@ function _loadBmSyncLog() {
       if (!tbody) return;
       var rows = d.log || [];
       if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="3" class="py-2 text-gray-400 text-center">Sin datos — presiona Actualizar ahora</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="py-2 text-gray-400 text-center">Sin datos — presiona Actualizar ahora</td></tr>';
         return;
       }
       tbody.innerHTML = rows.map(function(r) {
         var srcBadge = r.source === 'manual'
           ? '<span class="ml-1 px-1 bg-indigo-50 text-indigo-500 rounded text-[10px]">manual</span>'
           : '';
+        var rph = (r.retail_ph != null) ? r.retail_ph : '—';
         return '<tr class="border-b border-gray-50 last:border-0">' +
           '<td class="py-1 text-gray-500">' + r.age_str + srcBadge + '</td>' +
           '<td class="py-1 text-right font-mono text-gray-700">' + r.sku_count.toLocaleString() + '</td>' +
+          '<td class="py-1 text-right font-mono text-gray-500">' + rph + '</td>' +
           '<td class="py-1 text-right text-gray-400">' + r.elapsed_s + 's</td>' +
           '</tr>';
       }).join('');

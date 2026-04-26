@@ -2781,6 +2781,7 @@ _prewarm_queued_uid: str | None = None  # user_id del prewarm en cola (None = de
 _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
 _prewarm_source: str = "auto"     # "auto" | "manual" — para el historial de BM sync log
+_prewarm_history: list = []       # historial en memoria: últimas 20 ejecuciones del prewarm
 # Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
 
@@ -3081,7 +3082,18 @@ async def _prewarm_caches(user_id: str = None):
             try:
                 _bm_log_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
                 _bm_log_skus    = len(_bm_stock_cache)
-                logger.info(f"[PREWARM] BM sync log: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}")
+                _bm_log_retail  = len(_bm_retail_ph_cache)
+                logger.info(f"[PREWARM] BM sync log: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}, retail_ph={_bm_log_retail}")
+                # Historial en memoria (sobrevive entre requests, resiste Railway ephemeral DB)
+                _prewarm_history.append({
+                    "ts":           _time.time(),
+                    "sku_count":    _bm_log_skus,
+                    "elapsed_s":    _bm_log_elapsed,
+                    "source":       _prewarm_source,
+                    "retail_ph":    _bm_log_retail,
+                })
+                if len(_prewarm_history) > 20:
+                    _prewarm_history.pop(0)
                 await token_store.log_bm_sync_event(
                     sku_count=_bm_log_skus,
                     elapsed_s=_bm_log_elapsed,
@@ -9487,27 +9499,46 @@ async def prewarm_status():
 
 @app.get("/api/stock/bm-sync-log")
 async def bm_sync_log_endpoint():
-    """Historial de ejecuciones del prewarm BM — para la tarjeta Caché de Stock BM."""
-    rows = await token_store.get_bm_sync_log(limit=10)
-    import time as _t
-    now = _t.time()
-    entries = []
-    for r in rows:
-        age_s = now - r["synced_at"]
+    """Historial de ejecuciones del prewarm BM — para la tarjeta Caché de Stock BM.
+    Usa historial en memoria primero (sobrevive Railway ephemeral DB).
+    """
+    now = _time.time()
+
+    def _fmt_entry(ts, sku_count, elapsed_s, source, retail_ph=None):
+        age_s = now - ts
         if age_s < 120:
             age_str = f"hace {int(age_s)}s"
         elif age_s < 3600:
-            age_str = f"hace {int(age_s//60)}min"
+            age_str = f"hace {int(age_s // 60)}min"
         else:
-            age_str = f"hace {int(age_s//3600)}h"
-        entries.append({
-            "synced_at":  r["synced_at"],
-            "age_str":    age_str,
-            "sku_count":  r["sku_count"],
-            "elapsed_s":  r["elapsed_s"],
-            "source":     r["source"],
-        })
-    return JSONResponse({"log": entries})
+            age_str = f"hace {int(age_s // 3600)}h"
+        return {
+            "synced_at": ts,
+            "age_str":   age_str,
+            "sku_count": sku_count,
+            "elapsed_s": elapsed_s,
+            "source":    source,
+            "retail_ph": retail_ph,
+        }
+
+    # Historial en memoria (fuente primaria — resistente a reinicios de DB)
+    if _prewarm_history:
+        entries = [
+            _fmt_entry(h["ts"], h["sku_count"], h["elapsed_s"], h["source"], h.get("retail_ph"))
+            for h in reversed(_prewarm_history)
+        ]
+        return JSONResponse({"log": entries, "source": "memory"})
+
+    # Fallback: DB (útil solo si el proceso lleva corriendo desde antes del fix)
+    try:
+        rows = await token_store.get_bm_sync_log(limit=10)
+        entries = [
+            _fmt_entry(r["synced_at"], r["sku_count"], r["elapsed_s"], r["source"])
+            for r in rows
+        ]
+    except Exception:
+        entries = []
+    return JSONResponse({"log": entries, "source": "db"})
 
 
 @app.get("/api/bm/status")
