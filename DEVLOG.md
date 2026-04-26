@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-25 — FIX: Catalog sync 0 precios por CONCEPTID incorrecto
+
+### Bug
+`_sync_bm_product_catalog` corría OK (1,550 SKUs, ~345s) pero retornaba **0 con precio**.
+
+### Causa raíz
+`_fetch_one` usaba `_GS_BASE_PAYLOAD` que tiene `CONCEPTID=8` y `LOCATIONID=None`.
+El endpoint `Get_GlobalStock_InventoryBySKU` solo retorna `LastRetailPricePurchaseHistory`
+cuando se llama con `CONCEPTID=1` + `LOCATIONID="47,62,68"` (igual que el bulk).
+
+### Fix (`app/main.py` — commit 99a19f6)
+- `_fetch_one` ahora construye payload inline con `CONCEPTID=1`, `LOCATIONID="47,62,68"`,
+  `SEARCH=sku`, `NEEDRETAILPRICEPH=True` — mismo formato que el bulk pero para 1 SKU.
+- Eliminado import de `_GS_BASE_PAYLOAD` (ya no se usa en catalog sync).
+
+---
+
 ## 2026-04-25 — FEAT: Catálogo BM semanal + prewarm 10 min + VS REF% desde DB
 
 ### Problema
