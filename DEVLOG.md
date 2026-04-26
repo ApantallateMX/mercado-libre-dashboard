@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-25 — FIX: Concentrar — stock correcto al ganador + error check
+
+### Problema
+El botón "Concentrar" analizaba correctamente pero no asignaba el stock correcto al ganador.
+
+### Causa raíz
+- `concentrateItem`: enviaba `total_stock: d.total_bm_avail` pero el preview response no tiene ese campo (tiene `total_stock`). JS convierte `undefined` en omisión → backend recibe `total_stock=0` → ganador queda en 0.
+- `bulkConcentrateCritical`: mismo bug con `d.total_bm_avail`.
+- Check de éxito: solo revisaba `res.ok` (HTTP status) no `res.data.ok` → errores de negocio se mostraban como "OK".
+
+### Fix (`products_stock_issues.html`)
+- `concentrateItem`: `total_stock: bmAvail` (parámetro ya presente en la firma de la función, viene de `_bm_avail` del producto en BM)
+- `bulkConcentrateCritical`: `total_stock: s.avail` (campo ya presente en el array de SKUs)
+- Check de éxito: `if (!res.ok || !res.data.ok)` para capturar errores de negocio
+
+---
+
 ## 2026-04-24 — FEAT: Planeación — Tendencia, ABC, vs Ref%, Stock Detenido
 
 ### Cambios

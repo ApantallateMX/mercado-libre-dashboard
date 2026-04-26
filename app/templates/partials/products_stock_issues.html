@@ -1864,14 +1864,14 @@ function concentrateItem(sku, title, bmAvail, btn) {
             body: JSON.stringify({
                 sku: sku,
                 winner_user_id: winner.user_id,
-                total_stock: d.total_bm_avail,
+                total_stock: bmAvail,
                 dry_run: false
             })
         })
         .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
         .then(function(res) {
             btn.disabled = false;
-            if (!res.ok) { btn.textContent = 'Error'; alert('Error: ' + (res.data.detail || JSON.stringify(res.data))); return; }
+            if (!res.ok || !res.data.ok) { btn.textContent = 'Error'; alert('Error: ' + (res.data.error || res.data.detail || JSON.stringify(res.data))); return; }
             btn.textContent = 'OK';
             btn.className = btn.className.replace('bg-red-600', 'bg-green-600').replace('hover:bg-red-700', '');
             var zeroed = res.data.zeroed_accounts || [];
@@ -1926,7 +1926,7 @@ function bulkConcentrateCritical() {
             return fetch('/api/stock/concentration/execute', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-                body: JSON.stringify({ sku: s.sku, winner_user_id: winner.user_id, total_stock: d.total_bm_avail, dry_run: false })
+                body: JSON.stringify({ sku: s.sku, winner_user_id: winner.user_id, total_stock: s.avail, dry_run: false })
             })
             .then(function(r2) { return r2.json().then(function(data) { return {ok: r2.ok, data: data}; }); })
             .then(function(res) {
