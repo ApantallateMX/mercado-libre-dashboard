@@ -590,7 +590,63 @@ async def init_db():
             "CREATE INDEX IF NOT EXISTS idx_billing_requests_platform_order "
             "ON billing_requests(platform, order_number)"
         )
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: bm_product_catalog — info estática de SKUs desde BM
+        # retail_ph, brand, model, title — actualizada 1x/semana (domingo 9pm MTY)
+        # Sobrevive deploys, reinicios y resets de cache en memoria.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bm_product_catalog (
+                sku        TEXT PRIMARY KEY,
+                retail_ph  REAL NOT NULL DEFAULT 0,
+                brand      TEXT NOT NULL DEFAULT '',
+                model      TEXT NOT NULL DEFAULT '',
+                title      TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL DEFAULT 0
+            )
+        """)
         await db.commit()
+
+
+async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
+    """Guarda info de producto BM en bm_product_catalog.
+    rows: list of {sku, retail_ph, brand, model, title}
+    Retorna cantidad de rows insertadas/actualizadas.
+    """
+    if not rows:
+        return 0
+    now = __import__("time").time()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT OR REPLACE INTO bm_product_catalog
+               (sku, retail_ph, brand, model, title, updated_at)
+               VALUES (:sku, :retail_ph, :brand, :model, :title, :updated_at)""",
+            [{**r, "updated_at": now} for r in rows],
+        )
+        await db.commit()
+    return len(rows)
+
+
+async def get_bm_catalog_all() -> list[dict]:
+    """Lee toda la tabla bm_product_catalog. Usado al arrancar para popular cache en memoria."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT sku, retail_ph, brand, model, title, updated_at FROM bm_product_catalog"
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_bm_catalog_last_sync() -> float:
+    """Retorna el timestamp de la última sincronización del catálogo, o 0 si nunca."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT MAX(updated_at) FROM bm_product_catalog"
+        ) as cur:
+            row = await cur.fetchone()
+    val = row[0] if row else None
+    return float(val) if val else 0.0
 
 
 async def save_oauth_state(state: str, code_verifier: str):

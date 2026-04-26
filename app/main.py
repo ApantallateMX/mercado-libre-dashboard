@@ -384,6 +384,9 @@ async def lifespan(app: FastAPI):
     # deploy anterior desde el primer request, sin esperar el prewarm (90s).
     await _load_bm_cache_from_db()
     await _load_stock_issues_from_db()
+    # Cargar catálogo de productos BM (retail_ph, brand, model) desde DB
+    # Para que VS REF% en planeación funcione desde el primer request.
+    await _load_catalog_from_db()
 
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
@@ -473,8 +476,8 @@ async def lifespan(app: FastAPI):
                             await asyncio.sleep(2)
                 except Exception:
                     pass
-            # Retry rápido en fallo (2 min); ciclo normal 20 min
-            _sleep = 120 if _auto_fail_streak > 0 else 1200
+            # Retry rápido en fallo (2 min); ciclo normal 10 min
+            _sleep = 120 if _auto_fail_streak > 0 else 600
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
@@ -506,6 +509,29 @@ async def lifespan(app: FastAPI):
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
+
+    # ── Sync semanal de catálogo BM (domingo 9pm Monterrey CDT = lunes 02:00 UTC) ──
+    # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
+    # 1 sola corrida/semana para no saturar BM. Concurrencia=3, ~10 min.
+    async def _weekly_catalog_sync():
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        while True:
+            _now = _dt.now(_tz.utc)
+            # Próximo domingo (weekday=6) a las 02:00 UTC (= domingo 9pm Monterrey CDT)
+            days_until_sunday = (6 - _now.weekday()) % 7
+            if days_until_sunday == 0 and _now.hour >= 2:
+                days_until_sunday = 7  # ya pasó este domingo, esperar al siguiente
+            _next = (_now + _td(days=days_until_sunday)).replace(hour=2, minute=0, second=0, microsecond=0)
+            _secs = (_next - _now).total_seconds()
+            logger.info(f"[CATALOG-SYNC] Próximo sync semanal en {_secs/3600:.1f}h (domingo 9pm MTY)")
+            await asyncio.sleep(_secs)
+            logger.info("[CATALOG-SYNC] Iniciando sync semanal de catálogo BM...")
+            try:
+                synced = await _sync_bm_product_catalog()
+                logger.info(f"[CATALOG-SYNC] Sync semanal completado: {synced} SKUs")
+            except Exception as _e:
+                logger.warning(f"[CATALOG-SYNC] Error en sync semanal: {_e}")
+    asyncio.create_task(_weekly_catalog_sync())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
@@ -2481,7 +2507,108 @@ _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
 # Cache RetailPrice PH por SKU base — TTL 30 min (cambia lentamente)
 _bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_usd)
-_BM_RETAIL_PH_TTL = 1800    # 30 min
+_BM_RETAIL_PH_TTL = 7 * 24 * 3600  # 7 días — fuente real es DB (sync semanal)
+
+
+async def _sync_bm_product_catalog() -> int:
+    """Descarga info estática de todos los SKUs desde BM y la guarda en DB.
+    Corre 1x/semana (domingo 9pm Monterrey). Concurrencia=3 para no saturar BM.
+    Fuente: lista de SKUs del bulk cache actual + DB existente.
+    Retorna cantidad de SKUs sincronizados.
+    """
+    global _bm_retail_ph_cache
+    # Obtener lista de SKUs base del bulk cache (ya los tenemos, sin nuevas llamadas)
+    skus_to_fetch: list[str] = []
+    try:
+        _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
+        if _bulk:
+            seen: set = set()
+            for _row in _bulk[1]:
+                _rsk = (_row.get("SKU") or "").upper().strip()
+                if _rsk:
+                    _base = _extract_base_sku(_rsk)
+                    if _base and _base not in seen:
+                        seen.add(_base)
+                        skus_to_fetch.append(_base)
+    except Exception as _e:
+        logger.warning(f"[CATALOG-SYNC] Error leyendo bulk cache: {_e}")
+
+    if not skus_to_fetch:
+        logger.warning("[CATALOG-SYNC] Sin SKUs en bulk cache — abortando sync")
+        return 0
+
+    logger.info(f"[CATALOG-SYNC] Iniciando sync de {len(skus_to_fetch)} SKUs (concurrencia=3)")
+    from app.services.binmanager_client import get_shared_bm as _get_bm_cat
+    bm_cat = await _get_bm_cat()
+    sem_cat = asyncio.Semaphore(3)
+    results: list[dict] = []
+
+    async def _fetch_one(sku: str):
+        async with sem_cat:
+            try:
+                price = await bm_cat.get_retail_price_ph(sku)
+                if price is None:
+                    return None
+                # get_retail_price_ph solo devuelve el precio — necesitamos más campos
+                # Usamos el mismo endpoint con CONCEPTID=8 + SEARCH=sku
+                from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD
+                c = bm_cat._client()
+                r = await c.post(
+                    f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                    json={**_GS_BASE_PAYLOAD, "SEARCH": sku},
+                    headers=_AJAX_HEADERS, timeout=30,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    if isinstance(data, list) and data:
+                        row = next((x for x in data if (x.get("SKU") or "").upper() == sku), data[0])
+                        rph = float(row.get("LastRetailPricePurchaseHistory") or 0)
+                        return {
+                            "sku":      sku,
+                            "retail_ph": rph if 0 < rph < 9000 else 0,
+                            "brand":    row.get("Brand") or "",
+                            "model":    row.get("Model") or "",
+                            "title":    row.get("Title") or row.get("SKUDescription") or "",
+                        }
+            except Exception:
+                pass
+            return None
+
+    tasks = await asyncio.gather(*[_fetch_one(s) for s in skus_to_fetch], return_exceptions=True)
+    rows = [r for r in tasks if isinstance(r, dict) and r]
+
+    # Guardar en DB
+    saved = await token_store.upsert_bm_catalog_batch(rows)
+    logger.info(f"[CATALOG-SYNC] {saved}/{len(skus_to_fetch)} SKUs guardados en DB")
+
+    # Actualizar cache en memoria inmediatamente
+    now = _time.time()
+    for row in rows:
+        if row["retail_ph"] > 0:
+            _bm_retail_ph_cache[row["sku"]] = (now, row["retail_ph"])
+
+    logger.info(f"[CATALOG-SYNC] _bm_retail_ph_cache actualizado: {len(_bm_retail_ph_cache)} SKUs con precio")
+    return saved
+
+
+async def _load_catalog_from_db() -> int:
+    """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache en memoria.
+    Así VS REF% funciona desde el primer request sin esperar el prewarm semanal.
+    """
+    global _bm_retail_ph_cache
+    try:
+        rows = await token_store.get_bm_catalog_all()
+        now = _time.time()
+        loaded = 0
+        for row in rows:
+            if row.get("retail_ph") and row["retail_ph"] > 0:
+                _bm_retail_ph_cache[row["sku"]] = (now, float(row["retail_ph"]))
+                loaded += 1
+        logger.info(f"[CATALOG-LOAD] {loaded} SKUs con RetailPH cargados de DB al arrancar")
+        return loaded
+    except Exception as _e:
+        logger.warning(f"[CATALOG-LOAD] Error cargando catálogo de DB: {_e}")
+        return 0
 
 
 # Cache para órdenes de Amazon — TTL corto porque es el dashboard del día

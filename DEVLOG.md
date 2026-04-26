@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-25 — FEAT: Catálogo BM semanal + prewarm 10 min + VS REF% desde DB
+
+### Problema
+`LastRetailPricePurchaseHistory` no viene en bulk BM (SEARCH="" lo ignora).
+VS REF% siempre mostraba "—". No podemos hacer 50+ llamadas individuales por
+request (ya somos el usuario #1 en hits de BM con 8,169/día).
+
+### Solución
+- **`bm_product_catalog`** — nueva tabla SQLite: sku, retail_ph, brand, model, title
+- **`_sync_bm_product_catalog()`** — descarga info de todos los SKUs del bulk cache
+  con concurrencia=3. Guarda en DB. Actualiza cache en memoria inmediatamente.
+- **Cron semanal** — domingo 9pm Monterrey (02:00 UTC lunes). 1 corrida/semana.
+- **`_load_catalog_from_db()`** — al arrancar la app carga DB → `_bm_retail_ph_cache`
+  en memoria. VS REF% funciona desde el primer request tras deploy.
+- **`_BM_RETAIL_PH_TTL`** — subido a 7 días (fuente real es DB, no prewarm).
+- **Prewarm** — ciclo normal bajado de 20 min a **10 min**.
+
+### Archivos modificados
+- `app/services/token_store.py` — tabla + helpers (upsert_bm_catalog_batch, get_bm_catalog_all)
+- `app/main.py` — _sync_bm_product_catalog, _load_catalog_from_db, cron semanal, prewarm 10min
+
+---
+
 ## 2026-04-25 — FIX: Concentrar — stock correcto al ganador + error check
 
 ### Problema
