@@ -527,7 +527,7 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(_secs)
             logger.info("[CATALOG-SYNC] Iniciando sync semanal de catálogo BM...")
             try:
-                synced = await _sync_bm_product_catalog()
+                synced = await _sync_bm_product_catalog(source="auto")
                 logger.info(f"[CATALOG-SYNC] Sync semanal completado: {synced} SKUs")
             except Exception as _e:
                 logger.warning(f"[CATALOG-SYNC] Error en sync semanal: {_e}")
@@ -2510,13 +2510,17 @@ _bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_us
 _BM_RETAIL_PH_TTL = 7 * 24 * 3600  # 7 días — fuente real es DB (sync semanal)
 
 
-async def _sync_bm_product_catalog() -> int:
+async def _sync_bm_product_catalog(source: str = "auto") -> int:
     """Descarga info estática de todos los SKUs desde BM y la guarda en DB.
     Corre 1x/semana (domingo 9pm Monterrey). Concurrencia=3 para no saturar BM.
     Fuente: lista de SKUs del bulk cache actual + DB existente.
     Retorna cantidad de SKUs sincronizados.
     """
-    global _bm_retail_ph_cache
+    global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history
+    if _catalog_sync_running:
+        return 0
+    _catalog_sync_running = True
+    _t0 = _time.time()
     # Obtener lista de SKUs base del bulk cache (ya los tenemos, sin nuevas llamadas)
     skus_to_fetch: list[str] = []
     try:
@@ -2535,6 +2539,10 @@ async def _sync_bm_product_catalog() -> int:
 
     if not skus_to_fetch:
         logger.warning("[CATALOG-SYNC] Sin SKUs en bulk cache — abortando sync")
+        _catalog_sync_running = False
+        _catalog_sync_history.append({"ts": _time.time(), "skus": 0, "elapsed_s": 0,
+                                       "source": source, "ok": False, "error": "Sin SKUs en bulk cache"})
+        if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
         return 0
 
     logger.info(f"[CATALOG-SYNC] Iniciando sync de {len(skus_to_fetch)} SKUs (concurrencia=3)")
@@ -2574,21 +2582,42 @@ async def _sync_bm_product_catalog() -> int:
                 pass
             return None
 
-    tasks = await asyncio.gather(*[_fetch_one(s) for s in skus_to_fetch], return_exceptions=True)
-    rows = [r for r in tasks if isinstance(r, dict) and r]
+    try:
+        tasks = await asyncio.gather(*[_fetch_one(s) for s in skus_to_fetch], return_exceptions=True)
+        rows = [r for r in tasks if isinstance(r, dict) and r]
 
-    # Guardar en DB
-    saved = await token_store.upsert_bm_catalog_batch(rows)
-    logger.info(f"[CATALOG-SYNC] {saved}/{len(skus_to_fetch)} SKUs guardados en DB")
+        # Guardar en DB
+        saved = await token_store.upsert_bm_catalog_batch(rows)
+        logger.info(f"[CATALOG-SYNC] {saved}/{len(skus_to_fetch)} SKUs guardados en DB")
 
-    # Actualizar cache en memoria inmediatamente
-    now = _time.time()
-    for row in rows:
-        if row["retail_ph"] > 0:
-            _bm_retail_ph_cache[row["sku"]] = (now, row["retail_ph"])
+        # Actualizar cache en memoria inmediatamente
+        now = _time.time()
+        for row in rows:
+            if row["retail_ph"] > 0:
+                _bm_retail_ph_cache[row["sku"]] = (now, row["retail_ph"])
 
-    logger.info(f"[CATALOG-SYNC] _bm_retail_ph_cache actualizado: {len(_bm_retail_ph_cache)} SKUs con precio")
-    return saved
+        with_price = sum(1 for r in rows if r.get("retail_ph", 0) > 0)
+        elapsed = round(_time.time() - _t0, 1)
+        logger.info(f"[CATALOG-SYNC] _bm_retail_ph_cache actualizado: {len(_bm_retail_ph_cache)} SKUs con precio")
+        _catalog_sync_history.append({
+            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "skus_saved": saved, "with_price": with_price,
+            "elapsed_s": elapsed, "source": source, "ok": True, "error": "",
+        })
+        if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
+        return saved
+    except Exception as _err:
+        elapsed = round(_time.time() - _t0, 1)
+        _catalog_sync_history.append({
+            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "skus_saved": 0, "with_price": 0,
+            "elapsed_s": elapsed, "source": source, "ok": False, "error": str(_err)[:200],
+        })
+        if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
+        logger.error(f"[CATALOG-SYNC] Error: {_err}")
+        return 0
+    finally:
+        _catalog_sync_running = False
 
 
 async def _load_catalog_from_db() -> int:
@@ -2871,6 +2900,9 @@ _prewarm_error: str = ""          # último error para mostrar en UI
 _prewarm_progress: dict = {"done": 0, "total": 0, "started_at": 0.0}  # progreso en tiempo real
 _prewarm_source: str = "auto"     # "auto" | "manual" — para el historial de BM sync log
 _prewarm_history: list = []       # historial en memoria: últimas 20 ejecuciones del prewarm
+# ── Catálogo BM semanal — estado en memoria ──────────────────────────────────
+_catalog_sync_running: bool = False
+_catalog_sync_history: list = []   # últimas 10 corridas: {ts, skus, elapsed_s, source, ok, error}
 # Estadísticas de cobertura BM del último bulk fetch — para diagnóstico en Sync Stock
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
 
@@ -9665,6 +9697,54 @@ async def bm_health_status():
         "error_type": h.get("error_type"),
         "last_error": h.get("last_error", ""),
     })
+
+
+@app.get("/api/catalog/status")
+async def catalog_status_endpoint(request: Request):
+    """Estado del sync semanal de catálogo BM. Solo admin."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "Acceso denegado"}, status_code=403)
+    now = _time.time()
+    last_db_sync = await token_store.get_bm_catalog_last_sync()
+    last_db_age_h = round((now - last_db_sync) / 3600, 1) if last_db_sync > 0 else None
+    # Próximo domingo 9pm Monterrey (02:00 UTC lunes)
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    _dnow = _dt.now(_tz.utc)
+    days_until_sunday = (6 - _dnow.weekday()) % 7
+    if days_until_sunday == 0 and _dnow.hour >= 2:
+        days_until_sunday = 7
+    _next = (_dnow + _td(days=days_until_sunday)).replace(hour=2, minute=0, second=0, microsecond=0)
+    next_run_h = round((_next - _dnow).total_seconds() / 3600, 1)
+
+    def _fmt(h):
+        age_s = now - h["ts"]
+        if age_s < 120:   age_str = f"hace {int(age_s)}s"
+        elif age_s < 3600: age_str = f"hace {int(age_s//60)}min"
+        else:              age_str = f"hace {int(age_s//3600)}h {int((age_s%3600)//60)}min"
+        return {**h, "age_str": age_str}
+
+    return JSONResponse({
+        "running":         _catalog_sync_running,
+        "history":         [_fmt(h) for h in reversed(_catalog_sync_history)],
+        "cache_count":     len(_bm_retail_ph_cache),
+        "last_db_sync_ts": last_db_sync,
+        "last_db_age_h":   last_db_age_h,
+        "next_auto_run_h": next_run_h,
+        "next_auto_run_label": f"domingo 9pm MTY (en ~{next_run_h}h)",
+    })
+
+
+@app.post("/api/catalog/sync")
+async def catalog_sync_trigger(request: Request):
+    """Dispara el sync manual del catálogo BM. Solo admin."""
+    du = getattr(request.state, "dashboard_user", None) or {}
+    if du.get("role") != "admin":
+        return JSONResponse({"error": "Acceso denegado"}, status_code=403)
+    if _catalog_sync_running:
+        return JSONResponse({"ok": False, "error": "Ya está corriendo un sync"})
+    asyncio.create_task(_sync_bm_product_catalog(source="manual"))
+    return JSONResponse({"ok": True, "message": "Sync iniciado en background"})
 
 
 @app.get("/api/bm/health-log")

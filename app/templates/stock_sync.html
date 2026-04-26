@@ -311,6 +311,46 @@
     </div>
   </div>
 
+  <!-- ── Catálogo BM — Sync semanal (solo admin) ─────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-700">Catálogo BM — Precios & Info de SKUs</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Sync semanal: domingo 9pm Monterrey · retail_ph, brand, model, title</p>
+      </div>
+      <button id="catalog-sync-btn" onclick="triggerCatalogSync()"
+              class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 active:bg-indigo-800 transition flex items-center gap-1.5">
+        <svg id="catalog-spinner" class="hidden animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span id="catalog-btn-label">Sincronizar ahora</span>
+      </button>
+    </div>
+
+    <!-- Estado actual -->
+    <div id="catalog-status-row" class="text-xs text-gray-500 mb-3">Cargando...</div>
+
+    <!-- Historial de corridas -->
+    <div>
+      <p class="text-xs font-semibold text-gray-600 mb-1">Historial de corridas</p>
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-left text-gray-400 border-b border-gray-100">
+            <th class="pb-1 font-medium">Cuándo</th>
+            <th class="pb-1 font-medium text-right">SKUs</th>
+            <th class="pb-1 font-medium text-right">Con precio</th>
+            <th class="pb-1 font-medium text-right">Duración</th>
+            <th class="pb-1 font-medium text-center">Estado</th>
+          </tr>
+        </thead>
+        <tbody id="catalog-history-body">
+          <tr><td colspan="5" class="py-2 text-gray-400 text-center">Sin corridas registradas</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ── Historial de conectividad BM ───────────────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between">
@@ -1739,5 +1779,118 @@ window.lookupMlmStock = function() {
 };
 
 // (Listings huérfanos — gestionados desde Productos / tab Stock)
+
+// ── Catálogo BM — Sync semanal ────────────────────────────────────────────
+var _catalogPollTimer = null;
+
+function _loadCatalogStatus() {
+  fetch('/api/catalog/status', {headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) return;
+      // Status row
+      var row = document.getElementById('catalog-status-row');
+      if (row) {
+        var cacheStr = '<span class="' + (d.cache_count > 0 ? 'text-green-600 font-semibold' : 'text-red-500 font-semibold') + '">' + d.cache_count + ' SKUs en cache</span>';
+        var dbStr = d.last_db_age_h != null
+          ? 'Última DB: hace ' + d.last_db_age_h + 'h'
+          : '<span class="text-orange-500">Sin sync en DB aún</span>';
+        var nextStr = 'Próximo auto: ' + d.next_auto_run_label;
+        if (d.running) {
+          row.innerHTML = '<span class="text-indigo-600 font-semibold animate-pulse">Sincronizando...</span> · ' + cacheStr;
+        } else {
+          row.innerHTML = cacheStr + ' · ' + dbStr + ' · ' + nextStr;
+        }
+      }
+      // Botón
+      var btn = document.getElementById('catalog-sync-btn');
+      var spinner = document.getElementById('catalog-spinner');
+      var label = document.getElementById('catalog-btn-label');
+      if (btn && spinner && label) {
+        if (d.running) {
+          btn.disabled = true;
+          spinner.classList.remove('hidden');
+          label.textContent = 'Sincronizando...';
+        } else {
+          btn.disabled = false;
+          spinner.classList.add('hidden');
+          label.textContent = 'Sincronizar ahora';
+        }
+      }
+      // Historial
+      var tbody = document.getElementById('catalog-history-body');
+      if (tbody) {
+        var hist = d.history || [];
+        if (!hist.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="py-2 text-gray-400 text-center">Sin corridas registradas</td></tr>';
+        } else {
+          tbody.innerHTML = hist.map(function(h) {
+            var srcBadge = h.source === 'manual'
+              ? '<span class="ml-1 px-1 bg-indigo-50 text-indigo-500 rounded text-[10px]">manual</span>'
+              : '';
+            var statusBadge = h.ok
+              ? '<span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-semibold">OK</span>'
+              : '<span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-semibold" title="' + (h.error || '') + '">Error</span>';
+            return '<tr class="border-b border-gray-50 last:border-0">' +
+              '<td class="py-1 text-gray-500">' + h.age_str + srcBadge + '</td>' +
+              '<td class="py-1 text-right font-mono text-gray-700">' + (h.skus_total || 0).toLocaleString() + '</td>' +
+              '<td class="py-1 text-right font-mono ' + ((h.with_price || 0) > 0 ? 'text-green-600' : 'text-gray-400') + '">' + (h.with_price || 0).toLocaleString() + '</td>' +
+              '<td class="py-1 text-right text-gray-400">' + (h.elapsed_s || 0) + 's</td>' +
+              '<td class="py-1 text-center">' + statusBadge + '</td>' +
+              '</tr>';
+          }).join('');
+        }
+      }
+      // Polling si está corriendo
+      if (d.running && !_catalogPollTimer) {
+        _catalogPollTimer = setInterval(function() {
+          _loadCatalogStatus();
+          if (!_catalogSyncIsRunning()) clearInterval(_catalogPollTimer);
+        }, 4000);
+      }
+    })
+    .catch(function() {});
+}
+
+var _catalogRunning = false;
+function _catalogSyncIsRunning() { return _catalogRunning; }
+
+function triggerCatalogSync() {
+  if (!confirm('¿Iniciar sync manual del catálogo BM?\n\nEsto descargará retail_ph, brand, model y title para todos los SKUs del bulk cache.\nConcurrencia=3 para no saturar BM. Puede tardar varios minutos.')) return;
+  var btn = document.getElementById('catalog-sync-btn');
+  var spinner = document.getElementById('catalog-spinner');
+  var label = document.getElementById('catalog-btn-label');
+  btn.disabled = true;
+  spinner.classList.remove('hidden');
+  label.textContent = 'Iniciando...';
+  _catalogRunning = true;
+  fetch('/api/catalog/sync', {method: 'POST', headers: {'ngrok-skip-browser-warning': 'true'}})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (!d.ok) {
+        alert('Error: ' + (d.error || JSON.stringify(d)));
+        btn.disabled = false;
+        spinner.classList.add('hidden');
+        label.textContent = 'Sincronizar ahora';
+        _catalogRunning = false;
+        return;
+      }
+      label.textContent = 'Sincronizando...';
+      // Polling cada 4s hasta que termine
+      _catalogPollTimer = setInterval(function() {
+        _loadCatalogStatus();
+      }, 4000);
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      spinner.classList.add('hidden');
+      label.textContent = 'Sincronizar ahora';
+      _catalogRunning = false;
+      alert('Error: ' + e.message);
+    });
+}
+
+// Cargar estado del catálogo al abrir la página
+_loadCatalogStatus();
 </script>
 {% endblock %}
