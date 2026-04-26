@@ -2484,44 +2484,6 @@ _bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_us
 _BM_RETAIL_PH_TTL = 1800    # 30 min
 
 
-async def _prewarm_retail_prices(base_skus: list) -> int:
-    """Fetch LastRetailPricePurchaseHistory via SEARCH=sku (no SEARCH=empty).
-    El bulk fetch (SEARCH="") devuelve 0 para precios — esta función hace
-    requests individuales para los SKUs que necesita cobertura.
-    Popula _bm_retail_ph_cache. Llamada desde prewarm.
-    Retorna número de precios obtenidos.
-    """
-    global _bm_retail_ph_cache
-    now = _time.time()
-    to_fetch = [s for s in base_skus
-                if s and (s not in _bm_retail_ph_cache
-                          or (now - _bm_retail_ph_cache[s][0]) >= _BM_RETAIL_PH_TTL)][:50]
-    if not to_fetch:
-        logger.info(f"[PREWARM-RETAIL] {len(base_skus)} SKUs ya en caché — skip")
-        return 0
-    try:
-        from app.services.binmanager_client import get_shared_bm as _get_bm_rp
-        bm_rp = await _get_bm_rp()
-        sem_rp = asyncio.Semaphore(8)
-
-        async def _fetch_rp(sku):
-            async with sem_rp:
-                try:
-                    price = await bm_rp.get_retail_price_ph(sku)
-                    if price and 0 < float(price) < 9000:
-                        _bm_retail_ph_cache[sku] = (_time.time(), float(price))
-                        return 1
-                except Exception:
-                    pass
-                return 0
-
-        results = await asyncio.gather(*[_fetch_rp(s) for s in to_fetch], return_exceptions=True)
-        fetched = sum(r for r in results if isinstance(r, int))
-        logger.info(f"[PREWARM-RETAIL] {fetched}/{len(to_fetch)} SKUs con precio RetailPH → cache total={len(_bm_retail_ph_cache)}")
-        return fetched
-    except Exception as _rp_err:
-        logger.warning(f"[PREWARM-RETAIL] Error: {_rp_err}")
-        return 0
 # Cache para órdenes de Amazon — TTL corto porque es el dashboard del día
 # Key: "{seller_id}:{date}" para invalidar automáticamente al cambiar de día
 _amazon_daily_cache: dict[str, tuple[float, dict]] = {}
@@ -2964,11 +2926,6 @@ async def _prewarm_caches(user_id: str = None):
 
                 # BM metadata: RetailPrice USD, AvgCost, Brand (solo para candidatos)
                 await _enrich_with_bm_product_info(bm_candidates)
-
-                # RetailPH para cobertura — el bulk usa SEARCH="" que devuelve 0 en precios.
-                # Fetch individual SEARCH=sku para los top SKUs usados en planning/coverage.
-                _cov_skus = list({normalize_to_bm_sku(p["sku"]) for p in bm_candidates if p.get("sku")})[:50]
-                await _prewarm_retail_prices(_cov_skus)
 
                 # Calcular márgenes en candidatos (necesario para GAP 5, 7, 6)
                 fx = await _get_usd_to_mxn(client)
@@ -9484,6 +9441,25 @@ async def prewarm_status():
             "zero_in_bulk_skus": _bm_bulk_stats.get("zero_in_bulk_skus", []),
             "age_min":           round((_time.time() - _bm_bulk_stats["ts"]) / 60),
         }
+    # Muestra de precios RetailPH en bulk cache — para diagnosticar VS REF%
+    _retail_ph_diag = {
+        "cache_count": len(_bm_retail_ph_cache),
+        "sample": next(((k, round(v[1], 2)) for k, v in _bm_retail_ph_cache.items() if v[1] > 0), None),
+        "bulk_sample_retail_ph": None,
+    }
+    try:
+        _bl = _bm_bulk_gr_cache or _bm_bulk_all_cache
+        if _bl:
+            for _br in _bl[1][:200]:
+                _rph = _br.get("LastRetailPricePurchaseHistory") or 0
+                if _rph and float(_rph) > 0:
+                    _retail_ph_diag["bulk_sample_retail_ph"] = {
+                        "sku": _br.get("SKU"), "value": float(_rph)
+                    }
+                    break
+    except Exception:
+        pass
+
     return JSONResponse({
         "running": _prewarm_running,
         "ready": cache_ready,
@@ -9494,6 +9470,7 @@ async def prewarm_status():
         "bm_down_min": bm_down_min,
         "stale_available": stale_available,
         "bulk_stats": bulk_stats,
+        "retail_ph_diag": _retail_ph_diag,
     })
 
 

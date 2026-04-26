@@ -287,6 +287,11 @@
       </div>
       <button onclick="document.getElementById('cov-zero-skus').classList.toggle('hidden')"
               class="text-[10px] text-indigo-500 hover:text-indigo-700 mt-1" id="cov-toggle-btn">Ver SKUs con BM=0</button>
+      <!-- RetailPH diag — para diagnosticar VS REF% en planeación -->
+      <div class="mt-2 pt-2 border-t border-gray-50">
+        <p class="text-[10px] text-gray-400 mb-1">Precios RetailPH en caché (para VS REF% en Planeación):</p>
+        <div id="retail-ph-diag" class="text-[10px] text-gray-500 font-mono">—</div>
+      </div>
     </div>
 
     <!-- Diagnóstico por MLM -->
@@ -1141,6 +1146,8 @@ function _updatePrewarmStatus(data) {
     }
     // Mostrar panel de cobertura si hay estadísticas del bulk
     if (data.bulk_stats && data.bulk_stats.skus_total > 0) _fillCoveragePanel(data.bulk_stats);
+    // Diagnóstico RetailPH
+    if (data.retail_ph_diag) _fillRetailPhDiag(data.retail_ph_diag);
   } else {
     row.innerHTML = '<span class="text-gray-400">Sin datos — presiona Actualizar ahora</span>';
     btn.disabled = false;
@@ -1183,6 +1190,23 @@ function _fillCoveragePanel(stats) {
     var btn2 = el('cov-toggle-btn');
     if (btn2) btn2.classList.add('hidden');
   }
+}
+
+function _fillRetailPhDiag(diag) {
+  var el = document.getElementById('retail-ph-diag');
+  if (!el) return;
+  var count = diag.cache_count || 0;
+  var bulkSample = diag.bulk_sample_retail_ph;
+  var cacheSample = diag.sample;
+  var parts = [];
+  parts.push('Cache: <span class="' + (count > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold') + '">' + count + ' SKUs</span>');
+  if (cacheSample) parts.push('Ej: ' + cacheSample[0] + ' = $' + cacheSample[1]);
+  if (bulkSample) {
+    parts.push('Bulk tiene precio: ' + bulkSample.sku + ' = $' + bulkSample.value);
+  } else {
+    parts.push('<span class="text-orange-500">Bulk: sin precios RetailPH</span>');
+  }
+  el.innerHTML = parts.join(' &nbsp;|&nbsp; ');
 }
 
 function _pollPrewarmStatus() {
