@@ -2551,15 +2551,12 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     sem_cat = asyncio.Semaphore(3)
     results: list[dict] = []
 
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD
+
     async def _fetch_one(sku: str):
+        # 1 sola llamada por SKU — CONCEPTID=8 + SEARCH=sku + NEEDRETAILPRICEPH=True
         async with sem_cat:
             try:
-                price = await bm_cat.get_retail_price_ph(sku)
-                if price is None:
-                    return None
-                # get_retail_price_ph solo devuelve el precio — necesitamos más campos
-                # Usamos el mismo endpoint con CONCEPTID=8 + SEARCH=sku
-                from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, _GS_BASE_PAYLOAD
                 c = bm_cat._client()
                 r = await c.post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
@@ -2572,11 +2569,11 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                         row = next((x for x in data if (x.get("SKU") or "").upper() == sku), data[0])
                         rph = float(row.get("LastRetailPricePurchaseHistory") or 0)
                         return {
-                            "sku":      sku,
+                            "sku":       sku,
                             "retail_ph": rph if 0 < rph < 9000 else 0,
-                            "brand":    row.get("Brand") or "",
-                            "model":    row.get("Model") or "",
-                            "title":    row.get("Title") or row.get("SKUDescription") or "",
+                            "brand":     row.get("Brand") or "",
+                            "model":     row.get("Model") or "",
+                            "title":     row.get("Title") or row.get("SKUDescription") or "",
                         }
             except Exception:
                 pass
