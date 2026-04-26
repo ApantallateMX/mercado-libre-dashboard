@@ -11727,6 +11727,12 @@ async def planning_coverage(
 
     order = {"out_of_stock": 0, "critical": 1, "alert": 2, "ok": 3, "no_movement": 4}
     result.sort(key=lambda x: (order.get(x["status"], 5), -(x.get("total_daily_rate") or x["daily_rate"])))
+    _dbg_ph_count = len(_bm_retail_ph_cache)
+    _dbg_bulk_rows = len(_bm_bulk_gr_cache[1]) if _bm_bulk_gr_cache else 0
+    _dbg_sample = next(
+        ((k, round(v[1], 2)) for k, v in _bm_retail_ph_cache.items() if v[1] > 0),
+        None,
+    )
     return {
         "items": result,
         "target_days": target_days,
@@ -11734,6 +11740,10 @@ async def planning_coverage(
         "items_without_sku": items_without_sku_count,
         "has_amazon": vel.get("has_amazon", False),
         "usd_to_mxn": round(usd_to_mxn, 2),
+        "_dbg_retail_ph_cache_count": _dbg_ph_count,
+        "_dbg_bulk_rows": _dbg_bulk_rows,
+        "_dbg_retail_ph_sample": _dbg_sample,
+        "_dbg_retail_ph_map_count": len(retail_ph_map),
     }
 
 
