@@ -483,18 +483,21 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_startup_prewarm())
     else:
         # Modo backup: sync BM una vez al día a las 8:30 PM Monterrey (02:30 UTC)
-        async def _daily_bm_sync():
+        async def _weekly_bm_sync_backup():
             from datetime import datetime as _dt, timezone as _tz, timedelta as _td
             while True:
                 _now = _dt.now(_tz.utc)
-                # 8:30 PM Monterrey CST (UTC-6) = 02:30 UTC del día siguiente
-                _next = _now.replace(hour=2, minute=30, second=0, microsecond=0)
-                if _next <= _now:
-                    _next = _next + _td(days=1)
+                # Viernes 9pm Monterrey CDT (UTC-5) = sábado 02:00 UTC
+                # weekday: lunes=0 … viernes=4, sábado=5, domingo=6
+                days_until_sat = (5 - _now.weekday()) % 7
+                if days_until_sat == 0 and _now.hour >= 2:
+                    days_until_sat = 7  # ya pasó el sábado 02:00 UTC de esta semana
+                _next = (_now + _td(days=days_until_sat)).replace(
+                    hour=2, minute=0, second=0, microsecond=0)
                 _secs = (_next - _now).total_seconds()
-                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (8:30 PM Monterrey)")
+                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (viernes 9pm Monterrey)")
                 await asyncio.sleep(_secs)
-                logger.info("[BM-BACKUP] Iniciando sync diario BM (8:30 PM Monterrey)...")
+                logger.info("[BM-BACKUP] Iniciando sync semanal BM (viernes 9pm Monterrey)...")
                 try:
                     accounts = await token_store.get_all_tokens()
                     for acc in accounts:
@@ -502,10 +505,10 @@ async def lifespan(app: FastAPI):
                         if uid:
                             await _prewarm_caches(user_id=uid)
                             await asyncio.sleep(2)
-                    logger.info("[BM-BACKUP] Sync diario BM completado")
+                    logger.info("[BM-BACKUP] Sync semanal BM completado")
                 except Exception as _e:
-                    logger.warning(f"[BM-BACKUP] Error en sync diario: {_e}")
-        asyncio.create_task(_daily_bm_sync())
+                    logger.warning(f"[BM-BACKUP] Error en sync semanal: {_e}")
+        asyncio.create_task(_weekly_bm_sync_backup())
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
