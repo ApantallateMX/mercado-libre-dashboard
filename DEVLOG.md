@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-27 — FIX: Gap scan "SKUs sin publicar en ML" retornaba 0 resultados
+
+### Bug
+Sección "SKUs sin publicar en ML/Amazon" mostraba 0 gaps en todas las cuentas.
+
+### Causa raíz
+`_bm_fetch_all_skus_with_stock` en `lanzar.py` paginaba `Get_GlobalStock_InventoryBySKU`
+con `CONCEPTID=8`, que estaba bloqueado (rate-limiting por peticiones simultáneas) y
+retornaba `[]` en todas las páginas → 0 SKUs BM → 0 gaps.
+
+### Fix (`app/api/lanzar.py` — commit 1d1df47)
+- `_bm_fetch_all_skus_with_stock` reemplazada: ya no pagina `Get_GlobalStock_InventoryBySKU`.
+- Ahora hace 1 POST a `ConfColumns_Conditions_Excel` (igual que catalog sync), filtra
+  `TotalQty > 0`, retorna misma estructura que espera el gap scan.
+- `_BM_USER` default → `Carlos.Herrera@mitechnologiesinc.com` (cuenta dedicada app).
+
+---
+
 ## 2026-04-25 — FIX: Catalog sync 0 precios por CONCEPTID incorrecto
 
 ### Bug
