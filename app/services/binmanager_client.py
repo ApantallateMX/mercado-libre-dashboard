@@ -14,7 +14,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = os.getenv("BM_USER", "jovan.rodriguez@mitechnologiesinc.com")
+_BM_USER = os.getenv("BM_USER", "Carlos.Herrera@mitechnologiesinc.com")
 _BM_PASS = os.getenv("BM_PASS", "123456")
 
 _AJAX_HEADERS = {
