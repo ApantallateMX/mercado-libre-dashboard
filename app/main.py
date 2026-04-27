@@ -3055,7 +3055,11 @@ async def _prewarm_caches(user_id: str = None):
                 _prewarm_progress["total"] = len(set(normalize_to_bm_sku(p["sku"]) for p in bm_candidates))
                 _prewarm_progress["started_at"] = _time.time()
                 bm_map = await _get_bm_stock_cached(bm_candidates, retry_stale=True)
-                _apply_bm_stock(products, bm_map)
+                # Cargar regla de distribución para esta cuenta (si existe)
+                _dist_rule = await token_store.get_distribution_rule(str(client.user_id))
+                _dist_settings = await token_store.get_distribution_settings() if _dist_rule else None
+                _sold_history = await token_store.get_account_sold_history(str(client.user_id)) if _dist_rule else None
+                _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
 
                 # Persistir caché BM en DB para sobrevivir reinicios.
                 # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
@@ -3716,13 +3720,66 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     return result_map
 
 
-def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
+def _dist_apply_pool(
+    pool: int,
+    bm_sku: str,
+    units_30d: int,
+    dist_rule: dict | None,
+    dist_settings: dict | None,
+    sold_history: dict | None,
+) -> tuple[int, float]:
+    """Aplica la regla de distribución de cuenta al pool BM disponible.
+
+    Retorna (pool_ajustado, days_supply).
+    - Si dist_rule es None → devuelve pool sin cambios (comportamiento legacy).
+    - Aplica safety_buffer antes de calcular el %, pool nunca baja de 0.
+    - En modo escasez, si la cuenta tiene scarce_enabled=False pero tiene
+      historial de ventas del SKU → se habilita con mínimo 20%.
+    """
+    if not dist_rule or not dist_settings:
+        return pool, 9999.0
+
+    buffer = int(dist_settings.get("safety_buffer_units", 2))
+    effective = max(0, pool - buffer)
+
+    threshold_units = int(dist_settings.get("scarce_threshold_units", 10))
+    threshold_days  = int(dist_settings.get("scarce_threshold_days", 7))
+    daily_rate = (units_30d or 0) / 30.0
+    days_supply = effective / daily_rate if daily_rate > 0 else 9999.0
+
+    is_scarce = effective < threshold_units or days_supply < threshold_days
+
+    if is_scarce:
+        if not dist_rule.get("scarce_enabled", True):
+            has_history = bool(sold_history and sold_history.get(bm_sku, 0) > 0)
+            if not has_history:
+                return 0, days_supply
+            pct = max(0.2, float(dist_rule.get("pct_scarce", 0.0)))
+        else:
+            pct = float(dist_rule.get("pct_scarce", 1.0))
+    else:
+        pct = float(dist_rule.get("pct_full", 1.0))
+
+    return max(0, int(effective * pct)), days_supply
+
+
+def _apply_bm_stock(
+    products: list,
+    bm_map: dict,
+    sku_key: str = "sku",
+    dist_rule: dict | None = None,
+    dist_settings: dict | None = None,
+    sold_history: dict | None = None,
+):
     """Aplica datos de stock BM a la lista de productos.
-    _bm_avail = disponible real (excluye reservados para órdenes pendientes).
+    _bm_avail    = disponible real ajustado por regla de distribución de cuenta.
     _bm_reserved = unidades reservadas (Required en BM).
-    _bm_total = stock físico total (incluye reservados) — solo para referencia.
+    _bm_total    = stock físico total (incluye reservados) — solo para referencia.
+    _days_supply = días de supply estimados (stock / ventas diarias).
+    _is_scarce   = True si el SKU está en modo escasez para esta cuenta.
     """
     for p in products:
+        _units_30d = p.get("units_30d", 0) or 0
         if p.get("has_variations"):
             any_var_sku = False
             # Group variations by their normalized BM key to avoid double-counting
@@ -3737,7 +3794,9 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 _bm_key_vars[_bk].append(v)
 
             tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
+            tot_avail_raw = 0  # raw BM total (pre-distribution) for display
             _any_inv_found = False  # Fix B4: rastrear si al menos una variación tuvo dato BM real
+            _p_days_supply = 9999.0
             for _bk, _vars in _bm_key_vars.items():
                 # Look up BM data: try each variation's raw SKU until we find a match
                 inv = None
@@ -3749,7 +3808,12 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 if inv:
                     _any_inv_found = True
                     _n = len(_vars)
-                    _pool = inv.get("avail_total", 0)
+                    _pool_raw = inv.get("avail_total", 0)
+                    tot_avail_raw += _pool_raw
+                    # Apply distribution rule per-BM-key (pro-rata units_30d by variation count)
+                    _var_units_30d = _units_30d // len(_bm_key_vars) if _bm_key_vars else _units_30d
+                    _pool, _ds = _dist_apply_pool(_pool_raw, _bk, _var_units_30d, dist_rule, dist_settings, sold_history)
+                    _p_days_supply = min(_p_days_supply, _ds)
                     _quot, _rem = divmod(_pool, _n)
                     # Deduplicated parent totals — add once per unique BM key
                     tot_mty += inv["mty"]
@@ -3777,25 +3841,49 @@ def _apply_bm_stock(products: list, bm_map: dict, sku_key="sku"):
                 p["_bm_tj"] = tot_tj
                 p["_bm_total"] = tot_mty + tot_cdmx
                 p["_bm_avail"] = tot_avail
+                p["_bm_avail_raw"] = tot_avail_raw  # BM sin ajuste de distribución
                 p["_bm_reserved"] = tot_reserved
+                p["_days_supply"] = round(_p_days_supply, 1) if _p_days_supply < 9999 else None
+                p["_is_scarce"] = dist_rule is not None and (
+                    tot_avail_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
+                    or (_p_days_supply < int((dist_settings or {}).get("scarce_threshold_days", 7)))
+                )
             else:
                 inv = bm_map.get(p.get(sku_key))
                 if inv:
+                    _pool_raw = inv.get("avail_total", 0)
+                    _bk = normalize_to_bm_sku(p.get(sku_key, ""))
+                    _pool, _ds = _dist_apply_pool(_pool_raw, _bk, _units_30d, dist_rule, dist_settings, sold_history)
                     p["_bm_mty"] = inv["mty"]
                     p["_bm_cdmx"] = inv["cdmx"]
                     p["_bm_tj"] = inv["tj"]
                     p["_bm_total"] = inv["total"]
-                    p["_bm_avail"] = inv.get("avail_total", 0)
+                    p["_bm_avail"] = _pool
+                    p["_bm_avail_raw"] = _pool_raw
                     p["_bm_reserved"] = inv.get("reserved_total", 0)
+                    p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
+                    p["_is_scarce"] = dist_rule is not None and (
+                        _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
+                        or (_ds < int((dist_settings or {}).get("scarce_threshold_days", 7)))
+                    )
         else:
             inv = bm_map.get(p.get(sku_key))
             if inv:
+                _pool_raw = inv.get("avail_total", 0)
+                _bk = normalize_to_bm_sku(p.get(sku_key, ""))
+                _pool, _ds = _dist_apply_pool(_pool_raw, _bk, _units_30d, dist_rule, dist_settings, sold_history)
                 p["_bm_mty"] = inv["mty"]
                 p["_bm_cdmx"] = inv["cdmx"]
                 p["_bm_tj"] = inv["tj"]
                 p["_bm_total"] = inv["total"]
-                p["_bm_avail"] = inv.get("avail_total", 0)
+                p["_bm_avail"] = _pool
+                p["_bm_avail_raw"] = _pool_raw
                 p["_bm_reserved"] = inv.get("reserved_total", 0)
+                p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
+                p["_is_scarce"] = dist_rule is not None and (
+                    _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
+                    or (_ds < int((dist_settings or {}).get("scarce_threshold_days", 7)))
+                )
 
 
 def _enrich_sku_from_orders(products: list, orders: list):
@@ -8866,6 +8954,121 @@ async def stock_concentration_processed_skus_api(
     Usado por el frontend para ocultar productos ya procesados del bulk."""
     skus = await token_store.get_concentrated_skus(days=days)
     return {"skus": skus, "days": days, "count": len(skus)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISTRIBUCIÓN DE STOCK — Reglas por cuenta + umbrales globales
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/distribution/rules")
+async def get_distribution_rules_api():
+    """Retorna las reglas de distribución de stock por cuenta."""
+    rules = await token_store.get_all_distribution_rules()
+    # Enriquecer con nicknames de cuentas conectadas
+    all_tokens = await token_store.get_all_tokens()
+    token_map = {t["user_id"]: t.get("nickname", t["user_id"]) for t in all_tokens}
+    rules_by_uid = {r["user_id"]: r for r in rules}
+    # Devolver todas las cuentas conectadas, con regla si existe o defaults
+    result = []
+    for t in all_tokens:
+        uid = t["user_id"]
+        rule = rules_by_uid.get(uid) or {
+            "user_id": uid,
+            "nickname": token_map.get(uid, uid),
+            "priority": 99,
+            "pct_full": 1.0,
+            "pct_scarce": 1.0,
+            "scarce_enabled": 1,
+            "updated_at": 0,
+        }
+        rule["nickname"] = token_map.get(uid, rule.get("nickname", uid))
+        result.append(rule)
+    result.sort(key=lambda r: r["priority"])
+    settings = await token_store.get_distribution_settings()
+    return {"rules": result, "settings": settings}
+
+
+@app.post("/api/distribution/rules/{user_id}")
+async def upsert_distribution_rule_api(user_id: str, request: Request):
+    """Actualiza la regla de distribución para una cuenta."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    # Recuperar nickname actual
+    all_tokens = await token_store.get_all_tokens()
+    nick = next((t.get("nickname", user_id) for t in all_tokens if t["user_id"] == user_id), user_id)
+    await token_store.upsert_distribution_rule(
+        user_id=user_id,
+        nickname=nick,
+        priority=int(body.get("priority", 99)),
+        pct_full=float(body.get("pct_full", 1.0)),
+        pct_scarce=float(body.get("pct_scarce", 1.0)),
+        scarce_enabled=bool(body.get("scarce_enabled", True)),
+    )
+    return {"ok": True, "user_id": user_id}
+
+
+@app.get("/api/distribution/settings")
+async def get_distribution_settings_api():
+    """Retorna los umbrales globales de distribución."""
+    return await token_store.get_distribution_settings()
+
+
+@app.post("/api/distribution/settings")
+async def upsert_distribution_settings_api(request: Request):
+    """Actualiza los umbrales globales de distribución."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    await token_store.upsert_distribution_settings(
+        scarce_threshold_units=int(body.get("scarce_threshold_units", 10)),
+        scarce_threshold_days=int(body.get("scarce_threshold_days", 7)),
+        safety_buffer_units=int(body.get("safety_buffer_units", 2)),
+    )
+    return {"ok": True}
+
+
+@app.get("/api/distribution/sku-score")
+async def get_sku_score_api(sku: str = Query(..., description="SKU base BM")):
+    """Retorna ventas por cuenta para un SKU — usado para el score dinámico.
+    Incluye recomendación de distribución basada en % de ventas históricas.
+    """
+    sku = sku.split("/")[0].strip()
+    rows = await token_store.get_sku_sales_by_account(sku)
+    settings = await token_store.get_distribution_settings()
+    rules = {r["user_id"]: r for r in await token_store.get_all_distribution_rules()}
+
+    total_sold = sum(r["sold_qty"] or 0 for r in rows)
+    result = []
+    for r in rows:
+        sold = r["sold_qty"] or 0
+        pct_sales = (sold / total_sold * 100) if total_sold > 0 else 0
+        rule = rules.get(r["user_id"])
+        result.append({
+            "user_id": r["user_id"],
+            "nickname": r["nickname"],
+            "sold_qty": sold,
+            "available_qty": r["available_qty"] or 0,
+            "listing_count": r["listing_count"],
+            "pct_sales": round(pct_sales, 1),
+            "configured_pct_full": rule["pct_full"] * 100 if rule else 100,
+            "recommended_pct_full": round(pct_sales) if total_sold > 0 else None,
+        })
+    return {
+        "sku": sku,
+        "total_sold": total_sold,
+        "accounts": result,
+        "settings": settings,
+    }
+
+
+@app.get("/distribucion", response_class=HTMLResponse)
+async def distribucion_page(request: Request):
+    """Página de configuración de distribución de stock multi-cuenta."""
+    user = await get_current_user()
+    return templates.TemplateResponse(request, "distribucion.html", {"user": user, "active": "distribucion"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

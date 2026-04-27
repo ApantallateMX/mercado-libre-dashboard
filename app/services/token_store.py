@@ -619,6 +619,41 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_item_sync_log_at
             ON item_sync_log (synced_at)
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: account_stock_rules — reglas de distribución por cuenta
+        # pct_full   = % del stock BM cuando hay ≥ umbral unidades
+        # pct_scarce = % del stock BM cuando hay < umbral (modo escasez)
+        # scarce_enabled = si esta cuenta recibe stock en modo escasez
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS account_stock_rules (
+                user_id        TEXT PRIMARY KEY,
+                nickname       TEXT NOT NULL DEFAULT '',
+                priority       INTEGER NOT NULL DEFAULT 99,
+                pct_full       REAL NOT NULL DEFAULT 1.0,
+                pct_scarce     REAL NOT NULL DEFAULT 1.0,
+                scarce_enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at     REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: stock_distribution_settings — umbrales globales
+        # scarce_threshold_units  = unidades mínimas para modo "normal"
+        # scarce_threshold_days   = días de supply mínimos para modo "normal"
+        # safety_buffer_units     = unidades nunca expuestas (siempre en BM)
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_distribution_settings (
+                id                     INTEGER PRIMARY KEY CHECK (id = 1),
+                scarce_threshold_units INTEGER NOT NULL DEFAULT 10,
+                scarce_threshold_days  INTEGER NOT NULL DEFAULT 7,
+                safety_buffer_units    INTEGER NOT NULL DEFAULT 2,
+                updated_at             REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "INSERT OR IGNORE INTO stock_distribution_settings (id) VALUES (1)"
+        )
         await db.commit()
 
 
@@ -2182,3 +2217,108 @@ async def delete_billing_request(request_id: int) -> None:
         await db.execute("DELETE FROM billing_invoices WHERE request_id=?", (request_id,))
         await db.execute("DELETE FROM billing_requests WHERE id=?", (request_id,))
         await db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Distribución de stock multi-cuenta
+# ══════════════════════════════════════════════════════════════════
+
+async def get_distribution_rule(user_id: str) -> dict | None:
+    """Retorna la regla de distribución para una cuenta, o None si no tiene."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM account_stock_rules WHERE user_id = ?", (user_id,)
+        )).fetchone()
+    return dict(row) if row else None
+
+
+async def get_all_distribution_rules() -> list[dict]:
+    """Retorna todas las reglas de distribución, ordenadas por prioridad."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM account_stock_rules ORDER BY priority ASC, nickname ASC"
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def upsert_distribution_rule(
+    user_id: str, nickname: str, priority: int,
+    pct_full: float, pct_scarce: float, scarce_enabled: bool,
+) -> None:
+    """Crea o actualiza la regla de distribución de una cuenta."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO account_stock_rules
+               (user_id, nickname, priority, pct_full, pct_scarce, scarce_enabled, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, nickname, priority, pct_full, pct_scarce, int(scarce_enabled), _t.time()),
+        )
+        await db.commit()
+
+
+async def get_distribution_settings() -> dict:
+    """Retorna los umbrales globales de distribución."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM stock_distribution_settings WHERE id = 1"
+        )).fetchone()
+    if row:
+        return dict(row)
+    return {"scarce_threshold_units": 10, "scarce_threshold_days": 7, "safety_buffer_units": 2}
+
+
+async def upsert_distribution_settings(
+    scarce_threshold_units: int, scarce_threshold_days: int, safety_buffer_units: int,
+) -> None:
+    """Actualiza los umbrales globales de distribución."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO stock_distribution_settings
+               (id, scarce_threshold_units, scarce_threshold_days, safety_buffer_units, updated_at)
+               VALUES (1, ?, ?, ?, ?)""",
+            (scarce_threshold_units, scarce_threshold_days, safety_buffer_units, _t.time()),
+        )
+        await db.commit()
+
+
+async def get_account_sold_history(user_id: str) -> dict:
+    """Retorna {base_sku: sold_qty} para todos los SKUs con ventas históricas en esta cuenta.
+    Usado para la excepción histórica: cuentas sin scarce_enabled pero con historial de ventas
+    siguen recibiendo stock en modo escasez.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            """SELECT base_sku, SUM(sold_qty) as total
+               FROM ml_listings
+               WHERE account_id = ? AND sold_qty > 0 AND base_sku != ''
+               GROUP BY base_sku""",
+            (user_id,),
+        )).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+async def get_sku_sales_by_account(base_sku: str) -> list[dict]:
+    """Retorna ventas por cuenta para un SKU base.
+    Usado en el score dinámico: {user_id, nickname, sold_qty, available_qty}.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT m.account_id as user_id,
+                      COALESCE(t.nickname, m.account_id) as nickname,
+                      SUM(m.sold_qty) as sold_qty,
+                      SUM(m.available_qty) as available_qty,
+                      COUNT(*) as listing_count
+               FROM ml_listings m
+               LEFT JOIN tokens t ON t.user_id = m.account_id
+               WHERE m.base_sku = ? AND m.status = 'active'
+               GROUP BY m.account_id
+               ORDER BY sold_qty DESC""",
+            (base_sku,),
+        )).fetchall()
+    return [dict(r) for r in rows]

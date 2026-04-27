@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% block title %}Distribución de Stock{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+
+  <!-- Header -->
+  <div>
+    <h1 class="text-xl font-bold text-gray-800">Distribución de Stock Multi-Cuenta</h1>
+    <p class="text-xs text-gray-500 mt-0.5">Define qué porcentaje del stock BM expone cada cuenta en MercadoLibre según disponibilidad.</p>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="hidden fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white transition-all"></div>
+
+  <!-- ── Umbrales globales ───────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-bold text-gray-700">Umbrales Globales</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Aplican a todas las cuentas para definir cuándo activar el modo escasez.</p>
+      </div>
+      <button onclick="saveSettings()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+        Guardar umbrales
+      </button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4" id="settings-form">
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Umbral unidades (escasez)</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="s-units" min="1" max="500" value="10"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <span class="text-xs text-gray-400 whitespace-nowrap">uds</span>
+        </div>
+        <p class="text-[11px] text-gray-400 mt-1">Stock BM &lt; este valor → modo escasez</p>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Umbral días de supply</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="s-days" min="1" max="90" value="7"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <span class="text-xs text-gray-400 whitespace-nowrap">días</span>
+        </div>
+        <p class="text-[11px] text-gray-400 mt-1">Días de supply &lt; este valor → modo escasez</p>
+      </div>
+      <div>
+        <label class="text-xs font-medium text-gray-600 block mb-1">Buffer de seguridad BM</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="s-buffer" min="0" max="50" value="2"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none">
+          <span class="text-xs text-gray-400 whitespace-nowrap">uds</span>
+        </div>
+        <p class="text-[11px] text-gray-400 mt-1">Unidades reservadas en BM, nunca expuestas en ML</p>
+      </div>
+    </div>
+    <!-- Leyenda visual de modos -->
+    <div class="flex flex-wrap gap-3 pt-1">
+      <span class="inline-flex items-center gap-1.5 bg-green-50 border border-green-200 text-green-700 text-xs px-3 py-1.5 rounded-full font-medium">
+        <span class="w-2 h-2 rounded-full bg-green-500 inline-block"></span>
+        Modo Normal: stock ≥ umbral → aplica % completo
+      </span>
+      <span class="inline-flex items-center gap-1.5 bg-orange-50 border border-orange-200 text-orange-700 text-xs px-3 py-1.5 rounded-full font-medium">
+        <span class="w-2 h-2 rounded-full bg-orange-500 inline-block"></span>
+        Modo Escasez: stock &lt; umbral → aplica % escasez (o 0 si deshabilitada)
+      </span>
+    </div>
+  </div>
+
+  <!-- ── Reglas por cuenta ───────────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <h2 class="text-sm font-bold text-gray-700">Reglas por Cuenta</h2>
+        <p class="text-xs text-gray-400 mt-0.5">Los porcentajes deben sumar ~100% para evitar overselling. Haz clic en una fila para editar.</p>
+      </div>
+      <div id="pct-sum-badge" class="text-xs font-bold px-3 py-1.5 rounded-full border"></div>
+    </div>
+
+    <!-- Tabla -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm" id="rules-table">
+        <thead>
+          <tr class="border-b border-gray-100 text-xs text-gray-500 font-medium">
+            <th class="text-left py-2 pr-4">Prioridad</th>
+            <th class="text-left py-2 pr-4">Cuenta</th>
+            <th class="text-center py-2 pr-4">% Normal<br><span class="font-normal text-gray-400">(≥ umbral)</span></th>
+            <th class="text-center py-2 pr-4">% Escasez<br><span class="font-normal text-gray-400">(&lt; umbral)</span></th>
+            <th class="text-center py-2 pr-4">Activa en<br>escasez</th>
+            <th class="text-right py-2">Guardar</th>
+          </tr>
+        </thead>
+        <tbody id="rules-tbody">
+          <tr>
+            <td colspan="6" class="text-center py-6 text-gray-400 text-sm">
+              <svg class="w-5 h-5 animate-spin inline mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+              </svg>
+              Cargando cuentas...
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Nota sobre excepción histórica -->
+    <div class="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-700">
+      <strong>Excepción histórica:</strong> Si una cuenta tiene "Activa en escasez" desactivada pero ha tenido ventas previas de un SKU,
+      recibirá al menos 20% del stock en modo escasez. Esto evita perder canales que ya probaron funcionar.
+    </div>
+  </div>
+
+  <!-- ── Score dinámico por SKU ─────────────────────────────────── -->
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 space-y-4">
+    <div>
+      <h2 class="text-sm font-bold text-gray-700">Score Dinámico por SKU</h2>
+      <p class="text-xs text-gray-400 mt-0.5">Analiza las ventas históricas de un SKU por cuenta y compara con la distribución configurada.</p>
+    </div>
+    <div class="flex gap-2">
+      <input type="text" id="sku-input" placeholder="Ej: SNTV003363"
+             class="flex-1 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-300 outline-none"
+             onkeydown="if(event.key==='Enter') analyzeSku()">
+      <button onclick="analyzeSku()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2 rounded-xl transition">
+        Analizar
+      </button>
+    </div>
+    <div id="sku-result" class="hidden"></div>
+  </div>
+
+</div>
+
+<script>
+var _rules = [];
+var _settings = {};
+
+// ── Carga inicial ──────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() { loadData(); });
+
+function loadData() {
+    fetch('/api/distribution/rules').then(function(r){ return r.json(); }).then(function(d) {
+        _rules = d.rules || [];
+        _settings = d.settings || {};
+        renderSettings();
+        renderRules();
+    }).catch(function(e) { showToast('Error cargando datos: ' + e, 'error'); });
+}
+
+function renderSettings() {
+    document.getElementById('s-units').value  = _settings.scarce_threshold_units || 10;
+    document.getElementById('s-days').value   = _settings.scarce_threshold_days  || 7;
+    document.getElementById('s-buffer').value = _settings.safety_buffer_units    || 2;
+}
+
+function renderRules() {
+    var tbody = document.getElementById('rules-tbody');
+    if (!_rules.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center py-6 text-gray-400 text-sm">No hay cuentas conectadas.</td></tr>';
+        return;
+    }
+    var totalPctFull = _rules.reduce(function(s,r){ return s + (parseFloat(r.pct_full)||0)*100; }, 0);
+    var badge = document.getElementById('pct-sum-badge');
+    var sumRound = Math.round(totalPctFull);
+    if (sumRound > 105) {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-red-300 bg-red-50 text-red-700';
+        badge.textContent = 'Suma: ' + sumRound + '% — riesgo de oversell';
+    } else if (sumRound < 95) {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-yellow-300 bg-yellow-50 text-yellow-700';
+        badge.textContent = 'Suma: ' + sumRound + '% — stock subutilizado';
+    } else {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-green-300 bg-green-50 text-green-700';
+        badge.textContent = 'Suma: ' + sumRound + '% — óptimo';
+    }
+
+    tbody.innerHTML = _rules.map(function(r, idx) {
+        var pctFull   = Math.round((parseFloat(r.pct_full)   || 0) * 100);
+        var pctScarce = Math.round((parseFloat(r.pct_scarce) || 0) * 100);
+        var scarceOn  = r.scarce_enabled ? 1 : 0;
+        return '<tr class="border-b border-gray-50 hover:bg-gray-50 transition" data-uid="' + r.user_id + '">' +
+          '<td class="py-3 pr-4">' +
+            '<input type="number" class="w-14 border border-gray-200 rounded-lg px-2 py-1 text-xs text-center rule-priority focus:ring-1 focus:ring-indigo-300 outline-none" value="' + (r.priority||99) + '" min="1" max="99">' +
+          '</td>' +
+          '<td class="py-3 pr-4">' +
+            '<div class="font-semibold text-gray-800 text-sm">' + (r.nickname || r.user_id) + '</div>' +
+            '<div class="text-[11px] text-gray-400">' + r.user_id + '</div>' +
+          '</td>' +
+          '<td class="py-3 pr-4 text-center">' +
+            '<div class="flex items-center justify-center gap-1">' +
+              '<input type="range" class="rule-pct-full w-20 accent-indigo-600" min="0" max="100" step="5" value="' + pctFull + '" ' +
+                     'oninput="this.nextElementSibling.textContent=this.value+\'%\'; updatePctSum()">' +
+              '<span class="text-xs font-bold text-indigo-700 w-10 text-center">' + pctFull + '%</span>' +
+            '</div>' +
+          '</td>' +
+          '<td class="py-3 pr-4 text-center">' +
+            '<div class="flex items-center justify-center gap-1">' +
+              '<input type="range" class="rule-pct-scarce w-20 accent-orange-500" min="0" max="100" step="5" value="' + pctScarce + '" ' +
+                     'oninput="this.nextElementSibling.textContent=this.value+\'%\'">' +
+              '<span class="text-xs font-bold text-orange-700 w-10 text-center">' + pctScarce + '%</span>' +
+            '</div>' +
+          '</td>' +
+          '<td class="py-3 pr-4 text-center">' +
+            '<button onclick="toggleScarce(this)" data-on="' + scarceOn + '" ' +
+                    'class="text-xs font-semibold px-3 py-1.5 rounded-full border transition ' +
+                    (scarceOn ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500') + '">' +
+                    (scarceOn ? 'Activa' : 'Inactiva') +
+            '</button>' +
+          '</td>' +
+          '<td class="py-3 text-right">' +
+            '<button onclick="saveRule(this)" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-1.5 rounded-lg transition">Guardar</button>' +
+          '</td>' +
+        '</tr>';
+    }).join('');
+}
+
+function toggleScarce(btn) {
+    var on = btn.getAttribute('data-on') === '1';
+    btn.setAttribute('data-on', on ? '0' : '1');
+    if (!on) {
+        btn.textContent = 'Activa';
+        btn.className = 'text-xs font-semibold px-3 py-1.5 rounded-full border transition bg-green-50 border-green-300 text-green-700';
+    } else {
+        btn.textContent = 'Inactiva';
+        btn.className = 'text-xs font-semibold px-3 py-1.5 rounded-full border transition bg-gray-50 border-gray-200 text-gray-500';
+    }
+}
+
+function updatePctSum() {
+    var rows = document.querySelectorAll('#rules-tbody tr');
+    var total = 0;
+    rows.forEach(function(row) {
+        var slider = row.querySelector('.rule-pct-full');
+        if (slider) total += parseInt(slider.value) || 0;
+    });
+    var badge = document.getElementById('pct-sum-badge');
+    if (total > 105) {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-red-300 bg-red-50 text-red-700';
+        badge.textContent = 'Suma: ' + total + '% — riesgo de oversell';
+    } else if (total < 95) {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-yellow-300 bg-yellow-50 text-yellow-700';
+        badge.textContent = 'Suma: ' + total + '% — stock subutilizado';
+    } else {
+        badge.className = 'text-xs font-bold px-3 py-1.5 rounded-full border border-green-300 bg-green-50 text-green-700';
+        badge.textContent = 'Suma: ' + total + '% — óptimo';
+    }
+}
+
+function saveRule(btn) {
+    var row = btn.closest('tr');
+    var uid = row.getAttribute('data-uid');
+    var priority   = parseInt(row.querySelector('.rule-priority').value) || 99;
+    var pctFull    = (parseInt(row.querySelector('.rule-pct-full').value)   || 0) / 100;
+    var pctScarce  = (parseInt(row.querySelector('.rule-pct-scarce').value) || 0) / 100;
+    var scarceBtn  = row.querySelector('[data-on]');
+    var scarceEnabled = scarceBtn ? scarceBtn.getAttribute('data-on') === '1' : true;
+
+    btn.textContent = '...';
+    btn.disabled = true;
+    fetch('/api/distribution/rules/' + encodeURIComponent(uid), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ priority: priority, pct_full: pctFull, pct_scarce: pctScarce, scarce_enabled: scarceEnabled })
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        btn.textContent = '✓';
+        btn.className = 'bg-green-600 text-white text-xs px-3 py-1.5 rounded-lg transition';
+        showToast('Regla guardada para ' + uid, 'success');
+        setTimeout(function(){ btn.textContent = 'Guardar'; btn.disabled = false; btn.className = 'bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 py-1.5 rounded-lg transition'; }, 2000);
+    }).catch(function(e) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+        showToast('Error: ' + e, 'error');
+    });
+}
+
+function saveSettings() {
+    var units  = parseInt(document.getElementById('s-units').value)  || 10;
+    var days   = parseInt(document.getElementById('s-days').value)   || 7;
+    var buffer = parseInt(document.getElementById('s-buffer').value) || 2;
+    fetch('/api/distribution/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ scarce_threshold_units: units, scarce_threshold_days: days, safety_buffer_units: buffer })
+    }).then(function(r){ return r.json(); }).then(function(d) {
+        showToast('Umbrales actualizados', 'success');
+    }).catch(function(e) { showToast('Error: ' + e, 'error'); });
+}
+
+// ── Score dinámico por SKU ─────────────────────────────────────────────
+function analyzeSku() {
+    var sku = document.getElementById('sku-input').value.trim();
+    if (!sku) return;
+    var div = document.getElementById('sku-result');
+    div.classList.remove('hidden');
+    div.innerHTML = '<div class="flex items-center gap-2 text-sm text-gray-500"><svg class="w-4 h-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg> Analizando...</div>';
+
+    fetch('/api/distribution/sku-score?sku=' + encodeURIComponent(sku)).then(function(r){ return r.json(); }).then(function(d) {
+        if (!d.accounts || !d.accounts.length) {
+            div.innerHTML = '<p class="text-sm text-gray-500">No se encontraron ventas para este SKU en ninguna cuenta activa.</p>';
+            return;
+        }
+        var html = '<div class="space-y-3">';
+        html += '<div class="flex flex-wrap gap-3 text-xs">';
+        html += '<span class="bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full font-medium">SKU: <strong>' + d.sku + '</strong></span>';
+        html += '<span class="bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full font-medium">Total vendido: <strong>' + d.total_sold + '</strong> uds</span>';
+        html += '</div>';
+        html += '<div class="overflow-x-auto"><table class="w-full text-xs border-collapse">';
+        html += '<thead><tr class="bg-gray-50 border-b border-gray-200">';
+        html += '<th class="text-left py-2 px-3 font-medium text-gray-500">Cuenta</th>';
+        html += '<th class="text-right py-2 px-3 font-medium text-gray-500">Vendido (total)</th>';
+        html += '<th class="text-right py-2 px-3 font-medium text-gray-500">% de ventas</th>';
+        html += '<th class="text-right py-2 px-3 font-medium text-gray-500">% configurado</th>';
+        html += '<th class="text-right py-2 px-3 font-medium text-gray-500">Recomendado</th>';
+        html += '<th class="text-right py-2 px-3 font-medium text-gray-500">Stock ML</th>';
+        html += '</tr></thead><tbody>';
+        d.accounts.forEach(function(a) {
+            var diff = a.recommended_pct_full !== null ? a.recommended_pct_full - a.configured_pct_full : null;
+            var diffHtml = '';
+            if (diff !== null) {
+                if (diff > 5) diffHtml = ' <span class="text-green-600 font-bold">↑' + diff.toFixed(0) + '%</span>';
+                else if (diff < -5) diffHtml = ' <span class="text-red-500 font-bold">↓' + Math.abs(diff).toFixed(0) + '%</span>';
+                else diffHtml = ' <span class="text-gray-400">≈</span>';
+            }
+            html += '<tr class="border-b border-gray-100 hover:bg-gray-50">';
+            html += '<td class="py-2 px-3 font-medium text-gray-800">' + a.nickname + '</td>';
+            html += '<td class="py-2 px-3 text-right text-gray-700">' + a.sold_qty + '</td>';
+            html += '<td class="py-2 px-3 text-right">';
+            var barW = Math.round(a.pct_sales);
+            html += '<div class="flex items-center justify-end gap-2">';
+            html += '<div class="w-24 bg-gray-100 rounded-full h-1.5"><div class="bg-indigo-500 h-1.5 rounded-full" style="width:' + barW + '%"></div></div>';
+            html += '<span class="font-bold text-indigo-700">' + a.pct_sales + '%</span>';
+            html += '</div></td>';
+            html += '<td class="py-2 px-3 text-right text-gray-600">' + a.configured_pct_full.toFixed(0) + '%</td>';
+            html += '<td class="py-2 px-3 text-right">' + (a.recommended_pct_full !== null ? a.recommended_pct_full.toFixed(0) + '%' + diffHtml : '<span class="text-gray-400">—</span>') + '</td>';
+            html += '<td class="py-2 px-3 text-right text-gray-600">' + a.available_qty + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+        if (d.total_sold > 0) {
+            html += '<p class="text-[11px] text-gray-400">Recomendación basada en historial de ventas. Considera también márgenes por cuenta antes de aplicar cambios.</p>';
+        }
+        html += '</div>';
+        div.innerHTML = html;
+    }).catch(function(e) {
+        div.innerHTML = '<p class="text-sm text-red-600">Error: ' + e + '</p>';
+    });
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────
+function showToast(msg, type) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white transition-all ' +
+                  (type === 'error' ? 'bg-red-600' : 'bg-green-600');
+    t.classList.remove('hidden');
+    setTimeout(function(){ t.classList.add('hidden'); }, 3500);
+}
+</script>
+{% endblock %}
