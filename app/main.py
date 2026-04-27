@@ -476,8 +476,8 @@ async def lifespan(app: FastAPI):
                             await asyncio.sleep(2)
                 except Exception:
                     pass
-            # Retry rápido en fallo (2 min); ciclo normal 10 min
-            _sleep = 120 if _auto_fail_streak > 0 else 600
+            # Retry rápido en fallo (2 min); ciclo normal 15 min (requests BM son secuenciales)
+            _sleep = 120 if _auto_fail_streak > 0 else 900
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
@@ -2232,7 +2232,7 @@ async def items_grid_partial(
 
         if sku_to_items:
             from app.services.binmanager_client import get_shared_bm as _get_bm_cli
-            sem = asyncio.Semaphore(10)
+            sem = asyncio.Semaphore(1)  # secuencial — 1 request BM a la vez
             async def _fetch_inv(base_sku: str, full_sku: str, http: _httpx.AsyncClient):
                 async with sem:
                     try:
@@ -2566,7 +2566,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     bm_cat = await _get_bm_cat()
     if not bm_cat._logged_in:
         await bm_cat.login()
-    sem_cat = asyncio.Semaphore(3)
+    sem_cat = asyncio.Semaphore(1)  # secuencial — 1 request BM a la vez
     results: list[dict] = []
 
     # Mapa base_sku → fila del bulk (para brand/model/title sin llamadas extra a BM)
@@ -3431,10 +3431,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     def _store_empty(sku):
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), _EMPTY_BM)
 
-    # sem=12 + 1 request por SKU = 12 simultáneos máx — holgado bajo el límite de 20 de httpx.
-    # Con WH endpoint eliminado: de 2 requests por SKU → 1. Antes sem=12 = 24 simultáneos (WH+avail),
-    # ahora sem=12 = 12 simultáneos. Sesión BM estable sin saturar el pool de conexiones.
-    wh_sem = asyncio.Semaphore(12)
+    # Semaphore(1) = estrictamente secuencial — esperar respuesta antes de lanzar el siguiente.
+    # Evita rate-limiting de BM. ~600 SKUs × ~0.5s = ~5 min por ciclo de prewarm (15 min).
+    wh_sem = asyncio.Semaphore(1)
 
     async def _wh_phase(sku, http=None, _track_progress=True):
         """Consulta Get_GlobalStock_InventoryBySKU CONCEPTID=1 — fuente única de stock vendible.
@@ -7933,7 +7932,10 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             return result
 
         async with httpx.AsyncClient() as http:
-            var_results = await asyncio.gather(*[_fetch_var_bm(v, http) for v in raw_vars])
+            # Secuencial — 1 request BM a la vez para evitar rate-limiting
+            var_results = []
+            for _v in raw_vars:
+                var_results.append(await _fetch_var_bm(_v, http))
 
         # 3. Dividir stock entre variaciones del mismo SKU base para evitar sobreventa
         # Si var1 y var2 comparten SNTV001864 con BM=244 → cada una recibe 122, no 244
