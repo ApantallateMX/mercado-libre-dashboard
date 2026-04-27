@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-27 — FIX: Concentración de inventario no zeroaba otras cuentas (combo SKU)
+
+### Bug
+Al concentrar un SKU publicado como combo (ej. "SNTV003363 / SNWM000001"), el preview y el execute recibían el SKU completo con el slash, lo que hacía que `search_all_items_by_sku` solo encontrara la cuenta que tenía ese combo exacto — las demás cuentas con `SNTV003363` solo no aparecían y no se zeroaban.
+
+### Síntomas
+- Mensaje verde confirmando concentración pero las otras cuentas seguían con stock activo
+- SKU desaparecía de alertas pero sin efecto real
+
+### Fix (commit 12f2548)
+- `preview` endpoint (`GET /api/stock/concentration/preview`): `sku = sku.split("/")[0].strip()` antes de llamar a `preview_concentration`
+- `execute` endpoint (`POST /api/stock/concentration/execute`): mismo split
+- `concentrateItem` JS: split en frontend también, antes de hacer fetch al preview
+- UI confirmación: reemplazado `d.total_bm_avail` (undefined) → `bmAvail || d.total_stock`
+- UI resultado: separar cuentas-otras zeroeadas vs duplicados del ganador
+
+---
+
 ## 2026-04-27 — FIX: Gap scan "SKUs sin publicar en ML" retornaba 0 resultados
 
 ### Bug
