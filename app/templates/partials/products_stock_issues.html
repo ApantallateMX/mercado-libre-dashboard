@@ -1825,6 +1825,9 @@ function confirmSyncVariations(itemId, confirmBtn) {
 // --- Stock Crítico: Concentrar SKU en mejor cuenta ---
 function concentrateItem(sku, title, bmAvail, btn) {
     if (!sku) { alert('Este producto no tiene SKU registrado.'); return; }
+    // SKU puede ser combo "SNTV003363 / SNWM000001" — tomar solo el primero (10 chars BM)
+    var baseSku = sku.split('/')[0].trim();
+    sku = baseSku;
     btn.disabled = true;
     var origText = btn.textContent;
     btn.textContent = 'Analizando...';
@@ -1838,11 +1841,15 @@ function concentrateItem(sku, title, bmAvail, btn) {
         if (d.error) { alert('Error al analizar SKU ' + sku + ':\n' + d.error); return; }
         var winner = d.winner || {};
         var accounts = d.accounts || [];
-        var lines = ['SKU: ' + sku + ' — BM Disponible: ' + (d.total_bm_avail || bmAvail)];
+        var stockDisp = bmAvail || d.total_stock || 0;
+        var lines = ['SKU: ' + sku + ' — BM Disponible: ' + stockDisp];
         lines.push('');
-        accounts.forEach(function(a) {
-            var marker = a.user_id === winner.user_id ? '★ GANADOR' : '';
-            lines.push((marker || '  ') + ' ' + (a.nickname || a.user_id) + ': ' + a.sold_30d + ' ventas / MeLi=' + (a.meli_stock || 0) + ' ' + marker);
+        // Mostrar todas las cuentas encontradas con sus ventas
+        var details = d.details || [];
+        details.forEach(function(a) {
+            var isWinner = winner.user_id && a.user_id === winner.user_id;
+            var marker = isWinner ? '★ GANADOR' : '  Perder';
+            lines.push(marker + '  ' + (a.nickname || a.user_id) + ': ' + (a.sold_30d||0) + ' v/30d · MeLi=' + (a.available_quantity||0));
         });
         if (!winner.user_id) {
             lines.push('');
@@ -1851,7 +1858,7 @@ function concentrateItem(sku, title, bmAvail, btn) {
             return;
         }
         lines.push('');
-        lines.push('→ Concentrar todo el stock (' + d.total_bm_avail + ') en ' + (winner.nickname || winner.user_id));
+        lines.push('→ Concentrar todo el stock (' + stockDisp + ') en ' + (winner.nickname || winner.user_id));
         lines.push('→ Las demás cuentas quedarán en stock = 0');
         lines.push('');
         lines.push('¿Confirmar concentración?');
@@ -1883,10 +1890,14 @@ function concentrateItem(sku, title, bmAvail, btn) {
             btn.className = btn.className.replace('bg-red-600', 'bg-green-600').replace('hover:bg-red-700', '');
             var winnerItemId = (res.data.winner && res.data.winner.item_id) || res.data.winner_item_id || '';
             var winnerNick   = (res.data.winner && res.data.winner.nickname) || res.data.winner_nickname || (winner.nickname || winner.user_id);
-            var zeroed = res.data.zeroed_accounts || [];
-            var msg = '✓ Concentrado en ' + winnerNick + (winnerItemId ? ' (' + winnerItemId + ')' : '');
-            if (zeroed.length) msg += '\nStock→0 en: ' + zeroed.join(', ');
-            // Mostrar alerta persistente (no solo toast que se pierde)
+            // Cuentas zeoreadas = losers que NO son el ganador
+            var losers = res.data.losers || [];
+            var zeroedOthers = losers.filter(function(l){ return l.user_id !== (res.data.winner && res.data.winner.user_id); }).map(function(l){ return l.nickname || l.user_id; });
+            var zeroedSelf   = losers.filter(function(l){ return l.user_id === (res.data.winner && res.data.winner.user_id); }).map(function(l){ return l.item_id; });
+            var msg = '✓ Concentrado en ' + winnerNick + '\nMLM ganador: ' + (winnerItemId || '—');
+            if (zeroedOthers.length) msg += '\nStock→0 en otras cuentas: ' + [...new Set(zeroedOthers)].join(', ');
+            if (zeroedSelf.length)   msg += '\nDuplicados zeoreados en ' + winnerNick + ': ' + zeroedSelf.join(', ');
+            if (!zeroedOthers.length && !zeroedSelf.length) msg += '\n(No se encontraron otras cuentas con este SKU activo)';
             alert(msg);
         })
         .catch(function(e) {

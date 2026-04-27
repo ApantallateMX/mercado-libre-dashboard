@@ -8723,6 +8723,8 @@ async def stock_concentration_preview_api(
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     await client.close()
+    # SKU puede venir como combo "SNTV003363 / SNWM000001" — tomar solo el primero
+    sku = sku.split("/")[0].strip()
     from app.services.stock_concentrator import preview_concentration
     return await preview_concentration(sku)
 
@@ -8744,6 +8746,8 @@ async def stock_concentration_execute_api(request: Request):
         return JSONResponse({"detail": "JSON inválido"}, status_code=400)
 
     sku = body.get("sku", "").strip()
+    # SKU puede venir como combo "SNTV003363 / SNWM000001" — tomar solo el primero
+    sku = sku.split("/")[0].strip()
     winner_uid = body.get("winner_user_id", "").strip()
     total_stock = int(body.get("total_stock", 0))
     dry_run = bool(body.get("dry_run", True))
