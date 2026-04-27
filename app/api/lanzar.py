@@ -58,7 +58,7 @@ def _load_video(vid_id: str) -> bytes | None:
 
 # BM endpoints (same as sku_inventory.py)
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = __import__("os").getenv("BM_USER", "jovan.rodriguez@mitechnologiesinc.com")
+_BM_USER = __import__("os").getenv("BM_USER", "Carlos.Herrera@mitechnologiesinc.com")
 _BM_PASS = __import__("os").getenv("BM_PASS", "123456")
 _BM_INVENTORY_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
 _BM_WAREHOUSE_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
@@ -96,104 +96,51 @@ async def _bm_login(http: httpx.AsyncClient) -> bool:
 
 
 async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
-    """Fetch all SKUs from BinManager that have stock > 0.
-    Paginates through all pages, returns list of product dicts.
+    """Fetch all SKUs from BinManager using ConfColumns_Conditions_Excel (single call).
+    Returns list of product dicts with TotalQty > 0.
     """
-    results = []
-    page = 1
-    per_page = 200
-    while True:
-        payload = {
-            "COMPANYID": _BM_COMPANY,
-            "CATEGORYID": None,
-            "WAREHOUSEID": None,
-            "LOCATIONID": _BM_LOCATIONS,
-            "BINID": None,
-            "CONDITION": "GRA,GRB,GRC,NEW",
-            "FORINVENTORY": 0,
-            "BUSCADOR": False,
-            "BRAND": None,
-            "MODEL": None,
-            "SIZE": None,
-            "LCN": None,
-            "CONCEPTID": _BM_CONCEPT,
-            "OPENCELL": False,
-            "OCCOMPTABILITY": False,
-            "NEEDRETAILPRICE": True,
-            "NEEDFLOORPRICE": False,
-            "NEEDIPS": False,
-            "NEEDTIER": False,
-            "NEEDFILE": False,
-            "NEEDVIRTUALQTY": False,
-            "NEEDINCOMINGQTY": False,
-            "NEEDAVGCOST": True,
-            "NUMBERPAGE": page,
-            "RECORDSPAGE": per_page,
-            "ORDERBYNAME": None,
-            "ORDERBYTYPE": None,
-            "PorcentajeFloor": 20,
-            "StatusConcept": None,
-            "RetailBalance": None,
-            "RetailAvailable": None,
-            "MaxQty": None,
-            "MinQty": 1,
-            "NameQty": "QtyTotal",
-            "Tier": None,
-            "NEEDRETAILPRICEPH": True,
-            "TAGS": None,
-            "TVL": False,
-            "NEEDPORCENTAGE": False,
-            "NEEDUPC": True,
-            "filterUPC": None,
-            "IsComplete": None,
-            "NEEDSALES": False,
-            "StartDate": None,
-            "EndDate": None,
-            "SUPPLIERS": None,
-            "TAGSNOTIN": None,
-            "NEEDLASTREPORTEDSALESPRICE": False,
-            "SALESPRICE": None,
-            "Jsonfilter": "[]",
-            "Arrayfilters_Condition": None,
-            "Namefilters_Condition": None,
-            "Arrayfilters_Brand": None,
-            "Namefilters_Brand": None,
-            "Arrayfilters_Model": None,
-            "Namefilters_Model": None,
-            "Arrayfilters_Size": None,
-            "Namefilters_Size": None,
-            "Arrayfilters_Category": None,
-            "Namefilters_Category": None,
-            "Arrayfilters_Tags": None,
-            "Namefilters_Tags": None,
-            "Arrayfilters_Tags_Exclude": None,
-            "Namefilters_Tags_Exlude": None,
-            "Arrayfilters_Supplier": None,
-            "Namefilters_Supplier": None,
-            "SEARCH": "",  # post-mantenimiento BM 2026-04-16: SEARCH=null ya no funciona
-        }
-        try:
-            r = await http.post(_BM_INVENTORY_URL, json=payload, headers=_BM_AJAX, timeout=30)
-            # Redireccion a login = sin acceso — salir
-            if "User/Index" in str(r.url) or r.status_code == 401:
-                logger.warning("BM requiere autenticacion en pagina %d — saliendo", page)
-                break
-            if r.status_code != 200:
-                break
-            data = r.json()
-            if not data or not isinstance(data, list):
-                break
-            results.extend(data)
-            if len(data) < per_page:
-                break
-            page += 1
-            if page > 500:  # safety limit
-                logger.warning("BM pagination hit 500-page safety limit")
-                break
-        except Exception as e:
-            logger.error(f"BM fetch page {page} error: {e}")
-            break
-    return results
+    try:
+        r = await http.post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+            json={
+                "COMPANYID": _BM_COMPANY,
+                "NEEDRETAILPRICEPH": True,
+                "NEEDRETAILPRICE": True,
+                "NEEDAVGCOST": True,
+                "NEEDSALES": False,
+            },
+            headers=_BM_AJAX,
+            timeout=120,
+        )
+        if "User/Index" in str(r.url) or r.status_code == 401:
+            logger.warning("BM requiere autenticacion en ConfColumns")
+            return []
+        if r.status_code != 200:
+            logger.error(f"ConfColumns HTTP {r.status_code}")
+            return []
+        data = r.json()
+        if not data or not isinstance(data, list):
+            return []
+        results = []
+        for row in data:
+            qty = int(row.get("TotalQty") or 0)
+            if qty <= 0:
+                continue
+            results.append({
+                "SKU": (row.get("SKU") or "").upper().strip(),
+                "TotalQty": qty,
+                "Brand": row.get("Brand") or "",
+                "Model": row.get("Model") or "",
+                "Title": row.get("Title") or "",
+                "RetailPrice": float(row.get("RetailPrice") or 0),
+                "AvgCostQTY": float(row.get("AvgCostQTY") or 0),
+                "LastRetailPricePurchaseHistory": float(row.get("LastRetailPricePurchaseHistory") or 0),
+            })
+        logger.info(f"ConfColumns: {len(data)} SKUs total, {len(results)} con TotalQty>0")
+        return results
+    except Exception as e:
+        logger.error(f"ConfColumns fetch error: {e}")
+        return []
 
 
 _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -617,7 +564,7 @@ async def _run_gap_scan(user_id: str | None = None):
                 bm_logged_in = await _bm_login(bm_http)
                 if not bm_logged_in:
                     raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
-                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "Página 1...")
+                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
                 bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
