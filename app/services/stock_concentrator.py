@@ -21,11 +21,14 @@ Reglas:
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 from app.services import token_store
 from app.services.meli_client import get_meli_client
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -406,8 +409,10 @@ async def execute_concentration(
             except Exception as e:
                 return {"ok": False, "action": "zero_failed", "error": str(e), **la}
 
+        logger.info(f"[CONC] SKU={base_sku} winner={winner_entry['item_id']} losers={[l['item_id'] for l in loser_actions]}")
         loser_results = await asyncio.gather(*[_zero_loser(la) for la in loser_actions])
         executed_losers = list(loser_results)
+        logger.info(f"[CONC] loser results: {[(r['item_id'], r['action'], r.get('ok')) for r in executed_losers]}")
         errors.extend([r for r in executed_losers if not r.get("ok")])
 
         # PASO 2: Asignar stock total al ganador
@@ -416,9 +421,11 @@ async def execute_concentration(
             await client.update_item_stock(winner_entry["item_id"], total_stock)
             await client.close()
             executed_winner = {"ok": True, "action": "assigned", **winner_entry}
+            logger.info(f"[CONC] winner {winner_entry['item_id']} → qty={total_stock} OK")
         except Exception as e:
             executed_winner = {"ok": False, "action": "assign_failed", "error": str(e), **winner_entry}
             errors.append(executed_winner)
+            logger.error(f"[CONC] winner {winner_entry['item_id']} assign FAILED: {e}")
 
     # Registrar en log
     accounts_zeroed_log = [
