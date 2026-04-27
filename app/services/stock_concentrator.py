@@ -395,6 +395,9 @@ async def execute_concentration(
     else:
         # PASO 1: Poner 0 en todos los perdedores (previene sobreventa)
         async def _zero_loser(la):
+            # Si ya está en 0, no llamar a ML — evita errores innecesarios
+            if (la.get("prev_qty") or 0) == 0:
+                return {"ok": True, "action": "already_zero", **la}
             try:
                 client = await get_meli_client(user_id=la["user_id"])
                 await client.update_item_stock(la["item_id"], 0)

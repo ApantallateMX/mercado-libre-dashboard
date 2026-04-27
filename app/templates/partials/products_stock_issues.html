@@ -1871,13 +1871,21 @@ function concentrateItem(sku, title, bmAvail, btn) {
         .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
         .then(function(res) {
             btn.disabled = false;
-            if (!res.ok || !res.data.ok) { btn.textContent = 'Error'; alert('Error: ' + (res.data.error || res.data.detail || JSON.stringify(res.data))); return; }
+            var winnerOk = res.data.winner && res.data.winner.ok;
+            if (!res.ok || res.data.error || (!winnerOk && !res.data.winner)) {
+                btn.textContent = 'Error';
+                var errMsg = res.data.error || res.data.detail || 'Error desconocido';
+                if (typeof showToast === 'function') showToast('Error: ' + errMsg, 'error');
+                else alert('Error: ' + errMsg);
+                return;
+            }
             btn.textContent = 'OK';
             btn.className = btn.className.replace('bg-red-600', 'bg-green-600').replace('hover:bg-red-700', '');
             var zeroed = res.data.zeroed_accounts || [];
-            var msg = 'Concentrado en ' + (winner.nickname || winner.user_id) + '\n';
-            if (zeroed.length) msg += 'Stock→0 en: ' + zeroed.join(', ');
-            alert(msg);
+            var msg = 'Concentrado en ' + (winner.nickname || winner.user_id);
+            if (zeroed.length) msg += ' · Stock→0: ' + zeroed.join(', ');
+            if (typeof showToast === 'function') showToast('✓ ' + msg, 'success');
+            else alert(msg);
         })
         .catch(function(e) {
             btn.disabled = false;
