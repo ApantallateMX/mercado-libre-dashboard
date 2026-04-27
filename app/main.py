@@ -2515,10 +2515,10 @@ _BM_RETAIL_PH_TTL = 7 * 24 * 3600  # 7 días — fuente real es DB (sync semanal
 
 
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
-    """Descarga info estática de todos los SKUs desde BM y la guarda en DB.
-    Corre 1x/semana (domingo 9pm Monterrey). Concurrencia=3 para no saturar BM.
-    Fuente: lista de SKUs del bulk cache actual + DB existente.
-    Retorna cantidad de SKUs sincronizados.
+    """Descarga LastRetailPricePurchaseHistory para todos los SKUs de BM via
+    ConfColumns_Conditions_Excel. 1 sola llamada, ~8,786 SKUs, 97% cobertura LRPPH.
+    Corre 1x/semana (domingo 9pm Monterrey). Guarda en DB + actualiza _bm_retail_ph_cache.
+    Retorna cantidad de SKUs guardados en DB.
     """
     global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history, _catalog_sync_task
     if _catalog_sync_running:
@@ -2526,114 +2526,78 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     _catalog_sync_running = True
     _catalog_sync_task = asyncio.current_task()
     _t0 = _time.time()
-    # Obtener lista de SKUs base — fuente 1: bulk cache en memoria (prewarm)
-    skus_to_fetch: list[str] = []
-    seen: set = set()
-    try:
-        _bulk = _bm_bulk_gr_cache or _bm_bulk_all_cache
-        if _bulk:
-            for _row in _bulk[1]:
-                _rsk = (_row.get("SKU") or "").upper().strip()
-                if _rsk:
-                    _base = _extract_base_sku(_rsk)
-                    if _base and _base not in seen:
-                        seen.add(_base)
-                        skus_to_fetch.append(_base)
-            logger.info(f"[CATALOG-SYNC] Fuente: bulk cache → {len(skus_to_fetch)} SKUs")
-    except Exception as _e:
-        logger.warning(f"[CATALOG-SYNC] Error leyendo bulk cache: {_e}")
+    _total_rows = 0
 
-    # Fuente 2 fallback: _bm_stock_cache (cargado de DB al arrancar — siempre disponible)
-    if not skus_to_fetch:
-        try:
-            for _csk in list(_bm_stock_cache.keys()):
-                _base = _extract_base_sku(_csk.upper())
-                if _base and _base not in seen:
-                    seen.add(_base)
-                    skus_to_fetch.append(_base)
-            logger.info(f"[CATALOG-SYNC] Fuente: stock cache DB → {len(skus_to_fetch)} SKUs")
-        except Exception as _e:
-            logger.warning(f"[CATALOG-SYNC] Error leyendo stock cache: {_e}")
-
-    if not skus_to_fetch:
-        logger.warning("[CATALOG-SYNC] Sin SKUs disponibles — prewarm aún no corrió y DB vacía")
-        _catalog_sync_running = False
-        _catalog_sync_history.append({"ts": _time.time(), "skus_total": 0, "elapsed_s": 0,
-                                       "source": source, "ok": False,
-                                       "error": "Sin SKUs — espera que corra el prewarm (~90s post-deploy)"})
-        if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
-        return 0
-
-    logger.info(f"[CATALOG-SYNC] Iniciando sync de {len(skus_to_fetch)} SKUs (concurrencia=3)")
-    from app.services.binmanager_client import get_shared_bm as _get_bm_cat
+    logger.info("[CATALOG-SYNC] Iniciando sync via ConfColumns_Conditions_Excel (1 sola llamada)")
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _get_bm_cat
     bm_cat = await _get_bm_cat()
     if not bm_cat._logged_in:
         await bm_cat.login()
-    sem_cat = asyncio.Semaphore(1)  # secuencial — 1 request BM a la vez
-    results: list[dict] = []
-
-    # Mapa base_sku → fila del bulk (para brand/model/title sin llamadas extra a BM)
-    _bulk_meta: dict = {}
-    _bulk_src = _bm_bulk_gr_cache or _bm_bulk_all_cache
-    if _bulk_src:
-        for _br in _bulk_src[1]:
-            _bsk = normalize_to_bm_sku((_br.get("SKU") or "").upper().strip())
-            if _bsk and _bsk not in _bulk_meta:
-                _bulk_meta[_bsk] = _br
-
-    _debug_logged = {"n": 0}  # mutable para nonlocal-equivalente
-
-    async def _fetch_one(sku: str):
-        # Precio: get_retail_price_ph() — función verificada, maneja auth+retry.
-        # Brand/model/title: del bulk cache ya descargado (sin llamadas extras a BM).
-        async with sem_cat:
-            try:
-                rph_raw = await bm_cat.get_retail_price_ph(sku)
-                rph = float(rph_raw or 0)
-                # Debug: loguear los primeros 5 resultados para diagnóstico
-                if _debug_logged["n"] < 5:
-                    _debug_logged["n"] += 1
-                    logger.info(f"[CATALOG-SYNC-DEBUG] SKU={sku} rph_raw={rph_raw!r} rph={rph}")
-                _meta = _bulk_meta.get(sku, {})
-                return {
-                    "sku":       sku,
-                    "retail_ph": rph if 0 < rph < 9000 else 0,
-                    "brand":     _meta.get("Brand") or "",
-                    "model":     _meta.get("Model") or "",
-                    "title":     _meta.get("Title") or _meta.get("SKUDescription") or "",
-                }
-            except Exception as _ex:
-                logger.warning(f"[CATALOG-SYNC] _fetch_one error SKU={sku}: {_ex}")
-                return None
 
     try:
-        tasks = await asyncio.gather(*[_fetch_one(s) for s in skus_to_fetch], return_exceptions=True)
-        rows = [r for r in tasks if isinstance(r, dict) and r]
+        c = bm_cat._client()
+        r = await c.post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+            json={
+                "COMPANYID": 1,
+                "NEEDRETAILPRICEPH": True,
+                "NEEDRETAILPRICE": True,
+                "NEEDAVGCOST": True,
+                "NEEDSALES": True,
+            },
+            headers=_AJAX_HEADERS,
+            timeout=120,
+        )
+        if r.status_code != 200:
+            raise Exception(f"HTTP {r.status_code} de ConfColumns_Conditions_Excel")
+        data = r.json()
+        if not isinstance(data, list):
+            raise Exception(f"Respuesta inesperada (no lista): {str(data)[:200]}")
+
+        _total_rows = len(data)
+        logger.info(f"[CATALOG-SYNC] ConfColumns retornó {_total_rows} filas")
+
+        # Parsear — campo clave: LastRetailPricePurchaseHistory (97% cobertura)
+        rows = []
+        for _row in data:
+            _sku = normalize_to_bm_sku((_row.get("SKU") or "").upper().strip())
+            if not _sku:
+                continue
+            _rph = float(_row.get("LastRetailPricePurchaseHistory") or 0)
+            rows.append({
+                "sku":       _sku,
+                "retail_ph": _rph if 0 < _rph < 9000 else 0,
+                "brand":     _row.get("Brand") or "",
+                "model":     _row.get("Model") or "",
+                "title":     _row.get("Title") or "",
+            })
 
         # Guardar en DB
         saved = await token_store.upsert_bm_catalog_batch(rows)
-        logger.info(f"[CATALOG-SYNC] {saved}/{len(skus_to_fetch)} SKUs guardados en DB")
+        logger.info(f"[CATALOG-SYNC] {saved}/{_total_rows} SKUs guardados en DB")
 
-        # Actualizar cache en memoria inmediatamente
-        now = _time.time()
-        for row in rows:
-            if row["retail_ph"] > 0:
-                _bm_retail_ph_cache[row["sku"]] = (now, row["retail_ph"])
+        # Actualizar _bm_retail_ph_cache en memoria
+        _now = _time.time()
+        for _row in rows:
+            if _row["retail_ph"] > 0:
+                _bm_retail_ph_cache[_row["sku"]] = (_now, _row["retail_ph"])
 
-        with_price = sum(1 for r in rows if r.get("retail_ph", 0) > 0)
+        with_price = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
         elapsed = round(_time.time() - _t0, 1)
-        logger.info(f"[CATALOG-SYNC] _bm_retail_ph_cache actualizado: {len(_bm_retail_ph_cache)} SKUs con precio")
+        logger.info(f"[CATALOG-SYNC] Completado: {with_price}/{_total_rows} con LRPPH. "
+                    f"Cache: {len(_bm_retail_ph_cache)} SKUs. Elapsed: {elapsed}s")
         _catalog_sync_history.append({
-            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "ts": _time.time(), "skus_total": _total_rows,
             "skus_saved": saved, "with_price": with_price,
             "elapsed_s": elapsed, "source": source, "ok": True, "error": "",
         })
         if len(_catalog_sync_history) > 10: _catalog_sync_history.pop(0)
         return saved
+
     except asyncio.CancelledError:
         elapsed = round(_time.time() - _t0, 1)
         _catalog_sync_history.append({
-            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "ts": _time.time(), "skus_total": _total_rows,
             "skus_saved": 0, "with_price": 0,
             "elapsed_s": elapsed, "source": source, "ok": False, "error": "Cancelado por usuario",
         })
@@ -2643,7 +2607,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
     except Exception as _err:
         elapsed = round(_time.time() - _t0, 1)
         _catalog_sync_history.append({
-            "ts": _time.time(), "skus_total": len(skus_to_fetch),
+            "ts": _time.time(), "skus_total": _total_rows,
             "skus_saved": 0, "with_price": 0,
             "elapsed_s": elapsed, "source": source, "ok": False, "error": str(_err)[:200],
         })
