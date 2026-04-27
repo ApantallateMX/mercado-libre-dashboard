@@ -388,6 +388,39 @@
     };
 
     loadAlertBar();
+
+    // ── Auto-refresh cuando prewarm BM termina ────────────────────────────────
+    // Detecta pasivamente cuando el cache BM se actualiza (prewarm automático cada 15 min
+    // o manual desde stock_sync) y recarga el tab activo + alert bar sin disparar nuevo prewarm.
+    (function startPrewarmWatcher() {
+        var _lastAge = null;
+        var _wasRunning = false;
+        setInterval(function() {
+            fetch('/api/stock/prewarm-status')
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    var running = d.running;
+                    var age = d.last_updated_s;
+                    // Detectar: estaba corriendo y terminó → datos frescos
+                    var justFinished = _wasRunning && !running;
+                    // Detectar: age bajó (datos nuevos llegaron externamente)
+                    var cacheRefreshed = !running && _lastAge !== null && age !== null && age < _lastAge - 5;
+                    if (justFinished || cacheRefreshed) {
+                        loadAlertBar();
+                        var activeBtn = document.querySelector('#product-tabs .tab-btn.border-yellow-400') ||
+                                        document.querySelector('#product-tabs .tab-btn[class*="border-yellow-400"]');
+                        if (activeBtn && window.switchProductTab) {
+                            var tabUrl = activeBtn.dataset.url || activeBtn.getAttribute('hx-get') || '';
+                            window.switchProductTab(activeBtn.dataset.tab, tabUrl);
+                        }
+                    }
+                    _wasRunning = running;
+                    if (!running && age !== null) _lastAge = age;
+                })
+                .catch(function() {});
+        }, 60000); // Cada 60s — sin impacto en BM
+    })();
+
     // Carga no-bloqueante del conteo de pausados (alimenta la badge en la barra)
     window._pausedLoaded = false;
     (function fetchPausedCount() {
