@@ -2402,19 +2402,10 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
             if _is_admin_stock and _data_age_s > _STOCK_ISSUES_TTL:
                 asyncio.create_task(_prewarm_caches())
             return templates.TemplateResponse(request, "partials/products_stock_issues.html", ctx)
-        # Sin cache en absoluto
-        if not _is_admin_stock:
-            # Operador sin cache disponible — no puede iniciar prewarm
-            return HTMLResponse("""
-<div class="text-center py-16 text-gray-400">
-  <svg class="h-10 w-10 mx-auto mb-3 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-  </svg>
-  <p class="text-sm font-medium text-gray-500">Datos de stock no disponibles aún</p>
-  <p class="text-xs text-gray-400 mt-1">El administrador debe ejecutar el cache de stock primero.</p>
-</div>
-""")
+        # Sin cache en absoluto — operador y admin ven spinner (espera el prewarm).
+        # Admin además dispara el prewarm si no está corriendo.
+        if _is_admin_stock and not _prewarm_running:
+            asyncio.create_task(_prewarm_caches())
         return HTMLResponse("""
 <div id="stock-loading" class="text-center py-16 text-gray-500">
   <svg id="stock-spinner" class="animate-spin h-8 w-8 text-yellow-400 mx-auto mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -2463,12 +2454,12 @@ async def products_stock_issues_partial(request: Request, threshold: int = 10):
           reload();
           return;
         }
-        // Sin ningún dato disponible aún
+        // Sin datos y prewarm no corriendo — iniciarlo automáticamente
         if (!s.running) {
-          var sp2 = document.getElementById('stock-spinner');
-          if (sp2) sp2.classList.add('hidden');
-          if (msg) msg.textContent = 'Datos de inventario no disponibles';
-          if (sub) sub.innerHTML = '<span style="font-size:11px;color:#6b7280">El administrador debe actualizar el inventario desde Sync Stock.</span>';
+          fetch('/api/stock/force-prewarm', {method:'POST'}).catch(function(){});
+          if (msg) msg.textContent = 'Iniciando actualización de stock...';
+          if (sub) sub.textContent = 'Esto puede tardar unos minutos la primera vez.';
+          setTimeout(poll, 5000);
           return;
         }
         var secs = attempts * 5;
