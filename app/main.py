@@ -3658,8 +3658,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         await asyncio.gather(*[_wh_phase(s) for s in to_fetch], return_exceptions=True)
 
     # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
-    # Solo en prewarm (retry_stale=True). Se lanza como tarea background y prewarm continúa.
-    if retry_stale:
+    # Solo en prewarm (retry_stale=True) Y solo cuando el bulk NO fue usado (fallback per-SKU).
+    # Cuando el bulk corrió OK, SKUs no encontrados = genuinamente no en BM → sin retry necesario.
+    if retry_stale and not _used_bulk:
         _stale_after_prewarm = [
             s for s in to_fetch
             if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
