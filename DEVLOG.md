@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-27 — FEAT: Distribución de stock multi-cuenta con reglas por cuenta
+
+### Feature
+Sistema completo para controlar qué porcentaje del stock BM expone cada cuenta de MercadoLibre, con modo normal y modo escasez basado en días de supply.
+
+### Componentes (commit e300b2a)
+
+**DB (token_store.py):**
+- `account_stock_rules`: prioridad, pct_full (≥ umbral), pct_scarce (< umbral), scarce_enabled por cuenta
+- `stock_distribution_settings`: umbrales globales (unidades=10, días=7, buffer=2)
+- `get_account_sold_history()`, `get_sku_sales_by_account()` para excepción histórica y score
+
+**Lógica prewarm (main.py):**
+- `_dist_apply_pool()`: aplica pct según mode, con safety_buffer siempre retenido en BM
+- Excepción histórica: si cuenta tiene scarce_enabled=False pero vendió el SKU antes → habilitada con mínimo 20%
+- `_apply_bm_stock()` ahora produce `_days_supply`, `_is_scarce`, `_bm_avail_raw` en cada producto
+- Prewarm fetcha rule + settings + sold_history antes de llamar a `_apply_bm_stock`
+
+**API:**
+- `GET /api/distribution/rules` — lista reglas de todas las cuentas
+- `POST /api/distribution/rules/{user_id}` — upsert regla de cuenta
+- `GET/POST /api/distribution/settings` — umbrales globales
+- `GET /api/distribution/sku-score?sku=XXX` — ventas por cuenta + recomendación
+
+**UI:**
+- `/distribucion` — nueva página con sliders por cuenta, badge suma total (rojo si >105%)
+- Columna días de supply en tablas de alertas de stock
+- Badge ⚡ESCASEZ en SKUs en modo escasez
+- Alerta urgente si days_supply < 3 días en stock crítico
+- Enlace en nav (solo admins)
+
+### Comportamiento por defecto
+Si una cuenta no tiene regla configurada → `pct_full=1.0` (100% del stock, comportamiento legacy sin cambios).
+
+---
+
 ## 2026-04-27 — FIX: Concentración de inventario no zeroaba otras cuentas (combo SKU)
 
 ### Bug
