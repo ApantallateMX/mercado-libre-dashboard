@@ -605,7 +605,52 @@ async def init_db():
                 updated_at REAL NOT NULL DEFAULT 0
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS item_sync_log (
+                item_id    TEXT NOT NULL,
+                user_id    TEXT NOT NULL,
+                synced_qty INTEGER NOT NULL DEFAULT 0,
+                synced_at  REAL NOT NULL,
+                synced_by  TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (item_id, user_id)
+            )
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_item_sync_log_at
+            ON item_sync_log (synced_at)
+        """)
         await db.commit()
+
+
+async def save_item_sync(item_id: str, user_id: str, synced_qty: int, synced_by: str = "") -> None:
+    """Registra que un item fue sincronizado ahora.
+    Cross-user: cualquier cuenta que consulte get_recently_synced_ids verá este registro.
+    TTL de supresión: 60 min — tiempo suficiente para que ML confirme el qty nuevo.
+    """
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO item_sync_log (item_id, user_id, synced_qty, synced_at, synced_by)
+               VALUES (?, ?, ?, ?, ?)""",
+            (item_id, user_id, synced_qty, _t.time(), synced_by),
+        )
+        # Limpiar registros > 2 horas para no crecer indefinidamente
+        await db.execute("DELETE FROM item_sync_log WHERE synced_at < ?", (_t.time() - 7200,))
+        await db.commit()
+
+
+async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[str]:
+    """Retorna item_ids sincronizados en los últimos ttl_seconds para esta cuenta.
+    Usado en el prewarm para excluir items recién sincronizados de las alertas.
+    """
+    import time as _t
+    cutoff = _t.time() - ttl_seconds
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            "SELECT item_id FROM item_sync_log WHERE user_id = ? AND synced_at > ?",
+            (user_id, cutoff),
+        )).fetchall()
+    return {r[0] for r in rows}
 
 
 async def upsert_bm_catalog_batch(rows: list[dict]) -> int:

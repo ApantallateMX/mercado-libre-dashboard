@@ -3088,15 +3088,10 @@ async def _prewarm_caches(user_id: str = None):
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
-                # Items sincronizados recientemente (TTL 10 min): excluirlos de todas las alertas
-                # hasta que el qty-sync de ML (cada 3 min) actualice ml_listings y el siguiente
-                # prewarm refleje el estado real. Evita que otros usuarios vean items ya gestionados.
-                _SYNCED_TTL = 600
-                _now_sync_ts = _time.time()
-                _synced_ids = {iid for iid, ts in list(_synced_alert_items.items()) if _now_sync_ts - ts < _SYNCED_TTL}
-                # Limpiar entradas expiradas para que el dict no crezca indefinidamente
-                for _exp_id in [iid for iid, ts in list(_synced_alert_items.items()) if _now_sync_ts - ts >= _SYNCED_TTL]:
-                    _synced_alert_items.pop(_exp_id, None)
+                # Items sincronizados recientemente (TTL 60 min, cross-user, DB-backed):
+                # excluirlos de alertas hasta que ML confirme el qty nuevo en el próximo sync.
+                # Si ML volvió a 0 después de 60 min → el item re-aparece en alertas automáticamente.
+                _synced_ids = await token_store.get_recently_synced_ids(str(client.user_id), ttl_seconds=3600)
 
                 restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
@@ -4065,8 +4060,7 @@ async def products_inventory_partial(
 
         # --- Stock alerts from cached BM data (no waiting) ---
         # Muestra items con ventas, sin stock MeLi, y BM disponible>0 para alertar al usuario
-        _sa_now = _time.time()
-        _sa_synced = {iid for iid, ts in _synced_alert_items.items() if _sa_now - ts < 600}
+        _sa_synced = await token_store.get_recently_synced_ids(str(client.user_id), ttl_seconds=3600)
         stock_alerts = [
             p for p in products
             if p.get("units", 0) > 0
@@ -4326,9 +4320,14 @@ async def products_inventory_partial(
 # --- Mark alert item as synced (evita duplicar trabajo entre usuarios) ---
 
 @app.post("/partials/mark-synced/{item_id}")
-async def mark_alert_synced(item_id: str):
-    """Registra un item como sincronizado; se excluye de alertas hasta que la cache expire."""
-    _synced_alert_items[item_id] = _time.time()
+async def mark_alert_synced(item_id: str, request: Request):
+    """Registra un item como sincronizado; se excluye de alertas 60 min (cross-user, DB-backed)."""
+    client = await get_meli_client()
+    uid = str(client.user_id) if client else "unknown"
+    if client: await client.close()
+    _du = getattr(request.state, "dashboard_user", None) or {}
+    synced_by = _du.get("username") or _du.get("email") or "unknown"
+    asyncio.create_task(token_store.save_item_sync(item_id, uid, 0, synced_by))
     return Response(status_code=204)
 
 
@@ -7644,6 +7643,7 @@ async def update_item_stock_api(item_id: str, request: Request):
             del _products_cache[k]
         from app.services.token_store import update_ml_listing_qty as _update_qty
         asyncio.create_task(_update_qty(item_id, quantity))
+        asyncio.create_task(token_store.save_item_sync(item_id, uid, quantity))
         # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
         asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
         return {"ok": True, "quantity": quantity}
@@ -7928,13 +7928,13 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                     if r["variation_id"] in updated_ids:
                         r["updated"] = True
                 # Invalidar cache de stock issues y productos para reflejar cambio
-                _synced_alert_items[item_id] = _time.time()
+                _new_total_qty = sum(u["available_quantity"] for u in var_updates)
+                asyncio.create_task(token_store.save_item_sync(item_id, str(client.user_id), _new_total_qty))
                 _stock_issues_cache.clear()
                 uid = str(client.user_id)
                 for k in [k for k in _products_cache if k.startswith(f"{uid}:")]:
                     del _products_cache[k]
                 # Actualizar DB con qty total (suma de variaciones actualizadas)
-                _new_total_qty = sum(u["available_quantity"] for u in var_updates)
                 from app.services.token_store import update_ml_listing_qty as _update_qty
                 asyncio.create_task(_update_qty(item_id, _new_total_qty))
                 # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
@@ -8787,16 +8787,17 @@ async def stock_concentration_execute_api(request: Request):
         _conc_tasks = []
 
         # 1. Actualizar ml_listings para losers (qty → 0)
+        _conc_uid = str(client.user_id) if client else "unknown"
         for _loser in result.get("losers", []):
             if _loser.get("ok") and _loser.get("item_id"):
                 _conc_tasks.append(asyncio.create_task(_upd_qty(_loser["item_id"], 0)))
-                _synced_alert_items[_loser["item_id"]] = _time.time()
+                asyncio.create_task(token_store.save_item_sync(_loser["item_id"], _conc_uid, 0))
 
         # 2. Actualizar ml_listings para winner (qty → total_stock)
         _winner = result.get("winner") or {}
         if _winner.get("ok") and _winner.get("item_id"):
             _conc_tasks.append(asyncio.create_task(_upd_qty(_winner["item_id"], total_stock)))
-            _synced_alert_items[_winner["item_id"]] = _time.time()
+            asyncio.create_task(token_store.save_item_sync(_winner["item_id"], _conc_uid, total_stock))
 
         # 3. Limpiar cache de stock issues para todos los usuarios
         _stock_issues_cache.clear()
