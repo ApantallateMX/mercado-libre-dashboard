@@ -13,6 +13,21 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# ── Cola global de peticiones BM ─────────────────────────────────────────────
+# Solo 1 request activo a la vez hacia BM. La siguiente petición no sale
+# hasta que la anterior respondió + 200ms de pausa.
+# Compartido por TODAS las instancias de BinManagerClient en el proceso.
+_BM_GLOBAL_SEM: Optional[asyncio.Semaphore] = None
+_BM_REQUEST_DELAY = 0.2  # segundos entre requests
+
+
+def _get_bm_sem() -> asyncio.Semaphore:
+    """Lazy init del semáforo — requiere event loop activo."""
+    global _BM_GLOBAL_SEM
+    if _BM_GLOBAL_SEM is None:
+        _BM_GLOBAL_SEM = asyncio.Semaphore(1)
+    return _BM_GLOBAL_SEM
+
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
 _BM_USER = os.getenv("BM_USER", "Carlos.Herrera@mitechnologiesinc.com")
 _BM_PASS = os.getenv("BM_PASS", "123456")
@@ -72,15 +87,28 @@ class BinManagerClient:
         """True si la sesión expiró (redirige a login)."""
         return "User/Index" in str(r.url) or r.status_code == 401
 
+    async def _post(self, url: str, **kwargs) -> httpx.Response:
+        """POST a BM a través de la cola global — máx 1 request activo a la vez."""
+        async with _get_bm_sem():
+            r = await self._client().post(url, **kwargs)
+            await asyncio.sleep(_BM_REQUEST_DELAY)
+            return r
+
+    async def _get(self, url: str, **kwargs) -> httpx.Response:
+        """GET a BM a través de la cola global — máx 1 request activo a la vez."""
+        async with _get_bm_sem():
+            r = await self._client().get(url, **kwargs)
+            await asyncio.sleep(_BM_REQUEST_DELAY)
+            return r
+
     async def login(self) -> bool:
         async with self._login_lock:
             # Si otra coroutine ya completó el login mientras esperábamos, no repetir
             if self._logged_in:
                 return True
-            c = self._client()
             try:
-                await c.get(f"{_BM_BASE}/User/Index", timeout=15)
-                r = await c.post(
+                await self._get(f"{_BM_BASE}/User/Index", timeout=15)
+                r = await self._post(
                     f"{_BM_BASE}/User/LoginUser",
                     json={"USRNAME": _BM_USER, "PASS": _BM_PASS},
                     headers=_AJAX_HEADERS,
@@ -106,12 +134,11 @@ class BinManagerClient:
             if not await self.login():
                 return None
 
-        c = self._client()
         payload = {**_GS_BASE_PAYLOAD, "SEARCH": sku}
 
         for attempt in range(2):
             try:
-                r = await c.post(
+                r = await self._post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
                     json=payload,
                     headers=_AJAX_HEADERS,
@@ -151,11 +178,10 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return None
-        c = self._client()
         payload = {"StartDate": start_date, "EndDate": end_date, "excludedhv": 0, "needtv": 0}
         for attempt in range(2):
             try:
-                r = await c.post(
+                r = await self._post(
                     f"{_BM_BASE}/ReportsBinManager/OperationsDashboard/GetDashboardKPIs",
                     json=payload, headers=_AJAX_HEADERS, timeout=45,
                 )
@@ -189,7 +215,6 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return []
-        c = self._client()
         _PAGE_SIZE = min(per_page, 500)  # BM no acepta más de 500 por página
         payload = {
             "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
@@ -207,7 +232,7 @@ class BinManagerClient:
         }
         for attempt in range(2):
             try:
-                r = await c.post(
+                r = await self._post(
                     f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
                     json=payload, headers=_AJAX_HEADERS, timeout=60,
                 )
@@ -243,7 +268,6 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return []
-        c = self._client()
         _BM_PAGE_SIZE = 500   # límite impuesto por BM post-mantenimiento
         _BM_MAX_PAGES = 20    # tope de seguridad (20×500 = 10,000 SKUs máx)
         url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
@@ -284,7 +308,7 @@ class BinManagerClient:
             fetched = False
             for attempt in range(2):
                 try:
-                    r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=60)
+                    r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=60)
                     if self._session_expired(r):
                         self._logged_in = False
                         if attempt == 0:
@@ -343,7 +367,6 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return 0, 0
-        c = self._client()
 
         # Extraer base SKU (sin sufijo de condición)
         upper = sku.upper()
@@ -393,7 +416,7 @@ class BinManagerClient:
         _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         for attempt in range(2):
             try:
-                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=7)
+                r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=7)
                 if self._session_expired(r):
                     self._logged_in = False
                     if attempt == 0:
@@ -444,10 +467,9 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return None
-        c = self._client()
         for attempt in range(2):
             try:
-                r = await c.post(url, json=payload, headers=_AJAX_HEADERS, timeout=timeout)
+                r = await self._post(url, json=payload, headers=_AJAX_HEADERS, timeout=timeout)
                 if self._session_expired(r):
                     self._logged_in = False
                     if attempt == 0:
