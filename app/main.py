@@ -3066,7 +3066,7 @@ async def _prewarm_caches(user_id: str = None):
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
     _prewarm_queued=True y el prewarm activo lanza otro al terminar.
     user_id: cuenta a precalentar explícitamente. None = usar ContextVar / default."""
-    global _prewarm_running, _prewarm_queued, _prewarm_queued_uid, _prewarm_error
+    global _prewarm_running, _prewarm_queued, _prewarm_queued_uid, _prewarm_error, _prewarm_source
     if _prewarm_running:
         _prewarm_queued = True
         if user_id:
@@ -3522,6 +3522,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
         # ── GR bulk (15 min TTL normal; ilimitado cuando BM está caído) ────────
         _bm_is_down_now = _bm_health.get("consecutive_failures", 0) >= 2
+        _bulk_returned_empty = False  # True si BM respondió OK pero devolvió lista vacía
         _bulk_gr_rows = None
         if _bm_bulk_gr_cache:
             _age_gr = _time.time() - _bm_bulk_gr_cache[0]
@@ -3547,6 +3548,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
                     # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
                     logger.warning("[BM-CACHE] GR bulk fetch devolvió vacío — fallback a stale cache")
+                    _bulk_returned_empty = True  # señal para evitar retries individuales
                     if _bm_bulk_gr_cache:
                         _bulk_gr_rows = _bm_bulk_gr_cache[1]
                         logger.warning(f"[BM-CACHE] GR usando stale ({len(_bulk_gr_rows)} rows) tras bulk vacío")
@@ -3709,7 +3711,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     # Fix C: retry serial para SKUs STALE — fire-and-forget para no bloquear prewarm ni Stock tab.
     # Solo en prewarm (retry_stale=True) Y solo cuando el bulk NO fue usado (fallback per-SKU).
     # Cuando el bulk corrió OK, SKUs no encontrados = genuinamente no en BM → sin retry necesario.
-    if retry_stale and not _used_bulk:
+    # NUNCA cuando _bulk_returned_empty: si BM respondió pero devolvió vacío, las queries
+    # individuales también van a fallar → evitar el ciclo de 200+ segundos de hits a BM.
+    if retry_stale and not _used_bulk and not _bulk_returned_empty:
         _stale_after_prewarm = [
             s for s in to_fetch
             if not _bm_stock_cache.get(normalize_to_bm_sku(s), (None, {}))[1].get("_v")
