@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-28 — FIX: PriceMonitor dejaba de golpear BM — usa _bm_retail_ph_cache
+
+### Problema
+`PriceMonitor` (app/services/price_monitor.py) creaba su propio `BinManagerClient()` y hacía poll
+a BM cada 300 segundos (5 min) por cada SKU watcheado de forma individual. Esto:
+- Generaba tráfico continuo a BM independiente del sistema de prewarm
+- Mostraba sesión activa en el audit log de BM con usuario incorrecto en algunos entornos
+- Causaba re-login en cada restart del servicio
+
+### Solución (commit aae573b)
+
+1. **`PriceMonitor.set_cache(dict)`** — nuevo método que conecta la caché local `_bm_retail_ph_cache`
+   al monitor. Cuando está configurado, `_check_prices()` lee de memoria (cero hits a BM).
+
+2. **`_check_prices()` usa caché local si disponible:**
+   ```python
+   if self._ext_cache is not None:
+       entry = self._ext_cache.get(sku)
+       price = entry[1] if entry and entry[1] > 0 else None
+   else:
+       price = await self._client.get_retail_price_ph(sku)  # fallback
+   ```
+
+3. **`start()` omite login BM** cuando `_ext_cache` está configurado.
+
+4. **`main.py`** llama `price_monitor.set_cache(_bm_retail_ph_cache)` antes de `start()`,
+   después de que `_load_catalog_from_db()` ya pobló la caché desde SQLite.
+
+### Resultado
+PriceMonitor sigue detectando cambios de precio pero lee del catálogo local semanal —
+sin sesiones adicionales en BM, sin polling individual por SKU.
+
+---
+
 ## 2026-04-27 — FIX: OOM Railway — slim BM caches + limpieza periódica de memoria
 
 ### Problema
