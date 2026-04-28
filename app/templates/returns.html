@@ -705,14 +705,25 @@ function _renderTopProducts(data) {
         html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-4">' +
                 '<span class="text-red-500 font-semibold">' + p.opened + '</span> abiertos · ' +
                 '<span class="text-green-600 font-semibold">' + p.closed + '</span> cerrados</span>';
-        // Valor monetario
+        // Valor venta
         if (p.sale_amount_mxn > 0) {
             html += '<span class="text-xs text-orange-600 font-semibold border-l border-gray-200 pl-4">' +
-                    '💰 $' + p.sale_amount_mxn.toLocaleString('es-MX', {maximumFractionDigits:0}) + ' MXN</span>';
+                    '$' + p.sale_amount_mxn.toLocaleString('es-MX', {maximumFractionDigits:0}) + ' MXN</span>';
         }
-        if (p.cost_usd_bm > 0) {
-            html += '<span class="text-xs text-red-600 font-semibold border-l border-gray-200 pl-4">' +
-                    '🏷 $' + p.cost_usd_bm.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' USD costo</span>';
+        // Valor ref BM (Last Retail PH)
+        if (p.retail_ph_unit > 0) {
+            html += '<span class="text-xs text-blue-600 font-semibold border-l border-gray-200 pl-4" title="Last Retail Price PH por unidad">' +
+                    'Ref: $' + p.retail_ph_unit.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' USD/u</span>';
+        }
+        // Margen de recuperación
+        if (p.profit_pct !== null && p.profit_pct !== undefined) {
+            var profitUp = p.profit_pct >= 0;
+            var profitColor = profitUp ? 'text-green-600' : 'text-red-600';
+            var profitBg    = profitUp ? 'bg-green-50'   : 'bg-red-50';
+            html += '<span class="text-xs font-bold border-l border-gray-200 pl-4 ' + profitColor + '" title="(Venta USD - Ref BM) / Ref BM">' +
+                    (profitUp ? '▲' : '▼') + ' ' + Math.abs(p.profit_pct) + '%' +
+                    '<span class="font-normal text-[10px] ml-1">' +
+                    (profitUp ? 'sobre ref' : 'bajo ref') + '</span></span>';
         }
         html += '</div>';
 

@@ -11095,8 +11095,6 @@ async def _fetch_all_claims_cached(client, df, dt) -> list:
 _bm_retail_cache: tuple[float, dict] | None = None  # (ts, {sku: retail_usd})
 _BM_RETAIL_TTL = 600  # 10 min
 
-_bm_avg_cost_cache: tuple[float, dict] | None = None  # (ts, {sku: avg_cost_usd})
-_BM_AVG_COST_TTL = 600  # 10 min
 
 
 async def _get_bm_retail_prices() -> dict:
@@ -11125,47 +11123,12 @@ async def _get_bm_retail_prices() -> dict:
         return {}
 
 
-async def _get_bm_avg_costs() -> dict:
-    """Returns {bm_sku: avg_cost_usd} con cache de 10 min. Usa AvgCostQTY del bulk cache."""
-    global _bm_avg_cost_cache
-    import time as _t3
-    if _bm_avg_cost_cache and (_t3.time() - _bm_avg_cost_cache[0]) < _BM_AVG_COST_TTL:
-        return _bm_avg_cost_cache[1]
-    # Preferir el bulk cache ya cargado en memoria (evita hit extra a BM)
-    rows: list = []
-    if _bm_bulk_all_cache:
-        rows = _bm_bulk_all_cache[1]
-    elif _bm_bulk_gr_cache:
-        rows = _bm_bulk_gr_cache[1]
-    if rows:
-        cost_map: dict = {}
-        for item in rows:
-            sku = (item.get("SKU") or "").strip()
-            if sku:
-                cost = float(item.get("AvgCostQTY") or 0)
-                if cost > 0:
-                    cost_map[sku] = cost
-        _bm_avg_cost_cache = (_t3.time(), cost_map)
-        return cost_map
-    # Fallback: fetch directo a BM
-    try:
-        from app.services.binmanager_client import BinManagerClient
-        bm = BinManagerClient()
-        if not await bm.login():
-            return {}
-        items = await bm.get_bulk_stock()
-        cost_map = {}
-        for item in items:
-            sku = (item.get("SKU") or "").strip()
-            if sku:
-                cost = float(item.get("AvgCostQTY") or 0)
-                if cost > 0:
-                    cost_map[sku] = cost
-        _bm_avg_cost_cache = (_t3.time(), cost_map)
-        return cost_map
-    except Exception as _e:
-        logger.warning(f"[BM-AVG-COST] Error: {_e}")
-        return {}
+def _get_retail_ph_map() -> dict:
+    """Retorna {bm_sku: last_retail_price_ph_usd} desde _bm_retail_ph_cache (SQLite catalog).
+    CERO hits a BM — el catalog se sincroniza 1x/semana y se carga en memoria al arrancar.
+    Usado como precio de referencia para calcular márgenes y valor de retornos.
+    """
+    return {sku: v[1] for sku, v in _bm_retail_ph_cache.items() if v[1] > 0}
 
 
 @app.get("/returns", response_class=HTMLResponse)
@@ -11265,8 +11228,8 @@ async def returns_summary_partial(
                         if v[1]:
                             skus_returned.append(normalize_to_bm_sku(v[1]))
                 # Costo real = AvgCostQTY de BM (no RetailPrice)
-                bm_costs = await _get_bm_avg_costs()
-                costo_usd = sum(bm_costs.get(s, 0.0) for s in skus_returned if s)
+                retail_ph_map = _get_retail_ph_map()
+                costo_usd = sum(retail_ph_map.get(s, 0.0) for s in skus_returned if s)
         except Exception as _ev:
             logger.warning(f"[RETURNS-SUMMARY] valor error: {_ev}")
 
@@ -11641,8 +11604,8 @@ async def returns_top_products(
         results = await asyncio.gather(*[_fetch_order_info(oid) for oid in all_oids], return_exceptions=True)
         order_map = {r[0]: r[1] for r in results if isinstance(r, tuple)}
 
-        # Costo real = AvgCostQTY de BM (no RetailPrice)
-        bm_avg_costs_tp = await _get_bm_avg_costs()
+        # Precio de referencia = LastRetailPricePurchaseHistory desde catálogo local (sin hit BM)
+        bm_avg_costs_tp = _get_retail_ph_map()
 
         def _count_by_product(claims):
             counts = {}
@@ -11727,6 +11690,15 @@ async def returns_top_products(
         top_a = sorted(counts_a.values(), key=lambda x: x["count"], reverse=True)[:limit]
 
         products = []
+        # FX para convertir MXN → USD en cálculo de margen
+        _fx = _manual_fx_rate if _manual_fx_rate > 0 else 18.0
+        try:
+            _fx_cached = await _get_usd_to_mxn(client)
+            if _fx_cached > 0:
+                _fx = _fx_cached
+        except Exception:
+            pass
+
         for p in top_a:
             count_a = p["count"]
             b_entry = counts_b.get(p["title"])
@@ -11736,7 +11708,20 @@ async def returns_top_products(
                 delta_pct = round((count_a - count_b) / count_b * 100, 1)
             rec = _recommendation(p["reasons"], p["opened"], count_a)
             sku = p.get("sku", "")
-            cost_usd = bm_avg_costs_tp.get(sku, 0.0) * count_a if sku else 0.0
+            # Precio de referencia = LastRetailPricePurchaseHistory (catálogo local, sin BM)
+            retail_ph_unit = bm_avg_costs_tp.get(sku, 0.0) if sku else 0.0
+            retail_ph_total = retail_ph_unit * count_a
+
+            # Margen de recuperación:
+            # sale_amount_mxn = lo que cobró el vendedor (bruto)
+            # sale_usd = convertido a USD con FX
+            # profit_usd = sale_usd - retail_ph_total (pérdida si negativo)
+            # profit_pct = profit_usd / retail_ph_total * 100
+            sale_mxn = p.get("sale_amount_mxn", 0.0)
+            sale_usd = round(sale_mxn / _fx, 2) if _fx > 0 else 0.0
+            profit_usd = round(sale_usd - retail_ph_total, 2) if retail_ph_total > 0 else None
+            profit_pct = round(profit_usd / retail_ph_total * 100, 1) if (profit_usd is not None and retail_ph_total > 0) else None
+
             products.append({
                 "title": p["title"],
                 "item_id": p["item_id"],
@@ -11749,8 +11734,12 @@ async def returns_top_products(
                 "closed": p["closed"],
                 "reasons": p["reasons"],
                 "recommendation": rec,
-                "sale_amount_mxn": round(p.get("sale_amount_mxn", 0.0), 2),
-                "cost_usd_bm": round(cost_usd, 2),
+                "sale_amount_mxn": round(sale_mxn, 2),
+                "sale_usd": sale_usd,
+                "retail_ph_unit": round(retail_ph_unit, 2),
+                "retail_ph_total": round(retail_ph_total, 2),
+                "profit_usd": profit_usd,
+                "profit_pct": profit_pct,
             })
 
         def _label(df, dt):

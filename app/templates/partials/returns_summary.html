@@ -86,13 +86,13 @@
         </div>
     </div>
 
-    <!-- Costo BM USD -->
+    <!-- Valor Ref. BM -->
     <div class="bg-white p-5 rounded-lg shadow border-l-4 border-red-300">
-        <p class="text-xs text-gray-500 mb-1">Costo Estimado</p>
+        <p class="text-xs text-gray-500 mb-1">Valor Ref. BM</p>
         <p class="text-xl font-bold {% if summary.costo_usd > 0 %}text-red-600{% else %}text-gray-400{% endif %}">
             ${{ "{:,.2f}".format(summary.costo_usd) }}
         </p>
-        <p class="text-[10px] text-gray-400 mt-1">USD (Retail BM)</p>
+        <p class="text-[10px] text-gray-400 mt-1">USD · Last Retail PH</p>
         <div class="h-1.5 rounded-full mt-2 bg-red-100">
             <div class="h-1.5 rounded-full bg-red-400" style="width:{{ [summary.total * 10, 100]|min }}%"></div>
         </div>
