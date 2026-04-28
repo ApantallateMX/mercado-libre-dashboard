@@ -395,7 +395,7 @@ async def lifespan(app: FastAPI):
     from app.services.amazon_client import _seed_amazon_accounts
 
     import os as _os_bm
-    _BM_DISABLED = _os_bm.getenv("DISABLE_BM_MONITOR", "").lower() in ("1", "true", "yes")
+    _BM_DISABLED = _os_bm.getenv("DISABLE_BM_MONITOR", "true").lower() in ("1", "true", "yes")
     if _BM_DISABLED:
         logger.info("[BM] DISABLE_BM_MONITOR=true — polling BM deshabilitado en este ambiente")
 
@@ -489,34 +489,6 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(_sleep)
     if not _BM_DISABLED:
         asyncio.create_task(_startup_prewarm())
-    else:
-        # Modo backup: sync BM una vez al día a las 8:30 PM Monterrey (02:30 UTC)
-        async def _weekly_bm_sync_backup():
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            while True:
-                _now = _dt.now(_tz.utc)
-                # Viernes 9pm Monterrey CDT (UTC-5) = sábado 02:00 UTC
-                # weekday: lunes=0 … viernes=4, sábado=5, domingo=6
-                days_until_sat = (5 - _now.weekday()) % 7
-                if days_until_sat == 0 and _now.hour >= 2:
-                    days_until_sat = 7  # ya pasó el sábado 02:00 UTC de esta semana
-                _next = (_now + _td(days=days_until_sat)).replace(
-                    hour=2, minute=0, second=0, microsecond=0)
-                _secs = (_next - _now).total_seconds()
-                logger.info(f"[BM-BACKUP] Próximo sync en {_secs/3600:.1f}h (viernes 9pm Monterrey)")
-                await asyncio.sleep(_secs)
-                logger.info("[BM-BACKUP] Iniciando sync semanal BM (viernes 9pm Monterrey)...")
-                try:
-                    accounts = await token_store.get_all_tokens()
-                    for acc in accounts:
-                        uid = acc.get("user_id", "")
-                        if uid:
-                            await _prewarm_caches(user_id=uid)
-                            await asyncio.sleep(2)
-                    logger.info("[BM-BACKUP] Sync semanal BM completado")
-                except Exception as _e:
-                    logger.warning(f"[BM-BACKUP] Error en sync semanal: {_e}")
-        asyncio.create_task(_weekly_bm_sync_backup())
     # Monitor de salud BinManager — chequea cada 2 min, fast-fail en prewarm si está caído
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
@@ -543,7 +515,8 @@ async def lifespan(app: FastAPI):
                 logger.info(f"[CATALOG-SYNC] Sync semanal completado: {synced} SKUs")
             except Exception as _e:
                 logger.warning(f"[CATALOG-SYNC] Error en sync semanal: {_e}")
-    asyncio.create_task(_weekly_catalog_sync())
+    if not _BM_DISABLED:
+        asyncio.create_task(_weekly_catalog_sync())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
