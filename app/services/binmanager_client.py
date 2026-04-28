@@ -106,6 +106,13 @@ class BinManagerClient:
             # Si otra coroutine ya completó el login mientras esperábamos, no repetir
             if self._logged_in:
                 return True
+            # Bloqueo de seguridad: jovan.rodriguez es cuenta personal — nunca debe usarse
+            if "jovan.rodriguez" in _BM_USER.lower():
+                logger.error(
+                    "[BM] LOGIN BLOQUEADO — BM_USER es cuenta personal (jovan.rodriguez). "
+                    "Configurar BM_USER=Carlos.Herrera@mitechnologiesinc.com"
+                )
+                return False
             try:
                 await self._get(f"{_BM_BASE}/User/Index", timeout=15)
                 r = await self._post(
