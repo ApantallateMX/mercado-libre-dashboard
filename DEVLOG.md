@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-27 — FIX: OOM Railway — slim BM caches + limpieza periódica de memoria
+
+### Problema
+Servicio crasheaba cada ~5 min en Railway con "Out of memory". Causa: tres fugas de memoria acumuladas.
+
+### Causas y soluciones (commit 86f53b0)
+
+1. **`_bm_bulk_gr_cache` / `_bm_bulk_all_cache` almacenaban rows BM completos (30+ campos)** → ahora solo 10 campos via `_slim_bulk_rows()` (~70% menos RAM por ciclo de prewarm)
+
+2. **`_products_cache` nunca limpiaba entries expirados** → `_cleanup_memory_caches()` elimina entries con >2× TTL de antigüedad
+
+3. **`_bm_stock_cache` crecía sin límite** → capeado a 12,000 entries; elimina los más viejos si se excede
+
+4. **GC forzado después de cada ciclo** → `gc.collect()` libera objetos temporales del prewarm inmediatamente
+
+### Hook
+`_cleanup_memory_caches()` llamado al final de cada ciclo de `_startup_prewarm` (~cada 15 min)
+
+---
+
 ## 2026-04-27 — FEAT: Distribución de stock multi-cuenta con reglas por cuenta
 
 ### Feature
