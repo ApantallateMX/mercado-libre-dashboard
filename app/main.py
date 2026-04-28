@@ -11042,8 +11042,57 @@ async def set_fx_rate(request: Request):
 # RETORNOS / DEVOLUCIONES
 # ===========================
 
+# Mapa completo de tipos de reclamo ML → etiqueta legible
+CLAIM_REASON_MAP: dict[str, str] = {
+    # PDD — Producto Defectuoso o Diferente
+    "PDD":  "Defectuoso/Diferente",
+    "PDD1": "Defecto de fábrica",
+    "PDD2": "No coincide con descripción",
+    "PDD3": "Producto incorrecto",
+    "PDD4": "Partes faltantes",
+    "PDD5": "Dañado en tránsito",
+    "PDD6": "No funciona",
+    # PNTR — Producto No Recibido
+    "PNTR": "No recibido",
+    # Otros
+    "CANCEL": "Cancelación",
+}
+
+def _claim_reason_label(reason_id: str) -> str:
+    rid = (reason_id or "").upper().strip()
+    # Buscar coincidencia exacta primero, luego prefijo de 4 chars, luego 3
+    return (CLAIM_REASON_MAP.get(rid)
+            or CLAIM_REASON_MAP.get(rid[:4])
+            or CLAIM_REASON_MAP.get(rid[:3])
+            or f"Reclamo ({rid})")
+
+def _claim_category(reason_id: str) -> str:
+    """Categoría amplia para filtros: 'pdd' | 'pntr' | 'other'."""
+    rid = (reason_id or "").upper()
+    if rid.startswith("PDD"):  return "pdd"
+    if rid.startswith("PNTR"): return "pntr"
+    return "other"
+
+# Cache de claims por (user_id, date_from, date_to) — TTL 2 min
+_returns_claims_cache: dict = {}
+_RETURNS_CLAIMS_TTL = 120  # seg
+
+async def _fetch_all_claims_cached(client, df, dt) -> list:
+    """fetch_all_claims con cache de 2 min para compartir entre summary/table/timeline."""
+    import time as _tc
+    key = (client.user_id, df or "", dt or "")
+    entry = _returns_claims_cache.get(key)
+    if entry and (_tc.time() - entry[0]) < _RETURNS_CLAIMS_TTL:
+        return entry[1]
+    claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+    _returns_claims_cache[key] = (_tc.time(), claims)
+    return claims
+
 _bm_retail_cache: tuple[float, dict] | None = None  # (ts, {sku: retail_usd})
 _BM_RETAIL_TTL = 600  # 10 min
+
+_bm_avg_cost_cache: tuple[float, dict] | None = None  # (ts, {sku: avg_cost_usd})
+_BM_AVG_COST_TTL = 600  # 10 min
 
 
 async def _get_bm_retail_prices() -> dict:
@@ -11072,6 +11121,49 @@ async def _get_bm_retail_prices() -> dict:
         return {}
 
 
+async def _get_bm_avg_costs() -> dict:
+    """Returns {bm_sku: avg_cost_usd} con cache de 10 min. Usa AvgCostQTY del bulk cache."""
+    global _bm_avg_cost_cache
+    import time as _t3
+    if _bm_avg_cost_cache and (_t3.time() - _bm_avg_cost_cache[0]) < _BM_AVG_COST_TTL:
+        return _bm_avg_cost_cache[1]
+    # Preferir el bulk cache ya cargado en memoria (evita hit extra a BM)
+    rows: list = []
+    if _bm_bulk_all_cache:
+        rows = _bm_bulk_all_cache[1]
+    elif _bm_bulk_gr_cache:
+        rows = _bm_bulk_gr_cache[1]
+    if rows:
+        cost_map: dict = {}
+        for item in rows:
+            sku = (item.get("SKU") or "").strip()
+            if sku:
+                cost = float(item.get("AvgCostQTY") or 0)
+                if cost > 0:
+                    cost_map[sku] = cost
+        _bm_avg_cost_cache = (_t3.time(), cost_map)
+        return cost_map
+    # Fallback: fetch directo a BM
+    try:
+        from app.services.binmanager_client import BinManagerClient
+        bm = BinManagerClient()
+        if not await bm.login():
+            return {}
+        items = await bm.get_bulk_stock()
+        cost_map = {}
+        for item in items:
+            sku = (item.get("SKU") or "").strip()
+            if sku:
+                cost = float(item.get("AvgCostQTY") or 0)
+                if cost > 0:
+                    cost_map[sku] = cost
+        _bm_avg_cost_cache = (_t3.time(), cost_map)
+        return cost_map
+    except Exception as _e:
+        logger.warning(f"[BM-AVG-COST] Error: {_e}")
+        return {}
+
+
 @app.get("/returns", response_class=HTMLResponse)
 async def returns_page(request: Request):
     user = await get_current_user()
@@ -11097,19 +11189,17 @@ async def returns_summary_partial(
         df = date_from or None
         dt = date_to or None
 
-        # Fetch all PDD claims in the period
-        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
-        pdd_claims = [c for c in all_claims
-                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+        # Todos los reclamos del período (sin filtrar solo PDD)
+        all_claims = await _fetch_all_claims_cached(client, df, dt)
 
-        total = len(pdd_claims)
-        opened = sum(1 for c in pdd_claims if c.get("status") == "opened")
+        total = len(all_claims)
+        opened = sum(1 for c in all_claims if c.get("status") == "opened")
         closed = total - opened
 
-        # Count urgent (opened with due_date < 24h)
+        # Count urgent (opened con due_date < 24h)
         from datetime import datetime, timezone
         urgent = 0
-        for c in pdd_claims:
+        for c in all_claims:
             if c.get("status") != "opened":
                 continue
             for player in c.get("players", []):
@@ -11126,7 +11216,7 @@ async def returns_summary_partial(
                                 pass
                     break
 
-        # Total orders for return rate calculation
+        # Total orders para tasa de retorno
         total_orders = 0
         try:
             orders_data = await client.get(
@@ -11142,12 +11232,12 @@ async def returns_summary_partial(
 
         return_rate = (total / total_orders * 100) if total_orders > 0 else 0.0
 
-        # ── Valor monetario de retornos ──────────────────────────────────
+        # ── Valor monetario y costo real (AvgCostQTY) ──────────────────────
         valor_mxn = 0.0
         costo_usd = 0.0
         try:
-            oids = list({str(c.get("resource_id", "")) for c in pdd_claims
-                         if c.get("resource") == "order" and c.get("resource_id")})[:50]
+            oids = list({str(c.get("resource_id", "")) for c in all_claims
+                         if c.get("resource") == "order" and c.get("resource_id")})
             if oids:
                 sem_v = asyncio.Semaphore(5)
                 async def _fetch_order_val(oid):
@@ -11170,9 +11260,9 @@ async def returns_summary_partial(
                         valor_mxn += v[0]
                         if v[1]:
                             skus_returned.append(normalize_to_bm_sku(v[1]))
-                # BM cost
-                bm_prices = await _get_bm_retail_prices()
-                costo_usd = sum(bm_prices.get(s, 0.0) for s in skus_returned if s)
+                # Costo real = AvgCostQTY de BM (no RetailPrice)
+                bm_costs = await _get_bm_avg_costs()
+                costo_usd = sum(bm_costs.get(s, 0.0) for s in skus_returned if s)
         except Exception as _ev:
             logger.warning(f"[RETURNS-SUMMARY] valor error: {_ev}")
 
@@ -11214,17 +11304,17 @@ async def returns_table_partial(
         dt = date_to or None
         params_status = status if status else None
 
-        # Fetch all PDD claims, then paginate client-side for accuracy
-        all_claims = await client.fetch_all_claims(status=params_status,
-                                                    date_from=df, date_to=dt)
-        pdd_all = [c for c in all_claims
-                   if str(c.get("reason_id", "")).upper().startswith("PDD")]
+        # Todos los reclamos del período — sin filtrar solo PDD
+        all_claims = await _fetch_all_claims_cached(client, df, dt)
+        # Filtrar por status si se pidió
+        if params_status:
+            all_claims = [c for c in all_claims if c.get("status") == params_status]
 
-        total_pdd = len(pdd_all)
-        paging = {"total": total_pdd, "offset": offset, "limit": limit}
-        raw_claims = pdd_all[offset:offset + limit]
+        total_all = len(all_claims)
+        paging = {"total": total_all, "offset": offset, "limit": limit}
+        raw_claims = all_claims[offset:offset + limit]
 
-        # Refresh status of opened claims via detail endpoint
+        # Refresh status de reclamos abiertos via detail endpoint
         opened_ids = [c for c in raw_claims if c.get("status") == "opened"]
         if opened_ids:
             sem_refresh = asyncio.Semaphore(5)
@@ -11245,26 +11335,38 @@ async def returns_table_partial(
             await asyncio.gather(*[_refresh_status(c) for c in opened_ids[:30]],
                                  return_exceptions=True)
 
-        # Batch fetch order info for product titles
+        # Batch fetch info de órdenes — incluye SKU BM
         order_ids = list({str(c.get("resource_id", "")) for c in raw_claims
                           if c.get("resource") == "order" and c.get("resource_id")})
         orders_map = {}
         if order_ids:
-            for oid in order_ids[:20]:
-                try:
-                    order = await client.get(f"/orders/{oid}")
-                    oi = order.get("order_items", [])
-                    if oi:
-                        item = oi[0].get("item", {})
-                        orders_map[oid] = {
-                            "title": item.get("title", ""),
-                            "price": order.get("total_amount", 0),
-                            "item_id": item.get("id", ""),
-                        }
-                except Exception:
-                    pass
+            sem_ord = asyncio.Semaphore(5)
+            async def _fetch_order_info_tbl(oid):
+                async with sem_ord:
+                    try:
+                        order = await client.get(f"/orders/{oid}")
+                        oi = order.get("order_items", [])
+                        if oi:
+                            item = oi[0].get("item", {})
+                            raw_sku = item.get("seller_custom_field") or ""
+                            return oid, {
+                                "title":   item.get("title", ""),
+                                "price":   order.get("total_amount", 0),
+                                "item_id": item.get("id", ""),
+                                "bm_sku":  normalize_to_bm_sku(raw_sku) if raw_sku else "",
+                            }
+                    except Exception:
+                        pass
+                    return oid, {}
+            ord_results = await asyncio.gather(
+                *[_fetch_order_info_tbl(oid) for oid in order_ids[:20]],
+                return_exceptions=True
+            )
+            for r in ord_results:
+                if isinstance(r, tuple):
+                    orders_map[r[0]] = r[1]
 
-        # Fetch claim messages for all claims (opened + closed for analysis)
+        # Mensajes del reclamo
         sem = asyncio.Semaphore(5)
         claim_messages_map = {}
 
@@ -11285,10 +11387,6 @@ async def returns_table_partial(
         for r in msg_results:
             if isinstance(r, tuple):
                 claim_messages_map[r[0]] = r[1]
-
-        REASON_MAP = {
-            "PDD": ("Producto defectuoso o diferente", "defective"),
-        }
 
         from datetime import datetime, timezone
 
@@ -11333,14 +11431,13 @@ async def returns_table_partial(
                 urgency = "gray"
 
             reason_id = c.get("reason_id", "")
-            reason_prefix = reason_id[:3].upper() if reason_id else ""
-            reason_info = REASON_MAP.get(reason_prefix, ("Retorno / Devolucion", "defective"))
-            reason_desc = reason_info[0]
+            reason_desc = _claim_reason_label(reason_id)
+            category   = _claim_category(reason_id)
 
             resource_id = str(c.get("resource_id", ""))
             order_info = orders_map.get(resource_id, {})
 
-            # Conversation messages
+            # Mensajes de conversación
             claim_id_str = str(c.get("id", ""))
             raw_msgs = claim_messages_map.get(claim_id_str, [])
             conversation = []
@@ -11357,13 +11454,19 @@ async def returns_table_partial(
                     "date": msg_date[:16].replace("T", " ") if msg_date else "",
                 })
 
-            # Suggestions
+            # Sugerencias contextuales por tipo de reclamo
             suggestions = []
             if c_status == "opened":
                 if countdown_hours is not None and countdown_hours < 24:
                     suggestions.append("URGENTE: Responde antes de " + due_date + " para evitar penalizacion")
-                suggestions.append("Solicita fotos del defecto o diferencia al comprador")
-                suggestions.append("Ofrece solucion: reemplazo, devolucion o descuento")
+                if category == "pdd":
+                    suggestions.append("Solicita fotos del defecto o diferencia al comprador")
+                    suggestions.append("Ofrece solucion: reemplazo, devolucion o descuento")
+                elif category == "pntr":
+                    suggestions.append("Verifica el tracking del envio y comparte la guia al comprador")
+                    suggestions.append("Si el paquete esta entregado, solicita foto de quien recibio")
+                else:
+                    suggestions.append("Revisa el detalle del reclamo y responde con evidencia")
                 if stage == "dispute":
                     suggestions.append("Responde al mediador de MeLi con evidencia clara")
             else:
@@ -11382,9 +11485,11 @@ async def returns_table_partial(
                 countdown_hours=countdown_hours,
                 reason_desc=reason_desc,
                 reason_id=reason_id,
+                category=category,
                 product_title=order_info.get("title", ""),
                 product_price=order_info.get("price", 0),
                 item_id=str(order_info.get("item_id", "")),
+                bm_sku=order_info.get("bm_sku", ""),
                 due_date=due_date,
                 buyer_complaint=buyer_complaint,
                 conversation=conversation,
@@ -11421,15 +11526,13 @@ async def returns_analysis(
         df = date_from or None
         dt = date_to or None
 
-        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
-        pdd_claims = [c for c in all_claims
-                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+        all_claims = await _fetch_all_claims_cached(client, df, dt)
 
-        total = len(pdd_claims)
-        opened = sum(1 for c in pdd_claims if c.get("status") == "opened")
+        total = len(all_claims)
+        opened = sum(1 for c in all_claims if c.get("status") == "opened")
         closed = total - opened
 
-        order_ids = list({str(c.get("resource_id", "")) for c in pdd_claims
+        order_ids = list({str(c.get("resource_id", "")) for c in all_claims
                           if c.get("resource") == "order" and c.get("resource_id")})
         sem = asyncio.Semaphore(5)
 
@@ -11455,7 +11558,7 @@ async def returns_analysis(
                 order_info_map[r[0]] = r[1]
 
         product_counts: dict = {}
-        for c in pdd_claims:
+        for c in all_claims:
             oid = str(c.get("resource_id", ""))
             info = order_info_map.get(oid, {})
             title = info.get("title") or "Producto desconocido"
@@ -11495,25 +11598,13 @@ async def returns_top_products(
         df_b = compare_from or None
         dt_b = compare_to or None
 
-        # PDD sub-reason labels
-        REASON_LABELS = {
-            "PDD1": "Defecto de fábrica",
-            "PDD2": "No coincide con descripción",
-            "PDD3": "Producto incorrecto enviado",
-            "PDD4": "Partes/accesorios faltantes",
-            "PDD5": "Dañado en tránsito",
-            "PDD6": "No funciona",
-            "PDD":  "Defectuoso o diferente",
-        }
-
-        async def _fetch_pdd(df, dt):
-            claims = await client.fetch_all_claims(date_from=df, date_to=dt)
-            return [c for c in claims if str(c.get("reason_id", "")).upper().startswith("PDD")]
+        async def _fetch_all(df, dt):
+            return await _fetch_all_claims_cached(client, df, dt)
 
         if df_b or dt_b:
-            pdd_a, pdd_b = await asyncio.gather(_fetch_pdd(df_a, dt_a), _fetch_pdd(df_b, dt_b))
+            pdd_a, pdd_b = await asyncio.gather(_fetch_all(df_a, dt_a), _fetch_all(df_b, dt_b))
         else:
-            pdd_a = await _fetch_pdd(df_a, dt_a)
+            pdd_a = await _fetch_all(df_a, dt_a)
             pdd_b = []
 
         # Cap order lookups to avoid rate limiting — semaphore(3) + max 30 orders
@@ -11546,8 +11637,8 @@ async def returns_top_products(
         results = await asyncio.gather(*[_fetch_order_info(oid) for oid in all_oids], return_exceptions=True)
         order_map = {r[0]: r[1] for r in results if isinstance(r, tuple)}
 
-        # BM retail prices for cost calculation
-        bm_prices_tp = await _get_bm_retail_prices()
+        # Costo real = AvgCostQTY de BM (no RetailPrice)
+        bm_avg_costs_tp = await _get_bm_avg_costs()
 
         def _count_by_product(claims):
             counts = {}
@@ -11555,7 +11646,7 @@ async def returns_top_products(
                 oid = str(c.get("resource_id", ""))
                 info = order_map.get(oid, {"title": "Producto desconocido", "item_id": "", "sku": "", "sale_amount": 0.0})
                 title = info["title"]
-                reason_id = str(c.get("reason_id", "PDD")).upper()
+                reason_id = c.get("reason_id", "")
                 status = c.get("status", "")
                 if title not in counts:
                     counts[title] = {
@@ -11570,7 +11661,7 @@ async def returns_top_products(
                     counts[title]["opened"] += 1
                 else:
                     counts[title]["closed"] += 1
-                label = REASON_LABELS.get(reason_id, REASON_LABELS.get("PDD", reason_id))
+                label = _claim_reason_label(reason_id)
                 counts[title]["reasons"][label] = counts[title]["reasons"].get(label, 0) + 1
             return counts
 
@@ -11641,7 +11732,7 @@ async def returns_top_products(
                 delta_pct = round((count_a - count_b) / count_b * 100, 1)
             rec = _recommendation(p["reasons"], p["opened"], count_a)
             sku = p.get("sku", "")
-            cost_usd = bm_prices_tp.get(sku, 0.0) * count_a if sku else 0.0
+            cost_usd = bm_avg_costs_tp.get(sku, 0.0) * count_a if sku else 0.0
             products.append({
                 "title": p["title"],
                 "item_id": p["item_id"],
@@ -11689,9 +11780,7 @@ async def returns_timeline(
         df = date_from or None
         dt = date_to or None
 
-        all_claims = await client.fetch_all_claims(date_from=df, date_to=dt)
-        pdd_claims = [c for c in all_claims
-                      if str(c.get("reason_id", "")).upper().startswith("PDD")]
+        all_claims = await _fetch_all_claims_cached(client, df, dt)
 
         # Auto-granularity
         gran = granularity
@@ -11705,14 +11794,8 @@ async def returns_timeline(
             else:
                 gran = "day"
 
-        REASON_LABELS = {
-            "PDD1": "Defecto fábrica", "PDD2": "No coincide",
-            "PDD3": "Prod. incorrecto", "PDD4": "Partes faltantes",
-            "PDD5": "Dañado tránsito",  "PDD6": "No funciona",
-        }
-
         buckets: dict = {}
-        for c in pdd_claims:
+        for c in all_claims:
             dc = c.get("date_created", "")
             if not dc:
                 continue
@@ -11725,15 +11808,14 @@ async def returns_timeline(
                 key = week_start.strftime("%Y-%m-%d")
             else:
                 key = dc[:10]
-            reason_id = str(c.get("reason_id", "PDD")).upper()
-            reason_label = REASON_LABELS.get(reason_id, "Otro")
+            reason_label = _claim_reason_label(c.get("reason_id", ""))
             if key not in buckets:
                 buckets[key] = {"date": key, "count": 0, "reasons": {}}
             buckets[key]["count"] += 1
             buckets[key]["reasons"][reason_label] = buckets[key]["reasons"].get(reason_label, 0) + 1
 
         timeline = sorted(buckets.values(), key=lambda x: x["date"])
-        return {"timeline": timeline, "granularity": gran, "total": len(pdd_claims)}
+        return {"timeline": timeline, "granularity": gran, "total": len(all_claims)}
     except Exception as e:
         return {"error": str(e)}
     finally:

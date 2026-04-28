@@ -46,6 +46,15 @@
                 </span>
                 {% endif %}
 
+                <!-- Tipo de reclamo -->
+                {% if ret.category == 'pdd' %}
+                <span class="text-[10px] bg-red-50 text-red-600 px-2 py-0.5 rounded-full border border-red-200">Defecto/Diferente</span>
+                {% elif ret.category == 'pntr' %}
+                <span class="text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-200">No recibido</span>
+                {% else %}
+                <span class="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full border border-gray-200">{{ ret.reason_id or 'Reclamo' }}</span>
+                {% endif %}
+
                 <!-- Stage badge -->
                 {% if ret.stage == 'dispute' %}
                 <span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">En Disputa</span>
@@ -63,6 +72,9 @@
                 <div class="flex flex-wrap items-center gap-2 mt-1">
                     {% if ret.product_price and ret.product_price > 0 %}
                     <span class="text-xs text-orange-600 font-semibold">${{ "{:,.2f}".format(ret.product_price) }} MXN</span>
+                    {% endif %}
+                    {% if ret.bm_sku %}
+                    <span class="text-[10px] font-mono bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">{{ ret.bm_sku }}</span>
                     {% endif %}
                     {% if ret.item_id %}
                     <span class="text-[10px] text-gray-400 font-mono">{{ ret.item_id }}</span>
