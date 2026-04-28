@@ -476,6 +476,11 @@ async def lifespan(app: FastAPI):
                             await asyncio.sleep(2)
                 except Exception:
                     pass
+            # Limpieza de caches en memoria al final de cada ciclo completo
+            try:
+                _cleanup_memory_caches()
+            except Exception:
+                pass
             # Retry rápido en fallo (2 min); ciclo normal 15 min (requests BM son secuenciales)
             _sleep = 120 if _auto_fail_streak > 0 else 900
             await asyncio.sleep(_sleep)
@@ -2901,6 +2906,59 @@ _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_sku
 _bm_bulk_gr_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows)
 _bm_bulk_all_cache: tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/ICB/ICC/NEW rows)
 
+# Campos mínimos que necesitamos de cada row BM bulk.
+# Descartar todo lo demás para reducir el footprint de memoria de los caches globales.
+# _lookup_diag usa: SKU, AvailableQTY, Reserve, TotalQty
+# _enrich_with_bm_data usa: SKU, RetailPrice, LastRetailPricePurchaseHistory, AvgCostQTY, Brand, Model, Title
+_BM_BULK_KEEP_FIELDS = frozenset({
+    "SKU", "AvailableQTY", "Reserve", "TotalQty",
+    "RetailPrice", "LastRetailPricePurchaseHistory", "AvgCostQTY",
+    "Brand", "Model", "Title",
+})
+
+def _slim_bulk_rows(rows: list) -> list:
+    """Descarta campos no usados de las filas BM bulk para reducir memoria."""
+    return [{k: v for k, v in r.items() if k in _BM_BULK_KEEP_FIELDS} for r in rows]
+
+
+def _cleanup_memory_caches():
+    """Limpia entradas expiradas de los caches en memoria para liberar RAM.
+    Llamar después de cada ciclo completo de prewarm.
+    Los entries expirados (TTL vencido) normalmente quedan en el dict hasta que
+    son sobreescritos, acumulando memoria indefinidamente con múltiples cuentas.
+    """
+    import gc as _gc
+    now = _time.time()
+
+    # _products_cache: TTL 15 min — limpiar entries con > 2× TTL de antigüedad
+    _prod_ttl = _PRODUCTS_CACHE_TTL * 2
+    _expired_prod = [k for k, (ts, _) in list(_products_cache.items()) if now - ts > _prod_ttl]
+    for k in _expired_prod:
+        _products_cache.pop(k, None)
+
+    # _bm_stock_cache: cap a 12,000 entries — eliminar los más viejos si se excede
+    _BM_STOCK_MAX = 12000
+    if len(_bm_stock_cache) > _BM_STOCK_MAX:
+        _sorted_bm = sorted(_bm_stock_cache.items(), key=lambda x: x[1][0])
+        _to_remove = len(_bm_stock_cache) - _BM_STOCK_MAX + 1000  # liberar 1000 extra
+        for k, _ in _sorted_bm[:_to_remove]:
+            _bm_stock_cache.pop(k, None)
+
+    # _stock_issues_cache: TTL 30 min — limpiar entries con > 2× TTL
+    _si_ttl = _STOCK_ISSUES_TTL * 2
+    _expired_si = [k for k, (ts, _) in list(_stock_issues_cache.items()) if now - ts > _si_ttl]
+    for k in _expired_si:
+        _stock_issues_cache.pop(k, None)
+
+    # Forzar GC para liberar objetos temporales del prewarm inmediatamente
+    _gc.collect()
+
+    logger.info(
+        f"[MEM-CLEANUP] products_cache={len(_products_cache)} ({len(_expired_prod)} eliminados), "
+        f"bm_stock_cache={len(_bm_stock_cache)}, "
+        f"stock_issues_cache={len(_stock_issues_cache)} ({len(_expired_si)} eliminados)"
+    )
+
 # --- BM Health Monitor ---
 _bm_health: dict = {
     "ok": None,           # None=nunca chequeado, True=up, False=down
@@ -3479,7 +3537,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     timeout=270.0,
                 )
                 if _fresh_gr:
-                    _bm_bulk_gr_cache = (_time.time(), _fresh_gr)
+                    _bm_bulk_gr_cache = (_time.time(), _slim_bulk_rows(_fresh_gr))
                     _bm_health["ok"] = True
                     _bm_health["last_ok_ts"] = _time.time()
                     _bm_health["consecutive_failures"] = 0
@@ -3516,8 +3574,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         timeout=270.0,
                     )
                     if _fresh_all:
-                        _bm_bulk_all_cache = (_time.time(), _fresh_all)
-                        _bulk_all_rows = _fresh_all
+                        _slimmed_all = _slim_bulk_rows(_fresh_all)
+                        _bm_bulk_all_cache = (_time.time(), _slimmed_all)
+                        _bulk_all_rows = _slimmed_all
                         logger.info(f"[BM-CACHE] ALL bulk fetch OK: {len(_fresh_all)} filas")
                     else:
                         # Fix B2: mismo caso que GR — bulk vacío sin excepción → stale fallback
