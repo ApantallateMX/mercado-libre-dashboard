@@ -67,6 +67,7 @@ class PriceMonitor:
     - Hace poll cada BM_POLL_INTERVAL segundos
     - Compara precio nuevo vs. último registrado
     - Si cambia: guarda en historial y emite SSE a todos los subscribers
+    - Si se configura con set_cache(), lee de caché local en vez de BM (cero hits)
     """
 
     def __init__(self):
@@ -77,6 +78,15 @@ class PriceMonitor:
         self._watched: List[str] = self._load_skus()
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._ext_cache: Optional[dict] = None  # {sku: (ts, price_usd)}
+
+    def set_cache(self, cache: dict):
+        """
+        Conecta el monitor a la caché local de retail prices (dict {sku: (ts, price_usd)}).
+        Cuando está configurado, _check_prices lee de memoria — cero hits a BinManager.
+        """
+        self._ext_cache = cache
+        logger.info(f"PriceMonitor: usando caché local ({len(cache)} SKUs) — sin hits a BM")
 
     def _load_skus(self) -> List[str]:
         env = os.getenv("BM_WATCHED_SKUS", "").strip()
@@ -90,14 +100,17 @@ class PriceMonitor:
         if self._running:
             return
         self._running = True
-        if not await self._client.login():
-            logger.warning("PriceMonitor: BinManager login falló — reintento en primer poll")
+        if self._ext_cache is None:
+            # Solo hace login a BM si no hay caché local configurada
+            if not await self._client.login():
+                logger.warning("PriceMonitor: BinManager login falló — reintento en primer poll")
         # Fetch inicial antes de arrancar el loop
         await self._check_prices(initial=True)
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(
             f"PriceMonitor iniciado — {len(self._watched)} SKUs, "
-            f"intervalo {_POLL_INTERVAL}s"
+            f"intervalo {_POLL_INTERVAL}s, "
+            f"fuente={'caché local' if self._ext_cache is not None else 'BinManager live'}"
         )
 
     async def stop(self):
@@ -108,7 +121,8 @@ class PriceMonitor:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        await self._client.close()
+        if self._ext_cache is None:
+            await self._client.close()
         logger.info("PriceMonitor detenido")
 
     async def _poll_loop(self):
@@ -124,11 +138,16 @@ class PriceMonitor:
     # ── Core logic ───────────────────────────────────────────────────────────
 
     async def _check_prices(self, initial: bool = False):
-        """Consulta BinManager y detecta cambios en cada SKU watcheado."""
+        """Detecta cambios de precio. Lee de caché local si está disponible, si no llama a BM."""
         now = datetime.now(timezone.utc)
         for sku in list(self._watched):
             try:
-                price = await self._client.get_retail_price_ph(sku)
+                if self._ext_cache is not None:
+                    # Lee de _bm_retail_ph_cache — cero hits a BinManager
+                    entry = self._ext_cache.get(sku)
+                    price = entry[1] if entry and entry[1] > 0 else None
+                else:
+                    price = await self._client.get_retail_price_ph(sku)
                 existing = self._prices.get(sku)
 
                 if existing is None:

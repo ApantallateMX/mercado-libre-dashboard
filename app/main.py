@@ -405,6 +405,9 @@ async def lifespan(app: FastAPI):
         await _seed_tokens()
         await _seed_amazon_accounts()
         # 2. Monitor de precios BM (skip si DISABLE_BM_MONITOR=true)
+        # Conectar caché local al monitor para que nunca golpee BM directamente
+        if _bm_retail_ph_cache:
+            price_monitor.set_cache(_bm_retail_ph_cache)
         if not _BM_DISABLED:
             await price_monitor.start()
         # 3. Cachés ya cargados en startup síncrono — solo refrescar BM global
