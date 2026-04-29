@@ -11055,18 +11055,33 @@ def _claim_category(reason_id: str) -> str:
 
 # Cache de claims por (user_id, date_from, date_to) — TTL 2 min
 _returns_claims_cache: dict = {}
+_returns_claims_locks: dict = {}   # un asyncio.Lock por clave de caché
 _RETURNS_CLAIMS_TTL = 120  # seg
 
 async def _fetch_all_claims_cached(client, df, dt) -> list:
-    """fetch_all_claims con cache de 2 min para compartir entre summary/table/timeline."""
+    """fetch_all_claims con cache de 2 min para compartir entre summary/table/timeline.
+
+    Usa double-checked locking por clave para evitar que N endpoints concurrentes
+    (summary + table + analysis + top-products + timeline) fetcheen ML en paralelo
+    cuando el cache está vacío, lo que provoca 429 → MeliApiError 'Max retries exceeded'.
+    """
     import time as _tc
     key = (client.user_id, df or "", dt or "")
+    # Fast-path: hit de caché sin adquirir lock
     entry = _returns_claims_cache.get(key)
     if entry and (_tc.time() - entry[0]) < _RETURNS_CLAIMS_TTL:
         return entry[1]
-    claims = await client.fetch_all_claims(date_from=df, date_to=dt)
-    _returns_claims_cache[key] = (_tc.time(), claims)
-    return claims
+    # Slow-path: adquirir lock por clave — sólo un fetch simultáneo por (user, desde, hasta)
+    if key not in _returns_claims_locks:
+        _returns_claims_locks[key] = asyncio.Lock()
+    async with _returns_claims_locks[key]:
+        # Re-check: otra coroutine pudo haber poblado el cache mientras esperábamos el lock
+        entry = _returns_claims_cache.get(key)
+        if entry and (_tc.time() - entry[0]) < _RETURNS_CLAIMS_TTL:
+            return entry[1]
+        claims = await client.fetch_all_claims(date_from=df, date_to=dt)
+        _returns_claims_cache[key] = (_tc.time(), claims)
+        return claims
 
 _bm_retail_cache: tuple[float, dict] | None = None  # (ts, {sku: retail_usd})
 _BM_RETAIL_TTL = 600  # 10 min
