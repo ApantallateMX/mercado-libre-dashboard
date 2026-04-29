@@ -11032,8 +11032,10 @@ CLAIM_REASON_MAP: dict[str, str] = {
     "PDD4": "Partes faltantes",
     "PDD5": "Dañado en tránsito",
     "PDD6": "No funciona",
-    # PNTR — Producto No Recibido
+    # PNTR — Producto No Recibido (prefijo largo)
     "PNTR": "No recibido",
+    # PNR — Producto No Recibido (prefijo corto — usado por ML en la práctica)
+    "PNR":  "No recibido",
     # Otros
     "CANCEL": "Cancelación",
 }
@@ -11049,8 +11051,8 @@ def _claim_reason_label(reason_id: str) -> str:
 def _claim_category(reason_id: str) -> str:
     """Categoría amplia para filtros: 'pdd' | 'pntr' | 'other'."""
     rid = (reason_id or "").upper()
-    if rid.startswith("PDD"):  return "pdd"
-    if rid.startswith("PNTR"): return "pntr"
+    if rid.startswith("PDD"):              return "pdd"
+    if rid.startswith("PNTR") or rid.startswith("PNR"): return "pntr"
     return "other"
 
 # Cache de claims por (user_id, date_from, date_to) — TTL 2 min
@@ -11610,8 +11612,10 @@ async def returns_top_products(
             counts = {}
             for c in claims:
                 oid = str(c.get("resource_id", ""))
-                info = order_map.get(oid, {"title": "Producto desconocido", "item_id": "", "sku": "", "sale_amount": 0.0})
-                title = info["title"]
+                claim_id = str(c.get("id", ""))
+                info = order_map.get(oid, {"title": "", "item_id": "", "sku": "", "sale_amount": 0.0})
+                # Fallback: usar claim_id para que cada reclamo sin producto sea único (no se agrupen)
+                title = info.get("title") or f"Sin título (Reclamo #{claim_id})"
                 reason_id = c.get("reason_id", "")
                 status = c.get("status", "")
                 if title not in counts:
