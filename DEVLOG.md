@@ -7,6 +7,41 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-29 — FIX: Impuestos en desglose de órdenes — fórmula per-pago correcta
+
+### Problema
+El campo "Impuestos" en el desglose de cobros de la tabla de órdenes era incorrecto.
+La fórmula anterior usaba `taxes = total_amount - sum(net_received_amount)`, que incluía
+tanto la comisión de ML (`marketplace_fee`) como las retenciones fiscales (IVA+ISR).
+Resultado: para la orden 2000016202805920 mostraba $1,577.46 cuando lo correcto es $864.96.
+
+`net_received_amount` de `/collections/{id}` ya tiene `marketplace_fee` descontado:
+  `net_received = transaction_amount - marketplace_fee - retenciones_fiscales`
+
+Por eso sumar todos los `net_received` y restarlos del total mezclaba comisión con impuestos.
+
+### Solución
+
+**`app/services/meli_client.py`** — nuevo método `get_payment_collection_details()`:
+- Retorna `{net_received_amount, transaction_amount, marketplace_fee}` por pago
+- `get_payment_net_amount()` sin cambios (sigue usándose en KPIs / `enrich_orders_with_net_amount`)
+
+**`app/main.py`** — reemplazado el loop `net_amounts` con `payment_details`:
+- Por cada pago: `taxes += transaction_amount - marketplace_fee - net_received_amount`
+- `net = sum(net_received_amount) - shipping_cost`
+  (marketplace_fee ya está descontado por ML en `net_received_amount`)
+
+### Verificación con orden 2000016202805920
+| Pago | transaction | fee | net_received | taxes_pago |
+|------|------------|-----|--------------|-----------|
+| 157006910990 | $4,199.00 | $712.50 | $2,757.41 | $729.09 |
+| 157006932618 | $1,500.99 | $0.00 | $1,365.12 | $135.87 |
+| **Total** | $5,699.99 | $712.50 | $4,122.53 | **$864.96** |
+
+Antes: taxes=$1,577.46, net=$3,061.03 — Ahora: taxes=$864.96, net=$3,773.53
+
+---
+
 ## 2026-04-28 — FEAT: Returns section — aislamiento por cuenta + filtro por tipo de reclamo
 
 ### Problema

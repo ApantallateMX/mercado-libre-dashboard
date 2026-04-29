@@ -555,15 +555,32 @@ class MeliClient:
 
     async def get_payment_net_amount(self, payment_id: str) -> float | None:
         """Obtiene net_received_amount de un pago desde /collections/{id}.
-        IMPORTANTE: net_received_amount = total_amount - impuestos_retenidos.
-        La comisión (sale_fee) y el envío se descuentan por separado.
-        net_real_vendedor = net_received - sale_fee - shipping_cost
+        Usado por enrich_orders_with_net_amount (KPIs). Para el desglose de
+        impuestos en la tabla de órdenes, usar get_payment_collection_details().
         """
         try:
             data = await self.get(f"/collections/{payment_id}")
             return data.get("net_received_amount")
         except Exception:
             return None
+
+    async def get_payment_collection_details(self, payment_id: str) -> dict:
+        """Obtiene transaction_amount, marketplace_fee y net_received_amount de un pago.
+
+        Fórmula correcta para impuestos retenidos por pago:
+          taxes_pago = transaction_amount - marketplace_fee - net_received_amount
+        Neto real del vendedor (sumando todos los pagos):
+          net_vendedor = sum(net_received_amount) - shipping_cost
+        """
+        try:
+            data = await self.get(f"/collections/{payment_id}")
+            return {
+                "net_received_amount": float(data.get("net_received_amount") or 0),
+                "transaction_amount":  float(data.get("transaction_amount")  or 0),
+                "marketplace_fee":     float(data.get("marketplace_fee")     or 0),
+            }
+        except Exception:
+            return {}
 
     async def get_order_sale_fee(self, order_id: str) -> float:
         """Obtiene sale_fee real desde el endpoint individual /orders/{id}.
