@@ -11124,8 +11124,9 @@ async def returns_summary_partial(
     request: Request,
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar"),
 ):
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
@@ -11238,8 +11239,10 @@ async def returns_table_partial(
     status: str = Query(""),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar"),
+    claim_type: str = Query("", description="pdd | pntr | other — vacío = todos"),
 ):
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
@@ -11252,6 +11255,9 @@ async def returns_table_partial(
         # Filtrar por status si se pidió
         if params_status:
             all_claims = [c for c in all_claims if c.get("status") == params_status]
+        # Filtrar por tipo de reclamo (categoría) si se pidió
+        if claim_type:
+            all_claims = [c for c in all_claims if _claim_category(c.get("reason_id", "")) == claim_type]
 
         total_all = len(all_claims)
         paging = {"total": total_all, "offset": offset, "limit": limit}
@@ -11461,8 +11467,9 @@ async def returns_analysis(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     limit: int = Query(5, ge=1, le=20),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar"),
 ):
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         return {"error": "No autenticado"}
     try:
@@ -11530,9 +11537,10 @@ async def returns_top_products(
     compare_from: str = Query("", description="Period B start YYYY-MM-DD"),
     compare_to: str = Query("", description="Period B end YYYY-MM-DD"),
     limit: int = Query(10, ge=1, le=20),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar"),
 ):
     """Top N returned products with period comparison, reason breakdown, and action recommendations."""
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         return {"error": "No autenticado"}
     try:
@@ -11739,9 +11747,10 @@ async def returns_timeline(
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
     granularity: str = Query("auto", description="day | week | auto"),
+    account_id: str = Query("", description="ML user_id de la cuenta a consultar"),
 ):
     """Timeline de retornos agrupados por día o semana para gráfica de tendencia."""
-    client = await get_meli_client()
+    client = await get_meli_client(user_id=account_id or None)
     if not client:
         return {"error": "No autenticado"}
     try:

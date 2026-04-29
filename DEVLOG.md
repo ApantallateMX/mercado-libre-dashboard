@@ -7,6 +7,42 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-04-28 — FEAT: Returns section — aislamiento por cuenta + filtro por tipo de reclamo
+
+### Problema
+Todos los endpoints de la sección de Retornos usaban `get_meli_client()` sin `user_id`,
+lo que siempre traía los reclamos de la cuenta activa en sesión, no de la cuenta seleccionada.
+Si el usuario tenía Autobot o Lutema como cuenta activa pero quería ver retornos de otra cuenta,
+el selector no tenía efecto alguno.
+
+### Solución
+
+**Backend (`app/main.py`)** — 5 endpoints actualizados:
+- `/partials/returns-summary` — nuevo param `account_id`
+- `/partials/returns-table` — nuevos params `account_id` + `claim_type` (pdd/pntr/other)
+- `/api/returns/analysis` — nuevo param `account_id`
+- `/api/returns/top-products` — nuevo param `account_id`
+- `/api/returns/timeline` — nuevo param `account_id`
+
+Todos usan `get_meli_client(user_id=account_id or None)`. El helper `_fetch_all_claims_cached`
+ya cacheaba por `client.user_id`, así que el caché también está aislado por cuenta.
+
+**Frontend (`app/templates/returns.html`)**:
+- `retFilters.account_id` inyectado desde `{{ active_user_id }}` (Jinja2)
+- `_buildParams()` ahora incluye `account_id` y `claim_type` en todos los fetches
+- `loadTopProducts()` también pasa `account_id`
+- Badge de cuenta activa en el header de la página
+- Filtros por tipo de reclamo: botones Todos / Defecto·Diferente / No recibido / Otros
+- `setRetClaimType()` — nueva función que actualiza `retFilters.claim_type` y recarga tabla
+- Sidebar "Estado de Reclamos": muestra abiertos + resueltos (poblado por `loadAnalysis()`)
+- Sidebar "Acciones Rápidas": reemplaza los tips estáticos — botones directos a filtros y ML
+
+### Resultado
+Cada cuenta ML muestra sus propios reclamos/retornos. El filtro por tipo de reclamo permite
+aislar defectos, no recibidos u otros en un solo clic.
+
+---
+
 ## 2026-04-28 — FIX: PriceMonitor dejaba de golpear BM — usa _bm_retail_ph_cache
 
 ### Problema

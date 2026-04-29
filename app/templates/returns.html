@@ -3,9 +3,19 @@
 {% block title %}Retornos y Devoluciones{% endblock %}
 
 {% block content %}
-<div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Retornos y Devoluciones</h1>
-    <p class="text-gray-600">Productos defectuosos o diferentes reportados por compradores</p>
+<div class="mb-6 flex items-start justify-between flex-wrap gap-3">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Retornos y Devoluciones</h1>
+        <p class="text-gray-600">Productos defectuosos o diferentes reportados por compradores</p>
+    </div>
+    {% if active_user_id %}
+    <div class="flex items-center gap-2 mt-1">
+        <span class="text-xs text-gray-400">Cuenta activa:</span>
+        {% for acc in accounts %}{% if acc.user_id == active_user_id %}
+        <span class="text-xs font-semibold bg-yellow-400 text-gray-800 px-2.5 py-0.5 rounded-full">{{ acc.nickname or acc.user_id }}</span>
+        {% endif %}{% endfor %}
+    </div>
+    {% endif %}
 </div>
 
 <!-- Date Filters + Presets -->
@@ -166,30 +176,53 @@
     <div class="flex-1 min-w-0">
         <!-- Returns Table -->
         <div class="bg-white rounded-lg shadow">
-            <div class="border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
-                <div class="flex gap-2">
-                    <button onclick="setRetStatus('')" id="ret-btn-all"
-                            class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
+            <div class="border-b border-gray-200 px-4 py-2.5">
+                <!-- Fila 1: filtros por estado -->
+                <div class="flex items-center gap-3 mb-2">
+                    <div class="flex gap-2">
+                        <button onclick="setRetStatus('')" id="ret-btn-all"
+                                class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
+                            Todos
+                        </button>
+                        <button onclick="setRetStatus('opened')" id="ret-btn-opened"
+                                class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                            Abiertos
+                        </button>
+                        <button onclick="setRetStatus('closed')" id="ret-btn-closed"
+                                class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
+                            Cerrados
+                        </button>
+                    </div>
+                    <div class="ml-auto flex items-center gap-2">
+                        <span id="ret-table-timestamp" class="text-[10px] text-gray-400"></span>
+                        <button onclick="manualRefreshTable()"
+                                title="Refrescar lista"
+                                class="flex items-center gap-1 text-xs text-gray-400 hover:text-yellow-700 hover:bg-yellow-50 px-2 py-1 rounded transition">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                            </svg>
+                            Actualizar
+                        </button>
+                    </div>
+                </div>
+                <!-- Fila 2: filtros por tipo de reclamo -->
+                <div class="flex items-center gap-1.5">
+                    <span class="text-[10px] text-gray-400 mr-0.5">Tipo:</span>
+                    <button onclick="setRetClaimType('')" id="ret-btn-type-all"
+                            class="px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800 font-semibold">
                         Todos
                     </button>
-                    <button onclick="setRetStatus('opened')" id="ret-btn-opened"
-                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
-                        Abiertos
+                    <button onclick="setRetClaimType('pdd')" id="ret-btn-type-pdd"
+                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700">
+                        Defecto / Diferente
                     </button>
-                    <button onclick="setRetStatus('closed')" id="ret-btn-closed"
-                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
-                        Cerrados
+                    <button onclick="setRetClaimType('pntr')" id="ret-btn-type-pntr"
+                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700">
+                        No recibido
                     </button>
-                </div>
-                <div class="ml-auto flex items-center gap-2">
-                    <span id="ret-table-timestamp" class="text-[10px] text-gray-400"></span>
-                    <button onclick="manualRefreshTable()"
-                            title="Refrescar lista"
-                            class="flex items-center gap-1 text-xs text-gray-400 hover:text-yellow-700 hover:bg-yellow-50 px-2 py-1 rounded transition">
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                        </svg>
-                        Actualizar
+                    <button onclick="setRetClaimType('other')" id="ret-btn-type-other"
+                            class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700">
+                        Otros
                     </button>
                 </div>
             </div>
@@ -207,8 +240,8 @@
     <div class="hidden lg:block lg:w-72 flex-shrink-0">
         <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
-                <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                Top 5 productos
+                <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Estado de Reclamos
             </h3>
             <div id="ret-top-products">
                 <div class="animate-pulse space-y-2">
@@ -226,16 +259,27 @@
 
         <div class="bg-white rounded-lg shadow p-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
-                <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346A3.284 3.284 0 0119 16.5h-6a3.284 3.284 0 01-2.316-.904l-.347-.346z"/></svg>
-                Cómo reducir retornos
+                <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                Acciones Rápidas
             </h3>
-            <ul class="text-xs text-gray-600 space-y-2">
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Agrega fotos reales desde todos los ángulos</li>
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Verifica que título y descripción sean exactos</li>
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Incluye dimensiones, peso y especificaciones completas</li>
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Usa empaque adecuado para evitar daños en tránsito</li>
-                <li class="flex items-start gap-1.5"><span class="text-yellow-500 mt-0.5 flex-shrink-0">&#10148;</span>Responde retornos en &lt;24h para proteger reputación</li>
-            </ul>
+            <div class="space-y-2">
+                <button onclick="setRetStatus('opened')"
+                        class="w-full text-left text-xs py-2 px-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-medium transition">
+                    Ver reclamos abiertos
+                </button>
+                <button onclick="setRetStatus('')"
+                        class="w-full text-left text-xs py-2 px-3 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-lg font-medium transition">
+                    Ver todos los reclamos
+                </button>
+                <button onclick="setRetClaimType('pdd')"
+                        class="w-full text-left text-xs py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium transition">
+                    Filtrar defectos/diferente
+                </button>
+                <button onclick="manualRefreshAll()"
+                        class="w-full text-left text-xs py-2 px-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-lg font-medium transition">
+                    Refrescar datos
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -255,11 +299,13 @@ var _today = new Date();
 var _monthStart = new Date(_today.getFullYear(), _today.getMonth(), 1);
 
 var retFilters = {
-    date_from: _fmtDate(_monthStart),
-    date_to:   _fmtDate(_today),
-    status:    '',
-    offset:    0,
-    limit:     20,
+    date_from:  _fmtDate(_monthStart),
+    date_to:    _fmtDate(_today),
+    status:     '',
+    claim_type: '',
+    account_id: '{{ active_user_id | default("") }}',
+    offset:     0,
+    limit:      20,
 };
 
 // ============================================================
@@ -319,9 +365,11 @@ var _summaryCtrl = null;
 // ============================================================
 function _buildParams() {
     var p = [];
-    if (retFilters.date_from) p.push('date_from=' + retFilters.date_from);
-    if (retFilters.date_to)   p.push('date_to='   + retFilters.date_to);
-    if (retFilters.status)    p.push('status='    + retFilters.status);
+    if (retFilters.date_from)  p.push('date_from='  + retFilters.date_from);
+    if (retFilters.date_to)    p.push('date_to='    + retFilters.date_to);
+    if (retFilters.status)     p.push('status='     + retFilters.status);
+    if (retFilters.claim_type) p.push('claim_type=' + retFilters.claim_type);
+    if (retFilters.account_id) p.push('account_id=' + encodeURIComponent(retFilters.account_id));
     return p;
 }
 
@@ -461,26 +509,26 @@ function loadAnalysis() {
     fetch(url)
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            // Top 5 sidebar
+            // Estado de Reclamos sidebar (abiertos / resueltos + botón de acción)
             var topEl = document.getElementById('ret-top-products');
-            if (data.top_products && data.top_products.length) {
-                var html = '<div class="space-y-2">';
-                data.top_products.forEach(function(p, i) {
-                    var pct = data.total > 0 ? Math.round(p.count / data.total * 100) : 0;
-                    var colors = ['bg-red-400','bg-orange-400','bg-yellow-400','bg-blue-400','bg-gray-400'];
-                    html += '<div>' +
-                        '<div class="flex justify-between text-xs text-gray-700 mb-0.5">' +
-                        '<span class="truncate flex-1 mr-2" title="' + p.title + '">' + (i+1) + '. ' +
-                        (p.title.length > 28 ? p.title.slice(0,28)+'…' : p.title) + '</span>' +
-                        '<span class="font-bold text-red-600 flex-shrink-0">' + p.count + '</span></div>' +
-                        '<div class="h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 rounded-full ' +
-                        (colors[i]||'bg-gray-400') + '" style="width:' + pct + '%"></div></div></div>';
-                });
-                html += '</div>';
-                topEl.innerHTML = html;
+            var opened = (data.by_status || {}).opened || 0;
+            var closed = (data.by_status || {}).closed || 0;
+            var urgHtml = '<div class="space-y-2">';
+            urgHtml += '<div class="flex items-center justify-between p-2.5 bg-red-50 rounded-lg border border-red-100">' +
+                       '<span class="text-xs font-semibold text-red-700">Abiertos</span>' +
+                       '<span class="text-2xl font-black text-red-600">' + opened + '</span></div>';
+            urgHtml += '<div class="flex items-center justify-between p-2.5 bg-green-50 rounded-lg border border-green-100">' +
+                       '<span class="text-xs font-semibold text-green-700">Resueltos</span>' +
+                       '<span class="text-2xl font-black text-green-600">' + closed + '</span></div>';
+            if (opened > 0) {
+                urgHtml += '<button onclick="setRetStatus(\'opened\')" ' +
+                           'class="w-full mt-1 text-xs bg-red-500 hover:bg-red-600 text-white font-semibold px-3 py-2 rounded-lg transition">' +
+                           'Ver ' + opened + ' abierto' + (opened !== 1 ? 's' : '') + ' →</button>';
             } else {
-                topEl.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este periodo</p>';
+                urgHtml += '<p class="text-[10px] text-green-600 font-medium text-center py-1">Sin reclamos abiertos</p>';
             }
+            urgHtml += '</div>';
+            topEl.innerHTML = urgHtml;
             // Doughnut chart
             var canvas = document.getElementById('ret-status-chart');
             if (!canvas) return;
@@ -541,6 +589,7 @@ window.loadTopProducts = function() {
     if (cfrom) params.push('compare_from=' + cfrom);
     if (cto)   params.push('compare_to='   + cto);
     params.push('limit=' + limit);
+    if (retFilters.account_id) params.push('account_id=' + encodeURIComponent(retFilters.account_id));
 
     var resultsEl = document.getElementById('ret-top-results');
     resultsEl.innerHTML =
@@ -875,6 +924,18 @@ window.setRetStatus = function(status) {
     });
     var active = document.getElementById('ret-btn-' + (status || 'all'));
     if (active) active.className = 'px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold';
+    loadTable();
+};
+
+window.setRetClaimType = function(ct) {
+    retFilters.claim_type = ct;
+    retFilters.offset = 0;
+    ['all','pdd','pntr','other'].forEach(function(t) {
+        var btn = document.getElementById('ret-btn-type-' + t);
+        if (btn) btn.className = 'px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700';
+    });
+    var active = document.getElementById('ret-btn-type-' + (ct || 'all'));
+    if (active) active.className = 'px-3 py-1 text-xs rounded-full bg-blue-100 text-blue-800 font-semibold';
     loadTable();
 };
 
