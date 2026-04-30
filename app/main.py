@@ -3147,14 +3147,18 @@ async def _prewarm_caches(user_id: str = None):
                 fx = await _get_usd_to_mxn(client)
                 _calc_margins(bm_candidates, fx)
 
-                # Actualizar mapa SKU→costo y SKU→retail para cálculo de profit y alertas de precio
+                # Actualizar mapa SKU→costo para cálculo de profit en órdenes (GAP 6)
                 for _p in bm_candidates:
                     if _p.get("sku") and (_p.get("_costo_mxn") or 0) > 0:
                         _sku_cost_map[_p["sku"]] = _p["_costo_mxn"]
-                    if _p.get("sku"):
-                        _rph_mxn = (_p.get("_retail_ph_mxn") or 0) or (_p.get("_retail_mxn") or 0)
-                        if _rph_mxn > 0:
-                            _sku_retail_map[_p["sku"]] = _rph_mxn
+
+                # Reconstruir _sku_retail_map desde el catálogo completo BM (8484 SKUs × FX)
+                # Cobertura total: todos los SKUs en DB, no solo los listings activos de ML
+                _sku_retail_map.clear()
+                for _rsku, (_rts, _rusd) in _bm_retail_ph_cache.items():
+                    if 0 < _rusd < 9999:
+                        _sku_retail_map[_rsku] = round(_rusd * fx, 2)
+                logger.info(f"[PREWARM] _sku_retail_map: {len(_sku_retail_map)} SKUs con RetailPH MXN")
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10
