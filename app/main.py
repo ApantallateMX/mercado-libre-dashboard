@@ -1981,34 +1981,26 @@ async def orders_table_partial(
         orders_data = await client.get_orders(offset=offset, limit=limit, sort=sort)
         raw_orders = orders_data.get("results", [])
 
-        # Fetch detalles de cobro desde /collections por pago
-        # Fórmula correcta:
-        #   taxes_pago = transaction_amount - marketplace_fee - net_received_amount
-        #   net_vendedor = sum(net_received_amount) - shipping_cost
-        # net_received_amount ya incluye descuento de marketplace_fee + retenciones (PROACTIVE_12)
-        payment_details = {}  # order_id -> {"net": float, "taxes": float}
+        # Fetch net_received_amount desde /collections por pago
+        # net_received_amount = lo que ML deposita al vendedor: ya tiene descontado
+        #   marketplace_fee + shipping_cost + retenciones fiscales (IVA/ISR, PROACTIVE_12)
+        # Impuestos = residuo: total_amount - sale_fee - ship_cost - net_received
+        # Net       = net_received_amount directamente (no restar envío de nuevo)
+        net_amounts = {}  # order_id -> sum(net_received_amount)
         for o in raw_orders:
             payments = o.get("payments", [])
-            total_net   = 0.0
-            total_taxes = 0.0
+            total_net = 0.0
             for p in payments:
                 pid = p.get("id")
                 if pid:
                     try:
-                        det = await client.get_payment_collection_details(str(pid))
-                        if det:
-                            trx = det.get("transaction_amount", 0.0)
-                            fee = det.get("marketplace_fee",    0.0)
-                            net = det.get("net_received_amount",0.0)
-                            total_net   += net
-                            total_taxes += trx - fee - net
+                        net = await client.get_payment_net_amount(str(pid))
+                        if net is not None:
+                            total_net += net
                     except Exception:
                         pass
             if total_net > 0:
-                payment_details[o.get("id")] = {
-                    "net":   total_net,
-                    "taxes": round(total_taxes, 2),
-                }
+                net_amounts[o.get("id")] = total_net
 
         # Fetch real sale_fee desde /orders/{id} (search devuelve 0 frecuentemente)
         fee_amounts = {}  # order_id -> total sale_fee
@@ -2072,15 +2064,14 @@ async def orders_table_partial(
             iva_ship = round(ship_cost * 0.16, 2)
 
             # ─── Cálculo financiero ───────────────────────────────────────────
-            # Fuente: /collections/{payment_id} por cada pago aprobado
-            # taxes = sum(transaction_amount - marketplace_fee - net_received_amount)
-            #   → solo retenciones fiscales (IVA + ISR, esquema PROACTIVE_12)
-            # net   = sum(net_received_amount) - shipping_cost
-            #   → net_received_amount ya tiene marketplace_fee descontado
-            pdet = payment_details.get(o.get("id"), {})
-            if pdet:
-                taxes = pdet["taxes"]
-                net   = round(pdet["net"] - ship_cost, 2)
+            # net_received_amount (de /collections) ya tiene descontado:
+            #   marketplace_fee + shipping_cost + retenciones fiscales (PROACTIVE_12)
+            # Impuestos = residuo = total - sale_fee - ship_cost - net_received
+            # Net       = net_received  (monto que ML deposita al vendedor, sin restar nada más)
+            net_received = net_amounts.get(o.get("id"), 0)
+            if net_received > 0:
+                taxes = round(total - total_fees - ship_cost - net_received, 2)
+                net   = round(net_received, 2)
             else:
                 # Fallback: estimación con IVA conocido
                 iva_fee = round(total_fees * 0.16, 2)
