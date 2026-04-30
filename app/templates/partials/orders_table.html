@@ -70,7 +70,10 @@
             {% endif %}
         </div>
         <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
-            <span class="text-gray-600">Precio: <strong>${{ "{:,.2f}".format(order.total_amount) }}</strong></span>
+            <span class="text-gray-600">
+                Precio: <strong class="{% if order.underpriced_count > 0 %}text-amber-600{% endif %}">${{ "{:,.2f}".format(order.total_amount) }}</strong>
+                {% if order.underpriced_count > 0 %}<span class="text-[9px] text-amber-600">⚠</span>{% endif %}
+            </span>
             <span class="text-red-600">-${{ "{:,.2f}".format(order.total_fees) }}</span>
             {% if order.shipping_cost > 0 %}<span class="text-orange-600">Envio -${{ "{:,.2f}".format(order.shipping_cost) }}</span>{% endif %}
             <span class="text-green-700 font-bold">Neto: ${{ "{:,.2f}".format(order.net_final) }}</span>
@@ -121,7 +124,7 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Envío</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Impuestos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300 text-green-700">Total</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">Ganancia</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">Ganancia / % Neto</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Estado</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
         </tr>
@@ -145,10 +148,15 @@
             <td class="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-500">
                 {% if order.order_items %}{{ order.order_items[0].sku }}{% else %}-{% endif %}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-800">
-                ${{ "{:,.2f}".format(order.total_amount) }}
+            <td class="px-4 py-3 text-sm text-right text-gray-800">
+                {% if order.order_items and order.order_items[0].retail_ref > 0 %}
+                <div class="text-[9px] text-gray-400">Ref BM: ${{ "{:,.0f}".format(order.order_items[0].retail_ref) }}</div>
+                {% endif %}
+                <span class="{% if order.underpriced_count > 0 %}text-amber-600 font-semibold{% endif %}">
+                    ${{ "{:,.2f}".format(order.total_amount) }}
+                </span>
                 {% if order.underpriced_count > 0 %}
-                <div class="text-[9px] text-amber-600 font-semibold">⚠ precio bajo</div>
+                <span class="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-semibold">⚠ bajo retail</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-red-600">
@@ -164,11 +172,17 @@
                 ${{ "{:,.2f}".format(order.net_final) }}
                 <div class="text-[9px] text-gray-400 font-normal">ML: ${{ "{:,.0f}".format(order.net_amount) }}</div>
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold
-                {% if order.ganancia_est is not none %}{% if order.ganancia_est >= 0 %}text-blue-700{% else %}text-red-600{% endif %}{% else %}text-gray-300{% endif %}">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold">
                 {% if order.ganancia_est is not none %}
-                    ${{ "{:,.0f}".format(order.ganancia_est) }}
-                    {% if order.margen_est is not none %}<div class="text-[9px] font-normal">{{ order.margen_est }}%</div>{% endif %}
+                    <span class="{% if order.ganancia_est >= 0 %}text-blue-700{% else %}text-red-600{% endif %}">
+                        ${{ "{:,.0f}".format(order.ganancia_est) }}
+                    </span>
+                    {% if order.margen_est is not none %}
+                    <div class="text-[9px] font-normal text-gray-400">{{ order.margen_est }}% margen</div>
+                    {% endif %}
+                {% elif order.total_amount > 0 %}
+                    <span class="text-indigo-600">{{ "%.1f"|format(order.net_final / order.total_amount * 100) }}%</span>
+                    <div class="text-[9px] font-normal text-gray-400">% neto</div>
                 {% else %}—{% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-center">
