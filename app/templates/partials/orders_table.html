@@ -45,58 +45,39 @@
 {% endif %}
 {% endif %}
 
-<!-- KPI Filtros de margen -->
-{% if orders %}
-{% set ns = namespace(alto=0, medio=0, bajo=0) %}
-{% for o in orders %}{% if o.total_amount > 0 %}{% set _p = o.net_final / o.total_amount * 100 %}{% if _p >= 65 %}{% set ns.alto = ns.alto + 1 %}{% elif _p >= 55 %}{% set ns.medio = ns.medio + 1 %}{% else %}{% set ns.bajo = ns.bajo + 1 %}{% endif %}{% endif %}{% endfor %}
+<!-- KPI Filtros de margen — server-side, persiste en paginación -->
 <div class="flex flex-wrap gap-3 mb-4">
-    <button id="ord-band-all" data-active="1" onclick="window.filterOrdersBand('all')"
-        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-300 shadow-sm p-3 text-center cursor-pointer transition-all">
-        <div class="text-base font-bold text-gray-700">{{ orders|length }}</div>
+    {% set _band_all_active = margin_band == "" %}
+    <button onclick="window.filterOrdersBand('')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-gray-400' if _band_all_active else 'border-gray-100 hover:border-gray-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
+        <div class="text-base font-bold text-gray-700">{{ pl_count }}</div>
         <div class="text-[10px] text-gray-400 uppercase font-medium">Todas</div>
-        <div class="text-[9px] text-gray-300">cualquier % neto</div>
+        <div class="text-[9px] text-gray-300">en esta página</div>
     </button>
-    <button id="ord-band-alto" data-active="0" onclick="window.filterOrdersBand('alto')"
-        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-green-300">
-        <div class="text-base font-bold text-green-600">{{ ns.alto }}</div>
+    <button onclick="window.filterOrdersBand('alto')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-green-400 bg-green-50' if margin_band == 'alto' else 'border-gray-100 hover:border-green-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
+        <div class="text-base font-bold text-green-600">{{ pl_alto }}</div>
         <div class="text-[10px] text-green-600 uppercase font-medium">Margen Alto</div>
-        <div class="text-[9px] text-gray-300">≥ 65% neto</div>
+        <div class="text-[9px] text-gray-300">≥ 120% retail / ≥ 65% precio</div>
     </button>
-    <button id="ord-band-medio" data-active="0" onclick="window.filterOrdersBand('medio')"
-        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-yellow-300">
-        <div class="text-base font-bold text-yellow-600">{{ ns.medio }}</div>
+    <button onclick="window.filterOrdersBand('medio')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-yellow-400 bg-yellow-50' if margin_band == 'medio' else 'border-gray-100 hover:border-yellow-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
+        <div class="text-base font-bold text-yellow-600">{{ pl_medio }}</div>
         <div class="text-[10px] text-yellow-600 uppercase font-medium">Margen Medio</div>
-        <div class="text-[9px] text-gray-300">55 – 64% neto</div>
+        <div class="text-[9px] text-gray-300">100–119% retail / 55–64%</div>
     </button>
-    <button id="ord-band-bajo" data-active="0" onclick="window.filterOrdersBand('bajo')"
-        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-red-300">
-        <div class="text-base font-bold text-red-600">{{ ns.bajo }}</div>
+    <button onclick="window.filterOrdersBand('bajo')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-red-400 bg-red-50' if margin_band == 'bajo' else 'border-gray-100 hover:border-red-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
+        <div class="text-base font-bold text-red-600">{{ pl_bajo }}</div>
         <div class="text-[10px] text-red-600 uppercase font-medium">Margen Bajo</div>
-        <div class="text-[9px] text-gray-300">< 55% neto</div>
+        <div class="text-[9px] text-gray-300">< 100% retail / < 55%</div>
     </button>
 </div>
-{% endif %}
 
 <script>
 window.filterOrdersBand = function(band) {
-    ['all','alto','medio','bajo'].forEach(function(b) {
-        var btn = document.getElementById('ord-band-' + b);
-        if (!btn) return;
-        btn.dataset.active = '0';
-        btn.className = 'flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-blue-200';
-    });
-    var active = document.getElementById('ord-band-' + band);
-    if (active) {
-        active.dataset.active = '1';
-        var borderColor = band === 'alto' ? 'border-green-400' : band === 'medio' ? 'border-yellow-400' : band === 'bajo' ? 'border-red-400' : 'border-gray-300';
-        active.className = 'flex-1 min-w-[100px] bg-white rounded-xl border-2 ' + borderColor + ' shadow-sm p-3 text-center cursor-pointer transition-all';
-    }
-    document.querySelectorAll('tr[data-band]').forEach(function(row) {
-        var show = (band === 'all' || row.dataset.band === band);
-        row.style.display = show ? '' : 'none';
-        var detail = row.nextElementSibling;
-        if (detail && !show) detail.classList.add('hidden');
-    });
+    var newBand = (band === '{{ margin_band }}') ? '' : band;
+    htmx.ajax('GET', '/partials/orders-table?sort={{ sort }}&limit={{ limit }}&offset=0&margin_band=' + newBand, {target: '#orders-table', swap: 'innerHTML'});
 };
 </script>
 
@@ -177,8 +158,6 @@ window.filterOrdersBand = function(band) {
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase border-b-2 border-gray-300">Retail BM</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Precio</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cargos</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Envío</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Impuestos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300 text-green-700">Total</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">Ganancia / % Neto</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Estado</th>
@@ -187,9 +166,7 @@ window.filterOrdersBand = function(band) {
     </thead>
     <tbody class="divide-y divide-gray-200">
         {% for order in orders %}
-        {% set _pct_neto = (order.net_final / order.total_amount * 100) if order.total_amount > 0 else 0 %}
-        {% set _band = "alto" if _pct_neto >= 65 else ("medio" if _pct_neto >= 55 else "bajo") %}
-        <tr data-band="{{ _band }}" class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        <tr data-band="{{ order.margin_band }}" class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
                 {{ order.date_created[:10] }}
             </td>
@@ -220,13 +197,7 @@ window.filterOrdersBand = function(band) {
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-red-600">
-                -${{ "{:,.2f}".format(order.total_fees) }}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-orange-600">
-                {% if order.shipping_cost > 0 %}-${{ "{:,.2f}".format(order.shipping_cost) }}{% else %}-{% endif %}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-purple-600">
-                -${{ "{:,.2f}".format(order.taxes) }}
+                -${{ "{:,.2f}".format(order.total_cargos) }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-green-700">
                 ${{ "{:,.2f}".format(order.net_final) }}
@@ -240,10 +211,14 @@ window.filterOrdersBand = function(band) {
                     {% if order.margen_est is not none %}
                     <div class="text-[9px] font-normal text-gray-400">{{ order.margen_est }}% margen</div>
                     {% endif %}
-                {% elif order.total_amount > 0 %}
-                    <span class="text-indigo-600">{{ "%.1f"|format(order.net_final / order.total_amount * 100) }}%</span>
-                    <div class="text-[9px] font-normal text-gray-400">% neto</div>
-                {% else %}—{% endif %}
+                {% else %}
+                    <span class="{% if order.net_pct >= 120 %}text-green-600{% elif order.net_pct >= 100 %}text-indigo-600{% else %}text-red-500{% endif %}">
+                        {{ order.net_pct }}%
+                    </span>
+                    <div class="text-[9px] font-normal text-gray-400">
+                        {% if order.order_items and order.order_items[0].retail_ref > 0 %}vs retail{% else %}del precio{% endif %}
+                    </div>
+                {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-center">
                 {% if order.status == 'paid' %}
@@ -264,7 +239,7 @@ window.filterOrdersBand = function(band) {
         </tr>
         <!-- Fila expandible con detalle de cobros -->
         <tr class="hidden">
-            <td colspan="12" class="px-0 py-0">
+            <td colspan="10" class="px-0 py-0">
                 <div class="bg-gray-50 border-l-4 border-yellow-400 px-6 py-4">
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <!-- Col 1: Items de la orden -->
@@ -390,7 +365,7 @@ window.filterOrdersBand = function(band) {
         </tr>
         {% else %}
         <tr>
-            <td colspan="12" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
+            <td colspan="10" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -401,12 +376,9 @@ window.filterOrdersBand = function(band) {
 <div class="px-4 md:px-6 py-3 bg-gray-50 border-t-2 border-gray-300">
     <div class="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-center md:justify-between md:gap-2">
         <div class="flex flex-col gap-0.5 md:flex-row md:flex-wrap md:gap-4 text-sm text-gray-600">
-            <span>Precio: <strong>${{ "{:,.2f}".format(orders|sum(attribute='total_amount')) }}</strong></span>
-            <span class="text-red-600">Cargos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='total_fees')) }}</strong></span>
-            <span class="text-orange-600">Envios: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='shipping_cost')) }}</strong></span>
-            <span class="text-purple-600">Impuestos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='taxes')) }}</strong></span>
-            <span class="text-orange-600">Comisión socio: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='partner_commission')) }}</strong></span>
-            <span class="text-green-700 font-bold">Neto final: <strong>${{ "{:,.2f}".format(orders|sum(attribute='net_final')) }}</strong></span>
+            <span>Precio: <strong>${{ "{:,.0f}".format(orders|sum(attribute='total_amount')) }}</strong></span>
+            <span class="text-red-600">Cargos: <strong>-${{ "{:,.0f}".format(orders|sum(attribute='total_cargos')) }}</strong></span>
+            <span class="text-green-700 font-bold">Neto final: <strong>${{ "{:,.0f}".format(orders|sum(attribute='net_final')) }}</strong></span>
         </div>
         <span class="text-xs text-gray-400 hidden md:inline">Clic en una fila para ver detalle</span>
     </div>
@@ -416,7 +388,7 @@ window.filterOrdersBand = function(band) {
 {% if paging and paging.total > 0 %}
 {% set total_pages = ((paging.total - 1) // limit + 1) %}
 {% set current_page = (offset // limit) + 1 %}
-{% set base_url = "/partials/orders-table?sort=" ~ sort ~ "&limit=" ~ limit %}
+{% set base_url = "/partials/orders-table?sort=" ~ sort ~ "&limit=" ~ limit ~ ("&margin_band=" ~ margin_band if margin_band else "") %}
 
 <div class="px-4 md:px-6 py-3 bg-white border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
 

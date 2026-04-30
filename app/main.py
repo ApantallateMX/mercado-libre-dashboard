@@ -1971,7 +1971,8 @@ async def orders_table_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=50),
-    sort: str = Query("date_desc")
+    sort: str = Query("date_desc"),
+    margin_band: str = Query("", description="Filtro: alto / medio / bajo"),
 ):
     client = await get_meli_client()
     if not client:
@@ -2107,6 +2108,21 @@ async def orders_table_partial(
             partner_commission = round(net * _PARTNER_COMMISSION_PCT, 2)
             net_final = round(net - partner_commission, 2)
 
+            # Total cargos (todos los descuentos en una sola cifra)
+            total_cargos = round(total_fees + ship_cost + taxes + partner_commission, 2)
+
+            # Banda de margen para KPI filter
+            # Si hay retail_ref → % sobre costo de adquisición (más útil)
+            # Umbral: ≥120% alto, 100-119% medio, <100% bajo
+            # Sin retail_ref → fallback a % del precio de venta (65/55)
+            _first_retail = items_detail[0].retail_ref if items_detail else 0
+            if _first_retail > 0 and net_final > 0:
+                _net_pct = round(net_final / _first_retail * 100, 1)
+                _margin_band = "alto" if _net_pct >= 120 else ("medio" if _net_pct >= 100 else "bajo")
+            else:
+                _net_pct = round(net_final / total * 100, 1) if total > 0 else 0.0
+                _margin_band = "alto" if _net_pct >= 65 else ("medio" if _net_pct >= 55 else "bajo")
+
             # GAP 6: profit estimado = neto_final - costo_bm (si disponible)
             total_cost_est = 0.0
             for oi in items:
@@ -2132,6 +2148,9 @@ async def orders_table_partial(
                 net_amount=net,
                 partner_commission=partner_commission,
                 net_final=net_final,
+                total_cargos=total_cargos,
+                net_pct=_net_pct,
+                margin_band=_margin_band,
                 ganancia_est=ganancia_est,
                 margen_est=margen_est,
                 underpriced_count=underpriced_count,
@@ -2144,16 +2163,23 @@ async def orders_table_partial(
                 tags=o.get("tags", []),
             ))
 
+        # Aplicar filtro de banda si está activo
+        if margin_band in ("alto", "medio", "bajo"):
+            enriched = [o for o in enriched if o.margin_band == margin_band]
+
         # GAP 10: resumen P&L de la página actual
         active_orders = [o for o in enriched if o.status != "cancelled"]
         pl_revenue  = sum(o.total_amount        for o in active_orders)
-        pl_net_ml   = sum(o.net_amount          for o in active_orders)   # lo que ML deposita
-        pl_partner  = sum(o.partner_commission  for o in active_orders)   # comisión socio 7%
-        pl_net      = sum(o.net_final           for o in active_orders)   # neto final
+        pl_net_ml   = sum(o.net_amount          for o in active_orders)
+        pl_partner  = sum(o.partner_commission  for o in active_orders)
+        pl_net      = sum(o.net_final           for o in active_orders)
         pl_ganancia = sum(o.ganancia_est for o in active_orders if o.ganancia_est is not None)
         pl_has_costs = any(o.ganancia_est is not None for o in active_orders)
         pl_margen   = round(pl_net / pl_revenue * 100, 1) if pl_revenue > 0 else 0
         pl_underpriced = sum(1 for o in active_orders if o.underpriced_count > 0)
+        pl_alto  = sum(1 for o in active_orders if o.margin_band == "alto")
+        pl_medio = sum(1 for o in active_orders if o.margin_band == "medio")
+        pl_bajo  = sum(1 for o in active_orders if o.margin_band == "bajo")
 
         return templates.TemplateResponse(request, "partials/orders_table.html", {
             "orders": enriched,
@@ -2161,6 +2187,7 @@ async def orders_table_partial(
             "offset": offset,
             "limit": limit,
             "sort": sort,
+            "margin_band": margin_band,
             "seller_name": user.get("nickname", "-"),
             "pl_revenue": pl_revenue,
             "pl_net_ml": pl_net_ml,
@@ -2170,6 +2197,9 @@ async def orders_table_partial(
             "pl_margen": pl_margen,
             "pl_count": len(active_orders),
             "pl_underpriced": pl_underpriced,
+            "pl_alto": pl_alto,
+            "pl_medio": pl_medio,
+            "pl_bajo": pl_bajo,
         })
     finally:
         await client.close()
