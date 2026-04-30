@@ -110,7 +110,8 @@ def _clean_sku_for_bm(sku: str) -> str:
     return s
 
 
-_manual_fx_rate: float = 0.0  # 0 = usar tasa MeLi API; >0 = override manual
+_manual_fx_rate: float = 0.0   # 0 = usar tasa MeLi API; >0 = override manual
+_last_fx_rate:   float = 17.0  # última tasa conocida (actualizada en prewarm c/15 min)
 
 
 async def _get_usd_to_mxn(client) -> float:
@@ -2181,6 +2182,7 @@ async def orders_table_partial(
         pl_medio = sum(1 for o in active_orders if o.margin_band == "medio")
         pl_bajo  = sum(1 for o in active_orders if o.margin_band == "bajo")
 
+        _fx = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
         return templates.TemplateResponse(request, "partials/orders_table.html", {
             "orders": enriched,
             "paging": orders_data.get("paging", {}),
@@ -2188,6 +2190,7 @@ async def orders_table_partial(
             "limit": limit,
             "sort": sort,
             "margin_band": margin_band,
+            "usd_to_mxn": _fx,
             "seller_name": user.get("nickname", "-"),
             "pl_revenue": pl_revenue,
             "pl_net_ml": pl_net_ml,
@@ -3175,6 +3178,7 @@ async def _prewarm_caches(user_id: str = None):
 
                 # Calcular márgenes en candidatos (necesario para GAP 5, 7, 6)
                 fx = await _get_usd_to_mxn(client)
+                _last_fx_rate = fx  # cachear para conversión USD en endpoints sin ML client
                 _calc_margins(bm_candidates, fx)
 
                 # Actualizar mapa SKU→costo para cálculo de profit en órdenes (GAP 6)

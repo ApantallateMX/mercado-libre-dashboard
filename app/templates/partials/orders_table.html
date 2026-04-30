@@ -202,6 +202,9 @@ window.filterOrdersBand = function(band) {
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-green-700">
                 ${{ "{:,.2f}".format(order.net_final) }}
                 <div class="text-[9px] text-gray-400 font-normal">ML: ${{ "{:,.0f}".format(order.net_amount) }}</div>
+                {% if usd_to_mxn > 0 %}
+                <div class="text-[9px] text-blue-400 font-normal">≈ ${{ "{:,.0f}".format(order.net_final / usd_to_mxn) }} USD</div>
+                {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold">
                 {% if order.ganancia_est is not none %}
