@@ -2044,9 +2044,14 @@ async def orders_table_partial(
                 fee = float(oi.get("sale_fee", 0) or 0)
                 iva_fee = round(fee * 0.16, 2)
                 subtotal = unit_price * qty
+                # Alerta precio bajo: comparar unit_price vs RetailPrice PH de BM
+                _item_sku_raw = item_info.get("seller_sku") or item_info.get("seller_custom_field") or ""
+                _item_sku_b   = normalize_to_bm_sku(_item_sku_raw) if _item_sku_raw else ""
+                _retail_ref   = _sku_retail_map.get(_item_sku_b, 0) if _item_sku_b else 0
+                _retail_pct   = round(unit_price / _retail_ref * 100, 1) if (_retail_ref > 0 and unit_price > 0) else None
                 items_detail.append(SimpleNamespace(
                     title=item_info.get("title", "-"),
-                    sku=item_info.get("seller_sku") or item_info.get("seller_custom_field") or "-",
+                    sku=_item_sku_raw or "-",
                     item_id=item_info.get("id", "-"),
                     quantity=qty,
                     unit_price=unit_price,
@@ -2056,6 +2061,9 @@ async def orders_table_partial(
                     sale_fee=fee,
                     iva_fee=iva_fee,
                     listing_type=oi.get("listing_type_id", "-"),
+                    retail_ref=_retail_ref,
+                    retail_pct=_retail_pct,
+                    price_alert=(_retail_pct is not None and _retail_pct < 80),
                 ))
 
             # Shipping cost from API
@@ -2092,7 +2100,14 @@ async def orders_table_partial(
             buyer_raw = o.get("buyer") or {}
             total_iva = round(total_fees * 0.16, 2)  # IVA estimado sobre comisión
 
-            # GAP 6: profit estimado = neto_meli - costo_bm (si disponible)
+            # Alerta precio bajo: contar items con price_alert
+            underpriced_count = sum(1 for _id in items_detail if _id.price_alert)
+
+            # Comisión socio 7% sobre net_received (lo que ML deposita)
+            partner_commission = round(net * _PARTNER_COMMISSION_PCT, 2)
+            net_final = round(net - partner_commission, 2)
+
+            # GAP 6: profit estimado = neto_final - costo_bm (si disponible)
             total_cost_est = 0.0
             for oi in items:
                 oi_sku = (oi.get("item", {}).get("seller_sku")
@@ -2100,7 +2115,7 @@ async def orders_table_partial(
                 oi_sku_base = normalize_to_bm_sku(oi_sku) if oi_sku else ""
                 cost_unit = _sku_cost_map.get(oi_sku_base, 0) or 0
                 total_cost_est += cost_unit * oi.get("quantity", 1)
-            ganancia_est = round(net - total_cost_est, 2) if total_cost_est > 0 else None
+            ganancia_est = round(net_final - total_cost_est, 2) if total_cost_est > 0 else None
             margen_est = round(ganancia_est / total * 100, 1) if (ganancia_est is not None and total > 0) else None
 
             enriched.append(SimpleNamespace(
@@ -2115,8 +2130,11 @@ async def orders_table_partial(
                 iva_shipping=iva_ship,
                 taxes=taxes,
                 net_amount=net,
+                partner_commission=partner_commission,
+                net_final=net_final,
                 ganancia_est=ganancia_est,
                 margen_est=margen_est,
+                underpriced_count=underpriced_count,
                 shipping_id=shipping.get("id"),
                 payment_method=payment_method,
                 payment_type=payment_type,
@@ -2128,11 +2146,14 @@ async def orders_table_partial(
 
         # GAP 10: resumen P&L de la página actual
         active_orders = [o for o in enriched if o.status != "cancelled"]
-        pl_revenue = sum(o.total_amount for o in active_orders)
-        pl_net = sum(o.net_amount for o in active_orders)
+        pl_revenue  = sum(o.total_amount        for o in active_orders)
+        pl_net_ml   = sum(o.net_amount          for o in active_orders)   # lo que ML deposita
+        pl_partner  = sum(o.partner_commission  for o in active_orders)   # comisión socio 7%
+        pl_net      = sum(o.net_final           for o in active_orders)   # neto final
         pl_ganancia = sum(o.ganancia_est for o in active_orders if o.ganancia_est is not None)
         pl_has_costs = any(o.ganancia_est is not None for o in active_orders)
-        pl_margen = round(pl_net / pl_revenue * 100, 1) if pl_revenue > 0 else 0
+        pl_margen   = round(pl_net / pl_revenue * 100, 1) if pl_revenue > 0 else 0
+        pl_underpriced = sum(1 for o in active_orders if o.underpriced_count > 0)
 
         return templates.TemplateResponse(request, "partials/orders_table.html", {
             "orders": enriched,
@@ -2142,10 +2163,13 @@ async def orders_table_partial(
             "sort": sort,
             "seller_name": user.get("nickname", "-"),
             "pl_revenue": pl_revenue,
+            "pl_net_ml": pl_net_ml,
+            "pl_partner": pl_partner,
             "pl_net": pl_net,
             "pl_ganancia": pl_ganancia if pl_has_costs else None,
             "pl_margen": pl_margen,
             "pl_count": len(active_orders),
+            "pl_underpriced": pl_underpriced,
         })
     finally:
         await client.close()
@@ -2477,7 +2501,9 @@ import time as _time
 # Cache compartido: items details + BM stock (evita re-fetch entre tabs)
 _products_cache: dict[str, tuple[float, list]] = {}
 _bm_stock_cache: dict[str, tuple[float, dict]] = {}
-_sku_cost_map: dict[str, float] = {}  # sku -> costo MXN (del último prewarm)
+_sku_cost_map: dict[str, float] = {}    # sku -> costo MXN (del último prewarm)
+_sku_retail_map: dict[str, float] = {} # sku -> retail_ph MXN (LastRetailPricePurchaseHistory × FX)
+_PARTNER_COMMISSION_PCT = 0.07         # 7% comisión socio (aplicado sobre net_received ML)
 _category_cache: dict[str, str] = {}  # category_id -> name
 _PRODUCTS_CACHE_TTL = 900   # 15 min
 _BM_CACHE_TTL = 900         # 15 min
@@ -3121,10 +3147,14 @@ async def _prewarm_caches(user_id: str = None):
                 fx = await _get_usd_to_mxn(client)
                 _calc_margins(bm_candidates, fx)
 
-                # Actualizar mapa SKU→costo para cálculo de profit en órdenes (GAP 6)
+                # Actualizar mapa SKU→costo y SKU→retail para cálculo de profit y alertas de precio
                 for _p in bm_candidates:
                     if _p.get("sku") and (_p.get("_costo_mxn") or 0) > 0:
                         _sku_cost_map[_p["sku"]] = _p["_costo_mxn"]
+                    if _p.get("sku"):
+                        _rph_mxn = (_p.get("_retail_ph_mxn") or 0) or (_p.get("_retail_mxn") or 0)
+                        if _rph_mxn > 0:
+                            _sku_retail_map[_p["sku"]] = _rph_mxn
 
                 # Pre-computar stock issues result — threshold default=10
                 _DEFAULT_THRESHOLD = 10

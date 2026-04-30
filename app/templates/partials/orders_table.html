@@ -1,29 +1,48 @@
 <!-- GAP 10: P&L Summary -->
 {% if pl_revenue %}
-<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
         <div class="text-lg font-bold text-gray-800">${{ "{:,.0f}".format(pl_revenue) }}</div>
         <div class="text-[10px] text-gray-400">Ventas brutas</div>
         <div class="text-[10px] text-gray-300">{{ pl_count }} órdenes</div>
     </div>
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
-        <div class="text-lg font-bold text-green-700">${{ "{:,.0f}".format(pl_net) }}</div>
+        <div class="text-lg font-bold text-teal-700">${{ "{:,.0f}".format(pl_net_ml) }}</div>
         <div class="text-[10px] text-gray-400">Neto MeLi</div>
+        <div class="text-[10px] text-gray-300">depósito ML</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold text-orange-600">-${{ "{:,.0f}".format(pl_partner) }}</div>
+        <div class="text-[10px] text-gray-400">Comisión socio</div>
+        <div class="text-[10px] text-gray-300">7% del neto</div>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
+        <div class="text-lg font-bold text-green-700">${{ "{:,.0f}".format(pl_net) }}</div>
+        <div class="text-[10px] text-gray-400">Neto final</div>
         <div class="text-[10px] text-gray-300">{{ pl_margen }}% del bruto</div>
     </div>
     {% if pl_ganancia is not none %}
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
         <div class="text-lg font-bold {% if pl_ganancia >= 0 %}text-blue-700{% else %}text-red-600{% endif %}">${{ "{:,.0f}".format(pl_ganancia) }}</div>
-        <div class="text-[10px] text-gray-400">Utilidad est. (con costo)</div>
+        <div class="text-[10px] text-gray-400">Utilidad est.</div>
         <div class="text-[10px] text-gray-300">vs costo BM</div>
     </div>
-    {% endif %}
+    {% else %}
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-3 text-center">
-        <div class="text-lg font-bold text-gray-600">${{ "{:,.0f}".format((pl_revenue - pl_net)) }}</div>
+        <div class="text-lg font-bold text-gray-600">${{ "{:,.0f}".format((pl_revenue - pl_net_ml)) }}</div>
         <div class="text-[10px] text-gray-400">Retenciones MeLi</div>
         <div class="text-[10px] text-gray-300">fees + envío + impuestos</div>
     </div>
+    {% endif %}
 </div>
+
+<!-- Banner alertas precio bajo -->
+{% if pl_underpriced > 0 %}
+<div class="mb-3 px-4 py-2 bg-amber-50 border border-amber-300 rounded-lg flex items-center gap-2 text-sm text-amber-800">
+    <svg class="w-4 h-4 flex-shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+    <span><strong>{{ pl_underpriced }} {% if pl_underpriced == 1 %}venta{% else %}ventas{% endif %} con precio bajo</strong> — vendiendo por debajo del 80% del RetailPrice BM. Expande el detalle para ver qué productos.</span>
+</div>
+{% endif %}
 {% endif %}
 
 <!-- Mobile cards -->
@@ -54,7 +73,7 @@
             <span class="text-gray-600">Precio: <strong>${{ "{:,.2f}".format(order.total_amount) }}</strong></span>
             <span class="text-red-600">-${{ "{:,.2f}".format(order.total_fees) }}</span>
             {% if order.shipping_cost > 0 %}<span class="text-orange-600">Envio -${{ "{:,.2f}".format(order.shipping_cost) }}</span>{% endif %}
-            <span class="text-green-700 font-bold">Net: ${{ "{:,.2f}".format(order.net_amount) }}</span>
+            <span class="text-green-700 font-bold">Neto: ${{ "{:,.2f}".format(order.net_final) }}</span>
         </div>
         <!-- Detalle expandible mobile -->
         <div class="order-detail hidden mt-3 pt-3 border-t border-gray-200 space-y-3">
@@ -74,7 +93,8 @@
                 <div class="flex justify-between text-red-600"><span>Cargos</span><span>-${{ "{:,.2f}".format(order.total_fees) }}</span></div>
                 {% if order.shipping_cost > 0 %}<div class="flex justify-between text-orange-600"><span>Envio</span><span>-${{ "{:,.2f}".format(order.shipping_cost) }}</span></div>{% endif %}
                 <div class="flex justify-between text-purple-600"><span>Impuestos</span><span>-${{ "{:,.2f}".format(order.taxes) }}</span></div>
-                <div class="flex justify-between font-bold text-green-700 border-t pt-1"><span>Total Neto</span><span>${{ "{:,.2f}".format(order.net_amount) }}</span></div>
+                <div class="flex justify-between text-orange-600"><span>Comisión socio</span><span>-${{ "{:,.2f}".format(order.partner_commission) }}</span></div>
+                <div class="flex justify-between font-bold text-green-700 border-t pt-1"><span>Total neto</span><span>${{ "{:,.2f}".format(order.net_final) }}</span></div>
             </div>
             <div class="text-xs text-gray-500">
                 <span>Orden: <span class="font-mono">{{ order.id }}</span></span>
@@ -127,6 +147,9 @@
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-800">
                 ${{ "{:,.2f}".format(order.total_amount) }}
+                {% if order.underpriced_count > 0 %}
+                <div class="text-[9px] text-amber-600 font-semibold">⚠ precio bajo</div>
+                {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-red-600">
                 -${{ "{:,.2f}".format(order.total_fees) }}
@@ -138,7 +161,8 @@
                 -${{ "{:,.2f}".format(order.taxes) }}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-green-700">
-                ${{ "{:,.2f}".format(order.net_amount) }}
+                ${{ "{:,.2f}".format(order.net_final) }}
+                <div class="text-[9px] text-gray-400 font-normal">ML: ${{ "{:,.0f}".format(order.net_amount) }}</div>
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold
                 {% if order.ganancia_est is not none %}{% if order.ganancia_est >= 0 %}text-blue-700{% else %}text-red-600{% endif %}{% else %}text-gray-300{% endif %}">
@@ -183,7 +207,12 @@
                                     <span class="text-gray-400">Cantidad:</span>
                                     <span class="text-gray-700">{{ item.quantity }}</span>
                                     <span class="text-gray-400">Precio unitario:</span>
-                                    <span class="text-gray-700">${{ "{:,.2f}".format(item.unit_price) }}</span>
+                                    <span class="text-gray-700">
+                                        ${{ "{:,.2f}".format(item.unit_price) }}
+                                        {% if item.price_alert %}
+                                        <span class="ml-1 px-1 py-0.5 text-[9px] bg-amber-100 text-amber-700 rounded font-semibold">{{ item.retail_pct }}% retail</span>
+                                        {% endif %}
+                                    </span>
                                     {% if item.discount > 0 %}
                                     <span class="text-gray-400">Precio original:</span>
                                     <span class="text-gray-500 line-through">${{ "{:,.2f}".format(item.full_unit_price) }}</span>
@@ -221,16 +250,24 @@
                                     <span class="text-purple-700">Impuestos</span>
                                     <span class="text-purple-700">-${{ "{:,.2f}".format(order.taxes) }}</span>
                                 </div>
+                                <div class="px-4 py-2 flex justify-between text-sm border-b border-gray-100 bg-teal-50">
+                                    <span class="text-teal-700">Neto MeLi</span>
+                                    <span class="text-teal-700">${{ "{:,.2f}".format(order.net_amount) }}</span>
+                                </div>
+                                <div class="px-4 py-2 flex justify-between text-sm border-b border-gray-100 bg-orange-50">
+                                    <span class="text-orange-700">Comisión socio (7%)</span>
+                                    <span class="text-orange-700">-${{ "{:,.2f}".format(order.partner_commission) }}</span>
+                                </div>
                                 <div class="px-4 py-3 flex justify-between text-sm bg-green-50 border-t-2 border-green-300">
-                                    <span class="text-green-800 font-bold">Total</span>
-                                    <span class="text-green-800 font-bold">${{ "{:,.2f}".format(order.net_amount) }}</span>
+                                    <span class="text-green-800 font-bold">Total neto</span>
+                                    <span class="text-green-800 font-bold">${{ "{:,.2f}".format(order.net_final) }}</span>
                                 </div>
                             </div>
 
                             <!-- Porcentaje de comision -->
                             {% if order.total_amount > 0 %}
                             <div class="mt-2 text-xs text-gray-400">
-                                Descuentos totales: {{ "%.1f"|format((order.total_amount - order.net_amount) / order.total_amount * 100) }}% del precio
+                                Descuentos totales: {{ "%.1f"|format((order.total_amount - order.net_final) / order.total_amount * 100) }}% del precio
                             </div>
                             {% endif %}
                         </div>
@@ -294,7 +331,8 @@
             <span class="text-red-600">Cargos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='total_fees')) }}</strong></span>
             <span class="text-orange-600">Envios: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='shipping_cost')) }}</strong></span>
             <span class="text-purple-600">Impuestos: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='taxes')) }}</strong></span>
-            <span class="text-green-700 font-bold">Total: <strong>${{ "{:,.2f}".format(orders|sum(attribute='net_amount')) }}</strong></span>
+            <span class="text-orange-600">Comisión socio: <strong>-${{ "{:,.2f}".format(orders|sum(attribute='partner_commission')) }}</strong></span>
+            <span class="text-green-700 font-bold">Neto final: <strong>${{ "{:,.2f}".format(orders|sum(attribute='net_final')) }}</strong></span>
         </div>
         <span class="text-xs text-gray-400 hidden md:inline">Clic en una fila para ver detalle</span>
     </div>
