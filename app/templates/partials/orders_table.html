@@ -45,6 +45,61 @@
 {% endif %}
 {% endif %}
 
+<!-- KPI Filtros de margen -->
+{% if orders %}
+{% set ns = namespace(alto=0, medio=0, bajo=0) %}
+{% for o in orders %}{% if o.total_amount > 0 %}{% set _p = o.net_final / o.total_amount * 100 %}{% if _p >= 65 %}{% set ns.alto = ns.alto + 1 %}{% elif _p >= 55 %}{% set ns.medio = ns.medio + 1 %}{% else %}{% set ns.bajo = ns.bajo + 1 %}{% endif %}{% endif %}{% endfor %}
+<div class="flex flex-wrap gap-3 mb-4">
+    <button id="ord-band-all" data-active="1" onclick="window.filterOrdersBand('all')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-300 shadow-sm p-3 text-center cursor-pointer transition-all">
+        <div class="text-base font-bold text-gray-700">{{ orders|length }}</div>
+        <div class="text-[10px] text-gray-400 uppercase font-medium">Todas</div>
+        <div class="text-[9px] text-gray-300">cualquier % neto</div>
+    </button>
+    <button id="ord-band-alto" data-active="0" onclick="window.filterOrdersBand('alto')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-green-300">
+        <div class="text-base font-bold text-green-600">{{ ns.alto }}</div>
+        <div class="text-[10px] text-green-600 uppercase font-medium">Margen Alto</div>
+        <div class="text-[9px] text-gray-300">≥ 65% neto</div>
+    </button>
+    <button id="ord-band-medio" data-active="0" onclick="window.filterOrdersBand('medio')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-yellow-300">
+        <div class="text-base font-bold text-yellow-600">{{ ns.medio }}</div>
+        <div class="text-[10px] text-yellow-600 uppercase font-medium">Margen Medio</div>
+        <div class="text-[9px] text-gray-300">55 – 64% neto</div>
+    </button>
+    <button id="ord-band-bajo" data-active="0" onclick="window.filterOrdersBand('bajo')"
+        class="flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-red-300">
+        <div class="text-base font-bold text-red-600">{{ ns.bajo }}</div>
+        <div class="text-[10px] text-red-600 uppercase font-medium">Margen Bajo</div>
+        <div class="text-[9px] text-gray-300">< 55% neto</div>
+    </button>
+</div>
+{% endif %}
+
+<script>
+window.filterOrdersBand = function(band) {
+    ['all','alto','medio','bajo'].forEach(function(b) {
+        var btn = document.getElementById('ord-band-' + b);
+        if (!btn) return;
+        btn.dataset.active = '0';
+        btn.className = 'flex-1 min-w-[100px] bg-white rounded-xl border-2 border-gray-100 shadow-sm p-3 text-center cursor-pointer transition-all hover:border-blue-200';
+    });
+    var active = document.getElementById('ord-band-' + band);
+    if (active) {
+        active.dataset.active = '1';
+        var borderColor = band === 'alto' ? 'border-green-400' : band === 'medio' ? 'border-yellow-400' : band === 'bajo' ? 'border-red-400' : 'border-gray-300';
+        active.className = 'flex-1 min-w-[100px] bg-white rounded-xl border-2 ' + borderColor + ' shadow-sm p-3 text-center cursor-pointer transition-all';
+    }
+    document.querySelectorAll('tr[data-band]').forEach(function(row) {
+        var show = (band === 'all' || row.dataset.band === band);
+        row.style.display = show ? '' : 'none';
+        var detail = row.nextElementSibling;
+        if (detail && !show) detail.classList.add('hidden');
+    });
+};
+</script>
+
 <!-- Mobile cards -->
 <div class="md:hidden space-y-2">
     {% for order in orders %}
@@ -119,6 +174,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Fecha</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase border-b-2 border-gray-300">Retail BM</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Precio</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cargos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Envío</th>
@@ -131,7 +187,9 @@
     </thead>
     <tbody class="divide-y divide-gray-200">
         {% for order in orders %}
-        <tr class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
+        {% set _pct_neto = (order.net_final / order.total_amount * 100) if order.total_amount > 0 else 0 %}
+        {% set _band = "alto" if _pct_neto >= 65 else ("medio" if _pct_neto >= 55 else "bajo") %}
+        <tr data-band="{{ _band }}" class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
             <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-600">
                 {{ order.date_created[:10] }}
             </td>
@@ -148,15 +206,17 @@
             <td class="px-4 py-3 whitespace-nowrap text-xs font-mono text-gray-500">
                 {% if order.order_items %}{{ order.order_items[0].sku }}{% else %}-{% endif %}
             </td>
-            <td class="px-4 py-3 text-sm text-right text-gray-800">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-400">
                 {% if order.order_items and order.order_items[0].retail_ref > 0 %}
-                <div class="text-[9px] text-gray-400">Ref BM: ${{ "{:,.0f}".format(order.order_items[0].retail_ref) }}</div>
-                {% endif %}
+                ${{ "{:,.0f}".format(order.order_items[0].retail_ref) }}
+                {% else %}—{% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-800">
                 <span class="{% if order.underpriced_count > 0 %}text-amber-600 font-semibold{% endif %}">
                     ${{ "{:,.2f}".format(order.total_amount) }}
                 </span>
                 {% if order.underpriced_count > 0 %}
-                <span class="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-semibold">⚠ bajo retail</span>
+                <div class="text-[9px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded font-semibold inline-block mt-0.5">⚠ bajo retail</div>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-red-600">
@@ -204,7 +264,7 @@
         </tr>
         <!-- Fila expandible con detalle de cobros -->
         <tr class="hidden">
-            <td colspan="11" class="px-0 py-0">
+            <td colspan="12" class="px-0 py-0">
                 <div class="bg-gray-50 border-l-4 border-yellow-400 px-6 py-4">
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <!-- Col 1: Items de la orden -->
@@ -330,7 +390,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="10" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
+            <td colspan="12" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
         </tr>
         {% endfor %}
     </tbody>
