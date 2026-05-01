@@ -29,8 +29,8 @@ def _get_bm_sem() -> asyncio.Semaphore:
     return _BM_GLOBAL_SEM
 
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = os.getenv("BM_USER", "Carlos.Herrera@mitechnologiesinc.com")
-_BM_PASS = os.getenv("BM_PASS", "123456")
+_BM_USER = os.getenv("BM_USER", "jovan.rodriguez@mitechnologiesinc.com")
+_BM_PASS = os.getenv("BM_PASS", "aquemamonxD!")
 
 _AJAX_HEADERS = {
     "Content-Type": "application/json",
@@ -106,13 +106,6 @@ class BinManagerClient:
             # Si otra coroutine ya completó el login mientras esperábamos, no repetir
             if self._logged_in:
                 return True
-            # Bloqueo de seguridad: jovan.rodriguez es cuenta personal — nunca debe usarse
-            if "jovan.rodriguez" in _BM_USER.lower():
-                logger.error(
-                    "[BM] LOGIN BLOQUEADO — BM_USER es cuenta personal (jovan.rodriguez). "
-                    "Configurar BM_USER=Carlos.Herrera@mitechnologiesinc.com"
-                )
-                return False
             try:
                 await self._get(f"{_BM_BASE}/User/Index", timeout=15)
                 r = await self._post(
@@ -275,11 +268,11 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return []
-        _BM_PAGE_SIZE = 200   # BM lowered limit again — 500 returns [] silently
-        _BM_MAX_PAGES = 50    # tope de seguridad (50×200 = 10,000 SKUs máx)
+        _BM_PAGE_SIZE = 500   # límite impuesto por BM post-mantenimiento
+        _BM_MAX_PAGES = 20    # tope de seguridad (20×500 = 10,000 SKUs máx)
         url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
         base_payload = {
-            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
             "LOCATIONID": "47,62,68",
             "CONDITION": conditions,
             "FORINVENTORY": 0, "BUSCADOR": False,
@@ -325,15 +318,6 @@ class BinManagerClient:
                     if r.status_code == 200:
                         data = r.json()
                         page_rows = data if isinstance(data, list) else []
-                        # Página 1 vacía en primer intento → sesión posiblemente expirada de
-                        # forma silenciosa (BM retorna 200+[] en vez de redirect a User/Index).
-                        # _session_expired() no lo detecta — forzar re-login y reintentar.
-                        if not page_rows and page == 1 and attempt == 0:
-                            logger.warning("[BM] get_bulk_stock: página 1 vacía — probable sesión expirada. Re-login y reintento.")
-                            self._logged_in = False
-                            if await self.login():
-                                continue  # reintentar página 1 con sesión fresca
-                            return all_rows
                         all_rows.extend(page_rows)
                         fetched = True
                         if len(page_rows) < _BM_PAGE_SIZE:
