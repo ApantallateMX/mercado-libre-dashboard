@@ -46,40 +46,34 @@
 {% endif %}
 
 <!-- KPI Filtros de margen — server-side, persiste en paginación -->
+{% set _base = '/partials/orders-table?sort=' ~ sort ~ '&limit=' ~ limit ~ '&offset=0' %}
 <div class="flex flex-wrap gap-3 mb-4">
     {% set _band_all_active = margin_band == "" %}
-    <button onclick="window.filterOrdersBand('')"
+    <button hx-get="{{ _base }}" hx-target="#orders-table" hx-swap="innerHTML"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-gray-400' if _band_all_active else 'border-gray-100 hover:border-gray-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-gray-700">{{ pl_count }}</div>
         <div class="text-[10px] text-gray-400 uppercase font-medium">Todas</div>
         <div class="text-[9px] text-gray-300">en esta página</div>
     </button>
-    <button onclick="window.filterOrdersBand('alto')"
+    <button hx-get="{{ _base ~ ('&margin_band=' ~ ('' if margin_band == 'alto' else 'alto')) }}" hx-target="#orders-table" hx-swap="innerHTML"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-green-400 bg-green-50' if margin_band == 'alto' else 'border-gray-100 hover:border-green-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-green-600">{{ pl_alto }}</div>
         <div class="text-[10px] text-green-600 uppercase font-medium">≥ 100% Retail</div>
         <div class="text-[9px] text-gray-300">Recuperamos todo el retail o más</div>
     </button>
-    <button onclick="window.filterOrdersBand('medio')"
+    <button hx-get="{{ _base ~ ('&margin_band=' ~ ('' if margin_band == 'medio' else 'medio')) }}" hx-target="#orders-table" hx-swap="innerHTML"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-yellow-400 bg-yellow-50' if margin_band == 'medio' else 'border-gray-100 hover:border-yellow-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-yellow-600">{{ pl_medio }}</div>
         <div class="text-[10px] text-yellow-600 uppercase font-medium">80–99% Retail</div>
         <div class="text-[9px] text-gray-300">Recuperamos 80–99% del retail</div>
     </button>
-    <button onclick="window.filterOrdersBand('bajo')"
+    <button hx-get="{{ _base ~ ('&margin_band=' ~ ('' if margin_band == 'bajo' else 'bajo')) }}" hx-target="#orders-table" hx-swap="innerHTML"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-red-400 bg-red-50' if margin_band == 'bajo' else 'border-gray-100 hover:border-red-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-red-600">{{ pl_bajo }}</div>
         <div class="text-[10px] text-red-600 uppercase font-medium">< 80% Retail</div>
         <div class="text-[9px] text-gray-300">Recuperamos menos del 80% del retail</div>
     </button>
 </div>
-
-<script>
-window.filterOrdersBand = function(band) {
-    var newBand = (band === '{{ margin_band }}') ? '' : band;
-    htmx.ajax('GET', '/partials/orders-table?sort={{ sort }}&limit={{ limit }}&offset=0&margin_band=' + newBand, {target: '#orders-table', swap: 'innerHTML'});
-};
-</script>
 
 <!-- Mobile cards -->
 <div class="md:hidden space-y-2">
