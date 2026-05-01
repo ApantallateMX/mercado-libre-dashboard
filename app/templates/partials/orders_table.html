@@ -57,20 +57,20 @@
     <button onclick="window.filterOrdersBand('alto')"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-green-400 bg-green-50' if margin_band == 'alto' else 'border-gray-100 hover:border-green-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-green-600">{{ pl_alto }}</div>
-        <div class="text-[10px] text-green-600 uppercase font-medium">Margen Alto</div>
-        <div class="text-[9px] text-gray-300">≥ 120% retail / ≥ 65% precio</div>
+        <div class="text-[10px] text-green-600 uppercase font-medium">≥ 100% Retail</div>
+        <div class="text-[9px] text-gray-300">Recuperamos todo el retail o más</div>
     </button>
     <button onclick="window.filterOrdersBand('medio')"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-yellow-400 bg-yellow-50' if margin_band == 'medio' else 'border-gray-100 hover:border-yellow-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-yellow-600">{{ pl_medio }}</div>
-        <div class="text-[10px] text-yellow-600 uppercase font-medium">Margen Medio</div>
-        <div class="text-[9px] text-gray-300">100–119% retail / 55–64%</div>
+        <div class="text-[10px] text-yellow-600 uppercase font-medium">80–99% Retail</div>
+        <div class="text-[9px] text-gray-300">Recuperamos 80–99% del retail</div>
     </button>
     <button onclick="window.filterOrdersBand('bajo')"
         class="flex-1 min-w-[100px] bg-white rounded-xl border-2 {{ 'border-red-400 bg-red-50' if margin_band == 'bajo' else 'border-gray-100 hover:border-red-300' }} shadow-sm p-3 text-center cursor-pointer transition-all">
         <div class="text-base font-bold text-red-600">{{ pl_bajo }}</div>
-        <div class="text-[10px] text-red-600 uppercase font-medium">Margen Bajo</div>
-        <div class="text-[9px] text-gray-300">< 100% retail / < 55%</div>
+        <div class="text-[10px] text-red-600 uppercase font-medium">< 80% Retail</div>
+        <div class="text-[9px] text-gray-300">Recuperamos menos del 80% del retail</div>
     </button>
 </div>
 
@@ -159,7 +159,8 @@ window.filterOrdersBand = function(band) {
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Precio</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cargos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300 text-green-700">Total</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">Ganancia / % Neto</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-blue-500 uppercase border-b-2 border-gray-300">% vs Retail</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase border-b-2 border-gray-300">P. Sugerido</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Estado</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
         </tr>
@@ -207,20 +208,19 @@ window.filterOrdersBand = function(band) {
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold">
-                {% if order.ganancia_est is not none %}
-                    <span class="{% if order.ganancia_est >= 0 %}text-blue-700{% else %}text-red-600{% endif %}">
-                        ${{ "{:,.0f}".format(order.ganancia_est) }}
-                    </span>
-                    {% if order.margen_est is not none %}
-                    <div class="text-[9px] font-normal text-gray-400">{{ order.margen_est }}% margen</div>
-                    {% endif %}
+                <span class="{% if order.net_pct >= 120 %}text-green-600{% elif order.net_pct >= 100 %}text-blue-600{% elif order.net_pct >= 80 %}text-yellow-600{% elif order.net_pct >= 60 %}text-orange-500{% else %}text-red-600{% endif %}">
+                    {{ order.net_pct }}%
+                </span>
+                <div class="text-[9px] font-normal text-gray-400">
+                    {% if order.order_items and order.order_items[0].retail_ref > 0 %}vs retail{% else %}del precio{% endif %}
+                </div>
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-500">
+                {% if order.precio_sugerido %}
+                <span class="font-semibold text-gray-700">${{ "{:,.0f}".format(order.precio_sugerido) }}</span>
+                <div class="text-[9px] text-gray-400">para 100% retail</div>
                 {% else %}
-                    <span class="{% if order.net_pct >= 120 %}text-green-600{% elif order.net_pct >= 100 %}text-indigo-600{% else %}text-red-500{% endif %}">
-                        {{ order.net_pct }}%
-                    </span>
-                    <div class="text-[9px] font-normal text-gray-400">
-                        {% if order.order_items and order.order_items[0].retail_ref > 0 %}vs retail{% else %}del precio{% endif %}
-                    </div>
+                <span class="text-gray-300">—</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-center">

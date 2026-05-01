@@ -2112,28 +2112,22 @@ async def orders_table_partial(
             # Total cargos (todos los descuentos en una sola cifra)
             total_cargos = round(total_fees + ship_cost + taxes + partner_commission, 2)
 
-            # Banda de margen para KPI filter
-            # Si hay retail_ref → % sobre costo de adquisición (más útil)
-            # Umbral: ≥120% alto, 100-119% medio, <100% bajo
-            # Sin retail_ref → fallback a % del precio de venta (65/55)
+            # % vs Retail: cuánto recuperamos del retail BM después de todos los cargos
+            # Bandas: ≥100% alto, 80-99% medio, <80% bajo
             _first_retail = items_detail[0].retail_ref if items_detail else 0
             if _first_retail > 0 and net_final > 0:
                 _net_pct = round(net_final / _first_retail * 100, 1)
-                _margin_band = "alto" if _net_pct >= 120 else ("medio" if _net_pct >= 100 else "bajo")
+                _margin_band = "alto" if _net_pct >= 100 else ("medio" if _net_pct >= 80 else "bajo")
+                # Precio sugerido: precio de venta necesario para recuperar exactamente el retail
+                _net_ratio = net_final / total if total > 0 else 0
+                _precio_sugerido = round(_first_retail / _net_ratio) if _net_ratio > 0 else None
             else:
                 _net_pct = round(net_final / total * 100, 1) if total > 0 else 0.0
                 _margin_band = "alto" if _net_pct >= 65 else ("medio" if _net_pct >= 55 else "bajo")
+                _precio_sugerido = None
 
-            # GAP 6: profit estimado = neto_final - costo_bm (si disponible)
-            total_cost_est = 0.0
-            for oi in items:
-                oi_sku = (oi.get("item", {}).get("seller_sku")
-                          or oi.get("item", {}).get("seller_custom_field") or "")
-                oi_sku_base = normalize_to_bm_sku(oi_sku) if oi_sku else ""
-                cost_unit = _sku_cost_map.get(oi_sku_base, 0) or 0
-                total_cost_est += cost_unit * oi.get("quantity", 1)
-            ganancia_est = round(net_final - total_cost_est, 2) if total_cost_est > 0 else None
-            margen_est = round(ganancia_est / total * 100, 1) if (ganancia_est is not None and total > 0) else None
+            ganancia_est = None
+            margen_est = None
 
             enriched.append(SimpleNamespace(
                 id=o.get("id", "-"),
@@ -2152,6 +2146,7 @@ async def orders_table_partial(
                 total_cargos=total_cargos,
                 net_pct=_net_pct,
                 margin_band=_margin_band,
+                precio_sugerido=_precio_sugerido,
                 ganancia_est=ganancia_est,
                 margen_est=margen_est,
                 underpriced_count=underpriced_count,
