@@ -325,6 +325,15 @@ class BinManagerClient:
                     if r.status_code == 200:
                         data = r.json()
                         page_rows = data if isinstance(data, list) else []
+                        # Página 1 vacía en primer intento → sesión posiblemente expirada de
+                        # forma silenciosa (BM retorna 200+[] en vez de redirect a User/Index).
+                        # _session_expired() no lo detecta — forzar re-login y reintentar.
+                        if not page_rows and page == 1 and attempt == 0:
+                            logger.warning("[BM] get_bulk_stock: página 1 vacía — probable sesión expirada. Re-login y reintento.")
+                            self._logged_in = False
+                            if await self.login():
+                                continue  # reintentar página 1 con sesión fresca
+                            return all_rows
                         all_rows.extend(page_rows)
                         fetched = True
                         if len(page_rows) < _BM_PAGE_SIZE:
