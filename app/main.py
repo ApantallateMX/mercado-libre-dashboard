@@ -10534,6 +10534,67 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
     return JSONResponse({"sku": sku_up, "results": results})
 
 
+@app.get("/api/diag/bm-bulk-test")
+async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = ""):
+    """Diagnóstico: prueba el endpoint bulk de BM con distintas variantes de payload.
+    Muestra status HTTP, tipo de respuesta, cantidad de filas y primera fila.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_bt
+    bm = await _gsb_bt()
+    if not bm._logged_in:
+        await bm.login()
+
+    results = {}
+    c = bm._client()
+    search_val = search if search else None  # None = null en JSON
+
+    for label, payload in [
+        ("SEARCH=null,LOC=47,62,68,C=GRA_GRB_GRC_NEW", {
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68", "CONDITION": "GRA,GRB,GRC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": page_size, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True, "Jsonfilter": "[]",
+        }),
+        ("SEARCH=empty,LOC=47,62,68,C=GRA_GRB_GRC_NEW", {
+            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68", "CONDITION": "GRA,GRB,GRC,NEW",
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": page_size, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True, "Jsonfilter": "[]",
+        }),
+        ("SEARCH=null,NO_LOC,NO_COND", {
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+            "LOCATIONID": None, "CONDITION": None,
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": page_size, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True, "Jsonfilter": "[]",
+        }),
+        ("SEARCH=null,LOC=47,62,68,NO_COND", {
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+            "LOCATIONID": "47,62,68", "CONDITION": None,
+            "FORINVENTORY": 0, "BUSCADOR": False,
+            "RECORDSPAGE": page_size, "NUMBERPAGE": 1,
+            "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True, "Jsonfilter": "[]",
+        }),
+    ]:
+        try:
+            r = await c.post(
+                f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                json=payload, headers=_AJAX_HEADERS, timeout=30,
+            )
+            raw = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
+            n = len(raw) if isinstance(raw, list) else 0
+            first = raw[0] if isinstance(raw, list) and raw else (raw if not isinstance(raw, list) else None)
+            results[label] = {"status": r.status_code, "url": str(r.url), "rows": n, "first": first}
+        except Exception as e:
+            results[label] = {"error": str(e)}
+
+    return JSONResponse({"logged_in": bm._logged_in, "page_size_tested": page_size, "results": results})
+
+
 @app.get("/api/debug/item-stock")
 async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
