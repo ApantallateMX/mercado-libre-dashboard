@@ -275,11 +275,11 @@ class BinManagerClient:
         if not self._logged_in:
             if not await self.login():
                 return []
-        _BM_PAGE_SIZE = 500   # límite impuesto por BM post-mantenimiento
-        _BM_MAX_PAGES = 20    # tope de seguridad (20×500 = 10,000 SKUs máx)
+        _BM_PAGE_SIZE = 200   # BM lowered limit again — 500 returns [] silently
+        _BM_MAX_PAGES = 50    # tope de seguridad (50×200 = 10,000 SKUs máx)
         url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
         base_payload = {
-            "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
+            "COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
             "LOCATIONID": "47,62,68",
             "CONDITION": conditions,
             "FORINVENTORY": 0, "BUSCADOR": False,
