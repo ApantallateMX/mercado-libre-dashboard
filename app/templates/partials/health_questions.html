@@ -72,7 +72,7 @@
         </div>
         {% endif %}
 
-        {% if q.status == 'UNANSWERED' and q.item_id and q.buyer_id %}
+        {% if q.status == 'UNANSWERED' and q.item_id and q.buyer_id and q.buyer_question_count > 0 %}
         <!-- Conversación del comprador — carga bajo demanda -->
         <div class="mb-2" id="thread-wrap-{{ q.id }}">
             <button onclick="loadQuestionThread('{{ q.id }}', '{{ q.item_id }}', '{{ q.buyer_id }}')"
