@@ -5790,6 +5790,31 @@ async def health_questions_partial(
         await client.close()
 
 
+@app.get("/partials/question-thread", response_class=HTMLResponse)
+async def question_thread_partial(
+    request: Request,
+    item_id: str = Query(...),
+    buyer_id: str = Query(...),
+    current_qid: str = Query(""),
+):
+    """Carga el hilo completo de preguntas de un comprador sobre un producto específico."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse('<p class="text-xs text-red-400 py-1">No autenticado</p>')
+    try:
+        questions = await client.get_buyer_questions(buyer_id=buyer_id, item_id=item_id)
+        # Cronológico: más antiguas primero
+        questions.sort(key=lambda q: q.get("date_created", ""))
+        return templates.TemplateResponse(request, "partials/question_thread.html", {
+            "questions": questions,
+            "current_qid": current_qid,
+        })
+    except Exception as e:
+        return HTMLResponse(f'<p class="text-xs text-red-400 py-1">Error cargando hilo: {e}</p>')
+    finally:
+        await client.close()
+
+
 @app.get("/partials/health-search", response_class=HTMLResponse)
 async def health_search_partial(
     request: Request,

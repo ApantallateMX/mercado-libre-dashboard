@@ -1,0 +1,31 @@
+{% if questions %}
+<div class="space-y-0.5">
+    {% for q in questions %}
+    {% set is_current = (q.id | string) == (current_qid | string) %}
+    <!-- Pregunta del comprador -->
+    <div class="flex justify-start">
+        <div class="max-w-[88%] {% if is_current %}bg-blue-50 border border-blue-200{% else %}bg-gray-100{% endif %} rounded-lg px-3 py-2 mb-1">
+            <div class="text-[9px] text-gray-400 mb-0.5">{{ (q.date_created or '')[:10] }}
+                {% if is_current %}<span class="ml-1 text-blue-500 font-semibold">← pregunta actual</span>{% endif %}
+            </div>
+            <p class="text-xs text-gray-800 leading-relaxed">{{ q.text }}</p>
+        </div>
+    </div>
+    <!-- Respuesta del vendedor -->
+    {% if q.answer %}
+    <div class="flex justify-end mb-2">
+        <div class="max-w-[88%] bg-green-50 border border-green-100 rounded-lg px-3 py-2">
+            <div class="text-[9px] text-green-500 mb-0.5">Tu respuesta · {{ (q.answer.date_created or '')[:10] }}</div>
+            <p class="text-xs text-green-800 leading-relaxed">{{ q.answer.text }}</p>
+        </div>
+    </div>
+    {% elif not is_current %}
+    <div class="flex justify-end mb-2 mr-1">
+        <span class="text-[9px] text-yellow-500 italic">sin respuesta</span>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="text-xs text-gray-400 py-2 text-center">No hay preguntas anteriores de este comprador en este producto.</p>
+{% endif %}
