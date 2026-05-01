@@ -10592,6 +10592,48 @@ async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = 
         except Exception as e:
             results[label] = {"error": str(e)}
 
+    # Test adicional: ConfColumns_Conditions_Excel — ver si tiene AvailableQTY
+    try:
+        r_cc = await c.post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
+            json={"COMPANYID": 1, "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True,
+                  "NEEDAVGCOST": True, "NEEDSALES": True},
+            headers=_AJAX_HEADERS, timeout=30,
+        )
+        raw_cc = r_cc.json() if r_cc.status_code == 200 else f"HTTP {r_cc.status_code}"
+        if isinstance(raw_cc, list) and raw_cc:
+            first_row = raw_cc[0]
+            results["ConfColumns_Conditions_Excel"] = {
+                "status": r_cc.status_code,
+                "rows": len(raw_cc),
+                "all_fields_in_row0": sorted(first_row.keys()),
+                "sample": {k: first_row.get(k) for k in
+                           ["SKU", "AvailableQTY", "TotalQty", "Reserve",
+                            "LastRetailPricePurchaseHistory", "AvgCostQTY"]},
+            }
+        else:
+            results["ConfColumns_Conditions_Excel"] = {"status": r_cc.status_code, "rows": 0, "raw": str(raw_cc)[:200]}
+    except Exception as e:
+        results["ConfColumns_Conditions_Excel"] = {"error": str(e)}
+
+    # Test FORINVENTORY=1 con SEARCH=null
+    try:
+        r_fi = await c.post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+            json={"COMPANYID": 1, "SEARCH": None, "CONCEPTID": 1,
+                  "LOCATIONID": "47,62,68", "CONDITION": None,
+                  "FORINVENTORY": 1, "BUSCADOR": False,
+                  "RECORDSPAGE": page_size, "NUMBERPAGE": 1,
+                  "NEEDAVGCOST": False, "NEEDRETAILPRICEPH": False, "Jsonfilter": "[]"},
+            headers=_AJAX_HEADERS, timeout=30,
+        )
+        raw_fi = r_fi.json() if r_fi.status_code == 200 else f"HTTP {r_fi.status_code}"
+        results["FORINVENTORY=1"] = {"status": r_fi.status_code,
+                                      "rows": len(raw_fi) if isinstance(raw_fi, list) else 0,
+                                      "first": raw_fi[0] if isinstance(raw_fi, list) and raw_fi else raw_fi}
+    except Exception as e:
+        results["FORINVENTORY=1"] = {"error": str(e)}
+
     return JSONResponse({"logged_in": bm._logged_in, "page_size_tested": page_size, "results": results})
 
 
