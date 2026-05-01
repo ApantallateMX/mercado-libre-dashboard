@@ -10402,12 +10402,15 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
         payload_c8 = {**_GS_BASE_PAYLOAD, "SEARCH": sku_up}
         r = await c.post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
                          json=payload_c8, headers=_AJAX_HEADERS, timeout=30)
+        raw_text_c8 = r.text[:500]
         raw_c8 = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
         results["conceptid8"] = {
             "status": r.status_code,
             "url": str(r.url),
-            "rows": len(raw_c8) if isinstance(raw_c8, list) else 0,
-            "raw_first": raw_c8[0] if isinstance(raw_c8, list) and raw_c8 else raw_c8,
+            "response_type": type(raw_c8).__name__,
+            "rows": len(raw_c8) if isinstance(raw_c8, list) else ("dict_keys: " + str(list(raw_c8.keys())[:5]) if isinstance(raw_c8, dict) else "N/A"),
+            "raw_preview": raw_text_c8,
+            "raw_first": raw_c8[0] if isinstance(raw_c8, list) and raw_c8 else (raw_c8 if isinstance(raw_c8, dict) else None),
         }
     except Exception as e:
         results["conceptid8"] = {"error": str(e)}
@@ -10439,12 +10442,15 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
         }
         r = await c.post(f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
                          json=payload_c1, headers=_AJAX_HEADERS, timeout=30)
+        raw_text_c1 = r.text[:500]
         raw_c1 = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
         results["conceptid1_loc47"] = {
             "status": r.status_code,
             "url": str(r.url),
-            "rows": len(raw_c1) if isinstance(raw_c1, list) else 0,
-            "raw_first": raw_c1[0] if isinstance(raw_c1, list) and raw_c1 else raw_c1,
+            "response_type": type(raw_c1).__name__,
+            "rows": len(raw_c1) if isinstance(raw_c1, list) else ("dict_keys: " + str(list(raw_c1.keys())[:5]) if isinstance(raw_c1, dict) else "N/A"),
+            "raw_preview": raw_text_c1,
+            "raw_first": raw_c1[0] if isinstance(raw_c1, list) and raw_c1 else (raw_c1 if isinstance(raw_c1, dict) else None),
         }
     except Exception as e:
         results["conceptid1_loc47"] = {"error": str(e)}
@@ -10585,10 +10591,18 @@ async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = 
                 f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
                 json=payload, headers=_AJAX_HEADERS, timeout=30,
             )
+            raw_text = r.text[:600]
             raw = r.json() if r.status_code == 200 else f"HTTP {r.status_code}"
             n = len(raw) if isinstance(raw, list) else 0
             first = raw[0] if isinstance(raw, list) and raw else (raw if not isinstance(raw, list) else None)
-            results[label] = {"status": r.status_code, "url": str(r.url), "rows": n, "first": first}
+            results[label] = {
+                "status": r.status_code,
+                "url": str(r.url),
+                "response_type": type(raw).__name__,
+                "rows": n,
+                "raw_preview": raw_text,
+                "first": first,
+            }
         except Exception as e:
             results[label] = {"error": str(e)}
 
