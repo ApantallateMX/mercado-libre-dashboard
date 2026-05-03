@@ -631,6 +631,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     first_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
                     return RedirectResponse(first_url, status_code=302)
         request.state.dashboard_user = du
+
+        # ── Protección solo lectura ───────────────────────────────────────────
+        # El rol "viewer" puede ver y filtrar, pero no modificar nada.
+        _VIEWER_WRITE_EXEMPT = {
+            "/auth/logout", "/auth/switch-account", "/auth/switch-amazon",
+            "/login/verify", "/set-password",
+        }
+        if (du.get("role") == "viewer"
+                and request.method in ("POST", "PUT", "PATCH", "DELETE")
+                and path not in _VIEWER_WRITE_EXEMPT):
+            from fastapi.responses import JSONResponse as _jr
+            return _jr(
+                {"error": "Cuenta de solo lectura — sin permisos para realizar esta acción"},
+                status_code=403,
+            )
+
         return await call_next(request)
 
 

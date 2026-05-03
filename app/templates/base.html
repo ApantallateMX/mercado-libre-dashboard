@@ -11,6 +11,8 @@
     <style>
         [hx-indicator] .htmx-indicator { display: none; }
         [hx-indicator].htmx-request .htmx-indicator { display: inline; }
+        /* ── Solo lectura: ocultar acciones de escritura ── */
+        body[data-role="viewer"] .write-action { display: none !important; }
         /* Mobile touch targets & prevent iOS zoom on focus */
         @media (max-width: 767px) {
             input, select, textarea, button { min-height: 44px; font-size: 16px; }
@@ -18,7 +20,7 @@
         }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gray-100 min-h-screen" data-role="{{ dashboard_user.role if dashboard_user else '' }}">
 
 {% if user %}
 
@@ -170,6 +172,11 @@
                 {% if dashboard_user %}
                     {% if dashboard_user.role == 'admin' %}
                     <a href="/usuarios" title="{{ dashboard_user.display_name or dashboard_user.username }}" class="text-xs font-bold bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 transition">admin</a>
+                    {% elif dashboard_user.role == 'viewer' %}
+                    <span class="text-xs font-semibold bg-gray-500 text-white px-2 py-1 rounded flex items-center gap-1" title="{{ dashboard_user.display_name or dashboard_user.username }} — Solo lectura">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        Solo lectura
+                    </span>
                     {% else %}
                     <span class="text-xs font-semibold text-gray-400 px-2 py-1 rounded" style="background:#37475A" title="{{ dashboard_user.display_name or dashboard_user.username }}">{{ dashboard_user.role }}</span>
                     {% endif %}
@@ -408,6 +415,7 @@
 (function() {
     var _bmCanUpdate = {{ 'true' if dashboard_user and dashboard_user.role in ('admin', 'editor') else 'false' }};
     window._bmCanUpdate = _bmCanUpdate;
+    window._isViewer = {{ 'true' if dashboard_user and dashboard_user.role == 'viewer' else 'false' }};
 
     function _updateBmDot(last_updated_s) {
         // El dot muestra antigüedad del último cache descargado por el admin,
@@ -619,6 +627,11 @@
                 {% if dashboard_user %}
                     {% if dashboard_user.role == 'admin' %}
                     <a href="/usuarios" title="{{ dashboard_user.display_name or dashboard_user.username }}" class="text-xs font-bold bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 transition">admin</a>
+                    {% elif dashboard_user.role == 'viewer' %}
+                    <span class="text-xs font-semibold bg-gray-500 text-white px-2 py-1 rounded flex items-center gap-1" title="{{ dashboard_user.display_name or dashboard_user.username }} — Solo lectura">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                        Solo lectura
+                    </span>
                     {% else %}
                     <span class="text-xs font-semibold text-gray-600 bg-gray-200 px-2 py-1 rounded" title="{{ dashboard_user.display_name or dashboard_user.username }}">{{ dashboard_user.role }}</span>
                     {% endif %}
@@ -931,5 +944,91 @@ window._clearBmCache = function() {
     .catch(function() { btn.textContent = '↺ BM'; btn.disabled = false; });
 };
 </script>
+
+{% if dashboard_user and dashboard_user.role == 'viewer' %}
+<script>
+/* ── Auto-ocultar botones de escritura para viewer ── */
+(function hideWriteButtons() {
+    var WRITE_PATTERNS = [
+        'syncRestockItem','syncFullItem','syncVariationStocks','bulkSyncRestock',
+        'answerQuestion','deleteQuestion','respondClaim','sendMessage',
+        'activatePromotion','deactivatePromotion','reactivateItem',
+        'updatePrice','updateStock','updateTitle','updateDescription',
+        'triggerSync','triggerPrewarm','publishItem','pauseItem',
+        'bulkAction','stockAction','fulfillmentAction',
+        'saveDistribution','saveSettings','saveRule',
+        'assignCampaign','createCampaign','deleteListing',
+        'forcePriceUpdate','nocturnal','autoResync',
+        'flagReturn','resolveReturn',
+    ];
+    function processNode(root) {
+        var btns = root.querySelectorAll ? root.querySelectorAll('button, a[onclick], input[type="submit"], input[type="button"]') : [];
+        btns.forEach(function(el) {
+            var oc = el.getAttribute('onclick') || '';
+            var cls = el.className || '';
+            if (WRITE_PATTERNS.some(function(p) { return oc.indexOf(p) !== -1; }) || cls.indexOf('write-action') !== -1) {
+                el.style.display = 'none';
+            }
+        });
+        /* Ocultar forms de submit que envíen writes excepto logout/switch */
+        var forms = root.querySelectorAll ? root.querySelectorAll('form[method="post"], form[method="POST"]') : [];
+        forms.forEach(function(form) {
+            var action = (form.getAttribute('action') || '').toLowerCase();
+            var exempt = ['/auth/logout','/auth/switch','/login','/set-password'];
+            if (!exempt.some(function(e) { return action.indexOf(e) !== -1; })) {
+                form.style.display = 'none';
+            }
+        });
+    }
+    /* Procesar al cargar */
+    document.addEventListener('DOMContentLoaded', function() { processNode(document.body); });
+    /* Procesar contenido swapeado por HTMX */
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail && e.detail.target) processNode(e.detail.target);
+    });
+})();
+
+/* ── Interceptor HTMX: mostrar toast cuando un viewer intenta una acción de escritura ── */
+document.body.addEventListener('htmx:responseError', function(evt) {
+    if (evt.detail.xhr && evt.detail.xhr.status === 403) {
+        var msg = 'Sin permisos — cuenta de solo lectura';
+        try { msg = JSON.parse(evt.detail.xhr.responseText).error || msg; } catch(e) {}
+        _showReadonlyToast(msg);
+        evt.preventDefault();
+    }
+});
+/* Para fetch() y onclick directos */
+window._showReadonlyToast = function(msg) {
+    var t = document.getElementById('_readonly-toast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = '_readonly-toast';
+        t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;background:#374151;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;display:flex;align-items:center;gap:8px;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+        t.innerHTML = '<svg style="width:16px;height:16px;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg><span id="_readonly-toast-msg"></span>';
+        document.body.appendChild(t);
+    }
+    document.getElementById('_readonly-toast-msg').textContent = msg || 'Cuenta de solo lectura';
+    t.style.display = 'flex';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function() { t.style.display = 'none'; }, 3500);
+};
+/* Interceptar fetch global */
+(function() {
+    var _origFetch = window.fetch;
+    window.fetch = function(url, opts) {
+        return _origFetch.apply(this, arguments).then(function(res) {
+            if (res.status === 403) {
+                res.clone().json().then(function(d) {
+                    window._showReadonlyToast(d.error);
+                }).catch(function() {
+                    window._showReadonlyToast('Cuenta de solo lectura');
+                });
+            }
+            return res;
+        });
+    };
+})();
+</script>
+{% endif %}
 </body>
 </html>
