@@ -2580,6 +2580,9 @@ _ORDERS_CACHE_TTL = 900     # 15 min
 # Cache RetailPrice PH por SKU base — TTL 30 min (cambia lentamente)
 _bm_retail_ph_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_usd)
 _BM_RETAIL_PH_TTL = 7 * 24 * 3600  # 7 días — fuente real es DB (sync semanal)
+# Catálogo rico en memoria: sku -> {brand, model, title, category, qty, retail_ph}
+# Poblado al arrancar y al terminar el sync semanal. Fuente primaria para /bm/unlaunched.
+_bm_catalog_cache: dict[str, dict] = {}
 
 
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
@@ -2625,7 +2628,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
         _total_rows = len(data)
         logger.info(f"[CATALOG-SYNC] ConfColumns retornó {_total_rows} filas")
 
-        # Parsear — campo clave: LastRetailPricePurchaseHistory (97% cobertura)
+        # Parsear — campos: LastRetailPricePurchaseHistory, Category, QTY + info display
         rows = []
         for _row in data:
             _sku = normalize_to_bm_sku((_row.get("SKU") or "").upper().strip())
@@ -2638,22 +2641,34 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "brand":     _row.get("Brand") or "",
                 "model":     _row.get("Model") or "",
                 "title":     _row.get("Title") or "",
+                "category":  _row.get("Category") or "",
+                "qty":       int(_row.get("QTY") or 0),
             })
 
         # Guardar en DB
         saved = await token_store.upsert_bm_catalog_batch(rows)
         logger.info(f"[CATALOG-SYNC] {saved}/{_total_rows} SKUs guardados en DB")
 
-        # Actualizar _bm_retail_ph_cache en memoria
+        # Actualizar _bm_retail_ph_cache y _bm_catalog_cache en memoria
         _now = _time.time()
         for _row in rows:
             if _row["retail_ph"] > 0:
                 _bm_retail_ph_cache[_row["sku"]] = (_now, _row["retail_ph"])
+            _bm_catalog_cache[_row["sku"]] = {
+                "brand":     _row["brand"],
+                "model":     _row["model"],
+                "title":     _row["title"],
+                "category":  _row["category"],
+                "qty":       _row["qty"],
+                "retail_ph": _row["retail_ph"],
+            }
 
-        with_price = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
+        with_price  = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
+        with_cat    = sum(1 for _r in rows if _r.get("category"))
+        with_stock  = sum(1 for _r in rows if _r.get("qty", 0) > 0)
         elapsed = round(_time.time() - _t0, 1)
-        logger.info(f"[CATALOG-SYNC] Completado: {with_price}/{_total_rows} con LRPPH. "
-                    f"Cache: {len(_bm_retail_ph_cache)} SKUs. Elapsed: {elapsed}s")
+        logger.info(f"[CATALOG-SYNC] Completado: {with_price}/{_total_rows} con LRPPH, "
+                    f"{with_cat} con categoría, {with_stock} con stock. Elapsed: {elapsed}s")
         _catalog_sync_history.append({
             "ts": _time.time(), "skus_total": _total_rows,
             "skus_saved": saved, "with_price": with_price,
@@ -2688,19 +2703,30 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
 
 
 async def _load_catalog_from_db() -> int:
-    """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache en memoria.
-    Así VS REF% funciona desde el primer request sin esperar el prewarm semanal.
+    """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache y _bm_catalog_cache.
+    Así VS REF% y /bm/unlaunched funcionan desde el primer request sin esperar el prewarm semanal.
     """
-    global _bm_retail_ph_cache
+    global _bm_retail_ph_cache, _bm_catalog_cache
     try:
         rows = await token_store.get_bm_catalog_all()
         now = _time.time()
         loaded = 0
         for row in rows:
-            if row.get("retail_ph") and row["retail_ph"] > 0:
-                _bm_retail_ph_cache[row["sku"]] = (now, float(row["retail_ph"]))
+            sku = row["sku"]
+            rph = float(row.get("retail_ph") or 0)
+            if rph > 0:
+                _bm_retail_ph_cache[sku] = (now, rph)
                 loaded += 1
-        logger.info(f"[CATALOG-LOAD] {loaded} SKUs con RetailPH cargados de DB al arrancar")
+            _bm_catalog_cache[sku] = {
+                "brand":     row.get("brand") or "",
+                "model":     row.get("model") or "",
+                "title":     row.get("title") or "",
+                "category":  row.get("category") or "",
+                "qty":       int(row.get("qty") or 0),
+                "retail_ph": rph,
+            }
+        logger.info(f"[CATALOG-LOAD] {len(_bm_catalog_cache)} SKUs cargados de DB al arrancar "
+                    f"({loaded} con RetailPH)")
         return loaded
     except Exception as _e:
         logger.warning(f"[CATALOG-LOAD] Error cargando catálogo de DB: {_e}")
@@ -2985,7 +3011,7 @@ _bm_bulk_all_cache: tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/
 _BM_BULK_KEEP_FIELDS = frozenset({
     "SKU", "AvailableQTY", "Reserve", "TotalQty",
     "RetailPrice", "LastRetailPricePurchaseHistory", "AvgCostQTY",
-    "Brand", "Model", "Title",
+    "Brand", "Model", "Title", "CategoryName",
 })
 
 def _slim_bulk_rows(rows: list) -> list:
@@ -13059,20 +13085,55 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM inventory — usar _bm_bulk_gr_cache (ya descargado por prewarm vía semáforo).
-    #    Cero llamadas extra a BM. Solo fallback al cliente compartido si cache vacío.
+    # 2. BM inventory — fuente primaria: _bm_catalog_cache (sync semanal, category + qty).
+    #    Enriquecimiento: _bm_bulk_gr_cache (prewarm 15 min) para AvailableQTY actualizado.
+    #    Cero llamadas directas a BM.
     now = _time.time()
     # Re-procesar si: refresh forzado, cache unlaunched vencido, o bulk cache más reciente
     _bulk_newer = (_bm_bulk_gr_cache and (not _bm_unlaunched_cache or _bm_bulk_gr_cache[0] > _bm_unlaunched_cache[0]))
     if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL or _bulk_newer:
-        if _bm_bulk_gr_cache:
+        if _bm_catalog_cache:
+            # Construir lookup de stock fresco desde bulk cache (prewarm 15 min)
+            _bulk_stock_map: dict[str, dict] = {}
+            _bulk_src_rows = None
+            if _bm_bulk_gr_cache:
+                _bulk_src_rows = _bm_bulk_gr_cache[1]
+            elif _bm_bulk_all_cache:
+                _bulk_src_rows = _bm_bulk_all_cache[1]
+            if _bulk_src_rows:
+                for _r in _bulk_src_rows:
+                    _rs = normalize_to_bm_sku((_r.get("SKU") or "").strip())
+                    if _rs:
+                        _bulk_stock_map[_rs] = _r
+            logger.info(f"[UNLAUNCHED] Catálogo {len(_bm_catalog_cache)} SKUs "
+                        f"+ bulk enrich {len(_bulk_stock_map)} SKUs")
+            # Armar bm_raw desde catálogo enriquecido con stock fresco
+            bm_raw = []
+            for _cat_sku, _cat_info in _bm_catalog_cache.items():
+                _bulk = _bulk_stock_map.get(_cat_sku, {})
+                # AvailableQTY: del prewarm si disponible, si no usar QTY del catálogo
+                _avail = int(_bulk.get("AvailableQTY") or 0) if _bulk else _cat_info.get("qty", 0)
+                bm_raw.append({
+                    "SKU":      _cat_sku,
+                    "Brand":    _cat_info["brand"],
+                    "Model":    _cat_info["model"],
+                    "Title":    _cat_info["title"],
+                    # CategoryName: del bulk (más preciso) o del catálogo
+                    "CategoryName": _bulk.get("CategoryName") or _cat_info.get("category") or "",
+                    "AvailableQTY": _avail,
+                    "Reserve":      int(_bulk.get("Reserve") or 0),
+                    "TotalQty":     int(_bulk.get("TotalQty") or 0) if _bulk else _cat_info.get("qty", 0),
+                    "LastRetailPricePurchaseHistory":
+                        float(_bulk.get("LastRetailPricePurchaseHistory") or 0) or _cat_info.get("retail_ph", 0),
+                })
+        elif _bm_bulk_gr_cache:
             bm_raw = _bm_bulk_gr_cache[1]
-            logger.info(f"[UNLAUNCHED] Usando bulk cache ({len(bm_raw)} filas, {round(now - _bm_bulk_gr_cache[0])}s de antigüedad)")
+            logger.info(f"[UNLAUNCHED] Sin catálogo — usando bulk GR cache ({len(bm_raw)} filas)")
         elif _bm_bulk_all_cache:
             bm_raw = _bm_bulk_all_cache[1]
         else:
-            # Cache vacío (primer arranque) — fallback al cliente compartido (usa semáforo)
-            logger.info("[UNLAUNCHED] Cache vacío — fallback a get_bulk_stock() compartido")
+            # Último recurso: catálogo y bulk vacíos (deploy fresco sin sync previo)
+            logger.info("[UNLAUNCHED] Sin catálogo ni bulk — fallback a get_bulk_stock() compartido")
             bm_client = await get_shared_bm()
             bm_raw = await bm_client.get_bulk_stock()
         # Deduplicar por BM base SKU + armar lista de oportunidades
@@ -13099,7 +13160,7 @@ async def bm_launch_opportunities(
                 "avail":    int(item.get("AvailableQTY") or 0),
                 "reserve":  int(item.get("Reserve") or 0),
                 "total":    int(item.get("TotalQty") or 0),
-                "cost_usd": retail,   # costo = retail BM (precio de adquisición)
+                "cost_usd": retail,
                 "retail":   retail,
             })
         all_items.sort(key=lambda x: (-x["avail"], x["category"], x["bm_sku"]))
