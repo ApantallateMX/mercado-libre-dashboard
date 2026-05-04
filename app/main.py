@@ -2628,7 +2628,8 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
         _total_rows = len(data)
         logger.info(f"[CATALOG-SYNC] ConfColumns retornó {_total_rows} filas")
 
-        # Parsear — campos: LastRetailPricePurchaseHistory, Category, QTY + info display
+        # Parsear — guardar todo lo que BM retorna sin filtrar
+        import json as _json
         rows = []
         for _row in data:
             _sku = normalize_to_bm_sku((_row.get("SKU") or "").upper().strip())
@@ -2643,6 +2644,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "title":     _row.get("Title") or "",
                 "category":  _row.get("Category") or "",
                 "qty":       int(_row.get("QTY") or 0),
+                "raw_data":  _json.dumps(_row),   # row completo: UPC, Size, Description, condiciones, etc.
             })
 
         # Guardar en DB
@@ -2661,6 +2663,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "category":  _row["category"],
                 "qty":       _row["qty"],
                 "retail_ph": _row["retail_ph"],
+                "raw":       _json.loads(_row["raw_data"]),   # dict completo accesible en memoria
             }
 
         with_price  = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
@@ -2706,6 +2709,7 @@ async def _load_catalog_from_db() -> int:
     """Al arrancar: carga bm_product_catalog de DB a _bm_retail_ph_cache y _bm_catalog_cache.
     Así VS REF% y /bm/unlaunched funcionan desde el primer request sin esperar el prewarm semanal.
     """
+    import json as _json
     global _bm_retail_ph_cache, _bm_catalog_cache
     try:
         rows = await token_store.get_bm_catalog_all()
@@ -2717,6 +2721,12 @@ async def _load_catalog_from_db() -> int:
             if rph > 0:
                 _bm_retail_ph_cache[sku] = (now, rph)
                 loaded += 1
+            # Parsear raw_data si existe (filas antiguas sin raw_data tendrán '{}')
+            _raw_str = row.get("raw_data") or "{}"
+            try:
+                _raw_dict = _json.loads(_raw_str) if _raw_str and _raw_str != "{}" else {}
+            except Exception:
+                _raw_dict = {}
             _bm_catalog_cache[sku] = {
                 "brand":     row.get("brand") or "",
                 "model":     row.get("model") or "",
@@ -2724,6 +2734,7 @@ async def _load_catalog_from_db() -> int:
                 "category":  row.get("category") or "",
                 "qty":       int(row.get("qty") or 0),
                 "retail_ph": rph,
+                "raw":       _raw_dict,
             }
         logger.info(f"[CATALOG-LOAD] {len(_bm_catalog_cache)} SKUs cargados de DB al arrancar "
                     f"({loaded} con RetailPH)")
