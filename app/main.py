@@ -3033,12 +3033,14 @@ async def _check_bm_health():
     try:
         from app.services.binmanager_client import get_shared_bm as _get_shared_bm_health
         _bm_cli_health = await _get_shared_bm_health()
+        # Usar bulk query (5 filas, sin filtro SKU) — las queries individuales
+        # por SKU pueden ser lentas mientras el bulk endpoint responde rápido.
         _result = await asyncio.wait_for(
-            _bm_cli_health.get_stock_with_reserve("SNTV001764"),
+            _bm_cli_health.get_global_inventory(page=1, per_page=5),
             timeout=20.0,
         )
         elapsed_ms = round((_time.time() - t0) * 1000)
-        ok = True
+        ok = isinstance(_result, list) and len(_result) > 0
     except asyncio.TimeoutError:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False
