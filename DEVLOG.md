@@ -7,6 +7,15 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-01 — OPERACION: Cuenta BM cambiada a Claude.Jovan (cuenta de servicio dedicada)
+
+### Cambio
+- `BM_USER=Claude.Jovan@mitechnologiesinc.com`, `BM_PASS=claude123`
+- Cuenta creada por Jovan específicamente para el dashboard — libera jovan.rodriguez para uso personal
+- Railway env vars + defaults en `binmanager_client.py` actualizados
+
+---
+
 ## 2026-05-01 — FIX: BM claudio.suarez bloqueado → revertido a jovan.rodriguez
 
 ### Problema

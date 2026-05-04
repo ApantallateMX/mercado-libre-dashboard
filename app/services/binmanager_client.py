@@ -29,8 +29,8 @@ def _get_bm_sem() -> asyncio.Semaphore:
     return _BM_GLOBAL_SEM
 
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = os.getenv("BM_USER", "jovan.rodriguez@mitechnologiesinc.com")
-_BM_PASS = os.getenv("BM_PASS", "aquemamonxD!")
+_BM_USER = os.getenv("BM_USER", "Claude.Jovan@mitechnologiesinc.com")
+_BM_PASS = os.getenv("BM_PASS", "claude123")
 
 _AJAX_HEADERS = {
     "Content-Type": "application/json",
