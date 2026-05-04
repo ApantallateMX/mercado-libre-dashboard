@@ -457,15 +457,39 @@ async def lifespan(app: FastAPI):
             _prewarm_ok = False
             # Precalentar todas las cuentas — la deduplicación por normalize_to_bm_sku
             # garantiza que SKUs repetidos entre cuentas usen el cache existente.
+            # log_sync=False: cada cuenta NO escribe su propio log; el ciclo escribe 1 solo.
+            _cycle_start = _time.time()
             try:
                 accounts = await token_store.get_all_tokens()
                 for acc in accounts:
                     uid = acc.get("user_id", "")
                     if uid:
-                        await _prewarm_caches(user_id=uid)
+                        await _prewarm_caches(user_id=uid, log_sync=False)
                         await asyncio.sleep(1)
                 _prewarm_ok = True
                 _auto_fail_streak = 0
+                # Escribir UN SOLO log entry por ciclo completo
+                try:
+                    _cycle_elapsed  = round(_time.time() - _cycle_start, 1)
+                    _cycle_skus     = len(_bm_stock_cache)
+                    _cycle_retail   = len(_bm_retail_ph_cache)
+                    _prewarm_history.append({
+                        "ts":        _time.time(),
+                        "sku_count": _cycle_skus,
+                        "elapsed_s": _cycle_elapsed,
+                        "source":    "auto",
+                        "retail_ph": _cycle_retail,
+                    })
+                    if len(_prewarm_history) > 20:
+                        _prewarm_history.pop(0)
+                    await token_store.log_bm_sync_event(
+                        sku_count=_cycle_skus,
+                        elapsed_s=_cycle_elapsed,
+                        source="auto",
+                    )
+                    logger.info(f"[AUTO-PREWARM] Ciclo completo: {_cycle_skus} SKUs en {_cycle_elapsed}s")
+                except Exception as _log_exc:
+                    logger.warning(f"[AUTO-PREWARM] Error escribiendo log del ciclo: {_log_exc!r}")
             except Exception:
                 _auto_fail_streak += 1
                 logger.warning(f"[AUTO-PREWARM] Fallo #{_auto_fail_streak} en loop automático")
@@ -3111,11 +3135,13 @@ async def _bm_health_loop():
         await asyncio.sleep(120)  # cada 2 minutos
 
 
-async def _prewarm_caches(user_id: str = None):
+async def _prewarm_caches(user_id: str = None, log_sync: bool = True):
     """Pre-carga products + orders + BM stock + stock issues en background.
     Solo corre una instancia a la vez. Si se llama mientras ya corre, marca
     _prewarm_queued=True y el prewarm activo lanza otro al terminar.
-    user_id: cuenta a precalentar explícitamente. None = usar ContextVar / default."""
+    user_id: cuenta a precalentar explícitamente. None = usar ContextVar / default.
+    log_sync: False cuando se llama desde el loop automático — el loop escribe
+              el log UNA vez al final del ciclo completo (no 1 vez por cuenta)."""
     global _prewarm_running, _prewarm_queued, _prewarm_queued_uid, _prewarm_error, _prewarm_source
     if _prewarm_running:
         _prewarm_queued = True
@@ -3306,20 +3332,19 @@ async def _prewarm_caches(user_id: str = None):
                 _bm_log_elapsed = round(_time.time() - _prewarm_progress.get("started_at", _time.time()), 1)
                 _bm_log_skus    = len(_bm_stock_cache)
                 _bm_log_retail  = len(_bm_retail_ph_cache)
-                logger.info(f"[PREWARM] BM sync log: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}, retail_ph={_bm_log_retail}")
-                # Historial en memoria (sobrevive entre requests, resiste Railway ephemeral DB)
-                _prewarm_history.append({
-                    "ts":           _time.time(),
-                    "sku_count":    _bm_log_skus,
-                    "elapsed_s":    _bm_log_elapsed,
-                    "source":       _prewarm_source,
-                    "retail_ph":    _bm_log_retail,
-                })
-                if len(_prewarm_history) > 20:
-                    _prewarm_history.pop(0)
-                # Solo loguear si hubo trabajo real de BM (>5s) o fue manual.
-                # Evita 4 entradas por ciclo — las 3 cuentas extra solo leen cache (<2s).
-                if _bm_log_elapsed >= 5.0 or _prewarm_source == "manual":
+                logger.info(f"[PREWARM] done: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}, retail_ph={_bm_log_retail}, log_sync={log_sync}")
+                # log_sync=False → el loop automático escribe el log una vez al finalizar
+                # el ciclo completo. log_sync=True → llamada directa (manual/force), loguea aquí.
+                if log_sync:
+                    _prewarm_history.append({
+                        "ts":        _time.time(),
+                        "sku_count": _bm_log_skus,
+                        "elapsed_s": _bm_log_elapsed,
+                        "source":    _prewarm_source,
+                        "retail_ph": _bm_log_retail,
+                    })
+                    if len(_prewarm_history) > 20:
+                        _prewarm_history.pop(0)
                     await token_store.log_bm_sync_event(
                         sku_count=_bm_log_skus,
                         elapsed_s=_bm_log_elapsed,
