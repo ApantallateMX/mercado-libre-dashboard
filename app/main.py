@@ -3317,12 +3317,15 @@ async def _prewarm_caches(user_id: str = None):
                 })
                 if len(_prewarm_history) > 20:
                     _prewarm_history.pop(0)
-                await token_store.log_bm_sync_event(
-                    sku_count=_bm_log_skus,
-                    elapsed_s=_bm_log_elapsed,
-                    source=_prewarm_source,
-                )
-                logger.info("[PREWARM] BM sync log escrito OK")
+                # Solo loguear si hubo trabajo real de BM (>5s) o fue manual.
+                # Evita 4 entradas por ciclo — las 3 cuentas extra solo leen cache (<2s).
+                if _bm_log_elapsed >= 5.0 or _prewarm_source == "manual":
+                    await token_store.log_bm_sync_event(
+                        sku_count=_bm_log_skus,
+                        elapsed_s=_bm_log_elapsed,
+                        source=_prewarm_source,
+                    )
+                    logger.info("[PREWARM] BM sync log escrito OK")
             except Exception as _bm_log_exc:
                 logger.warning(f"[PREWARM] Error escribiendo BM sync log: {_bm_log_exc!r}")
             await client.close()
