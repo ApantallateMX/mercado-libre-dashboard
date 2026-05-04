@@ -562,17 +562,29 @@ async def _run_gap_scan(user_id: str | None = None):
                 finally:
                     _ctx_fx.reset(token_fx)
 
-            # 2b. Fetch all BM SKUs with stock — must login first
-            _prog(10, "bm_login", "Conectando a BinManager...", "")
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
-                bm_logged_in = await _bm_login(bm_http)
-                if not bm_logged_in:
-                    raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
-                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
-                bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
+            # 2b. Obtener inventario BM desde snapshot compartido (llenado por prewarm).
+            #     Cero sesiones BM paralelas — todo va por el semáforo global de binmanager_client.
+            _prog(10, "bm_cache", "Leyendo inventario BinManager desde caché...", "")
+            import time as _scan_time
+            from app.services.binmanager_client import get_bulk_snapshot as _get_snap, get_shared_bm as _get_shared_bm_scan
+            _snap = _get_snap()
+            _snap_age = round(_scan_time.time() - _snap[0]) if _snap else None
+            if _snap and _snap_age < 3600:  # acepta hasta 1h de antigüedad
+                bm_products = [r for r in _snap[1] if int(r.get("TotalQty") or r.get("AvailableQTY") or 0) > 0]
+                logger.info(f"BM gap scan: usando bulk snapshot ({len(bm_products)} SKUs, {_snap_age}s de antigüedad)")
+                _prog(15, "bm_cache_ok", "Inventario BM desde caché", f"{len(bm_products)} SKUs")
+            else:
+                # Sin snapshot o demasiado stale — usar cliente compartido (respeta semáforo)
+                logger.info("BM gap scan: snapshot vacío/stale — fetch fresco vía cliente compartido")
+                _prog(10, "bm_fetch", "Descargando inventario BinManager...", "cliente compartido")
+                _bm_cli_scan = await _get_shared_bm_scan()
+                _raw = await _bm_cli_scan.get_bulk_stock()
+                bm_products = [r for r in _raw if int(r.get("TotalQty") or r.get("AvailableQTY") or 0) > 0]
+                logger.info(f"BM gap scan: fetch fresco ({len(bm_products)} SKUs)")
+                _prog(15, "bm_fetch_ok", "Inventario BM cargado", f"{len(bm_products)} SKUs")
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
-            _prog(28, "bm_done", "Inventario BM cargado", f"{len(bm_products)} SKUs con stock")
+            _prog(28, "bm_done", "Inventario BM listo", f"{len(bm_products)} SKUs con stock")
 
             # Build BM map: base_sku → product info
             _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")

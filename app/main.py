@@ -3631,6 +3631,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bm_health["consecutive_failures"] = 0
                     _bulk_gr_rows = _fresh_gr
                     logger.info(f"[BM-CACHE] GR bulk fetch OK: {len(_fresh_gr)} filas")
+                    # Compartir snapshot con otros módulos (lanzar.py, unlaunched)
+                    # para que lean de aquí sin abrir sesiones BM paralelas.
+                    from app.services.binmanager_client import update_bulk_snapshot as _upd_snap
+                    _upd_snap(_fresh_gr)
                 else:
                     # Fix B1: BM respondió sin excepción pero devolvió vacío/None — tratar como fallo.
                     # Sin este else, _bulk_gr_rows queda None y el except-stale no se ejecuta → KPIs en 0.
@@ -13055,12 +13059,22 @@ async def bm_launch_opportunities(
             if isinstance(_s, set):
                 ml_bm_skus.update(_s)
 
-    # 2. BM inventory con filtros correctos (LOCATIONID=47,62,68 + CONDITION vendible + CONCEPTID=1)
-    #    get_bulk_stock() usa los mismos filtros que el resto de la app — stock vendible real.
+    # 2. BM inventory — usar _bm_bulk_gr_cache (ya descargado por prewarm vía semáforo).
+    #    Cero llamadas extra a BM. Solo fallback al cliente compartido si cache vacío.
     now = _time.time()
-    if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL:
-        bm_client = await get_shared_bm()
-        bm_raw = await bm_client.get_bulk_stock()
+    # Re-procesar si: refresh forzado, cache unlaunched vencido, o bulk cache más reciente
+    _bulk_newer = (_bm_bulk_gr_cache and (not _bm_unlaunched_cache or _bm_bulk_gr_cache[0] > _bm_unlaunched_cache[0]))
+    if refresh or not _bm_unlaunched_cache or (now - _bm_unlaunched_cache[0]) > _BM_UNLAUNCHED_TTL or _bulk_newer:
+        if _bm_bulk_gr_cache:
+            bm_raw = _bm_bulk_gr_cache[1]
+            logger.info(f"[UNLAUNCHED] Usando bulk cache ({len(bm_raw)} filas, {round(now - _bm_bulk_gr_cache[0])}s de antigüedad)")
+        elif _bm_bulk_all_cache:
+            bm_raw = _bm_bulk_all_cache[1]
+        else:
+            # Cache vacío (primer arranque) — fallback al cliente compartido (usa semáforo)
+            logger.info("[UNLAUNCHED] Cache vacío — fallback a get_bulk_stock() compartido")
+            bm_client = await get_shared_bm()
+            bm_raw = await bm_client.get_bulk_stock()
         # Deduplicar por BM base SKU + armar lista de oportunidades
         seen_bm: set[str] = set()
         all_items: list[dict] = []
