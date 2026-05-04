@@ -7,6 +7,121 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-01 — FIX: BM claudio.suarez bloqueado → revertido a jovan.rodriguez
+
+### Problema
+claudio.suarez retorna HTTP 500 "Object reference not set to an instance of an object" en todos
+los endpoints de inventario BM. La sesión inicia correctamente (`logged_in: true`) pero los
+queries fallan — mismo patrón que `IsFirstUse=True`. Cache: 0 SKUs, bulk_gr_rows: 0.
+
+### Solución
+- Railway env vars actualizados: `BM_USER=jovan.rodriguez@mitechnologiesinc.com`, `BM_PASS=aquemamonxD!`
+- Default en `binmanager_client.py` revertido a jovan.rodriguez
+- Commit: 962b4a4
+
+---
+
+## 2026-05-01 — FEAT: Rol viewer — protección total de solo lectura
+
+### Descripción
+Usuarios con `role=viewer` no pueden realizar ninguna acción de escritura.
+
+### Implementación
+- `AuthMiddleware` bloquea cualquier `POST/PUT/PATCH/DELETE` de viewer con HTTP 403
+- Excepciones: `/auth/logout`, `/auth/switch-account`, `/auth/switch-amazon`, `/login/verify`, `/set-password`
+- CSS: `body[data-role="viewer"] .write-action { display: none !important }` — oculta todos los botones de acción
+- `window._isViewer` JS global para scripts page-specific
+- Re-aplica ocultado tras HTMX swaps via `htmx:afterSwap`
+- Toast global al recibir 403 desde fetch() o htmx:responseError
+- Badge visual de "viewer" en ambas navbars (ML y Amazon)
+- Commit: c25d595
+
+---
+
+## 2026-05-01 — FIX: Botones KPI de órdenes no funcionaban
+
+### Problema
+Los botones "Todas / ≥100% Retail / 80-99% / <80%" no hacían nada al hacer click.
+
+### Causa
+`window.filterOrdersBand` definida en `<script>` dentro del partial HTMX — HTMX 1.9.10 no
+re-ejecuta scripts en contenido swapped de forma confiable.
+
+### Solución
+Reemplazados con atributos nativos `hx-get`/`hx-target`/`hx-swap` directamente en los botones,
+con lógica toggle en Jinja2. Commit: ef11689
+
+---
+
+## 2026-05-01 — FEAT: Historial de conversación por comprador en preguntas
+
+### Descripción
+Botón "Ver conversación de este comprador" en preguntas sin responder, cargado bajo demanda.
+Solo visible si el comprador tiene preguntas previas en el mismo producto (`buyer_question_count > 0`).
+
+### Implementación
+- Nuevo endpoint `GET /partials/question-thread?item_id=X&buyer_id=Y&current_qid=Z`
+- Nuevo template `partials/question_thread.html` — estilo chat bubble
+- `get_buyer_questions()` en `meli_client.py` vía `/questions/search?from=buyer_id&item=item_id`
+- `buyer_question_count` pre-calculado en el endpoint de preguntas para evitar cargas innecesarias
+- Commits: e4137a0, d8e1fa4
+
+---
+
+## 2026-05-01 — FEAT: Columna % vs Retail + Precio Sugerido en tabla de órdenes
+
+### Descripción
+- Columna GANANCIA ahora muestra solo el % de recuperación vs RetailPrice BM (sin monto $)
+- 5 bandas de color: ≥120% (verde oscuro), ≥100% (verde), ≥80% (amarillo), ≥60% (naranja), <60% (rojo)
+- Nueva columna "P. Sugerido" = precio al que se necesita vender para recuperar exactamente el 100% del retail
+- Fórmula: `net_pct = net_final / retail_bm * 100`; `precio_sugerido = retail / (net_final / precio_venta)`
+- Removido cálculo basado en AvgCostQTY (era 9999.99 placeholder, causaba valores negativos)
+- Commit: 9c32942
+
+---
+
+## 2026-05-01 — FIX: Cuenta BM cambiada a claudio.suarez — cache BM restaurada
+
+### Problema
+Cache BM mostraba 0/1 SKU en historial y KPIs Sin Stock/Revenue Perdido/Riesgo Sobreventa = 0.
+
+### Causa raíz
+Railway tenía `BM_USER=Carlos.Herrera@mitechnologiesinc.com`. Esa cuenta tiene `IsFirstUse=True` en BM,
+lo que hace que `Get_GlobalStock_InventoryBySKU` retorne `[]` para cualquier query, incluso con IsRoot=True.
+Sumado a esto, había un bloqueo en código (`if "jovan.rodriguez" in _BM_USER`) del commit d27be27 que
+impedía login con jovan.rodriguez. Las reinicios de servidor por múltiples deploys vaciaron la caché
+in-memory y el bulk roto no podía repopularla.
+
+### Solución
+- Creada cuenta de servicio dedicada: `claudio.suarez@mitechnologiesinc.com` (pass: 123456)
+- `BM_USER` y `BM_PASS` actualizados en Railway y como defaults en `binmanager_client.py`
+- Eliminado el bloqueo de jovan.rodriguez en el código
+- Verificado: SNTV003804 retorna AvailableQTY=242, Reserve=7 ✓
+- Prewarm completó: `cache_total_skus=5734`, `bulk_gr_rows=1762`, `bulk_all_rows=1934` ✓
+
+---
+
+## 2026-04-30 — FEAT: Monitor precio bajo + Comisión socio 7% en tabla de órdenes
+
+### Cambios
+
+**Monitor precio bajo (< 80% RetailPrice BM):**
+- `_sku_retail_map` global: SKU → `LastRetailPricePurchaseHistory × FX` MXN, populado en prewarm
+- Por cada item de cada orden: `retail_pct = unit_price / retail_ref * 100`; `price_alert = pct < 80`
+- Banner ámbar en header si hay órdenes con precio bajo en la página actual
+- Badge "XX% retail" junto al precio unitario en el detalle expandido
+- Indicador "⚠ precio bajo" en la columna Precio de la tabla
+
+**Comisión socio 7% (sobre net_received ML):**
+- `partner_commission = net_received * 0.07` por orden
+- `net_final = net_received - partner_commission` → columna Total de la tabla
+- Desglose de cobros muestra: Neto MeLi → Comisión socio (7%) → Total neto
+- `ganancia_est` ahora usa `net_final` (no net_received)
+- P&L summary actualizado: 5 tarjetas — Ventas brutas / Neto MeLi / Comisión socio / Neto final / Utilidad o Retenciones
+- Footer de totales incluye "Comisión socio" como línea separada
+
+---
+
 ## 2026-04-29 — FIX: Impuestos en desglose de órdenes — fórmula per-pago correcta
 
 ### Problema
