@@ -8,24 +8,7 @@
       <span id="gaps-badge" class="bg-red-100 text-red-700 text-xs font-bold px-2 py-0.5 rounded-full">–</span>
     </div>
     <div class="flex items-center gap-2">
-      <button onclick="window._scanNow()" id="btn-scan-now"
-              class="flex items-center gap-1.5 text-xs font-semibold bg-yellow-400 hover:bg-yellow-500 text-gray-800 px-3 py-1.5 rounded-lg transition">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-        </svg>
-        Escanear ahora
-      </button>
-      {% if dashboard_user and dashboard_user.role == 'admin' %}
-      <button onclick="window._scanAll()" id="btn-scan-all"
-              class="flex items-center gap-1.5 text-xs font-semibold bg-purple-500 hover:bg-purple-600 text-white px-3 py-1.5 rounded-lg transition">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
-                d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064"/>
-        </svg>
-        Scan Global
-      </button>
-      {% endif %}
+      <span class="text-xs text-gray-400">Actualización: catálogo BM semanal</span>
     </div>
   </div>
 
@@ -3700,10 +3683,6 @@
   }
 
   // ── Init
-  fetch('/api/lanzar/scan-status')
-    .then(function(r) { return r.json(); })
-    .then(function(s) { if (s.status === 'running') _startScanPolling(); });
-
   // Load initial reactivations count for badge
   fetch('/api/lanzar/reactivations')
     .then(function(r) { return r.json(); })

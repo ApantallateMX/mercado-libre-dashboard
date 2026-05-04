@@ -1166,11 +1166,24 @@ async def trigger_scan_all(request: Request):
 @router.get("/scan-status")
 async def get_scan_status():
     """Estado del último scan, incluyendo progreso en tiempo real."""
+    import time as _t
+    _STALE_THRESHOLD = 600  # 10 min — scan que lleva más de esto se considera muerto
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
-    base = dict(row) if row else {"status": "idle"}
+        base = dict(row) if row else {"status": "idle"}
+        # Auto-reset si el scan lleva >10 min "running" sin progreso real en memoria
+        if base.get("status") == "running":
+            started = float(base.get("started_at") or 0)
+            in_mem_pct = (_scan_progress or {}).get("pct", 0)
+            age = _t.time() - started
+            if started and age > _STALE_THRESHOLD and in_mem_pct < 5:
+                await db.execute(
+                    "UPDATE bm_gap_scan_status SET status='idle', error='scan interrumpido (stale reset)' WHERE id=1"
+                )
+                await db.commit()
+                base["status"] = "idle"
     # Merge in-memory progress when running
     if base.get("status") == "running":
         base["progress"] = _scan_progress
