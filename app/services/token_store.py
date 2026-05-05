@@ -654,6 +654,20 @@ async def init_db():
         await db.execute(
             "INSERT OR IGNORE INTO stock_distribution_settings (id) VALUES (1)"
         )
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: account_deal_config — precios para deals por cuenta
+        # deal_buffer_pct  = % que se añade al precio para absorber el descuento del deal
+        # retail_target_pct = % del retail BM que se quiere recuperar tras el deal
+        # Distintos por cuenta → competencia/ML no detecta que son el mismo vendedor
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS account_deal_config (
+                user_id           TEXT PRIMARY KEY,
+                deal_buffer_pct   REAL NOT NULL DEFAULT 0.15,
+                retail_target_pct REAL NOT NULL DEFAULT 1.0,
+                updated_at        REAL NOT NULL DEFAULT 0
+            )
+        """)
         await db.commit()
 
 
@@ -2300,6 +2314,34 @@ async def get_account_sold_history(user_id: str) -> dict:
             (user_id,),
         )).fetchall()
     return {r[0]: r[1] for r in rows}
+
+
+async def get_deal_config(user_id: str) -> dict:
+    """Retorna la config de precios deal para una cuenta. Defaults: 15% buffer, 100% retail."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(
+            "SELECT * FROM account_deal_config WHERE user_id = ?", (user_id,)
+        )).fetchone()
+    if row:
+        return dict(row)
+    return {"user_id": user_id, "deal_buffer_pct": 0.15, "retail_target_pct": 1.0}
+
+
+async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pct: float) -> None:
+    """Guarda o actualiza la config de precios deal para una cuenta."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO account_deal_config (user_id, deal_buffer_pct, retail_target_pct, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                   deal_buffer_pct = excluded.deal_buffer_pct,
+                   retail_target_pct = excluded.retail_target_pct,
+                   updated_at = excluded.updated_at""",
+            (user_id, deal_buffer_pct, retail_target_pct, _t.time()),
+        )
+        await db.commit()
 
 
 async def get_sku_sales_by_account(base_sku: str) -> list[dict]:

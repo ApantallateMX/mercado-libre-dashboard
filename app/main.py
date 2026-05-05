@@ -2022,6 +2022,11 @@ async def orders_table_partial(
                 except Exception:
                     pass
 
+        # Config de precios deal — distinta por cuenta para no revelar mismo vendedor
+        _deal_cfg = await token_store.get_deal_config(str(client.user_id))
+        _deal_buffer = _deal_cfg["deal_buffer_pct"]
+        _retail_target = _deal_cfg["retail_target_pct"]
+
         enriched = []
         for o in raw_orders:
             total = o.get("total_amount", 0) or 0
@@ -2113,10 +2118,15 @@ async def orders_table_partial(
                 # Precio sugerido: precio de venta necesario para recuperar exactamente el retail
                 _net_ratio = net_final / total if total > 0 else 0
                 _precio_sugerido = round(_first_retail / _net_ratio) if _net_ratio > 0 else None
+                # Precio deal: precio de lista para que, tras el descuento del deal,
+                # el vendedor recupere retail_target_pct de retail.
+                # deal_price × (1 - deal_buffer) × net_ratio = retail_target × retail
+                _precio_deal = round(_first_retail * _retail_target / ((1 - _deal_buffer) * _net_ratio)) if _net_ratio > 0 else None
             else:
                 _net_pct = round(net_final / total * 100, 1) if total > 0 else 0.0
                 _margin_band = "alto" if _net_pct >= 65 else ("medio" if _net_pct >= 55 else "bajo")
                 _precio_sugerido = None
+                _precio_deal = None
 
             ganancia_est = None
             margen_est = None
@@ -2139,6 +2149,9 @@ async def orders_table_partial(
                 net_pct=_net_pct,
                 margin_band=_margin_band,
                 precio_sugerido=_precio_sugerido,
+                precio_deal=_precio_deal,
+                deal_buffer_pct=_deal_buffer,
+                retail_target_pct=_retail_target,
                 ganancia_est=ganancia_est,
                 margen_est=margen_est,
                 underpriced_count=underpriced_count,
@@ -9172,6 +9185,43 @@ async def distribucion_page(request: Request):
     """Página de configuración de distribución de stock multi-cuenta."""
     user = await get_current_user()
     return templates.TemplateResponse(request, "distribucion.html", {"user": user, "active": "distribucion"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEAL CONFIG — Precios para deals por cuenta (buffer + target retail)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/deal-config")
+async def get_deal_config_api(request: Request, user_id: str = Query("", description="user_id de la cuenta (vacío = cuenta activa)")):
+    """Retorna la config de precios deal de la cuenta activa o del user_id indicado."""
+    if user_id:
+        return await token_store.get_deal_config(user_id)
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    return await token_store.get_deal_config(str(client.user_id))
+
+
+@app.post("/api/deal-config")
+async def set_deal_config_api(request: Request, user_id: str = Query("", description="user_id de la cuenta (vacío = cuenta activa)")):
+    """Guarda la config de precios deal. Body: {deal_buffer_pct: 0.18, retail_target_pct: 0.99}"""
+    if not user_id:
+        client = await get_meli_client()
+        if not client:
+            return JSONResponse({"detail": "No autenticado"}, status_code=401)
+        user_id = str(client.user_id)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "JSON inválido"}, status_code=400)
+    deal_buffer_pct = float(body.get("deal_buffer_pct", 0.15))
+    retail_target_pct = float(body.get("retail_target_pct", 1.0))
+    if not (0 < deal_buffer_pct < 1):
+        return JSONResponse({"detail": "deal_buffer_pct debe estar entre 0 y 1"}, status_code=400)
+    if not (0.5 <= retail_target_pct <= 1.5):
+        return JSONResponse({"detail": "retail_target_pct debe estar entre 0.5 y 1.5"}, status_code=400)
+    await token_store.set_deal_config(user_id, deal_buffer_pct, retail_target_pct)
+    return {"ok": True, "user_id": user_id, "deal_buffer_pct": deal_buffer_pct, "retail_target_pct": retail_target_pct}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

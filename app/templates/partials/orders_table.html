@@ -212,7 +212,11 @@
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-500">
                 {% if order.precio_sugerido %}
                 <span class="font-semibold text-gray-700">${{ "{:,.0f}".format(order.precio_sugerido) }}</span>
-                <div class="text-[9px] text-gray-400">para 100% retail</div>
+                <div class="text-[9px] text-gray-400">para {{ (order.retail_target_pct * 100) | int }}% retail</div>
+                {% if order.precio_deal %}
+                <div class="mt-0.5 font-semibold text-orange-500">${{ "{:,.0f}".format(order.precio_deal) }}</div>
+                <div class="text-[9px] text-orange-300">deal −{{ (order.deal_buffer_pct * 100) | int }}%</div>
+                {% endif %}
                 {% else %}
                 <span class="text-gray-300">—</span>
                 {% endif %}
