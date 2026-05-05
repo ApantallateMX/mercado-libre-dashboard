@@ -666,12 +666,13 @@
                     {% set _already_ok = p.price >= p.get('_precio_sug_retail', 0) and p.get('_precio_sug_retail', 0) > 0 %}
                     <td class="px-2 py-2 text-right text-xs min-w-[120px]">
                         {% if _already_ok %}
-                        {# Precio actual ya cubre retail — sugerir deal sobre precio actual, no bajar #}
-                        {% set _deal_from_current = (p.price * (1 - p.get('_deal_buffer_pct', 0.15))) | round | int %}
+                        {# Precio actual ya cubre retail — subir base para que con deal el comprador pague lo mismo #}
+                        {% set _buf = p.get('_deal_buffer_pct', 0.15) %}
+                        {% set _base_deal = (p.price / (1 - _buf)) | round | int %}
                         <div class="text-[9px] text-green-600 font-medium mb-1">✓ Buen margen — activar deal:</div>
-                        <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(_deal_from_current) }}</div>
-                        <div class="text-[9px] text-orange-400 mb-1">deal −{{ (p.get('_deal_buffer_pct', 0.15) * 100)|int }}% sobre ${{ "{:,.0f}".format(p.price) }}</div>
-                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ p.price }}, {{ p.get('_deal_buffer_pct', 0.15) }}, this)"
+                        <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(_base_deal) }}</div>
+                        <div class="text-[9px] text-orange-400 mb-1">base → deal −{{ (_buf * 100)|int }}% = ${{ "{:,.0f}".format(p.price) }}</div>
+                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ _base_deal }}, {{ _buf }}, this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
                             ↑ Activar Deal
                         </button>
