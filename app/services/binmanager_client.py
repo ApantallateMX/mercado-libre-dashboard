@@ -522,3 +522,11 @@ async def get_shared_bm() -> BinManagerClient:
     if not _shared_bm._logged_in:
         await _shared_bm.login()
     return _shared_bm
+
+
+async def bm_post(url: str, payload: dict, timeout: float = 30.0) -> "Optional[httpx.Response]":
+    """POST serializado a BM — un solo request activo a la vez, via _BM_GLOBAL_SEM.
+    Usa la sesión compartida con login automático. Retorna Response o None si falla.
+    ÚNICO punto de entrada para cualquier llamada HTTP a BinManager en todo el proceso."""
+    bm = await get_shared_bm()
+    return await bm.post_inventory(url, payload, timeout=timeout)
