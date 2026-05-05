@@ -1274,6 +1274,10 @@ async def sync_price(request: Request):
     item_id = body.get("item_id", "")
     price   = body.get("price")
 
+    price_type = body.get("price_type", "price")  # "price" or "original_price"
+    if price_type not in ("price", "original_price"):
+        price_type = "price"
+
     if not item_id or not price:
         return JSONResponse({"error": "item_id and price required"}, status_code=400)
 
@@ -1282,7 +1286,7 @@ async def sync_price(request: Request):
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
     try:
-        result = await client.put(f"/items/{item_id}", json={"price": float(price)})
+        result = await client.put(f"/items/{item_id}", json={price_type: float(price)})
         err = result.get("error") or result.get("message")
         if err and result.get("status") not in (None, 200):
             return JSONResponse({"error": err}, status_code=400)

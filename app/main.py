@@ -136,7 +136,7 @@ def _ml_fee(price: float) -> float:
     return 0.18
 
 
-def _calc_margins(products: list, usd_to_mxn: float):
+def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.15, retail_target_pct: float = 1.0):
     """Calcula costos, márgenes y comparativas vs RetailPrice PH para cada producto."""
     for p in products:
         avg_cost = p.get("_bm_avg_cost", 0) or 0
@@ -210,6 +210,31 @@ def _calc_margins(products: list, usd_to_mxn: float):
             p["_precio_sugerido_ph"] = None
             p["_roi_pct"] = None
             p["_margen_ph_pct"] = None
+
+        # Precios sugeridos: para recuperar retail BM (sin/con deal)
+        _retail = p["_retail_mxn"]
+        if _retail > 0:
+            # Sin deal: (retail + 150) / (1 - fee * 1.16), con una iteración de refinamiento
+            _fee0 = _ml_fee(_retail) * 1.16
+            _sp0 = (_retail + 150) / (1 - _fee0) if _fee0 < 1 else None
+            if _sp0:
+                _fee1 = _ml_fee(_sp0) * 1.16
+                p["_precio_sug_retail"] = round((_retail + 150) / (1 - _fee1)) if _fee1 < 1 else None
+            else:
+                p["_precio_sug_retail"] = None
+            # Con deal: original_price para que (1 - buffer) * (1 - fee*1.16) * orig - 150 = target * retail
+            if deal_buffer_pct < 1 and p["_precio_sug_retail"]:
+                _eff = p["_precio_sug_retail"] * (1 - deal_buffer_pct)  # approx final sale price
+                _fee_d = _ml_fee(_eff) * 1.16
+                _denom = (1 - deal_buffer_pct) * (1 - _fee_d)
+                p["_precio_sug_deal"] = round((retail_target_pct * _retail + 150) / _denom) if _denom > 0 else None
+            else:
+                p["_precio_sug_deal"] = None
+        else:
+            p["_precio_sug_retail"] = None
+            p["_precio_sug_deal"] = None
+        p["_deal_buffer_pct"] = deal_buffer_pct
+        p["_retail_target_pct"] = retail_target_pct
 
         # Precio piso: mínimo para lograr 15% de margen después de comisión MeLi
         costo = p["_costo_mxn"]
@@ -4674,7 +4699,8 @@ async def products_deals_partial(request: Request):
             _enrich_category_names(client, all_to_enrich),
         )
         _apply_bm_stock(all_to_enrich, bm_map)
-        _calc_margins(all_to_enrich, usd_to_mxn)
+        _deal_cfg = await token_store.get_deal_config(str(client.user_id))
+        _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
 
         # KPIs resumen
         deals_revenue = sum(p.get("revenue_30d", 0) for p in active_deals)
@@ -4735,7 +4761,8 @@ async def products_deals_partial(request: Request):
                 cat_counts[cn] = cat_counts.get(cn, 0) + 1
         categories = sorted(cat_counts.keys())
 
-        return templates.TemplateResponse(request, "partials/products_deals.html", {            "active_deals": active_deals,
+        return templates.TemplateResponse(request, "partials/products_deals.html", {
+            "active_deals": active_deals,
             "candidates": candidates,
             "usd_to_mxn": round(usd_to_mxn, 2),
             "deals_revenue": deals_revenue,
@@ -4744,6 +4771,8 @@ async def products_deals_partial(request: Request):
             "categories": categories,
             "cat_counts": cat_counts,
             "total_no_deal_no_sales": len([p for p in candidates if p.get("units_30d", 0) == 0]),
+            "deal_buffer_pct": _deal_cfg["deal_buffer_pct"],
+            "retail_target_pct": _deal_cfg["retail_target_pct"],
         })
     finally:
         await client.close()

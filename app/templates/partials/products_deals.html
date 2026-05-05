@@ -216,6 +216,7 @@
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Margen</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs whitespace-nowrap">P. Sug. / Deal</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
@@ -353,6 +354,34 @@
                         {% endif %}
                         <span data-stock-msg></span>
                     </td>
+                    <!-- P. Sugerido / Deal (active deals) -->
+                    <td class="px-2 py-2 text-right text-xs min-w-[120px]">
+                        {% if p.get('_precio_sug_deal') %}
+                        <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(p._precio_sug_deal) }}</div>
+                        <div class="text-[9px] text-orange-400 mb-1">base p/deal −{{ (p._deal_buffer_pct * 100)|int }}%</div>
+                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_deal }}, 'original_price', this)"
+                                class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
+                            ↑ Subir base
+                        </button>
+                        {% elif p.get('_precio_sug_retail') %}
+                        <div class="font-semibold text-gray-700">${{ "{:,.0f}".format(p._precio_sug_retail) }}</div>
+                        <div class="text-[9px] text-gray-400 mb-1">para 100% retail</div>
+                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_retail }}, 'original_price', this)"
+                                class="w-full px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition">
+                            ↑ Aplicar
+                        </button>
+                        {% else %}
+                        <span class="text-gray-300">—</span>
+                        {% endif %}
+                        <div class="flex gap-1 mt-1.5 items-center">
+                            <input type="number" min="1" max="79" step="1" placeholder="%" id="qdeal-{{ p.id }}"
+                                   class="w-10 px-1 py-0.5 text-[10px] border border-gray-200 rounded text-center focus:ring-1 focus:ring-yellow-400 focus:outline-none">
+                            <button onclick="quickDealByPct('{{ p.id }}', {{ p.original_price or p.price }}, this)"
+                                    class="flex-1 px-1 py-0.5 text-[10px] bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 transition font-medium">
+                                Deal
+                            </button>
+                        </div>
+                    </td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex flex-col items-center gap-1">
                             <button class="btn-ver-promos px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition w-full"
@@ -373,7 +402,7 @@
                 </tr>
                 {% if p.get('variations') %}
                 <tr id="ad-{{ loop.index }}" class="hidden bg-purple-50/30">
-                    <td colspan="12" class="px-6 py-2">
+                    <td colspan="13" class="px-6 py-2">
                         <div class="text-xs">
                             <table class="w-full">
                                 <thead><tr class="text-gray-500"><th class="text-left py-1 font-medium">Variacion</th><th class="text-left py-1 font-medium">ID Variacion</th><th class="text-left py-1 font-medium">SKU</th><th class="text-right py-1 font-medium">Stock</th><th class="text-right py-1 font-medium">Precio</th></tr></thead>
@@ -528,6 +557,7 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock BM</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs whitespace-nowrap">P. Sug. / Deal</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
@@ -631,6 +661,36 @@
                             <span class="text-[10px] text-gray-400">M:{{ p.get('_bm_mty', 0) or 0 }} C:{{ p.get('_bm_cdmx', 0) or 0 }}</span>
                         </div>
                     </td>
+                    <!-- P. Sugerido / Deal (candidates) -->
+                    <td class="px-2 py-2 text-right text-xs min-w-[120px]">
+                        {% if p.get('_precio_sug_retail') %}
+                        <div class="font-semibold text-gray-700">${{ "{:,.0f}".format(p._precio_sug_retail) }}</div>
+                        <div class="text-[9px] text-gray-400 mb-1">para 100% retail</div>
+                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_retail }}, 'price', this)"
+                                class="w-full px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition font-medium">
+                            ↑ Aplicar precio
+                        </button>
+                        {% endif %}
+                        {% if p.get('_precio_sug_deal') %}
+                        <div class="font-semibold text-orange-500 mt-1">${{ "{:,.0f}".format(p._precio_sug_deal) }}</div>
+                        <div class="text-[9px] text-orange-400 mb-1">+ activar deal −{{ (p._deal_buffer_pct * 100)|int }}%</div>
+                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ p._precio_sug_deal }}, {{ p._deal_buffer_pct }}, this)"
+                                class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
+                            ↑ Precio + Deal
+                        </button>
+                        {% endif %}
+                        {% if not p.get('_precio_sug_retail') and not p.get('_precio_sug_deal') %}
+                        <span class="text-gray-300">—</span>
+                        {% endif %}
+                        <div class="flex gap-1 mt-1.5 items-center">
+                            <input type="number" min="1" max="79" step="1" placeholder="%" id="qdeal-{{ p.id }}"
+                                   class="w-10 px-1 py-0.5 text-[10px] border border-gray-200 rounded text-center focus:ring-1 focus:ring-yellow-400 focus:outline-none">
+                            <button onclick="quickDealByPct('{{ p.id }}', {{ p.price }}, this)"
+                                    class="flex-1 px-1 py-0.5 text-[10px] bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 transition font-medium">
+                                Deal%
+                            </button>
+                        </div>
+                    </td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex flex-col items-center gap-1">
                             <button class="btn-ver-promos px-2 py-1 text-xs bg-blue-50 text-blue-600 rounded hover:bg-blue-100 transition w-full"
@@ -657,7 +717,7 @@
                 </tr>
                 {% if p.get('variations') %}
                 <tr id="cd-{{ loop.index }}" class="hidden bg-purple-50/30">
-                    <td colspan="9" class="px-6 py-2">
+                    <td colspan="10" class="px-6 py-2">
                         <div class="text-xs">
                             <table class="w-full">
                                 <thead><tr class="text-gray-500"><th class="text-left py-1 font-medium">Variacion</th><th class="text-left py-1 font-medium">ID Variacion</th><th class="text-left py-1 font-medium">SKU</th><th class="text-right py-1 font-medium">Stock</th><th class="text-right py-1 font-medium">Precio</th></tr></thead>
@@ -1850,6 +1910,107 @@ function clearRecFilter() {
     banner.className = 'hidden mb-3 px-4 py-2.5 rounded-lg flex items-center gap-3 text-sm';
     _adCurrentPage = 1;
     applySearchAndPaginate();
+}
+
+// ===== Precio sugerido: aplicar precio directo =====
+
+async function applyDealPrice(itemId, price, priceType, btn) {
+    var orig = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        var r = await fetch('/bm/sync-price', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_id: itemId, price: price, price_type: priceType })
+        });
+        var data = await r.json();
+        if (data.ok) {
+            showToast('success', 'Precio actualizado: $' + Math.round(price).toLocaleString('es-MX'));
+            btn.textContent = '✓ Listo';
+            btn.className = btn.className.replace(/bg-\w+-\d+/g, 'bg-green-100').replace(/text-\w+-\d+/g, 'text-green-700');
+        } else {
+            showToast('error', 'Error: ' + (data.error || 'desconocido'));
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    } catch(e) {
+        showToast('error', 'Error de red');
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
+}
+
+async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
+    var dealPrice = Math.round(originalPrice * (1 - bufferPct));
+    var orig = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        var r = await fetch('/api/items/' + itemId + '/activate-promotion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                deal_price: dealPrice,
+                promotion_type: 'PRICE_DISCOUNT',
+                original_price: originalPrice
+            })
+        });
+        var data = await r.json();
+        if (r.ok && data.ok) {
+            var pct = Math.round(bufferPct * 100);
+            showToast('success', 'Precio + Deal −' + pct + '% activado: $' + dealPrice.toLocaleString('es-MX'));
+            btn.textContent = '✓ Deal activo';
+            btn.className = btn.className.replace(/bg-\w+-\d+/g, 'bg-green-100').replace(/text-\w+-\d+/g, 'text-green-700');
+            markRowActivated(itemId);
+        } else {
+            showToast('error', 'Error: ' + (data.detail || data.error || 'desconocido'));
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    } catch(e) {
+        showToast('error', 'Error de red');
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
+}
+
+async function quickDealByPct(itemId, basePrice, btn) {
+    var inputEl = document.getElementById('qdeal-' + itemId);
+    var pct = parseFloat(inputEl ? inputEl.value : 0);
+    if (!pct || pct <= 0 || pct >= 80) {
+        showToast('error', 'Ingresa un % válido (1–79)');
+        return;
+    }
+    var dealPrice = Math.round(basePrice * (1 - pct / 100));
+    var orig = btn.textContent;
+    btn.textContent = '...';
+    btn.disabled = true;
+    try {
+        var r = await fetch('/api/items/' + itemId + '/activate-promotion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                deal_price: dealPrice,
+                promotion_type: 'PRICE_DISCOUNT',
+                original_price: basePrice
+            })
+        });
+        var data = await r.json();
+        if (r.ok && data.ok) {
+            showToast('success', 'Deal −' + pct + '% activado: $' + dealPrice.toLocaleString('es-MX'));
+            btn.textContent = '✓';
+            markRowActivated(itemId);
+        } else {
+            showToast('error', 'Error: ' + (data.detail || data.error || 'desconocido'));
+            btn.textContent = orig;
+            btn.disabled = false;
+        }
+    } catch(e) {
+        showToast('error', 'Error de red');
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
 }
 
 // ===== Category filter =====
