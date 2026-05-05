@@ -3769,12 +3769,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _avail, _res = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
                 else:
                     _avail, _res = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
-                # get_bulk_stock_by_location usa CONCEPTID=1 que excluye ítems con qty=0.
-                # SKU ausente del bulk = genuinamente 0 stock en LOC47+LOC68, no fallo de fetch.
-                # avail_ok=True siempre: el bulk es autoritativo — ausencia confirma 0, no ignora.
-                # Sin esto los ~8k SKUs con _v=False siempre van a to_fetch → ciclo infinito.
+                # avail_ok=True solo si BM encontró el SKU en bulk (confirmó el valor, sea 0 o >0).
+                # avail_ok=False si no estaba en bulk → _v=False → stale retry hace per-SKU fetch.
                 _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
-                          avail_ok=True, wh_responded=False)
+                          avail_ok=(_fsku not in _bulk_miss_set), wh_responded=False)
                 _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
 
             # Guardar estadísticas de cobertura para diagnóstico en Sync Stock
