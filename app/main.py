@@ -3516,6 +3516,26 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             # → no se genera alerta de oversell por dato desconocido
         return result_map
 
+    # ── CATALOG-FIRST: ConfColumns es la fuente canónica de stock CDMX+MTY ─────
+    # Si el catálogo tiene datos (sync activo cada 5 min), SKUs no-catálogo
+    # tienen 0 stock en CDMX+MTY por definición (LOCATIONID=47,62,68 no los incluyó).
+    # Esto elimina el fetch bulk a Get_GlobalStock_InventoryBySKU (bloqueado)
+    # y garantiza que el prewarm complete sin timeout de 270s×2.
+    if len(_bm_catalog_cache) > 50:
+        _now_cat = _time.time()
+        for _sku in to_fetch:
+            _bk = normalize_to_bm_sku(_sku)
+            _stale = _bm_stock_cache.get(_bk)
+            if _stale:
+                result_map[_sku] = _stale[1]  # entrada previa BM — más fiel que cero inventado
+            else:
+                # No en catálogo CDMX+MTY → stock CDMX+MTY = 0 (confirmado por ausencia en catálogo)
+                _zero_cat = {"avail_total": 0, "reserved_total": 0, "total": 0,
+                             "mty": 0, "cdmx": 0, "tj": 0, "_v": True}
+                _bm_stock_cache[_bk] = (_now_cat, _zero_cat)
+                result_map[_sku] = _zero_cat
+        return result_map
+
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
 
     def _parse_wh_rows(rows):
@@ -10142,22 +10162,19 @@ async def bm_health_status():
 
 @app.get("/api/catalog/status")
 async def catalog_status_endpoint(request: Request):
-    """Estado del sync semanal de catálogo BM. Solo admin."""
+    """Estado del sync de catálogo BM (cada 5 min). Solo admin."""
     du = getattr(request.state, "dashboard_user", None) or {}
     if du.get("role") != "admin":
         return JSONResponse({"error": "Acceso denegado"}, status_code=403)
     now = _time.time()
     last_db_sync = await token_store.get_bm_catalog_last_sync()
     last_db_age_h = round((now - last_db_sync) / 3600, 1) if last_db_sync > 0 else None
-    # Próximo domingo 9pm Monterrey (02:00 UTC lunes)
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    _dnow = _dt.now(_tz.utc)
-    # Domingo 9pm MTY CDT = lunes 02:00 UTC
-    days_until_monday = (0 - _dnow.weekday()) % 7
-    if days_until_monday == 0 and _dnow.hour >= 2:
-        days_until_monday = 7
-    _next = (_dnow + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
-    next_run_h = round((_next - _dnow).total_seconds() / 3600, 1)
+    # Sync automático cada 5 minutos — calcular cuánto falta para el próximo
+    _last_hist = _catalog_sync_history[-1] if _catalog_sync_history else None
+    _last_sync_ts = _last_hist["ts"] if _last_hist else 0
+    _elapsed_since = now - _last_sync_ts if _last_sync_ts else None
+    _next_in_s = max(0, 300 - _elapsed_since) if _elapsed_since is not None else 300
+    _next_in_min = round(_next_in_s / 60, 1)
 
     def _fmt(h):
         age_s = now - h["ts"]
@@ -10172,8 +10189,8 @@ async def catalog_status_endpoint(request: Request):
         "cache_count":     len(_bm_retail_ph_cache),
         "last_db_sync_ts": last_db_sync,
         "last_db_age_h":   last_db_age_h,
-        "next_auto_run_h": next_run_h,
-        "next_auto_run_label": f"domingo 9pm MTY (en ~{next_run_h}h)",
+        "next_auto_run_h": round(_next_in_s / 3600, 2),
+        "next_auto_run_label": f"cada 5 min (próximo en ~{_next_in_min}min)",
     })
 
 

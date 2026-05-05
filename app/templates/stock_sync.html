@@ -311,12 +311,12 @@
     </div>
   </div>
 
-  <!-- ── Catálogo BM — Sync semanal (solo admin) ─────────────────── -->
+  <!-- ── Catálogo BM — Sync cada 5 min (solo admin) ────────────────── -->
   <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
     <div class="flex items-center justify-between mb-3">
       <div>
         <h2 class="text-sm font-semibold text-gray-700">Catálogo BM — Precios & Info de SKUs</h2>
-        <p class="text-xs text-gray-400 mt-0.5">Sync semanal: domingo 9pm Monterrey · retail_ph, brand, model, title, category, qty</p>
+        <p class="text-xs text-gray-400 mt-0.5">Sync automático cada 5 min · CDMX+MTY (LOCATIONID 47,62,68) · retail_ph, brand, model, title, category, qty</p>
       </div>
       <div class="flex gap-2">
         <button id="catalog-sync-btn" onclick="triggerCatalogSync()"
@@ -1786,7 +1786,7 @@ window.lookupMlmStock = function() {
 
 // (Listings huérfanos — gestionados desde Productos / tab Stock)
 
-// ── Catálogo BM — Sync semanal ────────────────────────────────────────────
+// ── Catálogo BM — Sync cada 5 min ─────────────────────────────────────────
 var _catalogPollTimer = null;
 
 function _loadCatalogStatus() {
