@@ -518,7 +518,7 @@ async def lifespan(app: FastAPI):
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
 
-    # ── Sync de catálogo BM cada 5 min — inventario CDMX+MTY disponible (LOCATIONID=47,62,68) ──
+    # ── Sync de catálogo BM cada 5 min — inventario disponible total (sin reservas) ─
     # ConfColumns_Conditions_Excel: 1 llamada, ~8k SKUs, devuelve qty ya sin reservas.
     # Reemplaza Get_GlobalStock_InventoryBySKU como fuente primaria de stock.
     async def _catalog_sync_loop():
@@ -2576,7 +2576,7 @@ _bm_catalog_cache: dict[str, dict] = {}
 
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
     """Descarga inventario + RetailPH para todos los SKUs de BM via
-    ConfColumns_Conditions_Excel. 1 sola llamada, filtrada a CDMX+MTY (LOCATIONID=47,62,68).
+    ConfColumns_Conditions_Excel. 1 sola llamada, stock disponible total (sin reservas).
     Corre cada 5 min. Guarda en DB + actualiza _bm_retail_ph_cache + _bm_stock_cache.
     Retorna cantidad de SKUs guardados en DB.
     """
@@ -2600,7 +2600,6 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
             f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
             json={
                 "COMPANYID": 1,
-                "LOCATIONID": "47,62,68",   # CDMX (Ebanistas + B2B) + MTY (Colombia + Maxx)
                 "NEEDRETAILPRICEPH": True,
                 "NEEDRETAILPRICE": True,
                 "NEEDAVGCOST": True,
