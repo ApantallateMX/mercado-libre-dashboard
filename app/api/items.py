@@ -72,12 +72,12 @@ def _parse_wh_rows_items(rows):
     return mty, cdmx, tj
 
 
-async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
-    """Consulta en paralelo:
+async def _bm_warehouse_qty(sku: str) -> dict | None:
+    """Consulta secuencialmente:
     1) Warehouse endpoint → MTY/CDMX/TJ totales físicos
     2) get_available_qty → AvailableQTY real (Get_GlobalStock_InventoryBySKU, excluye reservados)
     """
-    from app.services.binmanager_client import get_shared_bm
+    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_wq
     base, _ = _get_base_and_type(sku)
     conditions = _bm_conditions(sku)
     wh_payload = {
@@ -87,13 +87,9 @@ async def _bm_warehouse_qty(sku: str, client: httpx.AsyncClient) -> dict | None:
     }
     try:
         bm_cli = await get_shared_bm()
-        r_wh, avail_total = await asyncio.gather(
-            client.post(BM_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
-            bm_cli.get_available_qty(base),
-            return_exceptions=True,
-        )
-        rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-        if isinstance(avail_total, Exception): avail_total = 0
+        r_wh = await _bm_post_wq(BM_WAREHOUSE_URL, wh_payload, timeout=15.0)
+        avail_total = await bm_cli.get_available_qty(base)
+        rows_wh = r_wh.json() if r_wh and r_wh.status_code == 200 else []
         mty, cdmx, tj = _parse_wh_rows_items(rows_wh)
         if mty + cdmx + tj > 0 or avail_total > 0:
             return {
@@ -325,23 +321,18 @@ async def get_inventory_sku_sales(skus: str = Query(..., description="Comma-sepa
         base, _ = _get_base_and_type(sku)
         base_to_skus.setdefault(base, []).append(sku)
 
-    # Consultar UNA sola vez por base SKU (usando el propio SKU tal cual)
-    sem = asyncio.Semaphore(10)
-
-    async def fetch_one(query_sku: str, client: httpx.AsyncClient):
-        async with sem:
-            data = await _bm_warehouse_qty(query_sku, client)
-            return query_sku, data
+    # Consultar UNA sola vez por base SKU (usando el propio SKU tal cual) — serializado via bm_post
+    async def fetch_one(query_sku: str):
+        data = await _bm_warehouse_qty(query_sku)
+        return query_sku, data
 
     base_data = {}
-    async with httpx.AsyncClient() as client:
-        tasks = [fetch_one(sku_list_for_base[0], client)
-                 for sku_list_for_base in base_to_skus.values()]
-        for coro in asyncio.as_completed(tasks):
-            queried_sku, data = await coro
-            if data:
-                base, _ = _get_base_and_type(queried_sku)
-                base_data[base] = data
+    tasks = [fetch_one(sku_list_for_base[0]) for sku_list_for_base in base_to_skus.values()]
+    for coro in asyncio.as_completed(tasks):
+        queried_sku, data = await coro
+        if data:
+            base, _ = _get_base_and_type(queried_sku)
+            base_data[base] = data
 
     # Asignar resultado a cada SKU original
     results = {}
@@ -364,12 +355,11 @@ async def get_inventory(web_sku: str):
     SKUs con sufijo ICB/ICC incluyen todo el stock. SKUs GR/sin sufijo excluyen ICB/ICC.
     """
     try:
-        async with httpx.AsyncClient() as client:
-            data = await _bm_warehouse_qty(web_sku, client)
-            if data:
-                return data
-            return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku,
-                    "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
+        data = await _bm_warehouse_qty(web_sku)
+        if data:
+            return data
+        return {"error": "SKU no encontrado en BinManager", "WebSKU": web_sku,
+                "MainQtyMTY": 0, "MainQtyCDMX": 0, "MainQtyTJ": 0}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando BinManager: {str(e)}")
 

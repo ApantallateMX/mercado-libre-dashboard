@@ -79,41 +79,38 @@ _scan_progress: dict = {
 }
 
 
-async def _bm_login(http: httpx.AsyncClient) -> bool:
-    """Login to BinManager and return True on success."""
+async def _bm_login() -> bool:
+    """Login to BinManager and return True on success. Uses shared serialized BM client."""
+    from app.services.binmanager_client import get_shared_bm as _gsb_login
     try:
-        await http.get(f"{_BM_BASE}/User/Index", timeout=15)
-        r = await http.post(
-            f"{_BM_BASE}/User/LoginUser",
-            json={"USRNAME": _BM_USER, "PASS": _BM_PASS},
-            headers=_BM_AJAX,
-            timeout=15,
-        )
-        return r.status_code == 200 and bool(r.json().get("Id"))
+        bm = await _gsb_login()
+        if bm._logged_in:
+            return True
+        return await bm.login()
     except Exception as e:
         logger.error(f"BM login error: {e}")
         return False
 
 
-async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
+async def _bm_fetch_all_skus_with_stock() -> list[dict]:
     """Fetch all SKUs from BinManager using ConfColumns_Conditions_Excel (single call).
     Returns list of product dicts with TotalQty > 0.
     """
+    from app.services.binmanager_client import bm_post as _bm_post_conf
     try:
-        r = await http.post(
+        r = await _bm_post_conf(
             f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
-            json={
+            {
                 "COMPANYID": _BM_COMPANY,
                 "NEEDRETAILPRICEPH": True,
                 "NEEDRETAILPRICE": True,
                 "NEEDAVGCOST": True,
                 "NEEDSALES": False,
             },
-            headers=_BM_AJAX,
-            timeout=120,
+            timeout=120.0,
         )
-        if "User/Index" in str(r.url) or r.status_code == 401:
-            logger.warning("BM requiere autenticacion en ConfColumns")
+        if r is None:
+            logger.error("ConfColumns: bm_post retornó None (sesión/red)")
             return []
         if r.status_code != 200:
             logger.error(f"ConfColumns HTTP {r.status_code}")
@@ -167,13 +164,12 @@ def _wh_name_to_zone(name: str) -> str:
     return "tj"
 
 
-async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
+async def _bm_fetch_warehouse_stock(sku: str) -> dict:
     """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo.
     Usa Get_GlobalStock_InventoryBySKU_Warehouse para desglose por almacen y
     get_available_qty (Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68) para AvailableQTY real.
-    InventoryBySKUAndCondicion_Quantity esta ROTO en el servidor (SQL binid error).
     """
-    from app.services.binmanager_client import get_shared_bm
+    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_whs
     try:
         base = sku.upper()
         for sfx in _ALL_SUFFIXES:
@@ -192,13 +188,10 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
             "SUPPLIERS": None,
         }
         bm_cli = await get_shared_bm()
-        r_wh, avail = await asyncio.gather(
-            http.post(_BM_WAREHOUSE_URL, json=wh_payload, headers=_BM_AJAX, timeout=15),
-            bm_cli.get_available_qty(base),
-            return_exceptions=True,
-        )
+        r_wh = await _bm_post_whs(_BM_WAREHOUSE_URL, wh_payload, timeout=15.0)
+        avail = await bm_cli.get_available_qty(base)
         mty = cdmx = 0
-        if not isinstance(r_wh, Exception) and r_wh.status_code == 200:
+        if r_wh and r_wh.status_code == 200:
             for row in (r_wh.json() or []):
                 qty = row.get("QtyTotal", 0) or 0
                 zone = _wh_name_to_zone(row.get("WarehouseName") or "")
@@ -206,8 +199,6 @@ async def _bm_fetch_warehouse_stock(sku: str, http: httpx.AsyncClient) -> dict:
                     mty += qty
                 elif zone == "cdmx":
                     cdmx += qty
-        if isinstance(avail, Exception):
-            avail = 0
         return {"mty": mty, "cdmx": cdmx, "avail": avail or mty + cdmx}
     except Exception:
         return {"mty": 0, "cdmx": 0, "avail": 0}
@@ -564,12 +555,11 @@ async def _run_gap_scan(user_id: str | None = None):
 
             # 2b. Fetch all BM SKUs with stock — must login first
             _prog(10, "bm_login", "Conectando a BinManager...", "")
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
-                bm_logged_in = await _bm_login(bm_http)
-                if not bm_logged_in:
-                    raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
-                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
-                bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
+            bm_logged_in = await _bm_login()
+            if not bm_logged_in:
+                raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
+            _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
+            bm_products = await _bm_fetch_all_skus_with_stock()
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
             _prog(28, "bm_done", "Inventario BM cargado", f"{len(bm_products)} SKUs con stock")
@@ -1476,13 +1466,12 @@ async def debug_scan(sku: str = ""):
 
     # 1. BM quick check
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
-            logged_in = await _bm_login(bm_http)
-            result["bm"]["login"] = logged_in
-            if logged_in:
-                page1 = await _bm_fetch_all_skus_with_stock(bm_http)
-                result["bm"]["total_skus"] = len(page1)
-                result["bm"]["first_row_keys"] = list(page1[0].keys()) if page1 else []
+        logged_in = await _bm_login()
+        result["bm"]["login"] = logged_in
+        if logged_in:
+            page1 = await _bm_fetch_all_skus_with_stock()
+            result["bm"]["total_skus"] = len(page1)
+            result["bm"]["first_row_keys"] = list(page1[0].keys()) if page1 else []
     except Exception as e:
         result["bm"]["error"] = str(e)
 
@@ -3183,24 +3172,25 @@ async def bm_images_endpoint(sku: str):
     dbg: dict = {"sku": sku}
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as http:
-            logged_in = await _bm_login(http)
-            dbg["login"] = logged_in
-            if not logged_in:
-                return JSONResponse({"images": [], "_debug": dbg, "error": "BM login failed"})
+        from app.services.binmanager_client import bm_post as _bm_post_img
+        logged_in = await _bm_login()
+        dbg["login"] = logged_in
+        if not logged_in:
+            return JSONResponse({"images": [], "_debug": dbg, "error": "BM login failed"})
 
-            r = await http.post(
-                _BM_PHOTOS_URL,
-                json={"COMPANYID": _BM_COMPANY, "SKU": sku.upper()},
-                headers=_BM_AJAX,
-                timeout=20,
-            )
-            dbg["status"] = r.status_code
-            dbg["body_preview"] = r.text[:400]
-            if r.status_code != 200:
-                return JSONResponse({"images": [], "_debug": dbg, "error": f"BM status {r.status_code}"})
+        r = await _bm_post_img(
+            _BM_PHOTOS_URL,
+            {"COMPANYID": _BM_COMPANY, "SKU": sku.upper()},
+            timeout=20.0,
+        )
+        if r is None:
+            return JSONResponse({"images": [], "_debug": dbg, "error": "BM no respondió"})
+        dbg["status"] = r.status_code
+        dbg["body_preview"] = r.text[:400]
+        if r.status_code != 200:
+            return JSONResponse({"images": [], "_debug": dbg, "error": f"BM status {r.status_code}"})
 
-            data = r.json()
+        data = r.json()
             dbg["data_keys"] = list(data.keys()) if isinstance(data, dict) else type(data).__name__
             raw = data.get("JSONSKUFiles") if isinstance(data, dict) else None
             dbg["raw_type"] = type(raw).__name__

@@ -137,20 +137,20 @@ async def _check_meli_tokens() -> dict:
 async def _check_binmanager() -> dict:
     t0 = time.monotonic()
     BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
+    from app.services.binmanager_client import bm_post as _bm_post_health
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as http:
-            # Usamos un SKU conocido (liviano — solo ping al API)
-            r = await http.post(BM_URL, json={
-                "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-                "LOCATIONID": "47,62,68", "BINID": None,
-                "PRODUCTSKU": "PING_TEST", "CONDITION": "GRA",
-                "SUPPLIERS": None, "LCN": None, "SEARCH": "PING_TEST"
-            })
+        # Usamos un SKU conocido (liviano — solo ping al API)
+        r = await _bm_post_health(BM_URL, {
+            "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
+            "LOCATIONID": "47,62,68", "BINID": None,
+            "PRODUCTSKU": "PING_TEST", "CONDITION": "GRA",
+            "SUPPLIERS": None, "LCN": None, "SEARCH": "PING_TEST"
+        }, timeout=_TIMEOUT)
         ms = _elapsed_ms(t0)
         # BM devuelve [] para SKU desconocido (200 OK) — eso es suficiente para confirmar acceso
-        if r.status_code in (200, 204):
+        if r and r.status_code in (200, 204):
             return _ok(f"BinManager accesible ({ms}ms)", ms)
-        return _warn(f"BinManager respondió {r.status_code}", ms)
+        return _warn(f"BinManager respondió {r.status_code if r else 'None'}", ms)
     except httpx.TimeoutException:
         return _warn(f"BinManager timeout (>{_TIMEOUT}s)", _elapsed_ms(t0))
     except Exception as e:

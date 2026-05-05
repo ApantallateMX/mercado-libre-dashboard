@@ -72,7 +72,7 @@ def _wh_name_to_zone(wname: str) -> str:
     return "tj"
 
 
-async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
+async def _fetch_sellable_stock(sku: str) -> dict:
     """Consulta stock vendible en BinManager via Warehouse + Condition endpoints.
 
     - Warehouse: totales reales por almacen (MTY/CDMX/TJ)
@@ -82,7 +82,7 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     Retorna {stock_gr, stock_ic, stock_other, total_stock, avail_total}
     """
     import json as _json
-    from app.services.binmanager_client import get_shared_bm
+    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_ss
     base = _bm_base_sku(sku)
     conditions = _bm_conditions_for_sku(sku)
 
@@ -108,16 +108,13 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     }
 
     bm_cli = await get_shared_bm()
-    wh_resp, avail_direct, cond_resp = await asyncio.gather(
-        http.post(BINMANAGER_WAREHOUSE_URL, json=wh_payload, timeout=15.0),
-        bm_cli.get_available_qty(base),
-        http.post(BINMANAGER_CONDITION_URL, json=cond_payload, timeout=15.0),
-        return_exceptions=True,
-    )
+    wh_resp = await _bm_post_ss(BINMANAGER_WAREHOUSE_URL, wh_payload, timeout=15.0)
+    avail_direct = await bm_cli.get_available_qty(base)
+    cond_resp = await _bm_post_ss(BINMANAGER_CONDITION_URL, cond_payload, timeout=15.0)
 
     # --- Totales por almacen (fisico) ---
     total_mty = total_cdmx = total_tj = 0
-    if not isinstance(wh_resp, Exception) and wh_resp.status_code == 200:
+    if wh_resp and wh_resp.status_code == 200:
         for row in (wh_resp.json() or []):
             qty = row.get("QtyTotal", 0) or 0
             zone = _wh_name_to_zone(row.get("WarehouseName") or "")
@@ -131,12 +128,12 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     grand_total = total_mty + total_cdmx  # TJ excluido
 
     # --- Stock disponible neto (excluye reservados para ordenes pendientes) ---
-    avail_total = int(avail_direct) if not isinstance(avail_direct, Exception) else 0
+    avail_total = int(avail_direct) if avail_direct is not None else 0
     avail_total = avail_total or grand_total  # fallback a total fisico si falla
 
     # --- Desglose GR vs IC por condicion ---
     gr_qty = ic_qty = 0
-    if not isinstance(cond_resp, Exception) and cond_resp.status_code == 200:
+    if cond_resp and cond_resp.status_code == 200:
         cond_data = cond_resp.json() or {}
         conditions_raw = cond_data.get("Conditions_JSON") or "[]"
         try:
@@ -178,8 +175,9 @@ async def _fetch_sellable_stock(sku: str, http: httpx.AsyncClient) -> dict:
     }
 
 
-async def _fetch_binmanager_product_info(sku: str, http: httpx.AsyncClient) -> dict:
+async def _fetch_binmanager_product_info(sku: str) -> dict:
     """Fetch product info (Brand, Model, Title) from BinManager InventoryReport."""
+    from app.services.binmanager_client import bm_post as _bm_post_pi
     try:
         payload = {
             "COMPANYID": BINMANAGER_COMPANY_ID,
@@ -188,12 +186,7 @@ async def _fetch_binmanager_product_info(sku: str, http: httpx.AsyncClient) -> d
             "NUMBERPAGE": 1,
             "RECORDSPAGE": 10
         }
-        resp = await http.post(
-            BINMANAGER_INVENTORY_URL,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=15.0
-        )
+        resp = await _bm_post_pi(BINMANAGER_INVENTORY_URL, payload, timeout=15.0)
         if resp.status_code == 200:
             data = resp.json()
             if data and isinstance(data, list) and len(data) > 0:
@@ -353,10 +346,10 @@ async def compare_skus(skus: list[str]):
         results = []
         sem = asyncio.Semaphore(10)
 
-        async def process_sku(sku: str, http: httpx.AsyncClient):
+        async def process_sku(sku: str):
             async with sem:
                 # 1. Consultar BinManager por sufijos vendibles
-                bm = await _fetch_sellable_stock(sku, http)
+                bm = await _fetch_sellable_stock(sku)
 
                 # 2. Buscar TODOS los listings en MeLi por SKU
                 meli_items = await client.search_all_items_by_sku(sku)
@@ -444,11 +437,10 @@ async def compare_skus(skus: list[str]):
                     "listing_score": best_score if best_item else None,
                 }
 
-        async with httpx.AsyncClient() as http:
-            tasks = [process_sku(sku, http) for sku in skus]
-            for coro in asyncio.as_completed(tasks):
-                result = await coro
-                results.append(result)
+        tasks = [process_sku(sku) for sku in skus]
+        for coro in asyncio.as_completed(tasks):
+            result = await coro
+            results.append(result)
 
         # Ordenar: candidatos a lanzar primero, luego pausados, luego activos, luego sin stock
         priority = {"not_published": 0, "paused": 1, "active": 2, "no_stock": 3}
@@ -485,9 +477,7 @@ async def research_sku(body: dict):
 
     try:
         # Fetch product info from BinManager (Brand, Model, Title)
-        bm_info = {}
-        async with httpx.AsyncClient() as http:
-            bm_info = await _fetch_binmanager_product_info(sku, http)
+        bm_info = await _fetch_binmanager_product_info(sku)
 
         result = await research_product(sku, client, bm_info=bm_info)
         return result

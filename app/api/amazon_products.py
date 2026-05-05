@@ -1551,9 +1551,9 @@ async def _enrich_bm_amz(items: list) -> None:
         return
 
     logger.info(f"[BM-AMZ] Consultando {len(base_to_amz_skus)} SKUs base: {list(base_to_amz_skus)}")
-    sem = asyncio.Semaphore(15)
+    from app.services.binmanager_client import bm_post as _bm_post_amz
 
-    async def _fetch_base(base: str, amz_skus: list[str], http: httpx.AsyncClient) -> None:
+    async def _fetch_base(base: str, amz_skus: list[str]) -> None:
         wh_payload = {
             "COMPANYID": 1, "SKU": base, "WarehouseID": None,
             "LocationID": _BM_LOC_IDS, "BINID": None,
@@ -1575,41 +1575,28 @@ async def _enrich_bm_amz(items: list) -> None:
         wh_rows: list = []
         stock_rows: list = []
         inv_rows: list = []
-        async with sem:
-            try:
-                r_wh, r_stock, r_inv = await asyncio.gather(
-                    http.post(_BM_WH_URL,  json=wh_payload,   timeout=15.0),
-                    http.post(_BM_INV_URL,  json=stock_payload, timeout=15.0),
-                    http.post(_BM_INV_URL,  json=inv_payload,   timeout=15.0),
-                    return_exceptions=True,
-                )
-                if not isinstance(r_wh, Exception):
-                    if r_wh.status_code == 200:
-                        wh_rows = r_wh.json()
-                        if not isinstance(wh_rows, list):
-                            wh_rows = []
-                    else:
-                        logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
-                else:
-                    logger.warning(f"[BM-AMZ] WH excepcion para base={base}: {r_wh}")
-                if not isinstance(r_stock, Exception):
-                    if r_stock.status_code == 200:
-                        stock_rows = r_stock.json()
-                        if not isinstance(stock_rows, list):
-                            stock_rows = []
-                    else:
-                        logger.warning(f"[BM-AMZ] STOCK HTTP {r_stock.status_code} para base={base}")
-                else:
-                    logger.warning(f"[BM-AMZ] STOCK excepcion para base={base}: {r_stock}")
-                if not isinstance(r_inv, Exception):
-                    if r_inv.status_code == 200:
-                        inv_rows = r_inv.json()
-                        if not isinstance(inv_rows, list):
-                            inv_rows = []
-                else:
-                    logger.warning(f"[BM-AMZ] INV excepcion para base={base}: {r_inv}")
-            except Exception as exc:
-                logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
+        try:
+            r_wh = await _bm_post_amz(_BM_WH_URL, wh_payload, timeout=15.0)
+            if r_wh and r_wh.status_code == 200:
+                wh_rows = r_wh.json()
+                if not isinstance(wh_rows, list):
+                    wh_rows = []
+            elif r_wh:
+                logger.warning(f"[BM-AMZ] WH HTTP {r_wh.status_code} para base={base}")
+            r_stock = await _bm_post_amz(_BM_INV_URL, stock_payload, timeout=15.0)
+            if r_stock and r_stock.status_code == 200:
+                stock_rows = r_stock.json()
+                if not isinstance(stock_rows, list):
+                    stock_rows = []
+            elif r_stock:
+                logger.warning(f"[BM-AMZ] STOCK HTTP {r_stock.status_code} para base={base}")
+            r_inv = await _bm_post_amz(_BM_INV_URL, inv_payload, timeout=15.0)
+            if r_inv and r_inv.status_code == 200:
+                inv_rows = r_inv.json()
+                if not isinstance(inv_rows, list):
+                    inv_rows = []
+        except Exception as exc:
+            logger.warning(f"[BM-AMZ] Error al conectar BM para base={base}: {exc}")
 
         mty, cdmx, tj = _parse_wh_rows_amz(wh_rows)
 
@@ -1655,11 +1642,10 @@ async def _enrich_bm_amz(items: list) -> None:
             for item in sku_to_items.get(amz_sku, []):
                 item.update(inv)
 
-    async with httpx.AsyncClient(timeout=30.0) as http:
-        await asyncio.gather(
-            *[_fetch_base(base, skus, http) for base, skus in base_to_amz_skus.items()],
-            return_exceptions=True,
-        )
+    await asyncio.gather(
+        *[_fetch_base(base, skus) for base, skus in base_to_amz_skus.items()],
+        return_exceptions=True,
+    )
 
 
 async def _refresh_bm_all_bg(listings: list) -> None:

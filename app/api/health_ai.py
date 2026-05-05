@@ -26,35 +26,31 @@ async def _fetch_bm_product(sku: str) -> dict:
     """
     if not sku:
         return {}
+    from app.services.binmanager_client import bm_post as _bm_post_hai
     try:
-        async with httpx.AsyncClient(timeout=10.0) as http:
-            resp = await http.post(
-                _BM_INVENTORY_URL,
-                json={
-                    "COMPANYID": _BM_COMPANY_ID,
-                    "SEARCH": sku,
-                    "CONCEPTID": _BM_CONCEPT_ID,
-                    "NUMBERPAGE": 1,
-                    "RECORDSPAGE": 10,
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and isinstance(data, list):
-                    row = data[0]
-                    for item in data:
-                        if item.get("SKU", "").upper() == sku.upper():
-                            row = item
-                            break
-                    return {
-                        "brand": row.get("Brand", "") or "",
-                        "model": row.get("Model", "") or "",
-                        "title": row.get("Title", "") or "",
-                        "description": row.get("Description", "") or "",
-                        "upc": row.get("UPC", "") or "",
-                        "category": row.get("CategoryName", "") or "",
-                    }
+        resp = await _bm_post_hai(_BM_INVENTORY_URL, {
+            "COMPANYID": _BM_COMPANY_ID,
+            "SEARCH": sku,
+            "CONCEPTID": _BM_CONCEPT_ID,
+            "NUMBERPAGE": 1,
+            "RECORDSPAGE": 10,
+        }, timeout=10.0)
+        if resp and resp.status_code == 200:
+            data = resp.json()
+            if data and isinstance(data, list):
+                row = data[0]
+                for item in data:
+                    if item.get("SKU", "").upper() == sku.upper():
+                        row = item
+                        break
+                return {
+                    "brand": row.get("Brand", "") or "",
+                    "model": row.get("Model", "") or "",
+                    "title": row.get("Title", "") or "",
+                    "description": row.get("Description", "") or "",
+                    "upc": row.get("UPC", "") or "",
+                    "category": row.get("CategoryName", "") or "",
+                }
     except Exception:
         pass
     return {}

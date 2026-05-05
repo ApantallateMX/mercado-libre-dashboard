@@ -58,8 +58,8 @@ def _parse_wh(rows) -> tuple:
     return mty, cdmx, tj
 
 
-async def _bm_stock(sku: str, hclient: httpx.AsyncClient) -> dict:
-    from app.services.binmanager_client import get_shared_bm
+async def _bm_stock(sku: str) -> dict:
+    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_ps
     base = _base_sku(sku)
     cond = _bm_conditions(sku)
     wh_payload = {
@@ -69,13 +69,9 @@ async def _bm_stock(sku: str, hclient: httpx.AsyncClient) -> dict:
     }
     try:
         bm_cli = await get_shared_bm()
-        r_wh, avail = await asyncio.gather(
-            hclient.post(_BM_WH_URL, json=wh_payload, timeout=12.0),
-            bm_cli.get_available_qty(base),
-            return_exceptions=True,
-        )
-        rows_wh = r_wh.json() if not isinstance(r_wh, Exception) and r_wh.status_code == 200 else []
-        if isinstance(avail, Exception): avail = 0
+        r_wh = await _bm_post_ps(_BM_WH_URL, wh_payload, timeout=12.0)
+        avail = await bm_cli.get_available_qty(base)
+        rows_wh = r_wh.json() if r_wh and r_wh.status_code == 200 else []
         mty, cdmx, tj = _parse_wh(rows_wh)
         return {"mty": mty, "cdmx": cdmx, "tj": tj, "avail": avail, "total": mty + cdmx + tj}
     except Exception:
@@ -382,12 +378,11 @@ async def list_productos(
         # 5. Consulta BM en paralelo (cap 100 SKUs por batch)
         bm_results: dict = {}
         if unique_skus:
-            async with httpx.AsyncClient() as hc:
-                tasks = [(sku, _bm_stock(sku, hc)) for sku in unique_skus[:100]]
-                raw   = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
-                for (sku, _), res in zip(tasks, raw):
-                    if not isinstance(res, Exception):
-                        bm_results[sku] = res
+            tasks_bm = [_bm_stock(sku) for sku in unique_skus[:100]]
+            raw = await asyncio.gather(*tasks_bm, return_exceptions=True)
+            for sku, res in zip(unique_skus[:100], raw):
+                if not isinstance(res, Exception):
+                    bm_results[sku] = res
 
         # 6. Video records desde DB
         video_recs = await get_videos_for_items(list(seen_bodies), user_id)
@@ -606,8 +601,7 @@ async def get_producto_detail(item_id: str):
         sku = _extract_sku(body)
         bm  = {}
         if sku:
-            async with httpx.AsyncClient() as hc:
-                bm = await _bm_stock(sku, hc)
+            bm = await _bm_stock(sku)
 
         return {
             **_item_row(body, video_rec, bm),

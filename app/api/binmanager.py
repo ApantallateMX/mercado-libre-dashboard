@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from typing import List
 
 from app.services.price_monitor import price_monitor
-from app.services.binmanager_client import BinManagerClient
+from app.services.binmanager_client import BinManagerClient, get_shared_bm
 
 router = APIRouter(prefix="/api/bm", tags=["binmanager"])
 
@@ -132,8 +132,6 @@ async def price_stream():
 # ── Caché local para retail-ph-batch ─────────────────────────────────────────
 _ph_batch_cache: dict[str, tuple[float, float]] = {}  # sku -> (ts, price_usd)
 _PH_BATCH_TTL = 1800  # 30 min
-_bm_client = BinManagerClient()
-_bm_client_ready = False
 
 
 class SkuBatchRequest(BaseModel):
@@ -144,12 +142,10 @@ class SkuBatchRequest(BaseModel):
 async def retail_ph_batch(body: SkuBatchRequest):
     """
     RetailPrice PH para una lista de SKUs.
-    Usa caché de 30 min. Primera llamada hace login automático.
+    Usa caché de 30 min. Usa el cliente BM compartido (serializado via _BM_GLOBAL_SEM).
     Respuesta: {sku: price_usd | null}
     """
-    global _bm_client_ready
-    if not _bm_client_ready:
-        _bm_client_ready = await _bm_client.login()
+    bm_client = await get_shared_bm()
 
     now = time.time()
     result = {}
@@ -163,14 +159,10 @@ async def retail_ph_batch(body: SkuBatchRequest):
         else:
             to_fetch.append(sku_up)
 
-    # Fetch en paralelo con semáforo
-    sem = asyncio.Semaphore(10)
-
     async def fetch_one(sku):
-        async with sem:
-            price = await _bm_client.get_retail_price_ph(sku)
-            _ph_batch_cache[sku] = (now, price)
-            return sku, price
+        price = await bm_client.get_retail_price_ph(sku)
+        _ph_batch_cache[sku] = (now, price)
+        return sku, price
 
     if to_fetch:
         fetched = await asyncio.gather(*[fetch_one(s) for s in to_fetch])
