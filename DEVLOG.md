@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-05 — FIX CRÍTICO: Usuarios BM bloqueados — cola global para todas las llamadas HTTP
+
+### Problema
+Los usuarios de BinManager (ivana.talavera, vianey.ramirez, christian.pastrano, etc.) eran
+expulsados de su sesión porque el dashboard hacía múltiples requests SIMULTÁNEOS a BM usando
+`httpx.AsyncClient()` crudo con `Semaphore(15)` y `Semaphore(10)` — completamente fuera del
+`_BM_GLOBAL_SEM`. BM interpreta múltiples requests con la misma cookie como conflicto → expulsa
+a todos.
+
+### Causa raíz
+El `_BM_GLOBAL_SEM = Semaphore(1)` en `binmanager_client.py` solo aplica cuando se usa
+`BinManagerClient._post()`. Había 10 sitios en `main.py` que usaban `httpx.AsyncClient()` crudo
+o `bm._client().post()` directamente, bypaseando por completo el semáforo global.
+
+Los peores ofensores:
+- `_enrich_bm_stock_batch` fallback: `Semaphore(15)` → 15 requests paralelos
+- `/partials/lanzar_gaps` comparison: `Semaphore(15)` en 2 fases → 30 potenciales requests
+- `_enrich_with_bm_stock`: `Semaphore(10)` → 10 requests paralelos
+
+### Solución
+1. Nueva función `bm_post(url, payload, timeout)` en `binmanager_client.py` — único punto de
+   entrada para cualquier POST a BM, siempre vía `_BM_GLOBAL_SEM`.
+2. 10 sitios en `main.py` migrados de httpx crudo a `bm_post()`. Todos los `Semaphore(15/10)`
+   eliminados. Resultado: máximo 1 request activo a BM en todo el proceso.
+
+- Commit: 37ce687
+
+---
+
 ## 2026-05-05 — FIX: Stock KPIs todos 0 — campo TotalQty (no QTY) en catalog sync
 
 ### Problema
