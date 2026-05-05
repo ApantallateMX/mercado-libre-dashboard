@@ -94,13 +94,19 @@ def _parse_state(state: str) -> str | None:
 
 
 @router.get("/connect")
-async def connect():
+async def connect(request: Request):
     """Inicia el flujo OAuth redirigiendo a Mercado Libre."""
     if not MELI_CLIENT_ID:
         raise HTTPException(
             status_code=500,
             detail="MELI_CLIENT_ID no configurado. Revisa el archivo .env"
         )
+
+    import os as _os_ml
+    _app_base = (_os_ml.getenv("APP_BASE_URL") or "").rstrip("/")
+    if not _app_base:
+        _app_base = str(request.base_url).rstrip("/").replace("http://", "https://")
+    _redirect_uri = f"{_app_base}/auth/callback"
 
     code_verifier = _generate_code_verifier()
     code_challenge = _generate_code_challenge(code_verifier)
@@ -109,7 +115,7 @@ async def connect():
     params = {
         "response_type": "code",
         "client_id": MELI_CLIENT_ID,
-        "redirect_uri": MELI_REDIRECT_URI,
+        "redirect_uri": _redirect_uri,
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
@@ -118,11 +124,12 @@ async def connect():
     }
 
     auth_url = f"{MELI_AUTH_URL}?{urlencode(params)}"
+    logger.info(f"[MeLi OAuth] connect → redirect_uri={_redirect_uri}")
     return RedirectResponse(url=auth_url)
 
 
 @router.get("/callback")
-async def callback(code: str = None, state: str = None, error: str = None):
+async def callback(request: Request, code: str = None, state: str = None, error: str = None):
     """Callback de OAuth - intercambia code por tokens."""
     if error:
         raise HTTPException(status_code=400, detail=f"Error de autorizacion: {error}")
@@ -137,6 +144,12 @@ async def callback(code: str = None, state: str = None, error: str = None):
     if not code_verifier:
         raise HTTPException(status_code=400, detail="State invalido - posible CSRF")
 
+    import os as _os_ml_cb
+    _app_base = (_os_ml_cb.getenv("APP_BASE_URL") or "").rstrip("/")
+    if not _app_base:
+        _app_base = str(request.base_url).rstrip("/").replace("http://", "https://")
+    _redirect_uri = f"{_app_base}/auth/callback"
+
     # Intercambiar code por access_token
     async with httpx.AsyncClient() as client:
         payload = {
@@ -144,7 +157,7 @@ async def callback(code: str = None, state: str = None, error: str = None):
             "client_id": MELI_CLIENT_ID,
             "client_secret": MELI_CLIENT_SECRET,
             "code": code,
-            "redirect_uri": MELI_REDIRECT_URI,
+            "redirect_uri": _redirect_uri,
             "code_verifier": code_verifier
         }
         response = await client.post(
