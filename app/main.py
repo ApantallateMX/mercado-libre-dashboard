@@ -518,30 +518,19 @@ async def lifespan(app: FastAPI):
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
 
-    # ── Sync semanal de catálogo BM (domingo 9pm Monterrey CDT = lunes 02:00 UTC) ──
-    # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
-    # 1 sola corrida/semana para no saturar BM. Concurrencia=3, ~10 min.
-    async def _weekly_catalog_sync():
-        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    # ── Sync de catálogo BM cada 5 min — inventario CDMX+MTY disponible (LOCATIONID=47,62,68) ──
+    # ConfColumns_Conditions_Excel: 1 llamada, ~8k SKUs, devuelve qty ya sin reservas.
+    # Reemplaza Get_GlobalStock_InventoryBySKU como fuente primaria de stock.
+    async def _catalog_sync_loop():
+        await asyncio.sleep(60)  # delay inicial — dejar que el servidor arranque
         while True:
-            _now = _dt.now(_tz.utc)
-            # Domingo 9pm Monterrey CDT (UTC-5) = lunes 02:00 UTC
-            # weekday: lunes=0, martes=1, ..., domingo=6
-            days_until_monday = (0 - _now.weekday()) % 7
-            if days_until_monday == 0 and _now.hour >= 2:
-                days_until_monday = 7  # ya pasó el lunes 02:00 UTC de esta semana
-            _next = (_now + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
-            _secs = (_next - _now).total_seconds()
-            logger.info(f"[CATALOG-SYNC] Próximo sync semanal en {_secs/3600:.1f}h (domingo 9pm MTY = lunes 02:00 UTC)")
-            await asyncio.sleep(_secs)
-            logger.info("[CATALOG-SYNC] Iniciando sync semanal de catálogo BM...")
             try:
-                synced = await _sync_bm_product_catalog(source="auto")
-                logger.info(f"[CATALOG-SYNC] Sync semanal completado: {synced} SKUs")
+                await _sync_bm_product_catalog(source="auto")
             except Exception as _e:
-                logger.warning(f"[CATALOG-SYNC] Error en sync semanal: {_e}")
+                logger.warning(f"[CATALOG-SYNC] Error en loop: {_e}")
+            await asyncio.sleep(300)  # cada 5 minutos
     if not _BM_DISABLED:
-        asyncio.create_task(_weekly_catalog_sync())
+        asyncio.create_task(_catalog_sync_loop())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
     start_gap_scan_loop()
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
@@ -2586,9 +2575,9 @@ _bm_catalog_cache: dict[str, dict] = {}
 
 
 async def _sync_bm_product_catalog(source: str = "auto") -> int:
-    """Descarga LastRetailPricePurchaseHistory para todos los SKUs de BM via
-    ConfColumns_Conditions_Excel. 1 sola llamada, ~8,786 SKUs, 97% cobertura LRPPH.
-    Corre 1x/semana (domingo 9pm Monterrey). Guarda en DB + actualiza _bm_retail_ph_cache.
+    """Descarga inventario + RetailPH para todos los SKUs de BM via
+    ConfColumns_Conditions_Excel. 1 sola llamada, filtrada a CDMX+MTY (LOCATIONID=47,62,68).
+    Corre cada 5 min. Guarda en DB + actualiza _bm_retail_ph_cache + _bm_stock_cache.
     Retorna cantidad de SKUs guardados en DB.
     """
     global _bm_retail_ph_cache, _catalog_sync_running, _catalog_sync_history, _catalog_sync_task
@@ -2611,10 +2600,11 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
             f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
             json={
                 "COMPANYID": 1,
+                "LOCATIONID": "47,62,68",   # CDMX (Ebanistas + B2B) + MTY (Colombia + Maxx)
                 "NEEDRETAILPRICEPH": True,
                 "NEEDRETAILPRICE": True,
                 "NEEDAVGCOST": True,
-                "NEEDSALES": True,
+                "NEEDSALES": False,
             },
             headers=_AJAX_HEADERS,
             timeout=120,
@@ -2665,6 +2655,24 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "retail_ph": _row["retail_ph"],
                 "raw":       _json.loads(_row["raw_data"]),   # dict completo accesible en memoria
             }
+
+        # Poblar _bm_stock_cache desde el catálogo — ConfColumns ya filtra CDMX+MTY
+        # y devuelve qty disponible (reservas ya deducidas por BM).
+        # Esto reemplaza Get_GlobalStock_InventoryBySKU como fuente de stock.
+        _stock_now = _time.time()
+        _stock_updated = 0
+        for _r in rows:
+            _q = _r.get("qty", 0)
+            if _q >= 0:  # incluir ceros verificados
+                _bm_stock_cache[_r["sku"]] = (_stock_now, {
+                    "avail_total": _q,
+                    "reserved_total": 0,
+                    "total": _q,
+                    "mty": 0, "cdmx": 0, "tj": 0,
+                    "_v": True,
+                })
+                _stock_updated += 1
+        logger.info(f"[CATALOG-SYNC] _bm_stock_cache actualizado: {_stock_updated} SKUs")
 
         with_price  = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
         with_cat    = sum(1 for _r in rows if _r.get("category"))
@@ -2736,8 +2744,23 @@ async def _load_catalog_from_db() -> int:
                 "retail_ph": rph,
                 "raw":       _raw_dict,
             }
+        # También poblar _bm_stock_cache desde el catálogo para que el stock
+        # esté disponible desde el primer request (antes del primer sync de 5 min).
+        _stock_loaded = 0
+        _stock_now = _time.time()
+        for sku, info in _bm_catalog_cache.items():
+            _q = info.get("qty", 0)
+            if _q >= 0:
+                _bm_stock_cache[sku] = (_stock_now, {
+                    "avail_total": _q,
+                    "reserved_total": 0,
+                    "total": _q,
+                    "mty": 0, "cdmx": 0, "tj": 0,
+                    "_v": True,
+                })
+                _stock_loaded += 1
         logger.info(f"[CATALOG-LOAD] {len(_bm_catalog_cache)} SKUs cargados de DB al arrancar "
-                    f"({loaded} con RetailPH)")
+                    f"({loaded} con RetailPH, {_stock_loaded} en stock cache)")
         return loaded
     except Exception as _e:
         logger.warning(f"[CATALOG-LOAD] Error cargando catálogo de DB: {_e}")

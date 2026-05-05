@@ -104,6 +104,7 @@ async def _bm_fetch_all_skus_with_stock(http: httpx.AsyncClient) -> list[dict]:
             f"{_BM_BASE}/InventoryReport/InventoryReport/ConfColumns_Conditions_Excel",
             json={
                 "COMPANYID": _BM_COMPANY,
+                "LOCATIONID": "47,62,68",   # CDMX (Ebanistas + B2B) + MTY (Colombia + Maxx)
                 "NEEDRETAILPRICEPH": True,
                 "NEEDRETAILPRICE": True,
                 "NEEDAVGCOST": True,
