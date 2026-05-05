@@ -28,28 +28,9 @@ def _get_bm_sem() -> asyncio.Semaphore:
         _BM_GLOBAL_SEM = asyncio.Semaphore(1)
     return _BM_GLOBAL_SEM
 
-# ── Bulk snapshot compartido ──────────────────────────────────────────────────
-# main.py actualiza esto después de cada prewarm exitoso.
-# lanzar.py y otros módulos lo leen sin crear sesiones BM paralelas.
-# Estructura: (timestamp_float, list[dict]) | None
-_bulk_snapshot: "tuple[float, list] | None" = None
-
-
-def update_bulk_snapshot(rows: list) -> None:
-    """Llamado por el prewarm de main.py tras cada fetch bulk exitoso."""
-    global _bulk_snapshot
-    import time as _t
-    _bulk_snapshot = (_t.time(), list(rows))
-
-
-def get_bulk_snapshot() -> "tuple[float, list] | None":
-    """Devuelve (timestamp, rows) del último bulk fetch, o None si aún no hay datos."""
-    return _bulk_snapshot
-
-
 _BM_BASE = "https://binmanager.mitechnologiesinc.com"
-_BM_USER = os.getenv("BM_USER", "Claude.Jovan@mitechnologiesinc.com")
-_BM_PASS = os.getenv("BM_PASS", "claude123")
+_BM_USER = os.getenv("BM_USER", "claudio.suarez@mitechnologiesinc.com")
+_BM_PASS = os.getenv("BM_PASS", "123456")
 
 _AJAX_HEADERS = {
     "Content-Type": "application/json",
@@ -522,11 +503,3 @@ async def get_shared_bm() -> BinManagerClient:
     if not _shared_bm._logged_in:
         await _shared_bm.login()
     return _shared_bm
-
-
-async def bm_post(url: str, payload: dict, timeout: float = 30.0) -> "Optional[httpx.Response]":
-    """POST serializado a BM — un solo request activo a la vez, via _BM_GLOBAL_SEM.
-    Usa la sesión compartida con login automático. Retorna Response o None si falla.
-    ÚNICO punto de entrada para cualquier llamada HTTP a BinManager en todo el proceso."""
-    bm = await get_shared_bm()
-    return await bm.post_inventory(url, payload, timeout=timeout)

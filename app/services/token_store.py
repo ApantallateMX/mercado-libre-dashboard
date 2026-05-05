@@ -591,10 +591,9 @@ async def init_db():
             "ON billing_requests(platform, order_number)"
         )
         # ─────────────────────────────────────────────────────────────────
-        # TABLA: bm_product_catalog — catálogo completo de SKUs desde BM (ConfColumns_Conditions_Excel)
-        # Columnas indexadas: retail_ph, brand, model, title, category, qty
-        # raw_data: JSON completo del row (UPC, Size, Description, condiciones GRA/GRB/etc., precios)
-        # Actualizada 1x/semana (domingo 9pm MTY). Sobrevive deploys y resets de cache.
+        # TABLA: bm_product_catalog — info estática de SKUs desde BM
+        # retail_ph, brand, model, title — actualizada 1x/semana (domingo 9pm MTY)
+        # Sobrevive deploys, reinicios y resets de cache en memoria.
         # ─────────────────────────────────────────────────────────────────
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bm_product_catalog (
@@ -603,22 +602,9 @@ async def init_db():
                 brand      TEXT NOT NULL DEFAULT '',
                 model      TEXT NOT NULL DEFAULT '',
                 title      TEXT NOT NULL DEFAULT '',
-                category   TEXT NOT NULL DEFAULT '',
-                qty        INTEGER NOT NULL DEFAULT 0,
-                raw_data   TEXT NOT NULL DEFAULT '{}',
                 updated_at REAL NOT NULL DEFAULT 0
             )
         """)
-        # Migraciones: agregar columnas nuevas si la tabla ya existe sin ellas
-        for _col_sql in [
-            "ALTER TABLE bm_product_catalog ADD COLUMN category TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE bm_product_catalog ADD COLUMN qty INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE bm_product_catalog ADD COLUMN raw_data TEXT NOT NULL DEFAULT '{}'",
-        ]:
-            try:
-                await db.execute(_col_sql)
-            except Exception:
-                pass  # Columna ya existe
         await db.execute("""
             CREATE TABLE IF NOT EXISTS item_sync_log (
                 item_id    TEXT NOT NULL,
@@ -704,26 +690,18 @@ async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[
 
 async def upsert_bm_catalog_batch(rows: list[dict]) -> int:
     """Guarda info de producto BM en bm_product_catalog.
-    rows: list of {sku, retail_ph, brand, model, title, category, qty, raw_data}
-    raw_data: JSON string con el row completo de BM (UPC, Size, Description, condiciones, etc.)
+    rows: list of {sku, retail_ph, brand, model, title}
     Retorna cantidad de rows insertadas/actualizadas.
     """
     if not rows:
         return 0
-    import json as _json
     now = __import__("time").time()
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.executemany(
             """INSERT OR REPLACE INTO bm_product_catalog
-               (sku, retail_ph, brand, model, title, category, qty, raw_data, updated_at)
-               VALUES (:sku, :retail_ph, :brand, :model, :title, :category, :qty, :raw_data, :updated_at)""",
-            [{
-                **r,
-                "category": r.get("category", ""),
-                "qty":      r.get("qty", 0),
-                "raw_data": r.get("raw_data") if isinstance(r.get("raw_data"), str) else _json.dumps(r.get("raw_data") or {}),
-                "updated_at": now,
-            } for r in rows],
+               (sku, retail_ph, brand, model, title, updated_at)
+               VALUES (:sku, :retail_ph, :brand, :model, :title, :updated_at)""",
+            [{**r, "updated_at": now} for r in rows],
         )
         await db.commit()
     return len(rows)
@@ -734,7 +712,7 @@ async def get_bm_catalog_all() -> list[dict]:
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT sku, retail_ph, brand, model, title, category, qty, raw_data, updated_at FROM bm_product_catalog"
+            "SELECT sku, retail_ph, brand, model, title, updated_at FROM bm_product_catalog"
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]

@@ -562,29 +562,17 @@ async def _run_gap_scan(user_id: str | None = None):
                 finally:
                     _ctx_fx.reset(token_fx)
 
-            # 2b. Obtener inventario BM desde snapshot compartido (llenado por prewarm).
-            #     Cero sesiones BM paralelas — todo va por el semáforo global de binmanager_client.
-            _prog(10, "bm_cache", "Leyendo inventario BinManager desde caché...", "")
-            import time as _scan_time
-            from app.services.binmanager_client import get_bulk_snapshot as _get_snap, get_shared_bm as _get_shared_bm_scan
-            _snap = _get_snap()
-            _snap_age = round(_scan_time.time() - _snap[0]) if _snap else None
-            if _snap and _snap_age < 3600:  # acepta hasta 1h de antigüedad
-                bm_products = [r for r in _snap[1] if int(r.get("TotalQty") or r.get("AvailableQTY") or 0) > 0]
-                logger.info(f"BM gap scan: usando bulk snapshot ({len(bm_products)} SKUs, {_snap_age}s de antigüedad)")
-                _prog(15, "bm_cache_ok", "Inventario BM desde caché", f"{len(bm_products)} SKUs")
-            else:
-                # Sin snapshot o demasiado stale — usar cliente compartido (respeta semáforo)
-                logger.info("BM gap scan: snapshot vacío/stale — fetch fresco vía cliente compartido")
-                _prog(10, "bm_fetch", "Descargando inventario BinManager...", "cliente compartido")
-                _bm_cli_scan = await _get_shared_bm_scan()
-                _raw = await _bm_cli_scan.get_bulk_stock()
-                bm_products = [r for r in _raw if int(r.get("TotalQty") or r.get("AvailableQTY") or 0) > 0]
-                logger.info(f"BM gap scan: fetch fresco ({len(bm_products)} SKUs)")
-                _prog(15, "bm_fetch_ok", "Inventario BM cargado", f"{len(bm_products)} SKUs")
+            # 2b. Fetch all BM SKUs with stock — must login first
+            _prog(10, "bm_login", "Conectando a BinManager...", "")
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as bm_http:
+                bm_logged_in = await _bm_login(bm_http)
+                if not bm_logged_in:
+                    raise Exception("BinManager login failed — verifica BM_USER/BM_PASS")
+                _prog(15, "bm_fetch", "Descargando inventario BinManager...", "ConfColumns...")
+                bm_products = await _bm_fetch_all_skus_with_stock(bm_http)
 
             logger.info(f"BM gap scan: {len(bm_products)} SKUs con stock en BM")
-            _prog(28, "bm_done", "Inventario BM listo", f"{len(bm_products)} SKUs con stock")
+            _prog(28, "bm_done", "Inventario BM cargado", f"{len(bm_products)} SKUs con stock")
 
             # Build BM map: base_sku → product info
             _ALL_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
@@ -1166,24 +1154,11 @@ async def trigger_scan_all(request: Request):
 @router.get("/scan-status")
 async def get_scan_status():
     """Estado del último scan, incluyendo progreso en tiempo real."""
-    import time as _t
-    _STALE_THRESHOLD = 600  # 10 min — scan que lleva más de esto se considera muerto
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM bm_gap_scan_status WHERE id=1")
         row = await cursor.fetchone()
-        base = dict(row) if row else {"status": "idle"}
-        # Auto-reset si el scan lleva >10 min "running" sin progreso real en memoria
-        if base.get("status") == "running":
-            started = float(base.get("started_at") or 0)
-            in_mem_pct = (_scan_progress or {}).get("pct", 0)
-            age = _t.time() - started
-            if started and age > _STALE_THRESHOLD and in_mem_pct < 5:
-                await db.execute(
-                    "UPDATE bm_gap_scan_status SET status='idle', error='scan interrumpido (stale reset)' WHERE id=1"
-                )
-                await db.commit()
-                base["status"] = "idle"
+    base = dict(row) if row else {"status": "idle"}
     # Merge in-memory progress when running
     if base.get("status") == "running":
         base["progress"] = _scan_progress
