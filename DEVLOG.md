@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-04 — FIX: Stock KPIs mostraban 0 — catalog-first mode en prewarm
+
+### Problema
+El tab Productos → Stock mostraba todos los KPIs en 0 (Sin Stock, Riesgo Sobreventa, etc.)
+a pesar de que `_bm_stock_cache` tenía 10,301 entradas del catálogo BM.
+
+### Causa raíz
+El prewarm llama `_get_bm_stock_cached(retry_stale=True)`. SKUs de ML no encontrados en el
+catálogo CDMX+MTY iban a `to_fetch`. El prewarm intentaba `get_bulk_stock()` →
+`Get_GlobalStock_InventoryBySKU` (endpoint BLOQUEADO por BM). Con timeout de 270s×2=540s,
+el prewarm podía exceder el límite de 600s y NO escribía `_stock_issues_cache`. Resultado:
+el Stock tab mostraba spinner o zeros stale permanentemente.
+
+### Solución
+Nuevo bloque **CATALOG-FIRST** en `_get_bm_stock_cached`:
+- Si `len(_bm_catalog_cache) > 50` (catálogo activo): SKUs no-catálogo reciben `avail=0` verificado
+  (CDMX+MTY-absent por definición, LOCATIONID=47,62,68). No se llama a BM.
+- El prewarm completa en segundos (sin esperar 540s de timeouts BM).
+- `_stock_issues_cache` se escribe correctamente → KPIs muestran datos reales.
+
+### Otros cambios
+- `/api/catalog/status`: `next_auto_run_label` ahora muestra "cada 5 min (próximo en ~Xmin)"
+- UI `stock_sync.html`, `lanzar_gaps.html`: textos actualizados de "sync semanal" a "sync cada 5 min"
+- Commits: 1982a5c
+
+---
+
 ## 2026-05-01 — OPERACION: Cuenta BM cambiada a Claude.Jovan (cuenta de servicio dedicada)
 
 ### Cambio
