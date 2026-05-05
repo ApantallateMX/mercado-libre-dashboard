@@ -3191,35 +3191,35 @@ async def bm_images_endpoint(sku: str):
             return JSONResponse({"images": [], "_debug": dbg, "error": f"BM status {r.status_code}"})
 
         data = r.json()
-            dbg["data_keys"] = list(data.keys()) if isinstance(data, dict) else type(data).__name__
-            raw = data.get("JSONSKUFiles") if isinstance(data, dict) else None
-            dbg["raw_type"] = type(raw).__name__
-            dbg["raw_len"] = len(raw) if raw else 0
+        dbg["data_keys"] = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+        raw = data.get("JSONSKUFiles") if isinstance(data, dict) else None
+        dbg["raw_type"] = type(raw).__name__
+        dbg["raw_len"] = len(raw) if raw else 0
 
-            if not raw:
-                return JSONResponse({"images": [], "_debug": dbg})
+        if not raw:
+            return JSONResponse({"images": [], "_debug": dbg})
 
-            try:
-                files = json.loads(raw) if isinstance(raw, str) else raw
-                dbg["files_count"] = len(files)
-            except Exception as e:
-                dbg["parse_error"] = str(e)
-                dbg["raw_sample"] = str(raw)[:200]
-                return JSONResponse({"images": [], "_debug": dbg})
+        try:
+            files = json.loads(raw) if isinstance(raw, str) else raw
+            dbg["files_count"] = len(files)
+        except Exception as e:
+            dbg["parse_error"] = str(e)
+            dbg["raw_sample"] = str(raw)[:200]
+            return JSONResponse({"images": [], "_debug": dbg})
 
-            images = []
-            for f in files:
-                url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
-                ext = (f.get("PhotoExtension") or "").lower()
-                if not url or (ext and ext not in _IMAGE_EXTENSIONS):
-                    continue
-                if not any(url.lower().endswith(e) for e in _IMAGE_EXTENSIONS):
-                    continue
-                images.append({"url": url, "type_name": f.get("TypeName") or ""})
-                if len(images) >= 12:
-                    break
+        images = []
+        for f in files:
+            url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
+            ext = (f.get("PhotoExtension") or "").lower()
+            if not url or (ext and ext not in _IMAGE_EXTENSIONS):
+                continue
+            if not any(url.lower().endswith(e) for e in _IMAGE_EXTENSIONS):
+                continue
+            images.append({"url": url, "type_name": f.get("TypeName") or ""})
+            if len(images) >= 12:
+                break
 
-            return {"images": images}
+        return {"images": images}
 
     except Exception as e:
         dbg["exception"] = str(e)
