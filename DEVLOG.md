@@ -7,44 +7,6 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
-## 2026-05-05 — FIX CRÍTICO: Stock muestra valores incorrectos — restaurar Get_GlobalStock LOC47+LOC68
-
-### Problema
-El dashboard mostraba stock erróneo para SKUs BM. Ejemplo: SNTV007461 aparecía con 20
-unidades disponibles cuando el stock real vendible era 1. Causa: se estaba sirviendo
-`TotalQty` de ConfColumns_Conditions_Excel (stock global — incluye condiciones no vendibles
-FRM/DMT/DML/PNP) en lugar de `AvailableQTY` de `Get_GlobalStock_InventoryBySKU CONCEPTID=1`
-(stock vendible LOC47 CDMX + LOC68 MTY MAXX).
-
-### Causa raíz
-Había dos capas de error:
-1. `_sync_bm_product_catalog()` escribía `_bm_stock_cache` desde datos ConfColumns —
-   `TotalQty` global, sin `Reserve`, sin filtro de condiciones no vendibles.
-2. `_get_bm_stock_cached()` tenía un bloque "catalog-first" que devolvía esos datos erróneos
-   sin hacer fetch real a `Get_GlobalStock_InventoryBySKU`.
-
-Además, BM tiene un bug: `Get_GlobalStock_InventoryBySKU` en modo bulk con
-`LOCATIONID="47,62,68"` (multi-location string) siempre retorna 0 filas.
-
-### Solución
-1. **`get_bulk_stock_by_location()`** en `binmanager_client.py`: 2 fetches separados
-   (LOC47 + LOC68), merge por SKU sumando TotalQty y Reserve. Workaround al bug BM.
-   AvailableQTY = max(0, TotalQty_merged - Reserve_merged). Todos los campos son
-   idénticos a `get_bulk_stock()` para compatibilidad total.
-2. Eliminado el bloque que escribía `_bm_stock_cache` desde ConfColumns en
-   `_sync_bm_product_catalog()`. El catálogo solo provee metadata (precio, categoría, marca).
-3. Eliminado el bloque "catalog-first" en `_get_bm_stock_cached()` que cortocircuitaba
-   el fetch real.
-4. Prewarm (`main.py`) y gap scan (`lanzar.py`) actualizados a `get_bulk_stock_by_location()`.
-
-### Acción requerida tras deploy
-1. Click **Actualizar alertas** → prewarm ejecuta `get_bulk_stock_by_location()` (LOC47+LOC68)
-2. Verificar KPIs con valores correctos — SNTV007461 debe mostrar 1, no 20.
-
-- Commit: e6df978
-
----
-
 ## 2026-05-05 — FIX CRÍTICO: Usuarios BM bloqueados — cola global para todas las llamadas HTTP
 
 ### Problema
