@@ -2632,7 +2632,7 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "model":     _row.get("Model") or "",
                 "title":     _row.get("Title") or "",
                 "category":  _row.get("Category") or "",
-                "qty":       int(_row.get("QTY") or 0),
+                "qty":       int(_row.get("TotalQty") or 0),
                 "raw_data":  _json.dumps(_row),   # row completo: UPC, Size, Description, condiciones, etc.
             })
 
@@ -2655,9 +2655,9 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "raw":       _json.loads(_row["raw_data"]),   # dict completo accesible en memoria
             }
 
-        # Poblar _bm_stock_cache desde el catálogo — ConfColumns ya filtra CDMX+MTY
-        # y devuelve qty disponible (reservas ya deducidas por BM).
-        # Esto reemplaza Get_GlobalStock_InventoryBySKU como fuente de stock.
+        # Poblar _bm_stock_cache desde el catálogo — TotalQty es stock total global (todos los almacenes).
+        # Fuente: ConfColumns_Conditions_Excel sin LOCATIONID filter.
+        # Reemplaza Get_GlobalStock_InventoryBySKU (endpoint bloqueado en BM).
         _stock_now = _time.time()
         _stock_updated = 0
         for _r in rows:
