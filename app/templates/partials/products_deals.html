@@ -1962,7 +1962,7 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
     btn.textContent = '...';
     btn.disabled = true;
     try {
-        var r = await fetch('/api/items/' + itemId + '/activate-promotion', {
+        var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2005,7 +2005,7 @@ async function quickDealByPct(itemId, basePrice, btn) {
     btn.textContent = '...';
     btn.disabled = true;
     try {
-        var r = await fetch('/api/items/' + itemId + '/activate-promotion', {
+        var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
