@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-05 — FIX: Stock KPIs todos 0 — campo TotalQty (no QTY) en catalog sync
+
+### Problema
+Después de cambiar a ConfColumns_Conditions_Excel como fuente de stock, todos los KPIs
+(Sin Stock, Riesgo Sobreventa, BM Disponible, etc.) seguían mostrando 0. El catálogo
+tenía 8,731 SKUs pero todos con `avail_total=0`.
+
+### Causa raíz
+`_sync_bm_product_catalog()` leía `_row.get("QTY")` pero ConfColumns no tiene campo `QTY`
+— el campo correcto es `TotalQty`. Cada SKU se guardaba con qty=0 → `_bm_stock_cache`
+con 8,731 ceros verificados → ningún KPI podía detectar stock real.
+
+Confirmado vía `/api/diag/`: `cache_verified_zeros: 8731` (todos). El agente de diagnóstico
+verificó que ConfColumns SÍ retorna datos (ej: SNWA000001 TotalQty=41).
+
+### Solución
+Una línea en `_sync_bm_product_catalog()`:
+```
+"qty": int(_row.get("TotalQty") or 0)  # antes: _row.get("QTY") — campo inexistente
+```
+
+### Acción requerida tras deploy
+1. Click **Actualizar BM** en stock_sync → descarga ConfColumns con campo correcto
+2. Click **Actualizar alertas** → prewarm recomputa KPIs con stock real
+Los KPIs deben mostrar valores no-cero.
+
+- Commit: b888fd4
+
+---
+
 ## 2026-05-04 — FIX: Stock KPIs mostraban 0 — catalog-first mode en prewarm
 
 ### Problema
