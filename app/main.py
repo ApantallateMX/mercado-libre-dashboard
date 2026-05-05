@@ -3517,23 +3517,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         return result_map
 
     # ── CATALOG-FIRST: ConfColumns es la fuente canónica de stock CDMX+MTY ─────
-    # Si el catálogo tiene datos (sync activo cada 5 min), SKUs no-catálogo
-    # tienen 0 stock en CDMX+MTY por definición (LOCATIONID=47,62,68 no los incluyó).
-    # Esto elimina el fetch bulk a Get_GlobalStock_InventoryBySKU (bloqueado)
-    # y garantiza que el prewarm complete sin timeout de 270s×2.
+    # Elimina el fetch bulk a Get_GlobalStock_InventoryBySKU (bloqueado),
+    # garantizando que el prewarm complete sin timeout de 270s×2.
+    # SKUs no en catálogo: si hay dato stale previo se sirve; si no,
+    # se omiten de result_map → _bm_avail no se asigna → sin alertas falsas.
+    # (Pueden tener stock en TJ u otros almacenes que LOCATIONID=47,62,68 no cubre.)
     if len(_bm_catalog_cache) > 50:
-        _now_cat = _time.time()
         for _sku in to_fetch:
             _bk = normalize_to_bm_sku(_sku)
             _stale = _bm_stock_cache.get(_bk)
             if _stale:
-                result_map[_sku] = _stale[1]  # entrada previa BM — más fiel que cero inventado
-            else:
-                # No en catálogo CDMX+MTY → stock CDMX+MTY = 0 (confirmado por ausencia en catálogo)
-                _zero_cat = {"avail_total": 0, "reserved_total": 0, "total": 0,
-                             "mty": 0, "cdmx": 0, "tj": 0, "_v": True}
-                _bm_stock_cache[_bk] = (_now_cat, _zero_cat)
-                result_map[_sku] = _zero_cat
+                result_map[_sku] = _stale[1]  # dato previo BM — mejor que inventar 0
+            # else: no asignar 0 — desconocido CDMX+MTY ≠ confirmado sin stock
         return result_map
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
