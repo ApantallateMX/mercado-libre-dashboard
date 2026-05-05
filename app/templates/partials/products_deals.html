@@ -1943,6 +1943,8 @@ async function applyDealPrice(itemId, price, priceType, btn) {
 
 async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
     var dealPrice = Math.round(originalPrice * (1 - bufferPct));
+    var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
+    var finish = finishDate.toISOString().slice(0, 10) + 'T23:59:59';
     var orig = btn.textContent;
     btn.textContent = '...';
     btn.disabled = true;
@@ -1953,13 +1955,14 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
             body: JSON.stringify({
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
-                original_price: originalPrice
+                original_price: originalPrice,
+                finish_date: finish
             })
         });
         var data = await r.json();
         if (r.ok && data.ok) {
             var pct = Math.round(bufferPct * 100);
-            showToast('success', 'Precio + Deal −' + pct + '% activado: $' + dealPrice.toLocaleString('es-MX'));
+            showToast('success', 'Deal −' + pct + '% activo hasta ' + finish.slice(0, 10) + ' · $' + dealPrice.toLocaleString('es-MX'));
             btn.textContent = '✓ Deal activo';
             btn.className = btn.className.replace(/bg-\w+-\d+/g, 'bg-green-100').replace(/text-\w+-\d+/g, 'text-green-700');
             markRowActivated(itemId);
@@ -1983,6 +1986,8 @@ async function quickDealByPct(itemId, basePrice, btn) {
         return;
     }
     var dealPrice = Math.round(basePrice * (1 - pct / 100));
+    var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
+    var finish = finishDate.toISOString().slice(0, 10) + 'T23:59:59';
     var orig = btn.textContent;
     btn.textContent = '...';
     btn.disabled = true;
@@ -1993,12 +1998,13 @@ async function quickDealByPct(itemId, basePrice, btn) {
             body: JSON.stringify({
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
-                original_price: basePrice
+                original_price: basePrice,
+                finish_date: finish
             })
         });
         var data = await r.json();
         if (r.ok && data.ok) {
-            showToast('success', 'Deal −' + pct + '% activado: $' + dealPrice.toLocaleString('es-MX'));
+            showToast('success', 'Deal −' + pct + '% activo hasta ' + finish.slice(0, 10) + ' · $' + dealPrice.toLocaleString('es-MX'));
             btn.textContent = '✓';
             markRowActivated(itemId);
         } else {
