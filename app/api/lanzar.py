@@ -578,7 +578,7 @@ async def _run_gap_scan(user_id: str | None = None):
                 logger.info("BM gap scan: snapshot vacío/stale — fetch fresco vía cliente compartido")
                 _prog(10, "bm_fetch", "Descargando inventario BinManager...", "cliente compartido")
                 _bm_cli_scan = await _get_shared_bm_scan()
-                _raw = await _bm_cli_scan.get_bulk_stock_by_location()
+                _raw = await _bm_cli_scan.get_bulk_stock()
                 bm_products = [r for r in _raw if int(r.get("TotalQty") or r.get("AvailableQTY") or 0) > 0]
                 logger.info(f"BM gap scan: fetch fresco ({len(bm_products)} SKUs)")
                 _prog(15, "bm_fetch_ok", "Inventario BM cargado", f"{len(bm_products)} SKUs")

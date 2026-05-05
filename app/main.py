@@ -2626,6 +2626,24 @@ async def _sync_bm_product_catalog(source: str = "auto") -> int:
                 "raw":       _json.loads(_row["raw_data"]),   # dict completo accesible en memoria
             }
 
+        # Poblar _bm_stock_cache desde el catálogo — TotalQty es stock total global (todos los almacenes).
+        # Fuente: ConfColumns_Conditions_Excel sin LOCATIONID filter.
+        # Reemplaza Get_GlobalStock_InventoryBySKU (endpoint bloqueado en BM).
+        _stock_now = _time.time()
+        _stock_updated = 0
+        for _r in rows:
+            _q = _r.get("qty", 0)
+            if _q >= 0:  # incluir ceros verificados
+                _bm_stock_cache[_r["sku"]] = (_stock_now, {
+                    "avail_total": _q,
+                    "reserved_total": 0,
+                    "total": _q,
+                    "mty": 0, "cdmx": 0, "tj": 0,
+                    "_v": True,
+                })
+                _stock_updated += 1
+        logger.info(f"[CATALOG-SYNC] _bm_stock_cache actualizado: {_stock_updated} SKUs")
+
         with_price  = sum(1 for _r in rows if _r.get("retail_ph", 0) > 0)
         with_cat    = sum(1 for _r in rows if _r.get("category"))
         with_stock  = sum(1 for _r in rows if _r.get("qty", 0) > 0)
@@ -3466,6 +3484,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             # → no se genera alerta de oversell por dato desconocido
         return result_map
 
+    # ── CATALOG-FIRST: ConfColumns es la fuente canónica de stock CDMX+MTY ─────
+    # Elimina el fetch bulk a Get_GlobalStock_InventoryBySKU (bloqueado),
+    # garantizando que el prewarm complete sin timeout de 270s×2.
+    # SKUs no en catálogo: si hay dato stale previo se sirve; si no,
+    # se omiten de result_map → _bm_avail no se asigna → sin alertas falsas.
+    # (Pueden tener stock en TJ u otros almacenes que LOCATIONID=47,62,68 no cubre.)
+    if len(_bm_catalog_cache) > 50:
+        for _sku in to_fetch:
+            _bk = normalize_to_bm_sku(_sku)
+            _stale = _bm_stock_cache.get(_bk)
+            if _stale:
+                result_map[_sku] = _stale[1]  # dato previo BM — mejor que inventar 0
+            # else: no asignar 0 — desconocido CDMX+MTY ≠ confirmado sin stock
+        return result_map
 
     _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
 
@@ -3632,7 +3664,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         if _bulk_gr_rows is None and not _bm_is_down_now:
             try:
                 _fresh_gr = await asyncio.wait_for(
-                    bm_cli.get_bulk_stock_by_location(conditions=_BM_COND_GR),
+                    bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
                     timeout=270.0,
                 )
                 if _fresh_gr:
@@ -3674,7 +3706,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if _bulk_all_rows is None and not _bm_is_down_now:
                 try:
                     _fresh_all = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock_by_location(conditions=_BM_COND_ALL),
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
                         timeout=270.0,
                     )
                     if _fresh_all:
