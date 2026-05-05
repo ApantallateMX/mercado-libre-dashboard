@@ -57,15 +57,24 @@
         Recomendaciones
     </h3>
     {% for rec in recommendations %}
-    <div class="bg-white rounded-lg shadow p-4 border-l-4
-        {% if rec.type == 'danger' %}border-red-500{% elif rec.type == 'warning' %}border-yellow-500{% elif rec.type == 'success' %}border-green-500{% else %}border-blue-500{% endif %}">
+    <div class="bg-white rounded-lg shadow p-4 border-l-4 cursor-pointer hover:shadow-md transition rec-card
+        {% if rec.type == 'danger' %}border-red-500 hover:bg-red-50/20{% elif rec.type == 'warning' %}border-yellow-500 hover:bg-yellow-50/20{% elif rec.type == 'success' %}border-green-500 hover:bg-green-50/20{% else %}border-blue-500 hover:bg-blue-50/20{% endif %}"
+        data-rec-ids="{{ rec.products | map(attribute='id') | join(',') }}"
+        data-rec-type="{{ rec.type }}"
+        onclick="filterByRec(this)">
         <div class="flex items-start gap-3">
             <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold
                 {% if rec.type == 'danger' %}bg-red-500{% elif rec.type == 'warning' %}bg-yellow-500{% elif rec.type == 'success' %}bg-green-500{% else %}bg-blue-500{% endif %}">
                 {{ rec.icon }}
             </div>
             <div class="flex-1 min-w-0">
-                <p class="font-semibold text-sm text-gray-800">{{ rec.title }}</p>
+                <div class="flex items-center justify-between gap-2">
+                    <p class="font-semibold text-sm text-gray-800">{{ rec.title }}</p>
+                    <span class="text-[10px] font-medium px-2 py-0.5 rounded-full
+                        {% if rec.type == 'danger' %}bg-red-100 text-red-600{% elif rec.type == 'warning' %}bg-yellow-100 text-yellow-600{% elif rec.type == 'success' %}bg-green-100 text-green-600{% else %}bg-blue-100 text-blue-600{% endif %}">
+                        Click para filtrar
+                    </span>
+                </div>
                 <p class="text-xs text-gray-500 mt-0.5">{{ rec.desc }}</p>
                 {% if rec.products %}
                 <div class="mt-2 flex flex-wrap gap-2">
@@ -84,6 +93,12 @@
     {% endfor %}
 </div>
 {% endif %}
+
+<!-- Filtro activo por recomendación -->
+<div id="rec-filter-banner" class="hidden mb-3 px-4 py-2.5 rounded-lg flex items-center gap-3 text-sm">
+    <span id="rec-filter-label" class="flex-1 font-medium"></span>
+    <button onclick="clearRecFilter()" class="px-3 py-1 rounded text-xs font-semibold bg-white/60 hover:bg-white transition border border-current/20">✕ Quitar filtro</button>
+</div>
 
 <!-- Deals activos -->
 <div id="active-section" class="mb-8">
@@ -107,6 +122,7 @@
     <div class="md:hidden space-y-2">
         {% for p in active_deals %}
         <div class="bg-white rounded-lg shadow p-3 border-l-4 border-green-500 active-deal-row"
+             data-id="{{ p.id }}"
              data-sales="{{ p.get('units_30d', 0) }}"
              data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
              data-stock="{{ p.available_quantity }}"
@@ -206,6 +222,7 @@
             <tbody class="divide-y divide-gray-100">
                 {% for p in active_deals %}
                 <tr class="hover:bg-green-50/30 active-deal-row"
+                    data-id="{{ p.id }}"
                     data-sales="{{ p.get('units_30d', 0) }}"
                     data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
                     data-stock="{{ p.available_quantity }}"
@@ -854,6 +871,8 @@ function mlFee(price) {
 let _adCurrentPage = 1;
 let _cdCurrentPage = 1;
 let _searchTerm = '';
+let _recFilterIds = null;
+let _activeRecEl = null;
 
 function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
 
@@ -878,6 +897,15 @@ function globalSearch() {
 function applySearchAndPaginate() {
     var adCount = paginateTable('active-deals-table', 'active-deal-row', _searchTerm, _adCurrentPage, 'ad');
     var cdCount = paginateTable('candidates-table', 'candidate-row', _searchTerm, _cdCurrentPage, 'cd');
+
+    // Filter mobile active deal cards (not in table, not handled by paginateTable)
+    document.querySelectorAll('div.active-deal-row').forEach(function(card) {
+        var id = (card.getAttribute('data-id') || '').toLowerCase();
+        var search = card.getAttribute('data-search') || '';
+        var matchSearch = !_searchTerm || search.indexOf(_searchTerm) !== -1;
+        var matchRec = !_recFilterIds || _recFilterIds.has(id);
+        card.classList.toggle('hidden', !(matchSearch && matchRec));
+    });
 
     var countEl = document.getElementById('search-count');
     if (_searchTerm) {
@@ -916,6 +944,10 @@ function paginateTable(tableId, rowClass, search, page, prefix) {
         if (match && catFilter) {
             var cat = row.getAttribute('data-category') || '';
             if (cat !== catFilter) match = false;
+        }
+        if (match && _recFilterIds && prefix === 'ad') {
+            var rowId = (row.getAttribute('data-id') || '').toLowerCase();
+            if (!_recFilterIds.has(rowId)) match = false;
         }
         row._visible = match;
         if (match) visible.push(row);
@@ -1761,6 +1793,63 @@ function markRowDeactivated(itemId) {
 function scrollToSection(id) {
     var el = document.getElementById(id);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ===== Rec filter (click en tarjeta de recomendación) =====
+var _recColorMap = {
+    danger:  { banner: 'bg-red-50 text-red-700 border border-red-200',    ring: 'ring-red-400' },
+    warning: { banner: 'bg-yellow-50 text-yellow-700 border border-yellow-200', ring: 'ring-yellow-400' },
+    success: { banner: 'bg-green-50 text-green-700 border border-green-200',  ring: 'ring-green-400' },
+    info:    { banner: 'bg-blue-50 text-blue-700 border border-blue-200',    ring: 'ring-blue-400' }
+};
+
+function filterByRec(el) {
+    // Toggle off if same card clicked again
+    if (_activeRecEl === el && _recFilterIds !== null) {
+        clearRecFilter();
+        return;
+    }
+    // Remove ring from previous active card
+    if (_activeRecEl && _activeRecEl !== el) {
+        _activeRecEl.classList.remove('ring-2', 'ring-offset-1', 'ring-red-400', 'ring-yellow-400', 'ring-green-400', 'ring-blue-400');
+    }
+    _activeRecEl = el;
+
+    var rawIds = (el.getAttribute('data-rec-ids') || '').split(',').map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+    var type = el.getAttribute('data-rec-type') || 'info';
+    _recFilterIds = new Set(rawIds);
+
+    // Ring on active card
+    var colors = _recColorMap[type] || _recColorMap.info;
+    el.classList.add('ring-2', 'ring-offset-1', colors.ring);
+
+    // Show banner
+    var banner = document.getElementById('rec-filter-banner');
+    var label = document.getElementById('rec-filter-label');
+    banner.className = 'mb-3 px-4 py-2.5 rounded-lg flex items-center gap-3 text-sm ' + colors.banner;
+    label.textContent = 'Filtrando ' + rawIds.length + ' item' + (rawIds.length !== 1 ? 's' : '') + ' de esta recomendación — solo aparecen en la tabla de Deals Activos';
+
+    // Reset page and apply filter
+    _adCurrentPage = 1;
+    applySearchAndPaginate();
+
+    // Scroll to active deals
+    setTimeout(function() {
+        var sec = document.getElementById('active-section');
+        if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+}
+
+function clearRecFilter() {
+    _recFilterIds = null;
+    if (_activeRecEl) {
+        _activeRecEl.classList.remove('ring-2', 'ring-offset-1', 'ring-red-400', 'ring-yellow-400', 'ring-green-400', 'ring-blue-400');
+        _activeRecEl = null;
+    }
+    var banner = document.getElementById('rec-filter-banner');
+    banner.className = 'hidden mb-3 px-4 py-2.5 rounded-lg flex items-center gap-3 text-sm';
+    _adCurrentPage = 1;
+    applySearchAndPaginate();
 }
 
 // ===== Category filter =====
