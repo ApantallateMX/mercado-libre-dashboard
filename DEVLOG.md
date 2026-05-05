@@ -7,6 +7,71 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-05 — FEAT: Precio deal por cuenta en Ventas/Órdenes (anti-detección)
+
+### Feature
+En la columna P. SUGERIDO de Ventas/Órdenes se añade un segundo precio (naranja): el precio
+de lista para correr un deal manteniendo el target de recuperación de retail.
+
+Fórmula: `deal_price = retail × retail_target_pct / ((1 − deal_buffer_pct) × net_ratio)`
+
+Cada cuenta tiene buffer y target distintos → competencia y ML no detectan que son el mismo vendedor.
+
+### Config por cuenta (vía POST /api/deal-config?user_id=XXX)
+- APANTALLATEMX: 18% buffer, 99% retail target
+- BLOWTECHNOLOGIES: 20% buffer, 101% retail target
+- LUTEMAMEXICO: 15% buffer, 95.9% retail target
+- AUTOBOT MEXICO: 22% buffer, 98% retail target
+
+### Archivos modificados
+- `app/services/token_store.py` — tabla `account_deal_config`, `get_deal_config()`, `set_deal_config()`
+- `app/main.py` — fetch config pre-loop, cálculo `_precio_deal`, endpoints GET/POST `/api/deal-config`
+- `app/templates/partials/orders_table.html` — segunda línea naranja con precio deal y %
+
+### Commit: eb27e80
+
+---
+
+## 2026-05-05 — FIX: Serialización total de requests BM — bm_post() entrada única
+
+### Problema
+BM bloqueaba sesiones de usuarios (Carlos, Claudio) por requests HTTP paralelos. El semáforo
+`_BM_GLOBAL_SEM = asyncio.Semaphore(1)` en `binmanager_client.py` solo protegía `_post()/_get()`
+del cliente compartido. Más de 20 sitios en 9 archivos usaban `httpx.AsyncClient()` crudo o
+`asyncio.Semaphore(15/10)` locales que **bypasseaban completamente** el semáforo global,
+generando hasta 45 requests paralelos a BM (p.ej. `amazon_products.py`: 3 raw httpx × Semaphore(15)).
+
+El patrón más grave: `asyncio.gather(http.post(BM_URL, ...), bm_cli.get_available_qty(...))` —
+un raw httpx en paralelo con uno serializado, lo que siempre enviaba ≥2 requests simultáneos.
+
+### Solución
+Nueva función pública `bm_post(url, payload, timeout)` en `binmanager_client.py`:
+- Llama `get_shared_bm()` → `post_inventory()` → `_post()` → `_BM_GLOBAL_SEM`
+- **Punto de entrada único** para TODOS los POST a BM
+
+Todos los `asyncio.gather` con BM convertidos a awaits secuenciales.
+Todos los `httpx.AsyncClient()` crudos para BM eliminados.
+
+### Archivos modificados (10 archivos, ~20+ sitios)
+| Archivo | Cambio principal |
+|---|---|
+| `app/services/binmanager_client.py` | +`bm_post()` función pública |
+| `app/api/lanzar.py` | `_bm_login`, `_bm_fetch_all_skus_with_stock`, `_bm_fetch_warehouse_stock`, BM-images |
+| `app/main.py` | 9+ sitios: enrich batch, items grid, deal comparison, `_fetch_var_bm`, deal modal, catalog sync, 4 diag endpoints |
+| `app/api/binmanager.py` | `retail-ph-batch`: eliminado `BinManagerClient()` separado + `Semaphore(10)` |
+| `app/api/amazon_products.py` | `_fetch_base`: 3 parallel×Sem(15) → 3 sequential `bm_post()` |
+| `app/api/items.py` | `_bm_warehouse_qty`, batch + single endpoints |
+| `app/api/productos.py` | `_bm_stock` + 2 call sites |
+| `app/api/sku_inventory.py` | `_fetch_sellable_stock`, `_fetch_binmanager_product_info`, `process_sku` |
+| `app/api/health_ai.py` | `_fetch_bm_product` |
+| `app/api/system_health.py` | `_check_binmanager` |
+
+### Resultado
+Máximo 1 request activo a BM en todo el proceso, siempre.
+Commit: `04450c8` — pushed a Railway.
+
+---
+
 ## 2026-04-29 — FIX: Impuestos en desglose de órdenes — fórmula per-pago correcta
 
 ### Problema
