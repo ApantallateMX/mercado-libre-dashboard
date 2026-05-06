@@ -176,7 +176,8 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         _retail_mxn = p["_retail_mxn"]
         if _sale_price > 0:
             _fee_s = _ml_fee(_sale_price)
-            _neto = _sale_price * (1 - _fee_s * 1.16) - 150
+            _net_ml = _sale_price * (1 - _fee_s * 1.16) - 150  # estimado depósito ML
+            _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)     # menos 7% comisión socio
             p["_neto_ml"] = round(_neto, 2)
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
         else:
