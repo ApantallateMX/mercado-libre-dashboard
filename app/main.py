@@ -4674,23 +4674,25 @@ async def products_deals_partial(request: Request):
         if isinstance(user_promos, Exception):
             user_promos = []
 
-        # ── Paso 2: obtener items de cada promo activa en paralelo ─────────
-        # Agrupa PRICE_DISCOUNT y DEAL activos (evita per-item API calls)
-        _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN"}
-        active_promos = [
+        # ── Paso 2: obtener items de TODAS las campañas en paralelo ──────────
+        # Sin filtro de status: campañas inactivas retornan 0 items rápido;
+        # MARKETPLACE_CAMPAIGN puede tener status distinto a "started"/"active"
+        _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN"}
+        _skip_statuses = {"finished", "expired", "cancelled", "paused"}
+        all_promos = [
             p for p in user_promos
-            if p.get("status") in ("started", "active")
-            and p.get("id") and p.get("type")
+            if p.get("id") and p.get("type")
+            and p.get("status") not in _skip_statuses
         ]
         promo_item_tasks = [
             client.get_promotion_items(p["id"], p["type"])
-            for p in active_promos
+            for p in all_promos
         ]
         promo_items_lists = await asyncio.gather(*promo_item_tasks, return_exceptions=True)
 
         # Construir mapa item_id → datos de promo
         promo_items_map: dict = {}
-        for promo, result in zip(active_promos, promo_items_lists):
+        for promo, result in zip(all_promos, promo_items_lists):
             if isinstance(result, Exception) or not result:
                 continue
             for item in result:
@@ -4742,7 +4744,19 @@ async def products_deals_partial(request: Request):
 
         # Top candidatos por stock
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
-        candidates = candidates[:60]
+        candidates_pre = candidates[:60]
+
+        # ── Fallback: check per-item top-25 candidatos no detectados por bulk ─
+        # MARKETPLACE_CAMPAIGN y algunos tipos no siempre aparecen en get_user_promotions
+        top25 = candidates_pre[:25]
+        if top25:
+            await _enrich_with_promotions(client, top25, id_key="id")
+            newly_found = [p for p in top25 if p.get("_has_deal")]
+            if newly_found:
+                active_deals.extend(newly_found)
+                top25_ids = {p["id"] for p in newly_found}
+                candidates_pre = [p for p in candidates_pre if p["id"] not in top25_ids]
+        candidates = candidates_pre[:60]
 
         # ── Paso 4: enriquecer con BM, FX, SKUs en paralelo ──────────────
         all_to_enrich = active_deals + candidates
