@@ -4647,7 +4647,9 @@ async def products_full_partial(request: Request, stock_filter: str = "all"):
 
 @app.get("/partials/products-deals", response_class=HTMLResponse)
 async def products_deals_partial(request: Request):
-    """Deals: detecta deals por original_price + pricing con FX rate, margenes y ventas."""
+    """Deals: detecta deals activos via bulk promotions API + top candidatos por stock."""
+    import logging as _log
+    import traceback as _tb
     from datetime import datetime, timedelta
     client = await get_meli_client()
     if not client:
@@ -4657,42 +4659,94 @@ async def products_deals_partial(request: Request):
         date_from = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
-        # Items + orders en paralelo (ambos cached)
-        all_bodies, all_orders = await asyncio.gather(
+        # ── Paso 1: obtener datos base en paralelo ─────────────────────────
+        # promotions: campaña del seller → items en bulk (sin loops por item)
+        all_bodies, all_orders, user_promos = await asyncio.gather(
             _get_all_products_cached(client, include_paused=True),
             client.fetch_all_orders(date_from=date_from, date_to=date_to),
+            client.get_user_promotions(),
+            return_exceptions=True,
         )
+        if isinstance(all_bodies, Exception):
+            raise all_bodies
+        if isinstance(all_orders, Exception):
+            all_orders = []
+        if isinstance(user_promos, Exception):
+            user_promos = []
 
+        # ── Paso 2: obtener items de cada promo activa en paralelo ─────────
+        # Agrupa PRICE_DISCOUNT y DEAL activos (evita per-item API calls)
+        _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN"}
+        active_promos = [
+            p for p in user_promos
+            if p.get("status") in ("started", "active")
+            and p.get("id") and p.get("type")
+        ]
+        promo_item_tasks = [
+            client.get_promotion_items(p["id"], p["type"])
+            for p in active_promos
+        ]
+        promo_items_lists = await asyncio.gather(*promo_item_tasks, return_exceptions=True)
+
+        # Construir mapa item_id → datos de promo
+        promo_items_map: dict = {}
+        for promo, result in zip(active_promos, promo_items_lists):
+            if isinstance(result, Exception) or not result:
+                continue
+            for item in result:
+                iid = item.get("id")
+                if not iid:
+                    continue
+                promo_items_map[iid] = {
+                    "original_price": item.get("original_price"),
+                    "deal_price": item.get("price"),
+                    "meli_percentage": item.get("meli_percentage", 0),
+                    "net_proceeds": item.get("net_proceeds"),
+                    "start_date": item.get("start_date"),
+                    "finish_date": item.get("end_date") or item.get("finish_date"),
+                    "_promo_type": promo.get("type"),
+                    "_promo_id": promo.get("id"),
+                    "_promo_name": promo.get("name", ""),
+                    "_promo_is_auto": promo.get("type") in _auto_types,
+                }
+
+        # ── Paso 3: clasificar productos ──────────────────────────────────
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
-        # Fase 1: clasificar por original_price del body (rapido, sin API extra)
         active_deals = []
         candidates = []
         for p in products:
+            iid = p.get("id", "")
+            # Deal activo = en mapa de promos O tiene original_price > price en body ML
+            promo_data = promo_items_map.get(iid)
             op = p.get("original_price")
-            if op and op > p["price"]:
+            has_deal_body = bool(op and op > p.get("price", 0))
+            if promo_data or has_deal_body:
                 p["_has_deal"] = True
+                p["_deal_is_ml_auto"] = bool(promo_data and promo_data.get("_promo_is_auto"))
+                p["_deal_types"] = [promo_data["_promo_type"]] if promo_data else []
+                p["_promotions"] = [promo_data] if promo_data else []
+                # Datos extra de la promo (fechas, % ML, etc.)
+                if promo_data:
+                    if promo_data.get("original_price"):
+                        p.setdefault("original_price", promo_data["original_price"])
+                    p["_meli_promo_pct"] = promo_data.get("meli_percentage", 0)
+                    p["_promo_start"] = promo_data.get("start_date")
+                    p["_promo_finish"] = promo_data.get("finish_date")
+                    p["_promo_type_str"] = promo_data.get("_promo_type", "")
+                    p["_promo_name"] = promo_data.get("_promo_name", "")
                 active_deals.append(p)
-            elif p["available_quantity"] > 0:
+            elif p.get("available_quantity", 0) > 0:
                 candidates.append(p)
 
-        # Fase 2: verificar deals perdidos via promotions API en candidatos
-        # (el body batch a veces no incluye original_price aunque haya deal activo)
-        # Pre-sort y limitar antes del check para evitar timeout con cientos de productos
+        # Top candidatos por stock
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
-        candidates_to_check = candidates[:80]
-        await _enrich_with_promotions(client, candidates_to_check, id_key="id")
-        newly_found = [p for p in candidates_to_check if p.get("_has_deal")]
-        if newly_found:
-            active_deals.extend(newly_found)
-            candidates_to_check = [p for p in candidates_to_check if not p.get("_has_deal")]
-        candidates = candidates_to_check[:60]
+        candidates = candidates[:60]
 
-        # BM data + FX rate + variation SKUs en paralelo
+        # ── Paso 4: enriquecer con BM, FX, SKUs en paralelo ──────────────
         all_to_enrich = active_deals + candidates
-
-        _gather_results = await asyncio.gather(
+        _gr = await asyncio.gather(
             _get_bm_stock_cached(all_to_enrich),
             _enrich_with_bm_product_info(all_to_enrich),
             _get_usd_to_mxn(client),
@@ -4700,64 +4754,54 @@ async def products_deals_partial(request: Request):
             _enrich_category_names(client, all_to_enrich),
             return_exceptions=True,
         )
-        bm_map = _gather_results[0] if not isinstance(_gather_results[0], Exception) else {}
-        usd_to_mxn = _gather_results[2] if not isinstance(_gather_results[2], Exception) else 17.0
+        bm_map = _gr[0] if not isinstance(_gr[0], Exception) else {}
+        usd_to_mxn = _gr[2] if not isinstance(_gr[2], Exception) else 17.0
         _apply_bm_stock(all_to_enrich, bm_map)
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
         _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
 
-        # KPIs resumen
+        # ── KPIs y recomendaciones ────────────────────────────────────────
         deals_revenue = sum(p.get("revenue_30d", 0) for p in active_deals)
         deals_units = sum(p.get("units_30d", 0) for p in active_deals)
 
-        # Recomendaciones inteligentes
         recs = []
-        # 1. Deals activos con margen negativo — revisar urgente
         neg_margin = [p for p in active_deals if p.get("_margen_pct") is not None and p["_margen_pct"] < 0]
         if neg_margin:
             neg_margin.sort(key=lambda p: p["_margen_pct"])
             recs.append({
-                "type": "danger",
-                "icon": "!",
+                "type": "danger", "icon": "!",
                 "title": f"{len(neg_margin)} deal(s) con margen negativo",
                 "desc": "Estos deals pierden dinero en cada venta. Revisa si conviene desactivarlos o subir el precio.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"Margen {p['_margen_pct']:.1f}%"} for p in neg_margin[:5]],
             })
-        # 2. Candidatos con alto stock + cero ventas — urge mover inventario
         high_stock_no_sales = [p for p in candidates if p.get("available_quantity", 0) >= 10 and p.get("units_30d", 0) == 0]
         if high_stock_no_sales:
             high_stock_no_sales.sort(key=lambda p: p["available_quantity"], reverse=True)
             recs.append({
-                "type": "warning",
-                "icon": "S",
+                "type": "warning", "icon": "S",
                 "title": f"{len(high_stock_no_sales)} producto(s) con alto stock sin ventas",
                 "desc": "Mucho inventario parado. Un deal agresivo puede activar la demanda.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"Stock: {p['available_quantity']}"} for p in high_stock_no_sales[:5]],
             })
-        # 3. Candidatos con buenas ventas que podrian vender mas con deal
         good_sellers_no_deal = [p for p in candidates if p.get("units_30d", 0) >= 3 and p.get("_margen_pct") is not None and p["_margen_pct"] >= 15]
         if good_sellers_no_deal:
             good_sellers_no_deal.sort(key=lambda p: p["units_30d"], reverse=True)
             recs.append({
-                "type": "success",
-                "icon": "^",
+                "type": "success", "icon": "^",
                 "title": f"{len(good_sellers_no_deal)} producto(s) vendiendo bien con buen margen",
                 "desc": "Ya venden sin deal y tienen margen para descuento. Un deal los puede catapultar.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p['units_30d']} uds, margen {p['_margen_pct']:.0f}%"} for p in good_sellers_no_deal[:5]],
             })
-        # 4. Stock BM disponible pero poco stock en MeLi
-        bm_available = [p for p in candidates if p.get("_bm_avail") is not None and p["_bm_avail"] > 20 and p["available_quantity"] <= 5]
+        bm_available = [p for p in candidates if p.get("_bm_avail") is not None and p["_bm_avail"] > 20 and p.get("available_quantity", 0) <= 5]
         if bm_available:
             bm_available.sort(key=lambda p: p["_bm_avail"], reverse=True)
             recs.append({
-                "type": "info",
-                "icon": "R",
+                "type": "info", "icon": "R",
                 "title": f"{len(bm_available)} producto(s) con stock BM disponible alto pero poco en MeLi",
                 "desc": "Reabastecer MeLi y activar deal para impulsar rotacion.",
                 "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"BM disp: {p['_bm_avail']}, MeLi: {p['available_quantity']}"} for p in bm_available[:5]],
             })
 
-        # Categorias unicas para filtro
         cat_counts = {}
         for p in candidates:
             cn = p.get("category_name", "")
@@ -4779,12 +4823,12 @@ async def products_deals_partial(request: Request):
             "retail_target_pct": _deal_cfg["retail_target_pct"],
         })
     except Exception as _deals_exc:
-        import logging, traceback
-        logging.getLogger("deals").error(f"products_deals_partial error: {_deals_exc}\n{traceback.format_exc()}")
+        _log.getLogger("deals").error(f"products_deals_partial error: {_deals_exc}\n{_tb.format_exc()}")
         return HTMLResponse(
-            f'<div class="p-6 text-red-600 text-sm">Error al cargar Deals: {type(_deals_exc).__name__}: {_deals_exc}'
-            f'<br><pre class="text-xs mt-2 whitespace-pre-wrap">{traceback.format_exc()}</pre></div>',
-            status_code=500
+            f'<div class="p-6 text-red-600 text-sm font-mono">'
+            f'<b>Error Deals:</b> {type(_deals_exc).__name__}: {_deals_exc}'
+            f'<pre class="text-xs mt-2 whitespace-pre-wrap overflow-auto max-h-64">{_tb.format_exc()}</pre></div>',
+            status_code=200
         )
     finally:
         await client.close()

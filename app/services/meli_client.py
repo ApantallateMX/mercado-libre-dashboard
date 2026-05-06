@@ -1396,6 +1396,32 @@ class MeliClient:
             logging.getLogger("meli").warning(f"get_item_promotions({item_id}) error: {e}")
             return []
 
+    async def get_promotion_items(self, promotion_id: str, promotion_type: str) -> list:
+        """GET /seller-promotions/promotions/{promotion_id}/items — todos los items de una promo (paginado)."""
+        import logging
+        endpoint = f"/seller-promotions/promotions/{promotion_id}/items"
+        all_items = []
+        offset = 0
+        limit = 50
+        try:
+            while True:
+                data = await self.get(endpoint, params={
+                    "app_version": "v2",
+                    "promotion_type": promotion_type,
+                    "offset": offset,
+                    "limit": limit,
+                })
+                results = data.get("results", [])
+                all_items.extend(results)
+                paging = data.get("paging", {})
+                total = paging.get("total", 0)
+                if not results or offset + limit >= total:
+                    break
+                offset += limit
+        except Exception as e:
+            logging.getLogger("meli").warning(f"get_promotion_items({promotion_id}) error: {e}")
+        return all_items
+
     async def activate_item_promotion(self, item_id: str, deal_price: float,
                                        promotion_type: str, **kwargs) -> dict:
         """Activa promocion via POST. Borra oferta existente si hay conflicto."""
