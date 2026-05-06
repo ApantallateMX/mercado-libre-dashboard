@@ -7908,7 +7908,7 @@ async def activate_item_promotion_api(item_id: str, request: Request):
         error_body = getattr(e, "body", None)
         logging.getLogger("api").warning(f"activate_promotion({item_id}) error: {e} body={error_body}")
         # Build detailed error message from MeLi response
-        detail = str(e)
+        detail = str(e) or repr(e) or type(e).__name__
         if isinstance(error_body, dict):
             parts = []
             if error_body.get("error"):
@@ -7922,9 +7922,11 @@ async def activate_item_promotion_api(item_id: str, request: Request):
                         parts.append(c.get("message") or c.get("code") or str(c))
                     else:
                         parts.append(str(c))
-            detail = " | ".join(parts) if parts else detail
+            detail = " | ".join(p for p in parts if p) or detail
         elif isinstance(error_body, str) and error_body:
             detail = error_body
+        if not detail:
+            detail = f"{type(e).__name__} (sin detalle)"
         return JSONResponse({"ok": False, "detail": detail, "meli_body": error_body}, status_code=400)
     finally:
         await client.close()

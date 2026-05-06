@@ -1299,9 +1299,10 @@ async def sync_price(request: Request):
 
     try:
         result = await client.put(f"/items/{item_id}", json={price_type: float(price)})
+        # Some ML responses return errors inside a 200 OK body (e.g. {"error": "...", "status": 400})
         err = result.get("error") or result.get("message")
-        if err and result.get("status") not in (None, 200):
-            return JSONResponse({"error": err}, status_code=400)
+        if err:
+            return JSONResponse({"error": str(err)}, status_code=400)
 
         async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
@@ -1327,8 +1328,9 @@ async def sync_price(request: Request):
             pass
         return {"ok": True, "item_id": item_id, "new_price": float(price)}
     except Exception as e:
-        logger.error(f"sync-price error {item_id}: {e}")
-        return JSONResponse({"error": str(e)}, status_code=500)
+        err_str = str(e) or repr(e) or f"{type(e).__name__}"
+        logger.error(f"sync-price error {item_id}: {err_str}")
+        return JSONResponse({"error": err_str}, status_code=500)
     finally:
         await client.close()
 

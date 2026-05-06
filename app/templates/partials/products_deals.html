@@ -1945,12 +1945,13 @@ async function applyDealPrice(itemId, price, priceType, btn) {
             btn.textContent = '✓ Listo';
             btn.className = btn.className.replace(/bg-\w+-\d+/g, 'bg-green-100').replace(/text-\w+-\d+/g, 'text-green-700');
         } else {
-            showToast('error', 'Error: ' + (data.error || 'desconocido'));
+            var errMsg = data.error || data.detail || JSON.stringify(data);
+            showToast('error', 'Error: ' + errMsg);
             btn.textContent = orig;
             btn.disabled = false;
         }
     } catch(e) {
-        showToast('error', 'Error de red');
+        showToast('error', 'Error de red: ' + e.message);
         btn.textContent = orig;
         btn.disabled = false;
     }
