@@ -7841,10 +7841,26 @@ async def ads_by_category_partial(
 
 # === Promotions API ===
 
+async def _get_client_for_item(item_id: str):
+    """Retorna un MeliClient con la cuenta dueña del item (busca en ml_listings)."""
+    import aiosqlite as _aio
+    owner_id = None
+    try:
+        async with _aio.connect(token_store.DATABASE_PATH) as _db:
+            _row = await (await _db.execute(
+                "SELECT account_id FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
+            )).fetchone()
+            if _row and _row[0]:
+                owner_id = _row[0]
+    except Exception:
+        pass
+    return await get_meli_client(owner_id)
+
+
 @app.get("/api/items/{item_id}/promotions")
 async def get_item_promotions_api(item_id: str):
     """Consulta promociones disponibles para un item."""
-    client = await get_meli_client()
+    client = await _get_client_for_item(item_id)
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
@@ -7863,7 +7879,7 @@ async def get_item_promotions_api(item_id: str):
 @app.post("/api/items/{item_id}/promotions/activate")
 async def activate_item_promotion_api(item_id: str, request: Request):
     """Activa una promocion para un item."""
-    client = await get_meli_client()
+    client = await _get_client_for_item(item_id)
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:

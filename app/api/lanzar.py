@@ -1281,7 +1281,19 @@ async def sync_price(request: Request):
     if not item_id or not price:
         return JSONResponse({"error": "item_id and price required"}, status_code=400)
 
-    client = await get_meli_client()
+    # Buscar la cuenta dueña del item (puede diferir de la cuenta activa)
+    owner_id = user_id
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as _db:
+            _row = await (await _db.execute(
+                "SELECT account_id FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
+            )).fetchone()
+            if _row and _row[0]:
+                owner_id = _row[0]
+    except Exception:
+        pass
+
+    client = await get_meli_client(owner_id)
     if not client:
         return JSONResponse({"error": "no_meli_client"}, status_code=500)
 
