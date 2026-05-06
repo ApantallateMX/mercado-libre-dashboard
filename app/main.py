@@ -4679,14 +4679,15 @@ async def products_deals_partial(request: Request):
 
         # Fase 2: verificar deals perdidos via promotions API en candidatos
         # (el body batch a veces no incluye original_price aunque haya deal activo)
-        await _enrich_with_promotions(client, candidates, id_key="id")
-        newly_found = [p for p in candidates if p.get("_has_deal")]
+        # Pre-sort y limitar antes del check para evitar timeout con cientos de productos
+        candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
+        candidates_to_check = candidates[:150]
+        await _enrich_with_promotions(client, candidates_to_check, id_key="id")
+        newly_found = [p for p in candidates_to_check if p.get("_has_deal")]
         if newly_found:
             active_deals.extend(newly_found)
-            candidates = [p for p in candidates if not p.get("_has_deal")]
-
-        candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
-        candidates = candidates[:60]
+            candidates_to_check = [p for p in candidates_to_check if not p.get("_has_deal")]
+        candidates = candidates_to_check[:60]
 
         # BM data + FX rate + variation SKUs en paralelo
         all_to_enrich = active_deals + candidates
