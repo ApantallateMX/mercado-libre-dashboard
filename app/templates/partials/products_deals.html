@@ -111,9 +111,9 @@
         <p class="text-xs text-gray-400">Ordenar:</p>
         <div class="flex gap-1">
             <button onclick="sortActiveDeals('sales')" id="asort-sales" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-green-100 text-green-700 border border-green-300">Ventas</button>
-            <button onclick="sortActiveDeals('margin')" id="asort-margin" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Margen</button>
+            <button onclick="sortActiveDeals('margin')" id="asort-margin" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">% Retail</button>
             <button onclick="sortActiveDeals('stock')" id="asort-stock" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock</button>
-            <button onclick="sortActiveDeals('profit')" id="asort-profit" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Ganancia</button>
+            <button onclick="sortActiveDeals('profit')" id="asort-profit" class="asort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Neto ML</button>
         </div>
     </div>
 
@@ -124,9 +124,9 @@
         <div class="bg-white rounded-lg shadow p-3 border-l-4 border-green-500 active-deal-row"
              data-id="{{ p.id }}"
              data-sales="{{ p.get('units_30d', 0) }}"
-             data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+             data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
              data-stock="{{ p.available_quantity }}"
-             data-profit="{{ p.get('_ganancia_est', -99999) if p.get('_ganancia_est') is not none else -99999 }}"
+             data-profit="{{ p.get('_neto_ml', -99999) if p.get('_neto_ml') is not none else -99999 }}"
              data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
             <div class="flex gap-2">
                 {% if p.thumbnail %}
@@ -154,11 +154,11 @@
                 {% if p.get('_meli_promo_pct', 0) > 0 %}
                 <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML paga {{ p._meli_promo_pct }}%</span>
                 {% endif %}
-                {% set _mg = p.get('_margen_real_pct') if p.get('_margen_real_pct') is not none else p.get('_margen_pct') %}
-                {% if _mg is not none %}
+                {% set _rr_badge = p.get('_recup_retail_pct') %}
+                {% if _rr_badge is not none %}
                 <span class="px-1.5 py-0.5 rounded font-semibold
-                    {% if _mg >= 20 %}bg-green-100 text-green-700{% elif _mg >= 10 %}bg-yellow-100 text-yellow-700{% elif _mg >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
-                    M: {{ "%.1f"|format(_mg) }}%
+                    {% if _rr_badge >= 100 %}bg-green-100 text-green-700{% elif _rr_badge >= 80 %}bg-yellow-100 text-yellow-700{% elif _rr_badge >= 60 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                    {{ "%.1f"|format(_rr_badge) }}% retail
                 </span>
                 {% endif %}
             </div>
@@ -173,12 +173,16 @@
                     <span class="font-semibold {{ 'text-green-600' if p.available_quantity > 5 else 'text-red-600' if p.available_quantity == 0 else 'text-yellow-600' }}">{{ p.available_quantity }}</span>
                 </div>
                 <div>
-                    <span class="text-gray-400 block">Ganancia{% if p.get('_meli_contribution_mxn', 0) > 0 %} real{% endif %}</span>
-                    {% set _greal = p.get('_ganancia_real') %}
-                    {% if _greal is not none %}
-                    <span class="font-semibold {{ 'text-green-600' if _greal > 0 else 'text-red-600' }}">${{ "{:,.0f}".format(_greal) }}</span>
-                    {% if p.get('_meli_contribution_mxn', 0) > 0 %}
-                    <span class="text-blue-500 text-[9px] block">+${{ "{:,.0f}".format(p._meli_contribution_mxn) }} ML</span>
+                    <span class="text-gray-400 block">Neto ML</span>
+                    {% set _neto_m = p.get('_neto_ml') %}
+                    {% set _rr_m = p.get('_recup_retail_pct') %}
+                    {% if _neto_m is not none %}
+                    <span class="font-semibold {{ 'text-green-600' if _neto_m > 0 else 'text-red-600' }}">${{ "{:,.0f}".format(_neto_m) }}</span>
+                    {% if _rr_m is not none %}
+                    <span class="text-[9px] block
+                        {% if _rr_m >= 100 %}text-green-600{% elif _rr_m >= 80 %}text-yellow-600{% elif _rr_m >= 60 %}text-orange-500{% else %}text-red-500{% endif %}">
+                        {{ "%.1f"|format(_rr_m) }}% retail
+                    </span>
                     {% endif %}
                     {% else %}<span class="text-gray-300">-</span>{% endif %}
                 </div>
@@ -211,8 +215,8 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">P. Deal</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Desc.</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail BM</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ganancia</th>
-                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Margen</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Neto ML</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">% Retail</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs whitespace-nowrap">P. Sug. / Deal</th>
@@ -225,9 +229,9 @@
                     data-id="{{ p.id }}"
                     data-account="{{ p.get('_account_id', '') }}"
                     data-sales="{{ p.get('units_30d', 0) }}"
-                    data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
                     data-stock="{{ p.available_quantity }}"
-                    data-profit="{{ p.get('_ganancia_est', -99999) if p.get('_ganancia_est') is not none else -99999 }}"
+                    data-profit="{{ p.get('_neto_ml', -99999) if p.get('_neto_ml') is not none else -99999 }}"
                     data-var-row="ad-{{ loop.index }}"
                     data-search="{{ p.id|lower }} {{ (p.sku or '')|lower }} {{ p.title|lower }}">
                     <td class="px-3 py-2">
@@ -308,27 +312,22 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right">
-                        {% set _gr = p.get('_ganancia_real') %}
-                        {% if _gr is not none %}
-                        <div class="flex flex-col items-end">
-                            <span class="{{ 'text-green-600' if _gr > 0 else 'text-red-600' }} font-semibold text-xs">${{ "{:,.0f}".format(_gr) }}</span>
-                            {% if p.get('_meli_contribution_mxn', 0) > 0 %}
-                            <span class="text-blue-500 text-[9px]">+${{ "{:,.0f}".format(p._meli_contribution_mxn) }} ML</span>
-                            {% endif %}
-                        </div>
+                        {% set _neto = p.get('_neto_ml') %}
+                        {% if _neto is not none %}
+                        <span class="{{ 'text-green-600' if _neto > 0 else 'text-red-600' }} font-semibold text-xs">${{ "{:,.0f}".format(_neto) }}</span>
                         {% else %}
                         <span class="text-gray-300 text-xs">-</span>
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-center">
-                        {% set _mr = p.get('_margen_real_pct') if p.get('_margen_real_pct') is not none else p.get('_margen_pct') %}
-                        {% if _mr is not none %}
+                        {% set _rr = p.get('_recup_retail_pct') %}
+                        {% if _rr is not none %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
-                            {% if _mr >= 20 %}bg-green-100 text-green-700
-                            {% elif _mr >= 10 %}bg-yellow-100 text-yellow-700
-                            {% elif _mr >= 0 %}bg-orange-100 text-orange-700
+                            {% if _rr >= 100 %}bg-green-100 text-green-700
+                            {% elif _rr >= 80 %}bg-yellow-100 text-yellow-700
+                            {% elif _rr >= 60 %}bg-orange-100 text-orange-700
                             {% else %}bg-red-100 text-red-700{% endif %}">
-                            {{ "%.1f"|format(_mr) }}%
+                            {{ "%.1f"|format(_rr) }}%
                         </span>
                         {% else %}
                         <span class="text-gray-300 text-xs">-</span>
@@ -455,7 +454,7 @@
             <div class="flex gap-1">
                 <button onclick="sortCandidates('stock')" id="sort-stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-yellow-100 text-yellow-700 border border-yellow-300">Stock</button>
                 <button onclick="sortCandidates('sales')" id="sort-sales" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Ventas</button>
-                <button onclick="sortCandidates('margin')" id="sort-margin" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Margen</button>
+                <button onclick="sortCandidates('margin')" id="sort-margin" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">% Retail</button>
                 <button onclick="sortCandidates('price')" id="sort-price" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Precio</button>
                 <button onclick="sortCandidates('bm_stock')" id="sort-bm_stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock BM</button>
             </div>
@@ -478,7 +477,7 @@
         <div class="bg-white rounded-lg shadow p-3 candidate-row" id="mcrow-{{ p.id }}"
              data-stock="{{ p.available_quantity }}"
              data-sales="{{ p.get('units_30d', 0) }}"
-             data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+             data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
              data-price="{{ p.price }}"
              data-bm-stock="{{ p.get('_bm_avail', 0) if p.get('_bm_avail') is not none else 0 }}"
              data-category="{{ p.get('category_name', '') }}"
@@ -497,10 +496,11 @@
             </div>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-xs">
                 <span class="font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
-                {% if p.get('_margen_pct') is not none %}
+                {% set _rrc_m = p.get('_recup_retail_pct') %}
+                {% if _rrc_m is not none %}
                 <span class="px-1.5 py-0.5 rounded font-semibold
-                    {% if p._margen_pct >= 20 %}bg-green-100 text-green-700{% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700{% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
-                    M: {{ "%.1f"|format(p._margen_pct) }}%
+                    {% if _rrc_m >= 100 %}bg-green-100 text-green-700{% elif _rrc_m >= 80 %}bg-yellow-100 text-yellow-700{% elif _rrc_m >= 60 %}bg-orange-100 text-orange-700{% else %}bg-red-100 text-red-700{% endif %}">
+                    {{ "%.1f"|format(_rrc_m) }}% retail
                 </span>
                 {% endif %}
                 <span class="text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded truncate max-w-[120px]">{{ p.get('category_name', '-') }}</span>
@@ -555,7 +555,7 @@
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Categoria</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
-                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Margen</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">% Retail</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock BM</th>
@@ -569,7 +569,7 @@
                     data-stock="{{ p.available_quantity }}"
                     data-sales="{{ p.get('units_30d', 0) }}"
                     data-account="{{ p.get('_account_id', '') }}"
-                    data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
                     data-price="{{ p.price }}"
                     data-bm-stock="{{ p.get('_bm_avail', 0) if p.get('_bm_avail') is not none else 0 }}"
                     data-category="{{ p.get('category_name', '') }}"
@@ -600,13 +600,14 @@
                     </td>
                     <td class="px-3 py-2 text-right font-semibold text-gray-700 text-xs">${{ "{:,.0f}".format(p.price) }}</td>
                     <td class="px-3 py-2 text-center">
-                        {% if p.get('_margen_pct') is not none %}
+                        {% set _rrc = p.get('_recup_retail_pct') %}
+                        {% if _rrc is not none %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
-                            {% if p._margen_pct >= 20 %}bg-green-100 text-green-700
-                            {% elif p._margen_pct >= 10 %}bg-yellow-100 text-yellow-700
-                            {% elif p._margen_pct >= 0 %}bg-orange-100 text-orange-700
+                            {% if _rrc >= 100 %}bg-green-100 text-green-700
+                            {% elif _rrc >= 80 %}bg-yellow-100 text-yellow-700
+                            {% elif _rrc >= 60 %}bg-orange-100 text-orange-700
                             {% else %}bg-red-100 text-red-700{% endif %}">
-                            {{ "%.1f"|format(p._margen_pct) }}%
+                            {{ "%.1f"|format(_rrc) }}%
                         </span>
                         {% else %}
                         <span class="text-gray-300 text-xs">-</span>
