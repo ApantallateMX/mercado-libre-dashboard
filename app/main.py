@@ -4681,7 +4681,7 @@ async def products_deals_partial(request: Request):
         # (el body batch a veces no incluye original_price aunque haya deal activo)
         # Pre-sort y limitar antes del check para evitar timeout con cientos de productos
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
-        candidates_to_check = candidates[:150]
+        candidates_to_check = candidates[:80]
         await _enrich_with_promotions(client, candidates_to_check, id_key="id")
         newly_found = [p for p in candidates_to_check if p.get("_has_deal")]
         if newly_found:
@@ -4692,13 +4692,16 @@ async def products_deals_partial(request: Request):
         # BM data + FX rate + variation SKUs en paralelo
         all_to_enrich = active_deals + candidates
 
-        bm_map, _, usd_to_mxn, _, _ = await asyncio.gather(
+        _gather_results = await asyncio.gather(
             _get_bm_stock_cached(all_to_enrich),
             _enrich_with_bm_product_info(all_to_enrich),
             _get_usd_to_mxn(client),
             _enrich_variation_skus(client, all_to_enrich),
             _enrich_category_names(client, all_to_enrich),
+            return_exceptions=True,
         )
+        bm_map = _gather_results[0] if not isinstance(_gather_results[0], Exception) else {}
+        usd_to_mxn = _gather_results[2] if not isinstance(_gather_results[2], Exception) else 17.0
         _apply_bm_stock(all_to_enrich, bm_map)
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
         _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
@@ -4775,6 +4778,14 @@ async def products_deals_partial(request: Request):
             "deal_buffer_pct": _deal_cfg["deal_buffer_pct"],
             "retail_target_pct": _deal_cfg["retail_target_pct"],
         })
+    except Exception as _deals_exc:
+        import logging, traceback
+        logging.getLogger("deals").error(f"products_deals_partial error: {_deals_exc}\n{traceback.format_exc()}")
+        return HTMLResponse(
+            f'<div class="p-6 text-red-600 text-sm">Error al cargar Deals: {type(_deals_exc).__name__}: {_deals_exc}'
+            f'<br><pre class="text-xs mt-2 whitespace-pre-wrap">{traceback.format_exc()}</pre></div>',
+            status_code=500
+        )
     finally:
         await client.close()
 
