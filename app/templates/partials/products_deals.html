@@ -655,7 +655,8 @@
                     </td>
                     <!-- P. Sugerido / Deal (candidates) -->
                     <!-- P. Sug./Deal candidates: lógica por margen -->
-                    {% set _already_ok = (p.price or 0) >= p.get('_precio_sug_retail', 0) and p.get('_precio_sug_retail', 0) > 0 %}
+                    {% set _precio_sug_retail_v = p.get('_precio_sug_retail') or 0 %}
+                    {% set _already_ok = (p.price or 0) >= _precio_sug_retail_v and _precio_sug_retail_v > 0 %}
                     <td class="px-2 py-2 text-right text-xs min-w-[120px]">
                         {% if _already_ok %}
                         {# Precio actual ya cubre retail — deal sobre precio actual (original_price = precio actual) #}
