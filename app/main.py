@@ -178,11 +178,22 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             _item_id = p.get("id", "")
             _hist_ratio = _item_net_ratio_map.get(_item_id)
             if _hist_ratio:
-                # Ratio real calculado desde ventas históricas (ya incluye fees ML + 7% socio)
+                # Ratio real de ventas históricas: ya incluye fee ML + retenciones + 7% socio
                 _neto = _sale_price * _hist_ratio
             else:
-                # Fallback: 18% fee flat (tasa real para electrónica/electrodomésticos)
-                _net_ml = _sale_price * (1 - 0.18 * 1.16) - 150
+                # Fallback con coeficientes reales ML Mexico:
+                #   fee 18% + retenciones fiscales ~9.05% del total (IVA 6.9% + ISR 2.15%)
+                #   → factor neto = 1 - 0.18 - 0.0905 = 0.7295
+                # Envío estimado por retail BM (mayor retail = producto más grande)
+                if _retail_mxn >= 5000:
+                    _ship_est = 400
+                elif _retail_mxn >= 2500:
+                    _ship_est = 250
+                elif _retail_mxn >= 1000:
+                    _ship_est = 150
+                else:
+                    _ship_est = 100
+                _net_ml = _sale_price * 0.7295 - _ship_est
                 _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)
             p["_neto_ml"] = round(_neto, 2)
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
