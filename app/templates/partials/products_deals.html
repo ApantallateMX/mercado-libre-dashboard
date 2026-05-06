@@ -1957,30 +1957,65 @@ async function applyDealPrice(itemId, price, priceType, btn) {
 }
 
 async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
-    var dealPrice = Math.round(originalPrice * (1 - bufferPct));
-    var now = new Date();
-    var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
-    var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
-    var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
     var orig = btn.textContent;
-    btn.textContent = '...';
+    btn.textContent = 'Verificando...';
     btn.disabled = true;
     try {
+        // Step 1: Ask ML what deal it will actually accept for this item
+        var pr = await fetch('/api/items/' + itemId + '/promotions');
+        var pd = await pr.json();
+        var promos = (pd.promotions || []);
+        var candidate = promos.find(function(p) {
+            return p.promotion_type === 'PRICE_DISCOUNT' && p.status === 'candidate';
+        });
+
+        if (!candidate) {
+            showToast('error', 'ML no tiene deal disponible para este item ahora. Si el precio fue modificado recientemente, espera 1-3 días para que ML actualice su historial.');
+            btn.textContent = orig;
+            btn.disabled = false;
+            return;
+        }
+
+        // Step 2: Cap our desired price to ML's credibility window
+        var suggested  = candidate.suggested_discounted_price;
+        var maxAllowed = candidate.max_discounted_price;
+        var minAllowed = candidate.min_discounted_price;
+        var mlOriginal = candidate.original_price || originalPrice;
+
+        var desiredPrice = Math.round(originalPrice * (1 - bufferPct));
+        var dealPrice;
+        if (maxAllowed && desiredPrice > maxAllowed) {
+            // Our price exceeds ML's historical ceiling → use ML's suggested (avoids ERROR_CREDIBILITY_DISCOUNTED_PRICE)
+            dealPrice = Math.round(suggested || maxAllowed);
+        } else if (minAllowed && desiredPrice < minAllowed) {
+            dealPrice = Math.round(minAllowed);
+        } else {
+            dealPrice = desiredPrice;
+        }
+
+        var now = new Date();
+        var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
+        var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
+        var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
+
+        btn.textContent = 'Activando...';
+
+        // Step 3: Activate with ML-credible price
         var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
-                original_price: originalPrice,
+                original_price: mlOriginal,
                 start_date: start,
                 finish_date: finish
             })
         });
         var data = await r.json();
         if (r.ok && data.ok) {
-            var pct = Math.round(bufferPct * 100);
-            showToast('success', 'Deal −' + pct + '% activo hasta ' + finish.slice(0, 10) + ' · $' + dealPrice.toLocaleString('es-MX'));
+            var actualPct = mlOriginal > 0 ? Math.round((1 - dealPrice / mlOriginal) * 100) : Math.round(bufferPct * 100);
+            showToast('success', 'Deal −' + actualPct + '% activo · $' + Math.round(dealPrice).toLocaleString('es-MX') + ' hasta ' + finish.slice(0, 10));
             btn.textContent = '✓ Deal activo';
             btn.className = btn.className.replace(/bg-\w+-\d+/g, 'bg-green-100').replace(/text-\w+-\d+/g, 'text-green-700');
             markRowActivated(itemId);
@@ -1990,7 +2025,7 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
             btn.disabled = false;
         }
     } catch(e) {
-        showToast('error', 'Error de red');
+        showToast('error', 'Error de red: ' + e.message);
         btn.textContent = orig;
         btn.disabled = false;
     }
@@ -2003,29 +2038,62 @@ async function quickDealByPct(itemId, basePrice, btn) {
         showToast('error', 'Ingresa un % válido (1–79)');
         return;
     }
-    var dealPrice = Math.round(basePrice * (1 - pct / 100));
-    var now = new Date();
-    var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
-    var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
-    var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
     var orig = btn.textContent;
-    btn.textContent = '...';
+    btn.textContent = 'Verificando...';
     btn.disabled = true;
     try {
+        // Check ML's credibility window before activating
+        var pr = await fetch('/api/items/' + itemId + '/promotions');
+        var pd = await pr.json();
+        var candidate = (pd.promotions || []).find(function(p) {
+            return p.promotion_type === 'PRICE_DISCOUNT' && p.status === 'candidate';
+        });
+
+        if (!candidate) {
+            showToast('error', 'ML no tiene deal disponible para este item ahora. Si el precio fue modificado recientemente, espera 1-3 días.');
+            btn.textContent = orig;
+            btn.disabled = false;
+            return;
+        }
+
+        var desiredPrice = Math.round(basePrice * (1 - pct / 100));
+        var maxAllowed = candidate.max_discounted_price;
+        var minAllowed = candidate.min_discounted_price;
+        var mlOriginal = candidate.original_price || basePrice;
+
+        var dealPrice;
+        if (maxAllowed && desiredPrice > maxAllowed) {
+            showToast('error', 'El −' + pct + '% que ingresaste ($' + desiredPrice.toLocaleString('es-MX') + ') supera el máximo que ML acepta ($' + Math.round(maxAllowed).toLocaleString('es-MX') + '). Usa un % mayor.');
+            btn.textContent = orig;
+            btn.disabled = false;
+            return;
+        } else if (minAllowed && desiredPrice < minAllowed) {
+            dealPrice = Math.round(minAllowed);
+        } else {
+            dealPrice = desiredPrice;
+        }
+
+        var now = new Date();
+        var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
+        var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
+        var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
+
+        btn.textContent = 'Activando...';
         var r = await fetch('/api/items/' + itemId + '/promotions/activate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
-                original_price: basePrice,
+                original_price: mlOriginal,
                 start_date: start,
                 finish_date: finish
             })
         });
         var data = await r.json();
         if (r.ok && data.ok) {
-            showToast('success', 'Deal −' + pct + '% activo hasta ' + finish.slice(0, 10) + ' · $' + dealPrice.toLocaleString('es-MX'));
+            var actualPct = mlOriginal > 0 ? Math.round((1 - dealPrice / mlOriginal) * 100) : pct;
+            showToast('success', 'Deal −' + actualPct + '% activo · $' + Math.round(dealPrice).toLocaleString('es-MX') + ' hasta ' + finish.slice(0, 10));
             btn.textContent = '✓';
             markRowActivated(itemId);
         } else {
@@ -2034,7 +2102,7 @@ async function quickDealByPct(itemId, basePrice, btn) {
             btn.disabled = false;
         }
     } catch(e) {
-        showToast('error', 'Error de red');
+        showToast('error', 'Error de red: ' + e.message);
         btn.textContent = orig;
         btn.disabled = false;
     }

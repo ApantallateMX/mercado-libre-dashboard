@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-05 — FIX: Deals — ERROR_CREDIBILITY_DISCOUNTED_PRICE al activar deal
+
+### Problema
+`applyAndActivateDeal` y `quickDealByPct` calculaban `deal_price` como `precio × (1 − buffer%)` sin verificar
+el historial de precios que ML usa para validar credibilidad. Si el precio fue subido recientemente (ej.
+MLM3872998748: $3,919 → $4,984), ML rechazaba con `ERROR_CREDIBILITY_DISCOUNTED_PRICE` porque el deal
+resultante ($4,236) superaba el máximo histórico que ML acepta ($3,527).
+
+### Fix
+Ambas funciones JS ahora siguen un flujo de dos pasos:
+1. `GET /api/items/{id}/promotions` → busca candidato PRICE_DISCOUNT con `suggested_discounted_price` / `max_discounted_price`
+2. Si no hay candidato → error claro: "ML no tiene deal disponible, espera 1-3 días si el precio fue modificado"
+3. Si hay candidato: compara precio deseado contra `max_discounted_price`:
+   - Si supera el máximo → usa `suggested_discounted_price` de ML (precio históricamente creíble)
+   - Si no supera → usa precio calculado normalmente
+4. Activa el deal con `original_price = candidate.original_price` (precio histórico de ML, no el nuestro)
+
+`quickDealByPct` muestra error específico cuando el % manual del usuario excede el techo de ML,
+indicando el precio máximo permitido.
+
+### Archivos modificados
+- `app/templates/partials/products_deals.html` — reescritura de `applyAndActivateDeal` y `quickDealByPct`
+
+---
+
 ## 2026-05-05 — FEAT: Precio deal por cuenta en Ventas/Órdenes (anti-detección)
 
 ### Feature
