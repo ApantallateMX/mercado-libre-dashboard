@@ -360,16 +360,16 @@
                         {% if p.get('_precio_sug_deal') %}
                         <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(p._precio_sug_deal) }}</div>
                         <div class="text-[9px] text-orange-400 mb-1">base p/deal −{{ (p._deal_buffer_pct * 100)|int }}%</div>
-                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_deal }}, 'original_price', this)"
+                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_deal }}, 'price', this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
-                            ↑ Subir base
+                            ↑ Subir precio
                         </button>
                         {% elif p.get('_precio_sug_retail') %}
                         <div class="font-semibold text-gray-700">${{ "{:,.0f}".format(p._precio_sug_retail) }}</div>
                         <div class="text-[9px] text-gray-400 mb-1">para 100% retail</div>
-                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_retail }}, 'original_price', this)"
+                        <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_retail }}, 'price', this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition">
-                            ↑ Aplicar
+                            ↑ Subir precio
                         </button>
                         {% else %}
                         <span class="text-gray-300">—</span>
@@ -1943,7 +1943,7 @@ async function applyDealPrice(itemId, price, priceType, btn) {
     btn.disabled = true;
     var accountId = _rowAccount(btn);
     try {
-        var r = await fetch('/bm/sync-price', {
+        var r = await fetch('/api/lanzar/sync-price', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ item_id: itemId, price: price, price_type: priceType, account_id: accountId })
