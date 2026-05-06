@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-06 — FEAT: Deals — Neto ML y % Retail reemplazan Ganancia y Margen
+
+### Cambio
+Las columnas "Ganancia" y "Margen" (basadas en costo BM) fueron reemplazadas por métricas que no
+requieren costo ya que no se tiene esa referencia:
+
+- **Neto ML** (`_neto_ml`): monto que queda después de comisión ML (×1.16 IVA) y $150 envío.
+  Fórmula: `deal_price × (1 − fee × 1.16) − 150`
+- **% Retail** (`_recup_retail_pct`): Neto ML como % del Retail BM.
+  Fórmula: `Neto ML / Retail BM × 100`. Ej: recibir $800 de un retail $1,000 = 80%.
+
+Color coding % Retail: ≥100% verde · 80-99% amarillo · 60-79% naranja · <60% rojo.
+
+Aplica en tablas desktop y mobile cards tanto para Deals Activos como Candidatos.
+`data-margin` en filas también usa `_recup_retail_pct` para el sort correcto por % Retail.
+
+### Archivos modificados
+- `app/templates/partials/products_deals.html` — headers, celdas y badges en todas las vistas
+- `app/main.py` — `_calc_margins` calcula `_neto_ml` y `_recup_retail_pct` (sesión anterior)
+
+---
+
+## 2026-05-06 — FIX: Deals — múltiples bugs resueltos (sesión anterior)
+
+### Fixes aplicados
+1. **ERROR_CREDIBILITY_DISCOUNTED_PRICE** — deal activation pre-verifica candidato ML y respeta `max_discounted_price`
+2. **"Error: desconocido"** — frontend ahora muestra `data.error || data.detail || JSON.stringify(data)`
+3. **"Error: Not Found"** — URL corregida `/bm/sync-price` → `/api/lanzar/sync-price`
+4. **"original_price is not modifiable"** — `price_type` cambiado a `'price'`, botón "Subir base" → "Subir precio"
+5. **Bug cross-account** — `_account_id` stampeado en cada item, embebido en `data-account`, pasado via `_rowAccount(btn)` al backend
+6. **ML_Auto precio deal incorrecto** — `_promo_deal_price = promo_data["deal_price"]` almacenado y usado en P. Deal column
+
+---
+
 ## 2026-05-05 — FIX: Deals — ERROR_CREDIBILITY_DISCOUNTED_PRICE al activar deal
 
 ### Problema
