@@ -666,30 +666,32 @@
                     {% set _already_ok = (p.price or 0) >= p.get('_precio_sug_retail', 0) and p.get('_precio_sug_retail', 0) > 0 %}
                     <td class="px-2 py-2 text-right text-xs min-w-[120px]">
                         {% if _already_ok %}
-                        {# Precio actual ya cubre retail — subir base para que con deal el comprador pague lo mismo #}
+                        {# Precio actual ya cubre retail — deal sobre precio actual (original_price = precio actual) #}
                         {% set _buf = p.get('_deal_buffer_pct', 0.15) %}
-                        {% set _base_deal = (p.price / (1 - _buf)) | round | int %}
+                        {% set _cur = (p.price or 0) | int %}
+                        {% set _deal_final = (_cur * (1 - _buf)) | round | int %}
                         <div class="text-[9px] text-green-600 font-medium mb-1">✓ Buen margen — activar deal:</div>
-                        <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(_base_deal) }}</div>
-                        <div class="text-[9px] text-orange-400 mb-1">base → deal −{{ (_buf * 100)|int }}% = ${{ "{:,.0f}".format(p.price) }}</div>
-                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ _base_deal }}, {{ _buf }}, this)"
+                        <div class="font-semibold text-orange-500">${{ "{:,.0f}".format(_deal_final) }}</div>
+                        <div class="text-[9px] text-orange-400 mb-1">deal −{{ (_buf * 100)|int }}% sobre ${{ "{:,.0f}".format(_cur) }}</div>
+                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ _cur }}, {{ _buf }}, this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
                             ↑ Activar Deal
                         </button>
                         {% elif p.get('_precio_sug_retail') %}
-                        {# Precio actual por debajo del retail recovery — sugerir subir #}
+                        {# Precio actual por debajo del retail recovery — sugerir subir primero #}
                         <div class="font-semibold text-gray-700">${{ "{:,.0f}".format(p._precio_sug_retail) }}</div>
                         <div class="text-[9px] text-gray-400 mb-1">para 100% retail</div>
                         <button onclick="applyDealPrice('{{ p.id }}', {{ p._precio_sug_retail }}, 'price', this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition font-medium">
-                            ↑ Aplicar precio
+                            ① Subir precio
                         </button>
                         {% if p.get('_precio_sug_deal') %}
-                        <div class="font-semibold text-orange-500 mt-1">${{ "{:,.0f}".format(p._precio_sug_deal) }}</div>
-                        <div class="text-[9px] text-orange-400 mb-1">+ activar deal −{{ (p._deal_buffer_pct * 100)|int }}%</div>
-                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ p._precio_sug_deal }}, {{ p._deal_buffer_pct }}, this)"
+                        {% set _buf2 = p.get('_deal_buffer_pct', 0.15) %}
+                        {% set _deal2 = (p._precio_sug_retail * (1 - _buf2)) | round | int %}
+                        <div class="text-[9px] text-gray-400 mt-1 mb-0.5">Luego activar deal −{{ (_buf2 * 100)|int }}% = ${{ "{:,.0f}".format(_deal2) }}</div>
+                        <button onclick="applyAndActivateDeal('{{ p.id }}', {{ p._precio_sug_retail | int }}, {{ _buf2 }}, this)"
                                 class="w-full px-1.5 py-0.5 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition font-medium">
-                            ↑ Precio + Deal
+                            ② Activar Deal
                         </button>
                         {% endif %}
                         {% else %}
