@@ -170,6 +170,19 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_ganancia_est"] = None
             p["_margen_pct"] = None
 
+        # ── Neto ML y % Recuperación Retail ─────────────────────────────────
+        # Precio real de venta: para ML_Auto usa _promo_deal_price; resto usa price
+        _sale_price = p.get("_promo_deal_price") or price
+        _retail_mxn = p["_retail_mxn"]
+        if _sale_price > 0:
+            _fee_s = _ml_fee(_sale_price)
+            _neto = _sale_price * (1 - _fee_s * 1.16) - 150
+            p["_neto_ml"] = round(_neto, 2)
+            p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
+        else:
+            p["_neto_ml"] = None
+            p["_recup_retail_pct"] = None
+
         # ── Aportación MeLi (PRE_NEGOTIATED) — ML subsidia parte del descuento ──
         _meli_pct = p.get("_meli_promo_pct", 0) or 0
         _orig_p = p.get("original_price", 0) or 0
