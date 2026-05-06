@@ -1956,6 +1956,8 @@ async function applyDealPrice(itemId, price, priceType, btn) {
 
 async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
     var dealPrice = Math.round(originalPrice * (1 - bufferPct));
+    var now = new Date();
+    var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
     var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
     var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
     var orig = btn.textContent;
@@ -1969,6 +1971,7 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
                 original_price: originalPrice,
+                start_date: start,
                 finish_date: finish
             })
         });
@@ -1999,6 +2002,8 @@ async function quickDealByPct(itemId, basePrice, btn) {
         return;
     }
     var dealPrice = Math.round(basePrice * (1 - pct / 100));
+    var now = new Date();
+    var start = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + 'T00:00:00';
     var finishDate = new Date(); finishDate.setDate(finishDate.getDate() + 14);
     var finish = finishDate.getFullYear() + '-' + String(finishDate.getMonth()+1).padStart(2,'0') + '-' + String(finishDate.getDate()).padStart(2,'0') + 'T23:59:59';
     var orig = btn.textContent;
@@ -2012,6 +2017,7 @@ async function quickDealByPct(itemId, basePrice, btn) {
                 deal_price: dealPrice,
                 promotion_type: 'PRICE_DISCOUNT',
                 original_price: basePrice,
+                start_date: start,
                 finish_date: finish
             })
         });
