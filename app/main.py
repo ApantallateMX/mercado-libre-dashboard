@@ -4739,8 +4739,15 @@ async def products_deals_partial(request: Request):
                     p["_promo_type_str"] = promo_data.get("_promo_type", "")
                     p["_promo_name"] = promo_data.get("_promo_name", "")
                 active_deals.append(p)
-            elif p.get("available_quantity", 0) > 0:
+            elif p.get("available_quantity", 0) > 0 and p.get("status", "active") != "closed":
                 candidates.append(p)
+
+        # Limitar active_deals a los más relevantes (seller-managed primero, luego por ventas)
+        active_deals.sort(key=lambda p: (
+            0 if not p.get("_deal_is_ml_auto") else 1,  # seller deals primero
+            -(p.get("units_30d") or 0)
+        ))
+        active_deals = active_deals[:200]
 
         # Top candidatos por stock
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)

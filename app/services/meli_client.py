@@ -30,9 +30,9 @@ class MeliApiError(Exception):
                 msg = f"{msg} ({details})" if msg else details
             else:
                 # Use error detail if available, otherwise message code
-                msg = error_detail or message_code or str(body)
+                msg = error_detail or message_code or str(body) or f"HTTP {status_code}"
         else:
-            msg = str(body)
+            msg = str(body) or f"HTTP {status_code}"
         super().__init__(msg)
 
 
