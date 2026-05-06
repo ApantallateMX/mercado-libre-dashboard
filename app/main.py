@@ -4716,6 +4716,12 @@ async def products_deals_partial(request: Request):
         sales_map = _aggregate_sales_by_item(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
+        # Stamp every product with the account that owns it so the UI can
+        # pass the correct account_id on write operations regardless of what
+        # account is active at click time.
+        for p in products:
+            p["_account_id"] = client.user_id
+
         active_deals = []
         candidates = []
         for p in products:
@@ -7841,26 +7847,28 @@ async def ads_by_category_partial(
 
 # === Promotions API ===
 
-async def _get_client_for_item(item_id: str):
-    """Retorna un MeliClient con la cuenta dueña del item (busca en ml_listings)."""
+async def _get_client_for_item(item_id: str, account_id: str = None):
+    """Retorna un MeliClient con la cuenta dueña del item.
+    Prioridad: account_id explícito > ml_listings > cuenta activa del contexto."""
     import aiosqlite as _aio
-    owner_id = None
-    try:
-        async with _aio.connect(token_store.DATABASE_PATH) as _db:
-            _row = await (await _db.execute(
-                "SELECT account_id FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
-            )).fetchone()
-            if _row and _row[0]:
-                owner_id = _row[0]
-    except Exception:
-        pass
+    owner_id = account_id or None
+    if not owner_id:
+        try:
+            async with _aio.connect(token_store.DATABASE_PATH) as _db:
+                _row = await (await _db.execute(
+                    "SELECT account_id FROM ml_listings WHERE item_id=? LIMIT 1", (item_id,)
+                )).fetchone()
+                if _row and _row[0]:
+                    owner_id = _row[0]
+        except Exception:
+            pass
     return await get_meli_client(owner_id)
 
 
 @app.get("/api/items/{item_id}/promotions")
-async def get_item_promotions_api(item_id: str):
+async def get_item_promotions_api(item_id: str, account_id: str = None):
     """Consulta promociones disponibles para un item."""
-    client = await _get_client_for_item(item_id)
+    client = await _get_client_for_item(item_id, account_id=account_id)
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
@@ -7879,11 +7887,17 @@ async def get_item_promotions_api(item_id: str):
 @app.post("/api/items/{item_id}/promotions/activate")
 async def activate_item_promotion_api(item_id: str, request: Request):
     """Activa una promocion para un item."""
-    client = await _get_client_for_item(item_id)
+    body_preview = None
+    try:
+        body_preview = await request.json()
+    except Exception:
+        body_preview = {}
+    account_id_hint = (body_preview or {}).get("account_id", "")
+    client = await _get_client_for_item(item_id, account_id=account_id_hint or None)
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
-        body = await request.json()
+        body = body_preview or {}
         deal_price = body.get("deal_price")
         promotion_type = body.get("promotion_type")
         if not deal_price or not promotion_type:

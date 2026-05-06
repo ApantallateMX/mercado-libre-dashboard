@@ -224,6 +224,7 @@
                 {% for p in active_deals %}
                 <tr class="hover:bg-green-50/30 active-deal-row"
                     data-id="{{ p.id }}"
+                    data-account="{{ p.get('_account_id', '') }}"
                     data-sales="{{ p.get('units_30d', 0) }}"
                     data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
                     data-stock="{{ p.available_quantity }}"
@@ -566,6 +567,7 @@
                 <tr class="hover:bg-yellow-50/30 candidate-row" id="crow-{{ p.id }}"
                     data-stock="{{ p.available_quantity }}"
                     data-sales="{{ p.get('units_30d', 0) }}"
+                    data-account="{{ p.get('_account_id', '') }}"
                     data-margin="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
                     data-price="{{ p.price }}"
                     data-bm-stock="{{ p.get('_bm_avail', 0) if p.get('_bm_avail') is not none else 0 }}"
@@ -1927,17 +1929,24 @@ function clearRecFilter() {
     applySearchAndPaginate();
 }
 
+// Helper: obtener account_id del data-account en el <tr> más cercano
+function _rowAccount(btn) {
+    var row = btn.closest('[data-account]');
+    return row ? (row.dataset.account || '') : '';
+}
+
 // ===== Precio sugerido: aplicar precio directo =====
 
 async function applyDealPrice(itemId, price, priceType, btn) {
     var orig = btn.textContent;
     btn.textContent = '...';
     btn.disabled = true;
+    var accountId = _rowAccount(btn);
     try {
         var r = await fetch('/bm/sync-price', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ item_id: itemId, price: price, price_type: priceType })
+            body: JSON.stringify({ item_id: itemId, price: price, price_type: priceType, account_id: accountId })
         });
         var data = await r.json();
         if (data.ok) {
@@ -1961,9 +1970,10 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
     var orig = btn.textContent;
     btn.textContent = 'Verificando...';
     btn.disabled = true;
+    var accountId = _rowAccount(btn);
     try {
         // Step 1: Ask ML what deal it will actually accept for this item
-        var pr = await fetch('/api/items/' + itemId + '/promotions');
+        var pr = await fetch('/api/items/' + itemId + '/promotions' + (accountId ? '?account_id=' + accountId : ''));
         var pd = await pr.json();
         var promos = (pd.promotions || []);
         var candidate = promos.find(function(p) {
@@ -2010,7 +2020,8 @@ async function applyAndActivateDeal(itemId, originalPrice, bufferPct, btn) {
                 promotion_type: 'PRICE_DISCOUNT',
                 original_price: mlOriginal,
                 start_date: start,
-                finish_date: finish
+                finish_date: finish,
+                account_id: accountId
             })
         });
         var data = await r.json();
@@ -2042,9 +2053,10 @@ async function quickDealByPct(itemId, basePrice, btn) {
     var orig = btn.textContent;
     btn.textContent = 'Verificando...';
     btn.disabled = true;
+    var accountId = _rowAccount(btn);
     try {
         // Check ML's credibility window before activating
-        var pr = await fetch('/api/items/' + itemId + '/promotions');
+        var pr = await fetch('/api/items/' + itemId + '/promotions' + (accountId ? '?account_id=' + accountId : ''));
         var pd = await pr.json();
         var candidate = (pd.promotions || []).find(function(p) {
             return p.promotion_type === 'PRICE_DISCOUNT' && p.status === 'candidate';
@@ -2088,7 +2100,8 @@ async function quickDealByPct(itemId, basePrice, btn) {
                 promotion_type: 'PRICE_DISCOUNT',
                 original_price: mlOriginal,
                 start_date: start,
-                finish_date: finish
+                finish_date: finish,
+                account_id: accountId
             })
         });
         var data = await r.json();
