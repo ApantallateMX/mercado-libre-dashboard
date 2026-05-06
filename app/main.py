@@ -175,9 +175,15 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
         _sale_price = p.get("_promo_deal_price") or price
         _retail_mxn = p["_retail_mxn"]
         if _sale_price > 0:
-            _fee_s = _ml_fee(_sale_price)
-            _net_ml = _sale_price * (1 - _fee_s * 1.16) - 150  # estimado depósito ML
-            _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)     # menos 7% comisión socio
+            _item_id = p.get("id", "")
+            _hist_ratio = _item_net_ratio_map.get(_item_id)
+            if _hist_ratio:
+                # Ratio real calculado desde ventas históricas (ya incluye fees ML + 7% socio)
+                _neto = _sale_price * _hist_ratio
+            else:
+                # Fallback: 18% fee flat (tasa real para electrónica/electrodomésticos)
+                _net_ml = _sale_price * (1 - 0.18 * 1.16) - 150
+                _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)
             p["_neto_ml"] = round(_neto, 2)
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
         else:
@@ -2145,6 +2151,18 @@ async def orders_table_partial(
             partner_commission = round(net * _PARTNER_COMMISSION_PCT, 2)
             net_final = round(net - partner_commission, 2)
 
+            # Cachear ratio real net_final/total por item_id — usado en deals tab para
+            # estimar neto sin depender de tarifas aproximadas
+            if total > 0 and net_final > 0:
+                for _oi in items:
+                    _iid = _oi.get("item", {}).get("id", "")
+                    if _iid:
+                        _ratio = net_final / total
+                        if _iid in _item_net_ratio_map:
+                            _item_net_ratio_map[_iid] = round((_item_net_ratio_map[_iid] + _ratio) / 2, 4)
+                        else:
+                            _item_net_ratio_map[_iid] = round(_ratio, 4)
+
             # Total cargos (todos los descuentos en una sola cifra)
             total_cargos = round(total_fees + ship_cost + taxes + partner_commission, 2)
 
@@ -2564,6 +2582,7 @@ _products_cache: dict[str, tuple[float, list]] = {}
 _bm_stock_cache: dict[str, tuple[float, dict]] = {}
 _sku_cost_map: dict[str, float] = {}    # sku -> costo MXN (del último prewarm)
 _sku_retail_map: dict[str, float] = {} # sku -> retail_ph MXN (LastRetailPricePurchaseHistory × FX)
+_item_net_ratio_map: dict[str, float] = {}  # item_id -> net_final/total_amount real (del tab ventas)
 _PARTNER_COMMISSION_PCT = 0.07         # 7% comisión socio (aplicado sobre net_received ML)
 _category_cache: dict[str, str] = {}  # category_id -> name
 _PRODUCTS_CACHE_TTL = 900   # 15 min
