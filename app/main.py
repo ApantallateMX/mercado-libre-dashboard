@@ -4744,6 +4744,8 @@ async def products_deals_partial(request: Request):
                     p["_promo_finish"] = promo_data.get("finish_date")
                     p["_promo_type_str"] = promo_data.get("_promo_type", "")
                     p["_promo_name"] = promo_data.get("_promo_name", "")
+                    # Precio real de campaña (lo que paga el comprador en ML_AUTO)
+                    p["_promo_deal_price"] = promo_data.get("deal_price")
                 active_deals.append(p)
             elif p.get("available_quantity", 0) > 0 and p.get("status", "active") != "closed":
                 candidates.append(p)
