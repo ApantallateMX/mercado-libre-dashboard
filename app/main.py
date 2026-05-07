@@ -10546,7 +10546,7 @@ async def diag_sku(sku: str = "", token: str = ""):
             f"OK: caché={cache_avail}, BM_live={live_avail}, bulk={bulk_avail}"
         ),
         "catalog": {
-            "retail_ph_usd": round(_bm_retail_ph_cache[sku_up][1], 2) if sku_up in _bm_retail_ph_cache else None,
+            "retail_ph_usd": round(_bm_retail_ph_cache[bm_key][1], 2) if bm_key in _bm_retail_ph_cache else None,
         },
     })
 
