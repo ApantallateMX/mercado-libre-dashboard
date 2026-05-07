@@ -4787,14 +4787,17 @@ async def products_deals_partial(request: Request):
                 p["_promotions"] = [promo_data] if promo_data else []
                 # Datos extra de la promo (fechas, % ML, etc.)
                 if promo_data:
-                    if promo_data.get("original_price"):
-                        p.setdefault("original_price", promo_data["original_price"])
+                    # Usar original_price de la API de promos si el body de ML no lo tiene
+                    # (setdefault falla cuando la clave existe con valor None)
+                    promo_op = promo_data.get("original_price")
+                    if promo_op and not p.get("original_price"):
+                        p["original_price"] = promo_op
                     p["_meli_promo_pct"] = promo_data.get("meli_percentage", 0)
                     p["_promo_start"] = promo_data.get("start_date")
                     p["_promo_finish"] = promo_data.get("finish_date")
                     p["_promo_type_str"] = promo_data.get("_promo_type", "")
                     p["_promo_name"] = promo_data.get("_promo_name", "")
-                    # Precio real de campaña (lo que paga el comprador en ML_AUTO)
+                    # Precio real de campaña (lo que paga el comprador)
                     p["_promo_deal_price"] = promo_data.get("deal_price")
                 active_deals.append(p)
             elif p.get("available_quantity", 0) > 0 and p.get("status", "active") != "closed":
