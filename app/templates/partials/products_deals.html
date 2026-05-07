@@ -144,15 +144,24 @@
                 {% if p.get('_deal_is_ml_auto') %}
                 <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML Auto</span>
                 {% endif %}
-                {% if p.original_price and p.original_price > p.price %}
+                {# Precio lista (tachado) #}
+                {% if p.get('_deal_is_ml_auto') or p.get('_meli_promo_pct', 0) > 0 %}
+                <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.price) }}</span>
+                {% elif p.original_price and p.original_price > p.price %}
                 <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
                 {% endif %}
+                {# Precio deal real #}
+                {% if p.get('_deal_is_ml_auto') and p.get('_promo_deal_price') %}
+                <span class="font-bold text-green-600 text-sm">${{ "{:,.0f}".format(p._promo_deal_price) }}</span>
+                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">-{{ "%.0f"|format((1 - p._promo_deal_price / p.price) * 100) }}%</span>
+                {% elif p.get('_meli_promo_pct', 0) > 0 %}
+                <span class="font-bold text-green-600 text-sm">${{ "{:,.0f}".format((p.price * (1 - p._meli_promo_pct / 100)) | round | int) }}</span>
+                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">-{{ "%.0f"|format(p._meli_promo_pct) }}%</span>
+                {% elif p.original_price and p.original_price > p.price %}
                 <span class="font-bold text-green-600 text-sm">${{ "{:,.0f}".format(p.price) }}</span>
-                {% if p.original_price and p.original_price > p.price %}
                 <span class="px-1.5 py-0.5 rounded bg-green-100 text-green-700 font-semibold">-{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%</span>
-                {% endif %}
-                {% if p.get('_meli_promo_pct', 0) > 0 %}
-                <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML paga {{ p._meli_promo_pct }}%</span>
+                {% else %}
+                <span class="font-bold text-green-600 text-sm">${{ "{:,.0f}".format(p.price) }}</span>
                 {% endif %}
                 {% set _rr_badge = p.get('_recup_retail_pct') %}
                 {% if _rr_badge is not none %}
@@ -267,9 +276,9 @@
                             <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
                         </div>
                     </td>
-                    {# P. Lista: para ML_Auto = precio de lista del item; para PRICE_DISCOUNT = original_price (tachado) #}
+                    {# P. Lista: precio antes del deal (tachado) #}
                     <td class="px-3 py-2 text-right">
-                        {% if p.get('_deal_is_ml_auto') %}
+                        {% if p.get('_deal_is_ml_auto') or p.get('_meli_promo_pct', 0) > 0 %}
                         <span class="text-gray-500 line-through text-xs">${{ "{:,.0f}".format(p.price) }}</span>
                         {% elif p.original_price and p.original_price > p.price %}
                         <span class="text-gray-400 line-through text-xs">${{ "{:,.0f}".format(p.original_price) }}</span>
@@ -277,19 +286,25 @@
                         <span class="text-gray-400 text-xs">-</span>
                         {% endif %}
                     </td>
-                    {# P. Deal: para ML_Auto = precio real de campaña; para PRICE_DISCOUNT = p.price #}
+                    {# P. Deal: precio real que paga el comprador #}
                     <td class="px-3 py-2 text-right font-bold text-green-600">
                         {% if p.get('_deal_is_ml_auto') and p.get('_promo_deal_price') %}
                         ${{ "{:,.0f}".format(p._promo_deal_price) }}
+                        {% elif p.get('_meli_promo_pct', 0) > 0 %}
+                        ${{ "{:,.0f}".format((p.price * (1 - p._meli_promo_pct / 100)) | round | int) }}
                         {% else %}
                         ${{ "{:,.0f}".format(p.price) }}
                         {% endif %}
                     </td>
-                    {# Desc.: calculado sobre precio real de campaña vs precio de lista #}
+                    {# Desc.: % de descuento real #}
                     <td class="px-3 py-2 text-center">
                         {% if p.get('_deal_is_ml_auto') and p.get('_promo_deal_price') and p.price > 0 %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">
                             -{{ "%.0f"|format((1 - p._promo_deal_price / p.price) * 100) }}%
+                        </span>
+                        {% elif p.get('_meli_promo_pct', 0) > 0 %}
+                        <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">
+                            -{{ "%.0f"|format(p._meli_promo_pct) }}%
                         </span>
                         {% elif p.original_price and p.original_price > p.price %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">

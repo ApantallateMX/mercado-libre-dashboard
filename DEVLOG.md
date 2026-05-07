@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-07 — FIX: Deals — P. Lista / P. Deal / Desc. incorrectos para deals con ML%
+
+### Problema
+Items con `_meli_promo_pct > 0` (ML subsidia X% del precio): el tipo de promo no es
+`ML_Auto` → `_deal_is_ml_auto = False` → template solo mostraba `p.price` en P. Deal
+(precio de lista), P. Lista en blanco, Desc. en blanco.
+
+### Root cause
+El template condicionaba P. Lista tachado y P. Deal real SOLO a `_deal_is_ml_auto`.
+Para PRE_NEGOTIATED y similares donde ML cubre el descuento, `_deal_is_ml_auto = False`
+aunque sí haya `_meli_promo_pct > 0`.
+
+### Fix
+- P. Lista tachado: ahora también se muestra cuando `_meli_promo_pct > 0`
+- P. Deal: cuando `_meli_promo_pct > 0`, calcula `price × (1 − meli_pct/100)` (precio del comprador)
+- Desc.: muestra `-meli_pct%` cuando `_meli_promo_pct > 0`
+- Aplica a table (desktop) y cards (mobile) de Deals Activos
+
+### Archivos
+- `app/templates/partials/products_deals.html` — P. Lista, P. Deal, Desc. (desktop + mobile)
+
+---
+
 ## 2026-05-07 — FIX: Deals — Neto ML y Retail BM en blanco para muchos items
 
 ### Problema 1: Neto ML en blanco para deals con price=0
