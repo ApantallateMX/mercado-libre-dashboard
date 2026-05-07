@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-07 — FIX: Deals — Neto ML y Retail BM en blanco para muchos items
+
+### Problema 1: Neto ML en blanco para deals con price=0
+Items de catálogo ML donde el precio es controlado por ML tienen `price=0` en el body.
+Si además no tienen `_promo_deal_price`, `_sale_price=0` → `_neto_ml=None`.
+
+**Fix:** `_sale_price = promo_deal_price or price or original_price` — usa `original_price` como
+último fallback, que siempre tiene valor para items clasificados como deal (`original_price > 0`).
+
+### Problema 2: Retail BM en blanco para items en catálogo DB
+`_enrich_with_bm_product_info` solo buscaba en el bulk cache de la API BM. Si un SKU no
+estaba en el bulk cache (prewarm distinto, cache expirado), no se encontraban datos aunque
+el SKU existiera en los 8,552 SKUs del catálogo DB (`_bm_retail_ph_cache`).
+
+**Fix:** Al no encontrar SKU en bulk cache, buscar en `_bm_retail_ph_cache` como fallback.
+Esto permite mostrar Retail BM y calcular Neto ML / % Retail para la gran mayoría de items.
+
+### Archivos modificados
+- `app/main.py` — `_calc_margins` línea 175: fallback `original_price`
+- `app/main.py` — `_enrich_with_bm_product_info` línea 1161: fallback DB catalog
+
+---
+
 ## 2026-05-06 — FEAT: Deals — Neto ML y % Retail reemplazan Ganancia y Margen
 
 ### Cambio

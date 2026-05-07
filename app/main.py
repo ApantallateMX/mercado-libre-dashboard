@@ -171,8 +171,8 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_margen_pct"] = None
 
         # ── Neto ML y % Recuperación Retail ─────────────────────────────────
-        # Precio real de venta: para ML_Auto usa _promo_deal_price; resto usa price
-        _sale_price = p.get("_promo_deal_price") or price
+        # Precio real de venta: promo_deal_price → price → original_price (fallback catalogo)
+        _sale_price = p.get("_promo_deal_price") or price or p.get("original_price") or 0
         _retail_mxn = p["_retail_mxn"]
         if _sale_price > 0:
             _item_id = p.get("id", "")
@@ -1158,6 +1158,12 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             # Poblar _bm_retail_ph_cache para que coverage lo use sin tocar BM
             if 0 < retail_ph < 9000:
                 _bm_retail_ph_cache[base] = (_time.time(), float(retail_ph))
+        else:
+            # Fallback: si el SKU no está en el bulk cache, usar catálogo DB local
+            ph_cached = _bm_retail_ph_cache.get(base)
+            if ph_cached and ph_cached[1] > 0:
+                p["_bm_retail_price"] = ph_cached[1]
+                p["_bm_has_data"] = True
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
