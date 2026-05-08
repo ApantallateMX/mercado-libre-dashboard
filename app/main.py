@@ -1049,7 +1049,7 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
         iid, data = r
         if isinstance(data, list):
             p_map[iid] = data
-    _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN"}
+    _auto_types = {"SMART", "PRE_NEGOTIATED", "SELLER_COUPON_CAMPAIGN", "MARKETPLACE_CAMPAIGN"}
     for p in products:
         promos = p_map.get(p.get(id_key), [])
         p["_promotions"] = promos
@@ -1059,7 +1059,7 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
             if pr.get("status") in ("started", "active", "pending")
             and pr.get("type") not in _auto_types
         ]
-        # Promos que gestiona ML automáticamente (PRE_NEGOTIATED, SMART, etc.)
+        # Promos que gestiona ML automáticamente (PRE_NEGOTIATED, SMART, MARKETPLACE_CAMPAIGN, etc.)
         active_auto = [
             pr for pr in promos
             if pr.get("status") in ("started", "active", "pending")
@@ -1072,15 +1072,23 @@ async def _enrich_with_promotions(client, products: list, id_key="id"):
         p["_deal_types"] = list(set(pr.get("type", "") for pr in active_promos))
         p["_meli_promo_pct"] = 0
         p["_seller_promo_pct"] = 0
-        # Actualizar price/original_price y contribución ML desde la promo activa
+        # Precio deal (lo que paga el comprador) y precio lista (intacto en p.price)
         if active_promos:
             ap = active_promos[0]
-            if ap.get("price") and ap["price"] > 0:
-                p["price"] = ap["price"]
+            deal_price = ap.get("price")
+            if deal_price and deal_price > 0:
+                p["_promo_deal_price"] = deal_price  # buyer price; NO pisar p.price (= precio lista)
             if ap.get("original_price") and ap["original_price"] > 0:
                 p["original_price"] = ap["original_price"]
             p["_meli_promo_pct"] = ap.get("meli_percentage", 0) or 0
             p["_seller_promo_pct"] = ap.get("seller_percentage", 0) or 0
+            orig = p.get("original_price") or 0
+            pdeal = p.get("_promo_deal_price") or 0
+            plist = p.get("price") or 0
+            p["_has_price_reduction"] = bool(
+                (pdeal > 0 and plist > 0 and pdeal < plist)
+                or (orig > 0 and plist > 0 and orig > plist)
+            )
 
 
 async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
@@ -4835,16 +4843,23 @@ async def products_deals_partial(request: Request):
         candidates.sort(key=lambda p: p.get("available_quantity", 0), reverse=True)
         candidates_pre = candidates[:60]
 
-        # ── Fallback: check per-item top-25 candidatos no detectados por bulk ─
-        # MARKETPLACE_CAMPAIGN y algunos tipos no siempre aparecen en get_user_promotions
+        # ── Per-item enrichment: corrige _promo_deal_price con precio real del comprador ─
+        # La API bulk devuelve price=precio_vendedor para MARKETPLACE_CAMPAIGN.
+        # La API per-item (/seller-promotions/items/{id}) devuelve el precio real que paga el comprador.
+        # Correr en paralelo: active_deals[:100] + top25 candidatos.
         top25 = candidates_pre[:25]
+        _enrich_tasks = []
+        if active_deals:
+            _enrich_tasks.append(_enrich_with_promotions(client, active_deals[:100], id_key="id"))
         if top25:
-            await _enrich_with_promotions(client, top25, id_key="id")
-            newly_found = [p for p in top25 if p.get("_has_deal")]
-            if newly_found:
-                active_deals.extend(newly_found)
-                top25_ids = {p["id"] for p in newly_found}
-                candidates_pre = [p for p in candidates_pre if p["id"] not in top25_ids]
+            _enrich_tasks.append(_enrich_with_promotions(client, top25, id_key="id"))
+        if _enrich_tasks:
+            await asyncio.gather(*_enrich_tasks, return_exceptions=True)
+        newly_found = [p for p in top25 if p.get("_has_deal")]
+        if newly_found:
+            active_deals.extend(newly_found)
+            top25_ids = {p["id"] for p in newly_found}
+            candidates_pre = [p for p in candidates_pre if p["id"] not in top25_ids]
         candidates = candidates_pre[:60]
 
         # ── Paso 4: enriquecer con BM, FX, SKUs en paralelo ──────────────
