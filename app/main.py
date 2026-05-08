@@ -452,10 +452,24 @@ async def lifespan(app: FastAPI):
     if _BM_DISABLED:
         logger.info("[BM] DISABLE_BM_MONITOR=true — polling BM deshabilitado en este ambiente")
 
+    async def _seed_tokens_with_retry():
+        """Intenta _seed_tokens() cada 30s hasta que al menos 1 cuenta quede activa.
+        Necesario cuando ML rate-limita el token endpoint al arrancar."""
+        for attempt in range(1, 25):  # max 12 min
+            await _seed_tokens()
+            accounts = await token_store.get_all_tokens()
+            if accounts:
+                print(f"[SEED-RETRY] Tokens OK en intento #{attempt}: {len(accounts)} cuentas")
+                return
+            print(f"[SEED-RETRY] Intento #{attempt} fallido, reintentando en 30s...")
+            import asyncio as _aio_retry
+            await _aio_retry.sleep(30)
+        print("[SEED-RETRY] No se pudieron recuperar tokens ML tras 24 intentos")
+
     async def _deferred_init():
         """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
-        # 1. Refrescar tokens ML + Amazon
-        await _seed_tokens()
+        # 1. Refrescar tokens ML + Amazon (con retry si ML rate-limita)
+        await _seed_tokens_with_retry()
         await _seed_amazon_accounts()
         # 2. Monitor de precios BM (skip si DISABLE_BM_MONITOR=true)
         # Conectar caché local al monitor para que nunca golpee BM directamente
