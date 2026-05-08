@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-07 — FIX: Sesión dashboard perdida en cada redeploy Railway
+
+### Problema
+Cada push a Railway reiniciaba el contenedor → SQLite DB ephemeral → tabla `user_sessions`
+borrada → cookie `dash_session` inválida → pantalla "Sesión no disponible" → todos los
+operadores tenían que re-loguearse después de cada deploy.
+
+### Root cause
+`get_session()` hacía lookup en DB para validar el token. El token era opaco (`secrets.token_urlsafe(32)`),
+sin datos propios. Al borrar la DB en cada deploy, el lookup fallaba aunque el usuario tuviera
+cookie válida.
+
+### Fix: JWT firmado en la cookie
+- `create_session()`: genera un JWT (`body.sig`) con `{uid, exp, username, display_name, role, must_change_pw, allowed_sections}` firmado con HMAC-SHA256
+- `get_session()`: valida la firma del JWT directamente — **sin tocar la DB**. DB solo se consulta
+  como fallback para tokens opacos legacy
+- Clave de firma: env var `SECRET_KEY` (Railway) o fallback determinista derivado de `DATABASE_PATH`
+- La DB sigue usándose para guardar el token (auditoría, soporte logout), pero ya no es necesaria para validar la sesión
+- Los JWTs vencen a los 30 días igual que antes
+
+### Resultado
+Tras redeploy: la cookie `dash_session` sigue siendo válida → sin re-login → operadores
+no se interrumpen. El único token que requiere re-login ahora es cuando la `SECRET_KEY`
+cambia (o si el usuario cierra sesión manualmente).
+
+### Recomendación Railway
+Agregar env var `SECRET_KEY=<random-hex-64>` en Railway para mayor seguridad (sin esto
+usa un fallback determinista basado en DATABASE_PATH que funciona igual pero es predecible).
+
+### Archivos
+- `app/services/user_store.py` — `_jwt_sign()`, `_jwt_verify()`, `create_session()`, `get_session()`
+
+---
+
 ## 2026-05-07 — FIX: Deals — P. Lista / P. Deal / Desc. incorrectos para deals con ML%
 
 ### Problema

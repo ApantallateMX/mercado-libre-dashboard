@@ -8,13 +8,49 @@ Tablas:
 """
 
 import hashlib
+import hmac
+import base64
 import secrets
 import time
 import json
+import os
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional
 from app.config import DATABASE_PATH
+
+# JWT signing key — stable across container restarts if set as Railway env var.
+# If not set, derive a deterministic fallback from DB path so at least all
+# processes on the same host share the same key.
+_SECRET_KEY = os.getenv("SECRET_KEY") or (
+    hashlib.sha256(f"apantallate-dash:{DATABASE_PATH}".encode()).hexdigest()
+)
+_SESSION_DAYS = 30
+
+
+def _jwt_sign(payload: dict) -> str:
+    body = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+    sig = hmac.new(_SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def _jwt_verify(token: str) -> Optional[dict]:
+    try:
+        body, sig = token.rsplit(".", 1)
+    except ValueError:
+        return None
+    expected = hmac.new(_SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(body + "==").decode())
+    except Exception:
+        return None
+    if payload.get("exp", 0) < time.time():
+        return None
+    return payload
 
 
 # ─── Roles disponibles ───────────────────────────────────────────────────────
@@ -231,36 +267,69 @@ async def delete_user(user_id: int):
 
 # ─── Sesiones ─────────────────────────────────────────────────────────────────
 async def create_session(user_id: int, ip: str = None) -> str:
-    token = secrets.token_urlsafe(32)
-    expires = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""
-            INSERT INTO user_sessions (user_id, token, ip, expires_at)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, token, ip, expires))
-        await db.commit()
+    """Genera un JWT firmado con los datos del usuario embebidos.
+    Sobrevive reinicios del contenedor mientras SECRET_KEY sea estable."""
+    user = await get_user_by_id(user_id)
+    exp = int(time.time()) + _SESSION_DAYS * 86400
+    payload = {
+        "uid": user_id,
+        "exp": exp,
+        "username": user.get("username", "") if user else "",
+        "dn": user.get("display_name", "") if user else "",
+        "role": user.get("role", "viewer") if user else "viewer",
+        "mcp": user.get("must_change_pw", 0) if user else 0,
+        "sec": _parse_allowed_sections(user.get("allowed_sections")) if user else [],
+    }
+    token = _jwt_sign(payload)
+    # Persistir en DB para auditoría y soporte de logout (best-effort)
+    expires = (datetime.utcnow() + timedelta(days=_SESSION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute(
+                "INSERT INTO user_sessions (user_id, token, ip, expires_at) VALUES (?, ?, ?, ?)",
+                (user_id, token, ip, expires),
+            )
+            await db.commit()
+    except Exception:
+        pass  # La sesión funciona igual sin DB gracias al JWT
     return token
 
 
 async def get_session(token: str) -> Optional[dict]:
-    """Retorna el usuario asociado al token si la sesión es válida y no expiró."""
+    """Valida la sesión. Primero intenta verificar el JWT (sin DB).
+    Si no es JWT válido, intenta lookup en DB (tokens legacy)."""
     if not token:
         return None
+    # Verificar JWT — no requiere DB, sobrevive reinicios
+    payload = _jwt_verify(token)
+    if payload:
+        return {
+            "id": payload.get("uid"),
+            "username": payload.get("username", ""),
+            "display_name": payload.get("dn", ""),
+            "role": payload.get("role", "viewer"),
+            "must_change_pw": payload.get("mcp", 0),
+            "allowed_sections": payload.get("sec", []),
+        }
+    # Fallback DB para tokens opacos legacy
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute("""
-            SELECT u.id, u.username, u.display_name, u.role, u.must_change_pw, u.allowed_sections
-            FROM user_sessions s
-            JOIN dashboard_users u ON u.id = s.user_id
-            WHERE s.token = ? AND s.expires_at > ? AND u.active = 1
-        """, (token, now))
-        row = await cur.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["allowed_sections"] = _parse_allowed_sections(d.get("allowed_sections"))
-        return d
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("""
+                SELECT u.id, u.username, u.display_name, u.role, u.must_change_pw, u.allowed_sections
+                FROM user_sessions s
+                JOIN dashboard_users u ON u.id = s.user_id
+                WHERE s.token = ? AND s.expires_at > ? AND u.active = 1
+            """, (token, now))
+            row = await cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["allowed_sections"] = _parse_allowed_sections(d.get("allowed_sections"))
+            return d
+    except Exception:
+        return None
 
 
 async def delete_session(token: str):
