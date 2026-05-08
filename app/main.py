@@ -13460,6 +13460,54 @@ async def diag_amazon_accounts(token: str = ""):  # noqa
     return JSONResponse({"accounts": results})
 
 
+@app.get("/api/diag/refresh-ml-tokens")
+async def diag_refresh_ml_tokens(token: str = ""):
+    """Fuerza re-seed de tokens ML. Solo accesible con diag token."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    results = []
+    import os as _diag_os
+    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET
+    _slots = [
+        (_diag_os.getenv("MELI_USER_ID", ""), _diag_os.getenv("MELI_REFRESH_TOKEN", ""), "cuenta1"),
+        (_diag_os.getenv("MELI_USER_ID_2", ""), _diag_os.getenv("MELI_REFRESH_TOKEN_2", ""), "cuenta2"),
+        (_diag_os.getenv("MELI_USER_ID_3", ""), _diag_os.getenv("MELI_REFRESH_TOKEN_3", ""), "cuenta3"),
+        (_diag_os.getenv("MELI_USER_ID_4", ""), _diag_os.getenv("MELI_REFRESH_TOKEN_4", ""), "cuenta4"),
+    ]
+    import httpx as _hx
+    for uid, env_rt, label in _slots:
+        if not uid or not env_rt:
+            continue
+        # Preferir RT del DB (más actual) sobre env var
+        existing = await token_store.get_tokens(uid)
+        db_rt = (existing or {}).get("refresh_token", "")
+        rt_to_use = db_rt or env_rt
+        try:
+            async with _hx.AsyncClient(timeout=15) as _c:
+                resp = await _c.post(MELI_TOKEN_URL, data={
+                    "grant_type": "refresh_token",
+                    "client_id": MELI_CLIENT_ID,
+                    "client_secret": MELI_CLIENT_SECRET,
+                    "refresh_token": rt_to_use,
+                })
+            if resp.status_code == 200:
+                data = resp.json()
+                await token_store.save_tokens(uid, data["access_token"], data["refresh_token"],
+                                              data.get("expires_in", 21600))
+                results.append({"cuenta": label, "uid": uid, "status": "ok",
+                                 "rt_source": "db" if db_rt else "env"})
+                print(f"[DIAG-REFRESH] {label} ({uid}): OK — AT actualizado")
+            else:
+                results.append({"cuenta": label, "uid": uid, "status": f"error_{resp.status_code}",
+                                 "detail": resp.text[:200]})
+                print(f"[DIAG-REFRESH] {label} ({uid}): {resp.status_code} — {resp.text[:100]}")
+        except Exception as e:
+            results.append({"cuenta": label, "uid": uid, "status": "exception", "detail": str(e)[:200]})
+            print(f"[DIAG-REFRESH] {label} ({uid}): exception — {e}")
+    return JSONResponse({"results": results})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
