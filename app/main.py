@@ -181,10 +181,9 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
                 # Ratio real de ventas históricas: ya incluye fee ML + retenciones + 7% socio
                 _neto = _sale_price * _hist_ratio
             else:
-                # Fallback con coeficientes reales ML Mexico:
-                #   fee 18% + retenciones fiscales ~9.05% del total (IVA 6.9% + ISR 2.15%)
-                #   → factor neto = 1 - 0.18 - 0.0905 = 0.7295
-                # Envío estimado por retail BM (mayor retail = producto más grande)
+                # Fee real por tramo + retenciones fiscales ML Mexico ~9.05% (IVA 6.9% + ISR 2.15%)
+                # Envío estimado: producto mayor retail = más grande/pesado
+                _fee_pct = _ml_fee(_sale_price)
                 if _retail_mxn >= 5000:
                     _ship_est = 400
                 elif _retail_mxn >= 2500:
@@ -193,7 +192,7 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
                     _ship_est = 150
                 else:
                     _ship_est = 100
-                _net_ml = _sale_price * 0.7295 - _ship_est
+                _net_ml = _sale_price * (1 - _fee_pct - 0.0905) - _ship_est
                 _neto = _net_ml * (1 - _PARTNER_COMMISSION_PCT)
             p["_neto_ml"] = round(_neto, 2)
             p["_recup_retail_pct"] = round((_neto / _retail_mxn) * 100, 1) if _retail_mxn > 0 else None
@@ -1167,7 +1166,8 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         if bm:
             retail_price = bm.get("RetailPrice", 0) or 0
             retail_ph    = bm.get("LastRetailPricePurchaseHistory", 0) or 0
-            p["_bm_retail_price"] = retail_price if retail_price > 0 else retail_ph
+            # Preferir LastRetailPricePurchaseHistory (misma fuente que vista Ventas / _sku_retail_map)
+            p["_bm_retail_price"] = retail_ph if (0 < retail_ph < 9000) else (retail_price if (0 < retail_price < 9000) else 0)
             p["_bm_avg_cost"] = bm.get("AvgCostQTY", 0) or 0
             p["_bm_brand"] = bm.get("Brand", "")
             p["_bm_model"] = bm.get("Model", "")
@@ -1255,6 +1255,48 @@ def _aggregate_sales_by_item(orders: list) -> dict:
             sales[iid]["revenue"] += qty * unit_price
             sales[iid]["fees"] += fee
     return sales
+
+
+def _preload_item_neto_ratios(orders: list) -> None:
+    """Pre-carga _item_net_ratio_map desde historial de órdenes del período.
+    Solo actualiza items que el tab Ventas todavía no enriqueció con datos reales.
+    Usa sale_fee real si viene en la orden; si no, estima por tramo de precio.
+    """
+    _seen: dict[str, list] = {}
+    for order in orders:
+        if order.get("status") not in ("paid", "delivered"):
+            continue
+        total = float(order.get("total_amount") or 0)
+        if total <= 0:
+            continue
+        for oi in order.get("order_items", []):
+            item_id = str((oi.get("item") or {}).get("id", "") or "")
+            if not item_id:
+                continue
+            unit_price = float(oi.get("unit_price") or 0)
+            qty = int(oi.get("quantity") or 1)
+            subtotal = unit_price * qty
+            if subtotal <= 0:
+                continue
+            sale_fee = float(oi.get("sale_fee") or 0)
+            if sale_fee <= 0:
+                sale_fee = subtotal * _ml_fee(unit_price)
+            taxes = subtotal * 0.0905
+            if subtotal >= 5000:
+                ship = 400
+            elif subtotal >= 2500:
+                ship = 250
+            elif subtotal >= 1000:
+                ship = 150
+            else:
+                ship = 100
+            net_ml = subtotal - sale_fee - taxes - ship
+            net_final = net_ml * (1 - _PARTNER_COMMISSION_PCT)
+            if net_final > 0 and total > 0:
+                _seen.setdefault(item_id, []).append(net_final / total)
+    for item_id, ratios in _seen.items():
+        if item_id not in _item_net_ratio_map:
+            _item_net_ratio_map[item_id] = round(sum(ratios) / len(ratios), 4)
 
 
 def _get_item_sku(body: dict) -> str:
@@ -4782,6 +4824,9 @@ async def products_deals_partial(request: Request):
 
         # ── Paso 3: clasificar productos ──────────────────────────────────
         sales_map = _aggregate_sales_by_item(all_orders)
+        # Pre-cargar ratios neto/total desde historial real — mejora precisión de _neto_ml
+        # sin esperar que el tab Ventas sea cargado primero.
+        _preload_item_neto_ratios(all_orders)
         products = _build_product_list(all_bodies, sales_map)
 
         # Stamp every product with the account that owns it so the UI can
