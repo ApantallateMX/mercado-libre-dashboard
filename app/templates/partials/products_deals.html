@@ -295,7 +295,7 @@
                         ${{ "{:,.0f}".format(p.price) }}
                         {% endif %}
                     </td>
-                    {# Desc.: % de descuento real #}
+                    {# Desc.: % de descuento real, o badge de campaña sin descuento #}
                     <td class="px-3 py-2 text-center">
                         {% set _pdeal = p.get('_promo_deal_price') %}
                         {% if _pdeal and _pdeal > 0 and p.price > 0 and _pdeal < p.price %}
@@ -305,6 +305,10 @@
                         {% elif p.original_price and p.original_price > p.price %}
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-700">
                             -{{ "%.0f"|format((1 - p.price / p.original_price) * 100) }}%
+                        </span>
+                        {% elif p.get('_has_deal') and not p.get('_has_price_reduction') %}
+                        <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 text-purple-500 border border-purple-200">
+                            Campaña
                         </span>
                         {% else %}
                         <span class="text-gray-400 text-xs">-</span>

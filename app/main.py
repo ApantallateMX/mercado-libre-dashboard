@@ -4785,6 +4785,8 @@ async def products_deals_partial(request: Request):
                 p["_deal_is_ml_auto"] = bool(promo_data and promo_data.get("_promo_is_auto"))
                 p["_deal_types"] = [promo_data["_promo_type"]] if promo_data else []
                 p["_promotions"] = [promo_data] if promo_data else []
+                if has_deal_body and not promo_data:
+                    p["_has_price_reduction"] = True  # original_price > price en body ML
                 # Datos extra de la promo (fechas, % ML, etc.)
                 if promo_data:
                     # Usar original_price de la API de promos si el body de ML no lo tiene
@@ -4798,7 +4800,16 @@ async def products_deals_partial(request: Request):
                     p["_promo_type_str"] = promo_data.get("_promo_type", "")
                     p["_promo_name"] = promo_data.get("_promo_name", "")
                     # Precio real de campaña (lo que paga el comprador)
-                    p["_promo_deal_price"] = promo_data.get("deal_price")
+                    _raw_deal = promo_data.get("deal_price")
+                    p["_promo_deal_price"] = _raw_deal
+                    # Detectar si hay reducción real de precio
+                    _cur_p = p.get("price") or 0
+                    _orig_p2 = p.get("original_price") or 0
+                    p["_has_price_reduction"] = bool(
+                        (_raw_deal and _cur_p > 0 and _raw_deal < _cur_p)
+                        or (_orig_p2 > _cur_p > 0)
+                        or p.get("_meli_promo_pct", 0) > 0
+                    )
                 active_deals.append(p)
             elif p.get("available_quantity", 0) > 0 and p.get("status", "active") != "closed":
                 candidates.append(p)
