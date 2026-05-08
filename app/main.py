@@ -9631,27 +9631,39 @@ def start_stock_sync():
 
 
 async def _token_refresh_loop():
-    """Auto-renueva tokens MeLi cada 5 horas — evita expiración silenciosa.
-    MeLi tokens duran 6 horas; refrescamos a las 5h para tener margen.
-    Fuerza el refresh siempre (no espera a que el timestamp de expiración venza)
-    porque ML rota el refresh_token en cada uso — el DB siempre tiene el RT más actual.
+    """Auto-renueva tokens MeLi.
+    - Normal: cada 5h (ML access tokens duran 6h)
+    - Si falla (rate limit / error): reintenta cada 60s hasta que funcione
+    Usa el refresh_token del DB (más actual por rotación de ML).
     """
     await asyncio.sleep(300)  # 5 min initial delay — dejar que todo arranque primero
     while True:
         try:
-            print("[TOKEN_REFRESH] Renovando tokens MeLi automáticamente...")
-            # Forzar refresh sin importar el timestamp de expiración
             from app.services import token_store as _ts
             accounts = await _ts.get_all_tokens()
+            ok, failed = 0, 0
             for acc in accounts:
                 uid = acc.get("user_id", "")
                 db_rt = acc.get("refresh_token", "")
                 if uid and db_rt:
+                    before = await _ts.get_tokens(uid)
+                    before_at = (before or {}).get("access_token", "")
                     await _seed_one(uid, db_rt, f"uid={uid}")
-            print(f"[TOKEN_REFRESH] {len(accounts)} cuentas renovadas OK")
+                    after = await _ts.get_tokens(uid)
+                    after_at = (after or {}).get("access_token", "")
+                    if after_at and after_at != before_at:
+                        ok += 1
+                    else:
+                        failed += 1
+            if ok > 0 or not accounts:
+                print(f"[TOKEN_REFRESH] {ok}/{len(accounts)} cuentas renovadas OK — próximo en 5h")
+                await asyncio.sleep(5 * 3600)
+            else:
+                print(f"[TOKEN_REFRESH] {failed}/{len(accounts)} fallaron — reintentando en 60s")
+                await asyncio.sleep(60)
         except Exception as e:
-            print(f"[TOKEN_REFRESH] Error al renovar tokens: {e}")
-        await asyncio.sleep(5 * 3600)  # Cada 5 horas
+            print(f"[TOKEN_REFRESH] Error: {e} — reintentando en 60s")
+            await asyncio.sleep(60)
 
 
 def start_token_refresh():
