@@ -11,6 +11,7 @@ CACHÉ:
     _items_cache:   {order_id → (ts, list)}                                TTL 600s
 """
 
+import asyncio
 import time as _time
 import logging
 from datetime import datetime, timedelta
@@ -20,6 +21,71 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from app.services.amazon_client import get_amazon_client
+
+
+def _save_amazon_items_history_bg(
+    order_id: str, seller_id: str, items: list,
+    order_date_str: str, status_es: str, currency: str,
+) -> None:
+    """Fire-and-forget: persiste items de orden Amazon en order_history."""
+    async def _do():
+        try:
+            from app.services import token_store as _ts
+            from app.services.sku_utils import normalize_to_bm_sku as _norm
+            # Intentar leer FX y mapas de costo/retail de main (lazy import — evita circular)
+            try:
+                from app.main import _last_fx_rate, _sku_cost_map, _sku_retail_map, _PARTNER_COMMISSION_PCT
+                fx = _last_fx_rate or 17.0
+            except Exception:
+                fx, _sku_cost_map, _sku_retail_map, _PARTNER_COMMISSION_PCT = 17.0, {}, {}, 0.07
+            # Fecha: "YYYY-MM-DD HH:MM" → "YYYY-MM-DD"
+            order_date = (order_date_str or "")[:10]
+            order_month = order_date[:7] if len(order_date) >= 7 else ""
+            rows = []
+            for it in items:
+                sku_raw    = (it.get("sku") or "").strip()
+                if sku_raw in ("—", "-", ""):
+                    sku_raw = ""
+                sku        = _norm(sku_raw) if sku_raw else ""
+                unit_price = float(it.get("unit_price") or 0)
+                qty        = int(it.get("qty") or 1)
+                asin       = it.get("asin") or ""
+                if unit_price <= 0:
+                    continue
+                subtotal   = unit_price * qty
+                # Amazon referral fee estimado ~10% + tax/retenciones ~9%
+                sale_fee   = subtotal * 0.10
+                taxes      = subtotal * 0.09
+                ship       = float(it.get("shipping") or 0)
+                neto_plat  = subtotal - sale_fee - taxes - ship
+                costo_mxn  = _sku_cost_map.get(sku, 0) if sku else 0
+                retail_mxn = _sku_retail_map.get(sku, 0) if sku else 0
+                retail_ph_usd = round(retail_mxn / fx, 2) if (retail_mxn > 0 and fx > 0) else 0
+                costo_usd  = round(costo_mxn / fx, 2) if (costo_mxn > 0 and fx > 0) else 0
+                ganancia   = neto_plat * (1 - _PARTNER_COMMISSION_PCT) - costo_mxn
+                margen_pct = round(ganancia / unit_price * 100, 1) if unit_price > 0 else 0
+                recup      = round(neto_plat / retail_mxn * 100, 1) if retail_mxn > 0 else 0
+                rows.append({
+                    "order_id": order_id, "account_id": seller_id, "platform": "amazon",
+                    "item_id": asin, "sku": sku,
+                    "unit_price": unit_price, "quantity": qty,
+                    "sale_fee": round(sale_fee, 2), "neto_plat": round(neto_plat, 2),
+                    "costo_usd": costo_usd, "costo_mxn": round(costo_mxn, 2),
+                    "retail_ph_usd": retail_ph_usd,
+                    "ganancia_neta": round(ganancia, 2),
+                    "margen_pct": margen_pct, "recup_retail_pct": recup,
+                    "fx_rate": round(fx, 4), "currency": currency or "MXN",
+                    "order_date": order_date, "order_month": order_month,
+                    "status": status_es, "data_source": "estimated",
+                })
+            if rows:
+                await _ts.upsert_order_history(rows)
+        except Exception as _e:
+            logging.getLogger(__name__).warning(f"[ORDER-HIST] Amazon error: {_e}")
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +323,10 @@ async def get_order_items_partial(
                     "currency":   ip.get("CurrencyCode", "MXN"),
                 })
             _items_cache[order_id] = (_time.time(), items)
+            # Persistir en order_history (fire-and-forget)
+            _save_amazon_items_history_bg(
+                order_id, client.seller_id, items, date, status, currency
+            )
         except Exception as exc:
             logger.error("[Amazon Orders] Error fetching items for %s: %s", order_id, exc)
             items = []

@@ -668,6 +668,42 @@ async def init_db():
                 updated_at        REAL NOT NULL DEFAULT 0
             )
         """)
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: order_history — historial de ventas por SKU / cuenta / plataforma
+        # Crece automáticamente: cada vez que se fetchan órdenes se hace upsert.
+        # data_source: 'estimated' = neto calculado con fórmula; 'real' = de /collections ML
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS order_history (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id         TEXT NOT NULL,
+                account_id       TEXT NOT NULL,
+                platform         TEXT NOT NULL DEFAULT 'ml',
+                item_id          TEXT NOT NULL DEFAULT '',
+                sku              TEXT NOT NULL DEFAULT '',
+                unit_price       REAL NOT NULL DEFAULT 0,
+                quantity         INTEGER NOT NULL DEFAULT 1,
+                sale_fee         REAL NOT NULL DEFAULT 0,
+                neto_plat        REAL NOT NULL DEFAULT 0,
+                costo_usd        REAL NOT NULL DEFAULT 0,
+                costo_mxn        REAL NOT NULL DEFAULT 0,
+                retail_ph_usd    REAL NOT NULL DEFAULT 0,
+                ganancia_neta    REAL NOT NULL DEFAULT 0,
+                margen_pct       REAL NOT NULL DEFAULT 0,
+                recup_retail_pct REAL NOT NULL DEFAULT 0,
+                fx_rate          REAL NOT NULL DEFAULT 17.0,
+                currency         TEXT NOT NULL DEFAULT 'MXN',
+                order_date       TEXT NOT NULL DEFAULT '',
+                order_month      TEXT NOT NULL DEFAULT '',
+                status           TEXT NOT NULL DEFAULT '',
+                data_source      TEXT NOT NULL DEFAULT 'estimated',
+                created_at       REAL NOT NULL DEFAULT 0,
+                UNIQUE(order_id, item_id, platform)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_sku ON order_history(sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
         await db.commit()
 
 
@@ -2342,6 +2378,119 @@ async def set_deal_config(user_id: str, deal_buffer_pct: float, retail_target_pc
             (user_id, deal_buffer_pct, retail_target_pct, _t.time()),
         )
         await db.commit()
+
+
+async def upsert_order_history(rows: list[dict]) -> int:
+    """Guarda/actualiza historial de ventas. ON CONFLICT actualiza con el dato más preciso.
+    data_source='real' prevalece sobre 'estimated'; sale_fee y neto_plat toman el mayor valor.
+    """
+    import time as _t
+    if not rows:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for r in rows:
+            await db.execute("""
+                INSERT INTO order_history
+                    (order_id, account_id, platform, item_id, sku,
+                     unit_price, quantity, sale_fee, neto_plat,
+                     costo_usd, costo_mxn, retail_ph_usd,
+                     ganancia_neta, margen_pct, recup_retail_pct,
+                     fx_rate, currency, order_date, order_month,
+                     status, data_source, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
+                    unit_price       = excluded.unit_price,
+                    sale_fee         = MAX(order_history.sale_fee, excluded.sale_fee),
+                    neto_plat        = MAX(order_history.neto_plat, excluded.neto_plat),
+                    costo_usd        = CASE WHEN excluded.costo_usd > 0 THEN excluded.costo_usd ELSE order_history.costo_usd END,
+                    costo_mxn        = CASE WHEN excluded.costo_mxn > 0 THEN excluded.costo_mxn ELSE order_history.costo_mxn END,
+                    retail_ph_usd    = CASE WHEN excluded.retail_ph_usd > 0 THEN excluded.retail_ph_usd ELSE order_history.retail_ph_usd END,
+                    ganancia_neta    = excluded.ganancia_neta,
+                    margen_pct       = excluded.margen_pct,
+                    recup_retail_pct = excluded.recup_retail_pct,
+                    status           = excluded.status,
+                    data_source      = CASE WHEN excluded.data_source = 'real' THEN 'real' ELSE order_history.data_source END
+            """, (
+                r.get("order_id", ""), r.get("account_id", ""), r.get("platform", "ml"),
+                r.get("item_id", ""), r.get("sku", ""),
+                r.get("unit_price", 0), r.get("quantity", 1), r.get("sale_fee", 0),
+                r.get("neto_plat", 0), r.get("costo_usd", 0), r.get("costo_mxn", 0),
+                r.get("retail_ph_usd", 0), r.get("ganancia_neta", 0),
+                r.get("margen_pct", 0), r.get("recup_retail_pct", 0),
+                r.get("fx_rate", 17.0), r.get("currency", "MXN"),
+                r.get("order_date", ""), r.get("order_month", ""),
+                r.get("status", ""), r.get("data_source", "estimated"),
+                _t.time(),
+            ))
+        await db.commit()
+    return len(rows)
+
+
+async def get_sku_price_history(
+    sku: str,
+    platform: str = None,
+    account_id: str = None,
+    months: int = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Retorna historial de ventas para un SKU (búsqueda exacta o parcial).
+    Ordenado por fecha descendente. Filtra por plataforma/cuenta/meses si se pasan.
+    """
+    import time as _t
+    conditions = ["(sku = ? OR sku LIKE ?)"]
+    params: list = [sku.upper(), f"%{sku.upper()}%"]
+    if platform:
+        conditions.append("platform = ?")
+        params.append(platform)
+    if account_id:
+        conditions.append("account_id = ?")
+        params.append(account_id)
+    if months and months > 0:
+        from datetime import datetime, timedelta
+        cutoff = (datetime.utcnow() - timedelta(days=months * 30)).strftime("%Y-%m-%d")
+        conditions.append("order_date >= ?")
+        params.append(cutoff)
+    params.append(limit)
+    where = " AND ".join(conditions)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT * FROM order_history WHERE {where} ORDER BY order_date DESC LIMIT ?",
+            params,
+        )).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_sku_history_summary(sku: str, platform: str = None) -> dict:
+    """Stats agregados del historial: avg/min/max precio y margen, total unidades."""
+    conditions = ["(sku = ? OR sku LIKE ?)"]
+    params: list = [sku.upper(), f"%{sku.upper()}%"]
+    if platform:
+        conditions.append("platform = ?")
+        params.append(platform)
+    where = " AND ".join(conditions)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        row = await (await db.execute(f"""
+            SELECT
+                COUNT(*)              AS total_orders,
+                SUM(quantity)         AS total_units,
+                AVG(unit_price)       AS avg_price,
+                MIN(unit_price)       AS min_price,
+                MAX(unit_price)       AS max_price,
+                AVG(ganancia_neta)    AS avg_ganancia,
+                MIN(ganancia_neta)    AS min_ganancia,
+                AVG(margen_pct)       AS avg_margen,
+                MIN(margen_pct)       AS min_margen,
+                MAX(margen_pct)       AS max_margen,
+                AVG(neto_plat)        AS avg_neto,
+                MIN(neto_plat)        AS min_neto,
+                AVG(recup_retail_pct) AS avg_recup,
+                MIN(order_date)       AS first_sale,
+                MAX(order_date)       AS last_sale
+            FROM order_history WHERE {where}
+        """, params)).fetchone()
+    return dict(row) if row else {}
 
 
 async def get_sku_sales_by_account(base_sku: str) -> list[dict]:

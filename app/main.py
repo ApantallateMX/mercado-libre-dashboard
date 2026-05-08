@@ -1299,6 +1299,68 @@ def _preload_item_neto_ratios(orders: list) -> None:
             _item_net_ratio_map[item_id] = round(sum(ratios) / len(ratios), 4)
 
 
+def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float) -> None:
+    """Fire-and-forget: persiste órdenes ML en order_history. No bloquea el request."""
+    async def _do():
+        from app.services import token_store as _ts
+        from app.services.sku_utils import normalize_to_bm_sku as _norm
+        rows = []
+        for order in orders:
+            if order.get("status") not in ("paid", "delivered"):
+                continue
+            order_id = str(order.get("id", ""))
+            order_date = (order.get("date_closed") or order.get("date_created") or "")[:10]
+            order_month = order_date[:7] if order_date else ""
+            for oi in order.get("order_items", []):
+                item_info = oi.get("item", {})
+                item_id = str(item_info.get("id", "") or "")
+                sku_raw = (item_info.get("seller_sku") or
+                           item_info.get("seller_custom_field") or "").strip()
+                sku = _norm(sku_raw) if sku_raw else ""
+                unit_price = float(oi.get("unit_price") or 0)
+                quantity   = int(oi.get("quantity") or 1)
+                if not order_id or not item_id or unit_price <= 0:
+                    continue
+                subtotal   = unit_price * quantity
+                sale_fee   = float(oi.get("sale_fee") or 0)
+                if sale_fee <= 0:
+                    sale_fee = subtotal * _ml_fee(unit_price)
+                taxes      = subtotal * 0.0905
+                ship       = 400 if subtotal >= 5000 else (250 if subtotal >= 2500 else (150 if subtotal >= 1000 else 100))
+                neto_plat  = subtotal - sale_fee - taxes - ship
+                # Snapshot de costos BM en este momento
+                costo_mxn     = _sku_cost_map.get(sku, 0) if sku else 0
+                retail_mxn    = _sku_retail_map.get(sku, 0) if sku else 0
+                retail_ph_usd = round(retail_mxn / usd_to_mxn, 2) if (retail_mxn > 0 and usd_to_mxn > 0) else 0
+                costo_usd     = round(costo_mxn / usd_to_mxn, 2) if (costo_mxn > 0 and usd_to_mxn > 0) else 0
+                ganancia      = neto_plat * (1 - _PARTNER_COMMISSION_PCT) - costo_mxn
+                margen_pct    = round(ganancia / unit_price * 100, 1) if unit_price > 0 else 0
+                recup         = round(neto_plat / retail_mxn * 100, 1) if retail_mxn > 0 else 0
+                rows.append({
+                    "order_id": order_id, "account_id": account_id, "platform": "ml",
+                    "item_id": item_id, "sku": sku,
+                    "unit_price": unit_price, "quantity": quantity,
+                    "sale_fee": round(sale_fee, 2), "neto_plat": round(neto_plat, 2),
+                    "costo_usd": costo_usd, "costo_mxn": round(costo_mxn, 2),
+                    "retail_ph_usd": retail_ph_usd,
+                    "ganancia_neta": round(ganancia, 2),
+                    "margen_pct": margen_pct, "recup_retail_pct": recup,
+                    "fx_rate": round(usd_to_mxn, 4), "currency": "MXN",
+                    "order_date": order_date, "order_month": order_month,
+                    "status": order.get("status", ""), "data_source": "estimated",
+                })
+        if rows:
+            try:
+                await _ts.upsert_order_history(rows)
+                logger.debug(f"[ORDER-HIST] ML uid={account_id}: {len(rows)} filas guardadas")
+            except Exception as _e:
+                logger.warning(f"[ORDER-HIST] Error guardando historial ML uid={account_id}: {_e}")
+    try:
+        asyncio.create_task(_do())
+    except Exception:
+        pass
+
+
 def _get_item_sku(body: dict) -> str:
     """Extrae SKU de un item body usando TODAS las fuentes disponibles en cascada.
 
@@ -4922,6 +4984,9 @@ async def products_deals_partial(request: Request):
         _apply_bm_stock(all_to_enrich, bm_map)
         _deal_cfg = await token_store.get_deal_config(str(client.user_id))
         _calc_margins(all_to_enrich, usd_to_mxn, _deal_cfg["deal_buffer_pct"], _deal_cfg["retail_target_pct"])
+
+        # Persistir historial de ventas en background (no bloquea el render)
+        _save_ml_orders_history_bg(all_orders, str(client.user_id), usd_to_mxn)
 
         # ── KPIs y recomendaciones ────────────────────────────────────────
         deals_revenue = sum(p.get("revenue_30d", 0) for p in active_deals)
@@ -10549,6 +10614,162 @@ async def debug_bm_cache(sku: str = ""):
 _DEBUG_KEY = "mi-apantallate-debug-2025"
 import os as _os_diag
 _DIAG_TOKEN = _os_diag.getenv("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
+
+
+@app.get("/api/sku-history", response_class=HTMLResponse)
+async def sku_price_history(
+    request: Request,
+    sku: str = "",
+    platform: str = "",
+    account_id: str = "",
+    months: int = 0,
+):
+    """Historial de precio de venta y ganancia neta por SKU. Requiere sesión."""
+    user = await get_current_user(request)
+    if not user:
+        return HTMLResponse("<p class='text-red-500 p-4'>Sin sesión</p>", status_code=401)
+    if not sku:
+        return HTMLResponse("<p class='text-gray-400 p-4 text-center'>Ingresa un SKU para consultar</p>")
+
+    from app.services.sku_utils import normalize_to_bm_sku as _norm
+    sku_norm = _norm(sku.upper().strip()) or sku.upper().strip()
+
+    rows   = await token_store.get_sku_price_history(
+        sku_norm, platform=platform or None, account_id=account_id or None,
+        months=months or None,
+    )
+    summary = await token_store.get_sku_history_summary(sku_norm, platform=platform or None)
+
+    # Lookup nicknames para mostrar nombre de cuenta en vez de ID
+    all_accounts = await token_store.get_all_accounts()
+    nick_map: dict = {}
+    for uid, info in (all_accounts or {}).items():
+        nick_map[str(uid)] = info.get("nickname") or str(uid)
+
+    def _fmt(v, decimals=0, prefix="$"):
+        if v is None:
+            return "—"
+        try:
+            v = float(v)
+        except Exception:
+            return "—"
+        if decimals == 0:
+            return f"{prefix}{v:,.0f}"
+        return f"{prefix}{v:,.{decimals}f}"
+
+    # Construir HTML inline (sin template extra)
+    src_badge = lambda ds: (
+        "<span class='text-[9px] bg-green-100 text-green-700 rounded px-1'>real</span>"
+        if ds == "real" else
+        "<span class='text-[9px] bg-gray-100 text-gray-400 rounded px-1'>est.</span>"
+    )
+    plat_badge = lambda p: (
+        "<span class='text-[9px] bg-orange-100 text-orange-700 rounded px-1font-semibold'>Amazon</span>"
+        if p == "amazon" else
+        "<span class='text-[9px] bg-yellow-100 text-yellow-700 rounded px-1 font-semibold'>ML</span>"
+    )
+
+    # ── Summary cards ──────────────────────────────────────────────────────
+    s = summary
+    total_orders = int(s.get("total_orders") or 0)
+    total_units  = int(s.get("total_units") or 0)
+    avg_price    = s.get("avg_price") or 0
+    min_price    = s.get("min_price") or 0
+    max_price    = s.get("max_price") or 0
+    avg_gan      = s.get("avg_ganancia") or 0
+    min_gan      = s.get("min_ganancia") or 0
+    avg_margen   = s.get("avg_margen") or 0
+    min_margen   = s.get("min_margen") or 0
+    max_margen   = s.get("max_margen") or 0
+    first_sale   = (s.get("first_sale") or "")[:10]
+    last_sale    = (s.get("last_sale") or "")[:10]
+
+    if total_orders == 0:
+        return HTMLResponse(f"""
+        <div class="p-6 text-center text-gray-400">
+            <p class="text-lg font-semibold">Sin historial para <span class="font-mono">{sku_norm}</span></p>
+            <p class="text-sm mt-1">Los datos se acumulan automáticamente cada vez que se carga el tab Deals o Ventas.</p>
+        </div>""")
+
+    cards_html = f"""
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-white border rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold text-gray-800">{total_orders}</div>
+        <div class="text-xs text-gray-500 mt-0.5">Órdenes ({total_units} uds)</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">{first_sale} → {last_sale}</div>
+      </div>
+      <div class="bg-white border rounded-lg p-3 text-center">
+        <div class="text-xl font-bold text-blue-700">{_fmt(avg_price)}</div>
+        <div class="text-xs text-gray-500 mt-0.5">P. Venta promedio</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Min {_fmt(min_price)} · Max {_fmt(max_price)}</div>
+      </div>
+      <div class="bg-white border rounded-lg p-3 text-center">
+        <div class="text-xl font-bold {'text-green-600' if avg_gan >= 0 else 'text-red-600'}">{_fmt(avg_gan)}</div>
+        <div class="text-xs text-gray-500 mt-0.5">Ganancia neta promedio</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Peor caso {_fmt(min_gan)}</div>
+      </div>
+      <div class="bg-white border rounded-lg p-3 text-center">
+        <div class="text-xl font-bold {'text-green-600' if avg_margen >= 0 else 'text-red-600'}">{avg_margen:.1f}%</div>
+        <div class="text-xs text-gray-500 mt-0.5">Margen promedio</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Min {min_margen:.1f}% · Max {max_margen:.1f}%</div>
+      </div>
+    </div>"""
+
+    # ── Tabla de transacciones ─────────────────────────────────────────────
+    rows_html = ""
+    for r in rows[:300]:
+        gan = r.get("ganancia_neta") or 0
+        mar = r.get("margen_pct") or 0
+        gan_cls = "text-green-600 font-semibold" if gan >= 0 else "text-red-600 font-semibold"
+        mar_cls = "text-green-600" if mar >= 0 else "text-red-600"
+        acct = nick_map.get(str(r.get("account_id", "")), r.get("account_id", "—"))
+        rows_html += f"""
+        <tr class="hover:bg-gray-50 text-xs border-t">
+          <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{r.get('order_date','')[:10]}</td>
+          <td class="px-3 py-1.5">{plat_badge(r.get('platform','ml'))}</td>
+          <td class="px-3 py-1.5 text-gray-600 truncate max-w-[100px]" title="{acct}">{acct}</td>
+          <td class="px-3 py-1.5 text-right font-mono font-semibold text-blue-700">{_fmt(r.get('unit_price'))}</td>
+          <td class="px-3 py-1.5 text-right text-gray-500">{r.get('quantity',1)}</td>
+          <td class="px-3 py-1.5 text-right text-gray-500">{_fmt(r.get('neto_plat'))}</td>
+          <td class="px-3 py-1.5 text-right {gan_cls}">{_fmt(gan)}</td>
+          <td class="px-3 py-1.5 text-right {mar_cls}">{mar:.1f}%</td>
+          <td class="px-3 py-1.5 text-center">{src_badge(r.get('data_source','estimated'))}</td>
+        </tr>"""
+
+    table_html = f"""
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-gray-50 text-gray-500 uppercase text-[10px]">
+          <tr>
+            <th class="px-3 py-2 text-left">Fecha</th>
+            <th class="px-3 py-2 text-left">Plataforma</th>
+            <th class="px-3 py-2 text-left">Cuenta</th>
+            <th class="px-3 py-2 text-right">P. Venta</th>
+            <th class="px-3 py-2 text-right">Qty</th>
+            <th class="px-3 py-2 text-right">Neto Plat.</th>
+            <th class="px-3 py-2 text-right">Ganancia</th>
+            <th class="px-3 py-2 text-right">Margen</th>
+            <th class="px-3 py-2 text-center">Fuente</th>
+          </tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </div>"""
+
+    html = f"""
+    <div class="p-4">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-base font-bold text-gray-800">Historial: <span class="font-mono text-blue-700">{sku_norm}</span></h2>
+          <p class="text-[10px] text-gray-400 mt-0.5">
+            est. = neto calculado con fórmula · real = dato confirmado de ML /collections
+          </p>
+        </div>
+      </div>
+      {cards_html}
+      {table_html}
+    </div>"""
+    return HTMLResponse(html)
 
 
 @app.get("/api/diag/sku")
