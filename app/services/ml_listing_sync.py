@@ -294,6 +294,10 @@ async def _sync_qty_only_account(uid: str, client) -> int:
                     if iid and current_qtys.get(iid, -1) != qty:
                         updates.append((iid, qty))
             except Exception as e:
+                err_str = str(e).lower()
+                if "invalid access token" in err_str or "401" in err_str:
+                    logger.warning(f"[ML-QTY] Token inválido uid={uid} — abortando sync para esta cuenta")
+                    break  # No seguir martillando ML con tokens inválidos
                 logger.warning(f"[ML-QTY] batch error uid={uid} offset={i}: {e}")
 
         if not updates:

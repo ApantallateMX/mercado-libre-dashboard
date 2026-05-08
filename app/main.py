@@ -394,17 +394,13 @@ async def _seed_tokens():
         if not existing:
             await _seed_one(uid, rt, label)
         else:
-            # Si el token está expirado, refrescar usando el refresh_token del DB
-            # (más actualizado que el del archivo de env)
             is_expired = await token_store.is_token_expired(uid)
             if is_expired:
-                # Preferir RT del archivo/env (más fresco en deployments nuevos como Coolify)
-                # Solo cae al RT del DB si el archivo no trae uno para esta cuenta
-                refresh_rt = rt or existing.get("refresh_token")
-                print(f"[SEED] Token expirado para {label} — refrescando con RT {'env' if rt else 'db'}...")
+                # DB RT es más actual que env (ML rota el RT en cada uso)
+                refresh_rt = existing.get("refresh_token") or rt
+                print(f"[SEED] Token expirado para {label} — refrescando con RT {'db' if existing.get('refresh_token') else 'env'}...")
                 await _seed_one(uid, refresh_rt, label)
             elif not existing.get("nickname"):
-                # Cuenta existente sin nickname — rellenar desde MeLi API
                 await _backfill_nickname(uid, existing.get("access_token", ""))
 
     # Backfill nickname para TODAS las cuentas en DB que aún no lo tienen
@@ -9623,13 +9619,22 @@ def start_stock_sync():
 async def _token_refresh_loop():
     """Auto-renueva tokens MeLi cada 5 horas — evita expiración silenciosa.
     MeLi tokens duran 6 horas; refrescamos a las 5h para tener margen.
+    Fuerza el refresh siempre (no espera a que el timestamp de expiración venza)
+    porque ML rota el refresh_token en cada uso — el DB siempre tiene el RT más actual.
     """
     await asyncio.sleep(300)  # 5 min initial delay — dejar que todo arranque primero
     while True:
         try:
             print("[TOKEN_REFRESH] Renovando tokens MeLi automáticamente...")
-            await _seed_tokens()
-            print("[TOKEN_REFRESH] Tokens renovados OK")
+            # Forzar refresh sin importar el timestamp de expiración
+            from app.services import token_store as _ts
+            accounts = await _ts.get_all_tokens()
+            for acc in accounts:
+                uid = acc.get("user_id", "")
+                db_rt = acc.get("refresh_token", "")
+                if uid and db_rt:
+                    await _seed_one(uid, db_rt, f"uid={uid}")
+            print(f"[TOKEN_REFRESH] {len(accounts)} cuentas renovadas OK")
         except Exception as e:
             print(f"[TOKEN_REFRESH] Error al renovar tokens: {e}")
         await asyncio.sleep(5 * 3600)  # Cada 5 horas
