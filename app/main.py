@@ -10732,7 +10732,10 @@ async def sku_price_history(
         recup      = round(neto_neto / retail_mxn * 100, 1) if retail_mxn > 0 else 0
         acct       = nick_map.get(str(r.get("account_id", "")), r.get("account_id", "—"))
         recup_td   = _recup_badge(recup) if recup > 0 else "<span class='text-gray-300 text-[10px]'>—</span>"
-        retail_td  = _fmt(retail_mxn) if retail_mxn > 0 else "—"
+        retail_td  = (
+            f"<div class='text-right'>{_fmt(retail_mxn)}<div class='text-[10px] text-gray-400'>${retail_usd:,.0f} USD</div></div>"
+            if retail_mxn > 0 else "—"
+        )
         rows_html += f"""
         <tr class="hover:bg-gray-50 text-xs border-t">
           <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{r.get('order_date','')[:10]}</td>
