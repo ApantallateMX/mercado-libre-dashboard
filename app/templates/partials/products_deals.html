@@ -203,6 +203,12 @@
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
+                {% if p.sku %}
+                <button onclick="openHistorialModal('{{ p.sku }}','{{ p.title|replace("'","\\'") }}')"
+                    class="flex-1 px-2 py-2 text-xs bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition min-h-[40px]">
+                    📈 Historial
+                </button>
+                {% endif %}
                 <button class="btn-desactivar flex-1 px-2 py-2 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100 transition min-h-[40px]"
                     data-item-id="{{ p.id }}">
                     Desactivar
@@ -410,6 +416,12 @@
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
+                            {% if p.sku %}
+                            <button onclick="openHistorialModal('{{ p.sku }}','{{ p.title|replace("'","\\'") }}')"
+                                class="px-2 py-1 text-xs bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition w-full">
+                                📈 Historial
+                            </button>
+                            {% endif %}
                             <button class="btn-desactivar px-2 py-1 text-xs bg-red-50 text-red-600 rounded hover:bg-red-100 transition w-full"
                                 data-item-id="{{ p.id }}">
                                 Desactivar
@@ -548,6 +560,12 @@
                     data-thumb="{{ p.thumbnail or '' }}">
                     Ver promos
                 </button>
+                {% if p.sku %}
+                <button onclick="openHistorialModal('{{ p.sku }}','{{ p.title|replace("'","\\'") }}')"
+                    class="flex-1 px-2 py-2 text-xs bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition min-h-[40px]">
+                    📈 Historial
+                </button>
+                {% endif %}
                 <button class="btn-activar-deal flex-1 px-2 py-2 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600 transition font-medium min-h-[40px]"
                     data-item-id="{{ p.id }}"
                     data-price="{{ p.price }}"
@@ -725,6 +743,12 @@
                                 data-thumb="{{ p.thumbnail or '' }}">
                                 Ver promos
                             </button>
+                            {% if p.sku %}
+                            <button onclick="openHistorialModal('{{ p.sku }}','{{ p.title|replace("'","\\'") }}')"
+                                class="px-2 py-1 text-xs bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition w-full">
+                                📈 Historial
+                            </button>
+                            {% endif %}
                             <button class="btn-activar-deal px-2 py-1 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600 transition font-medium w-full"
                                 data-item-id="{{ p.id }}"
                                 data-price="{{ p.price }}"
@@ -774,6 +798,28 @@
         Todos los productos con stock ya estan en algun deal
     </div>
     {% endif %}
+</div>
+
+<!-- Modal Historial de Precios -->
+<div id="historialModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center" onclick="if(event.target===this)closeHistorialModal()">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b flex-shrink-0">
+            <div>
+                <h3 class="font-semibold text-gray-800 text-sm">📈 Historial de Ventas</h3>
+                <p id="hm-sku" class="text-xs text-indigo-600 font-mono mt-0.5"></p>
+            </div>
+            <button onclick="closeHistorialModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <div id="hm-body" class="overflow-y-auto flex-1">
+            <div class="flex items-center justify-center p-12 text-gray-400">
+                <svg class="animate-spin h-6 w-6 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                </svg>
+                Cargando historial...
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Modal de Activacion de Deal -->
@@ -1446,6 +1492,32 @@ function closeDealModal() {
     modal.classList.add('hidden');
     modal.classList.remove('flex');
     _modalState = {};
+}
+
+// ===== Historial Modal =====
+
+function openHistorialModal(sku, title) {
+    const modal = document.getElementById('historialModal');
+    document.getElementById('hm-sku').textContent = sku + (title ? '  —  ' + title : '');
+    document.getElementById('hm-body').innerHTML = `<div class="flex items-center justify-center p-12 text-gray-400">
+        <svg class="animate-spin h-6 w-6 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+        </svg>
+        Cargando historial...
+    </div>`;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    fetch('/api/sku-history?sku=' + encodeURIComponent(sku))
+        .then(r => r.text())
+        .then(html => { document.getElementById('hm-body').innerHTML = html; })
+        .catch(() => { document.getElementById('hm-body').innerHTML = '<p class="p-6 text-red-500 text-sm">Error cargando historial.</p>'; });
+}
+
+function closeHistorialModal() {
+    const modal = document.getElementById('historialModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
 }
 
 // ===== Deactivate =====

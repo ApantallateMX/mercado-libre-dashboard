@@ -41,6 +41,115 @@ usa un fallback determinista basado en DATABASE_PATH que funciona igual pero es 
 
 ---
 
+## 2026-05-08 — FEAT: order_history — historial de precio de venta y ganancia neta
+
+### Qué hace
+Base de datos persistente de todas las ventas por SKU, cuenta y plataforma (ML + Amazon).
+Crece automáticamente sin intervención manual.
+
+### Schema: tabla `order_history`
+`order_id | account_id | platform | item_id | sku | unit_price | quantity | sale_fee |
+neto_plat | costo_usd | costo_mxn | retail_ph_usd | ganancia_neta | margen_pct |
+recup_retail_pct | fx_rate | currency | order_date | order_month | status | data_source`
+
+### Pipeline de datos
+- **ML**: `_save_ml_orders_history_bg()` — al cargar tab Deals, guarda los últimos 30 días
+  de órdenes paid/delivered con snapshot de costo/retail BM al momento de la venta.
+  `data_source='estimated'` (se actualizará a 'real' cuando tab Ventas procese /collections).
+- **Amazon**: `_save_amazon_items_history_bg()` — al expandir detalle de una orden Amazon
+  guarda SKU + precio unitario + ganancia estimada (fee ~10%, retenciones ~9%).
+
+### Endpoint de consulta
+`GET /api/sku-history?sku=SNTV007322` — HTML con:
+- Cards: total órdenes/unidades, P.Venta avg/min/max, Ganancia avg/peor caso, Margen avg/min/max
+- Tabla: fecha, plataforma, cuenta, P.Venta, Qty, Neto, Ganancia, Margen, fuente (real/est.)
+
+### Próximo paso: panel expandible en tab Deals
+Cada fila de Deals podrá mostrar el historial del SKU sin salir de la pantalla.
+
+### Archivos
+- `app/services/token_store.py` — tabla + upsert + queries
+- `app/main.py` — helper ML + llamada en deals flow + endpoint /api/sku-history
+- `app/api/amazon_orders.py` — hook al expandir orden
+
+### Commit
+`10be394`
+
+---
+
+## 2026-05-08 — FIX: Deals — Retail BM y Neto ML más precisos
+
+### Problema
+Para SNTV007322 (TV Samsung 55") el tab Deals mostraba:
+- Retail BM: $6,517 ($378 USD) vs $9,704 en vista Ventas (49% de diferencia)
+- Neto ML: $4,583 vs $4,908 real de la orden (6.6% de diferencia)
+
+### Root cause
+1. `_enrich_with_bm_product_info` usaba `RetailPrice` como primera opción, pero `RetailPrice`
+   en BM puede ser incorrecto o el costo de compra. `LastRetailPricePurchaseHistory` es el
+   precio real de referencia y es el mismo campo que usa la vista Ventas (`_sku_retail_map`).
+2. `_calc_margins` aplicaba factor fijo `0.7295` (asume fee ML=18% para TODOS los precios).
+   Para items ≥$5,000 la tarifa ML es 12%, no 18% — error de ~6pp en neto estimado.
+3. `_item_net_ratio_map` (ratio neto real/total de órdenes) solo se poblaba al abrir el tab
+   Ventas. Si Deals se abría primero, usaba solo la fórmula estimada.
+
+### Fix
+- `_enrich_with_bm_product_info`: usa `LastRetailPricePurchaseHistory` como primary, fallback a `RetailPrice`
+- `_calc_margins`: reemplaza factor 0.7295 con `_ml_fee(price)` por tramo de precio
+- Nueva función `_preload_item_neto_ratios(orders)`: pre-carga ratios reales desde `all_orders`
+  (ya disponible en el deals flow) en `_item_net_ratio_map` — usa `sale_fee` real si viene
+  en la orden, estimado por `_ml_fee()` si no
+
+### Resultado esperado SNTV007322
+- Retail BM: ~$9,704 (antes $6,517) — alineado con vista Ventas
+- Neto ML: ~$4,900 (antes $4,583) — más preciso con ratio real de 45 ventas del mes
+
+### Archivos
+- `app/main.py` — `_calc_margins()`, `_enrich_with_bm_product_info()`, nueva `_preload_item_neto_ratios()`
+
+### Commit
+`bf8f78d`
+
+---
+
+## 2026-05-08 — FIX: Deals Activos — P. Lista / P. Deal / Desc. incorrectos para MARKETPLACE_CAMPAIGN
+
+### Problema
+Items con campaña ML (tipo `MARKETPLACE_CAMPAIGN`, ej. MLM5239612118 cuenta BLOW $12,999 → $7,919):
+- P. Lista mostraba `-` (en blanco)
+- P. Deal mostraba $12,999 (precio de lista, NO el precio deal del comprador)
+- Desc. mostraba badge "Campaña" en vez de `-39%`
+
+### Root cause
+Dos bugs combinados:
+1. **API bulk** (`get_promotion_items`): para MARKETPLACE_CAMPAIGN devuelve `price = $12,999`
+   (precio del vendedor, no el precio deal del comprador $7,919). Resultado: `_promo_deal_price = $12,999 = p.price` → sin reducción detectada.
+2. **`_enrich_with_promotions`** (API per-item): SÍ devuelve el precio real del comprador ($7,919),
+   pero (a) MARKETPLACE_CAMPAIGN no estaba en `_auto_types` → clasificado como seller promo → ignorado,
+   y (b) solo se llamaba para top-25 candidatos, nunca para items ya en `active_deals`.
+
+### Fix
+- `_enrich_with_promotions`: agrega `MARKETPLACE_CAMPAIGN` a `_auto_types`
+- En vez de sobrescribir `p["price"]` con el deal price (perdiendo el precio lista), ahora
+  setea `p["_promo_deal_price"] = deal_price` y mantiene `p.price` como precio lista
+- Agrega `_has_price_reduction` calculado desde per-item API
+- Deals flow: corre `_enrich_with_promotions` sobre `active_deals[:100]` + `top25 candidatos`
+  en paralelo → la per-item API sobreescribe y corrige el `_promo_deal_price` incorrecto del bulk
+
+### Resultado
+Para MLM5239612118 (y cualquier MARKETPLACE_CAMPAIGN):
+- P. Lista: $12,999 tachado ✓
+- P. Deal: $7,919 ✓
+- Desc.: -39% ✓
+
+### Archivos
+- `app/main.py` — `_enrich_with_promotions()` (~línea 1052), deals flow (~línea 4846)
+
+### Commit
+`9555b8f`
+
+---
+
 ## 2026-05-07 — FIX: Deals — P. Lista / P. Deal / Desc. incorrectos para deals con ML%
 
 ### Problema
