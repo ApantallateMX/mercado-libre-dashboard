@@ -1114,10 +1114,10 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
         base_map = {}
 
     if not base_map:
-        # Fallback: requests individuales (sin bulk cache disponible) — serializados via bm_post
-        from app.services.binmanager_client import bm_post as _bm_post_enrich
-        BM_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
-        base_to_skus: dict = {}
+        # Cache-first: usar datos locales en vez de llamar a BM.
+        # _bm_retail_ph_cache (USD), _sku_retail_map (MXN) y _sku_cost_map (MXN)
+        # se poblan en prewarm desde el catálogo BM — no requieren ninguna llamada en vivo.
+        _fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
         for p in products:
             sku = p.get(sku_key, "")
             if not sku:
@@ -1125,34 +1125,25 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
             base = normalize_to_bm_sku(sku)
             if not base:
                 continue
-            base_to_skus.setdefault(base, []).append(sku)
-
-        async def _fetch(base):
-            try:
-                resp = await _bm_post_enrich(BM_URL, {
-                    "COMPANYID": 1, "SEARCH": base, "CONCEPTID": 8,
-                    "NUMBERPAGE": 1, "RECORDSPAGE": 10,
-                    "NEEDRETAILPRICEPH": True, "NEEDRETAILPRICE": True, "NEEDAVGCOST": True,
-                }, timeout=30.0)
-                if resp and resp.status_code == 200:
-                    data = resp.json()
-                    if data and isinstance(data, list) and data:
-                        for item in data:
-                            if item.get("SKU", "").upper() == base:
-                                return base, item
-                        return base, data[0]
-            except Exception:
-                pass
-            return base, None
-
-        unique_bases = list(base_to_skus.keys())[:30]
-        results = await asyncio.gather(*[_fetch(b) for b in unique_bases], return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception) or r is None:
-                continue
-            base, data = r
-            if data:
-                base_map[base] = data
+            # 1. Prioridad: _bm_retail_ph_cache (USD directo — mismo campo que BM usa)
+            ph_cached = _bm_retail_ph_cache.get(base)
+            retail_usd = ph_cached[1] if (ph_cached and ph_cached[1] > 0) else 0
+            # 2. Fallback: _sku_retail_map (MXN) → convertir a USD para que _calc_margins funcione
+            if not retail_usd:
+                retail_mxn = _sku_retail_map.get(base, 0) or 0
+                if retail_mxn > 0:
+                    retail_usd = round(retail_mxn / _fx, 2)
+            # Costo: _sku_cost_map (MXN) → USD
+            cost_mxn = _sku_cost_map.get(base, 0) or 0
+            cost_usd  = round(cost_mxn / _fx, 2) if cost_mxn > 0 else 0
+            if retail_usd > 0 or cost_usd > 0:
+                p["_bm_retail_price"] = retail_usd
+                p["_bm_retail_ph"]    = retail_usd
+                p["_bm_avg_cost"]     = cost_usd
+                p["_bm_has_data"]     = True
+                if retail_usd > 0:
+                    _bm_retail_ph_cache[base] = (_time.time(), retail_usd)
+        return  # No llamar BM — todos los datos vienen del catálogo local
 
     # Aplicar datos a todos los productos
     for p in products:
