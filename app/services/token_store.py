@@ -2462,7 +2462,7 @@ async def get_sku_price_history(
 
 
 async def get_sku_history_summary(sku: str, platform: str = None) -> dict:
-    """Stats agregados del historial: avg/min/max precio y margen, total unidades."""
+    """Stats agregados del historial: % retail recuperado (con 7% comisión), neto neto, precio."""
     conditions = ["(sku = ? OR sku LIKE ?)"]
     params: list = [sku.upper(), f"%{sku.upper()}%"]
     if platform:
@@ -2473,21 +2473,25 @@ async def get_sku_history_summary(sku: str, platform: str = None) -> dict:
         db.row_factory = aiosqlite.Row
         row = await (await db.execute(f"""
             SELECT
-                COUNT(*)              AS total_orders,
-                SUM(quantity)         AS total_units,
-                AVG(unit_price)       AS avg_price,
-                MIN(unit_price)       AS min_price,
-                MAX(unit_price)       AS max_price,
-                AVG(ganancia_neta)    AS avg_ganancia,
-                MIN(ganancia_neta)    AS min_ganancia,
-                AVG(margen_pct)       AS avg_margen,
-                MIN(margen_pct)       AS min_margen,
-                MAX(margen_pct)       AS max_margen,
-                AVG(neto_plat)        AS avg_neto,
-                MIN(neto_plat)        AS min_neto,
-                AVG(recup_retail_pct) AS avg_recup,
-                MIN(order_date)       AS first_sale,
-                MAX(order_date)       AS last_sale
+                COUNT(*)                                          AS total_orders,
+                SUM(quantity)                                     AS total_units,
+                AVG(unit_price)                                   AS avg_price,
+                MIN(unit_price)                                   AS min_price,
+                MAX(unit_price)                                   AS max_price,
+                AVG(neto_plat * 0.93)                            AS avg_neto_neto,
+                MIN(neto_plat * 0.93)                            AS min_neto_neto,
+                MAX(neto_plat * 0.93)                            AS max_neto_neto,
+                AVG(CASE WHEN retail_ph_usd > 0 AND fx_rate > 0
+                    THEN (neto_plat * 0.93) / (retail_ph_usd * fx_rate) * 100
+                    ELSE NULL END)                                AS avg_recup_neto,
+                MIN(CASE WHEN retail_ph_usd > 0 AND fx_rate > 0
+                    THEN (neto_plat * 0.93) / (retail_ph_usd * fx_rate) * 100
+                    ELSE NULL END)                                AS min_recup_neto,
+                MAX(CASE WHEN retail_ph_usd > 0 AND fx_rate > 0
+                    THEN (neto_plat * 0.93) / (retail_ph_usd * fx_rate) * 100
+                    ELSE NULL END)                                AS max_recup_neto,
+                MIN(order_date)                                   AS first_sale,
+                MAX(order_date)                                   AS last_sale
             FROM order_history WHERE {where}
         """, params)).fetchone()
     return dict(row) if row else {}

@@ -10664,18 +10664,18 @@ async def sku_price_history(
 
     # ── Summary cards ──────────────────────────────────────────────────────
     s = summary
-    total_orders = int(s.get("total_orders") or 0)
-    total_units  = int(s.get("total_units") or 0)
-    avg_price    = s.get("avg_price") or 0
-    min_price    = s.get("min_price") or 0
-    max_price    = s.get("max_price") or 0
-    avg_gan      = s.get("avg_ganancia") or 0
-    min_gan      = s.get("min_ganancia") or 0
-    avg_margen   = s.get("avg_margen") or 0
-    min_margen   = s.get("min_margen") or 0
-    max_margen   = s.get("max_margen") or 0
-    first_sale   = (s.get("first_sale") or "")[:10]
-    last_sale    = (s.get("last_sale") or "")[:10]
+    total_orders  = int(s.get("total_orders") or 0)
+    total_units   = int(s.get("total_units") or 0)
+    avg_price     = s.get("avg_price") or 0
+    min_price     = s.get("min_price") or 0
+    max_price     = s.get("max_price") or 0
+    avg_neto_neto = s.get("avg_neto_neto") or 0
+    min_neto_neto = s.get("min_neto_neto") or 0
+    avg_recup     = float(s.get("avg_recup_neto") or 0)
+    min_recup     = float(s.get("min_recup_neto") or 0)
+    max_recup     = float(s.get("max_recup_neto") or 0)
+    first_sale    = (s.get("first_sale") or "")[:10]
+    last_sale     = (s.get("last_sale") or "")[:10]
 
     if total_orders == 0:
         return HTMLResponse(f"""
@@ -10683,6 +10683,17 @@ async def sku_price_history(
             <p class="text-lg font-semibold">Sin historial para <span class="font-mono">{sku_norm}</span></p>
             <p class="text-sm mt-1">Los datos se acumulan automáticamente cada vez que se carga el tab Deals o Ventas.</p>
         </div>""")
+
+    def _recup_cls(pct):
+        if pct >= 90:  return "text-green-600"
+        if pct >= 65:  return "text-yellow-600"
+        return "text-red-600"
+
+    def _recup_badge(pct):
+        if pct >= 90:   bg = "bg-green-100 text-green-700"
+        elif pct >= 65: bg = "bg-yellow-100 text-yellow-700"
+        else:           bg = "bg-red-100 text-red-600"
+        return f"<span class='inline-block px-1.5 py-0.5 rounded text-[10px] font-bold {bg}'>{pct:.1f}%</span>"
 
     cards_html = f"""
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -10694,28 +10705,34 @@ async def sku_price_history(
       <div class="bg-white border rounded-lg p-3 text-center">
         <div class="text-xl font-bold text-blue-700">{_fmt(avg_price)}</div>
         <div class="text-xs text-gray-500 mt-0.5">P. Venta promedio</div>
-        <div class="text-[10px] text-gray-400 mt-0.5">Min {_fmt(min_price)} · Max {_fmt(max_price)}</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Mín {_fmt(min_price)} · Máx {_fmt(max_price)}</div>
       </div>
       <div class="bg-white border rounded-lg p-3 text-center">
-        <div class="text-xl font-bold {'text-green-600' if avg_gan >= 0 else 'text-red-600'}">{_fmt(avg_gan)}</div>
-        <div class="text-xs text-gray-500 mt-0.5">Ganancia neta promedio</div>
-        <div class="text-[10px] text-gray-400 mt-0.5">Peor caso {_fmt(min_gan)}</div>
+        <div class="text-2xl font-bold {_recup_cls(avg_recup)}">{avg_recup:.1f}%</div>
+        <div class="text-xs text-gray-500 mt-0.5">% Retail recuperado</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Mín {min_recup:.1f}% · Máx {max_recup:.1f}%</div>
       </div>
       <div class="bg-white border rounded-lg p-3 text-center">
-        <div class="text-xl font-bold {'text-green-600' if avg_margen >= 0 else 'text-red-600'}">{avg_margen:.1f}%</div>
-        <div class="text-xs text-gray-500 mt-0.5">Margen promedio</div>
-        <div class="text-[10px] text-gray-400 mt-0.5">Min {min_margen:.1f}% · Max {max_margen:.1f}%</div>
+        <div class="text-xl font-bold text-indigo-600">{_fmt(avg_neto_neto)}</div>
+        <div class="text-xs text-gray-500 mt-0.5">Neto Neto promedio</div>
+        <div class="text-[10px] text-gray-400 mt-0.5">Mín {_fmt(min_neto_neto)}</div>
       </div>
-    </div>"""
+    </div>
+    <p class="text-[10px] text-gray-400 mb-3">
+      🟢 ≥90% · 🟡 65–89% · 🔴 &lt;65% · Neto Neto = después de fees ML + 7% comisión socio
+    </p>"""
 
     # ── Tabla de transacciones ─────────────────────────────────────────────
     rows_html = ""
     for r in rows[:300]:
-        gan = r.get("ganancia_neta") or 0
-        mar = r.get("margen_pct") or 0
-        gan_cls = "text-green-600 font-semibold" if gan >= 0 else "text-red-600 font-semibold"
-        mar_cls = "text-green-600" if mar >= 0 else "text-red-600"
-        acct = nick_map.get(str(r.get("account_id", "")), r.get("account_id", "—"))
+        neto_neto  = (r.get("neto_plat") or 0) * 0.93
+        retail_usd = r.get("retail_ph_usd") or 0
+        fx         = r.get("fx_rate") or 17.0
+        retail_mxn = retail_usd * fx if retail_usd > 0 else 0
+        recup      = round(neto_neto / retail_mxn * 100, 1) if retail_mxn > 0 else 0
+        acct       = nick_map.get(str(r.get("account_id", "")), r.get("account_id", "—"))
+        recup_td   = _recup_badge(recup) if recup > 0 else "<span class='text-gray-300 text-[10px]'>—</span>"
+        retail_td  = _fmt(retail_mxn) if retail_mxn > 0 else "—"
         rows_html += f"""
         <tr class="hover:bg-gray-50 text-xs border-t">
           <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{r.get('order_date','')[:10]}</td>
@@ -10723,9 +10740,9 @@ async def sku_price_history(
           <td class="px-3 py-1.5 text-gray-600 truncate max-w-[100px]" title="{acct}">{acct}</td>
           <td class="px-3 py-1.5 text-right font-mono font-semibold text-blue-700">{_fmt(r.get('unit_price'))}</td>
           <td class="px-3 py-1.5 text-right text-gray-500">{r.get('quantity',1)}</td>
-          <td class="px-3 py-1.5 text-right text-gray-500">{_fmt(r.get('neto_plat'))}</td>
-          <td class="px-3 py-1.5 text-right {gan_cls}">{_fmt(gan)}</td>
-          <td class="px-3 py-1.5 text-right {mar_cls}">{mar:.1f}%</td>
+          <td class="px-3 py-1.5 text-right font-semibold text-indigo-700">{_fmt(neto_neto)}</td>
+          <td class="px-3 py-1.5 text-right text-gray-500">{retail_td}</td>
+          <td class="px-3 py-1.5 text-center">{recup_td}</td>
           <td class="px-3 py-1.5 text-center">{src_badge(r.get('data_source','estimated'))}</td>
         </tr>"""
 
@@ -10735,13 +10752,13 @@ async def sku_price_history(
         <thead class="bg-gray-50 text-gray-500 uppercase text-[10px]">
           <tr>
             <th class="px-3 py-2 text-left">Fecha</th>
-            <th class="px-3 py-2 text-left">Plataforma</th>
+            <th class="px-3 py-2 text-left">Plat.</th>
             <th class="px-3 py-2 text-left">Cuenta</th>
             <th class="px-3 py-2 text-right">P. Venta</th>
             <th class="px-3 py-2 text-right">Qty</th>
-            <th class="px-3 py-2 text-right">Neto Plat.</th>
-            <th class="px-3 py-2 text-right">Ganancia</th>
-            <th class="px-3 py-2 text-right">Margen</th>
+            <th class="px-3 py-2 text-right">Neto Neto</th>
+            <th class="px-3 py-2 text-right">Retail BM</th>
+            <th class="px-3 py-2 text-center">% vs Retail</th>
             <th class="px-3 py-2 text-center">Fuente</th>
           </tr>
         </thead>
@@ -10751,13 +10768,8 @@ async def sku_price_history(
 
     html = f"""
     <div class="p-4">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-base font-bold text-gray-800">Historial: <span class="font-mono text-blue-700">{sku_norm}</span></h2>
-          <p class="text-[10px] text-gray-400 mt-0.5">
-            est. = neto calculado con fórmula · real = dato confirmado de ML /collections
-          </p>
-        </div>
+      <div class="mb-3">
+        <h2 class="text-base font-bold text-gray-800">Historial: <span class="font-mono text-blue-700">{sku_norm}</span></h2>
       </div>
       {cards_html}
       {table_html}
