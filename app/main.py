@@ -3288,6 +3288,7 @@ async def _prewarm_caches(user_id: str = None):
     _prewarm_running = True
     _prewarm_queued = False
     _prewarm_error = ""
+    _this_prewarm_start = _time.time()
     try:
         client = await get_meli_client(user_id=user_id)
         if not client:
@@ -3470,22 +3471,32 @@ async def _prewarm_caches(user_id: str = None):
                 _bm_log_skus    = len(_bm_stock_cache)
                 _bm_log_retail  = len(_bm_retail_ph_cache)
                 logger.info(f"[PREWARM] BM sync log: skus={_bm_log_skus}, elapsed={_bm_log_elapsed}s, source={_prewarm_source}, retail_ph={_bm_log_retail}")
-                # Historial en memoria (sobrevive entre requests, resiste Railway ephemeral DB)
-                _prewarm_history.append({
-                    "ts":           _time.time(),
-                    "sku_count":    _bm_log_skus,
-                    "elapsed_s":    _bm_log_elapsed,
-                    "source":       _prewarm_source,
-                    "retail_ph":    _bm_log_retail,
-                })
-                if len(_prewarm_history) > 20:
-                    _prewarm_history.pop(0)
-                await token_store.log_bm_sync_event(
-                    sku_count=_bm_log_skus,
-                    elapsed_s=_bm_log_elapsed,
-                    source=_prewarm_source,
+                # Solo loguear cuando BM fue efectivamente descargado en este ciclo.
+                # El startup corre prewarm 1x por cuenta ML (4 cuentas) pero solo la primera
+                # hace fetch real de BM; las otras 3 usan el cache global (900s TTL).
+                # Sin este guard aparecen 4 entradas idénticas en el historial.
+                _bm_fetched_fresh = (
+                    (_bm_bulk_gr_cache is not None and _bm_bulk_gr_cache[0] >= _this_prewarm_start)
+                    or (_bm_bulk_all_cache is not None and _bm_bulk_all_cache[0] >= _this_prewarm_start)
                 )
-                logger.info("[PREWARM] BM sync log escrito OK")
+                if _bm_fetched_fresh:
+                    _prewarm_history.append({
+                        "ts":           _time.time(),
+                        "sku_count":    _bm_log_skus,
+                        "elapsed_s":    _bm_log_elapsed,
+                        "source":       _prewarm_source,
+                        "retail_ph":    _bm_log_retail,
+                    })
+                    if len(_prewarm_history) > 20:
+                        _prewarm_history.pop(0)
+                    await token_store.log_bm_sync_event(
+                        sku_count=_bm_log_skus,
+                        elapsed_s=_bm_log_elapsed,
+                        source=_prewarm_source,
+                    )
+                    logger.info("[PREWARM] BM sync log escrito OK")
+                else:
+                    logger.info("[PREWARM] BM sync log omitido — BM sirvió desde caché (no fetch real)")
             except Exception as _bm_log_exc:
                 logger.warning(f"[PREWARM] Error escribiendo BM sync log: {_bm_log_exc!r}")
             await client.close()
