@@ -10741,7 +10741,7 @@ async def sku_price_history(
           <td class="px-3 py-1.5 text-gray-500 whitespace-nowrap">{r.get('order_date','')[:10]}</td>
           <td class="px-3 py-1.5">{plat_badge(r.get('platform','ml'))}</td>
           <td class="px-3 py-1.5 text-gray-600 truncate max-w-[100px]" title="{acct}">{acct}</td>
-          <td class="px-3 py-1.5 text-right font-mono font-semibold text-blue-700">{_fmt(r.get('unit_price'))}</td>
+          <td class="px-3 py-1.5 text-right font-mono font-semibold text-blue-700">{_fmt(r.get('unit_price'))}<div class='text-[10px] text-gray-400 font-normal'>${(r.get('unit_price') or 0)/fx:,.0f} USD</div></td>
           <td class="px-3 py-1.5 text-right text-gray-500">{r.get('quantity',1)}</td>
           <td class="px-3 py-1.5 text-right font-semibold text-indigo-700">{_fmt(neto_neto)}<div class='text-[10px] text-gray-400 font-normal'>${neto_neto/fx:,.0f} USD</div></td>
           <td class="px-3 py-1.5 text-right text-gray-500">{retail_td}</td>
