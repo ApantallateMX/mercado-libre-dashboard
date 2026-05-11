@@ -10637,7 +10637,7 @@ async def sku_price_history(
 
 
 async def _sku_price_history_inner(request, sku, platform, account_id, months):
-    user = await get_current_user(request)
+    user = await get_current_user()
     if not user:
         return HTMLResponse("<p class='text-red-500 p-4'>Sin sesión</p>", status_code=401)
     if not sku:
