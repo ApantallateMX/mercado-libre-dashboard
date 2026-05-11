@@ -10625,6 +10625,18 @@ async def sku_price_history(
     months: int = 0,
 ):
     """Historial de precio de venta y ganancia neta por SKU. Requiere sesión."""
+    import traceback as _tb
+    try:
+        return await _sku_price_history_inner(request, sku, platform, account_id, months)
+    except Exception as _exc:
+        _trace = _tb.format_exc()
+        return HTMLResponse(
+            f"<pre class='p-4 text-xs text-red-600 whitespace-pre-wrap'>{_trace}</pre>",
+            status_code=200,
+        )
+
+
+async def _sku_price_history_inner(request, sku, platform, account_id, months):
     user = await get_current_user(request)
     if not user:
         return HTMLResponse("<p class='text-red-500 p-4'>Sin sesión</p>", status_code=401)
