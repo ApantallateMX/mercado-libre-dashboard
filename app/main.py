@@ -10655,8 +10655,10 @@ async def _sku_price_history_inner(request, sku, platform, account_id, months):
     # Lookup nicknames para mostrar nombre de cuenta en vez de ID
     all_accounts = await token_store.get_all_accounts()
     nick_map: dict = {}
-    for uid, info in (all_accounts or {}).items():
-        nick_map[str(uid)] = info.get("nickname") or str(uid)
+    for _plat_accs in (all_accounts or {}).values():
+        for acc in (_plat_accs or []):
+            uid = acc.get("user_id") or acc.get("seller_id") or ""
+            nick_map[str(uid)] = acc.get("nickname") or str(uid)
 
     def _fmt(v, decimals=0, prefix="$"):
         if v is None:
