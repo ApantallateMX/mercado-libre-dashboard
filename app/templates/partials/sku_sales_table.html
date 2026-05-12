@@ -12,6 +12,7 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROI</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Margen</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ganancia/u</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Días de stock BM disponible a la velocidad de ventas actual">Días BM</th>
         </tr>
     </thead>
     <tbody class="divide-y divide-gray-200" id="sku-tbody">
@@ -85,10 +86,22 @@
                 <span class="text-gray-300">—</span>
                 {% endif %}
             </td>
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                {% if sku_data.get('_days_coverage') is not none %}
+                {% set dc = sku_data._days_coverage %}
+                <span class="font-semibold {% if dc < 7 %}text-red-600{% elif dc < 14 %}text-yellow-600{% else %}text-green-600{% endif %}">
+                    {{ "{:.0f}".format(dc) }}d
+                </span>
+                {% elif sku_data.get('_bm_avail') is not none %}
+                <span class="text-xs text-gray-400">0d</span>
+                {% else %}
+                <span class="text-gray-300">—</span>
+                {% endif %}
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="11" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+            <td colspan="12" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
         </tr>
         {% endfor %}
     </tbody>

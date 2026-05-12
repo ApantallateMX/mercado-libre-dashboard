@@ -6720,6 +6720,23 @@ async def sku_sales_table_partial(
         )
         _calc_margins(sku_sales, usd_to_mxn)
 
+        # Días de cobertura BM: stock disponible / velocidad diaria del periodo
+        try:
+            from datetime import datetime as _dtp
+            _df = _dtp.strptime(date_from, "%Y-%m-%d") if date_from else _dtp.utcnow()
+            _dt = _dtp.strptime(date_to,   "%Y-%m-%d") if date_to   else _dtp.utcnow()
+            _period_days = max(1, (_dt - _df).days)
+        except Exception:
+            _period_days = 30
+        for _s in sku_sales:
+            _bsk = normalize_to_bm_sku(_s.get("sku", ""))
+            if _bsk and _bsk in _bm_stock_cache:
+                _, _bmd = _bm_stock_cache[_bsk]
+                _avail = int(_bmd.get("avail_total", 0) or 0)
+                _s["_bm_avail"] = _avail
+                _daily = _s["quantity"] / _period_days if _s["quantity"] > 0 else 0
+                _s["_days_coverage"] = round(_avail / _daily, 1) if _daily > 0 else None
+
         return templates.TemplateResponse(request, "partials/sku_sales_table.html", {            "sku_sales": sku_sales,
             "total_quantity": total_quantity,
             "total_revenue": total_revenue

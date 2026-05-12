@@ -69,7 +69,23 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     BLOQUE 3 — Cobertura de Stock + Orden de Separación
+     BLOQUE 3 — Radar de Oportunidad (carga con velocidad)
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Radar de Oportunidad</h2>
+        <span class="text-xs text-gray-400">— clasificación ABC + top revenue + ingresos en riesgo</span>
+    </div>
+    <div id="plan-radar-content" class="p-5">
+        <div class="animate-pulse space-y-2">{% for i in range(3) %}<div class="h-16 bg-gray-100 rounded-xl"></div>{% endfor %}</div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 4 — Cobertura de Stock + Orden de Separación
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6">
     <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
@@ -120,30 +136,6 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     BLOQUE 4 — Nuevos Productos / Sin Lanzar
-═══════════════════════════════════════════════════════════ -->
-<div class="bg-white rounded-xl shadow mb-6">
-    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
-         onclick="toggleSection('plan-unlaunched')">
-        <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        <h2 class="text-sm font-bold text-gray-700">Nuevos Productos & Oportunidades Sin Lanzar</h2>
-        <span class="text-xs text-gray-400">— stock en BM que no está generando ventas en ML</span>
-        <button onclick="event.stopPropagation(); loadUnlaunched()" id="btn-load-unlaunched"
-                class="ml-auto bg-purple-600 text-white text-xs px-3 py-1.5 rounded hover:bg-purple-700 font-semibold">
-            Descubrir oportunidades
-        </button>
-        <svg id="chevron-plan-unlaunched" class="w-4 h-4 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-        </svg>
-    </div>
-    <div id="plan-unlaunched" class="hidden p-5">
-        <p class="text-center text-gray-400 text-sm py-6">Haz clic en <strong>Descubrir oportunidades</strong> para ver productos en BinManager sin ventas activas en ML.</p>
-    </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════
      BLOQUE 4.5 — Stock Detenido
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6" id="plan-stagnant-section" style="display:none">
@@ -159,20 +151,20 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     BLOQUE 5 — Radar de Oportunidad
+     BLOQUE 5 — Sin Lanzar → Lanzador Inteligente
 ═══════════════════════════════════════════════════════════ -->
-<div class="bg-white rounded-xl shadow mb-6">
-    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
-        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+<a href="/sku-inventory" class="block bg-white rounded-xl shadow mb-6 px-6 py-4 hover:shadow-md transition group">
+    <div class="flex items-center gap-3">
+        <svg class="w-4 h-4 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
         </svg>
-        <h2 class="text-sm font-bold text-gray-700">Radar de Oportunidad</h2>
-        <span class="text-xs text-gray-400">— dinero perdido y quick wins</span>
+        <div>
+            <h2 class="text-sm font-bold text-gray-700 group-hover:text-purple-700 transition">Nuevos Productos & Sin Lanzar</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Stock en BM sin publicar en ML — con acción directa de lanzamiento</p>
+        </div>
+        <span class="ml-auto text-xs bg-purple-600 text-white px-3 py-1.5 rounded font-semibold group-hover:bg-purple-700 transition flex-shrink-0">Ir al Lanzador →</span>
     </div>
-    <div id="plan-radar-content" class="p-5">
-        <p class="text-center text-gray-400 text-sm py-4">Carga la cobertura primero para ver el radar de oportunidad.</p>
-    </div>
-</div>
+</a>
 {% endblock %}
 
 {% block scripts %}
@@ -379,6 +371,10 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
     var amzAcctChips = (p.amz_accounts || []).map(function(a) {
         return '<span class="px-1 py-0.5 text-[8px] bg-orange-50 text-orange-500 rounded border border-orange-100">' + a + '</span>';
     }).join('');
+    var histBtn = p.sku
+        ? '<button onclick="openHistorialModal(\'' + p.sku.replace(/'/g,"\\'") + '\',\'' + p.title.replace(/'/g,"\\'").substring(0,40) + '\')" ' +
+          'class="text-indigo-500 hover:text-indigo-700 text-base leading-none" title="Ver historial de ventas">📈</button>'
+        : '';
     return '<tr class="vel-row border-b border-gray-50 hover:bg-gray-50 transition">' +
         '<td class="py-2 pl-1 text-xs font-bold text-gray-400">' + (globalIdx+1) + '</td>' +
         '<td class="py-2 pr-3 max-w-xs">' +
@@ -393,6 +389,7 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
         '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
         '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
             '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
+        '<td class="py-2 pl-2 text-center">' + histBtn + '</td>' +
         '</tr>';
 }
 
@@ -429,6 +426,7 @@ function _renderVelPage() {
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
             '<th class="pb-2 pr-3">Proporción</th>' +
+            '<th class="pb-2 pl-2 w-6"></th>' +
             '</tr></thead><tbody>';
 
         _velRows = [];
@@ -1038,6 +1036,27 @@ window.reloadAll = function() {
 loadProduction();
 loadVelocity();
 
+// ── Modal Historial de Ventas ─────────────────────────────────────────────────
+window.openHistorialModal = function(sku, title) {
+    var modal = document.getElementById('historialModal');
+    document.getElementById('hm-sku').textContent = sku + (title ? '  —  ' + title : '');
+    document.getElementById('hm-body').innerHTML = '<div class="flex items-center justify-center p-12 text-gray-400">' +
+        '<svg class="animate-spin h-6 w-6 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path></svg>Cargando historial...</div>';
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    fetch('/api/sku-history?sku=' + encodeURIComponent(sku))
+        .then(function(r){ return r.text(); })
+        .then(function(html){ document.getElementById('hm-body').innerHTML = html; })
+        .catch(function(){ document.getElementById('hm-body').innerHTML = '<p class="p-6 text-red-500 text-sm">Error cargando historial.</p>'; });
+};
+window.closeHistorialModal = function() {
+    var modal = document.getElementById('historialModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+};
+
 // ── Modal: listings sin SKU ──────────────────────────────────────────────────
 window._openNoSkuModal = async function() {
     var modal = document.getElementById('no-sku-modal');
@@ -1107,6 +1126,20 @@ window._copyNoSkuList = function(items) {
                     class="text-gray-400 hover:text-gray-600 text-lg font-bold leading-none">✕</button>
         </div>
         <div id="no-sku-modal-body" class="overflow-y-auto flex-1 p-5"></div>
+    </div>
+</div>
+
+<!-- Modal Historial de Ventas (reutiliza /api/sku-history) -->
+<div id="historialModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center" onclick="if(event.target===this)closeHistorialModal()">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col">
+        <div class="flex items-center justify-between p-4 border-b flex-shrink-0">
+            <div>
+                <h3 class="font-semibold text-gray-800 text-sm">📈 Historial de Ventas</h3>
+                <p id="hm-sku" class="text-xs text-indigo-600 font-mono mt-0.5"></p>
+            </div>
+            <button onclick="closeHistorialModal()" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <div id="hm-body" class="overflow-y-auto flex-1"></div>
     </div>
 </div>
 {% endblock %}
