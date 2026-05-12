@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-12 — FIX: SKU Ventas — columnas de costo removidas, Retail PH + % Recuperado
+
+### Problema
+Tab "SKU > Ventas" mostraba ROI -94.4%, Margen -2897%, Ganancia/u -$119,331 para todos los
+productos. Root cause: `AvgCostQTY` de `Get_GlobalStock_InventoryBySKU` devuelve valores en MXN
+(no USD) para algunos items; el código los trataba como USD y los multiplicaba por FX de nuevo
+→ costo_mxn 17.77× inflado → ROI completamente negativo.
+
+### Decisión
+No manejamos costo de compra. La referencia de negocio es **Retail PH** (LastRetailPricePurchaseHistory
+de BM). La métrica clave es cuánto % del Retail PH recuperamos como neto de ML. Meta ≥ 100%.
+
+### Fix
+- Eliminadas columnas: Costo (USD), ROI, Margen, Ganancia/u — todas dependían de costo inválido
+- Retail PH: MXN primario (azul) + USD secundario (gris, debajo)
+- Ingreso Total: MXN primario + USD secundario
+- **% Recuperado**: neto ML real / (qty × RetailPH MXN) × 100
+  - Verde ≥ 100% | Amarillo ≥ 80% | Rojo < 80%
+- Regla de display establecida: en TODO el dashboard, dinero = MXN grande + USD pequeño debajo
+
+### Commits
+- `05b0544` fix: SKU Ventas — quitar columnas de costo, usar Retail PH + % Recuperado
+
+---
+
 ## 2026-05-07 — FIX: Sesión dashboard perdida en cada redeploy Railway
 
 ### Problema
