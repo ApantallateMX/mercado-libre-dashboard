@@ -13190,7 +13190,7 @@ async def planning_sync_skus():
 
 
 @app.post("/api/planning/sync-amazon")
-async def planning_sync_amazon(session=Depends(get_session)):
+async def planning_sync_amazon():
     """Fuerza descarga de órdenes Amazon para todas las cuentas.
     Resetea el guard de 2h y corre _save_amazon_orders_bg en background.
     """
