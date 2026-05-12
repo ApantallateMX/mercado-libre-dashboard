@@ -69,23 +69,7 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     BLOQUE 3 — Radar de Oportunidad (carga con velocidad)
-═══════════════════════════════════════════════════════════ -->
-<div class="bg-white rounded-xl shadow mb-6">
-    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
-        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-        </svg>
-        <h2 class="text-sm font-bold text-gray-700">Radar de Oportunidad</h2>
-        <span class="text-xs text-gray-400">— clasificación ABC + top revenue + ingresos en riesgo</span>
-    </div>
-    <div id="plan-radar-content" class="p-5">
-        <div class="animate-pulse space-y-2">{% for i in range(3) %}<div class="h-16 bg-gray-100 rounded-xl"></div>{% endfor %}</div>
-    </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════
-     BLOQUE 4 — Cobertura de Stock + Orden de Separación
+     BLOQUE 3 — Cobertura de Stock + Orden de Separación
 ═══════════════════════════════════════════════════════════ -->
 <div class="bg-white rounded-xl shadow mb-6">
     <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3 cursor-pointer select-none"
@@ -148,6 +132,22 @@
         <span id="stagnant-count-badge" class="ml-auto text-xs font-bold bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full border border-orange-200"></span>
     </div>
     <div id="plan-stagnant-content" class="p-5"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     BLOQUE 4.5 — Radar de Oportunidad
+═══════════════════════════════════════════════════════════ -->
+<div class="bg-white rounded-xl shadow mb-6">
+    <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-3">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+        </svg>
+        <h2 class="text-sm font-bold text-gray-700">Radar de Oportunidad</h2>
+        <span class="text-xs text-gray-400">— clasificación ABC + top revenue + ingresos en riesgo</span>
+    </div>
+    <div id="plan-radar-content" class="p-5">
+        <div class="animate-pulse space-y-2">{% for i in range(3) %}<div class="h-16 bg-gray-100 rounded-xl"></div>{% endfor %}</div>
+    </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
