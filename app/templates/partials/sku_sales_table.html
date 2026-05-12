@@ -32,17 +32,23 @@
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-mty">
-                {% if show_inv %}
-                <span class="text-gray-400 text-xs">...</span>
-                {% else %}
+                {% if not show_inv %}
                 <span class="text-gray-300">—</span>
+                {% elif sku_data.get('_bm_mty') is not none %}
+                {% set mq = sku_data._bm_mty %}
+                <span class="font-medium {% if mq == 0 %}text-red-500{% elif mq <= 5 %}text-yellow-600{% else %}text-gray-800{% endif %}">{{ mq }}</span>
+                {% else %}
+                <span class="text-gray-400 text-xs">...</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-cdmx">
-                {% if show_inv %}
-                <span class="text-gray-400 text-xs">...</span>
-                {% else %}
+                {% if not show_inv %}
                 <span class="text-gray-300">—</span>
+                {% elif sku_data.get('_bm_cdmx') is not none %}
+                {% set cq = sku_data._bm_cdmx %}
+                <span class="font-medium {% if cq == 0 %}text-red-500{% elif cq <= 5 %}text-yellow-600{% else %}text-gray-800{% endif %}">{{ cq }}</span>
+                {% else %}
+                <span class="text-gray-400 text-xs">...</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right">

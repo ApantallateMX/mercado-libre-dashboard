@@ -6865,6 +6865,8 @@ async def sku_sales_table_partial(
                 _, _bmd = _bm_stock_cache[_bsk]
                 _avail = int(_bmd.get("avail_total", 0) or 0)
                 _s["_bm_avail"] = _avail
+                _s["_bm_mty"]  = int(_bmd.get("mty", 0) or 0)
+                _s["_bm_cdmx"] = int(_bmd.get("cdmx", 0) or 0)
                 _daily = _s["quantity"] / _period_days if _s["quantity"] > 0 else 0
                 _s["_days_coverage"] = round(_avail / _daily, 1) if _daily > 0 else None
 
