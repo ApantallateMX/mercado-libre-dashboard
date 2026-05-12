@@ -3,15 +3,12 @@
         <tr>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">SKU</th>
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad Vendida</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingreso Total</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">MTY</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">CDMX</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Costo (USD)</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROI</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Margen</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ganancia/u</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Neto recibido de ML vs Retail PH de BM. Meta ≥ 100%">% Recuperado</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Días de stock BM disponible a la velocidad de ventas actual">Días BM</th>
         </tr>
     </thead>
@@ -28,8 +25,11 @@
             <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 text-right">
                 {{ sku_data.quantity }}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-800 text-right">
-                ${{ "%.2f"|format(sku_data.revenue) }}
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
+                <div class="font-medium text-gray-800">${{ "{:,.0f}".format(sku_data.revenue) }} <span class="text-xs text-gray-400">MXN</span></div>
+                {% if usd_to_mxn and usd_to_mxn > 0 %}
+                <div class="text-xs text-gray-400">${{ "{:,.0f}".format(sku_data.revenue / usd_to_mxn) }} USD</div>
+                {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-mty">
                 {% if show_inv %}
@@ -46,41 +46,23 @@
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
-                {% if sku_data.get('_bm_avg_cost') and sku_data._bm_avg_cost > 0 %}
-                <span class="text-gray-700 font-medium">${{ "%.2f"|format(sku_data._bm_avg_cost) }}</span>
-                {% else %}
-                <span class="text-gray-300">—</span>
-                {% endif %}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
                 {% if sku_data.get('_retail_ph_mxn') and sku_data._retail_ph_mxn > 0 %}
-                <span class="text-blue-700 font-medium">${{ "%.2f"|format(sku_data._retail_ph_mxn) }} MXN</span>
+                <div class="font-medium text-blue-700">${{ "{:,.0f}".format(sku_data._retail_ph_mxn) }} <span class="text-xs text-blue-400">MXN</span></div>
+                {% if sku_data.get('_bm_retail_ph') and sku_data._bm_retail_ph > 0 %}
+                <div class="text-xs text-gray-400">${{ "%.0f"|format(sku_data._bm_retail_ph) }} USD</div>
+                {% endif %}
                 {% else %}
                 <span class="text-gray-300">—</span>
                 {% endif %}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
-                {% if sku_data.get('_roi_pct') is not none %}
-                <span class="font-semibold {% if sku_data._roi_pct >= 30 %}text-green-600{% elif sku_data._roi_pct >= 0 %}text-yellow-600{% else %}text-red-600{% endif %}">
-                    {{ "%.1f"|format(sku_data._roi_pct) }}%
-                </span>
-                {% else %}
-                <span class="text-gray-300">—</span>
-                {% endif %}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
-                {% if sku_data.get('_margen_pct') is not none %}
-                <span class="font-semibold {% if sku_data._margen_pct >= 20 %}text-green-600{% elif sku_data._margen_pct >= 10 %}text-yellow-600{% elif sku_data._margen_pct >= 0 %}text-orange-500{% else %}text-red-600{% endif %}">
-                    {{ "%.1f"|format(sku_data._margen_pct) }}%
-                </span>
-                {% else %}
-                <span class="text-gray-300">—</span>
-                {% endif %}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
-                {% if sku_data.get('_ganancia_est') is not none %}
-                <span class="font-medium {% if sku_data._ganancia_est >= 0 %}text-green-700{% else %}text-red-600{% endif %}">
-                    ${{ "{:,.0f}".format(sku_data._ganancia_est) }}
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-center">
+                {% if sku_data.get('_recup_retail_pct') is not none %}
+                {% set rp = sku_data._recup_retail_pct %}
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold
+                    {% if rp >= 100 %}bg-green-100 text-green-800
+                    {% elif rp >= 80 %}bg-yellow-100 text-yellow-800
+                    {% else %}bg-red-100 text-red-700{% endif %}">
+                    {{ "%.1f"|format(rp) }}%
                 </span>
                 {% else %}
                 <span class="text-gray-300">—</span>
@@ -101,7 +83,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="12" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+            <td colspan="9" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -118,7 +100,10 @@
     <div class="text-right">
         <span class="text-sm text-gray-600">Unidades: <strong>{{ total_quantity }}</strong></span>
         <span class="mx-2 text-gray-400">|</span>
-        <span class="text-sm text-gray-600">Ingreso: <strong>${{ "%.2f"|format(total_revenue) }}</strong></span>
+        <span class="text-sm text-gray-600">Ingreso neto: <strong>${{ "{:,.0f}".format(total_revenue) }} MXN</strong></span>
+        {% if usd_to_mxn and usd_to_mxn > 0 %}
+        <span class="text-xs text-gray-400 ml-1">(≈ ${{ "{:,.0f}".format(total_revenue / usd_to_mxn) }} USD)</span>
+        {% endif %}
     </div>
 </div>
 {% endif %}

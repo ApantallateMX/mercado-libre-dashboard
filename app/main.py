@@ -6840,6 +6840,17 @@ async def sku_sales_table_partial(
         )
         _calc_margins(sku_sales, usd_to_mxn)
 
+        # % Recuperado: neto recibido (revenue ya es neto ML) vs Retail PH de BM
+        # Meta ≥ 100% = recuperamos al menos el precio de referencia BM como neto
+        for _s in sku_sales:
+            _rph = _s.get("_retail_ph_mxn", 0) or 0
+            _qty = _s.get("quantity", 0) or 0
+            _rev = _s.get("revenue", 0) or 0
+            if _rph > 0 and _qty > 0:
+                _s["_recup_retail_pct"] = round((_rev / (_qty * _rph)) * 100, 1)
+            else:
+                _s["_recup_retail_pct"] = None
+
         # Días de cobertura BM: stock disponible / velocidad diaria del periodo
         try:
             from datetime import datetime as _dtp
@@ -6857,9 +6868,11 @@ async def sku_sales_table_partial(
                 _daily = _s["quantity"] / _period_days if _s["quantity"] > 0 else 0
                 _s["_days_coverage"] = round(_avail / _daily, 1) if _daily > 0 else None
 
-        return templates.TemplateResponse(request, "partials/sku_sales_table.html", {            "sku_sales": sku_sales,
+        return templates.TemplateResponse(request, "partials/sku_sales_table.html", {
+            "sku_sales": sku_sales,
             "total_quantity": total_quantity,
-            "total_revenue": total_revenue
+            "total_revenue": total_revenue,
+            "usd_to_mxn": usd_to_mxn,
         })
     finally:
         await client.close()
