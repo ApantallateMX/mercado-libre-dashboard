@@ -1352,6 +1352,126 @@ def _save_ml_orders_history_bg(orders: list, account_id: str, usd_to_mxn: float)
         pass
 
 
+# ── Amazon orders background save ────────────────────────────────────────────
+_amz_bg_running: bool  = False
+_amz_bg_last_run: float = 0.0   # epoch seconds de la última corrida exitosa
+
+async def _save_amazon_orders_bg(days: int = 30) -> None:
+    """Background: descarga órdenes Amazon + items, guarda en order_history.
+    Evita duplicados con _amz_bg_running y un intervalo mínimo de 2h entre corridas.
+    """
+    global _amz_bg_running, _amz_bg_last_run
+    if _amz_bg_running:
+        return
+    if _time.time() - _amz_bg_last_run < 7200:  # 2h mínimo entre corridas
+        return
+    _amz_bg_running = True
+    try:
+        from app.services.amazon_client import get_amazon_client as _get_amz
+        from app.services.token_store import (
+            get_all_amazon_accounts as _get_amz_accts,
+            upsert_order_history as _upsert_oh,
+        )
+        from app.services.sku_utils import normalize_to_bm_sku as _norm_sku
+        from datetime import datetime as _dt, timedelta as _td
+
+        amazon_accounts = await _get_amz_accts()
+        if not amazon_accounts:
+            return
+
+        date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+        date_to   = _dt.utcnow().strftime("%Y-%m-%d")
+
+        # Semáforo 1 — SP-API es strict con rate limits
+        _amz_sem = asyncio.Semaphore(1)
+        all_rows: list = []
+
+        async def _process_amz_account(acc):
+            nick = acc.get("nickname") or acc.get("seller_id", "AMZ")
+            client = await _get_amz(seller_id=acc.get("seller_id"))
+            if not client:
+                return
+            try:
+                orders = await client.fetch_orders_range(date_from, date_to)
+                logger.info(f"[AMZ-BG] {nick}: {len(orders)} órdenes en {days}d")
+                for order in orders:
+                    status = order.get("OrderStatus", "")
+                    if status in ("Cancelled", "Pending"):
+                        continue
+                    order_id   = order.get("AmazonOrderId", "")
+                    order_date = (order.get("PurchaseDate") or "")[:10]
+                    order_month = order_date[:7]
+                    if not order_id or not order_date:
+                        continue
+                    try:
+                        async with _amz_sem:
+                            items = await client.get_order_items(order_id)
+                        for it in items:
+                            sku_raw = (it.get("SellerSKU") or "").strip()
+                            if not sku_raw:
+                                continue
+                            sku = _norm_sku(sku_raw) or sku_raw.upper()
+                            qty = int(it.get("QuantityOrdered") or 0)
+                            if qty <= 0:
+                                continue
+                            price_obj = it.get("ItemPrice") or {}
+                            price     = float(price_obj.get("Amount") or 0)
+                            currency  = price_obj.get("CurrencyCode", "MXN")
+                            fx = _last_fx_rate if _last_fx_rate > 0 else 17.0
+                            retail_mxn    = _sku_retail_map.get(sku, 0) or 0
+                            retail_ph_usd = round(retail_mxn / fx, 2) if retail_mxn > 0 else 0
+                            amz_fee   = round(price * 0.15, 2)
+                            neto      = round(price - amz_fee, 2)
+                            recup     = round(neto / retail_mxn * 100, 1) if retail_mxn > 0 else 0
+                            all_rows.append({
+                                "order_id":       order_id,
+                                "account_id":     nick,
+                                "platform":       "amazon",
+                                "item_id":        it.get("ASIN", ""),
+                                "sku":            sku,
+                                "unit_price":     price,
+                                "quantity":       qty,
+                                "sale_fee":       amz_fee,
+                                "neto_plat":      neto,
+                                "costo_usd":      0.0,
+                                "costo_mxn":      0.0,
+                                "retail_ph_usd":  retail_ph_usd,
+                                "ganancia_neta":  0.0,
+                                "margen_pct":     0.0,
+                                "recup_retail_pct": recup,
+                                "fx_rate":        round(fx, 4),
+                                "currency":       currency,
+                                "order_date":     order_date,
+                                "order_month":    order_month,
+                                "status":         status,
+                                "data_source":    "estimated",
+                            })
+                    except Exception:
+                        pass
+            except Exception as _amz_err:
+                logger.warning(f"[AMZ-BG] Error cuenta {nick}: {_amz_err}")
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    pass
+
+        await asyncio.gather(
+            *[_process_amz_account(a) for a in amazon_accounts],
+            return_exceptions=True,
+        )
+
+        if all_rows:
+            await _upsert_oh(all_rows)
+            logger.info(f"[AMZ-BG] {len(all_rows)} filas guardadas en order_history")
+        _amz_bg_last_run = _time.time()
+
+    except Exception as _amz_bg_err:
+        logger.warning(f"[AMZ-BG] Error general: {_amz_bg_err}")
+    finally:
+        _amz_bg_running = False
+
+
 def _get_item_sku(body: dict) -> str:
     """Extrae SKU de un item body usando TODAS las fuentes disponibles en cascada.
 
@@ -12721,78 +12841,31 @@ async def _planning_fetch_orders_for_user(uid: str, df_str: str, dt_str: str) ->
 async def _planning_fetch_amazon_velocity(days: int) -> dict:
     """
     Retorna {SKU_UPPER: {units, units_7d, revenue, accounts}} desde todas las cuentas Amazon.
-    Usa caché SQLite de 2 horas para no bloquear. Retorna {} si no hay cuentas o hay errores.
+    Fuente primaria: order_history DB (instantáneo, sin SP-API).
+    Background: _save_amazon_orders_bg() rellena order_history con órdenes reales.
     """
-    from app.services.amazon_client import get_amazon_client as _get_amz
-    from app.services.token_store import get_all_amazon_accounts, get_amazon_vel_cache, save_amazon_vel_cache
-    from datetime import datetime, timedelta, timezone
-
+    from app.services.token_store import get_amazon_velocity_from_db as _amz_db_vel
     try:
-        # Check cache first — avoid hammering SP-API on every page load
-        cached = await get_amazon_vel_cache(days)
-        if cached is not None:
+        # 1. Consultar DB — respuesta inmediata, sin timeout, sin auth
+        db_data = await _amz_db_vel(days)
+
+        # 2. Siempre disparar background refresh (se auto-limita con intervalo 2h)
+        asyncio.create_task(_save_amazon_orders_bg(days))
+
+        if db_data:
+            logger.debug(f"[AMZ-VEL] DB: {len(db_data)} SKUs en {days}d")
+            return db_data
+
+        # 3. DB vacía: intentar caché SP-API (solo en el primer boot antes de que
+        #    el background llene order_history)
+        from app.services.token_store import get_amazon_vel_cache as _amz_cache
+        cached = await _amz_cache(days)
+        if cached:
             return cached
 
-        amazon_accounts = await get_all_amazon_accounts()
-        if not amazon_accounts:
-            return {}
-
-        now = datetime.now(timezone.utc)
-        date_from = (now - timedelta(days=days)).strftime("%Y-%m-%d")
-        date_to   = now.strftime("%Y-%m-%d")
-        date_7d   = (now - timedelta(days=7)).isoformat()
-
-        sku_agg: dict = {}
-        sem = asyncio.Semaphore(2)  # SP-API rate limit más estricto
-
-        async def _process_account(acc):
-            client = await _get_amz(seller_id=acc.get("seller_id"))
-            if not client:
-                return
-            try:
-                orders = await client.fetch_orders_range(date_from, date_to)
-                for order in orders:
-                    if order.get("OrderStatus") in ("Cancelled", "Pending"):
-                        continue
-                    order_id = order.get("AmazonOrderId", "")
-                    purchase_date = order.get("PurchaseDate", "")
-                    is_7d = purchase_date >= date_7d
-                    if not order_id:
-                        continue
-                    try:
-                        async with sem:
-                            items = await client.get_order_items(order_id)
-                        for item in items:
-                            sku = (item.get("SellerSKU") or "").upper().strip()
-                            qty = int(item.get("QuantityOrdered") or 0)
-                            price = float((item.get("ItemPrice") or {}).get("Amount") or 0)
-                            if not sku or qty <= 0:
-                                continue
-                            if sku not in sku_agg:
-                                sku_agg[sku] = {"units": 0, "units_7d": 0, "revenue": 0.0, "accounts": set()}
-                            sku_agg[sku]["units"]   += qty
-                            sku_agg[sku]["revenue"] += price
-                            sku_agg[sku]["accounts"].add(acc.get("nickname") or acc.get("seller_id", ""))
-                            if is_7d:
-                                sku_agg[sku]["units_7d"] += qty
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        await asyncio.gather(*[_process_account(a) for a in amazon_accounts], return_exceptions=True)
-
-        # Serialize sets
-        for v in sku_agg.values():
-            v["accounts"] = sorted(v["accounts"])
-
-        # Persist to cache so next call is instant
-        try:
-            await save_amazon_vel_cache(days, sku_agg)
-        except Exception:
-            pass
-        return sku_agg
-    except Exception:
+        return {}
+    except Exception as _amz_vel_err:
+        logger.warning(f"[AMZ-VEL] Error: {_amz_vel_err}")
         return {}
 
 

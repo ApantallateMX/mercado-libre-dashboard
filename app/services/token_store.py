@@ -1262,6 +1262,45 @@ async def save_amazon_vel_cache(days: int, data: dict) -> None:
         await db.commit()
 
 
+async def get_amazon_velocity_from_db(days: int) -> dict:
+    """Consulta order_history para velocidad Amazon — fuente primaria rápida en planeación.
+    Retorna {SKU_UPPER: {units, units_7d, revenue, accounts}} sin llamar SP-API.
+    """
+    from datetime import datetime, timedelta
+    date_from = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    date_7d   = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("""
+            SELECT
+                sku,
+                GROUP_CONCAT(DISTINCT account_id) AS accounts_csv,
+                SUM(quantity)                      AS units,
+                SUM(unit_price * quantity)         AS revenue,
+                SUM(CASE WHEN order_date >= ? THEN quantity ELSE 0 END) AS units_7d
+            FROM order_history
+            WHERE platform = 'amazon'
+              AND order_date >= ?
+              AND sku != ''
+              AND LOWER(status) NOT IN ('cancelled', 'pending')
+            GROUP BY sku
+        """, (date_7d, date_from))
+        rows = await cursor.fetchall()
+    result = {}
+    for row in rows:
+        sku = (row["sku"] or "").upper().strip()
+        if not sku:
+            continue
+        accounts = [a.strip() for a in (row["accounts_csv"] or "").split(",") if a.strip()]
+        result[sku] = {
+            "units":    int(row["units"] or 0),
+            "units_7d": int(row["units_7d"] or 0),
+            "revenue":  float(row["revenue"] or 0),
+            "accounts": accounts,
+        }
+    return result
+
+
 async def set_amazon_stock_threshold(seller_id: str, threshold: int) -> None:
     """Guarda el umbral de stock bajo para la cuenta."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
