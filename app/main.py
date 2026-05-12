@@ -13189,6 +13189,28 @@ async def planning_sync_skus():
     }
 
 
+@app.post("/api/planning/sync-amazon")
+async def planning_sync_amazon(session=Depends(get_session)):
+    """Fuerza descarga de órdenes Amazon para todas las cuentas.
+    Resetea el guard de 2h y corre _save_amazon_orders_bg en background.
+    """
+    global _amz_bg_running, _amz_bg_last_run
+    from app.services.token_store import get_all_amazon_accounts as _get_amz_accts
+    amazon_accounts = await _get_amz_accts()
+    if not amazon_accounts:
+        return {"error": "No hay cuentas Amazon configuradas"}
+    # Resetear guard para forzar sync aunque haya corrido hace < 2h
+    _amz_bg_running = False
+    _amz_bg_last_run = 0.0
+    asyncio.create_task(_save_amazon_orders_bg(days=30))
+    return {
+        "status": "iniciado",
+        "accounts": len(amazon_accounts),
+        "nicknames": [a.get("nickname", a["seller_id"]) for a in amazon_accounts],
+        "message": f"Descargando órdenes de {len(amazon_accounts)} cuentas Amazon en background (~5 min). Recarga la tabla cuando termine.",
+    }
+
+
 @app.get("/api/planning/production-kpis")
 async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
     """Production KPIs from BinManager Operations Dashboard."""

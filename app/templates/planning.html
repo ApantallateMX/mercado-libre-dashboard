@@ -49,7 +49,7 @@
         <h2 class="text-sm font-bold text-gray-700">Velocidad de Ventas</h2>
         <span class="text-xs text-gray-400">— ML + Amazon por SKU</span>
         <div class="ml-auto flex items-center gap-2">
-            <button onclick="syncSkus()" id="btn-sync-skus" title="Sincronizar SKUs desde todas las cuentas ML"
+            <button onclick="syncSkus()" id="btn-sync-skus" title="Sincronizar SKUs ML (4 cuentas) + órdenes Amazon (2 cuentas)"
                     class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded border flex items-center gap-1">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 Sync SKUs
@@ -315,13 +315,20 @@ function _kpiCard(label, value, cls, sub) {
 window.syncSkus = function() {
     var btn = document.getElementById('btn-sync-skus');
     if (btn) { btn.disabled = true; btn.textContent = 'Sincronizando...'; }
-    fetch('/api/planning/sync-skus', { method: 'POST' })
-        .then(function(r){ return r.json(); })
-        .then(function(d){
-            if (d.error) {
-                alert('Error: ' + d.error);
+    // Llamar ML sync y Amazon sync en paralelo
+    Promise.all([
+        fetch('/api/planning/sync-skus', { method: 'POST' }).then(function(r){ return r.json(); }),
+        fetch('/api/planning/sync-amazon', { method: 'POST' }).then(function(r){ return r.json(); })
+    ])
+        .then(function(results){
+            var ml = results[0], amz = results[1];
+            if (ml.error) {
+                alert('Error ML: ' + ml.error);
             } else {
-                alert('Sync completado:\n✅ ' + d.with_sku + ' publicaciones con SKU\n⚪ ' + d.without_sku + ' sin SKU\nTotal: ' + d.synced_items + ' publicaciones en ' + d.accounts + ' cuentas.\n\nRecarga la tabla para ver los cambios.');
+                var amzLine = amz.error
+                    ? '\n⚠️ Amazon: ' + amz.error
+                    : '\n🟠 Amazon: ' + (amz.nicknames || []).join(' + ') + ' en background (~5 min)';
+                alert('Sync completado:\n✅ ' + ml.with_sku + ' publicaciones con SKU\n⚪ ' + ml.without_sku + ' sin SKU\nTotal: ' + ml.synced_items + ' publicaciones en ' + ml.accounts + ' cuentas ML' + amzLine + '\n\nRecarga la tabla para ver cambios ML. Amazon aparece en ~5 min.');
             }
         })
         .catch(function(e){ alert('Error: ' + e.message); })
