@@ -5,8 +5,7 @@
             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Producto</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Cantidad</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingreso Total</th>
-            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">MTY</th>
-            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">CDMX</th>
+            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Stock vendible en BM (avail_total de caché)">Stock BM</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Retail PH</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Neto recibido de ML vs Retail PH de BM. Meta ≥ 100%">% Recuperado</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Días de stock BM disponible a la velocidad de ventas actual">Días BM</th>
@@ -31,24 +30,20 @@
                 <div class="text-xs text-gray-400">${{ "{:,.0f}".format(sku_data.revenue / usd_to_mxn) }} USD</div>
                 {% endif %}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-mty">
+            <td class="px-4 py-3 whitespace-nowrap text-sm text-center">
                 {% if not show_inv %}
                 <span class="text-gray-300">—</span>
-                {% elif sku_data.get('_bm_mty') is not none %}
-                {% set mq = sku_data._bm_mty %}
-                <span class="font-medium {% if mq == 0 %}text-red-500{% elif mq <= 5 %}text-yellow-600{% else %}text-gray-800{% endif %}">{{ mq }}</span>
-                {% else %}
-                <span class="text-gray-400 text-xs">...</span>
+                {% elif sku_data.get('_bm_avail') is not none %}
+                {% set av = sku_data._bm_avail %}
+                {% set rv = sku_data.get('_bm_reserve', 0) or 0 %}
+                <div class="font-semibold {% if av == 0 %}text-red-500{% elif av <= 5 %}text-yellow-600{% else %}text-gray-800{% endif %}">
+                    {{ av }}
+                </div>
+                {% if rv > 0 %}
+                <div class="text-xs text-orange-500">Reserva: {{ rv }}</div>
                 {% endif %}
-            </td>
-            <td class="px-4 py-3 whitespace-nowrap text-sm text-center inv-cdmx">
-                {% if not show_inv %}
-                <span class="text-gray-300">—</span>
-                {% elif sku_data.get('_bm_cdmx') is not none %}
-                {% set cq = sku_data._bm_cdmx %}
-                <span class="font-medium {% if cq == 0 %}text-red-500{% elif cq <= 5 %}text-yellow-600{% else %}text-gray-800{% endif %}">{{ cq }}</span>
                 {% else %}
-                <span class="text-gray-400 text-xs">...</span>
+                <span class="text-gray-400 text-xs">—</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 whitespace-nowrap text-sm text-right">
@@ -89,7 +84,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="9" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
+            <td colspan="8" class="px-6 py-8 text-center text-gray-500">No hay datos de ventas por SKU</td>
         </tr>
         {% endfor %}
     </tbody>
