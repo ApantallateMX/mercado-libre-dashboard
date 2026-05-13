@@ -235,7 +235,7 @@
                 </div>
             </div>
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this)"
+                <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
                         class="flex-1 py-1.5 text-xs bg-green-600 text-white rounded-lg font-medium active:bg-green-700 min-h-[36px]">
                     Sync + Activar
                 </button>
@@ -308,7 +308,7 @@
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{{ p.get('_bm_tj', 0) or 0 }}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1">
-                            <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this)"
+                            <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
                                     class="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium transition">
                                 Sync + Activar
                             </button>
@@ -410,47 +410,68 @@ function bulkSyncRestock() {
 }
 
 // --- Activate: sync stock BM disponible + activate if paused ---
-function activateItem(itemId, bmTotal, status, btn) {
-    var safeQty = Math.max(1, bmTotal);  // bmTotal aqui ya es _bm_avail
+function activateItem(itemId, bmTotal, status, btn, hasVariations) {
+    var safeQty = Math.max(1, bmTotal);  // bmTotal aqui ya es _bm_avail (usado solo si no tiene variaciones)
     btn.disabled = true;
     btn.textContent = '...';
     var msgEl = document.getElementById('act-msg-' + itemId) || document.getElementById('act-msg-d-' + itemId);
     var me1Warn = false;
-    fetch('/api/items/' + itemId + '/stock', {
-        method: 'PUT',
-        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-        body: JSON.stringify({quantity: safeQty})
-    })
-    .then(function(r) {
-        if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
-            throw new Error(d.detail || d.message || ('Error ' + r.status));
+
+    // Variaciones: sync-variation-stocks consulta el SKU individual de cada variación en BM
+    var stockPromise;
+    if (hasVariations) {
+        stockPromise = fetch('/api/items/' + itemId + '/sync-variation-stocks', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({pct: 1.0})
+        }).then(function(r) {
+            if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+                throw new Error(d.detail || d.message || ('Error ' + r.status));
+            });
+            return r.json().then(function(d) {
+                var totalQty = (d.results || []).reduce(function(s, v) { return s + (v.meli_qty || 0); }, 0);
+                safeQty = totalQty;  // para mostrar en el botón
+                return d;
+            });
         });
-        return r.json().then(function(d) {
-            if (d && d.warning === 'me1') {
-                me1Warn = true;
-                if (msgEl) { msgEl.textContent = 'Verifica en MeLi (ME1)'; msgEl.className = 'text-[10px] ml-1 text-orange-500'; }
-            }
-            if (status === 'paused') {
-                return fetch('/api/items/' + itemId + '/status', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-                    body: JSON.stringify({status: 'active'})
-                }).then(function(r2) {
-                    if (!r2.ok) {
-                        return r2.json().catch(function() { return {}; }).then(function(d2) {
-                            if (msgEl) {
-                                var emsg = d2.detail || d2.message || ('Activar fallo ' + r2.status);
-                                msgEl.textContent = 'Stock OK — ' + emsg;
-                                msgEl.className = 'text-[10px] ml-1 text-yellow-600';
-                            }
-                            return 'done';
-                        });
-                    }
-                    return 'done';
-                });
-            }
-            return 'done';
+    } else {
+        stockPromise = fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+            body: JSON.stringify({quantity: safeQty})
+        }).then(function(r) {
+            if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+                throw new Error(d.detail || d.message || ('Error ' + r.status));
+            });
+            return r.json().then(function(d) {
+                if (d && d.warning === 'me1') { me1Warn = true; }
+                return d;
+            });
         });
+    }
+
+    stockPromise.then(function() {
+        if (msgEl && me1Warn) { msgEl.textContent = 'Verifica en MeLi (ME1)'; msgEl.className = 'text-[10px] ml-1 text-orange-500'; }
+        if (status === 'paused') {
+            return fetch('/api/items/' + itemId + '/status', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                body: JSON.stringify({status: 'active'})
+            }).then(function(r2) {
+                if (!r2.ok) {
+                    return r2.json().catch(function() { return {}; }).then(function(d2) {
+                        if (msgEl) {
+                            var emsg = d2.detail || d2.message || ('Activar fallo ' + r2.status);
+                            msgEl.textContent = 'Stock OK — ' + emsg;
+                            msgEl.className = 'text-[10px] ml-1 text-yellow-600';
+                        }
+                        return 'done';
+                    });
+                }
+                return 'done';
+            });
+        }
+        return 'done';
     })
     .then(function() {
         if (me1Warn) {
@@ -461,7 +482,7 @@ function activateItem(itemId, bmTotal, status, btn) {
             btn.className = btn.className.replace('bg-green-600', 'bg-gray-400').replace('hover:bg-green-700', '');
         }
         if (msgEl && !me1Warn) {
-            msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : '');
+            msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : '') + (hasVariations ? ' (vars)' : '');
             msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold';
         }
         var row = document.getElementById('act-m-' + itemId) || document.getElementById('act-d-' + itemId);
@@ -483,7 +504,7 @@ function bulkActivateAll() {
     if (!confirm('Activar TODOS los productos?\n\nSe sincronizara 60% del stock BM y se activaran los pausados.\n\n' + {{ activate|length }} + ' productos seran afectados.')) return;
     var items = [
         {% for p in activate %}
-        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, status: '{{ p.status }}' }{{ ',' if not loop.last else '' }}
+        {id: '{{ p.id }}', bm: {{ p.get('_bm_avail', 0) }}, status: '{{ p.status }}', hasVars: {{ 'true' if p.get('has_variations') else 'false' }} }{{ ',' if not loop.last else '' }}
         {% endfor %}
     ];
     var btn = document.getElementById('bulk-activate-btn');
@@ -496,12 +517,22 @@ function bulkActivateAll() {
         msg.className = 'text-xs mt-2 block text-center ' + (errors > 0 ? 'text-red-600' : 'text-green-600');
     }
     items.forEach(function(item) {
-        var qty = Math.max(1, item.bm);  // Usa Available directamente
-        fetch('/api/items/' + item.id + '/stock', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
-            body: JSON.stringify({quantity: qty})
-        })
+        var stockFetch;
+        if (item.hasVars) {
+            stockFetch = fetch('/api/items/' + item.id + '/sync-variation-stocks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                body: JSON.stringify({pct: 1.0})
+            });
+        } else {
+            var qty = Math.max(1, item.bm);
+            stockFetch = fetch('/api/items/' + item.id + '/stock', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'},
+                body: JSON.stringify({quantity: qty})
+            });
+        }
+        stockFetch
         .then(function(r) {
             if (!r.ok) throw new Error('stock fail');
             if (item.status === 'paused') {
