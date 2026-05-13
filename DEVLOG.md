@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-13 — FIX: Activar variaciones ponía mismo stock a todas — usa sync-variation-stocks
+
+### Problema
+Botón "Sync + Activar" en secciones Stock/Activar llamaba `/api/items/{id}/stock` con el stock
+total del producto. Para listings con variaciones (ej. MLM1375689664 con 16 colores), esto ponía
+la misma cantidad a todas las variaciones en lugar del stock individual por SKU de BM.
+
+### Root cause
+`activateItem()` ignoraba si el producto tenía variaciones y siempre usaba el endpoint simple de
+stock plano. El endpoint correcto para variaciones es `sync-variation-stocks` que:
+1. Obtiene el `seller_custom_field` de cada variación via API ML
+2. Consulta BM individualmente por SKU de variación
+3. Actualiza cada variación con su stock propio
+
+### Fix
+- `activateItem(itemId, bmTotal, status, btn, hasVariations)` — nuevo parámetro `hasVariations`
+  - Si `true`: llama `POST /sync-variation-stocks` con `pct=1.0`
+  - Si `false`: comportamiento anterior (`PUT /stock`)
+- `bulkActivateAll`: mismo split por `item.hasVars`
+- Templates: botones pasan `has_variations` desde Jinja — `{{ 'true' if p.get('has_variations') else 'false' }}`
+- Fix aplicado en 4 lugares: vista mobile + desktop en `stock_section_restock.html` y `products_stock_issues.html`
+
+---
+
 ## 2026-05-13 — FIX: KPI "Sin Stock (con BM)" mostraba 0 — lógica restock_count corregida
 
 ### Problema
