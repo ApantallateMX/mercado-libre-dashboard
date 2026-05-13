@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-13 — FIX: KPI "Sin Stock (con BM)" mostraba 0 — lógica restock_count corregida
+
+### Problema
+KPI "Sin Stock (con BM)" y "Revenue Perdido" en tab Stock mostraban 0 a pesar de que había
+123 productos en "Oportunidad Activar" y 151 en "Stock Crítico". Lógicamente imposible.
+
+### Root cause
+`restock` (productos con MeLi=0 pero BM tiene stock) se filtraba con `p.get("units", 0) > 0`.
+Un producto que lleva 30+ días sin stock en MeLi tiene `units=0` porque no puede vender — es
+exactamente el problema que queremos detectar. El filtro excluía todos los candidatos válidos.
+
+### Fix
+- `restock_count`: ahora es `len(restock) + len(activate)` — incluye ambas listas (sin stock BM
+  también con oportunidad de activar desde cero)
+- `lost_revenue`: suma revenue de `restock` + estimado conservador para `activate`
+  (`price * min(bm_avail, 3)` por producto)
+- Subtitle KPI cambiado de "Con ventas recientes" → "MeLi=0, BM tiene stock" en ambos templates:
+  `stock_section_restock.html` y `products_stock_issues.html`
+
+### Archivos modificados
+- `app/main.py` → línea ~3570: fórmula `restock_count` y `lost_revenue`
+- `app/templates/partials/stock_section_restock.html` → subtitle KPI
+- `app/templates/partials/products_stock_issues.html` → subtitle KPI
+
+---
+
 ## 2026-05-13 — FEAT: Diagnóstico de ventas — heatmap semanal + desglose por día + alertas stock
 
 ### Contexto
