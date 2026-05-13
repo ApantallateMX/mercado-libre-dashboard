@@ -11270,6 +11270,21 @@ async def diag_bm_sku_probe(sku: str = "", token: str = ""):
     return JSONResponse({"sku": sku_up, "results": results})
 
 
+@app.get("/api/diag/clear-sessions")
+async def diag_clear_sessions(token: str = ""):
+    """Limpia todas las sesiones activas de la DB. Requiere DIAG_TOKEN."""
+    if token != _DIAG_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import aiosqlite as _aiosqlite
+    from app.services.user_store import DATABASE_PATH as _US_DB
+    async with _aiosqlite.connect(_US_DB) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM user_sessions")
+        count = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM user_sessions")
+        await db.commit()
+    return {"deleted": count, "status": "all sessions cleared"}
+
+
 @app.get("/api/diag/bm-bulk-test")
 async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = ""):
     """Diagnóstico: prueba el endpoint bulk de BM con distintas variantes de payload.
