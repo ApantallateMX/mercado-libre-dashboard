@@ -835,7 +835,12 @@ async def set_password_submit(request: Request):
     global _prewarm_task
     if _prewarm_task is None or _prewarm_task.done():
         _prewarm_task = asyncio.create_task(_prewarm_caches())
-    return RedirectResponse("/dashboard", status_code=302)
+    # Emitir JWT nuevo con must_change_pw=0 — el token viejo tiene mcp=1 en su payload
+    # y el middleware lo detectaría redirigiendo de vuelta a /set-password en loop.
+    new_token = await user_store.create_session(du["id"], ip=request.client.host if request.client else "")
+    response = RedirectResponse("/dashboard", status_code=302)
+    response.set_cookie("dash_session", new_token, max_age=2592000, httponly=True, samesite="lax")
+    return response
 
 
 # Routers
