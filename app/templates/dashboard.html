@@ -152,6 +152,50 @@
             {% endfor %}
         </div>
     </div>
+
+    <!-- Heatmap patrón semanal -->
+    <div class="px-4 md:px-6 py-4 border-t border-gray-100" id="heatmap-section">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-gray-700">Patrón semanal</h3>
+            <span class="text-xs text-gray-400">Clic en una celda para ver el detalle del día</span>
+        </div>
+        <div id="sales-heatmap" class="overflow-x-auto">
+            <div class="text-xs text-gray-300 py-2">Cargando...</div>
+        </div>
+    </div>
+
+    <!-- Panel desglose por día -->
+    <div id="day-breakdown-panel" class="hidden border-t border-gray-100 px-4 md:px-6 py-4">
+        <div class="flex items-center justify-between mb-3">
+            <h3 id="breakdown-title" class="text-sm font-semibold text-gray-700">Detalle del día</h3>
+            <button onclick="document.getElementById('day-breakdown-panel').classList.add('hidden')"
+                    class="text-xs text-gray-400 hover:text-gray-600 transition px-2 py-1 rounded hover:bg-gray-100">✕ Cerrar</button>
+        </div>
+        <div id="breakdown-content" class="text-sm text-gray-500">Cargando...</div>
+    </div>
+</div>
+
+<!-- ═══ ALERTAS DE STOCK ═══ -->
+<div class="bg-white rounded-xl shadow mb-5" id="low-stock-section">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div>
+            <h2 class="text-base font-bold text-gray-800">Alertas de Stock</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Top SKUs por ventas (30 días) · stock BM en tiempo real</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-500">Umbral:</span>
+            <input type="number" id="stock-threshold-input" min="1" max="100" value="5"
+                   class="border rounded px-2 py-1.5 text-xs w-16 text-right font-semibold focus:ring-2 focus:ring-yellow-400 outline-none">
+            <span class="text-xs text-gray-400">uds</span>
+            <button onclick="window.loadLowStockAlerts()"
+                    class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded-lg hover:bg-yellow-500 transition text-xs">
+                Revisar
+            </button>
+        </div>
+    </div>
+    <div id="low-stock-content" class="px-4 md:px-6 py-6">
+        <p class="text-xs text-gray-400 text-center">Haz clic en "Revisar" para verificar el stock de los SKUs más vendidos</p>
+    </div>
 </div>
 
 <!-- ═══ GRÁFICO DE VENTAS ═══ -->
@@ -526,7 +570,7 @@ function renderDailyTable(data) {
         else { badge = '—'; badgeClass = 'bg-gray-100 text-gray-400'; }
         var dateDisplay = isToday ? '<span class="font-bold" style="color:'+accColor+'">● Hoy</span>' : day.date;
         var barW = Math.min(pct, 100);
-        return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">' +
+        return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition cursor-pointer" onclick="window.showDayBreakdown(\'' + day.date + '\')">' +
             '<td class="py-2.5 px-4 font-medium text-gray-700 whitespace-nowrap">' + dateDisplay + '</td>' +
             '<td class="py-2.5 px-3 text-right text-gray-600">' + day.units + '</td>' +
             '<td class="py-2.5 px-3 text-right font-semibold text-gray-800">$' + fmtMoney(day.revenue_gross) + '</td>' +
@@ -567,6 +611,7 @@ function renderDailyTable(data) {
     window['meli-daily-pag_go'] = function(p) { _renderPaginatedMeli(_meliDailyRows, p, 'meli-daily-tbody', 'meli-daily-pag'); };
     _renderPaginatedMeli(_meliDailyRows, 1, 'meli-daily-tbody', 'meli-daily-pag');
     updateTodayBar(todayGross, todayNet, todayUnits);
+    renderHeatmap(daily);
 }
 
 // ─── Carga de datos ───────────────────────────────────────────────────────────
@@ -666,6 +711,158 @@ document.getElementById('btn-dash-limpiar').addEventListener('click', function()
     highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
     loadDashboard();
 });
+
+// ─── Heatmap patrón semanal ───────────────────────────────────────────────────
+function renderHeatmap(daily) {
+    var el = document.getElementById('sales-heatmap');
+    if (!el || !daily || !daily.length) return;
+    var pctMap = {};
+    daily.forEach(function(d) { pctMap[d.date] = d.pct_of_goal; });
+    var sorted = daily.slice().sort(function(a, b) { return a.date.localeCompare(b.date); });
+    var startDate = new Date(sorted[0].date + 'T12:00:00');
+    var endDate = new Date(sorted[sorted.length - 1].date + 'T12:00:00');
+    var dow = startDate.getDay();
+    var mondayOffset = dow === 0 ? -6 : 1 - dow;
+    var cur = new Date(startDate);
+    cur.setDate(cur.getDate() + mondayOffset);
+    var weeks = [];
+    while (cur <= endDate) {
+        var week = [];
+        for (var d = 0; d < 7; d++) {
+            var ds = cur.toISOString().slice(0, 10);
+            week.push({ date: ds, pct: pctMap[ds] !== undefined ? pctMap[ds] : null, inRange: cur >= startDate && cur <= endDate });
+            cur.setDate(cur.getDate() + 1);
+        }
+        weeks.push(week);
+    }
+    var dayLabels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    var html = '<table class="border-separate text-xs" style="border-spacing:4px"><thead><tr><td class="w-14 pb-1"></td>';
+    dayLabels.forEach(function(l) { html += '<td class="text-center text-gray-400 font-semibold pb-1 w-12">' + l + '</td>'; });
+    html += '</tr></thead><tbody>';
+    weeks.forEach(function(week) {
+        var weekLabel = week[0].date.slice(5);
+        html += '<tr><td class="text-gray-400 text-right pr-2 align-middle whitespace-nowrap">' + weekLabel + '</td>';
+        week.forEach(function(cell) {
+            if (!cell.inRange || cell.pct === null) {
+                html += '<td class="w-12 h-9 rounded-md bg-gray-50"></td>';
+            } else {
+                var bg, fg;
+                if (cell.pct >= 90) { bg = '#10B981'; fg = 'white'; }
+                else if (cell.pct >= 75) { bg = '#84CC16'; fg = 'white'; }
+                else if (cell.pct >= 50) { bg = '#F97316'; fg = 'white'; }
+                else if (cell.pct > 0) { bg = '#EF4444'; fg = 'white'; }
+                else { bg = '#F3F4F6'; fg = '#9CA3AF'; }
+                html += '<td class="w-12 h-9 rounded-md text-center font-bold align-middle cursor-pointer select-none"' +
+                    ' style="background:' + bg + ';color:' + fg + '"' +
+                    ' title="' + cell.date + ': ' + cell.pct.toFixed(1) + '%"' +
+                    ' onclick="window.showDayBreakdown(\'' + cell.date + '\')">' +
+                    cell.pct.toFixed(0) + '%</td>';
+            }
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table><div class="flex items-center gap-3 mt-3 text-xs text-gray-400">' +
+        '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#10B981"></span>≥90%</span>' +
+        '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#84CC16"></span>75-90%</span>' +
+        '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#F97316"></span>50-75%</span>' +
+        '<span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded" style="background:#EF4444"></span>&lt;50%</span>' +
+        '</div>';
+    el.innerHTML = html;
+}
+
+// ─── Detalle de un día específico ─────────────────────────────────────────────
+window.showDayBreakdown = function(date) {
+    var panel = document.getElementById('day-breakdown-panel');
+    var title = document.getElementById('breakdown-title');
+    var content = document.getElementById('breakdown-content');
+    panel.classList.remove('hidden');
+    title.textContent = 'Detalle del día: ' + date;
+    content.innerHTML = '<div class="text-center py-4 text-gray-400 text-xs animate-pulse">Cargando SKUs...</div>';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    fetch('/api/metrics/day-breakdown?date=' + date)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(data) {
+            if (!data.skus || !data.skus.length) {
+                content.innerHTML = '<p class="text-gray-400 text-xs text-center py-4">Sin ventas registradas este día</p>';
+                return;
+            }
+            var rows = data.skus.map(function(s) {
+                var dColor = s.delta_pct === null ? '#9CA3AF' : (s.delta_pct >= 0 ? '#10B981' : '#EF4444');
+                var dText = s.delta_pct === null ? '—' : ((s.delta_pct > 0 ? '+' : '') + s.delta_pct.toFixed(0) + '%');
+                var todayBold = s.today_units > 0 ? 'font-bold text-gray-800' : 'text-gray-400';
+                return '<tr class="border-b border-gray-50 hover:bg-gray-50">' +
+                    '<td class="py-2 px-3 text-gray-500 font-mono text-xs whitespace-nowrap">' + s.sku + '</td>' +
+                    '<td class="py-2 px-3 text-gray-600 text-xs" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + s.title + '</td>' +
+                    '<td class="py-2 px-3 text-right ' + todayBold + '">' + s.today_units + '</td>' +
+                    '<td class="py-2 px-3 text-right text-gray-400">' + s.avg_units.toFixed(1) + '</td>' +
+                    '<td class="py-2 px-3 text-right font-semibold text-xs" style="color:' + dColor + '">' + dText + '</td>' +
+                    '<td class="py-2 px-3 text-right text-gray-600">$' + fmtMoney(s.today_revenue) + '</td>' +
+                    '</tr>';
+            }).join('');
+            content.innerHTML = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+                '<thead><tr class="text-left text-gray-400 border-b border-gray-200 bg-gray-50">' +
+                '<th class="py-2 px-3 font-semibold">SKU</th>' +
+                '<th class="py-2 px-3 font-semibold">Producto</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Hoy</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Prom 7d</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Δ vs prom</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Venta</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+                '<p class="text-xs text-gray-300 mt-2 px-1">Prom 7d = promedio de los 7 días anteriores a esta fecha · Δ negativo = vendió menos que el promedio</p>';
+        })
+        .catch(function(e) {
+            content.innerHTML = '<p class="text-red-400 text-xs py-4 text-center">Error: ' + e.message + '</p>';
+        });
+};
+
+// ─── Alertas de stock crítico ─────────────────────────────────────────────────
+window.loadLowStockAlerts = function() {
+    var threshold = parseInt(document.getElementById('stock-threshold-input').value) || 5;
+    var content = document.getElementById('low-stock-content');
+    content.innerHTML = '<div class="text-center py-6 text-gray-400 text-xs animate-pulse">Consultando stock BM... puede tomar unos segundos</div>';
+    fetch('/api/metrics/low-stock-alerts?threshold=' + threshold)
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(data) {
+            var all = data.all_skus || [];
+            if (!all.length) {
+                content.innerHTML = '<p class="text-center text-gray-400 text-xs py-4">Sin datos de ventas en los últimos 30 días</p>';
+                return;
+            }
+            var rows = all.map(function(s) {
+                var rowBg = s.alert ? 'bg-red-50' : '';
+                var stockColor = s.alert ? '#EF4444' : (s.bm_stock <= 10 ? '#F97316' : '#10B981');
+                var daysText = s.days_remaining !== null ? s.days_remaining + 'd' : '∞';
+                var daysColor = (s.days_remaining !== null && s.days_remaining <= 7) ? '#EF4444' : ((s.days_remaining !== null && s.days_remaining <= 14) ? '#F97316' : '#6B7280');
+                return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50">' +
+                    '<td class="py-2.5 px-3 text-center text-sm">' + (s.alert ? '⚠️' : '<span class="text-gray-200">—</span>') + '</td>' +
+                    '<td class="py-2.5 px-3 font-mono text-xs text-gray-500 whitespace-nowrap">' + s.sku + '</td>' +
+                    '<td class="py-2.5 px-3 text-xs text-gray-700" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + s.title + '</td>' +
+                    '<td class="py-2.5 px-3 text-right font-bold text-sm" style="color:' + stockColor + '">' + s.bm_stock + '</td>' +
+                    '<td class="py-2.5 px-3 text-right text-gray-500 text-xs">' + s.daily_velocity.toFixed(1) + '/día</td>' +
+                    '<td class="py-2.5 px-3 text-right font-semibold text-xs" style="color:' + daysColor + '">' + daysText + '</td>' +
+                    '<td class="py-2.5 px-3 text-right text-gray-500 text-xs">' + s.units_30d + ' uds</td>' +
+                    '</tr>';
+            }).join('');
+            var alertCount = data.alerts.length;
+            var banner = alertCount > 0
+                ? '<div class="mb-4 p-3 bg-red-50 rounded-lg border border-red-200 text-xs text-red-700 font-semibold">⚠️ ' + alertCount + ' SKU' + (alertCount > 1 ? 's' : '') + ' con stock ≤ ' + threshold + ' unidades — requieren reposición</div>'
+                : '<div class="mb-4 p-3 bg-green-50 rounded-lg border border-green-200 text-xs text-green-700 font-semibold">✓ Todos los top SKUs tienen stock suficiente (&gt;' + threshold + ' uds)</div>';
+            content.innerHTML = banner +
+                '<div class="overflow-x-auto"><table class="w-full text-sm">' +
+                '<thead><tr class="text-left text-xs text-gray-400 border-b border-gray-200 bg-gray-50">' +
+                '<th class="py-2 px-3 w-8"></th>' +
+                '<th class="py-2 px-3 font-semibold">SKU</th>' +
+                '<th class="py-2 px-3 font-semibold">Producto</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Stock BM</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Velocidad</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Días stock</th>' +
+                '<th class="py-2 px-3 font-semibold text-right">Ventas 30d</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+        })
+        .catch(function(e) {
+            content.innerHTML = '<p class="text-red-400 text-xs py-4 text-center">Error: ' + e.message + '</p>';
+        });
+};
 
 // ─── Carga inicial ────────────────────────────────────────────────────────────
 highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));

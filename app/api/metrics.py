@@ -269,6 +269,138 @@ async def get_daily_sales(
         await client.close()
 
 
+@router.get("/day-breakdown")
+async def get_day_breakdown(date: str = Query(..., description="YYYY-MM-DD")):
+    """Top SKUs vendidos en un día específico vs promedio de los 7 días anteriores."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        target = datetime.strptime(date, "%Y-%m-%d")
+        date_from = (target - timedelta(days=14)).strftime("%Y-%m-%d")
+        _fetch_to = (target + timedelta(days=1)).strftime("%Y-%m-%d")
+        all_orders = await client.fetch_all_orders(date_from=date_from, date_to=_fetch_to)
+
+        _EXCL = {"cancelled", "payment_required", "payment_in_process"}
+        target_str = target.strftime("%Y-%m-%d")
+        prev_dates = {(target - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 8)}
+
+        day_skus: dict = {}
+        prev_skus: dict = {}
+
+        for order in all_orders:
+            if order.get("status") in _EXCL:
+                continue
+            order_date_utc = datetime.fromisoformat(
+                order["date_created"].replace("Z", "+00:00")
+            ).replace(tzinfo=None)
+            order_date_mx = order_date_utc - timedelta(hours=6)
+            date_key = order_date_mx.strftime("%Y-%m-%d")
+
+            for item in order.get("order_items", []):
+                raw_sku = (item.get("item", {}).get("seller_sku") or "").strip()
+                if not raw_sku:
+                    raw_sku = item.get("item", {}).get("id", "SIN-SKU")
+                title = (item.get("item", {}).get("title") or raw_sku)[:45]
+                qty = item.get("quantity", 1)
+                revenue = (item.get("unit_price") or 0) * qty
+
+                if date_key == target_str:
+                    if raw_sku not in day_skus:
+                        day_skus[raw_sku] = {"units": 0, "revenue": 0.0, "title": title}
+                    day_skus[raw_sku]["units"] += qty
+                    day_skus[raw_sku]["revenue"] += revenue
+                elif date_key in prev_dates:
+                    if raw_sku not in prev_skus:
+                        prev_skus[raw_sku] = {}
+                    if date_key not in prev_skus[raw_sku]:
+                        prev_skus[raw_sku][date_key] = {"units": 0, "revenue": 0.0}
+                    prev_skus[raw_sku][date_key]["units"] += qty
+                    prev_skus[raw_sku][date_key]["revenue"] += revenue
+
+        all_skus = set(list(day_skus.keys()) + list(prev_skus.keys()))
+        results = []
+        for sku in all_skus:
+            td = day_skus.get(sku, {"units": 0, "revenue": 0.0, "title": sku})
+            pd_data = prev_skus.get(sku, {})
+            prev_units = sum(v["units"] for v in pd_data.values())
+            prev_rev = sum(v["revenue"] for v in pd_data.values())
+            avg_units = prev_units / 7
+            avg_rev = prev_rev / 7
+            delta_pct = ((td["units"] - avg_units) / avg_units * 100) if avg_units > 0 else None
+            results.append({
+                "sku": sku,
+                "title": td.get("title", sku),
+                "today_units": td["units"],
+                "today_revenue": round(td["revenue"], 2),
+                "avg_units": round(avg_units, 1),
+                "avg_revenue": round(avg_rev, 2),
+                "delta_pct": round(delta_pct, 1) if delta_pct is not None else None,
+            })
+
+        results.sort(key=lambda x: x["today_units"], reverse=True)
+        return {"date": date, "skus": results[:20]}
+    finally:
+        await client.close()
+
+
+@router.get("/low-stock-alerts")
+async def get_low_stock_alerts(threshold: int = Query(5, description="Umbral de stock bajo")):
+    """Top 10 SKUs más vendidos (últimos 30 días) con stock BM bajo."""
+    from app.api.productos import _bm_stock
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        now_mx = datetime.utcnow() - timedelta(hours=6)
+        date_from = (now_mx - timedelta(days=29)).strftime("%Y-%m-%d")
+        _fetch_to = (now_mx + timedelta(days=1)).strftime("%Y-%m-%d")
+        all_orders = await client.fetch_all_orders(date_from=date_from, date_to=_fetch_to)
+
+        _EXCL = {"cancelled", "payment_required", "payment_in_process"}
+        sku_sales: dict = {}
+        for order in all_orders:
+            if order.get("status") in _EXCL:
+                continue
+            for item in order.get("order_items", []):
+                raw_sku = (item.get("item", {}).get("seller_sku") or "").strip()
+                if not raw_sku:
+                    continue
+                title = (item.get("item", {}).get("title") or raw_sku)[:45]
+                qty = item.get("quantity", 1)
+                revenue = (item.get("unit_price") or 0) * qty
+                if raw_sku not in sku_sales:
+                    sku_sales[raw_sku] = {"units": 0, "revenue": 0.0, "title": title}
+                sku_sales[raw_sku]["units"] += qty
+                sku_sales[raw_sku]["revenue"] += revenue
+
+        top_skus = sorted(sku_sales.items(), key=lambda x: x[1]["units"], reverse=True)[:10]
+        results = []
+        for sku, data in top_skus:
+            stock = await _bm_stock(sku)
+            avail = stock.get("avail", 0)
+            velocity = data["units"] / 30
+            days_rem = round(avail / velocity) if velocity > 0 else None
+            results.append({
+                "sku": sku,
+                "title": data["title"],
+                "units_30d": data["units"],
+                "revenue_30d": round(data["revenue"], 2),
+                "daily_velocity": round(velocity, 2),
+                "bm_stock": avail,
+                "days_remaining": int(days_rem) if days_rem is not None else None,
+                "alert": avail <= threshold,
+            })
+
+        return {
+            "threshold": threshold,
+            "alerts": [r for r in results if r["alert"]],
+            "all_skus": results,
+        }
+    finally:
+        await client.close()
+
+
 def _build_chart_data(all_orders: list, date_from: str, date_to: str):
     """Construye los datos del chart a partir de ordenes ya obtenidas."""
     start = datetime.strptime(date_from, "%Y-%m-%d")
