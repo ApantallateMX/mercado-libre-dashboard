@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-13 — FEAT: Diagnóstico de ventas — heatmap semanal + desglose por día + alertas stock
+
+### Contexto
+Apantallate promedia 72% de meta diaria con alta variabilidad entre días. Se necesitaban herramientas
+para identificar causas: ¿quiebre de stock? ¿patrón día-de-semana? ¿SKU que desapareció?
+
+### Features implementadas (aplican por cuenta ML activa)
+
+**1. Heatmap patrón semanal**
+- Grid 4-5 semanas × 7 días (Lun-Dom) dentro de la sección Meta Diaria
+- Colores: verde ≥90%, verde-lima 75-90%, naranja 50-75%, rojo <50%
+- Cada celda es clickeable → abre desglose del día
+- Detecta visualmente si ciertos días de la semana son sistemáticamente bajos
+
+**2. Desglose por día (click en fila de tabla o celda del heatmap)**
+- Endpoint: `GET /api/metrics/day-breakdown?date=YYYY-MM-DD`
+- Muestra top SKUs vendidos ese día con comparativa vs promedio 7 días anteriores
+- Columnas: SKU, Producto, Unidades hoy, Promedio 7d, Δ% vs promedio, Venta MXN
+- Panel inline colapsable dentro de la sección Meta Diaria
+
+**3. Alertas de Stock Crítico**
+- Sección nueva entre Meta Diaria y Gráfico de Ventas
+- Endpoint: `GET /api/metrics/low-stock-alerts?threshold=N`
+- Top 10 SKUs por volumen (30 días) + stock BM en tiempo real
+- Columnas: SKU, Producto, Stock BM, Velocidad/día, Días restantes, Ventas 30d
+- Umbral configurable (default 5 uds) — banner rojo si hay SKUs en alerta
+- Usuario activa manualmente con botón "Revisar" (BM calls on-demand)
+
+### Commits
+- `f39fe0e` feat: diagnóstico de ventas — heatmap semanal, desglose por día, alertas stock
+
+---
+
 ## 2026-05-12 — FIX: SKU Ventas — columnas de costo removidas, Retail PH + % Recuperado
 
 ### Problema
