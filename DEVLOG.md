@@ -7,20 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FEAT: Top Productos — columna BM Avail junto a ML Stock
+
+### Descripción
+Se agregó columna **BM** (stock disponible en BinManager) en el panel Top Productos,
+junto a la columna existente de ML Stock. Los headers cambiaron a `BM` (azul) y `ML`.
+
+### Cambios
+- `app/api/metrics.py`: lookup BM por SKU en el loop de resultados del endpoint `/top-products`
+  usando `_bm_stock()` (cache-first, no genera llamadas extra si el SKU ya está en caché)
+- `app/templates/dashboard.html`: helper `stockBadge(val, noDataText)` reemplaza lógica inline;
+  `bmStockHtml` y `mlStockHtml` generados con el mismo helper para consistencia visual
+- Row alert: fondo naranja si `status=active && bm_avail===0`; amarillo si pausado con `bm_avail>0`
+- SKU sin BM: muestra `?` en columna BM; sin SKU: `S/SKU` en gris
+
+---
+
 ## 2026-05-14 — FEAT: Panel "Top Productos" — ranking de ventas al lado del heatmap semanal
 
 ### Descripción
-Panel nuevo a la derecha del heatmap semanal (grid 2 columnas en desktop). Muestra el ranking
+Panel nuevo a la derecha del heatmap semanal (flex layout en desktop). Muestra el ranking
 de los 20 productos más vendidos del período seleccionado con estado actual en ML.
 
 ### Features
 - Selector de período: 7d / 15d / 30d / 90d (default 30d). Carga instantánea.
-- Columnas: #, Foto + SKU/Producto, Uds vendidas, Neto MXN, Stock ML, Status
+- Columnas: #, Foto + SKU/Producto, Uds vendidas, Neto MXN, BM Stock, ML Stock, Status
 - Stock badge: verde >5 uds / naranja 1-5 uds / rojo 0 uds
 - Alertas visuales por fila:
-  - Fondo naranja: Activo en ML pero stock=0 (riesgo de oversell o pérdida de ventas)
-  - Fondo amarillo: Pausado pero tiene stock ML (oportunidad no aprovechada)
+  - Fondo naranja: Activo en ML pero BM=0 (riesgo de oversell o pérdida de ventas)
+  - Fondo amarillo: Pausado pero tiene stock BM (oportunidad no aprovechada)
 - Scroll interno (max 320px) para no romper el layout de la card
+- Heatmap: `flex-none` (ancho natural); Top Productos: `flex-1` (rellena el espacio)
 
 ### Endpoint
 `GET /api/metrics/top-products?days=N`
