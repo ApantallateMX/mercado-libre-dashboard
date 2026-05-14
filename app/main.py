@@ -14003,9 +14003,9 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
         async with _aio.connect(_DB_PATH) as db:
             db.row_factory = _aio.Row
             rows = await (await db.execute(
-                """SELECT item_id, title, seller_custom_field, catalog_product_id, status, available_quantity, user_id
+                """SELECT item_id, title, sku, status, available_qty, account_id, catalog_listing, logistic_type
                    FROM ml_listings
-                   WHERE title LIKE ? OR seller_custom_field LIKE ?
+                   WHERE title LIKE ? OR sku LIKE ?
                    LIMIT 20""",
                 (f"%{q}%", f"%{q}%")
             )).fetchall()
