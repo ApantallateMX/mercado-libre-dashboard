@@ -14006,17 +14006,24 @@ async def diag_ml_search(q: str = "", token: str = "", limit: int = 20):
         import urllib.parse as _up
 
         # Paso 1: buscar el product en el catálogo por número de parte
-        catalog_results = await client.get(
-            f"/marketplace/products/search?product_identifier={_up.quote(q)}&status=active&limit=5"
-        )
-        products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+        from app.services.meli_client import MeliApiError as _MeliErr
+        try:
+            catalog_results = await client.get(
+                f"/marketplace/products/search?product_identifier={_up.quote(q)}&status=active&limit=5"
+            )
+            products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+        except _MeliErr as _me:
+            return JSONResponse({"error": f"catalog_search HTTP {_me.status_code}", "body": str(_me.body)[:400], "endpoint": f"/marketplace/products/search?product_identifier={q}"}, status_code=502)
 
         if not products:
             # Fallback: búsqueda textual
-            catalog_results = await client.get(
-                f"/marketplace/products/search?q={_up.quote(q)}&status=active&limit=5"
-            )
-            products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+            try:
+                catalog_results = await client.get(
+                    f"/marketplace/products/search?q={_up.quote(q)}&status=active&limit=5"
+                )
+                products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+            except _MeliErr as _me2:
+                return JSONResponse({"error": f"catalog_search_text HTTP {_me2.status_code}", "body": str(_me2.body)[:400]}, status_code=502)
 
         if not products:
             return JSONResponse({"query": q, "catalog_products": [], "sellers": [], "msg": "No encontrado en catálogo ML"})
