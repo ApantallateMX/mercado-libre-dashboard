@@ -14016,6 +14016,55 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/catalog-sellers")
+async def diag_catalog_sellers(product_id: str = "", token: str = ""):
+    """Lista todos los vendedores en una página de catálogo ML."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not product_id:
+        return JSONResponse({"error": "product_id requerido"}, status_code=400)
+    from app.services.meli_client import MeliApiError as _MeliErrC
+    # Nuestros seller_ids para identificar cuentas propias
+    _OWN_IDS = {523916436, 292395685, 391393176, 515061615}
+    try:
+        client = await get_meli_client()
+        if not client:
+            return JSONResponse({"error": "Sin cliente ML activo"}, status_code=503)
+        data = await client.get(f"/products/{product_id}/items?limit=50")
+        items = data.get("results", []) if isinstance(data, dict) else []
+        sellers = []
+        for it in items:
+            seller_id = (it.get("seller") or {}).get("id") or it.get("seller_id")
+            seller_nick = (it.get("seller") or {}).get("nickname") or ""
+            price = it.get("price")
+            sellers.append({
+                "item_id": it.get("item_id") or it.get("id"),
+                "price": price,
+                "currency": it.get("currency_id", "MXN"),
+                "buy_box_winner": it.get("buy_box_winner", False),
+                "condition": it.get("condition"),
+                "full": (it.get("shipping") or {}).get("logistic_type") == "fulfillment",
+                "seller_id": seller_id,
+                "seller_nickname": seller_nick,
+                "own_account": seller_id in _OWN_IDS,
+                "available_qty": it.get("available_quantity"),
+            })
+        sellers.sort(key=lambda x: x.get("price") or 999999)
+        own = [s for s in sellers if s["own_account"]]
+        external = [s for s in sellers if not s["own_account"]]
+        return JSONResponse({
+            "product_id": product_id,
+            "total_sellers": len(sellers),
+            "own_accounts": len(own),
+            "external_sellers": len(external),
+            "sellers": sellers,
+        })
+    except _MeliErrC as e:
+        return JSONResponse({"error": f"HTTP {e.status_code}", "body": str(e.body)[:400]}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/price-to-win")
 async def diag_price_to_win(item_id: str = "", token: str = ""):
     """Diagnóstico: llama price_to_win de ML para un item_id propio."""
