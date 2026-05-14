@@ -13992,22 +13992,37 @@ async def diag_refresh_ml_tokens(token: str = ""):
 @app.get("/api/diag/ml-search")
 async def diag_ml_search(q: str = "", token: str = "", limit: int = 10):
     """Diagnóstico: busca competencia en ML por número de parte/modelo.
-    Usa el cliente ML autenticado de la app. No requiere sesión de dashboard."""
+    Usa client_credentials (app token) para poder acceder al search público."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not q:
         return JSONResponse({"error": "q requerido"}, status_code=400)
     limit = max(1, min(50, limit))
+    import httpx as _httpx
+    import os as _os_s
+    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_API_URL as _MELI_API
     try:
-        client = await get_meli_client()
-        if not client:
-            return JSONResponse({"error": "Sin cliente ML activo"}, status_code=503)
-        resp = await client.get(
-            f"/sites/MLM/search?q={q}&limit={limit}&sort=price_asc"
-        )
-        if resp.status_code != 200:
-            return JSONResponse({"error": f"ML {resp.status_code}", "body": resp.text[:300]}, status_code=502)
-        data = resp.json()
+        # Obtener app token via client_credentials (no requiere user, accede a search público)
+        async with _httpx.AsyncClient(timeout=10) as _hx:
+            tr = await _hx.post(MELI_TOKEN_URL, data={
+                "grant_type": "client_credentials",
+                "client_id": MELI_CLIENT_ID,
+                "client_secret": MELI_CLIENT_SECRET,
+            })
+        if tr.status_code != 200:
+            return JSONResponse({"error": f"token error {tr.status_code}", "body": tr.text[:200]}, status_code=502)
+        app_token = tr.json().get("access_token", "")
+        if not app_token:
+            return JSONResponse({"error": "no access_token en respuesta"}, status_code=502)
+
+        # Buscar en ML con el app token
+        import urllib.parse as _up
+        url = f"{_MELI_API}/sites/MLM/search?q={_up.quote(q)}&limit={limit}&sort=price_asc"
+        async with _httpx.AsyncClient(timeout=15) as _hx2:
+            sr = await _hx2.get(url, headers={"Authorization": f"Bearer {app_token}"})
+        if sr.status_code != 200:
+            return JSONResponse({"error": f"search {sr.status_code}", "body": sr.text[:300]}, status_code=502)
+        data = sr.json()
         results = []
         for item in data.get("results", []):
             shipping = item.get("shipping", {})
