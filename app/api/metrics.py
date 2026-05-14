@@ -452,8 +452,13 @@ async def get_top_products(days: int = Query(30, description="Período en días:
             except Exception:
                 pass
 
-        # BM stock: cache-first lookup para cada SKU (sin nuevas llamadas HTTP si ya está en caché)
-        from app.api.productos import _bm_stock as _tp_bm_stock
+        # BM stock: leer del caché bulk en memoria — NUNCA llamar BM en vivo
+        try:
+            from app.main import _bm_stock_cache as _tp_bm_cache, normalize_to_bm_sku as _tp_norm
+        except Exception:
+            _tp_bm_cache = {}
+            _tp_norm = lambda s: s.upper()[:10]
+
         results = []
         for item_id, data in top_items:
             detail = item_details.get(item_id, {})
@@ -463,11 +468,9 @@ async def get_top_products(days: int = Query(30, description="Período en días:
             sku = data["sku"] or detail.get("seller_custom_field") or ""
             bm_avail = None
             if sku:
-                try:
-                    bm_data = await _tp_bm_stock(sku)
-                    bm_avail = bm_data.get("avail")
-                except Exception:
-                    pass
+                cached = _tp_bm_cache.get(_tp_norm(sku))
+                if cached:
+                    bm_avail = cached[1].get("avail_total")
             results.append({
                 "item_id": item_id,
                 "sku": sku,
