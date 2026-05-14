@@ -14016,6 +14016,26 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/price-to-win")
+async def diag_price_to_win(item_id: str = "", token: str = ""):
+    """Diagnóstico: llama price_to_win de ML para un item_id propio."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not item_id:
+        return JSONResponse({"error": "item_id requerido"}, status_code=400)
+    from app.services.meli_client import MeliApiError as _MeliErrP
+    try:
+        client = await get_meli_client()
+        if not client:
+            return JSONResponse({"error": "Sin cliente ML activo"}, status_code=503)
+        data = await client.get(f"/items/{item_id}/price_to_win?siteId=MLM&version=v2")
+        return JSONResponse(data)
+    except _MeliErrP as e:
+        return JSONResponse({"error": f"HTTP {e.status_code}", "body": str(e.body)[:400]}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/ml-search")
 async def diag_ml_search(q: str = "", token: str = "", limit: int = 20):
     """Diagnóstico: busca competencia en ML por número de parte/modelo usando la API de catálogo.
