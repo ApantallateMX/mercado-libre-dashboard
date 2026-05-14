@@ -401,6 +401,80 @@ async def get_low_stock_alerts(threshold: int = Query(5, description="Umbral de 
         await client.close()
 
 
+@router.get("/top-products")
+async def get_top_products(days: int = Query(30, description="Período en días: 7, 15, 30 o 90")):
+    """Top 20 productos más vendidos en el período con stock y status actual de ML."""
+    days = max(7, min(90, days))
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        now_mx = datetime.utcnow() - timedelta(hours=6)
+        date_from = (now_mx - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        _fetch_to = (now_mx + timedelta(days=1)).strftime("%Y-%m-%d")
+        all_orders = await client.fetch_all_orders(date_from=date_from, date_to=_fetch_to)
+
+        _EXCL = {"cancelled", "payment_required", "payment_in_process"}
+        item_sales: dict = {}
+        for order in all_orders:
+            if order.get("status") in _EXCL:
+                continue
+            for oi in order.get("order_items", []):
+                item = oi.get("item", {})
+                item_id = item.get("id", "")
+                if not item_id:
+                    continue
+                sku = (item.get("seller_sku") or "").strip()
+                title = (item.get("title") or item_id)[:55]
+                qty = oi.get("quantity", 1)
+                revenue = (oi.get("unit_price") or 0) * qty
+                if item_id not in item_sales:
+                    item_sales[item_id] = {"units": 0, "revenue": 0.0, "title": title, "sku": sku}
+                item_sales[item_id]["units"] += qty
+                item_sales[item_id]["revenue"] += revenue
+
+        top_items = sorted(item_sales.items(), key=lambda x: x[1]["units"], reverse=True)[:20]
+        top_ids = [iid for iid, _ in top_items]
+
+        # Batch fetch: status, available_quantity, thumbnail por item
+        item_details: dict = {}
+        if top_ids:
+            try:
+                resp = await client.get(
+                    f"/items?ids={','.join(top_ids)}"
+                    f"&attributes=id,status,available_quantity,thumbnail,seller_custom_field"
+                )
+                entries = resp if isinstance(resp, list) else []
+                for entry in entries:
+                    body = entry.get("body", {}) if isinstance(entry, dict) and "body" in entry else entry
+                    if isinstance(body, dict) and body.get("id"):
+                        item_details[body["id"]] = body
+            except Exception:
+                pass
+
+        results = []
+        for item_id, data in top_items:
+            detail = item_details.get(item_id, {})
+            status = detail.get("status", "unknown")
+            ml_stock = detail.get("available_quantity")
+            thumbnail = (detail.get("thumbnail") or "").replace("http://", "https://")
+            sku = data["sku"] or detail.get("seller_custom_field") or ""
+            results.append({
+                "item_id": item_id,
+                "sku": sku,
+                "title": data["title"],
+                "units": data["units"],
+                "revenue": round(data["revenue"], 2),
+                "status": status,
+                "ml_stock": ml_stock,
+                "thumbnail": thumbnail,
+            })
+
+        return {"days": days, "products": results}
+    finally:
+        await client.close()
+
+
 def _build_chart_data(all_orders: list, date_from: str, date_to: str):
     """Construye los datos del chart a partir de ordenes ya obtenidas."""
     start = datetime.strptime(date_from, "%Y-%m-%d")

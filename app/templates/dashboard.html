@@ -153,14 +153,34 @@
         </div>
     </div>
 
-    <!-- Heatmap patrón semanal -->
+    <!-- Heatmap patrón semanal + Top Productos -->
     <div class="px-4 md:px-6 py-4 border-t border-gray-100" id="heatmap-section">
-        <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold text-gray-700">Patrón semanal</h3>
-            <span class="text-xs text-gray-400">Clic en una celda para ver el detalle del día</span>
-        </div>
-        <div id="sales-heatmap" class="overflow-x-auto">
-            <div class="text-xs text-gray-300 py-2">Cargando...</div>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- LEFT: Heatmap -->
+            <div>
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-gray-700">Patrón semanal</h3>
+                    <span class="text-xs text-gray-400">Clic en celda para ver desglose</span>
+                </div>
+                <div id="sales-heatmap" class="overflow-x-auto">
+                    <div class="text-xs text-gray-300 py-2">Cargando...</div>
+                </div>
+            </div>
+            <!-- RIGHT: Top Productos -->
+            <div id="top-products-panel">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-sm font-semibold text-gray-700">Top Productos</h3>
+                    <div class="flex gap-1" id="tp-period-btns">
+                        <button onclick="window.loadTopProducts(7)"  id="tp-btn-7"  class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">7d</button>
+                        <button onclick="window.loadTopProducts(15)" id="tp-btn-15" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">15d</button>
+                        <button onclick="window.loadTopProducts(30)" id="tp-btn-30" class="px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition">30d</button>
+                        <button onclick="window.loadTopProducts(90)" id="tp-btn-90" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">90d</button>
+                    </div>
+                </div>
+                <div id="top-products-content">
+                    <div class="text-xs text-gray-300 py-2">Cargando...</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -864,8 +884,95 @@ window.loadLowStockAlerts = function() {
         });
 };
 
+// ─── Top Productos ────────────────────────────────────────────────────────────
+var _tpActiveDays = 30;
+window.loadTopProducts = function(days) {
+    _tpActiveDays = days || 30;
+    // Highlight período activo
+    [7, 15, 30, 90].forEach(function(d) {
+        var btn = document.getElementById('tp-btn-' + d);
+        if (!btn) return;
+        if (d === _tpActiveDays) {
+            btn.className = 'px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition';
+        } else {
+            btn.className = 'px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition';
+        }
+    });
+    var content = document.getElementById('top-products-content');
+    content.innerHTML = '<div class="text-center py-6 text-gray-400 text-xs animate-pulse">Cargando top productos...</div>';
+    fetch('/api/metrics/top-products?days=' + _tpActiveDays, {headers: {'ngrok-skip-browser-warning': 'true'}})
+        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(data) {
+            var prods = data.products || [];
+            if (!prods.length) {
+                content.innerHTML = '<p class="text-center text-gray-400 text-xs py-4">Sin ventas en este período</p>';
+                return;
+            }
+            var rows = prods.map(function(p, idx) {
+                // Stock badge
+                var stockVal = p.ml_stock;
+                var stockHtml;
+                if (stockVal === null || stockVal === undefined) {
+                    stockHtml = '<span class="text-gray-300 text-xs">—</span>';
+                } else if (stockVal === 0) {
+                    stockHtml = '<span class="inline-block px-1.5 py-0.5 text-[10px] font-bold rounded bg-red-100 text-red-700">0</span>';
+                } else if (stockVal <= 5) {
+                    stockHtml = '<span class="inline-block px-1.5 py-0.5 text-[10px] font-bold rounded bg-orange-100 text-orange-700">' + stockVal + '</span>';
+                } else {
+                    stockHtml = '<span class="inline-block px-1.5 py-0.5 text-[10px] font-bold rounded bg-green-100 text-green-700">' + stockVal + '</span>';
+                }
+                // Status badge
+                var statusHtml;
+                if (p.status === 'active') {
+                    statusHtml = '<span class="text-[10px] text-green-600 font-medium">Activo</span>';
+                } else if (p.status === 'paused') {
+                    statusHtml = '<span class="text-[10px] text-yellow-600 font-medium">Pausado</span>';
+                } else if (p.status === 'closed') {
+                    statusHtml = '<span class="text-[10px] text-red-500 font-medium">Cerrado</span>';
+                } else {
+                    statusHtml = '<span class="text-[10px] text-gray-400">' + (p.status || '—') + '</span>';
+                }
+                // Row background alerts
+                var rowBg = '';
+                if (p.status === 'active' && stockVal === 0) rowBg = 'bg-orange-50';
+                else if (p.status === 'paused' && stockVal > 0) rowBg = 'bg-yellow-50';
+                // Thumbnail
+                var imgHtml = p.thumbnail
+                    ? '<img src="' + p.thumbnail + '" class="w-7 h-7 rounded object-cover flex-shrink-0" alt="" onerror="this.style.display=\'none\'">'
+                    : '<div class="w-7 h-7 rounded bg-gray-100 flex-shrink-0"></div>';
+                // Revenue formatted
+                var rev = '$' + (p.revenue || 0).toLocaleString('es-MX', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+                return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">' +
+                    '<td class="py-1.5 pl-2 pr-1 text-center text-xs text-gray-400 font-mono w-5">' + (idx + 1) + '</td>' +
+                    '<td class="py-1.5 px-1"><div class="flex items-center gap-1.5">' + imgHtml +
+                        '<div class="min-w-0"><div class="text-xs text-gray-700 truncate max-w-[160px]" title="' + p.title + '">' + p.title + '</div>' +
+                        '<div class="text-[10px] text-gray-400 font-mono">' + (p.sku || p.item_id) + '</div></div></div></td>' +
+                    '<td class="py-1.5 px-2 text-right font-bold text-sm text-gray-800">' + p.units + '</td>' +
+                    '<td class="py-1.5 px-2 text-right text-xs text-gray-500">' + rev + '</td>' +
+                    '<td class="py-1.5 px-2 text-center">' + stockHtml + '</td>' +
+                    '<td class="py-1.5 pr-2 text-center">' + statusHtml + '</td>' +
+                    '</tr>';
+            }).join('');
+            content.innerHTML =
+                '<div class="overflow-x-auto max-h-[320px] overflow-y-auto">' +
+                '<table class="w-full text-sm">' +
+                '<thead class="sticky top-0 bg-white z-10"><tr class="text-left text-[10px] text-gray-400 border-b border-gray-200">' +
+                '<th class="py-1.5 pl-2 pr-1 w-5">#</th>' +
+                '<th class="py-1.5 px-1">Producto</th>' +
+                '<th class="py-1.5 px-2 text-right">Uds</th>' +
+                '<th class="py-1.5 px-2 text-right">Neto</th>' +
+                '<th class="py-1.5 px-2 text-center">ML Stock</th>' +
+                '<th class="py-1.5 pr-2 text-center">Status</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+        })
+        .catch(function(e) {
+            content.innerHTML = '<p class="text-red-400 text-xs py-4 text-center">Error: ' + e.message + '</p>';
+        });
+};
+
 // ─── Carga inicial ────────────────────────────────────────────────────────────
 highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
 loadDashboard();
+window.loadTopProducts(30);
 </script>
 {% endblock %}
