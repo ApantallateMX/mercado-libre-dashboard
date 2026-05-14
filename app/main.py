@@ -13989,6 +13989,32 @@ async def diag_refresh_ml_tokens(token: str = ""):
     return JSONResponse({"results": results})
 
 
+@app.get("/api/diag/find-item-by-model")
+async def diag_find_item_by_model(q: str = "", token: str = ""):
+    """Busca un item en nuestra DB de listings por modelo/número de parte."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not q:
+        return JSONResponse({"error": "q requerido"}, status_code=400)
+    import aiosqlite as _aio
+    try:
+        matches = []
+        async with _aio.connect(token_store._DB_PATH) as db:
+            db.row_factory = _aio.Row
+            rows = await (await db.execute(
+                """SELECT item_id, title, seller_custom_field, catalog_product_id, status, available_quantity, user_id
+                   FROM ml_listings
+                   WHERE title LIKE ? OR seller_custom_field LIKE ?
+                   LIMIT 20""",
+                (f"%{q}%", f"%{q}%")
+            )).fetchall()
+            for r in rows:
+                matches.append(dict(r))
+        return JSONResponse({"query": q, "found": len(matches), "items": matches})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/ml-search")
 async def diag_ml_search(q: str = "", token: str = "", limit: int = 20):
     """Diagnóstico: busca competencia en ML por número de parte/modelo usando la API de catálogo.
