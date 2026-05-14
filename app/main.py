@@ -13990,62 +13990,76 @@ async def diag_refresh_ml_tokens(token: str = ""):
 
 
 @app.get("/api/diag/ml-search")
-async def diag_ml_search(q: str = "", token: str = "", limit: int = 10):
-    """Diagnóstico: busca competencia en ML por número de parte/modelo.
-    Usa client_credentials (app token) para poder acceder al search público."""
+async def diag_ml_search(q: str = "", token: str = "", limit: int = 20):
+    """Diagnóstico: busca competencia en ML por número de parte/modelo usando la API de catálogo.
+    Flujo: product_identifier → catalog_product_id → /products/{id}/items (todos los vendedores)."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
     if not q:
         return JSONResponse({"error": "q requerido"}, status_code=400)
     limit = max(1, min(50, limit))
-    import httpx as _httpx
-    import os as _os_s
-    from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_API_URL as _MELI_API
     try:
-        # Obtener app token via client_credentials (no requiere user, accede a search público)
-        async with _httpx.AsyncClient(timeout=10) as _hx:
-            tr = await _hx.post(MELI_TOKEN_URL, data={
-                "grant_type": "client_credentials",
-                "client_id": MELI_CLIENT_ID,
-                "client_secret": MELI_CLIENT_SECRET,
-            })
-        if tr.status_code != 200:
-            return JSONResponse({"error": f"token error {tr.status_code}", "body": tr.text[:200]}, status_code=502)
-        app_token = tr.json().get("access_token", "")
-        if not app_token:
-            return JSONResponse({"error": "no access_token en respuesta"}, status_code=502)
+        client = await get_meli_client()
+        if not client:
+            return JSONResponse({"error": "Sin cliente ML activo"}, status_code=503)
 
-        # Buscar en ML con el app token
         import urllib.parse as _up
-        url = f"{_MELI_API}/sites/MLM/search?q={_up.quote(q)}&limit={limit}&sort=price_asc"
-        async with _httpx.AsyncClient(timeout=15) as _hx2:
-            sr = await _hx2.get(url, headers={"Authorization": f"Bearer {app_token}"})
-        if sr.status_code != 200:
-            return JSONResponse({"error": f"search {sr.status_code}", "body": sr.text[:300]}, status_code=502)
-        data = sr.json()
-        results = []
-        for item in data.get("results", []):
-            shipping = item.get("shipping", {})
-            seller = item.get("seller", {})
-            results.append({
-                "id": item.get("id"),
-                "title": item.get("title"),
-                "price": item.get("price"),
-                "currency": item.get("currency_id"),
-                "sold_quantity": item.get("sold_quantity"),
-                "available_quantity": item.get("available_quantity"),
-                "condition": item.get("condition"),
-                "full": shipping.get("logistic_type") == "fulfillment",
-                "free_shipping": shipping.get("free_shipping"),
-                "seller_id": seller.get("id"),
-                "seller_nickname": seller.get("nickname"),
-                "permalink": item.get("permalink"),
-            })
+
+        # Paso 1: buscar el product en el catálogo por número de parte
+        catalog_results = await client.get(
+            f"/marketplace/products/search?product_identifier={_up.quote(q)}&status=active&limit=5"
+        )
+        products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+
+        if not products:
+            # Fallback: búsqueda textual
+            catalog_results = await client.get(
+                f"/marketplace/products/search?q={_up.quote(q)}&status=active&limit=5"
+            )
+            products = catalog_results.get("results", []) if isinstance(catalog_results, dict) else []
+
+        if not products:
+            return JSONResponse({"query": q, "catalog_products": [], "sellers": [], "msg": "No encontrado en catálogo ML"})
+
+        # Paso 2: para cada catalog_product encontrado, obtener sus sellers
+        all_sellers = []
+        catalog_info = []
+        for prod in products[:3]:
+            prod_id = prod.get("id") or prod.get("catalog_product_id")
+            if not prod_id:
+                continue
+            catalog_info.append({"id": prod_id, "name": prod.get("name", ""), "domain": prod.get("domain_id", "")})
+            try:
+                items_data = await client.get(f"/products/{prod_id}/items?limit={limit}")
+                items = items_data.get("results", []) if isinstance(items_data, dict) else []
+                for it in items:
+                    seller = it.get("seller", {})
+                    shipping = it.get("shipping", {})
+                    all_sellers.append({
+                        "catalog_product_id": prod_id,
+                        "item_id": it.get("item_id") or it.get("id"),
+                        "price": it.get("price"),
+                        "currency": it.get("currency_id", "MXN"),
+                        "condition": it.get("condition"),
+                        "buy_box_winner": it.get("buy_box_winner", False),
+                        "full": shipping.get("logistic_type") == "fulfillment",
+                        "free_shipping": shipping.get("free_shipping"),
+                        "seller_id": seller.get("id"),
+                        "seller_nickname": seller.get("nickname"),
+                        "available_quantity": it.get("available_quantity"),
+                    })
+            except Exception:
+                pass
+
+        # Ordenar por precio
+        all_sellers.sort(key=lambda x: x.get("price") or 999999)
+
         return JSONResponse({
             "query": q,
-            "total": data.get("paging", {}).get("total", 0),
-            "returned": len(results),
-            "results": results,
+            "catalog_products_found": len(catalog_info),
+            "catalog_products": catalog_info,
+            "sellers_count": len(all_sellers),
+            "sellers": all_sellers,
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
