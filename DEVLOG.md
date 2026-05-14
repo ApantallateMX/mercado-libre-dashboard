@@ -7,6 +7,39 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FIX: "Sesión no disponible" tras Railway restart + nicknames ML en dropdown
+
+### Problema
+Dashboard mostraba "Sesión no disponible / El servicio no está conectado" tras restart de Railway.
+Adicionalmente el dropdown de cuentas mostraba user IDs numéricos en lugar de nombres (APANTALLATEMX, etc.).
+
+### Root cause
+Railway reinicia el contenedor ocasionalmente (mantenimiento). Al reiniciar, el SQLite DB en volumen
+puede quedar vacío o los tokens ML pueden no sembrarse correctamente si ML rate-limita el token
+endpoint durante el arranque (`_seed_tokens_with_retry` ya existe pero puede fallar si ML responde 429
+por >12 minutos seguidos). Sin tokens → `get_any_tokens()` devuelve None → `get_current_user()` → None.
+
+El `diag/refresh-ml-tokens` tampoco obtenía nickname de ML API al guardar tokens → DB guardaba
+access/refresh tokens pero nickname vacío → dropdown mostraba user ID como fallback.
+
+### Fix
+1. **Lazy auto-seed**: `get_meli_client()` en `meli_client.py` ahora detecta si `get_any_tokens()`
+   devuelve None y llama `_auto_seed_from_env()` automáticamente (cooldown 5 min para no spamear).
+   `_auto_seed_from_env()` hace refresh de todos los slots de env vars + obtiene nickname de ML API.
+
+2. **Nickname en diag/refresh**: `diag/refresh-ml-tokens` ahora también hace GET a `/users/{uid}`
+   para obtener el nickname y lo guarda en DB. Solo fetcha si el nickname aún no existe en DB.
+
+### Operación realizada
+- `diag/refresh-ml-tokens` llamado manualmente para re-sembrar tokens tras el Railway restart
+- Segunda llamada después del deploy para poblar nicknames
+
+### Archivos modificados
+- `app/services/meli_client.py` → `_auto_seed_from_env()` + lazy re-seed en `get_meli_client()`
+- `app/main.py` → `diag/refresh-ml-tokens` ahora incluye nickname fetch
+
+---
+
 ## 2026-05-13 — FIX: Activar variaciones ponía mismo stock a todas — usa sync-variation-stocks
 
 ### Problema
