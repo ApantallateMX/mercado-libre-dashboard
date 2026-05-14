@@ -13997,9 +13997,10 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
     if not q:
         return JSONResponse({"error": "q requerido"}, status_code=400)
     import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB_PATH
     try:
         matches = []
-        async with _aio.connect(token_store._DB_PATH) as db:
+        async with _aio.connect(_DB_PATH) as db:
             db.row_factory = _aio.Row
             rows = await (await db.execute(
                 """SELECT item_id, title, seller_custom_field, catalog_product_id, status, available_quantity, user_id
