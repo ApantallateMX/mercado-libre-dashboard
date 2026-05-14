@@ -558,7 +558,35 @@ async def get_competition_analysis(item_id: str = Query(...)):
             retail_ph_mxn = round(retail_ph_usd * (s.get("avg_fx") or 17.0), 2)
             break
 
-    # ── 5. price_to_win por cada listing de catálogo (paralelo) ─────────────
+    # ── 5. Batch fetch precios frescos de ML (incluye sale_price si hay deal) ──
+    all_item_ids = [dict(l)["item_id"] for l in listings]
+    ml_prices: dict = {}  # item_id -> {price, deal_price, original_price}
+    try:
+        price_client = await get_meli_client()
+        if price_client and all_item_ids:
+            chunk = all_item_ids[:20]
+            raw_prices = await price_client.get(
+                f"/items?ids={','.join(chunk)}&attributes=id,price,sale_price,original_price"
+            )
+            items_list = raw_prices if isinstance(raw_prices, list) else []
+            for entry in items_list:
+                body = entry.get("body", entry) if isinstance(entry, dict) else {}
+                iid = body.get("id")
+                if not iid:
+                    continue
+                base_price = body.get("price")
+                sale = body.get("sale_price") or {}
+                orig = body.get("original_price")
+                deal_price = sale.get("amount") if isinstance(sale, dict) else None
+                ml_prices[iid] = {
+                    "price": base_price,
+                    "deal_price": deal_price,
+                    "original_price": orig or base_price,
+                }
+    except Exception:
+        pass
+
+    # ── 6. price_to_win por cada listing de catálogo (paralelo) ─────────────
     catalog_ids = [dict(l)["item_id"] for l in listings if dict(l)["catalog_listing"] == 1]
 
     async def _ptw(iid, acct_id):
@@ -612,6 +640,10 @@ async def get_competition_analysis(item_id: str = Query(...)):
         iid = ld["item_id"]
         s = sales_map.get(iid, {})
         ptw = ptw_map.get(iid, {})
+        fresh = ml_prices.get(iid, {})
+        base_price = fresh.get("price") or ld["price"]
+        deal_price = fresh.get("deal_price")
+        original_price = fresh.get("original_price") or base_price
         our_listings.append({
             "item_id": iid,
             "title": ld["title"],
@@ -619,7 +651,9 @@ async def get_competition_analysis(item_id: str = Query(...)):
             "status": ld["status"],
             "catalog": bool(ld["catalog_listing"]),
             "logistic": ld["logistic_type"],
-            "price": ld["price"],
+            "price": original_price,
+            "deal_price": deal_price,
+            "has_deal": deal_price is not None,
             "ml_stock": ld["available_qty"],
             "sales_30d": int(s.get("units") or 0),
             "revenue_30d": round(float(s.get("revenue") or 0), 2),

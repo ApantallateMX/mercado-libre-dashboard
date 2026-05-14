@@ -1031,9 +1031,13 @@ function _renderCompetition(d) {
     d.our_listings.forEach(function(l) {
         var rowCls = l.sales_30d > 0 ? 'bg-green-50' : '';
         html += '<tr class="' + rowCls + ' border-b border-gray-50">' +
+            var priceHtml = l.has_deal
+            ? '<span class="line-through text-gray-400 text-[10px]">' + _mxn(l.price) + '</span> <span class="font-bold text-orange-600">' + _mxn(l.deal_price) + '</span> <span class="text-[9px] bg-orange-100 text-orange-500 px-1 rounded">Deal</span>'
+            : _mxn(l.price || l.avg_price);
+        html += '<tr class="' + rowCls + ' border-b border-gray-50">' +
             '<td class="py-1 pr-1 font-medium text-gray-700">' + l.account + '</td>' +
             '<td class="py-1 pr-1">' + _logBadge(l.logistic) + '</td>' +
-            '<td class="py-1 pr-1 text-right">' + _mxn(l.price || l.avg_price) + '</td>' +
+            '<td class="py-1 pr-1 text-right">' + priceHtml + '</td>' +
             '<td class="py-1 pr-1 text-right font-bold ' + (l.sales_30d > 0 ? 'text-green-700' : 'text-gray-300') + '">' + (l.sales_30d || 0) + ' uds</td>' +
             '<td class="py-1 pr-1 text-right ' + (l.margen_pct >= 10 ? 'text-green-600' : l.margen_pct >= 5 ? 'text-yellow-600' : 'text-gray-400') + '">' + _pct(l.margen_pct || null) + '</td>' +
             '<td class="py-1 pr-1 text-right text-gray-600">' + _pct(l.recup_pct || null) + '</td>' +
