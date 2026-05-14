@@ -13989,6 +13989,53 @@ async def diag_refresh_ml_tokens(token: str = ""):
     return JSONResponse({"results": results})
 
 
+@app.get("/api/diag/ml-search")
+async def diag_ml_search(q: str = "", token: str = "", limit: int = 10):
+    """Diagnóstico: busca competencia en ML por número de parte/modelo.
+    Usa el cliente ML autenticado de la app. No requiere sesión de dashboard."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not q:
+        return JSONResponse({"error": "q requerido"}, status_code=400)
+    limit = max(1, min(50, limit))
+    try:
+        client = await get_meli_client()
+        if not client:
+            return JSONResponse({"error": "Sin cliente ML activo"}, status_code=503)
+        resp = await client.get(
+            f"/sites/MLM/search?q={q}&limit={limit}&sort=price_asc"
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": f"ML {resp.status_code}", "body": resp.text[:300]}, status_code=502)
+        data = resp.json()
+        results = []
+        for item in data.get("results", []):
+            shipping = item.get("shipping", {})
+            seller = item.get("seller", {})
+            results.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "price": item.get("price"),
+                "currency": item.get("currency_id"),
+                "sold_quantity": item.get("sold_quantity"),
+                "available_quantity": item.get("available_quantity"),
+                "condition": item.get("condition"),
+                "full": shipping.get("logistic_type") == "fulfillment",
+                "free_shipping": shipping.get("free_shipping"),
+                "seller_id": seller.get("id"),
+                "seller_nickname": seller.get("nickname"),
+                "permalink": item.get("permalink"),
+            })
+        return JSONResponse({
+            "query": q,
+            "total": data.get("paging", {}).get("total", 0),
+            "returned": len(results),
+            "results": results,
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
