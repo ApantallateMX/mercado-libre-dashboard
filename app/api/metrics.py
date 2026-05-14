@@ -488,6 +488,183 @@ async def get_top_products(days: int = Query(30, description="Período en días:
         await client.close()
 
 
+_ACCOUNT_NAMES = {
+    "523916436": "APANTALLATEMX",
+    "292395685": "AUTOBOT",
+    "391393176": "BLOWTECHNOLOGIES",
+    "515061615": "LUTEMAMEXICO",
+}
+_OWN_ACCOUNT_IDS = {int(k) for k in _ACCOUNT_NAMES}
+
+
+@router.get("/competition")
+async def get_competition_analysis(item_id: str = Query(...)):
+    """Análisis de competencia para un item_id propio: nuestros listings + externos en catálogo."""
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB_P
+    from app.services.meli_client import MeliApiError as _MErr
+    from app.main import _bm_stock_cache as _bsc, normalize_to_bm_sku as _norm
+
+    # ── 1. Buscar item en DB y obtener SKU base ───────────────────────────────
+    async with _aio.connect(_DB_P) as db:
+        db.row_factory = _aio.Row
+        row = await (await db.execute(
+            "SELECT sku, account_id FROM ml_listings WHERE item_id = ? LIMIT 1", (item_id,)
+        )).fetchone()
+    if not row:
+        raise HTTPException(404, "Item no encontrado en DB")
+
+    raw_sku = row["sku"] or ""
+    base_sku = raw_sku.split("/")[0].split("-")[0].strip()[:10] if raw_sku else ""
+
+    # ── 2. Todos nuestros listings con el mismo SKU base ─────────────────────
+    async with _aio.connect(_DB_P) as db:
+        db.row_factory = _aio.Row
+        listings = await (await db.execute(
+            """SELECT item_id, title, account_id, status, available_qty,
+                      catalog_listing, logistic_type, price, sku
+               FROM ml_listings
+               WHERE sku LIKE ? AND status != 'closed'
+               ORDER BY catalog_listing DESC, price ASC""",
+            (f"%{base_sku}%",)
+        )).fetchall()
+
+    # ── 3. Datos de ventas 30d por listing ───────────────────────────────────
+    cutoff = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    async with _aio.connect(_DB_P) as db:
+        db.row_factory = _aio.Row
+        sales_rows = await (await db.execute(
+            """SELECT item_id, COUNT(*) as orders, SUM(quantity) as units,
+                      SUM(neto_plat) as revenue, AVG(margen_pct) as avg_margin,
+                      AVG(recup_retail_pct) as avg_recup, AVG(unit_price) as avg_price,
+                      AVG(fx_rate) as avg_fx, AVG(retail_ph_usd) as retail_ph_usd
+               FROM order_history
+               WHERE sku LIKE ? AND platform='ml' AND order_date >= ? AND status != 'cancelled'
+               GROUP BY item_id""",
+            (f"%{base_sku}%", cutoff)
+        )).fetchall()
+    sales_map = {r["item_id"]: dict(r) for r in sales_rows}
+
+    # ── 4. BM stock desde caché ──────────────────────────────────────────────
+    bm_key = _norm(base_sku) if base_sku else ""
+    bm_cached = _bsc.get(bm_key)
+    bm_avail = bm_cached[1].get("avail_total") if bm_cached else None
+    # Retail PH: tomar del primer order que lo tenga, o del caché
+    retail_ph_usd = None
+    retail_ph_mxn = None
+    for s in sales_map.values():
+        if s.get("retail_ph_usd"):
+            retail_ph_usd = s["retail_ph_usd"]
+            retail_ph_mxn = round(retail_ph_usd * (s.get("avg_fx") or 17.0), 2)
+            break
+
+    # ── 5. price_to_win por cada listing de catálogo (paralelo) ─────────────
+    catalog_ids = [dict(l)["item_id"] for l in listings if dict(l)["catalog_listing"] == 1]
+
+    async def _ptw(iid, acct_id):
+        try:
+            cl = await get_meli_client(user_id=acct_id)
+            if not cl:
+                return iid, None
+            data = await cl.get(f"/items/{iid}/price_to_win?siteId=MLM&version=v2")
+            return iid, data
+        except _MErr:
+            return iid, None
+        except Exception:
+            return iid, None
+
+    ptw_tasks = [_ptw(iid, dict(l)["account_id"]) for l in listings
+                 if dict(l)["catalog_listing"] == 1 for iid in [dict(l)["item_id"]]]
+    ptw_results = await asyncio.gather(*ptw_tasks)
+    ptw_map = {iid: data for iid, data in ptw_results if data}
+
+    # ── 6. Competidores externos (1 sola llamada al catalog_product_id) ──────
+    catalog_product_id = None
+    for _, data in ptw_map.items():
+        if data and data.get("catalog_product_id"):
+            catalog_product_id = data["catalog_product_id"]
+            break
+
+    external_sellers = []
+    if catalog_product_id:
+        try:
+            client = await get_meli_client()
+            if client:
+                raw = await client.get(f"/products/{catalog_product_id}/items?limit=30")
+                for it in (raw.get("results", []) if isinstance(raw, dict) else []):
+                    sid = (it.get("seller") or {}).get("id")
+                    if sid and int(sid) not in _OWN_ACCOUNT_IDS:
+                        external_sellers.append({
+                            "item_id": it.get("item_id") or it.get("id"),
+                            "price": it.get("price"),
+                            "buy_box_winner": it.get("buy_box_winner", False),
+                            "full": (it.get("shipping") or {}).get("logistic_type") == "fulfillment",
+                            "seller_id": sid,
+                        })
+                external_sellers.sort(key=lambda x: x.get("price") or 999999)
+        except Exception:
+            pass
+
+    # ── 7. Ensamblar listings ────────────────────────────────────────────────
+    our_listings = []
+    for l in listings:
+        ld = dict(l)
+        iid = ld["item_id"]
+        s = sales_map.get(iid, {})
+        ptw = ptw_map.get(iid, {})
+        our_listings.append({
+            "item_id": iid,
+            "title": ld["title"],
+            "account": _ACCOUNT_NAMES.get(str(ld["account_id"]), str(ld["account_id"])),
+            "status": ld["status"],
+            "catalog": bool(ld["catalog_listing"]),
+            "logistic": ld["logistic_type"],
+            "price": ld["price"],
+            "ml_stock": ld["available_qty"],
+            "sales_30d": int(s.get("units") or 0),
+            "revenue_30d": round(float(s.get("revenue") or 0), 2),
+            "margen_pct": round(float(s.get("avg_margin") or 0), 1),
+            "recup_pct": round(float(s.get("avg_recup") or 0), 1),
+            "avg_price": round(float(s.get("avg_price") or 0), 2),
+            "ptw_status": (ptw.get("status") or "").lower() if ptw else None,
+            "ptw_price": ptw.get("price_to_win") if ptw else None,
+            "winner_price": (ptw.get("winner") or {}).get("price") if ptw else None,
+            "winner_item": (ptw.get("winner") or {}).get("item_id") if ptw else None,
+        })
+
+    # ── 8. Recomendación ────────────────────────────────────────────────────
+    best = max((l for l in our_listings if l["sales_30d"] > 0),
+               key=lambda x: x["margen_pct"], default=None)
+    cheapest_ext = external_sellers[0]["price"] if external_sellers else None
+    rec = ""
+    if best and cheapest_ext:
+        gap = round(best["avg_price"] - cheapest_ext, 0)
+        if gap > 0:
+            rec = (f"{best['account']} ({best['logistic']}, ${best['avg_price']:,.0f}) "
+                   f"tiene el mejor margen activo ({best['margen_pct']}%). "
+                   f"Externo más barato: ${cheapest_ext:,.0f} (${gap:,.0f} menos). "
+                   f"Mantener precio actual — bajar no justifica la pérdida de margen.")
+        else:
+            rec = (f"{best['account']} ya es competitivo. "
+                   f"Externo más barato: ${cheapest_ext:,.0f}. Buen posicionamiento.")
+    elif best:
+        rec = f"{best['account']} ({best['logistic']}, ${best['avg_price']:,.0f}) — sin competidores externos en catálogo detectados."
+    elif our_listings:
+        rec = "Sin ventas en los últimos 30 días en ningún listing de este SKU."
+
+    return {
+        "item_id": item_id,
+        "sku": base_sku,
+        "catalog_product_id": catalog_product_id,
+        "bm_avail": bm_avail,
+        "retail_ph_usd": retail_ph_usd,
+        "retail_ph_mxn": retail_ph_mxn,
+        "our_listings": our_listings,
+        "external_sellers": external_sellers,
+        "recommendation": rec,
+    }
+
+
 def _build_chart_data(all_orders: list, date_from: str, date_to: str):
     """Construye los datos del chart a partir de ordenes ya obtenidas."""
     start = datetime.strptime(date_from, "%Y-%m-%d")

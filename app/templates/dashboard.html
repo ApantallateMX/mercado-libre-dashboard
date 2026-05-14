@@ -939,16 +939,18 @@ window.loadTopProducts = function(days) {
                     : '<div class="w-7 h-7 rounded bg-gray-100 flex-shrink-0"></div>';
                 // Revenue formatted
                 var rev = '$' + (p.revenue || 0).toLocaleString('es-MX', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+                var compBtn = '<button onclick="window.openCompetition(\'' + p.item_id + '\',\'' + (p.title||'').replace(/'/g,'') + '\')" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition font-medium" title="Ver competencia">⚡</button>';
                 return '<tr class="' + rowBg + ' border-b border-gray-100 hover:bg-gray-50 transition">' +
                     '<td class="py-1.5 pl-2 pr-1 text-center text-xs text-gray-400 font-mono w-5">' + (idx + 1) + '</td>' +
                     '<td class="py-1.5 px-1"><div class="flex items-center gap-1.5">' + imgHtml +
-                        '<div class="min-w-0"><div class="text-xs text-gray-700 truncate max-w-[150px]" title="' + p.title + '">' + p.title + '</div>' +
+                        '<div class="min-w-0"><div class="text-xs text-gray-700 truncate max-w-[140px]" title="' + p.title + '">' + p.title + '</div>' +
                         '<div class="text-[10px] text-gray-400 font-mono">' + (p.sku || p.item_id) + '</div></div></div></td>' +
                     '<td class="py-1.5 px-2 text-right font-bold text-sm text-gray-800">' + p.units + '</td>' +
                     '<td class="py-1.5 px-2 text-right text-xs text-gray-500">' + rev + '</td>' +
                     '<td class="py-1.5 px-1 text-center">' + bmStockHtml + '</td>' +
                     '<td class="py-1.5 px-1 text-center">' + mlStockHtml + '</td>' +
-                    '<td class="py-1.5 pr-2 text-center">' + statusHtml + '</td>' +
+                    '<td class="py-1.5 px-1 text-center">' + statusHtml + '</td>' +
+                    '<td class="py-1.5 pr-2 text-center">' + compBtn + '</td>' +
                     '</tr>';
             }).join('');
             content.innerHTML =
@@ -961,7 +963,8 @@ window.loadTopProducts = function(days) {
                 '<th class="py-1.5 px-2 text-right">Neto</th>' +
                 '<th class="py-1.5 px-1 text-center text-blue-500">BM</th>' +
                 '<th class="py-1.5 px-1 text-center">ML</th>' +
-                '<th class="py-1.5 pr-2 text-center">Status</th>' +
+                '<th class="py-1.5 px-1 text-center">Status</th>' +
+                '<th class="py-1.5 pr-2 w-6"></th>' +
                 '</tr></thead><tbody>' + rows + '</tbody></table></div>';
         })
         .catch(function(e) {
@@ -973,5 +976,118 @@ window.loadTopProducts = function(days) {
 highlightRangeBtn(document.querySelector('.range-btn[data-days="30"]'));
 loadDashboard();
 window.loadTopProducts(30);
+
+// ─── Competition Drawer ───────────────────────────────────────────────────────
+window.openCompetition = function(itemId, title) {
+    var drawer = document.getElementById('competition-drawer');
+    var titleEl = document.getElementById('comp-drawer-title');
+    var body = document.getElementById('comp-drawer-body');
+    titleEl.textContent = title || itemId;
+    body.innerHTML = '<div class="flex items-center justify-center h-32 text-gray-400 text-sm">Cargando análisis...</div>';
+    drawer.classList.remove('translate-x-full');
+    fetch('/api/metrics/competition?item_id=' + itemId, {headers: {'ngrok-skip-browser-warning': 'true'}})
+        .then(function(r) { return r.json(); })
+        .then(function(d) { body.innerHTML = _renderCompetition(d); })
+        .catch(function(e) { body.innerHTML = '<div class="text-red-500 text-sm p-4">Error: ' + e + '</div>'; });
+};
+window.closeCompetition = function() {
+    document.getElementById('competition-drawer').classList.add('translate-x-full');
+};
+
+function _renderCompetition(d) {
+    if (d.detail || d.error) return '<div class="text-red-500 text-sm p-4">' + (d.detail || d.error) + '</div>';
+
+    var _mxn = function(v) { return v ? '$' + Number(v).toLocaleString('es-MX', {minimumFractionDigits:0, maximumFractionDigits:0}) : '—'; };
+    var _pct = function(v) { return v ? v.toFixed(1) + '%' : '—'; };
+    var _logBadge = function(l) {
+        if (l === 'fulfillment') return '<span class="text-[10px] px-1 py-0.5 rounded bg-blue-100 text-blue-700 font-bold">FULL</span>';
+        if (l === 'xd_drop_off') return '<span class="text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700">XD</span>';
+        return '<span class="text-[10px] px-1 py-0.5 rounded bg-gray-100 text-gray-500">CD</span>';
+    };
+    var _ptw = function(status) {
+        if (!status) return '<span class="text-gray-300 text-[10px]">—</span>';
+        var map = {winning:'<span class="text-[10px] text-green-600 font-bold">✓ Ganando</span>',
+                   competing:'<span class="text-[10px] text-yellow-600">Compitiendo</span>',
+                   losing:'<span class="text-[10px] text-red-500">Perdiendo</span>',
+                   listed:'<span class="text-[10px] text-gray-400">Listado</span>'};
+        return map[status] || '<span class="text-[10px] text-gray-400">' + status + '</span>';
+    };
+
+    // Bloque 1: Resumen SKU
+    var html = '<div class="space-y-4">';
+    html += '<div class="flex gap-4 text-xs bg-gray-50 rounded-lg p-3">' +
+        '<div><span class="text-gray-400">SKU</span><br><span class="font-mono font-bold text-gray-700">' + (d.sku||'—') + '</span></div>' +
+        '<div><span class="text-gray-400">Stock BM</span><br><span class="font-bold ' + (d.bm_avail > 5 ? 'text-green-600' : d.bm_avail > 0 ? 'text-orange-500' : 'text-red-500') + '">' + (d.bm_avail !== null ? d.bm_avail : '—') + '</span></div>' +
+        '<div><span class="text-gray-400">Retail PH</span><br><span class="font-bold text-gray-700">' + (d.retail_ph_usd ? '$' + d.retail_ph_usd + ' USD' : '—') + '</span></div>' +
+        (d.retail_ph_mxn ? '<div><span class="text-gray-400">Retail MXN</span><br><span class="font-bold text-gray-700">' + _mxn(d.retail_ph_mxn) + '</span></div>' : '') +
+        '</div>';
+
+    // Bloque 2: Nuestros listings
+    html += '<div><div class="text-xs font-semibold text-gray-600 mb-1.5">Nuestros listings (' + d.our_listings.length + ')</div>';
+    html += '<div class="overflow-x-auto"><table class="w-full text-[11px]"><thead><tr class="text-[10px] text-gray-400 border-b">' +
+        '<th class="pb-1 text-left">Cuenta</th><th class="pb-1 text-left">Tipo</th><th class="pb-1 text-right">Precio</th>' +
+        '<th class="pb-1 text-right">Vtas 30d</th><th class="pb-1 text-right">Margen</th><th class="pb-1 text-right">%Rec</th>' +
+        '<th class="pb-1 text-center">Catálogo</th></tr></thead><tbody>';
+    d.our_listings.forEach(function(l) {
+        var rowCls = l.sales_30d > 0 ? 'bg-green-50' : '';
+        html += '<tr class="' + rowCls + ' border-b border-gray-50">' +
+            '<td class="py-1 pr-1 font-medium text-gray-700">' + l.account + '</td>' +
+            '<td class="py-1 pr-1">' + _logBadge(l.logistic) + '</td>' +
+            '<td class="py-1 pr-1 text-right">' + _mxn(l.price || l.avg_price) + '</td>' +
+            '<td class="py-1 pr-1 text-right font-bold ' + (l.sales_30d > 0 ? 'text-green-700' : 'text-gray-300') + '">' + (l.sales_30d || 0) + ' uds</td>' +
+            '<td class="py-1 pr-1 text-right ' + (l.margen_pct >= 10 ? 'text-green-600' : l.margen_pct >= 5 ? 'text-yellow-600' : 'text-gray-400') + '">' + _pct(l.margen_pct || null) + '</td>' +
+            '<td class="py-1 pr-1 text-right text-gray-600">' + _pct(l.recup_pct || null) + '</td>' +
+            '<td class="py-1 text-center">' + (l.catalog ? _ptw(l.ptw_status) : '<span class="text-[10px] text-gray-300">Único</span>') + '</td>' +
+            '</tr>';
+    });
+    html += '</tbody></table></div></div>';
+
+    // Bloque 3: Competidores externos
+    if (d.external_sellers && d.external_sellers.length > 0) {
+        html += '<div><div class="text-xs font-semibold text-gray-600 mb-1.5">Competidores externos (' + d.external_sellers.length + ')</div>';
+        html += '<div class="space-y-1">';
+        d.external_sellers.slice(0, 8).forEach(function(s, i) {
+            var isWinner = s.buy_box_winner;
+            html += '<div class="flex items-center justify-between text-[11px] ' + (isWinner ? 'bg-orange-50 rounded px-2 py-0.5' : 'px-2') + '">' +
+                '<span class="text-gray-500">' + (i+1) + '. Vendedor ' + String(s.seller_id).slice(-4) + (s.full ? ' <span class="text-blue-500 font-bold">FULL</span>' : '') + (isWinner ? ' <span class="text-orange-500 font-bold">★ Buy Box</span>' : '') + '</span>' +
+                '<span class="font-bold text-gray-800">' + _mxn(s.price) + '</span>' +
+                '</div>';
+        });
+        html += '</div></div>';
+    }
+
+    // Bloque 4: Recomendación
+    if (d.recommendation) {
+        html += '<div class="bg-indigo-50 rounded-lg p-3 text-xs text-indigo-800 leading-relaxed">' +
+            '<span class="font-semibold">Recomendación: </span>' + d.recommendation + '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
 </script>
+
+<!-- Competition Drawer -->
+<div id="competition-drawer" class="fixed top-0 right-0 h-full w-full sm:w-[420px] bg-white shadow-2xl z-50 transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col">
+    <div class="flex items-center justify-between px-4 py-3 border-b bg-gray-50">
+        <div>
+            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide">Análisis de Competencia</div>
+            <div id="comp-drawer-title" class="text-sm font-semibold text-gray-800 truncate max-w-[320px]"></div>
+        </div>
+        <button onclick="window.closeCompetition()" class="text-gray-400 hover:text-gray-700 text-xl font-bold ml-3 flex-shrink-0">×</button>
+    </div>
+    <div id="comp-drawer-body" class="flex-1 overflow-y-auto p-4"></div>
+</div>
+<!-- Overlay -->
+<div onclick="window.closeCompetition()" id="comp-overlay" class="fixed inset-0 bg-black/20 z-40 hidden"></div>
+<script>
+// Mostrar/ocultar overlay con el drawer
+var _compDrawer = document.getElementById('competition-drawer');
+var _compOv = document.getElementById('comp-overlay');
+var _obs = new MutationObserver(function() {
+    _compOv.classList.toggle('hidden', _compDrawer.classList.contains('translate-x-full'));
+});
+_obs.observe(_compDrawer, {attributes: true, attributeFilter: ['class']});
+</script>
+
 {% endblock %}
