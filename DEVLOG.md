@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FEAT: Análisis de Competencia — drawer por producto
+
+### Descripción
+Botón ⚡ en cada fila del panel Top Productos. Abre un drawer lateral derecho con:
+1. **Resumen SKU**: SKU BM, stock disponible, RetailPH USD/MXN
+2. **Nuestros listings**: todos los listings del mismo SKU en todas las cuentas, con ventas 30d, margen real, % recuperado, posición en catálogo (WINNING/COMPETING/LOSING)
+3. **Competidores externos**: precios de vendedores ajenos en el mismo catálogo ML, con indicador de buy box winner
+4. **Recomendación automática**: basada en el listing con mejor margen activo vs precio del externo más barato
+
+### Endpoint
+`GET /api/metrics/competition?item_id=MLM...`
+- Busca el item en `ml_listings` → extrae SKU base
+- Agrupa todos nuestros listings del mismo SKU
+- Lee ventas 30d de `order_history` (margen real, % recuperado)
+- Llama `price_to_win` por cuenta para cada listing de catálogo
+- Obtiene `catalog_product_id` → llama `/products/{id}/items` para externos
+- Lee BM stock de `_bm_stock_cache` (sin llamar BM en vivo)
+
+### UI
+- Drawer deslizable desde la derecha (420px, con overlay)
+- Filas en verde si tuvieron ventas en 30d
+- Margen: verde ≥10%, amarillo ≥5%, gris sin datos
+
+---
+
 ## 2026-05-14 — FEAT: Top Productos — columna BM Avail junto a ML Stock
 
 ### Descripción
