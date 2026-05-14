@@ -13934,6 +13934,7 @@ async def diag_refresh_ml_tokens(token: str = ""):
         (_diag_os.getenv("MELI_USER_ID_4", ""), _diag_os.getenv("MELI_REFRESH_TOKEN_4", ""), "cuenta4"),
     ]
     import httpx as _hx
+    from app.config import MELI_API_URL as _MELI_API_URL
     for uid, env_rt, label in _slots:
         if not uid or not env_rt:
             continue
@@ -13951,11 +13952,22 @@ async def diag_refresh_ml_tokens(token: str = ""):
                 })
             if resp.status_code == 200:
                 data = resp.json()
+                # Fetch nickname from ML API
+                nickname = (existing or {}).get("nickname", "") or ""
+                if not nickname:
+                    try:
+                        async with _hx.AsyncClient(timeout=10) as _c2:
+                            me = await _c2.get(f"{_MELI_API_URL}/users/{uid}",
+                                               headers={"Authorization": f"Bearer {data['access_token']}"})
+                            if me.status_code == 200:
+                                nickname = me.json().get("nickname", "")
+                    except Exception:
+                        pass
                 await token_store.save_tokens(uid, data["access_token"], data["refresh_token"],
-                                              data.get("expires_in", 21600))
+                                              data.get("expires_in", 21600), nickname=nickname)
                 results.append({"cuenta": label, "uid": uid, "status": "ok",
-                                 "rt_source": "db" if db_rt else "env"})
-                print(f"[DIAG-REFRESH] {label} ({uid}): OK — AT actualizado")
+                                 "rt_source": "db" if db_rt else "env", "nickname": nickname})
+                print(f"[DIAG-REFRESH] {label} ({uid}) nickname={nickname}: OK — AT actualizado")
             else:
                 results.append({"cuenta": label, "uid": uid, "status": f"error_{resp.status_code}",
                                  "detail": resp.text[:200]})

@@ -1526,17 +1526,76 @@ class MeliClient:
             return {"error": str(e)}
 
 
+_lazy_seed_ts: float = 0  # timestamp of last emergency re-seed attempt
+
+
+async def _auto_seed_from_env() -> int:
+    """Emergency re-seed when DB tokens are missing (e.g. after Railway restart wiped SQLite).
+    Reads MELI_USER_ID/MELI_REFRESH_TOKEN env vars, refreshes each account, saves to DB with nickname.
+    Returns number of accounts successfully seeded. 5-minute cooldown enforced by caller.
+    """
+    import os as _os
+    global _lazy_seed_ts
+    _lazy_seed_ts = time.time()
+    slots = [
+        (_os.getenv("MELI_USER_ID", ""),   _os.getenv("MELI_REFRESH_TOKEN", ""),   "cuenta1"),
+        (_os.getenv("MELI_USER_ID_2", ""), _os.getenv("MELI_REFRESH_TOKEN_2", ""), "cuenta2"),
+        (_os.getenv("MELI_USER_ID_3", ""), _os.getenv("MELI_REFRESH_TOKEN_3", ""), "cuenta3"),
+        (_os.getenv("MELI_USER_ID_4", ""), _os.getenv("MELI_REFRESH_TOKEN_4", ""), "cuenta4"),
+    ]
+    seeded = 0
+    for uid, rt, label in slots:
+        if not uid or not rt:
+            continue
+        try:
+            async with httpx.AsyncClient(timeout=15) as _c:
+                resp = await _c.post(MELI_TOKEN_URL, data={
+                    "grant_type": "refresh_token",
+                    "client_id": MELI_CLIENT_ID,
+                    "client_secret": MELI_CLIENT_SECRET,
+                    "refresh_token": rt,
+                })
+            if resp.status_code != 200:
+                print(f"[AUTO-SEED] {label} ({uid}): token refresh {resp.status_code}")
+                continue
+            data = resp.json()
+            nickname = ""
+            try:
+                async with httpx.AsyncClient(timeout=10) as _c2:
+                    me = await _c2.get(f"{MELI_API_URL}/users/{uid}",
+                                       headers={"Authorization": f"Bearer {data['access_token']}"})
+                    if me.status_code == 200:
+                        nickname = me.json().get("nickname", "")
+            except Exception:
+                pass
+            await token_store.save_tokens(uid, data["access_token"], data["refresh_token"],
+                                          data.get("expires_in", 21600), nickname=nickname)
+            seeded += 1
+            print(f"[AUTO-SEED] {label} ({uid}) nickname={nickname}: OK")
+        except Exception as e:
+            print(f"[AUTO-SEED] {label} ({uid}): error {e}")
+    return seeded
+
+
 async def get_meli_client(user_id: str = None) -> Optional[MeliClient]:
     """Factory para obtener un cliente MeLi con tokens almacenados.
     Si user_id es None, usa el ContextVar de la cuenta activa (seteado por AccountMiddleware).
     Si tampoco hay ContextVar, usa get_any_tokens() para compatibilidad con single-user.
+    Si el DB está vacío (Railway wipe), intenta re-seed automático desde env vars (cooldown 5 min).
     """
+    global _lazy_seed_ts
     if user_id is None:
         user_id = _active_user_id.get()
     if user_id:
         tokens = await token_store.get_tokens(user_id)
     else:
         tokens = await token_store.get_any_tokens()
+
+    if not tokens and (time.time() - _lazy_seed_ts) > 300:
+        print("[AUTO-SEED] Tokens ausentes en DB — intentando re-seed de emergencia desde env vars")
+        await _auto_seed_from_env()
+        tokens = await token_store.get_tokens(user_id) if user_id else await token_store.get_any_tokens()
+
     if not tokens:
         return None
 
