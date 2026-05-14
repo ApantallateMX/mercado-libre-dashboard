@@ -14016,6 +14016,33 @@ async def diag_find_item_by_model(q: str = "", token: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/order-sample")
+async def diag_order_sample(sku: str = "", token: str = "", limit: int = 3):
+    """Muestra últimas órdenes reales de un SKU con todos los campos financieros."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB_P
+    try:
+        async with _aio.connect(_DB_P) as db:
+            db.row_factory = _aio.Row
+            rows = await (await db.execute(
+                """SELECT order_id, item_id, account_id, unit_price, quantity, sale_fee,
+                          neto_plat, costo_usd, costo_mxn, retail_ph_usd,
+                          ganancia_neta, margen_pct, recup_retail_pct,
+                          fx_rate, order_date, data_source
+                   FROM order_history
+                   WHERE sku LIKE ? AND platform = 'ml' AND status != 'cancelled'
+                   ORDER BY order_date DESC LIMIT ?""",
+                (f"%{sku}%", limit)
+            )).fetchall()
+        return JSONResponse({"sku": sku, "found": len(rows), "orders": [dict(r) for r in rows]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.get("/api/diag/catalog-sellers")
 async def diag_catalog_sellers(product_id: str = "", token: str = ""):
     """Lista todos los vendedores en una página de catálogo ML."""
