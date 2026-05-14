@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FEAT: Competition drawer — Bloque Anotaciones por listing
+
+### Descripción
+Se agrega un nuevo bloque "Anotaciones" al fondo del competition drawer con propuestas
+accionables por cada listing activo. Son sugerencias visuales — el usuario decide qué hacer.
+
+### Lógica de anotaciones (JS frontend, sin cambios al backend)
+- **Listing de catálogo + Ganando + ≥10 uds** → `MANTENER` (verde)
+- **Listing de catálogo + Ganando + <10 uds** → `REVISAR` (amarillo) — pocas ventas pese a ganar
+- **Listing de catálogo + Compitiendo** → `BAJAR PRECIO` (naranja) — incluye price to win si disponible
+- **Listing único + 0 ventas + duplicado de misma cuenta** → `PAUSAR` (rojo)
+- **Listing único + 0 ventas** → `SIN VENTAS` (rojo) — considera bajar precio
+- **Listing único + ≥20 uds + %Rec ≥55%** → `SUBIR PRECIO` (verde) — hay margen
+- **Listing único + ≤3 uds** → `VENTAS BAJAS` (amarillo)
+- **Listing único + ventas normales** → `MANTENER` (gris)
+
+Detección de duplicados: misma cuenta + mismo precio → el de 0 ventas se marca PAUSAR.
+
+---
+
 ## 2026-05-14 — FEAT: Análisis de Competencia — drawer por producto
 
 ### Descripción
