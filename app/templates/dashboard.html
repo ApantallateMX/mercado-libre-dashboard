@@ -155,9 +155,9 @@
 
     <!-- Heatmap patrón semanal + Top Productos -->
     <div class="px-4 md:px-6 py-4 border-t border-gray-100" id="heatmap-section">
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <!-- LEFT: Heatmap -->
-            <div>
+        <div class="flex flex-col lg:flex-row gap-6">
+            <!-- LEFT: Heatmap — ancho natural, no se estira -->
+            <div class="lg:flex-none">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-sm font-semibold text-gray-700">Patrón semanal</h3>
                     <span class="text-xs text-gray-400">Clic en celda para ver desglose</span>
@@ -166,8 +166,8 @@
                     <div class="text-xs text-gray-300 py-2">Cargando...</div>
                 </div>
             </div>
-            <!-- RIGHT: Top Productos -->
-            <div id="top-products-panel">
+            <!-- RIGHT: Top Productos — ocupa todo el espacio restante -->
+            <div id="top-products-panel" class="lg:flex-1 min-w-0">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-sm font-semibold text-gray-700">Top Productos</h3>
                     <div class="flex gap-1" id="tp-period-btns">
