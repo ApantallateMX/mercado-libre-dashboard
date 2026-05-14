@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FEAT: Panel "Top Productos" — ranking de ventas al lado del heatmap semanal
+
+### Descripción
+Panel nuevo a la derecha del heatmap semanal (grid 2 columnas en desktop). Muestra el ranking
+de los 20 productos más vendidos del período seleccionado con estado actual en ML.
+
+### Features
+- Selector de período: 7d / 15d / 30d / 90d (default 30d). Carga instantánea.
+- Columnas: #, Foto + SKU/Producto, Uds vendidas, Neto MXN, Stock ML, Status
+- Stock badge: verde >5 uds / naranja 1-5 uds / rojo 0 uds
+- Alertas visuales por fila:
+  - Fondo naranja: Activo en ML pero stock=0 (riesgo de oversell o pérdida de ventas)
+  - Fondo amarillo: Pausado pero tiene stock ML (oportunidad no aprovechada)
+- Scroll interno (max 320px) para no romper el layout de la card
+
+### Endpoint
+`GET /api/metrics/top-products?days=N`
+- Fetcha órdenes ML del período
+- Agrupa por item_id: suma unidades y revenue neto
+- Batch fetch `/items?ids=...` para status, available_quantity y thumbnail
+- Retorna top 20 ordenado por unidades
+
+---
+
 ## 2026-05-14 — FIX: "Sesión no disponible" tras Railway restart + nicknames ML en dropdown
 
 ### Problema
