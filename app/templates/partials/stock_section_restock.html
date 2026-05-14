@@ -418,6 +418,7 @@ function activateItem(itemId, bmTotal, status, btn, hasVariations) {
     var me1Warn = false;
 
     // Variaciones: sync-variation-stocks consulta el SKU individual de cada variación en BM
+    var _noSkuVars = [];
     var stockPromise;
     if (hasVariations) {
         stockPromise = fetch('/api/items/' + itemId + '/sync-variation-stocks', {
@@ -430,7 +431,8 @@ function activateItem(itemId, bmTotal, status, btn, hasVariations) {
             });
             return r.json().then(function(d) {
                 var totalQty = (d.results || []).reduce(function(s, v) { return s + (v.meli_qty || 0); }, 0);
-                safeQty = totalQty;  // para mostrar en el botón
+                safeQty = totalQty;
+                _noSkuVars = d.no_sku_vars || [];
                 return d;
             });
         });
@@ -477,13 +479,22 @@ function activateItem(itemId, bmTotal, status, btn, hasVariations) {
         if (me1Warn) {
             btn.textContent = 'OK (verif.)';
             btn.className = btn.className.replace('bg-green-600', 'bg-orange-500').replace('hover:bg-green-700', 'hover:bg-orange-600');
+        } else if (_noSkuVars.length > 0) {
+            btn.textContent = 'OK (' + safeQty + ') ⚠️';
+            btn.className = btn.className.replace('bg-green-600', 'bg-orange-500').replace('hover:bg-green-700', 'hover:bg-orange-600');
         } else {
             btn.textContent = 'OK (' + safeQty + ')';
             btn.className = btn.className.replace('bg-green-600', 'bg-gray-400').replace('hover:bg-green-700', '');
         }
-        if (msgEl && !me1Warn) {
-            msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : '') + (hasVariations ? ' (vars)' : '');
-            msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold';
+        if (msgEl) {
+            if (_noSkuVars.length > 0) {
+                var names = _noSkuVars.map(function(v) { return v.combo; }).join(', ');
+                msgEl.innerHTML = '<span class="text-orange-600 font-semibold">' + _noSkuVars.length + ' var sin SKU → stock 0: ' + names + '</span>';
+                msgEl.className = 'text-[10px] ml-1 block mt-1';
+            } else if (!me1Warn) {
+                msgEl.textContent = 'Stock: ' + safeQty + (status === 'paused' ? ' + Activado' : '') + (hasVariations ? ' (vars)' : '');
+                msgEl.className = 'text-[10px] ml-1 text-green-600 font-semibold';
+            }
         }
         var row = document.getElementById('act-m-' + itemId) || document.getElementById('act-d-' + itemId);
         if (row) row.classList.add('opacity-50');

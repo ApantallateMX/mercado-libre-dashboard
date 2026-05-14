@@ -8608,10 +8608,20 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
                 _rv_base = normalize_to_bm_sku(_rv_parts[0].strip()) if _rv_parts else "__none__"
                 _sku_base_groups[_rv_base].append(_rv)
 
+        # Errores de SKU (sin asignar o inválido) → qty=0 en ML + flag no_sku.
+        # Errores de BM (conectividad) → NO tocar ML — podría ser BM down, no falta de SKU.
+        _SKU_ERRORS = {"Sin SKU en variacion", "SKU no mapeable a BM"}
+
         var_updates = []
+        no_sku_vars = []  # variaciones que necesitan SKU asignado
         for r in var_results:
             if r["error"]:
                 r["meli_qty"] = 0
+                if r["error"] in _SKU_ERRORS:
+                    r["no_sku"] = True
+                    no_sku_vars.append({"variation_id": r["variation_id"], "combo": r["combo"], "sku": r["sku"]})
+                    if not dry_run:
+                        var_updates.append({"id": r["variation_id"], "available_quantity": 0})
                 continue
             _parts = _re_var.split(r'\s*[/+]\s*', r.get("sku") or "")
             _base = normalize_to_bm_sku(_parts[0].strip()) if _parts else "__none__"
@@ -8653,6 +8663,7 @@ async def sync_variation_stocks_api(item_id: str, request: Request):
             "dry_run": dry_run,
             "results": list(var_results),
             "updated_count": sum(1 for r in var_results if r["updated"]),
+            "no_sku_vars": no_sku_vars,  # variaciones sin SKU BM válido → stock puesto en 0
         })
     finally:
         await client.close()
