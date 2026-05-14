@@ -13989,6 +13989,30 @@ async def diag_refresh_ml_tokens(token: str = ""):
     return JSONResponse({"results": results})
 
 
+@app.get("/api/diag/item-data-json")
+async def diag_item_data_json(item_id: str = "", token: str = ""):
+    """Muestra data_json de un item para verificar si tiene sale_price."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio, json as _j
+    from app.config import DATABASE_PATH as _DB_P
+    async with _aio.connect(_DB_P) as db:
+        db.row_factory = _aio.Row
+        row = await (await db.execute(
+            "SELECT item_id, price, data_json FROM ml_listings WHERE item_id = ? LIMIT 1", (item_id,)
+        )).fetchone()
+    if not row:
+        return JSONResponse({"error": "no encontrado"})
+    try:
+        body = _j.loads(row["data_json"] or "{}")
+        return JSONResponse({"item_id": item_id, "price": row["price"],
+                             "sale_price": body.get("sale_price"),
+                             "original_price": body.get("original_price"),
+                             "has_data_json": bool(row["data_json"])})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
 @app.get("/api/diag/find-item-by-model")
 async def diag_find_item_by_model(q: str = "", token: str = ""):
     """Busca un item en nuestra DB de listings por modelo/número de parte."""
