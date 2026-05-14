@@ -1065,6 +1065,74 @@ function _renderCompetition(d) {
             '<span class="font-semibold">Recomendación: </span>' + d.recommendation + '</div>';
     }
 
+    // Bloque 5: Anotaciones por listing
+    var _colorCls = {
+        red:    'bg-red-100 text-red-700',
+        orange: 'bg-orange-100 text-orange-700',
+        yellow: 'bg-yellow-100 text-yellow-700',
+        green:  'bg-green-100 text-green-700',
+        gray:   'bg-gray-100 text-gray-500'
+    };
+    // detectar duplicados: misma cuenta + mismo precio
+    var _dupGroups = {};
+    (d.our_listings || []).forEach(function(l) {
+        var k = l.account + '|' + (l.price || 0);
+        _dupGroups[k] = (_dupGroups[k] || 0) + 1;
+    });
+    var _notes = [];
+    (d.our_listings || []).filter(function(l){ return l.status !== 'paused'; }).forEach(function(l) {
+        var action = '', color = '', reason = '';
+        var sales = l.sales_30d || 0;
+        var isDup = _dupGroups[l.account + '|' + (l.price || 0)] > 1;
+
+        if (l.catalog) {
+            // Listing de catálogo — juzgar por ptw_status
+            if (l.ptw_status === 'Ganando') {
+                if (sales >= 10) {
+                    action = 'MANTENER'; color = 'green';
+                    reason = 'Ganando buy box con ' + sales + ' uds/mes';
+                } else {
+                    action = 'REVISAR'; color = 'yellow';
+                    reason = 'Ganando buy box pero pocas ventas (' + sales + ' uds) — revisa el listing';
+                }
+            } else if (l.ptw_status === 'Compitiendo') {
+                action = 'BAJAR PRECIO'; color = 'orange';
+                reason = 'No gana buy box' + (l.ptw_price ? ' — price to win: ' + _mxn(l.ptw_price) : '');
+            } else {
+                // ptw sin dato
+                if (sales === 0) { action = 'SIN VENTAS'; color = 'red'; reason = '0 uds en 30d — revisa precio o listing'; }
+            }
+        } else {
+            // Listing único
+            if (sales === 0) {
+                if (isDup) { action = 'PAUSAR'; color = 'red'; reason = '0 uds/mes — posible duplicado de otro listing de esta cuenta'; }
+                else        { action = 'SIN VENTAS'; color = 'red'; reason = '0 uds en 30d — considera bajar precio'; }
+            } else if (sales >= 20 && (l.recup_pct || 0) >= 55) {
+                action = 'SUBIR PRECIO'; color = 'green';
+                reason = sales + ' uds/mes con buen %Rec (' + _pct(l.recup_pct) + ') — hay margen para subir';
+            } else if (sales <= 3) {
+                action = 'VENTAS BAJAS'; color = 'yellow';
+                reason = 'Solo ' + sales + ' ud(s)/mes — evalúa ajustar precio';
+            } else {
+                action = 'MANTENER'; color = 'gray';
+                reason = sales + ' uds/mes — rendimiento estable';
+            }
+        }
+        if (action) _notes.push({account: l.account, logistic: l.logistic, price: l.price, action: action, color: color, reason: reason});
+    });
+
+    if (_notes.length > 0) {
+        html += '<div><div class="text-xs font-semibold text-gray-600 mb-1.5">Anotaciones</div><div class="space-y-1.5">';
+        _notes.forEach(function(n) {
+            html += '<div class="flex items-start gap-2 text-[11px]">' +
+                '<span class="shrink-0 px-1.5 py-0.5 rounded font-bold ' + (_colorCls[n.color] || _colorCls.gray) + '">' + n.action + '</span>' +
+                '<span class="text-gray-500"><span class="font-medium text-gray-700">' + n.account + '</span>' +
+                ' ' + _logBadge(n.logistic) + ' ' + _mxn(n.price) + ' — ' + n.reason + '</span>' +
+                '</div>';
+        });
+        html += '</div></div>';
+    }
+
     html += '</div>';
     return html;
 }
