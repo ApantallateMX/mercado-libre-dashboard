@@ -1030,8 +1030,7 @@ function _renderCompetition(d) {
         '<th class="pb-1 text-center">Catálogo</th></tr></thead><tbody>';
     d.our_listings.forEach(function(l) {
         var rowCls = l.sales_30d > 0 ? 'bg-green-50' : '';
-        html += '<tr class="' + rowCls + ' border-b border-gray-50">' +
-            var priceHtml = l.has_deal
+        var priceHtml = l.has_deal
             ? '<span class="line-through text-gray-400 text-[10px]">' + _mxn(l.price) + '</span> <span class="font-bold text-orange-600">' + _mxn(l.deal_price) + '</span> <span class="text-[9px] bg-orange-100 text-orange-500 px-1 rounded">Deal</span>'
             : _mxn(l.price || l.avg_price);
         html += '<tr class="' + rowCls + ' border-b border-gray-50">' +
