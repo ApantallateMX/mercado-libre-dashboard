@@ -2130,24 +2130,27 @@
     var gap = _wiz.gap;
     if (!gap) return;
     var grid = document.getElementById('wiz-bm-grid');
-    var empty = document.getElementById('wiz-bm-empty');
     var loading = document.getElementById('wiz-bm-loading');
     var countEl = document.getElementById('wiz-bm-count');
+    if (!grid) return;
 
-    loading.classList.remove('hidden');
-    empty.textContent = 'Cargando imágenes...';
-    countEl.textContent = '';
-    // Clear grid immediately so old SKU images don't stay visible while loading
+    if (loading) loading.classList.remove('hidden');
+    if (countEl) countEl.textContent = '';
+    // Limpiar grid y mostrar loading — siempre crear nuevo div (wiz-bm-empty puede haber sido eliminado)
     while (grid.firstChild) grid.removeChild(grid.firstChild);
+    var _loadDiv = document.createElement('div');
+    _loadDiv.className = 'col-span-4 text-center py-3 text-xs text-gray-300 bg-gray-50 rounded-lg border border-dashed border-gray-200';
+    _loadDiv.textContent = 'Cargando imágenes...';
+    grid.appendChild(_loadDiv);
 
     fetch('/api/lanzar/bm-images/' + encodeURIComponent(gap.sku))
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      loading.classList.add('hidden');
+      if (loading) loading.classList.add('hidden');
       var imgs = d.images || [];
-      countEl.textContent = imgs.length ? imgs.length + ' imagen' + (imgs.length > 1 ? 'es' : '') : '';
+      if (countEl) countEl.textContent = imgs.length ? imgs.length + ' imagen' + (imgs.length > 1 ? 'es' : '') : '';
 
-      // Clear grid (keep empty placeholder)
+      // Clear grid (loading div + any stale content)
       while (grid.firstChild) grid.removeChild(grid.firstChild);
 
       if (!imgs.length) {
