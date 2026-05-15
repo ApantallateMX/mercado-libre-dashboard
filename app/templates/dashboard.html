@@ -979,6 +979,7 @@ window.loadTopProducts(30);
 
 // ─── Competition Drawer ───────────────────────────────────────────────────────
 var _compCurrentAccount = {{ user.nickname | tojson }};
+var _compIsAdmin = {{ 'true' if dashboard_user and dashboard_user.role == 'admin' else 'false' }};
 var _compItemId = '', _compSku = '', _compTitle = '';
 
 window.openCompetition = function(itemId, title) {
@@ -1152,7 +1153,7 @@ function _renderCompetition(d) {
     if (_notes.length > 0) {
         html += '<div><div class="text-xs font-semibold text-gray-600 mb-1.5">Anotaciones</div><div class="space-y-1.5">';
         _notes.forEach(function(n) {
-            var isOther = n.account.toUpperCase() !== _compCurrentAccount.toUpperCase();
+            var isOther = _compIsAdmin || n.account.toUpperCase() !== _compCurrentAccount.toUpperCase();
             var safeAction = n.action.replace(/'/g, "\\'");
             var safeReason = n.reason.replace(/'/g, "\\'");
             var safeAcct = n.account.replace(/'/g, "\\'");
