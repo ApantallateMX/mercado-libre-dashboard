@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-14 — FEAT: Sistema de sugerencias cruzadas entre cuentas
+
+### Descripción
+Comunicación in-app entre cuentas (APANTALLATEMX, AUTOBOT, LUTEMA, BLOW).
+Desde el drawer de Análisis de Competencia, cualquier anotación dirigida a otra cuenta
+muestra un botón 📤. Al presionarlo, se guarda la sugerencia en DB y el responsable de
+esa cuenta la ve en su campana 🔔 sin necesidad de email ni WhatsApp.
+
+### Flujo
+1. Usuario abre drawer ⚡ → ve anotaciones de todas las cuentas
+2. Filas de otras cuentas → botón 📤 (propias no tienen el botón — no tendría sentido notificarse a uno mismo)
+3. Click en 📤 → `POST /api/suggestions` → guarda en DB con `from_account`, `to_account`, `item_id`, `sku`, `item_title`, `action`, `reason`
+4. Campana 🔔 en nav MeLi con badge rojo si hay sugerencias pendientes (polling cada 2 min)
+5. Click en campana → panel lateral con lista: acción, SKU, título, quien mandó, tiempo transcurrido
+6. Botones por sugerencia: `✓ Aplicado` / `⏳ En proceso` / `✕ Descartar`
+
+### Cambios
+- `app/services/token_store.py`: tabla `suggestions` con índice por `(to_account, status)`
+- `app/main.py`: `POST /api/suggestions`, `GET /api/suggestions`, `PATCH /api/suggestions/{id}`
+- `app/templates/base.html`: campana 🔔 en nav MeLi, panel `#notif-panel`, JS de polling/render/acciones
+- `app/templates/dashboard.html`: `_compCurrentAccount` inyectado desde Jinja, botón 📤 en `_notes.forEach`, `window._sendSuggestion()`
+
+---
+
 ## 2026-05-14 — FEAT: Competition drawer — Bloque Anotaciones por listing
 
 ### Descripción
