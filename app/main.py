@@ -14047,17 +14047,41 @@ async def diag_refresh_ml_tokens(token: str = ""):
 
 @app.get("/api/diag/bm-photos")
 async def diag_bm_photos(sku: str = "", token: str = ""):
-    """Diagnóstico: llama al endpoint bm-images y devuelve la respuesta RAW completa."""
+    """Diagnóstico: llama directamente a BM GetPhotoBySKU y muestra respuesta raw."""
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
-    import httpx as _hx
+    from app.api.lanzar import _bm_login as _bml, _BM_BASE as _bm_base, _BM_COMPANY as _bm_co
+    from app.services.binmanager_client import bm_post as _bm_post_d
+    _BM_PHOTOS_URL = f"{_bm_base}/InventoryReport/InventoryReport/GlobalStock_GetPhotoBySKU"
+    dbg: dict = {"sku": sku, "url": _BM_PHOTOS_URL}
     try:
-        import os as _os_bm
-        async with _hx.AsyncClient(timeout=30) as _c:
-            r = await _c.get(f"http://127.0.0.1:{_os_bm.environ.get('PORT', 8000)}/api/lanzar/bm-images/{sku}")
-            return JSONResponse({"status": r.status_code, "body": r.json()})
+        logged_in = await _bml()
+        dbg["login"] = logged_in
+        if not logged_in:
+            return JSONResponse({"error": "BM login failed", "_debug": dbg})
+        r = await _bm_post_d(_BM_PHOTOS_URL, {"COMPANYID": _bm_co, "SKU": sku.upper()}, timeout=20.0)
+        if r is None:
+            return JSONResponse({"error": "BM no respondió (None)", "_debug": dbg})
+        dbg["http_status"] = r.status_code
+        dbg["body_len"] = len(r.text)
+        dbg["body_preview"] = r.text[:1000]
+        try:
+            data = r.json()
+            dbg["json_keys"] = list(data.keys()) if isinstance(data, dict) else type(data).__name__
+            raw = data.get("JSONSKUFiles") if isinstance(data, dict) else None
+            dbg["JSONSKUFiles_type"] = type(raw).__name__
+            dbg["JSONSKUFiles_len"] = len(raw) if raw else 0
+            if raw:
+                import json as _jj
+                files = _jj.loads(raw) if isinstance(raw, str) else raw
+                dbg["files_count"] = len(files)
+                dbg["first_file"] = files[0] if files else None
+        except Exception as je:
+            dbg["json_error"] = str(je)
+        return JSONResponse({"_debug": dbg})
     except Exception as e:
-        return JSONResponse({"error": str(e)})
+        dbg["exception"] = str(e)
+        return JSONResponse({"error": str(e), "_debug": dbg})
 
 
 @app.get("/api/diag/item-data-json")
