@@ -1092,19 +1092,33 @@ async def get_gaps(
         )
         launched_total = (await launched_cur.fetchone())[0]
 
-        # Cross-reference bm_stock_cache to detect stale stock in gap list
+        # Cross-reference bm_stock_cache — only override when cache is MORE RECENT
+        # than the last gap scan. Both sources can be stale; timestamp wins.
         _page_skus = [dict(r)["sku"].upper() for r in rows]
-        _cache_map: dict[str, int] = {}
+        _gap_ts_map: dict[str, float] = {}
+        for _r2 in rows:
+            _rd = dict(_r2)
+            _sk = _rd["sku"].upper()
+            try:
+                _ls = str(_rd.get("last_scan") or "")
+                _gap_ts_map[_sk] = datetime.fromisoformat(_ls).replace(tzinfo=timezone.utc).timestamp()
+            except Exception:
+                _gap_ts_map[_sk] = 0.0
+        _cache_map: dict[str, tuple[int, float]] = {}  # sku → (avail, synced_at)
         if _page_skus:
             _ph = ",".join("?" * len(_page_skus))
             _cache_rows = await (await db.execute(
-                f"SELECT sku, data_json FROM bm_stock_cache WHERE sku IN ({_ph})",
+                f"SELECT sku, data_json, synced_at FROM bm_stock_cache WHERE sku IN ({_ph})",
                 _page_skus,
             )).fetchall()
             for _cr in _cache_rows:
                 try:
-                    _cd = json.loads(dict(_cr)["data_json"])
-                    _cache_map[dict(_cr)["sku"].upper()] = int(_cd.get("AvailableQTY") or 0)
+                    _crd = dict(_cr)
+                    _cd = json.loads(_crd["data_json"])
+                    _cache_map[_crd["sku"].upper()] = (
+                        int(_cd.get("AvailableQTY") or 0),
+                        float(_crd["synced_at"] or 0),
+                    )
                 except Exception:
                     pass
 
@@ -1119,15 +1133,17 @@ async def get_gaps(
         else:
             d["cost_usd"]       = 0
             d["cost_price_mxn"] = 0
-        # Overlay real stock from bm_stock_cache when available
+        # Overlay real stock from cache ONLY when cache is fresher than gap scan
         _sku_up = (d.get("sku") or "").upper()
         if _sku_up in _cache_map:
-            _cached = _cache_map[_sku_up]
-            _gap_stock = int(d.get("stock_total") or 0)
-            if _cached != _gap_stock:
-                d["stock_stale"] = True
-                d["stock_cache"] = _cached
-                d["stock_total"] = _cached
+            _cached_avail, _cache_ts = _cache_map[_sku_up]
+            _gap_ts = _gap_ts_map.get(_sku_up, 0.0)
+            if _cache_ts > _gap_ts:
+                _gap_stock = int(d.get("stock_total") or 0)
+                if _cached_avail != _gap_stock:
+                    d["stock_stale"] = True
+                    d["stock_cache"] = _cached_avail
+                    d["stock_total"] = _cached_avail
         items.append(d)
 
     return {
