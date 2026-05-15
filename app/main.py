@@ -14045,6 +14045,21 @@ async def diag_refresh_ml_tokens(token: str = ""):
     return JSONResponse({"results": results})
 
 
+@app.get("/api/diag/bm-photos")
+async def diag_bm_photos(sku: str = "", token: str = ""):
+    """Diagnóstico: llama al endpoint bm-images y devuelve la respuesta RAW completa."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import httpx as _hx
+    try:
+        import os as _os_bm
+        async with _hx.AsyncClient(timeout=30) as _c:
+            r = await _c.get(f"http://127.0.0.1:{_os_bm.environ.get('PORT', 8000)}/api/lanzar/bm-images/{sku}")
+            return JSONResponse({"status": r.status_code, "body": r.json()})
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+
+
 @app.get("/api/diag/item-data-json")
 async def diag_item_data_json(item_id: str = "", token: str = ""):
     """Muestra data_json de un item para verificar si tiene sale_price."""
