@@ -3192,19 +3192,29 @@ async def bm_images_endpoint(sku: str):
     dbg: dict = {"sku": sku}
 
     try:
-        from app.services.binmanager_client import bm_post as _bm_post_img
-        logged_in = await _bm_login()
-        dbg["login"] = logged_in
-        if not logged_in:
-            return JSONResponse({"images": [], "_debug": dbg, "error": "BM login failed"})
+        # Bypass del semáforo BM — fotos son read-only y no deben quedar bloqueadas
+        # si hay un scan corriendo. Usamos las cookies de la sesión compartida directamente.
+        from app.services.binmanager_client import get_shared_bm as _gsb_photos
+        import httpx as _hx_photos
+        bm_client = await _gsb_photos()
+        dbg["login"] = bm_client._logged_in
+        if not bm_client._logged_in:
+            logged_in = await _bm_login()
+            dbg["login_forced"] = logged_in
+            if not logged_in:
+                return JSONResponse({"images": [], "_debug": dbg, "error": "BM login failed"})
+            bm_client = await _gsb_photos()
 
-        r = await _bm_post_img(
-            _BM_PHOTOS_URL,
-            {"COMPANYID": _BM_COMPANY, "SKU": sku.upper()},
-            timeout=20.0,
-        )
-        if r is None:
-            return JSONResponse({"images": [], "_debug": dbg, "error": "BM no respondió"})
+        # Copiar cookies de la sesión compartida a un cliente propio (sin semáforo)
+        shared_http = bm_client._client()
+        cookies = {k: v for k, v in shared_http.cookies.items()}
+        dbg["cookie_count"] = len(cookies)
+        async with _hx_photos.AsyncClient(cookies=cookies, follow_redirects=True, timeout=15.0) as _photo_hx:
+            r = await _photo_hx.post(
+                _BM_PHOTOS_URL,
+                json={"COMPANYID": _BM_COMPANY, "SKU": sku.upper()},
+                headers={"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
         dbg["status"] = r.status_code
         dbg["body_preview"] = r.text[:400]
         if r.status_code != 200:
