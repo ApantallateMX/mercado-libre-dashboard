@@ -1092,6 +1092,22 @@ async def get_gaps(
         )
         launched_total = (await launched_cur.fetchone())[0]
 
+        # Cross-reference bm_stock_cache to detect stale stock in gap list
+        _page_skus = [dict(r)["sku"].upper() for r in rows]
+        _cache_map: dict[str, int] = {}
+        if _page_skus:
+            _ph = ",".join("?" * len(_page_skus))
+            _cache_rows = await (await db.execute(
+                f"SELECT sku, data_json FROM bm_stock_cache WHERE sku IN ({_ph})",
+                _page_skus,
+            )).fetchall()
+            for _cr in _cache_rows:
+                try:
+                    _cd = json.loads(dict(_cr)["data_json"])
+                    _cache_map[dict(_cr)["sku"].upper()] = int(_cd.get("AvailableQTY") or 0)
+                except Exception:
+                    pass
+
     items = []
     for r in rows:
         d = dict(r)
@@ -1103,6 +1119,15 @@ async def get_gaps(
         else:
             d["cost_usd"]       = 0
             d["cost_price_mxn"] = 0
+        # Overlay real stock from bm_stock_cache when available
+        _sku_up = (d.get("sku") or "").upper()
+        if _sku_up in _cache_map:
+            _cached = _cache_map[_sku_up]
+            _gap_stock = int(d.get("stock_total") or 0)
+            if _cached != _gap_stock:
+                d["stock_stale"] = True
+                d["stock_cache"] = _cached
+                d["stock_total"] = _cached
         items.append(d)
 
     return {
