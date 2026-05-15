@@ -2201,9 +2201,13 @@
         grid.appendChild(wrapper);
       });
     })
-    .catch(function() {
+    .catch(function(e) {
       loading.classList.add('hidden');
-      empty.textContent = 'Error cargando imágenes';
+      while (grid.firstChild) grid.removeChild(grid.firstChild);
+      var errDiv = document.createElement('div');
+      errDiv.className = 'col-span-4 text-center py-3 text-xs text-red-400 bg-red-50 rounded-lg border border-dashed border-red-200';
+      errDiv.textContent = '⚠ Error cargando imágenes BM';
+      grid.appendChild(errDiv);
     });
   }
 

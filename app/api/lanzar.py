@@ -3230,11 +3230,18 @@ async def bm_images_endpoint(sku: str):
         images = []
         for f in files:
             url = (f.get("PhotoWebURL") or f.get("URL") or f.get("ImageName") or "").strip()
+            if not url or not url.startswith("http"):
+                continue
             ext = (f.get("PhotoExtension") or "").lower()
-            if not url or (ext and ext not in _IMAGE_EXTENSIONS):
+            # Reject only if explicit non-image extension is declared
+            if ext and ext not in _IMAGE_EXTENSIONS:
                 continue
-            if not any(url.lower().endswith(e) for e in _IMAGE_EXTENSIONS):
-                continue
+            # Accept URL if path (before query params) ends with image ext OR extension field looks ok
+            url_path = url.split("?")[0].lower()
+            has_img_ext = any(url_path.endswith(e) for e in _IMAGE_EXTENSIONS)
+            if not has_img_ext and not ext:
+                # No extension info at all — still accept if it's a valid http URL from BM
+                pass  # trust BM
             images.append({"url": url, "type_name": f.get("TypeName") or ""})
             if len(images) >= 12:
                 break
