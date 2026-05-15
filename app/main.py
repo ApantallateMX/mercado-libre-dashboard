@@ -3359,34 +3359,36 @@ def _cleanup_memory_caches():
     )
 
 async def _sync_gap_stock_from_cache():
-    """Actualiza bm_sku_gaps.stock_total con datos frescos del caché BM en memoria.
-    Llamar al final de cada ciclo de prewarm (c/15 min) para mantener la lista
-    de gaps sincronizada sin queries adicionales a BM."""
+    """Baja stock en bm_sku_gaps cuando el caché BM confirma una reducción.
+    Solo actualiza cuando avail_total < stock_total actual — el gap scanner
+    es la fuente autoritativa para aumentos y primeras inserciones."""
     if not _bm_stock_cache:
         return
     try:
         import aiosqlite as _aio_gap
         async with _aio_gap.connect(DATABASE_PATH) as _db:
-            _gap_skus = await (await _db.execute(
-                "SELECT DISTINCT sku FROM bm_sku_gaps WHERE status='unlaunched'"
+            _gap_rows = await (await _db.execute(
+                "SELECT sku, stock_total FROM bm_sku_gaps WHERE status='unlaunched'"
             )).fetchall()
             _updates = []
-            for _gr in _gap_skus:
+            for _gr in _gap_rows:
                 _sk = _gr[0].upper()
+                _current = int(_gr[1] or 0)
                 _entry = _bm_stock_cache.get(_sk)
                 if _entry is not None:
                     _, _bm_data = _entry
                     _avail = int(_bm_data.get("avail_total") or 0)
-                    _updates.append((_avail, _sk))
+                    if _avail < _current:  # solo bajar, nunca subir
+                        _updates.append((_avail, _sk))
             if _updates:
                 await _db.executemany(
                     "UPDATE bm_sku_gaps SET stock_total=? WHERE sku=?",
                     _updates,
                 )
                 await _db.commit()
-                logger.info(f"[GAP-SYNC] stock_total actualizado para {len(_updates)} SKUs desde caché BM")
+                logger.info(f"[GAP-SYNC] stock bajado para {len(_updates)} SKUs desde caché BM")
     except Exception as _e:
-        logger.warning(f"[GAP-SYNC] Error sincronizando stock de gaps: {_e}")
+        logger.warning(f"[GAP-SYNC] Error en gap stock sync: {_e}")
 
 
 # --- BM Health Monitor ---
