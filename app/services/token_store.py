@@ -704,6 +704,27 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_sku ON order_history(sku)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: suggestions — notificaciones cruzadas entre cuentas
+        # Propuestas de acción desde el análisis de competencia
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS suggestions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_account TEXT NOT NULL,
+                to_account   TEXT NOT NULL,
+                item_id      TEXT NOT NULL DEFAULT '',
+                sku          TEXT NOT NULL DEFAULT '',
+                item_title   TEXT NOT NULL DEFAULT '',
+                action       TEXT NOT NULL,
+                reason       TEXT NOT NULL DEFAULT '',
+                created_at   REAL NOT NULL DEFAULT 0,
+                status       TEXT NOT NULL DEFAULT 'pending'
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_suggestions_to ON suggestions(to_account, status)"
+        )
         await db.commit()
 
 

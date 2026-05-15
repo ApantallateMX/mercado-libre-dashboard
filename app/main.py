@@ -1522,6 +1522,62 @@ async def get_current_user():
         await client.close()
 
 
+# === Sugerencias cruzadas entre cuentas ===
+
+@app.post("/api/suggestions")
+async def create_suggestion(request: Request):
+    import aiosqlite as _aiosqlite
+    import time as _t
+    body = await request.json()
+    from_account = (body.get("from_account") or "").strip()
+    to_account   = (body.get("to_account") or "").strip()
+    item_id      = (body.get("item_id") or "").strip()
+    sku          = (body.get("sku") or "").strip()
+    item_title   = (body.get("item_title") or "").strip()
+    action       = (body.get("action") or "").strip()
+    reason       = (body.get("reason") or "").strip()
+    if not from_account or not to_account or not action:
+        return JSONResponse({"error": "Faltan campos requeridos"}, status_code=400)
+    async with _aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            """INSERT INTO suggestions (from_account, to_account, item_id, sku, item_title, action, reason, created_at, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (from_account, to_account, item_id, sku, item_title, action, reason, _t.time())
+        )
+        await db.commit()
+        sid = cur.lastrowid
+    return {"id": sid, "ok": True}
+
+@app.get("/api/suggestions")
+async def list_suggestions(to_account: str = Query(""), status: str = Query("pending")):
+    import aiosqlite as _aiosqlite
+    async with _aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = _aiosqlite.Row
+        if to_account:
+            cur = await db.execute(
+                "SELECT * FROM suggestions WHERE to_account=? AND status=? ORDER BY created_at DESC LIMIT 50",
+                (to_account, status)
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM suggestions WHERE status=? ORDER BY created_at DESC LIMIT 50",
+                (status,)
+            )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+@app.patch("/api/suggestions/{sid}")
+async def update_suggestion(sid: int, request: Request):
+    import aiosqlite as _aiosqlite
+    body = await request.json()
+    new_status = (body.get("status") or "").strip()
+    if new_status not in ("pending", "applied", "dismissed", "in_progress"):
+        return JSONResponse({"error": "Status inválido"}, status_code=400)
+    async with _aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("UPDATE suggestions SET status=? WHERE id=?", (new_status, sid))
+        await db.commit()
+    return {"ok": True}
+
 # === Rutas de paginas ===
 
 @app.get("/api/ping")

@@ -978,20 +978,48 @@ loadDashboard();
 window.loadTopProducts(30);
 
 // ─── Competition Drawer ───────────────────────────────────────────────────────
+var _compCurrentAccount = {{ user.nickname | tojson }};
+var _compItemId = '', _compSku = '', _compTitle = '';
+
 window.openCompetition = function(itemId, title) {
     var drawer = document.getElementById('competition-drawer');
     var titleEl = document.getElementById('comp-drawer-title');
     var body = document.getElementById('comp-drawer-body');
-    titleEl.textContent = title || itemId;
+    _compItemId = itemId;
+    _compTitle = title || itemId;
+    titleEl.textContent = _compTitle;
     body.innerHTML = '<div class="flex items-center justify-center h-32 text-gray-400 text-sm">Cargando análisis...</div>';
     drawer.classList.remove('translate-x-full');
     fetch('/api/metrics/competition?item_id=' + itemId, {headers: {'ngrok-skip-browser-warning': 'true'}})
         .then(function(r) { return r.json(); })
-        .then(function(d) { body.innerHTML = _renderCompetition(d); })
+        .then(function(d) { _compSku = d.sku || ''; body.innerHTML = _renderCompetition(d); })
         .catch(function(e) { body.innerHTML = '<div class="text-red-500 text-sm p-4">Error: ' + e + '</div>'; });
 };
 window.closeCompetition = function() {
     document.getElementById('competition-drawer').classList.add('translate-x-full');
+};
+window._sendSuggestion = function(toAccount, action, reason, btnEl) {
+    if (!toAccount || !action) return;
+    fetch('/api/suggestions', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+            from_account: _compCurrentAccount,
+            to_account: toAccount,
+            item_id: _compItemId,
+            sku: _compSku,
+            item_title: _compTitle,
+            action: action,
+            reason: reason
+        })
+    }).then(function(r){return r.json();}).then(function(d){
+        if (d.ok) {
+            if (btnEl) { btnEl.textContent = '✓ Enviado'; btnEl.disabled = true; btnEl.className = btnEl.className.replace('bg-indigo-100 text-indigo-600','bg-green-100 text-green-600'); }
+            if (typeof showToast === 'function') showToast('Sugerencia enviada a ' + toAccount, false);
+        }
+    }).catch(function(){
+        if (typeof showToast === 'function') showToast('Error al enviar sugerencia', true);
+    });
 };
 
 function _renderCompetition(d) {
@@ -1124,10 +1152,18 @@ function _renderCompetition(d) {
     if (_notes.length > 0) {
         html += '<div><div class="text-xs font-semibold text-gray-600 mb-1.5">Anotaciones</div><div class="space-y-1.5">';
         _notes.forEach(function(n) {
+            var isOther = n.account.toUpperCase() !== _compCurrentAccount.toUpperCase();
+            var safeAction = n.action.replace(/'/g, "\\'");
+            var safeReason = n.reason.replace(/'/g, "\\'");
+            var safeAcct = n.account.replace(/'/g, "\\'");
+            var sendBtn = isOther
+                ? '<button onclick="window._sendSuggestion(\'' + safeAcct + '\',\'' + safeAction + '\',\'' + safeReason + '\',this)" class="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600 hover:bg-indigo-200 font-semibold" title="Notificar a ' + n.account + '">📤</button>'
+                : '';
             html += '<div class="flex items-start gap-2 text-[11px]">' +
                 '<span class="shrink-0 px-1.5 py-0.5 rounded font-bold ' + (_colorCls[n.color] || _colorCls.gray) + '">' + n.action + '</span>' +
-                '<span class="text-gray-500"><span class="font-medium text-gray-700">' + n.account + '</span>' +
+                '<span class="flex-1 text-gray-500"><span class="font-medium text-gray-700">' + n.account + '</span>' +
                 ' ' + _logBadge(n.logistic) + ' ' + _mxn(n.price) + ' — ' + n.reason + '</span>' +
+                sendBtn +
                 '</div>';
         });
         html += '</div></div>';

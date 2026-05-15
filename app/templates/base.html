@@ -541,6 +541,17 @@
                   setInterval(loadFx, 300000); // refresh every 5 min
                 })();
                 </script>
+                <!-- Campana de sugerencias cruzadas -->
+                <div class="relative">
+                    <button onclick="window.toggleNotifPanel()" title="Sugerencias recibidas"
+                            class="relative p-1.5 rounded-lg text-gray-700 hover:bg-yellow-300 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+                        </svg>
+                        <span id="notif-bell-badge" class="hidden absolute -top-0.5 -right-0.5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold" style="font-size:9px;min-width:16px;height:16px;padding:0 3px"></span>
+                    </button>
+                </div>
                 <div class="relative" id="account-menu-wrap">
                     <button type="button"
                         onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
@@ -884,6 +895,129 @@ document.addEventListener('click', function(e) {
     setInterval(_checkGlobalHealth, 5 * 60 * 1000);
 })();
 </script>
+
+<!-- Panel de sugerencias cruzadas -->
+{% if user %}
+<div id="notif-panel" class="hidden fixed right-0 z-50 bg-white shadow-2xl border-l border-gray-200 flex flex-col"
+     style="top:56px;width:min(420px,100vw);max-height:calc(100vh - 56px)">
+    <div class="flex items-center justify-between px-4 py-3 border-b bg-gray-50 flex-shrink-0">
+        <div>
+            <div class="text-xs text-gray-400 font-medium uppercase tracking-wide">Sugerencias recibidas</div>
+            <div class="text-sm font-semibold text-gray-800">{{ user.nickname }}</div>
+        </div>
+        <button onclick="window.toggleNotifPanel()" class="text-gray-400 hover:text-gray-700 text-xl font-bold ml-3">×</button>
+    </div>
+    <div id="notif-list" class="flex-1 overflow-y-auto divide-y divide-gray-50"></div>
+    <div id="notif-empty" class="hidden flex-1 flex items-center justify-center text-sm text-gray-400 py-10">Sin sugerencias pendientes</div>
+</div>
+<div id="notif-overlay" onclick="window.toggleNotifPanel()" class="hidden fixed inset-0 bg-black/10 z-40"></div>
+<script>
+(function() {
+    var _panel = document.getElementById('notif-panel');
+    var _overlay = document.getElementById('notif-overlay');
+    var _badge = document.getElementById('notif-bell-badge');
+    var _list = document.getElementById('notif-list');
+    var _empty = document.getElementById('notif-empty');
+    var _currentAcct = {{ user.nickname | tojson }};
+    var _statusLabels = {pending:'Pendiente', in_progress:'En proceso', applied:'Aplicado', dismissed:'Descartado'};
+    var _statusColors = {pending:'bg-yellow-100 text-yellow-700', in_progress:'bg-blue-100 text-blue-700', applied:'bg-green-100 text-green-700', dismissed:'bg-gray-100 text-gray-400'};
+    var _actionColors = {
+        'MANTENER':'bg-green-100 text-green-700','SUBIR PRECIO':'bg-green-100 text-green-700',
+        'BAJAR PRECIO':'bg-orange-100 text-orange-700','REVISAR':'bg-yellow-100 text-yellow-700',
+        'VENTAS BAJAS':'bg-yellow-100 text-yellow-700','SIN VENTAS':'bg-red-100 text-red-700',
+        'PAUSAR':'bg-red-100 text-red-700'
+    };
+
+    function _timeAgo(ts) {
+        var diff = Math.floor(Date.now()/1000 - ts);
+        if (diff < 60) return 'hace un momento';
+        if (diff < 3600) return 'hace ' + Math.floor(diff/60) + 'min';
+        if (diff < 86400) return 'hace ' + Math.floor(diff/3600) + 'h';
+        return 'hace ' + Math.floor(diff/86400) + 'd';
+    }
+
+    function _renderList(items) {
+        if (!items || items.length === 0) {
+            _list.innerHTML = '';
+            _empty.classList.remove('hidden');
+            return;
+        }
+        _empty.classList.add('hidden');
+        _list.innerHTML = items.map(function(s) {
+            var aCls = _actionColors[s.action] || 'bg-gray-100 text-gray-500';
+            var isPending = s.status === 'pending' || s.status === 'in_progress';
+            return '<div class="p-3 ' + (isPending ? '' : 'opacity-60') + '">' +
+                '<div class="flex items-start justify-between gap-2 mb-1">' +
+                    '<div class="flex items-center gap-1.5 flex-wrap">' +
+                        '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded ' + aCls + '">' + s.action + '</span>' +
+                        '<span class="text-xs font-medium text-gray-600">' + (s.sku || s.item_id) + '</span>' +
+                    '</div>' +
+                    '<span class="text-[10px] text-gray-400 shrink-0">' + _timeAgo(s.created_at) + '</span>' +
+                '</div>' +
+                (s.item_title ? '<div class="text-[11px] text-gray-500 mb-1 truncate">' + s.item_title + '</div>' : '') +
+                '<div class="text-[11px] text-gray-600 mb-2">' + s.reason + '</div>' +
+                '<div class="flex items-center gap-1.5 flex-wrap">' +
+                    '<span class="text-[10px] text-gray-400">De: <span class="font-medium text-gray-600">' + s.from_account + '</span></span>' +
+                    (isPending ? (
+                        '<button onclick="window._notifAction(' + s.id + ',\'applied\')" class="text-[10px] px-2 py-0.5 rounded bg-green-600 text-white hover:bg-green-700 font-semibold">✓ Aplicado</button>' +
+                        '<button onclick="window._notifAction(' + s.id + ',\'in_progress\')" class="text-[10px] px-2 py-0.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200 font-semibold">⏳ En proceso</button>' +
+                        '<button onclick="window._notifAction(' + s.id + ',\'dismissed\')" class="text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500 hover:bg-gray-200">✕ Descartar</button>'
+                    ) : '<span class="text-[10px] px-1.5 py-0.5 rounded ' + (_statusColors[s.status]||'') + '">' + (_statusLabels[s.status]||s.status) + '</span>') +
+                '</div>' +
+                '</div>';
+        }).join('');
+    }
+
+    function _loadNotifs(showAll) {
+        var url = '/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + (showAll ? '&status=all' : '&status=pending');
+        fetch(url).then(function(r){return r.json();}).then(function(data) {
+            // also load in_progress when showing pending
+            if (!showAll) {
+                fetch('/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + '&status=in_progress')
+                    .then(function(r2){return r2.json();}).then(function(d2){
+                        var merged = (data||[]).concat(d2||[]).sort(function(a,b){return b.created_at-a.created_at;});
+                        _renderList(merged);
+                    }).catch(function(){_renderList(data);});
+            } else {
+                _renderList(data||[]);
+            }
+        }).catch(function(){});
+    }
+
+    function _refreshBadge() {
+        fetch('/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + '&status=pending')
+            .then(function(r){return r.json();}).then(function(d) {
+                var n = (d||[]).length;
+                if (!_badge) return;
+                if (n > 0) { _badge.textContent = n > 9 ? '9+' : n; _badge.classList.remove('hidden'); }
+                else { _badge.classList.add('hidden'); }
+            }).catch(function(){});
+    }
+
+    window._notifAction = function(id, newStatus) {
+        fetch('/api/suggestions/' + id, {
+            method: 'PATCH',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({status: newStatus})
+        }).then(function(){
+            _loadNotifs(false);
+            _refreshBadge();
+        }).catch(function(){});
+    };
+
+    window.toggleNotifPanel = function() {
+        var open = !_panel.classList.contains('hidden');
+        _panel.classList.toggle('hidden', open);
+        _overlay.classList.toggle('hidden', open);
+        if (!open) _loadNotifs(false);
+    };
+
+    // Badge inicial + polling cada 2 min
+    _refreshBadge();
+    setInterval(_refreshBadge, 120000);
+})();
+</script>
+{% endif %}
 
 {% endif %}{# end if user #}
 
