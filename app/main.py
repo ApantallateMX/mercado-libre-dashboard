@@ -3359,36 +3359,89 @@ def _cleanup_memory_caches():
     )
 
 async def _sync_gap_stock_from_cache():
-    """Baja stock en bm_sku_gaps cuando el caché BM confirma una reducción.
-    Solo actualiza cuando avail_total < stock_total actual — el gap scanner
-    es la fuente autoritativa para aumentos y primeras inserciones."""
-    if not _bm_stock_cache:
-        return
+    """Sincroniza stock vendible real en bm_sku_gaps (c/15 min vía prewarm).
+
+    Paso 1 — SKUs ya en _bm_stock_cache:
+      Si avail_total < stock_total → UPDATE (solo baja, nunca sube).
+
+    Paso 2 — SKUs sin entrada en caché (top 20 por priority_score):
+      Consulta BM directamente con CONCEPTID=1 LOCATIONID=47,62,68 (stock vendible real).
+      Garantiza que SKUs en warehouses no vendibles (ej. WH2/MIT Internacional) no
+      aparezcan con stock inflado en la lista de gaps.
+    """
+    _to_verify: list = []
     try:
         import aiosqlite as _aio_gap
         async with _aio_gap.connect(DATABASE_PATH) as _db:
             _gap_rows = await (await _db.execute(
-                "SELECT sku, stock_total FROM bm_sku_gaps WHERE status='unlaunched'"
+                "SELECT sku, stock_total, priority_score FROM bm_sku_gaps WHERE status='unlaunched'"
             )).fetchall()
-            _updates = []
+
+            _updates_p1 = []
+            _unverified: list = []
             for _gr in _gap_rows:
                 _sk = _gr[0].upper()
                 _current = int(_gr[1] or 0)
+                _prio = int(_gr[2] or 0)
                 _entry = _bm_stock_cache.get(_sk)
                 if _entry is not None:
                     _, _bm_data = _entry
                     _avail = int(_bm_data.get("avail_total") or 0)
-                    if _avail < _current:  # solo bajar, nunca subir
-                        _updates.append((_avail, _sk))
-            if _updates:
+                    if _avail < _current:
+                        _updates_p1.append((_avail, _sk))
+                else:
+                    _unverified.append((_sk, _current, _prio))
+
+            if _updates_p1:
                 await _db.executemany(
                     "UPDATE bm_sku_gaps SET stock_total=? WHERE sku=?",
-                    _updates,
+                    _updates_p1,
                 )
                 await _db.commit()
-                logger.info(f"[GAP-SYNC] stock bajado para {len(_updates)} SKUs desde caché BM")
+                logger.info(f"[GAP-SYNC] Paso1: {len(_updates_p1)} SKUs bajados desde caché")
+
+            # Top 20 unverified ordenados por prioridad para el paso 2
+            _unverified.sort(key=lambda x: -x[2])
+            _to_verify = _unverified[:20]
+
     except Exception as _e:
-        logger.warning(f"[GAP-SYNC] Error en gap stock sync: {_e}")
+        logger.warning(f"[GAP-SYNC] Error paso1: {_e}")
+        return
+
+    if not _to_verify:
+        return
+
+    # Paso 2: verificar stock vendible real vía BM (CONCEPTID=1 LOCATIONID=47,62,68)
+    try:
+        import time as _t_gap
+        from app.services.binmanager_client import get_shared_bm as _gsb_gap
+        _bm_cli = await _gsb_gap()
+        _updates_p2 = []
+        for _sk, _current, _ in _to_verify:
+            try:
+                _cond = "GRA,GRB,GRC,ICB,ICC,NEW" if _sk.startswith("SNTV") else "GRA,GRB,GRC,NEW"
+                _avail = await _bm_cli.get_available_qty(_sk, conditions=_cond)
+                _bm_stock_cache[_sk] = (_t_gap.time(), {"avail_total": _avail, "_v": True})
+                if _avail < _current:
+                    _updates_p2.append((_avail, _sk))
+            except Exception:
+                pass
+
+        if _updates_p2:
+            import aiosqlite as _aio_gap2
+            async with _aio_gap2.connect(DATABASE_PATH) as _db2:
+                await _db2.executemany(
+                    "UPDATE bm_sku_gaps SET stock_total=? WHERE sku=?",
+                    _updates_p2,
+                )
+                await _db2.commit()
+
+        logger.info(
+            f"[GAP-SYNC] Paso2: {len(_to_verify)} verificados vía BM, "
+            f"{len(_updates_p2)} actualizados"
+        )
+    except Exception as _e:
+        logger.warning(f"[GAP-SYNC] Error paso2: {_e}")
 
 
 # --- BM Health Monitor ---
