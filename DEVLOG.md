@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-15 — FIX: Lanzador — stock obsoleto en lista "Sin publicar"
+
+### Problema
+SKUs como SNTV007050 aparecían con 177 unidades disponibles en la lista de gaps
+pero el caché BM confirmaba 0 unidades reales. La tabla `bm_sku_gaps.stock_total`
+es una instantánea del último escaneo y puede quedarse desactualizada.
+
+### Solución
+En el endpoint de gaps (`GET /api/lanzar/gaps`), después de leer la página de resultados,
+se hace un batch-query a `bm_stock_cache` para todos los SKUs de la página.
+Si el caché tiene un valor diferente al del escaneo, se sobrescribe `stock_total` con
+el valor real y se agrega `stock_stale: true` al item.
+
+En el frontend (tabla de gaps), cuando `stock_stale=true` y `stock_total===0`,
+se muestra una celda naranja "⚠ 0 / sin stock" en lugar del número obsoleto.
+
+### Cambios
+- `app/api/lanzar.py`: batch-query `bm_stock_cache` dentro del bloque `async with`; overlay de stock real + flag `stock_stale` en items loop
+- `app/templates/partials/lanzar_gaps.html`: celda Stock con badge naranja "⚠ 0 sin stock" cuando `stock_stale && stock_total===0`
+
+### Commit
+`2ac72fa`
+
+---
+
 ## 2026-05-14 — FEAT: Sistema de sugerencias cruzadas entre cuentas
 
 ### Descripción
