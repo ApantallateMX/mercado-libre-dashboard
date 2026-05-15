@@ -596,6 +596,22 @@ async def _run_gap_scan(user_id: str | None = None):
                 if base not in bm_map or qty > _bm_qty(bm_map[base]):
                     bm_map[base] = prod
 
+            # Cruzar contra _bm_stock_cache (en memoria, sin llamadas BM extra).
+            # Si avail_total verificado (CONCEPTID=1 LOCATIONID=47,62,68) confirma 0
+            # → excluir del gap list (stock en warehouse no vendible o realmente agotado).
+            import sys as _sys_gap
+            _main_mod = _sys_gap.modules.get("app.main")
+            _live_cache = getattr(_main_mod, "_bm_stock_cache", {}) if _main_mod else {}
+            for _base_sku in list(bm_map.keys()):
+                _ce = _live_cache.get(_base_sku)
+                if _ce is not None:
+                    _, _cd = _ce
+                    _verified_avail = int(_cd.get("avail_total") or 0)
+                    if _verified_avail == 0:
+                        del bm_map[_base_sku]  # no hay stock vendible confirmado
+                    elif _verified_avail < _bm_qty(bm_map[_base_sku]):
+                        bm_map[_base_sku]["TotalQty"] = _verified_avail  # usar valor real
+
             # ── FASE 1: Recolectar datos ML desde caché DB ────────────────────
             # Lee ml_listings (sync cada 10 min) en vez de llamar la ML API.
             # Elimina ~1000+ llamadas HTTP por scan. Fallback a API si DB vacía.
