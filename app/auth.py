@@ -40,6 +40,9 @@ from app.config import (
     AMAZON2_CLIENT_ID, AMAZON2_CLIENT_SECRET, AMAZON2_SELLER_ID,
     AMAZON2_MARKETPLACE_ID, AMAZON2_MARKETPLACE_NAME,
     AMAZON2_APP_SOLUTION_ID, AMAZON2_NICKNAME,
+    AMAZON3_CLIENT_ID, AMAZON3_CLIENT_SECRET, AMAZON3_SELLER_ID,
+    AMAZON3_MARKETPLACE_ID, AMAZON3_MARKETPLACE_NAME,
+    AMAZON3_APP_SOLUTION_ID, AMAZON3_NICKNAME,
 )
 from app.services import token_store
 from app.services import user_store
@@ -418,25 +421,37 @@ async def amazon_callback(
     _is_acct2 = (
         effective_seller_id == (AMAZON2_SELLER_ID or _file_vars.get("AMAZON2_SELLER_ID", ""))
     )
+    _is_acct3 = (
+        effective_seller_id == (AMAZON3_SELLER_ID or _file_vars.get("AMAZON3_SELLER_ID", ""))
+    )
 
-    # El token exchange SIEMPRE usa las credenciales de la app que inició el OAuth
-    # (VECKTOR app = AMAZON_CLIENT_ID/SECRET). El seller_id determina cómo se guarda.
-    _client_id     = _file_vars.get("AMAZON_CLIENT_ID")     or AMAZON_CLIENT_ID
-    _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET") or AMAZON_CLIENT_SECRET
-    _redirect_uri  = _file_vars.get("AMAZON_REDIRECT_URI")  or AMAZON_REDIRECT_URI
+    _redirect_uri = _file_vars.get("AMAZON_REDIRECT_URI") or AMAZON_REDIRECT_URI
 
-    if _is_acct2:
-        _nickname   = _file_vars.get("AMAZON2_NICKNAME")      or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
-        _mkt_id     = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
-        _mkt_name   = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
-        _app_sol_id = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
-        _rt_env_key = "AMAZON2_REFRESH_TOKEN"
+    if _is_acct3:
+        # ExclusiveBulbs usa su propia app LWA (Claude Exclusive — AMAZON3_CLIENT_ID/SECRET)
+        _nickname      = _file_vars.get("AMAZON3_NICKNAME")       or AMAZON3_NICKNAME or "ExclusiveBulbs"
+        _mkt_id        = _file_vars.get("AMAZON3_MARKETPLACE_ID")   or AMAZON3_MARKETPLACE_ID
+        _mkt_name      = _file_vars.get("AMAZON3_MARKETPLACE_NAME") or AMAZON3_MARKETPLACE_NAME
+        _app_sol_id    = _file_vars.get("AMAZON3_APP_SOLUTION_ID")  or AMAZON3_APP_SOLUTION_ID
+        _rt_env_key    = "AMAZON3_REFRESH_TOKEN"
+        _client_id     = _file_vars.get("AMAZON3_CLIENT_ID")        or AMAZON3_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON3_CLIENT_SECRET")    or AMAZON3_CLIENT_SECRET
+    elif _is_acct2:
+        _nickname      = _file_vars.get("AMAZON2_NICKNAME")       or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
+        _mkt_id        = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
+        _mkt_name      = _file_vars.get("AMAZON2_MARKETPLACE_NAME") or AMAZON2_MARKETPLACE_NAME
+        _app_sol_id    = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
+        _rt_env_key    = "AMAZON2_REFRESH_TOKEN"
+        _client_id     = _file_vars.get("AMAZON_CLIENT_ID")         or AMAZON_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET")     or AMAZON_CLIENT_SECRET
     else:
-        _nickname   = _file_vars.get("AMAZON_NICKNAME")      or AMAZON_NICKNAME or "VECKTOR IMPORTS"
-        _mkt_id     = _file_vars.get("AMAZON_MARKETPLACE_ID")   or AMAZON_MARKETPLACE_ID
-        _mkt_name   = _file_vars.get("AMAZON_MARKETPLACE_NAME") or AMAZON_MARKETPLACE_NAME
-        _app_sol_id = _file_vars.get("AMAZON_APP_SOLUTION_ID")  or AMAZON_APP_SOLUTION_ID
-        _rt_env_key = "AMAZON_REFRESH_TOKEN"
+        _nickname      = _file_vars.get("AMAZON_NICKNAME")       or AMAZON_NICKNAME or "VECKTOR IMPORTS"
+        _mkt_id        = _file_vars.get("AMAZON_MARKETPLACE_ID")    or AMAZON_MARKETPLACE_ID
+        _mkt_name      = _file_vars.get("AMAZON_MARKETPLACE_NAME")  or AMAZON_MARKETPLACE_NAME
+        _app_sol_id    = _file_vars.get("AMAZON_APP_SOLUTION_ID")   or AMAZON_APP_SOLUTION_ID
+        _rt_env_key    = "AMAZON_REFRESH_TOKEN"
+        _client_id     = _file_vars.get("AMAZON_CLIENT_ID")         or AMAZON_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON_CLIENT_SECRET")     or AMAZON_CLIENT_SECRET
 
     # ── Intercambiar código por tokens ──────────────────────────────────
     async with httpx.AsyncClient(timeout=15) as http:
@@ -467,7 +482,7 @@ async def amazon_callback(
             detail="Amazon no devolvió refresh_token. Verificar que la app tenga scope offline_access."
         )
 
-    logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id} (acct{'2' if _is_acct2 else '1'})")
+    logger.info(f"[Amazon OAuth] Tokens obtenidos para seller {effective_seller_id} (acct{'3' if _is_acct3 else '2' if _is_acct2 else '1'})")
 
     # ── Guardar en DB ────────────────────────────────────────────────────
     await token_store.save_amazon_account(

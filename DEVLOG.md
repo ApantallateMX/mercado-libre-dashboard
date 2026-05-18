@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-18 — FEAT: Amazon — Tercera cuenta ExclusiveBulbs USA (AMAZON3_*)
+
+### Descripción
+Se agregó soporte para una tercera cuenta de Amazon (`AMAZON3_*`) correspondiente
+a ExclusiveBulbs, que opera en Amazon USA (marketplace `ATVPDKIKX0ER`).
+
+A diferencia de AUTOBOT (cuenta 2, que comparte la app LWA de VECKTOR), ExclusiveBulbs
+usa su propia app LWA "Claude Exclusive" (`amzn1.sp.solution.04590df7-...`) con
+credenciales propias (AMAZON3_CLIENT_ID / AMAZON3_CLIENT_SECRET).
+
+El refresh token fue generado directamente desde Solution Provider Portal → Create Token
+(self-authorization).
+
+### Datos de la cuenta
+- **Seller ID**: A22XNR713HGDVG
+- **Nickname**: ExclusiveBulbs
+- **Marketplace**: ATVPDKIKX0ER (Amazon USA)
+- **App Solution ID**: amzn1.sp.solution.04590df7-1d50-40bc-9088-f950711048ca
+
+### Cambios
+- `app/config.py`: bloque `AMAZON3_*` (8 vars, default marketplace USA)
+- `app/auth.py`: importa vars AMAZON3_*; callback detecta `_is_acct3` por seller_id; rama `if/elif/else` para token exchange con credenciales correctas por cuenta
+- `app/services/amazon_client.py`: bloque tercera cuenta en `_seed_amazon_accounts()` con sus propias credenciales LWA
+
+### Railway env vars a configurar (Jovan)
+```
+AMAZON3_CLIENT_ID=<ver Railway / reference_amazon_developer.md>
+AMAZON3_CLIENT_SECRET=<ver Railway / reference_amazon_developer.md>
+AMAZON3_SELLER_ID=A22XNR713HGDVG
+AMAZON3_REFRESH_TOKEN=<ver Railway / reference_amazon_developer.md>
+AMAZON3_APP_SOLUTION_ID=amzn1.sp.solution.04590df7-1d50-40bc-9088-f950711048ca
+AMAZON3_MARKETPLACE_ID=ATVPDKIKX0ER
+AMAZON3_MARKETPLACE_NAME=US
+AMAZON3_NICKNAME=ExclusiveBulbs
+```
+
+---
+
 ## 2026-05-15 — FIX: Lanzador — stock obsoleto en lista "Sin publicar"
 
 ### Problema

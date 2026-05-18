@@ -1532,3 +1532,35 @@ async def _seed_amazon_accounts():
             logger.info(f"[Amazon] Cuenta2 actualizada (token sin cambios): {seller_id2}")
     else:
         logger.info("[Amazon] AMAZON2_* no configurado — skip segunda cuenta")
+
+    # ── Tercera cuenta (AMAZON3_* — ExclusiveBulbs USA) ───────────────────────
+    seller_id3  = _g("AMAZON3_SELLER_ID",       "")
+    client_id3  = _g("AMAZON3_CLIENT_ID",        "")
+    client_sec3 = _g("AMAZON3_CLIENT_SECRET",    "")
+    mkt_id3     = _g("AMAZON3_MARKETPLACE_ID",   "ATVPDKIKX0ER")
+    mkt_name3   = _g("AMAZON3_MARKETPLACE_NAME", "US")
+    app_sol_id3 = _g("AMAZON3_APP_SOLUTION_ID",  "")
+    nickname3   = _g("AMAZON3_NICKNAME",         "ExclusiveBulbs")
+    _rt3_file   = file_vars.get("AMAZON3_REFRESH_TOKEN", "").strip()
+    import os as _os3
+    _rt3_env    = (_os3.getenv("AMAZON3_REFRESH_TOKEN") or "").strip().replace("\n","").replace("\r","").replace(" ","")
+    refresh_rt3 = _rt3_file or _rt3_env or ""
+
+    if seller_id3 and refresh_rt3:
+        existing3  = await token_store.get_amazon_account(seller_id3)
+        stored_rt3 = (existing3 or {}).get("refresh_token", "")
+        token_to_save3 = refresh_rt3 if refresh_rt3 != stored_rt3 else ""
+        # ExclusiveBulbs usa su propia app LWA (Claude Exclusive — AMAZON3_CLIENT_ID/SECRET)
+        await token_store.save_amazon_account(
+            seller_id=seller_id3, nickname=nickname3,
+            client_id=client_id3, client_secret=client_sec3,
+            refresh_token=token_to_save3,
+            marketplace_id=mkt_id3, marketplace_name=mkt_name3,
+            app_solution_id=app_sol_id3,
+        )
+        if token_to_save3:
+            logger.info(f"[Amazon] Cuenta3 token actualizado: {seller_id3} ({nickname3})")
+        else:
+            logger.info(f"[Amazon] Cuenta3 actualizada (token sin cambios): {seller_id3}")
+    else:
+        logger.info("[Amazon] AMAZON3_* no configurado — skip tercera cuenta")

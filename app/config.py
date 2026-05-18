@@ -77,6 +77,16 @@ AMAZON2_MARKETPLACE_NAME = os.getenv("AMAZON2_MARKETPLACE_NAME", "MX")
 AMAZON2_APP_SOLUTION_ID = os.getenv("AMAZON2_APP_SOLUTION_ID", "")
 AMAZON2_NICKNAME = os.getenv("AMAZON2_NICKNAME", "AUTOBOT AMZ MX")
 
+# ── Amazon SP-API — Cuenta 3 (ExclusiveBulbs USA) ─────────────────────────
+AMAZON3_CLIENT_ID = os.getenv("AMAZON3_CLIENT_ID", "")
+AMAZON3_CLIENT_SECRET = os.getenv("AMAZON3_CLIENT_SECRET", "")
+AMAZON3_SELLER_ID = os.getenv("AMAZON3_SELLER_ID", "")
+AMAZON3_REFRESH_TOKEN = os.getenv("AMAZON3_REFRESH_TOKEN", "")
+AMAZON3_MARKETPLACE_ID = os.getenv("AMAZON3_MARKETPLACE_ID", "ATVPDKIKX0ER")  # USA
+AMAZON3_MARKETPLACE_NAME = os.getenv("AMAZON3_MARKETPLACE_NAME", "US")
+AMAZON3_APP_SOLUTION_ID = os.getenv("AMAZON3_APP_SOLUTION_ID", "")
+AMAZON3_NICKNAME = os.getenv("AMAZON3_NICKNAME", "ExclusiveBulbs")
+
 # API Key externa — para el planeador de flujo de caja y otros sistemas externos
 CASHFLOW_API_KEY = os.getenv("CASHFLOW_API_KEY", "")
 
