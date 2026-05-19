@@ -38,7 +38,7 @@
     </svg>
     <p class="text-sm font-semibold text-red-600 mb-1">Token Amazon expirado</p>
     <p class="text-xs text-gray-400 mb-4 max-w-sm">{{ error[:200] }}</p>
-    <a href="/auth/amazon/connect"
+    <a href="/auth/amazon/connect{% if seller_id %}?seller_id={{ seller_id }}{% endif %}"
        class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-6 py-2.5 rounded-lg text-sm transition">
         Reconectar Amazon ahora →
     </a>

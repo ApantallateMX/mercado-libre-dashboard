@@ -814,6 +814,7 @@ async def get_amazon_daily_sales(
                 "date_to": date_to,
                 "nickname": client.nickname,
                 "marketplace": client.marketplace_name,
+                "seller_id": client.seller_id,
             },
         )
 
@@ -891,6 +892,7 @@ async def get_amazon_daily_sales(
         "date_to":      date_to,
         "nickname":     client.nickname,
         "marketplace":  client.marketplace_name,
+        "seller_id":    client.seller_id,
         "not_connected": False,
         "error":        None,
     }

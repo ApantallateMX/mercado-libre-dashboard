@@ -334,59 +334,56 @@ def _verify_amazon_state(state: str) -> bool:
 
 
 @router.get("/amazon/connect")
-async def amazon_connect(request: Request):
+async def amazon_connect(request: Request, seller_id: str = None):
     """
     Inicia el flujo OAuth de Amazon SP-API.
 
-    Construye la URL de autorización de Seller Central y redirige al vendedor
-    para que autorice nuestra app (VeKtorClaude) a acceder a su cuenta.
-
-    URL de autorización:
-        https://sellercentral.amazon.com.mx/apps/authorize/consent
-        ?application_id={AMAZON_APP_SOLUTION_ID}
-        &state={SIGNED_STATE}
-        &version=beta    ← requerido para apps Draft
-
-    Después de que el vendedor autoriza, Amazon redirige a AMAZON_REDIRECT_URI
-    con: ?spapi_oauth_code=XXX&state=YYY&selling_partner_id=ZZZ
+    Acepta seller_id opcional para usar el APP_SOLUTION_ID correcto por cuenta:
+      - AMAZON3_SELLER_ID → AMAZON3_APP_SOLUTION_ID (Claude Exclusive / ExclusiveBulbs)
+      - AMAZON2_SELLER_ID → AMAZON2_APP_SOLUTION_ID (Claude Autobot Dashboard)
+      - default           → AMAZON_APP_SOLUTION_ID  (VeKtorClaude / VECKTOR IMPORTS)
     """
-    if not AMAZON_APP_SOLUTION_ID:
+    # Seleccionar el app_solution_id correcto según la cuenta
+    _eff_seller = seller_id or ""
+    if _eff_seller == (AMAZON3_SELLER_ID or "") and AMAZON3_APP_SOLUTION_ID:
+        _app_sol = AMAZON3_APP_SOLUTION_ID
+        _check_client = AMAZON3_CLIENT_ID
+    elif _eff_seller == (AMAZON2_SELLER_ID or "") and AMAZON2_APP_SOLUTION_ID:
+        _app_sol = AMAZON2_APP_SOLUTION_ID
+        _check_client = AMAZON2_CLIENT_ID
+    else:
+        _app_sol = AMAZON_APP_SOLUTION_ID
+        _check_client = AMAZON_CLIENT_ID
+
+    if not _app_sol:
         raise HTTPException(
             status_code=500,
-            detail="AMAZON_APP_SOLUTION_ID no configurado. Obtenerlo desde Developer Central → App ID."
+            detail="APP_SOLUTION_ID no configurado para esta cuenta."
         )
-    if not AMAZON_CLIENT_ID:
+    if not _check_client:
         raise HTTPException(
             status_code=500,
-            detail="AMAZON_CLIENT_ID no configurado. Revisar .env.production"
+            detail="CLIENT_ID no configurado para esta cuenta."
         )
 
     state = _build_amazon_state()
 
-    # SP-API región NA — la autorización va por sellercentral.amazon.com (US/NA)
-    # aunque el marketplace sea MX. Usar .com.mx causa error MD9100.
-    # version=beta requerido para apps en estado Draft.
-    # redirect_uri dinámico: usa el host actual para que el callback llegue
-    # al mismo servidor que inició el OAuth (Railway o Coolify).
     from urllib.parse import quote as _quote
     import os as _os_auth
-    # APP_BASE_URL env var permite forzar el scheme correcto (necesario cuando
-    # Traefik hace TLS termination y request.base_url devuelve http://).
     _app_base = (_os_auth.getenv("APP_BASE_URL") or "").rstrip("/")
     if not _app_base:
-        # Fallback: usar base_url pero forzar https si viene de host conocido
         _base = str(request.base_url).rstrip("/").replace("http://", "https://")
         _app_base = _base
     _dynamic_redirect_uri = f"{_app_base}/auth/amazon/callback"
     auth_url = (
         f"https://sellercentral.amazon.com/apps/authorize/consent"
-        f"?application_id={AMAZON_APP_SOLUTION_ID}"
+        f"?application_id={_app_sol}"
         f"&state={state}"
         f"&version=beta"
         f"&redirect_uri={_quote(_dynamic_redirect_uri, safe='')}"
     )
 
-    logger.info(f"[Amazon OAuth] Iniciando autorización → {auth_url[:80]}...")
+    logger.info(f"[Amazon OAuth] Iniciando autorización cuenta {_eff_seller or 'default'} → {auth_url[:80]}...")
     return RedirectResponse(url=auth_url)
 
 
