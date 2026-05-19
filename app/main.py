@@ -281,10 +281,19 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_precio_piso"] = None
 
 
+# Nicknames conocidos de cuentas propias — fallback cuando ML API rate-limita en startup
+_KNOWN_ML_NICKNAMES: dict = {
+    "523916436": "APANTALLATEMX",
+    "292395685": "AUTOBOT MEXICO",
+    "391393176": "BLOWTECHNOLOGIES",
+    "515061615": "LUTEMAMEXICO",
+}
+
+
 async def _seed_one(user_id: str, refresh_token: str, label: str, nickname_hint: str = ""):
     """Intenta recuperar tokens para una cuenta via refresh_token.
     También obtiene el nickname desde la API de MeLi para mostrarlo en el dropdown.
-    nickname_hint: fallback estático desde env var MELI_NICKNAME_N — se usa cuando ML API rate-limita."""
+    nickname_hint: fallback desde env var MELI_NICKNAME_N — se usa cuando ML API rate-limita."""
     import httpx
     from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_API_URL
     try:
@@ -309,9 +318,12 @@ async def _seed_one(user_id: str, refresh_token: str, label: str, nickname_hint:
                         nickname = me_resp.json().get("nickname", "")
                 except Exception:
                     pass
-                # Fallback: usar hint de env var si ML API no devolvió nickname
+                # Fallback 1: env var MELI_NICKNAME_N
                 if not nickname and nickname_hint:
                     nickname = nickname_hint
+                # Fallback 2: dict estático de cuentas conocidas
+                if not nickname:
+                    nickname = _KNOWN_ML_NICKNAMES.get(str(user_id), "")
                 await token_store.save_tokens(
                     user_id,
                     access_token,
@@ -331,6 +343,7 @@ async def _backfill_nickname(user_id: str, access_token: str):
     import httpx
     from app.config import MELI_API_URL
     try:
+        nickname = ""
         async with httpx.AsyncClient() as client:
             resp = await client.get(
                 f"{MELI_API_URL}/users/{user_id}",
@@ -338,9 +351,12 @@ async def _backfill_nickname(user_id: str, access_token: str):
             )
             if resp.status_code == 200:
                 nickname = resp.json().get("nickname", "")
-                if nickname:
-                    await token_store.update_nickname(user_id, nickname)
-                    print(f"[SEED] Nickname actualizado: {user_id} → {nickname}")
+        # Fallback: dict estático de cuentas conocidas
+        if not nickname:
+            nickname = _KNOWN_ML_NICKNAMES.get(str(user_id), "")
+        if nickname:
+            await token_store.update_nickname(user_id, nickname)
+            print(f"[SEED] Nickname actualizado: {user_id} → {nickname}")
     except Exception as e:
         print(f"[SEED] Error obteniendo nickname para {user_id}: {e}")
 
