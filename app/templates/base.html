@@ -430,11 +430,20 @@
         }
     }
 
-    function _updateCacheAge(s) {
+    function _updateCacheAge(s, running) {
         // s = segundos desde última actualización del caché BM
+        // running = true si el prewarm está corriendo ahora mismo
         var ageEl = document.getElementById('bm-cache-age');
         var banner = document.getElementById('bm-stale-banner');
         if (!ageEl) return;
+        // Si está sincronizando ahora mismo: mostrar ↻ azul y ocultar banner
+        if (running) {
+            ageEl.textContent = '↻';
+            ageEl.style.color = '#3b82f6';
+            ageEl.classList.remove('hidden');
+            if (banner) banner.classList.add('hidden');
+            return;
+        }
         if (s == null) { ageEl.classList.add('hidden'); return; }
         var mins = Math.round(s / 60);
         var label = mins < 2 ? 'ahora' : mins + 'm';
@@ -448,9 +457,9 @@
         } else {               // > 20 min → rojo
             ageEl.style.color = '#dc2626';
         }
-        // Banner global de datos desactualizados
+        // Banner global de datos desactualizados (>25 min para evitar falsos positivos)
         if (banner) {
-            if (s > 900) { // > 15 min → mostrar
+            if (s > 1500) { // > 25 min → mostrar
                 var isOld = s > 1800; // > 30 min → rojo
                 banner.className = 'px-4 py-2 text-xs flex items-center justify-between gap-3 ' +
                     (isOld ? 'bg-red-50 border-b border-red-200 text-red-700' : 'bg-yellow-50 border-b border-yellow-200 text-yellow-700');
@@ -478,7 +487,7 @@
     function _checkCacheAge() {
         fetch('/api/stock/prewarm-status').then(function(r){ return r.json(); }).then(function(d){
             _updateBmDot(d.last_updated_s);
-            _updateCacheAge(d.last_updated_s);
+            _updateCacheAge(d.last_updated_s, d.running);
         }).catch(function(){});
     }
     _checkCacheAge();

@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-19 — FIX: Nicknames y cuentas ML desaparecen tras redeploy Railway
+
+### Problema
+Tras cada redeploy Railway borra el SQLite. Al re-sembrar cuentas MeLi desde env vars,
+el nickname se obtiene de ML API (`/users/{id}`). Si ML rate-limita esa llamada durante
+startup (varias cuentas refrescando simultáneamente), el nickname queda vacío y el
+selector muestra el raw `user_id` (ej. "523916436"). Además el refresh_token rotado
+no sobrevivía al redeploy porque solo se guardaba en `.env.production` (efímero).
+
+### Solución — 3 fixes
+
+**Fix 1 — Nicknames desde env vars (fallback estático):**
+- `_parse_env_slots()` ahora devuelve 4-tupla `(uid, rt, label, nick)` leyendo `MELI_NICKNAME_N`
+- `_seed_tokens()` copia `MELI_NICKNAME_N` de Railway env vars al igual que hace con UID/RT
+- `_seed_one()` acepta `nickname_hint`; si ML API falla → usa el hint
+- En `_seed_tokens`: si cuenta sin nickname + hay hint de env var → `update_nickname()` directo
+- **Jovan debe agregar en Railway:** `MELI_NICKNAME=<nick acct1>`, `MELI_NICKNAME_2=<nick acct2>`, etc.
+
+**Fix 2 — Railway API update en ML callback:**
+- El callback OAuth de ML ahora detecta el slot del usuario desde Railway env vars
+  (fuente de verdad, independiente de archivos efímeros)
+- Después de escribir `.env.production`, llama Railway GraphQL `variableUpsert` para
+  persistir `MELI_REFRESH_TOKEN_N`, `MELI_USER_ID_N` (nuevas cuentas), `MELI_NICKNAME_N`
+- Mismo patrón que ya existía para Amazon tokens — ahora aplica a ML también
+- Requiere `RAILWAY_API_TOKEN` + `RAILWAY_SERVICE_ID` + `RAILWAY_ENVIRONMENT_ID` + `RAILWAY_PROJECT_ID`
+
+**Fix 3 — Indicador "sincronizando" en nav:**
+- `_updateCacheAge(s, running)` ahora recibe el flag `running` del endpoint `/api/stock/prewarm-status`
+- Si `running=true`: muestra "↻" azul en el badge; oculta el banner de datos desactualizados
+- Threshold del banner stale subido de 15 min → 25 min (reduce falsos positivos cuando BM responde lento)
+
+### Cambios
+- `app/main.py`: `_parse_env_slots` (4-tupla), `_seed_one` (nickname_hint), `_seed_tokens` (MELI_NICKNAME_N vars + fallback)
+- `app/auth.py`: callback ML — detección de slot desde Railway env vars + Railway GraphQL API update
+- `app/templates/base.html`: `_updateCacheAge(s, running)` + `_checkCacheAge` pasa `d.running`
+
+---
+
 ## 2026-05-18 — FEAT: Amazon — Tercera cuenta ExclusiveBulbs USA (AMAZON3_*)
 
 ### Descripción

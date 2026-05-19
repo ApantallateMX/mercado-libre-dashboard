@@ -186,57 +186,86 @@ async def callback(code: str = None, state: str = None, error: str = None):
         nickname=nickname,
     )
 
-    # Persistir nuevo refresh_token en .env.production para sobrevivir redeploys de Railway
-    # Sistema dinámico: busca el slot existente del user o crea uno nuevo (cuentaN)
+    # Persistir refresh_token + nickname en archivos .env y Railway env vars
+    # (Railway borra el SQLite en cada redeploy — los env vars son la fuente permanente)
     if new_refresh:
         import re as _re, os as _os
+
+        # ── Detectar slot una sola vez desde Railway env vars ─────────────────
+        _rt_key: str = ""
+        _uid_key: str = ""
+        if _os.getenv("MELI_USER_ID", "") == uid:
+            _rt_key = "MELI_REFRESH_TOKEN"
+        else:
+            _sn = 2
+            while True:
+                if not _os.getenv(f"MELI_USER_ID_{_sn}", ""):
+                    break
+                if _os.getenv(f"MELI_USER_ID_{_sn}") == uid:
+                    _rt_key = f"MELI_REFRESH_TOKEN_{_sn}"
+                    break
+                _sn += 1
+        if not _rt_key:
+            # Cuenta nueva — siguiente slot libre en Railway
+            _sn = 2
+            while _os.getenv(f"MELI_USER_ID_{_sn}", ""):
+                _sn += 1
+            _uid_key = f"MELI_USER_ID_{_sn}"
+            _rt_key = f"MELI_REFRESH_TOKEN_{_sn}"
+            print(f"[AUTH] Nueva cuenta — slot {_sn}: {uid} ({nickname})")
+        _nick_key = _rt_key.replace("MELI_REFRESH_TOKEN", "MELI_NICKNAME")
+
+        # ── Actualizar archivos .env locales ─────────────────────────────────
         for env_file in (".env.production", ".env"):
-            path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), env_file)
-            if not _os.path.exists(path):
+            env_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), env_file)
+            if not _os.path.exists(env_path):
                 continue
             try:
-                text = open(path, encoding="utf-8").read()
-                # Parsear env actual para encontrar slots existentes
-                env_vars = {}
-                for line in text.splitlines():
-                    line = line.strip()
-                    if '=' in line and not line.startswith('#'):
-                        k, _, v = line.partition('=')
-                        env_vars[k.strip()] = v.strip()
-
-                # Buscar si este user_id ya tiene un slot asignado
-                rt_key = None
-                uid_key = None
-                if env_vars.get("MELI_USER_ID") == uid:
-                    rt_key = "MELI_REFRESH_TOKEN"
+                text = open(env_path, encoding="utf-8").read()
+                if f"{_rt_key}=" in text:
+                    text = _re.sub(rf"(?m)^{_rt_key}=.*$", f"{_rt_key}={new_refresh}", text)
                 else:
-                    n = 2
-                    while True:
-                        k_uid = f"MELI_USER_ID_{n}"
-                        if k_uid not in env_vars:
-                            break
-                        if env_vars[k_uid] == uid:
-                            rt_key = f"MELI_REFRESH_TOKEN_{n}"
-                            break
-                        n += 1
-
-                if rt_key:
-                    # Slot existente — solo actualizar refresh token
-                    text = _re.sub(rf"(?m)^{rt_key}=.*$", f"{rt_key}={new_refresh}", text)
-                else:
-                    # Cuenta nueva — encontrar próximo slot disponible
-                    n = 2
-                    while f"MELI_USER_ID_{n}" in env_vars:
-                        n += 1
-                    uid_key = f"MELI_USER_ID_{n}"
-                    rt_key = f"MELI_REFRESH_TOKEN_{n}"
-                    text += f"\n{uid_key}={uid}\n{rt_key}={new_refresh}\n"
-                    print(f"[AUTH] Nueva cuenta registrada en slot {n}: {uid} ({nickname})")
-
-                open(path, "w", encoding="utf-8").write(text)
+                    text += f"\n{_rt_key}={new_refresh}"
+                if _uid_key and f"{_uid_key}=" not in text:
+                    text += f"\n{_uid_key}={uid}"
+                if nickname:
+                    if f"{_nick_key}=" in text:
+                        text = _re.sub(rf"(?m)^{_nick_key}=.*$", f"{_nick_key}={nickname}", text)
+                    else:
+                        text += f"\n{_nick_key}={nickname}"
+                open(env_path, "w", encoding="utf-8").write(text)
                 print(f"[AUTH] Tokens updated for user {uid} ({nickname}) in {env_file}")
             except Exception as _e:
                 print(f"[AUTH] Could not update {env_file}: {_e}")
+
+        # ── Persistir en Railway env vars via API (sobrevive redeploys) ───────
+        _rw_token = _os.getenv("RAILWAY_API_TOKEN", "")
+        _rw_svc   = _os.getenv("RAILWAY_SERVICE_ID", "")
+        _rw_env   = _os.getenv("RAILWAY_ENVIRONMENT_ID", "")
+        _rw_proj  = _os.getenv("RAILWAY_PROJECT_ID", "")
+        if _rw_token and _rw_svc:
+            _mutation = "mutation U($i: VariableUpsertInput!) { variableUpsert(input: $i) }"
+            async def _rv(_name: str, _value: str):
+                try:
+                    async with httpx.AsyncClient(timeout=10) as _hh:
+                        _r = await _hh.post(
+                            "https://backboard.railway.app/graphql/v2",
+                            json={"query": _mutation, "variables": {"i": {
+                                "projectId": _rw_proj, "serviceId": _rw_svc,
+                                "environmentId": _rw_env, "name": _name, "value": _value,
+                            }}},
+                            headers={"Authorization": f"Bearer {_rw_token}", "Content-Type": "application/json"},
+                        )
+                    if _r.status_code != 200:
+                        logger.warning(f"[Auth ML] Railway API {_name}: HTTP {_r.status_code}")
+                except Exception as _re2:
+                    logger.warning(f"[Auth ML] Railway API {_name} error: {_re2}")
+            await _rv(_rt_key, new_refresh)
+            if _uid_key:
+                await _rv(_uid_key, uid)
+            if nickname:
+                await _rv(_nick_key, nickname)
+            logger.info(f"[Auth ML] Railway vars actualizados: {_rt_key}")
 
     # Setear cookie de cuenta activa
     response = RedirectResponse(url="/dashboard", status_code=303)

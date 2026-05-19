@@ -281,9 +281,10 @@ def _calc_margins(products: list, usd_to_mxn: float, deal_buffer_pct: float = 0.
             p["_precio_piso"] = None
 
 
-async def _seed_one(user_id: str, refresh_token: str, label: str):
+async def _seed_one(user_id: str, refresh_token: str, label: str, nickname_hint: str = ""):
     """Intenta recuperar tokens para una cuenta via refresh_token.
-    También obtiene el nickname desde la API de MeLi para mostrarlo en el dropdown."""
+    También obtiene el nickname desde la API de MeLi para mostrarlo en el dropdown.
+    nickname_hint: fallback estático desde env var MELI_NICKNAME_N — se usa cuando ML API rate-limita."""
     import httpx
     from app.config import MELI_TOKEN_URL, MELI_CLIENT_ID, MELI_CLIENT_SECRET, MELI_API_URL
     try:
@@ -308,6 +309,9 @@ async def _seed_one(user_id: str, refresh_token: str, label: str):
                         nickname = me_resp.json().get("nickname", "")
                 except Exception:
                     pass
+                # Fallback: usar hint de env var si ML API no devolvió nickname
+                if not nickname and nickname_hint:
+                    nickname = nickname_hint
                 await token_store.save_tokens(
                     user_id,
                     access_token,
@@ -315,7 +319,7 @@ async def _seed_one(user_id: str, refresh_token: str, label: str):
                     data.get("expires_in", 21600),
                     nickname=nickname,
                 )
-                print(f"[SEED] Tokens recovered for {label} (user {user_id}, nickname={nickname})")
+                print(f"[SEED] Tokens recovered for {label} (user {user_id}, nickname={nickname or '(sin nickname)'})")
             else:
                 print(f"[SEED] Token refresh failed for {label}: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
@@ -342,21 +346,23 @@ async def _backfill_nickname(user_id: str, access_token: str):
 
 
 def _parse_env_slots(env_vars: dict) -> list:
-    """Devuelve lista de (uid, rt, label) para todos los slots encontrados en env_vars.
-    Slot 1: MELI_USER_ID / MELI_REFRESH_TOKEN
-    Slot N: MELI_USER_ID_N / MELI_REFRESH_TOKEN_N (sin límite)"""
+    """Devuelve lista de (uid, rt, label, nick) para todos los slots en env_vars.
+    Slot 1: MELI_USER_ID / MELI_REFRESH_TOKEN / MELI_NICKNAME
+    Slot N: MELI_USER_ID_N / MELI_REFRESH_TOKEN_N / MELI_NICKNAME_N (sin límite)"""
     accounts = []
     uid = env_vars.get("MELI_USER_ID", "") or MELI_USER_ID
     rt = env_vars.get("MELI_REFRESH_TOKEN", "") or MELI_REFRESH_TOKEN
+    nick = env_vars.get("MELI_NICKNAME", "")
     if uid and rt:
-        accounts.append((uid, rt, "cuenta1"))
+        accounts.append((uid, rt, "cuenta1", nick))
     n = 2
     while True:
         uid = env_vars.get(f"MELI_USER_ID_{n}", "")
         rt = env_vars.get(f"MELI_REFRESH_TOKEN_{n}", "")
+        nick = env_vars.get(f"MELI_NICKNAME_{n}", "")
         if not uid or not rt:
             break
-        accounts.append((uid, rt, f"cuenta{n}"))
+        accounts.append((uid, rt, f"cuenta{n}", nick))
         n += 1
     return accounts
 
@@ -377,30 +383,36 @@ async def _seed_tokens():
                 k, _, v = line.partition('=')
                 file_vars[k.strip()] = v.strip()
 
-    # Railway env vars tienen prioridad sobre el archivo
+    # Railway env vars tienen prioridad sobre el archivo (incluye MELI_NICKNAME_N)
     env_vars = {**file_vars}
-    for key in ("MELI_USER_ID", "MELI_REFRESH_TOKEN",
-                "MELI_USER_ID_2", "MELI_REFRESH_TOKEN_2",
-                "MELI_USER_ID_3", "MELI_REFRESH_TOKEN_3",
-                "MELI_USER_ID_4", "MELI_REFRESH_TOKEN_4",
-                "MELI_USER_ID_5", "MELI_REFRESH_TOKEN_5"):
+    for key in ("MELI_USER_ID", "MELI_REFRESH_TOKEN", "MELI_NICKNAME",
+                "MELI_USER_ID_2", "MELI_REFRESH_TOKEN_2", "MELI_NICKNAME_2",
+                "MELI_USER_ID_3", "MELI_REFRESH_TOKEN_3", "MELI_NICKNAME_3",
+                "MELI_USER_ID_4", "MELI_REFRESH_TOKEN_4", "MELI_NICKNAME_4",
+                "MELI_USER_ID_5", "MELI_REFRESH_TOKEN_5", "MELI_NICKNAME_5"):
         val = _os.getenv(key)
         if val:
             env_vars[key] = val
 
-    for uid, rt, label in _parse_env_slots(env_vars):
+    for uid, rt, label, nick_hint in _parse_env_slots(env_vars):
         existing = await token_store.get_tokens(uid)
         if not existing:
-            await _seed_one(uid, rt, label)
+            await _seed_one(uid, rt, label, nickname_hint=nick_hint)
         else:
             is_expired = await token_store.is_token_expired(uid)
             if is_expired:
                 # DB RT es más actual que env (ML rota el RT en cada uso)
                 refresh_rt = existing.get("refresh_token") or rt
                 print(f"[SEED] Token expirado para {label} — refrescando con RT {'db' if existing.get('refresh_token') else 'env'}...")
-                await _seed_one(uid, refresh_rt, label)
+                await _seed_one(uid, refresh_rt, label, nickname_hint=nick_hint)
             elif not existing.get("nickname"):
                 await _backfill_nickname(uid, existing.get("access_token", ""))
+                # Fallback: si la API falla y tenemos hint de env var, usarlo directamente
+                if nick_hint:
+                    refetched = await token_store.get_tokens(uid)
+                    if not (refetched or {}).get("nickname"):
+                        await token_store.update_nickname(uid, nick_hint)
+                        print(f"[SEED] Nickname desde env var: {uid} → {nick_hint}")
 
     # Backfill nickname para TODAS las cuentas en DB que aún no lo tienen
     # (incluye cuentas agregadas via OAuth que no están en env vars)
