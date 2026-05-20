@@ -99,7 +99,7 @@ function switchAmzTab(tabName) {
         else if (tabName === 'fba') loadFbaTab();
         else if (tabName === 'listings') loadListingsTab();
         else if (tabName === 'deals') loadDealsTab();
-        else if (tabName === 'ventas') { loadAmzBriefing(); loadAmzCompare(); loadAmzRecentOrders(); loadTopProducts(); }
+        else if (tabName === 'ventas') { loadAmzBriefing(); loadAmzRecentOrders(); loadTopProducts(); }
     } else if (tabName === 'ventas') {
         loadAmzBriefing();
     }
@@ -984,7 +984,6 @@ if (amzActiveTab === 'salud') {
     loadAmzFinanzasTab();
 } else if (amzActiveTab === 'ventas') {
     loadAmzBriefing();
-    loadAmzCompare();
     loadAmzRecentOrders();
     setTimeout(loadTopProducts, 1500);
 } else {

@@ -263,24 +263,6 @@
     <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
 </div>
 
-{% if amazon_accounts|length > 1 %}
-<!-- ─── Comparativa multi-cuenta (solo si hay >1 cuenta Amazon) ──── -->
-<div id="amz-compare-section" class="mb-5">
-  <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-      <div>
-        <h3 class="font-semibold text-gray-800 text-sm">📊 Comparativa de cuentas</h3>
-        <p class="text-xs text-gray-400">Mes actual · todas las cuentas Amazon</p>
-      </div>
-      <button onclick="loadAmzCompare()" class="text-xs text-orange-500 hover:text-orange-700 font-medium">↻</button>
-    </div>
-    <div id="amz-compare-content" class="p-4">
-      <div class="text-center py-4 text-gray-400 text-xs">Cargando comparativa...</div>
-    </div>
-  </div>
-</div>
-{% endif %}
-
 <!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
