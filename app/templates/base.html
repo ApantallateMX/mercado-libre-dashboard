@@ -21,269 +21,12 @@
 <body class="bg-gray-100 min-h-screen">
 
 {% if user %}
+{% set _sec = dashboard_user.allowed_sections if dashboard_user else [] %}
 
-{% if active_platform == "amazon" %}
 {# ════════════════════════════════════════════════════════════════════════════
-   AMAZON NAV — fondo oscuro #232F3E, acentos naranja #FF9900
-   Tabs: 📊 Dashboard | 💚 Salud | 📦 Productos
-   ════════════════════════════════════════════════════════════════════════ #}
-<nav style="background:#232F3E" class="shadow-lg">
-    <div class="max-w-7xl mx-auto px-4">
-        <div class="flex justify-between h-14 md:h-16 items-center">
-
-            <!-- ── Logo + hamburger ──────────────────────────────────────── -->
-            <div class="flex items-center gap-3">
-                <button onclick="document.getElementById('mobile-menu').classList.toggle('hidden')"
-                        class="md:hidden p-2.5 -ml-2 rounded-lg hover:bg-[#37475A] active:bg-[#37475A]" aria-label="Menu">
-                    <svg class="w-6 h-6 text-gray-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-                    </svg>
-                </button>
-                <a href="/amazon" class="flex items-center font-black text-xl text-white tracking-wide px-1 py-0.5 rounded" style="background:#FF9900">
-                    AMZ
-                </a>
-            </div>
-
-            <!-- ── Tabs Amazon (desktop) — todos en el nav igual que ML ─── -->
-            <div class="hidden md:flex items-center h-full overflow-x-auto">
-                <a href="/amazon?tab=dashboard"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'dashboard' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    🏠 Dashboard
-                </a>
-                <a href="/amazon?tab=ventas"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'ventas' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    📊 Ventas
-                </a>
-                <a href="/amazon?tab=salud"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'salud' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    💚 Salud
-                </a>
-                <a href="/amazon/products"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'productos' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    📦 Productos
-                </a>
-                <a href="/amazon?tab=finanzas"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'finanzas' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    💰 Finanzas
-                </a>
-                <a href="/amazon?tab=fba"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'fba' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    📦 FBA & Stock
-                </a>
-                <a href="/amazon?tab=listings"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'listings' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    🏷️ Listings
-                </a>
-                <a href="/amazon?tab=deals"
-                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
-                          {% if active_amazon_tab == 'deals' %}font-bold border-[#FF9900] text-[#FF9900]{% else %}border-transparent text-gray-300 hover:text-white hover:border-gray-500{% endif %}">
-                    🎯 Deals
-                </a>
-            </div>
-
-            <!-- ── Selector de cuentas + Salir (Amazon) ─────────────────── -->
-            <div class="flex items-center gap-2">
-                <div class="relative" id="account-menu-wrap">
-                    <button type="button"
-                        onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
-                        class="flex items-center gap-1.5 text-sm cursor-pointer select-none px-3 py-1.5 rounded-lg transition text-white border border-[#4a5568] hover:bg-[#485769]"
-                        style="background:#37475A">
-                        <span class="text-xs font-bold text-white px-1 rounded" style="background:#FF9900">AMZ</span>
-                        {% if amazon_account %}
-                        <span class="max-w-[110px] truncate font-medium">{{ amazon_account.nickname or amazon_account.seller_id }}</span>
-                        {% else %}
-                        <span class="max-w-[110px] truncate text-gray-300">Sin cuenta</span>
-                        {% endif %}
-                        <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                        </svg>
-                    </button>
-
-                    <!-- Dropdown — mismo para ambas plataformas -->
-                    <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-50 min-w-[240px] py-2">
-                        <!-- Sección MeLi -->
-                        <div class="px-4 py-1.5 flex items-center gap-2">
-                            <span class="text-xs font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
-                            <p class="text-xs text-gray-400 font-semibold uppercase tracking-wide">Mercado Libre</p>
-                        </div>
-                        {% for account in accounts %}
-                        <form action="/auth/switch-account" method="POST">
-                            <input type="hidden" name="user_id" value="{{ account.user_id }}">
-                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-yellow-50 transition-colors">
-                                {% if account.user_id == active_user_id %}
-                                <span class="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center text-xs font-bold text-gray-800 shrink-0">✓</span>
-                                {% else %}
-                                <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
-                                {% endif %}
-                                <span class="{% if account.user_id == active_user_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
-                                    {{ account.nickname or account.user_id }}
-                                </span>
-                            </button>
-                        </form>
-                        {% endfor %}
-                        <!-- Sección Amazon -->
-                        {% if amazon_accounts %}
-                        <hr class="my-1.5 border-gray-100">
-                        <div class="px-4 py-1.5 flex items-center gap-2">
-                            <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
-                            <p class="text-xs text-gray-400 font-semibold uppercase tracking-wide">Amazon</p>
-                        </div>
-                        {% for amz in amazon_accounts %}
-                        <form action="/auth/switch-amazon" method="POST">
-                            <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                            <input type="hidden" name="next" value="/amazon">
-                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
-                                {% if amz.seller_id == active_amazon_id %}
-                                <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
-                                {% else %}
-                                <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
-                                {% endif %}
-                                <div class="flex flex-col min-w-0">
-                                    <span class="{% if amz.seller_id == active_amazon_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
-                                        {{ amz.nickname or amz.seller_id }}
-                                    </span>
-                                    <span class="text-xs text-gray-400">{{ amz.marketplace_name }} · {{ amz.seller_id }}</span>
-                                </div>
-                            </button>
-                        </form>
-                        {% endfor %}
-                        {% endif %}
-                        <hr class="my-1.5 border-gray-100">
-                        <a href="/auth/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-yellow-600 hover:bg-yellow-50 transition-colors">
-                            <span class="w-5 h-5 rounded-full bg-yellow-100 flex items-center justify-center text-xs font-bold text-yellow-600 shrink-0">+</span>
-                            Agregar cuenta MeLi
-                        </a>
-                        <a href="/auth/amazon/connect" class="flex items-center gap-2 px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 transition-colors">
-                            <span class="w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center text-xs font-bold text-orange-600 shrink-0">+</span>
-                            Agregar cuenta Amazon
-                        </a>
-                    </div>
-                </div>
-
-                {% if dashboard_user %}
-                    {% if dashboard_user.role == 'admin' %}
-                    <a href="/usuarios" title="{{ dashboard_user.display_name or dashboard_user.username }}" class="text-xs font-bold bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 transition">admin</a>
-                    {% else %}
-                    <span class="text-xs font-semibold text-gray-400 px-2 py-1 rounded" style="background:#37475A" title="{{ dashboard_user.display_name or dashboard_user.username }}">{{ dashboard_user.role }}</span>
-                    {% endif %}
-                {% endif %}
-                <form action="/auth/logout" method="POST" class="inline">
-                    <button type="submit" class="text-white px-3 py-1.5 text-sm rounded-lg transition font-semibold hover:opacity-90" style="background:#FF9900">
-                        Salir
-                    </button>
-                </form>
-            </div>
-
-        </div><!-- /flex justify-between -->
-    </div><!-- /max-w-7xl -->
-
-    <!-- ── Mobile menu Amazon ─────────────────────────────────────────────── -->
-    <div id="mobile-menu" class="hidden md:hidden border-t border-[#37475A]" style="background:#232F3E">
-        <!-- 8 tabs — grid 4+4 en móvil -->
-        <div class="grid grid-cols-4 gap-1.5 px-3 pt-3 pb-1">
-            <a href="/amazon?tab=dashboard"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'dashboard' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">🏠</span>
-                <span class="text-xs {% if active_amazon_tab == 'dashboard' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Dashboard</span>
-            </a>
-            <a href="/amazon?tab=ventas"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'ventas' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">📊</span>
-                <span class="text-xs {% if active_amazon_tab == 'ventas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Ventas</span>
-            </a>
-            <a href="/amazon?tab=salud"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'salud' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">💚</span>
-                <span class="text-xs {% if active_amazon_tab == 'salud' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Salud</span>
-            </a>
-            <a href="/amazon/products"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'productos' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">📦</span>
-                <span class="text-xs {% if active_amazon_tab == 'productos' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Productos</span>
-            </a>
-        </div>
-        <div class="grid grid-cols-4 gap-1.5 px-3 pb-3">
-            <a href="/amazon?tab=finanzas"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'finanzas' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">💰</span>
-                <span class="text-xs {% if active_amazon_tab == 'finanzas' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Finanzas</span>
-            </a>
-            <a href="/amazon?tab=fba"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'fba' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">📦</span>
-                <span class="text-xs {% if active_amazon_tab == 'fba' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">FBA</span>
-            </a>
-            <a href="/amazon?tab=listings"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'listings' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">🏷️</span>
-                <span class="text-xs {% if active_amazon_tab == 'listings' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Listings</span>
-            </a>
-            <a href="/amazon?tab=deals"
-               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
-                      {% if active_amazon_tab == 'deals' %}bg-[#37475A]{% else %}hover:bg-[#37475A]{% endif %}">
-                <span class="text-xl">🎯</span>
-                <span class="text-xs {% if active_amazon_tab == 'deals' %}font-semibold text-[#FF9900]{% else %}text-gray-300{% endif %}">Deals</span>
-            </a>
-        </div>
-        <!-- Selector de cuentas móvil Amazon -->
-        <div class="px-3 pb-3 border-t border-[#37475A] pt-3">
-            <div class="flex items-center gap-2 mb-2">
-                <span class="text-xs font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
-                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Mercado Libre</p>
-            </div>
-            <div class="grid grid-cols-2 gap-2 mb-3">
-                {% for account in accounts %}
-                <form action="/auth/switch-account" method="POST">
-                    <input type="hidden" name="user_id" value="{{ account.user_id }}">
-                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                        {% if account.user_id == active_user_id %}bg-[#37475A] font-bold text-white{% else %}bg-[#2d3e50] hover:bg-[#37475A] text-gray-300{% endif %}">
-                        {% if account.user_id == active_user_id %}<span class="shrink-0">✓</span>{% endif %}
-                        <span class="truncate">{{ account.nickname or account.user_id }}</span>
-                    </button>
-                </form>
-                {% endfor %}
-            </div>
-            {% if amazon_accounts %}
-            <div class="flex items-center gap-2 mb-2">
-                <span class="text-xs font-bold bg-orange-500 text-white px-1.5 py-0.5 rounded">AMZ</span>
-                <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Amazon</p>
-            </div>
-            <div class="grid grid-cols-2 gap-2">
-                {% for amz in amazon_accounts %}
-                <form action="/auth/switch-amazon" method="POST">
-                    <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                    <input type="hidden" name="next" value="/amazon">
-                    <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                        {% if amz.seller_id == active_amazon_id %}bg-orange-500 font-bold text-white{% else %}bg-[#2d3e50] hover:bg-[#37475A] text-gray-300{% endif %}">
-                        {% if amz.seller_id == active_amazon_id %}<span class="shrink-0">✓</span>{% endif %}
-                        <span class="truncate">{{ amz.nickname or amz.seller_id }}</span>
-                    </button>
-                </form>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-    </div><!-- /mobile-menu Amazon -->
-
-</nav><!-- /Amazon nav -->
-
-{% else %}
-{# ════════════════════════════════════════════════════════════════════════════
-   MELI NAV — fondo amarillo, sin cambios
+   NAV UNIFICADO — fondo amarillo para ML y Amazon
+   active_platform == "amazon"  →  tabs Amazon
+   active_platform != "amazon"  →  tabs Mercado Libre
    ════════════════════════════════════════════════════════════════════════ #}
 <nav class="bg-yellow-400 shadow-lg">
     <div class="max-w-7xl mx-auto px-4">
@@ -291,16 +34,69 @@
 
             <!-- ── Logo + hamburger ──────────────────────────────────────── -->
             <div class="flex items-center gap-3">
-                <button onclick="document.getElementById('mobile-menu').classList.toggle('hidden')" class="md:hidden p-2.5 -ml-2 rounded-lg hover:bg-yellow-500 active:bg-yellow-600" aria-label="Menu">
+                <button onclick="document.getElementById('mobile-menu').classList.toggle('hidden')"
+                        class="md:hidden p-2.5 -ml-2 rounded-lg hover:bg-yellow-500 active:bg-yellow-600" aria-label="Menu">
                     <svg class="w-6 h-6 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
                     </svg>
                 </button>
+                {% if active_platform == "amazon" %}
+                <a href="/amazon" class="flex items-center gap-1.5">
+                    <span class="text-xs font-black text-white bg-orange-500 px-1.5 py-0.5 rounded">AMZ</span>
+                    <span class="font-bold text-lg text-gray-800 hidden sm:inline">Amazon</span>
+                </a>
+                {% else %}
                 <a href="/dashboard" class="font-bold text-lg md:text-xl text-gray-800">MeLi</a>
+                {% endif %}
             </div>
 
-            <!-- ── Links MeLi ────────────────────────────────────────────── -->
-            {% set _sec = dashboard_user.allowed_sections if dashboard_user else [] %}
+            <!-- ── Tabs desktop ──────────────────────────────────────────── -->
+            {% if active_platform == "amazon" %}
+            {# Amazon tabs — mismo estilo amarillo que ML #}
+            <div class="hidden md:flex items-center h-full overflow-x-auto">
+                <a href="/amazon?tab=dashboard"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'dashboard' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    🏠 Dashboard
+                </a>
+                <a href="/amazon?tab=ventas"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'ventas' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    📊 Ventas
+                </a>
+                <a href="/amazon?tab=salud"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'salud' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    💚 Salud
+                </a>
+                <a href="/amazon/products"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'productos' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    📦 Productos
+                </a>
+                <a href="/amazon?tab=finanzas"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'finanzas' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    💰 Finanzas
+                </a>
+                <a href="/amazon?tab=fba"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'fba' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    📦 FBA & Stock
+                </a>
+                <a href="/amazon?tab=listings"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'listings' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    🏷️ Listings
+                </a>
+                <a href="/amazon?tab=deals"
+                   class="flex items-center gap-1 px-3.5 h-full text-sm font-medium border-b-2 transition whitespace-nowrap
+                          {% if active_amazon_tab == 'deals' %}font-bold border-gray-700 text-gray-900{% else %}border-transparent text-gray-700 hover:text-gray-900 hover:border-gray-500{% endif %}">
+                    🎯 Deals
+                </a>
+            </div>
+            {% else %}
+            {# ML tabs #}
             <div class="hidden md:flex items-center gap-1 text-xs font-medium">
                 {% if not _sec or 'dashboard' in _sec %}
                 <a href="/multi-dashboard" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active == 'multi_dashboard' %}font-semibold bg-yellow-500{% endif %} flex items-center gap-0.5 whitespace-nowrap">
@@ -410,8 +206,6 @@
     window._bmCanUpdate = _bmCanUpdate;
 
     function _updateBmDot(last_updated_s) {
-        // El dot muestra antigüedad del último cache descargado por el admin,
-        // NO la conectividad directa con BM (los operadores no contactan BM).
         var dot = document.getElementById('bm-health-dot');
         if (!dot) return;
         if (last_updated_s == null) {
@@ -431,12 +225,9 @@
     }
 
     function _updateCacheAge(s, running) {
-        // s = segundos desde última actualización del caché BM
-        // running = true si el prewarm está corriendo ahora mismo
         var ageEl = document.getElementById('bm-cache-age');
         var banner = document.getElementById('bm-stale-banner');
         if (!ageEl) return;
-        // Si está sincronizando ahora mismo: mostrar ↻ azul y ocultar banner
         if (running) {
             ageEl.textContent = '↻';
             ageEl.style.color = '#3b82f6';
@@ -449,7 +240,6 @@
         var label = mins < 2 ? 'ahora' : mins + 'm';
         ageEl.textContent = label;
         ageEl.classList.remove('hidden');
-        // Color por antigüedad
         if (s < 600) {         // < 10 min → verde
             ageEl.style.color = '#16a34a';
         } else if (s < 1200) { // 10-20 min → amarillo
@@ -457,10 +247,9 @@
         } else {               // > 20 min → rojo
             ageEl.style.color = '#dc2626';
         }
-        // Banner global de datos desactualizados (>25 min para evitar falsos positivos)
         if (banner) {
             if (s > 1500) { // > 25 min → mostrar
-                var isOld = s > 1800; // > 30 min → rojo
+                var isOld = s > 1800;
                 banner.className = 'px-4 py-2 text-xs flex items-center justify-between gap-3 ' +
                     (isOld ? 'bg-red-50 border-b border-red-200 text-red-700' : 'bg-yellow-50 border-b border-yellow-200 text-yellow-700');
                 var adminHint = _bmCanUpdate
@@ -495,10 +284,13 @@
 })();
 </script>
             </div>
+            {% endif %}{# end platform tabs #}
 
-            <!-- ── Selector de cuentas + Salir (MeLi) ───────────────────── -->
+            <!-- ── Selector de cuentas + utilidades ─────────────────────── -->
             <div class="flex items-center gap-2">
-                <!-- FX Rate Widget -->
+
+                {% if active_platform != "amazon" %}
+                <!-- FX Rate Widget — solo ML -->
                 <div class="flex items-center gap-1" id="fx-widget">
                   <span class="text-[10px] text-gray-600 hidden md:inline">USD/MXN</span>
                   <span id="fx-display" class="text-xs font-mono font-bold text-gray-600 cursor-pointer hover:text-blue-600"
@@ -515,7 +307,7 @@
                       if (el) {
                         el.textContent = '$' + (d.active_rate||0).toFixed(2);
                         el.className = 'text-xs font-mono font-bold cursor-pointer hover:text-blue-600 ' + (d.is_manual ? 'text-blue-600' : 'text-gray-600');
-                        el.title = d.is_manual ? 'Tipo de cambio manual \u2014 click para editar' : 'Tipo de cambio MeLi API \u2014 click para sobrescribir';
+                        el.title = d.is_manual ? 'Tipo de cambio manual — click para editar' : 'Tipo de cambio MeLi API — click para sobrescribir';
                       }
                     }).catch(function(){});
                   }
@@ -547,10 +339,10 @@
                     document.getElementById('fx-display').classList.remove('hidden');
                   };
                   loadFx();
-                  setInterval(loadFx, 300000); // refresh every 5 min
+                  setInterval(loadFx, 300000);
                 })();
                 </script>
-                <!-- Campana de sugerencias cruzadas -->
+                <!-- Campana de sugerencias cruzadas — solo ML -->
                 <div class="relative">
                     <button onclick="window.toggleNotifPanel()" title="Sugerencias recibidas"
                             class="relative p-1.5 rounded-lg text-gray-700 hover:bg-yellow-300 transition">
@@ -561,21 +353,33 @@
                         <span id="notif-bell-badge" class="hidden absolute -top-0.5 -right-0.5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold" style="font-size:9px;min-width:16px;height:16px;padding:0 3px"></span>
                     </button>
                 </div>
+                {% endif %}{# end ML-only widgets #}
+
+                <!-- Selector de cuentas (unificado ML + Amazon) -->
                 <div class="relative" id="account-menu-wrap">
                     <button type="button"
                         onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
                         class="flex items-center gap-1.5 text-gray-700 text-sm hover:text-gray-900 cursor-pointer select-none bg-yellow-300 hover:bg-yellow-200 px-3 py-1.5 rounded-lg transition">
+                        {% if active_platform == "amazon" %}
+                        <span class="text-xs font-bold text-white bg-orange-500 px-1 py-0.5 rounded">AMZ</span>
+                        {% if amazon_account %}
+                        <span class="max-w-[110px] truncate font-medium">{{ amazon_account.nickname or amazon_account.seller_id }}</span>
+                        {% else %}
+                        <span class="max-w-[110px] truncate text-gray-500">Sin cuenta</span>
+                        {% endif %}
+                        {% else %}
                         <span class="text-xs font-bold text-yellow-700">ML</span>
                         <span class="max-w-[110px] truncate font-medium">{{ user.nickname }}</span>
                         {% if amazon_accounts %}
                         <span class="text-xs font-bold bg-orange-500 text-white px-1 rounded">AMZ</span>
+                        {% endif %}
                         {% endif %}
                         <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                         </svg>
                     </button>
 
-                    <!-- Dropdown MeLi -->
+                    <!-- Dropdown — mismo para ML y Amazon -->
                     <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-50 min-w-[240px] py-2">
                         <!-- Sección MeLi -->
                         <div class="px-4 py-1.5 flex items-center gap-2">
@@ -653,8 +457,66 @@
         </div><!-- /flex justify-between -->
     </div><!-- /max-w-7xl -->
 
-    <!-- ── Mobile menu MeLi ──────────────────────────────────────────────── -->
+    <!-- ── Mobile menu ───────────────────────────────────────────────────── -->
     <div id="mobile-menu" class="hidden md:hidden border-t border-yellow-500 bg-yellow-400">
+
+        {% if active_platform == "amazon" %}
+        {# Amazon mobile tabs — 4+4 en dos filas #}
+        <div class="grid grid-cols-4 gap-1.5 px-3 pt-3 pb-1">
+            <a href="/amazon?tab=dashboard"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'dashboard' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">🏠</span>
+                <span class="text-xs text-gray-800">Dashboard</span>
+            </a>
+            <a href="/amazon?tab=ventas"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'ventas' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">📊</span>
+                <span class="text-xs text-gray-800">Ventas</span>
+            </a>
+            <a href="/amazon?tab=salud"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'salud' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">💚</span>
+                <span class="text-xs text-gray-800">Salud</span>
+            </a>
+            <a href="/amazon/products"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'productos' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">📦</span>
+                <span class="text-xs text-gray-800">Productos</span>
+            </a>
+        </div>
+        <div class="grid grid-cols-4 gap-1.5 px-3 pb-3">
+            <a href="/amazon?tab=finanzas"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'finanzas' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">💰</span>
+                <span class="text-xs text-gray-800">Finanzas</span>
+            </a>
+            <a href="/amazon?tab=fba"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'fba' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">📦</span>
+                <span class="text-xs text-gray-800">FBA</span>
+            </a>
+            <a href="/amazon?tab=listings"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'listings' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">🏷️</span>
+                <span class="text-xs text-gray-800">Listings</span>
+            </a>
+            <a href="/amazon?tab=deals"
+               class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg transition
+                      {% if active_amazon_tab == 'deals' %}bg-yellow-500 font-semibold{% else %}hover:bg-yellow-500{% endif %}">
+                <span class="text-xl">🎯</span>
+                <span class="text-xs text-gray-800">Deals</span>
+            </a>
+        </div>
+
+        {% else %}
+        {# ML mobile tabs #}
         <div class="grid grid-cols-3 gap-1 px-3 py-3">
             {% if not _sec or 'dashboard' in _sec %}
             <a href="/multi-dashboard" class="flex flex-col items-center gap-1 min-h-[48px] py-2 px-1 rounded-lg hover:bg-yellow-500 active:bg-yellow-600 {% if active == 'multi_dashboard' %}bg-yellow-500 font-semibold{% endif %}">
@@ -733,8 +595,9 @@
             </a>
             {% endif %}
         </div>
+        {% endif %}{# end platform mobile tabs #}
 
-        <!-- Selector de cuentas móvil MeLi -->
+        <!-- Selector de cuentas móvil (unificado) -->
         <div class="px-3 pb-3 border-t border-yellow-500 pt-3">
             <div class="flex items-center gap-2 mb-2">
                 <span class="text-xs font-bold bg-yellow-500 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
@@ -773,11 +636,9 @@
             {% endif %}
         </div>
 
-    </div><!-- /mobile-menu MeLi -->
+    </div><!-- /mobile-menu -->
 
-</nav><!-- /MeLi nav -->
-
-{% endif %}{# end if active_platform == "amazon" #}
+</nav>
 
 <!-- Close dropdown on outside click -->
 <script>
@@ -819,7 +680,6 @@ document.addEventListener('click', function(e) {
             var fixBtn = document.getElementById('global-health-fix-btn');
             if (!banner) return;
             if (d.overall === 'error') {
-                // Construir mensaje con los checks fallidos
                 var failed = [];
                 var checks = d.checks || {};
                 var labels = {db:'DB',meli_tokens:'Tokens MeLi',binmanager:'BinManager',
@@ -828,7 +688,6 @@ document.addEventListener('click', function(e) {
                 for (var k in checks) {
                     if (checks[k].status === 'error' || checks[k].status === 'warning') {
                         failed.push((labels[k] || k) + ': ' + (checks[k].msg || '').substring(0, 60));
-                        // Asignar fix action al primer error encontrado
                         if (!_fixAction) {
                             if (k === 'meli_tokens' || k === 'revenue') _fixAction = {label:'Refrescar tokens', fn: function(){ fetch('/api/system-health/fix-tokens',{method:'POST'}); }};
                             else if (k === 'amazon') _fixAction = {label:'Reconectar Amazon', fn: function(){ window.location.href='/auth/amazon/connect'; }};
@@ -858,14 +717,9 @@ document.addEventListener('click', function(e) {
         var btn = document.getElementById('global-health-fix-btn');
         var msg = document.getElementById('global-health-msg');
         if (!_fixAction) return;
-
-        // Visual feedback inmediato
         if (btn) { btn.textContent = 'Iniciando...'; btn.disabled = true; btn.style.opacity = '0.7'; }
         if (msg) msg.textContent = 'Ejecutando sync...';
-
         _fixAction.fn();
-
-        // Si es stock_sync: pollear hasta que termine y mostrar resultado
         var isStockSync = (_fixAction.label === 'Sync ahora');
         if (isStockSync) {
             var _pollCount = 0;
@@ -874,7 +728,6 @@ document.addEventListener('click', function(e) {
                 fetch('/api/stock/multi-sync/status').then(function(r){ return r.json(); }).then(function(s) {
                     if (!s.running || _pollCount > 60) {
                         clearInterval(_poll);
-                        // Mostrar toast de resultado
                         var toast = document.createElement('div');
                         var hasErr = s.last_result && s.last_result.error;
                         toast.textContent = hasErr ? 'Sync terminó con errores' : 'Sync completado ✓';
@@ -882,7 +735,6 @@ document.addEventListener('click', function(e) {
                         if (hasErr) toast.style.background = '#ef4444';
                         document.body.appendChild(toast);
                         setTimeout(function(){ toast.style.opacity='0'; setTimeout(function(){ toast.remove(); },600); }, 3000);
-                        // Re-check health para actualizar banner
                         setTimeout(_checkGlobalHealth, 500);
                     } else {
                         if (msg) msg.textContent = 'Sincronizando... (' + _pollCount + 's)';
@@ -890,7 +742,6 @@ document.addEventListener('click', function(e) {
                 }).catch(function(){ clearInterval(_poll); });
             }, 1000);
         } else {
-            // Para otras acciones (tokens, amazon): re-check tras 3s
             setTimeout(function(){
                 if (btn) { btn.disabled = false; btn.style.opacity = ''; }
                 _checkGlobalHealth();
@@ -898,9 +749,7 @@ document.addEventListener('click', function(e) {
         }
     }
     window._globalHealthFix = _globalHealthFix;
-    // Primer check con 8 segundos de delay — dejar que la página cargue
     setTimeout(_checkGlobalHealth, 8000);
-    // Polling automático cada 5 minutos
     setInterval(_checkGlobalHealth, 5 * 60 * 1000);
 })();
 </script>
@@ -980,7 +829,6 @@ document.addEventListener('click', function(e) {
     function _loadNotifs(showAll) {
         var url = '/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + (showAll ? '&status=all' : '&status=pending');
         fetch(url).then(function(r){return r.json();}).then(function(data) {
-            // also load in_progress when showing pending
             if (!showAll) {
                 fetch('/api/suggestions?to_account=' + encodeURIComponent(_currentAcct) + '&status=in_progress')
                     .then(function(r2){return r2.json();}).then(function(d2){
@@ -1021,7 +869,6 @@ document.addEventListener('click', function(e) {
         if (!open) _loadNotifs(false);
     };
 
-    // Badge inicial + polling cada 2 min
     _refreshBadge();
     setInterval(_refreshBadge, 120000);
 })();
@@ -1054,7 +901,6 @@ window._clearBmCache = function() {
         btn.disabled = false;
       } else {
         btn.textContent = '↻ Actualizando...';
-        // Sondear hasta que termine
         var _poll = setInterval(function() {
           fetch('/api/stock/prewarm-status')
             .then(function(r) { return r.json(); })
@@ -1063,7 +909,6 @@ window._clearBmCache = function() {
                 clearInterval(_poll);
                 btn.textContent = '↺ BM';
                 btn.disabled = false;
-                // Recargar la página para ver los datos frescos
                 window.location.reload();
               }
             })
