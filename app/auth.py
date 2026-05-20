@@ -344,10 +344,11 @@ async def amazon_connect(request: Request, seller_id: str = None):
       - default           → AMAZON_APP_SOLUTION_ID  (VeKtorClaude / VECKTOR IMPORTS)
     """
     # Seleccionar el app_solution_id correcto según la cuenta
+    # AMAZON3 usa Claude Autobot Dashboard (AMAZON2) — app Production ya establecida
     _eff_seller = seller_id or ""
-    if _eff_seller == (AMAZON3_SELLER_ID or "") and AMAZON3_APP_SOLUTION_ID:
-        _app_sol = AMAZON3_APP_SOLUTION_ID
-        _check_client = AMAZON3_CLIENT_ID
+    if _eff_seller == (AMAZON3_SELLER_ID or "") and AMAZON2_APP_SOLUTION_ID:
+        _app_sol = AMAZON2_APP_SOLUTION_ID
+        _check_client = AMAZON2_CLIENT_ID
     elif _eff_seller == (AMAZON2_SELLER_ID or "") and AMAZON2_APP_SOLUTION_ID:
         _app_sol = AMAZON2_APP_SOLUTION_ID
         _check_client = AMAZON2_CLIENT_ID
@@ -454,13 +455,14 @@ async def amazon_callback(
     _redirect_uri = _file_vars.get("AMAZON_REDIRECT_URI") or AMAZON_REDIRECT_URI
 
     if _is_acct3:
+        # ExclusiveBulbs se autentica via Claude Autobot Dashboard (AMAZON2 Production app)
         _nickname      = _file_vars.get("AMAZON3_NICKNAME")         or AMAZON3_NICKNAME or "ExclusiveBulbs"
         _mkt_id        = _file_vars.get("AMAZON3_MARKETPLACE_ID")   or AMAZON3_MARKETPLACE_ID
         _mkt_name      = _file_vars.get("AMAZON3_MARKETPLACE_NAME") or AMAZON3_MARKETPLACE_NAME
-        _app_sol_id    = _file_vars.get("AMAZON3_APP_SOLUTION_ID")  or AMAZON3_APP_SOLUTION_ID
+        _app_sol_id    = _file_vars.get("AMAZON2_APP_SOLUTION_ID")  or AMAZON2_APP_SOLUTION_ID
         _rt_env_key    = "AMAZON3_REFRESH_TOKEN"
-        _client_id     = _file_vars.get("AMAZON3_CLIENT_ID")        or AMAZON3_CLIENT_ID
-        _client_secret = _file_vars.get("AMAZON3_CLIENT_SECRET")    or AMAZON3_CLIENT_SECRET
+        _client_id     = _file_vars.get("AMAZON2_CLIENT_ID")        or AMAZON2_CLIENT_ID
+        _client_secret = _file_vars.get("AMAZON2_CLIENT_SECRET")    or AMAZON2_CLIENT_SECRET
     elif _is_acct2:
         _nickname      = _file_vars.get("AMAZON2_NICKNAME")       or AMAZON2_NICKNAME or "AUTOBOT AMZ MX"
         _mkt_id        = _file_vars.get("AMAZON2_MARKETPLACE_ID")   or AMAZON2_MARKETPLACE_ID
