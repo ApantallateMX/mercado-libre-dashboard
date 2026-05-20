@@ -1550,17 +1550,12 @@ async def _seed_amazon_accounts():
         existing3  = await token_store.get_amazon_account(seller_id3)
         stored_rt3 = (existing3 or {}).get("refresh_token", "")
         token_to_save3 = refresh_rt3 if refresh_rt3 != stored_rt3 else ""
-        # ExclusiveBulbs usa Claude Autobot Dashboard (AMAZON2) como app de acceso
-        import os as _os3b
-        _c2_id  = _os3b.getenv("AMAZON2_CLIENT_ID", "")       or client_id3
-        _c2_sec = _os3b.getenv("AMAZON2_CLIENT_SECRET", "")   or client_sec3
-        _app2   = _os3b.getenv("AMAZON2_APP_SOLUTION_ID", "") or app_sol_id3
         await token_store.save_amazon_account(
             seller_id=seller_id3, nickname=nickname3,
-            client_id=_c2_id, client_secret=_c2_sec,
+            client_id=client_id3, client_secret=client_sec3,
             refresh_token=token_to_save3,
             marketplace_id=mkt_id3, marketplace_name=mkt_name3,
-            app_solution_id=_app2,
+            app_solution_id=app_sol_id3,
         )
         if token_to_save3:
             logger.info(f"[Amazon] Cuenta3 token actualizado: {seller_id3} ({nickname3})")
