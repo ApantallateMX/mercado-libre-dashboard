@@ -58,24 +58,26 @@ def _parse_wh(rows) -> tuple:
     return mty, cdmx, tj
 
 
-async def _bm_stock(sku: str) -> dict:
-    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_ps
-    base = _base_sku(sku)
-    cond = _bm_conditions(sku)
-    wh_payload = {
-        "COMPANYID": _BM_COMPANY, "SKU": base, "WarehouseID": None,
-        "LocationID": _BM_LOCS, "BINID": None, "Condition": cond,
-        "SUPPLIERS": None, "ForInventory": 0,
-    }
+def _bm_stock_from_cache(sku: str) -> dict:
+    """Lee stock BM del caché en memoria (prewarm). Sin llamadas HTTP."""
     try:
-        bm_cli = await get_shared_bm()
-        r_wh = await _bm_post_ps(_BM_WH_URL, wh_payload, timeout=12.0)
-        avail = await bm_cli.get_available_qty(base)
-        rows_wh = r_wh.json() if r_wh and r_wh.status_code == 200 else []
-        mty, cdmx, tj = _parse_wh(rows_wh)
-        return {"mty": mty, "cdmx": cdmx, "tj": tj, "avail": avail, "total": mty + cdmx + tj}
+        import sys as _sys
+        _main = _sys.modules.get("app.main")
+        _cache = getattr(_main, "_bm_stock_cache", {}) if _main else {}
     except Exception:
-        return {"mty": 0, "cdmx": 0, "tj": 0, "avail": 0, "total": 0}
+        _cache = {}
+    base = _base_sku(sku)
+    entry = _cache.get(base.upper())
+    if entry:
+        _, data = entry
+        return {
+            "mty":   data.get("mty", 0),
+            "cdmx":  data.get("cdmx", 0),
+            "tj":    data.get("tj", 0),
+            "avail": data.get("avail_total", 0),
+            "total": data.get("total", 0),
+        }
+    return {"mty": 0, "cdmx": 0, "tj": 0, "avail": 0, "total": 0}
 
 
 def _calc_score(body: dict) -> tuple:
@@ -375,14 +377,10 @@ async def list_productos(
 
         unique_skus = list({s for s in sku_map.values() if s})
 
-        # 5. Consulta BM en paralelo (cap 100 SKUs por batch)
+        # 5. Stock BM desde caché en memoria — sin llamadas HTTP
         bm_results: dict = {}
-        if unique_skus:
-            tasks_bm = [_bm_stock(sku) for sku in unique_skus[:100]]
-            raw = await asyncio.gather(*tasks_bm, return_exceptions=True)
-            for sku, res in zip(unique_skus[:100], raw):
-                if not isinstance(res, Exception):
-                    bm_results[sku] = res
+        for sku in unique_skus:
+            bm_results[sku] = _bm_stock_from_cache(sku)
 
         # 6. Video records desde DB
         video_recs = await get_videos_for_items(list(seen_bodies), user_id)
@@ -413,7 +411,7 @@ async def list_productos(
 
         # Optional filter: only items with BM stock > 0
         if bm_gt0:
-            items = [i for i in items if i.get("bm_total", 0) > 0]
+            items = [i for i in items if i.get("bm_avail", 0) > 0]
 
         # Apply sort_by
         if sort_by == "score_asc":
@@ -421,9 +419,9 @@ async def list_productos(
         elif sort_by == "score_desc":
             items.sort(key=lambda x: x.get("score", 0), reverse=True)
         elif sort_by == "stock_asc":
-            items.sort(key=lambda x: x.get("bm_total", 0))
+            items.sort(key=lambda x: x.get("bm_avail", 0))
         elif sort_by == "stock_desc":
-            items.sort(key=lambda x: x.get("bm_total", 0), reverse=True)
+            items.sort(key=lambda x: x.get("bm_avail", 0), reverse=True)
         elif sort_by == "ventas_asc":
             items.sort(key=lambda x: x.get("sold_quantity", 0))
         elif sort_by == "ventas_desc":
@@ -599,9 +597,7 @@ async def get_producto_detail(item_id: str):
             video_rec = dict(row) if row else None
 
         sku = _extract_sku(body)
-        bm  = {}
-        if sku:
-            bm = await _bm_stock(sku)
+        bm  = _bm_stock_from_cache(sku) if sku else {}
 
         return {
             **_item_row(body, video_rec, bm),

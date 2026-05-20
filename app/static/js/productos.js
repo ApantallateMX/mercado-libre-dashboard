@@ -116,7 +116,7 @@
           <td class="px-3 py-2.5 text-right text-sm font-mono">
             ${item.status === 'candidate'
               ? bmCell(item)
-              : `<span class="${item.bm_total === 0 ? 'text-red-500' : 'text-gray-700'}">${item.bm_total ?? '—'}</span>
+              : `<span class="${item.bm_avail === 0 ? 'text-red-500' : 'text-gray-700'}">${item.bm_avail ?? '—'}</span>
                  <span class="text-gray-300 text-xs ml-0.5">(${item.bm_mty}+${item.bm_cdmx})</span>`
             }
           </td>
@@ -153,7 +153,7 @@
               ${item.sku ? `<span class="text-xs text-gray-400 font-mono">${escHtml(item.sku)}</span>` : ''}
             </div>
             <div class="flex items-center gap-3 mt-1 text-xs text-gray-500">
-              <span>BM: <b class="${item.bm_total === 0 ? 'text-red-500' : 'text-gray-700'}">${item.bm_total ?? 0}</b></span>
+              <span>BM: <b class="${item.bm_avail === 0 ? 'text-red-500' : 'text-gray-700'}">${item.bm_avail ?? 0}</b></span>
               ${item.status !== 'candidate' ? `<span>ML: <b>${item.stock_ml ?? 0}</b></span>` : ''}
               ${item.price ? `<span class="font-semibold text-gray-700">$${fmt(item.price)}</span>` : ''}
             </div>
