@@ -10,6 +10,7 @@ from app.services import token_store
 from app import order_net_revenue
 import time as _time
 import asyncio
+import httpx
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
@@ -966,6 +967,95 @@ async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> lis
         return all_orders
 
 
+async def _orders_api_fallback_metrics(client, date_from: str, date_to: str) -> list:
+    """Fallback: construye métricas diarias desde Orders API cuando Sales API devuelve 403.
+
+    Produce la misma estructura que Sales API (interval, orderCount, unitCount, totalSales)
+    usando PurchaseDate + OrderTotal. Menos preciso (OrderTotal incluye shipping/taxes)
+    pero funcional cuando la app no tiene acceso al Sales API.
+    """
+    try:
+        import zoneinfo as _zi
+        _la = _zi.ZoneInfo("America/Los_Angeles")
+    except Exception:
+        _la = None
+
+    start = datetime.strptime(date_from, "%Y-%m-%d")
+    end   = datetime.strptime(date_to,   "%Y-%m-%d")
+
+    buckets: dict[str, dict] = {}
+    cur = start
+    while cur <= end:
+        buckets[cur.strftime("%Y-%m-%d")] = {"orders": 0, "units": 0, "revenue": 0.0}
+        cur += timedelta(days=1)
+
+    created_after  = start.strftime("%Y-%m-%dT00:00:00Z")
+    created_before = (end + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+
+    try:
+        orders = await client.get_orders(
+            created_after=created_after,
+            created_before=created_before,
+        )
+    except Exception:
+        return []
+
+    from datetime import timezone as _tz_mod
+    for order in orders:
+        if order.get("OrderStatus") == "Cancelled":
+            continue
+        purchase_date = order.get("PurchaseDate", "")
+        if not purchase_date:
+            continue
+        try:
+            dt_utc = datetime.strptime(purchase_date[:19], "%Y-%m-%dT%H:%M:%S").replace(
+                tzinfo=_tz_mod.utc
+            )
+            if _la:
+                date_str = dt_utc.astimezone(_la).strftime("%Y-%m-%d")
+            else:
+                date_str = (dt_utc - timedelta(hours=8)).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+        if date_str not in buckets:
+            continue
+        buckets[date_str]["orders"] += 1
+        buckets[date_str]["units"] += (
+            int(order.get("NumberOfItemsShipped", 0) or 0)
+            + int(order.get("NumberOfItemsUnshipped", 0) or 0)
+        )
+        try:
+            buckets[date_str]["revenue"] += float(
+                order.get("OrderTotal", {}).get("Amount", 0) or 0
+            )
+        except (TypeError, ValueError):
+            pass
+
+    # Determinar offset PST/PDT para el formato de interval
+    try:
+        import zoneinfo as _zi2
+        _ref = datetime.strptime(date_from, "%Y-%m-%d").replace(
+            tzinfo=_zi2.ZoneInfo("America/Los_Angeles")
+        )
+        _off = _ref.strftime("%z")  # "-0800" o "-0700"
+        _offset_fmt = _off[:3] + ":" + _off[3:]  # → "-08:00" o "-07:00"
+    except Exception:
+        _offset_fmt = "-08:00"
+
+    result = []
+    for date_str in sorted(buckets.keys()):
+        next_day = (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        d = buckets[date_str]
+        result.append({
+            "interval":        f"{date_str}T00:00:00{_offset_fmt}--{next_day}T00:00:00{_offset_fmt}",
+            "orderCount":      d["orders"],
+            "unitCount":       d["units"],
+            "totalSales":      {"currencyCode": "USD", "amount": str(round(d["revenue"], 2))},
+            "averageUnitPrice": {"currencyCode": "USD", "amount": "0"},
+        })
+    return result
+
+
 async def _get_cached_order_metrics(client, date_from: str, date_to: str) -> list:
     """Obtiene y cachea métricas del Sales API con granularidad=Day.
 
@@ -975,6 +1065,7 @@ async def _get_cached_order_metrics(client, date_from: str, date_to: str) -> lis
     Retorna lista de dicts con: interval, orderCount, unitCount, totalSales.
     El campo totalSales.amount = Ordered Product Sales (OPS) = lo que muestra
     Amazon Seller Central. Mucho más preciso que sumar OrderTotal de Orders API.
+    Si el Sales API devuelve 403 (permisos insuficientes), usa fallback de Orders API.
     """
     cache_key = f"metrics:{client.seller_id}:{date_from}:{date_to}"
 
@@ -998,11 +1089,23 @@ async def _get_cached_order_metrics(client, date_from: str, date_to: str) -> lis
             datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
         ).strftime("%Y-%m-%d")
 
-        data = await client.get_order_metrics(
-            date_from=date_from,
-            date_to_exclusive=date_to_exclusive,
-            granularity="Day",
-        )
+        try:
+            data = await client.get_order_metrics(
+                date_from=date_from,
+                date_to_exclusive=date_to_exclusive,
+                granularity="Day",
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 403:
+                raise
+            # Sales API no disponible para esta app → fallback a Orders API
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "[Amazon] Sales API 403 para %s — usando fallback Orders API",
+                client.seller_id,
+            )
+            data = await _orders_api_fallback_metrics(client, date_from, date_to)
+
         _amazon_metrics_cache[cache_key] = (_time.time(), data)
         return data
 
