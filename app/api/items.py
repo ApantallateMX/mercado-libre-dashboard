@@ -73,32 +73,27 @@ def _parse_wh_rows_items(rows):
 
 
 async def _bm_warehouse_qty(sku: str) -> dict | None:
-    """Consulta secuencialmente:
-    1) Warehouse endpoint → MTY/CDMX/TJ totales físicos
-    2) get_available_qty → AvailableQTY real (Get_GlobalStock_InventoryBySKU, excluye reservados)
-    """
-    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_wq
+    """Stock BM desde caché en memoria (prewarm). Sin llamadas HTTP."""
+    import sys as _sys
+    _main = _sys.modules.get("app.main")
+    _cache = getattr(_main, "_bm_stock_cache", {}) if _main else {}
     base, _ = _get_base_and_type(sku)
-    conditions = _bm_conditions(sku)
-    wh_payload = {
-        "COMPANYID": BM_COMPANY_ID, "SKU": base, "WarehouseID": None,
-        "LocationID": BM_LOCATION_IDS, "BINID": None,
-        "Condition": conditions, "SUPPLIERS": None, "ForInventory": 0,
-    }
-    try:
-        bm_cli = await get_shared_bm()
-        r_wh = await _bm_post_wq(BM_WAREHOUSE_URL, wh_payload, timeout=15.0)
-        avail_total = await bm_cli.get_available_qty(base)
-        rows_wh = r_wh.json() if r_wh and r_wh.status_code == 200 else []
-        mty, cdmx, tj = _parse_wh_rows_items(rows_wh)
-        if mty + cdmx + tj > 0 or avail_total > 0:
-            return {
-                "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
-                "AvailTotal": avail_total,
-                "WebSKU": sku, "ProductSKU": base,
-            }
-    except Exception:
-        pass
+    if not base:
+        return None
+    entry = _cache.get(base.upper())
+    if not entry:
+        return None
+    _, data = entry
+    mty   = data.get("mty", 0)
+    cdmx  = data.get("cdmx", 0)
+    tj    = data.get("tj", 0)
+    avail = data.get("avail_total", 0)
+    if mty + cdmx + tj > 0 or avail > 0:
+        return {
+            "MainQtyMTY": mty, "MainQtyCDMX": cdmx, "MainQtyTJ": tj,
+            "AvailTotal": avail,
+            "WebSKU": sku, "ProductSKU": base,
+        }
     return None
 
 
@@ -271,18 +266,11 @@ async def get_inventory_bulk(skus: str = Query(..., description="Comma-separated
     if not sku_list:
         return {}
 
-    async def fetch_one(sku: str, client: httpx.AsyncClient):
-        """Consulta BM Warehouse endpoint. Condiciones segun sufijo del SKU."""
-        data = await _bm_warehouse_qty(sku, client)
-        return sku, data
-
     results = {}
-    async with httpx.AsyncClient() as client:
-        tasks = [fetch_one(sku, client) for sku in sku_list]
-        for coro in asyncio.as_completed(tasks):
-            sku, data = await coro
-            if data:
-                results[sku] = data
+    for sku in sku_list:
+        data = await _bm_warehouse_qty(sku)
+        if data:
+            results[sku] = data
     return results
 
 

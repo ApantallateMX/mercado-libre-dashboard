@@ -165,43 +165,24 @@ def _wh_name_to_zone(name: str) -> str:
 
 
 async def _bm_fetch_warehouse_stock(sku: str) -> dict:
-    """Fetch MTY/CDMX stock para un SKU usando condiciones correctas según sufijo.
-    Usa Get_GlobalStock_InventoryBySKU_Warehouse para desglose por almacen y
-    get_available_qty (Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68) para AvailableQTY real.
-    """
-    from app.services.binmanager_client import get_shared_bm, bm_post as _bm_post_whs
-    try:
-        base = sku.upper()
-        for sfx in _ALL_SUFFIXES:
-            if base.endswith(sfx):
-                base = base[:-len(sfx)]
-                break
-        conditions = _bm_conditions_for_sku(sku)
-        wh_payload = {
-            "COMPANYID": _BM_COMPANY,
-            "SKU": base,
-            "WarehouseID": None,
-            "LocationID": _BM_LOCATIONS,
-            "BINID": None,
-            "Condition": conditions,
-            "ForInventory": 0,
-            "SUPPLIERS": None,
+    """Stock BM desde caché en memoria. Sin llamadas HTTP."""
+    import sys as _sys
+    _main = _sys.modules.get("app.main")
+    _cache = getattr(_main, "_bm_stock_cache", {}) if _main else {}
+    base = sku.upper()
+    for sfx in _ALL_SUFFIXES:
+        if base.endswith(sfx):
+            base = base[:-len(sfx)]
+            break
+    entry = _cache.get(base)
+    if entry:
+        _, data = entry
+        return {
+            "mty":   data.get("mty", 0),
+            "cdmx":  data.get("cdmx", 0),
+            "avail": data.get("avail_total", 0),
         }
-        bm_cli = await get_shared_bm()
-        r_wh = await _bm_post_whs(_BM_WAREHOUSE_URL, wh_payload, timeout=15.0)
-        avail = await bm_cli.get_available_qty(base)
-        mty = cdmx = 0
-        if r_wh and r_wh.status_code == 200:
-            for row in (r_wh.json() or []):
-                qty = row.get("QtyTotal", 0) or 0
-                zone = _wh_name_to_zone(row.get("WarehouseName") or "")
-                if zone == "mty":
-                    mty += qty
-                elif zone == "cdmx":
-                    cdmx += qty
-        return {"mty": mty, "cdmx": cdmx, "avail": avail or mty + cdmx}
-    except Exception:
-        return {"mty": 0, "cdmx": 0, "avail": 0}
+    return {"mty": 0, "cdmx": 0, "avail": 0}
 
 
 async def _get_meli_sku_set(user_id: str, nickname: str) -> tuple[set[str], dict[str, list[str]], dict[str, list[dict]]]:

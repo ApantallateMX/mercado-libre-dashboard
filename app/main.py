@@ -1214,54 +1214,18 @@ async def _enrich_with_bm_product_info(products: list, sku_key="sku"):
 
 
 async def _enrich_with_bm_stock(products: list, sku_key="sku"):
-    """Consulta BinManager Warehouse endpoint para stock real por almacen (MTY/CDMX/TJ)."""
-    from app.services.binmanager_client import bm_post as _bm_post_wh
-    BM_WH_URL = "https://binmanager.mitechnologiesinc.com/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU_Warehouse"
-
-    async def _fetch(sku):
-        base = normalize_to_bm_sku(sku)
-        if not base:
-            return sku, None
-        try:
-            resp = await _bm_post_wh(BM_WH_URL, {
-                "COMPANYID": 1, "SKU": base, "WarehouseID": None,
-                "LocationID": "47,62,68", "BINID": None,
-                "Condition": _bm_conditions_for_sku(sku), "ForInventory": 0, "SUPPLIERS": None,
-            }, timeout=15.0)
-            if resp and resp.status_code == 200:
-                rows = resp.json() or []
-                mty = cdmx = tj = 0
-                for row in rows:
-                    qty = row.get("QtyTotal", 0) or 0
-                    wname = (row.get("WarehouseName") or "").lower()
-                    if "monterrey" in wname or "maxx" in wname:
-                        mty += qty
-                    elif "autobot" in wname or "cdmx" in wname or "ebanistas" in wname:
-                        cdmx += qty
-                    else:
-                        tj += qty
-                return sku, {"mty": mty, "cdmx": cdmx, "tj": tj}
-        except Exception:
-            pass
-        return sku, None
-
-    tasks = [_fetch(p.get(sku_key, "")) for p in products if p.get(sku_key)]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    bm_map = {}
-    for r in results:
-        if isinstance(r, Exception) or r is None:
-            continue
-        sku, data = r
-        if data:
-            bm_map[sku] = data
-
+    """Enriquece productos con stock BM desde caché en memoria (MTY/CDMX/TJ)."""
     for p in products:
-        bm = bm_map.get(p.get(sku_key))
-        if bm:
-            p["_bm_mty"] = max(0, bm.get("mty", 0) or 0)
-            p["_bm_cdmx"] = max(0, bm.get("cdmx", 0) or 0)
-            p["_bm_tj"] = max(0, bm.get("tj", 0) or 0)
+        sku = p.get(sku_key, "")
+        if not sku:
+            continue
+        base = normalize_to_bm_sku(sku)
+        entry = _bm_stock_cache.get(base.upper()) if base else None
+        if entry:
+            _, data = entry
+            p["_bm_mty"]   = max(0, data.get("mty", 0) or 0)
+            p["_bm_cdmx"]  = max(0, data.get("cdmx", 0) or 0)
+            p["_bm_tj"]    = max(0, data.get("tj", 0) or 0)
             p["_bm_total"] = p["_bm_mty"] + p["_bm_cdmx"]
 
 
