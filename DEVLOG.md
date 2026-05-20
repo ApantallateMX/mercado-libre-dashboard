@@ -7,6 +7,76 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-20 — FEAT: Navbar unificado ML + Amazon
+
+### Problema
+Al cambiar de cuenta ML a Amazon (o viceversa), el nav entero cambiaba de estilo:
+ML = amarillo, Amazon = oscuro #232F3E. El usuario veía dos interfaces completamente
+distintas y la experiencia era confusa.
+
+### Solución
+Eliminado el navbar oscuro de Amazon. Ahora existe **un único navbar amarillo** para
+ambas plataformas. Los tabs cambian condicionalmente según `active_platform` ("amazon"
+o ML), pero el fondo, la posición, el selector de cuentas y el botón de logout son
+siempre iguales. El selector de cuentas ya era shared — ahora todo el nav lo es.
+
+- `base.html`: eliminados 267 líneas del Amazon dark nav, reemplazado por tabs
+  condicionales `{% if active_platform == "amazon" %}` dentro del mismo nav amarillo
+- Amazon tabs en mobile: mismo estilo `bg-yellow-500` en activo en lugar de `bg-[#37475A]`
+- El logo muestra `AMZ` badge naranja en modo Amazon, `MeLi` texto en modo ML
+- FX widget y campana de sugerencias solo se muestran en modo ML
+
+---
+
+## 2026-05-20 — FIX: ExclusiveBulbs (AMAZON3) marketplace ID typo
+
+### Problema
+ExclusiveBulbs mostraba $0 ventas, 0 órdenes. El marketplace ID estaba mal:
+`ATVPDKIKX0ER` en lugar de `ATVPDKIKX0DER` (Amazon.com USA). Amazon retornaba
+200 OK con array vacío, haciendo el bug muy difícil de detectar.
+
+### Solución
+- `app/config.py` línea 85: `AMAZON3_MARKETPLACE_ID` default corregido a `ATVPDKIKX0DER`
+- `app/services/amazon_client.py` línea 1540: mismo fix en el hardcode de fallback
+- Railway rechazó actualización de env var (deploy paused), fix en código default
+- La DB se actualiza automáticamente en próximo restart vía UPSERT incondicional
+
+---
+
+## 2026-05-20 — FIX: Sales API 403 → fallback a Orders API para ExclusiveBulbs
+
+### Problema
+`/sales/v1/orderMetrics` retorna 403 para la app Draft de Amazon porque no tiene
+permiso de Sales API. ExclusiveBulbs no puede usar Sales API.
+
+### Solución
+`app/api/metrics.py`: función `_orders_api_fallback_metrics(client, date_from, date_to)`
+que construye métricas diarias equivalentes desde Orders API (`/orders/v0/orders`)
+cuando Sales API devuelve 403. La función retorna la misma estructura que Sales API:
+`[{interval, orderCount, unitCount, totalSales}]`. El fallback es transparente para
+el resto del código.
+
+---
+
+## 2026-05-20 — FIX: Inventario BM en sección Productos mostraba 0
+
+### Problema
+`SNTV004097` y otros SKUs mostraban BM=0 en la tabla de productos aunque el caché
+tenía stock correcto. `_bm_stock()` hacía llamadas HTTP directas a BM en tiempo real,
+violando la regla cache-first.
+
+### Solución
+Auditoría completa de llamadas BM en vivo + reemplazo con lecturas del `_bm_stock_cache`:
+- `app/api/productos.py`: `_bm_stock()` → `_bm_stock_from_cache()`; columna `bm_total` → `bm_avail`
+- `app/static/js/productos.js`: `item.bm_total` → `item.bm_avail` en tabla y detalle
+- `app/api/items.py`: `_bm_warehouse_qty()` reescrito para leer cache; fix bug `fetch_one(sku, client)`
+- `app/main.py`: `_enrich_with_bm_stock()` reescrito para leer `_bm_stock_cache` directamente
+- `app/api/lanzar.py`: `_bm_fetch_warehouse_stock()` reescrito para leer cache
+- 4 casos genuinamente necesarios de BM en vivo identificados (condición breakdown, catalog, costos)
+  — todos user-initiated, single-SKU, pasan por Semaphore(1)
+
+---
+
 ## 2026-05-19 — FIX: Nicknames y cuentas ML desaparecen tras redeploy Railway
 
 ### Problema
