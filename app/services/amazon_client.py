@@ -1537,7 +1537,7 @@ async def _seed_amazon_accounts():
     seller_id3  = _g("AMAZON3_SELLER_ID",       "")
     client_id3  = _g("AMAZON3_CLIENT_ID",        "")
     client_sec3 = _g("AMAZON3_CLIENT_SECRET",    "")
-    mkt_id3     = _g("AMAZON3_MARKETPLACE_ID",   "ATVPDKIKX0ER")
+    mkt_id3     = _g("AMAZON3_MARKETPLACE_ID",   "ATVPDKIKX0DER")
     mkt_name3   = _g("AMAZON3_MARKETPLACE_NAME", "US")
     app_sol_id3 = _g("AMAZON3_APP_SOLUTION_ID",  "")
     nickname3   = _g("AMAZON3_NICKNAME",         "ExclusiveBulbs")
