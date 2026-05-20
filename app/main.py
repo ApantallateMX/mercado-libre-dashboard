@@ -14015,6 +14015,166 @@ async def diag_amazon_accounts(token: str = ""):  # noqa
     return JSONResponse({"accounts": results})
 
 
+@app.get("/api/diag/exclusivebulbs-probe")
+async def diag_exclusivebulbs_probe(token: str = ""):  # noqa
+    """
+    Diagnóstico temporal: llama SP-API para ExclusiveBulbs (A22XNR713HGDVG) en USA.
+    Verifica órdenes 30d y listings activos. Solo accesible con diag token.
+    """
+    _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+
+    import httpx as _hx
+    from datetime import datetime as _dt, timedelta as _td
+
+    TARGET_SELLER_ID  = "A22XNR713HGDVG"
+    TARGET_MARKETPLACE = "ATVPDKIKX0DER"   # Amazon USA (correcto con D)
+    LWA_URL            = "https://api.amazon.com/auth/o2/token"
+    SP_BASE            = "https://sellingpartnerapi-na.amazon.com"
+
+    # 1. Obtener credenciales de la DB
+    acct = await token_store.get_amazon_account(TARGET_SELLER_ID)
+    if not acct:
+        return JSONResponse({"error": "Cuenta ExclusiveBulbs no encontrada en DB", "seller_id": TARGET_SELLER_ID})
+
+    client_id     = acct.get("client_id", "")
+    client_secret = acct.get("client_secret", "")
+    refresh_token = acct.get("refresh_token", "")
+    mkt_stored    = acct.get("marketplace_id", "?")
+
+    if not refresh_token:
+        return JSONResponse({"error": "refresh_token vacío en DB — necesita re-OAuth", "seller_id": TARGET_SELLER_ID})
+
+    result = {
+        "seller_id": TARGET_SELLER_ID,
+        "nickname": acct.get("nickname", ""),
+        "marketplace_stored": mkt_stored,
+        "marketplace_probe": TARGET_MARKETPLACE,
+        "client_id_prefix": client_id[:40] if client_id else "",
+        "token_len": len(refresh_token),
+    }
+
+    async with _hx.AsyncClient(timeout=20) as http:
+        # 2. Obtener access token via LWA
+        try:
+            lwa_resp = await http.post(LWA_URL, data={
+                "grant_type":    "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id":     client_id,
+                "client_secret": client_secret,
+            })
+            if lwa_resp.status_code != 200:
+                result["lwa_error"] = f"HTTP {lwa_resp.status_code}: {lwa_resp.text[:200]}"
+                return JSONResponse(result)
+            access_token = lwa_resp.json()["access_token"]
+            result["lwa_status"] = "OK"
+        except Exception as e:
+            result["lwa_error"] = str(e)
+            return JSONResponse(result)
+
+        headers = {
+            "x-amz-access-token": access_token,
+            "Content-Type": "application/json",
+        }
+
+        # 3. Órdenes últimos 30 días
+        created_after = (_dt.utcnow() - _td(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            ord_resp = await http.get(
+                f"{SP_BASE}/orders/v0/orders",
+                headers=headers,
+                params=[
+                    ("MarketplaceIds", TARGET_MARKETPLACE),
+                    ("CreatedAfter", created_after),
+                    ("OrderStatuses", "Shipped"),
+                    ("OrderStatuses", "Unshipped"),
+                    ("OrderStatuses", "PartiallyShipped"),
+                ],
+                timeout=20,
+            )
+            result["orders_status"] = ord_resp.status_code
+            if ord_resp.status_code == 200:
+                payload = ord_resp.json().get("payload", {})
+                orders = payload.get("Orders", [])
+                result["orders_count"] = len(orders)
+                result["orders_next_token"] = bool(payload.get("NextToken"))
+                if orders:
+                    result["orders_sample"] = [
+                        {
+                            "id": o.get("AmazonOrderId"),
+                            "status": o.get("OrderStatus"),
+                            "date": o.get("PurchaseDate", "")[:10],
+                            "total": (o.get("OrderTotal") or {}).get("Amount"),
+                            "currency": (o.get("OrderTotal") or {}).get("CurrencyCode"),
+                            "marketplace": o.get("MarketplaceId"),
+                        }
+                        for o in orders[:5]
+                    ]
+                else:
+                    result["orders_sample"] = []
+            else:
+                result["orders_error"] = ord_resp.text[:300]
+        except Exception as e:
+            result["orders_exception"] = str(e)
+
+        # 4. Listings activos — primera página
+        try:
+            lst_resp = await http.get(
+                f"{SP_BASE}/listings/2021-08-01/items/{TARGET_SELLER_ID}",
+                headers=headers,
+                params=[
+                    ("marketplaceIds", TARGET_MARKETPLACE),
+                    ("includedData", "summaries"),
+                    ("pageSize", "20"),
+                ],
+                timeout=20,
+            )
+            result["listings_status"] = lst_resp.status_code
+            if lst_resp.status_code == 200:
+                lst_data = lst_resp.json()
+                items = lst_data.get("items", [])
+                result["listings_page1_count"] = len(items)
+                result["listings_has_more"] = bool((lst_data.get("pagination") or {}).get("nextToken"))
+                if items:
+                    result["listings_sample"] = [
+                        {
+                            "sku": it.get("sku"),
+                            "status": ((it.get("summaries") or [{}])[0]).get("status"),
+                            "asin": ((it.get("summaries") or [{}])[0]).get("asin"),
+                            "title": ((it.get("summaries") or [{}])[0]).get("itemName", "")[:60],
+                        }
+                        for it in items[:5]
+                    ]
+            else:
+                result["listings_error"] = lst_resp.text[:300]
+        except Exception as e:
+            result["listings_exception"] = str(e)
+
+        # 5. También probar con el marketplace que está guardado en DB (por si difiere)
+        if mkt_stored and mkt_stored != TARGET_MARKETPLACE:
+            try:
+                ord_resp2 = await http.get(
+                    f"{SP_BASE}/orders/v0/orders",
+                    headers=headers,
+                    params=[
+                        ("MarketplaceIds", mkt_stored),
+                        ("CreatedAfter", created_after),
+                        ("OrderStatuses", "Shipped"),
+                    ],
+                    timeout=15,
+                )
+                result["orders_stored_mkt_status"] = ord_resp2.status_code
+                if ord_resp2.status_code == 200:
+                    result["orders_stored_mkt_count"] = len(ord_resp2.json().get("payload", {}).get("Orders", []))
+                else:
+                    result["orders_stored_mkt_error"] = ord_resp2.text[:150]
+            except Exception as e:
+                result["orders_stored_mkt_exception"] = str(e)
+
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/refresh-ml-tokens")
 async def diag_refresh_ml_tokens(token: str = ""):
     """Fuerza re-seed de tokens ML. Solo accesible con diag token."""
