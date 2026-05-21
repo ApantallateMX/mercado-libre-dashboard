@@ -363,15 +363,43 @@ function loadAmazonDashboard() {
         .finally(function(){ btn.disabled = false; btn.classList.remove('opacity-50'); });
 }
 
-function loadAmzRecentOrders() {
+function loadAmzRecentOrders(_retryCount) {
     var el = document.getElementById('amz-recent-orders');
     if (!el) return;
+    var retryCount = _retryCount || 0;
     el.innerHTML = '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
     var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
     fetch('/api/metrics/amazon-recent-orders' + sellerParam)
-        .then(function(r){return r.text();})
-        .then(function(html){ el.innerHTML = html; })
+        .then(function(r){
+            if (r.status === 429) { _amzOrdersRateLimit(el, retryCount); return null; }
+            return r.text();
+        })
+        .then(function(html){
+            if (html === null) return;
+            el.innerHTML = html;
+        })
         .catch(function(){ el.innerHTML = '<p class="text-red-400 text-center py-4 text-sm">Error cargando órdenes</p>'; });
+}
+
+function _amzOrdersRateLimit(el, retryCount) {
+    var delay = Math.min(60, 15 * Math.pow(2, retryCount));  // 15s, 30s, 60s
+    var deadline = Date.now() + delay * 1000;
+    var timer = setInterval(function() {
+        var secs = Math.ceil((deadline - Date.now()) / 1000);
+        if (secs <= 0) {
+            clearInterval(timer);
+            loadAmzRecentOrders(retryCount + 1);
+            return;
+        }
+        el.innerHTML =
+            '<div class="flex flex-col items-center justify-center py-8 gap-3">' +
+            '<svg class="w-8 h-8 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>' +
+            '<p class="text-sm font-semibold text-orange-700">Rate limit Amazon SP-API</p>' +
+            '<p class="text-xs text-gray-500">Reintentando en <span class="font-bold text-orange-600">' + secs + 's</span>…</p>' +
+            '<button onclick="clearInterval(window._amzOrdersTimer);loadAmzRecentOrders(0)" class="text-xs text-orange-600 hover:underline mt-1">Reintentar ahora</button>' +
+            '</div>';
+    }, 500);
+    window._amzOrdersTimer = timer;
 }
 
 // ── Multi-cuenta comparativa ──────────────────────────────────────────────
