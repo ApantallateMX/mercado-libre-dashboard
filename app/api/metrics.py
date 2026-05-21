@@ -1576,18 +1576,25 @@ async def get_amazon_recent_orders(
     valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
     recent = valid[:5]
 
-    # Enriquecer con items (ASIN, SKU, Title, Qty, Price) — en paralelo
-    async def _fetch_items(order: dict) -> dict:
+    # Enriquecer con items — secuencial con delay para respetar rate limit SP-API
+    # (asyncio.gather paralelo provoca 429 en apps Draft con cuotas reducidas)
+    enriched = []
+    for i, order in enumerate(recent):
+        if i > 0:
+            await asyncio.sleep(0.4)   # 0.4s gap → ~2.5 rps, bajo límite de orderItems
         try:
             items = await client.get_order_items(order.get("AmazonOrderId", ""))
             order = dict(order)
             order["_items"] = items
-        except Exception:
+        except Exception as _e:
             order = dict(order)
             order["_items"] = []
-        return order
-
-    recent = list(await asyncio.gather(*[_fetch_items(o) for o in recent]))
+            if "429" in str(_e) or "QuotaExceeded" in str(_e):
+                # Rate limit alcanzado — detener enriquecimiento, mostrar los que tenemos
+                enriched.append(order)
+                break
+        enriched.append(order)
+    recent = enriched
 
     return _templates.TemplateResponse(
         request, "partials/amazon_recent_orders.html", {"orders": recent},
