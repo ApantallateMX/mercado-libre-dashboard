@@ -238,7 +238,10 @@ async def _check_amazon() -> dict:
                 ok_count += 1
             except Exception as e:
                 err_str = str(e)
-                if "403" in err_str or "Unauthorized" in err_str or "LWA" in err_str:
+                if "429" in err_str or "QuotaExceeded" in err_str:
+                    # Rate limit — token válido, solo cuota agotada temporalmente
+                    ok_count += 1
+                elif "403" in err_str or "Unauthorized" in err_str or "LWA" in err_str:
                     fail_msgs.append(f"{nick}:TOKEN_INVALIDO(403)")
                 elif "401" in err_str:
                     fail_msgs.append(f"{nick}:TOKEN_EXPIRADO(401)")

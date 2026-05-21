@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -1568,8 +1568,11 @@ async def get_amazon_recent_orders(
     try:
         orders = await _get_cached_amazon_orders(client, date_from, date_to)
     except Exception as exc:
+        exc_str = str(exc)
+        if "429" in exc_str or "QuotaExceeded" in exc_str:
+            return Response(status_code=429, content="Rate limit Amazon SP-API")
         return HTMLResponse(
-            f'<p class="text-center text-red-400 py-6 text-sm">Error: {str(exc)[:120]}</p>'
+            f'<p class="text-center text-red-400 py-6 text-sm">Error: {exc_str[:120]}</p>'
         )
 
     valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending")]
