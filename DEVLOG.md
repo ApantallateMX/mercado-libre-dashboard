@@ -7,6 +7,66 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-21 — FIX: Amazon órdenes recientes — 429 QuotaExceeded
+
+### Problema
+La sección "Últimas Órdenes Amazon" en el tab Ventas mostraba HTTP 429 QuotaExceeded.
+Causa raíz: `asyncio.gather` disparaba 5 llamadas simultáneas a `get_order_items` 
+en SP-API. Las apps Draft tienen rate limits reducidos — el endpoint orderItems permite
+0.5 rps, y 5 llamadas en paralelo lo superan instantáneamente.
+
+### Solución
+- `app/api/metrics.py`: reemplazado `asyncio.gather` por loop secuencial con
+  `await asyncio.sleep(0.4)` entre cada llamada (~2.5 rps total, bajo el límite).
+  Si llega 429, se detecta en el except y se hace `break` devolviendo las órdenes
+  ya enriquecidas en lugar de fallar todo el endpoint.
+- `app/static/js/amazon_dashboard.js`: `loadAmzRecentOrders` ahora detecta respuesta
+  429 del servidor y muestra UI de countdown con backoff exponencial (15s → 30s → 60s)
+  y botón "Reintentar ahora". Auto-reintenta hasta convergencia.
+
+### Commits
+- `86f5c2f` fix: Amazon órdenes recientes — sequential orderItems para evitar 429
+- `29a2617` feat: Amazon órdenes — retry UI con countdown en rate limit 429
+
+---
+
+## 2026-05-21 — FEAT: Detalles financieros en órdenes Amazon
+
+### Resumen
+Las órdenes Amazon ahora muestran breakdown completo de precio, fees y ganancia —
+equivalente a lo que ML ya mostraba. El expand de cada orden incluye tres columnas:
+Productos (título, SKU, ASIN, qty, precio unitario), Finanzas (cobros al comprador,
+fees Amazon, Neto Amazon, rentabilidad vs costo BM), e Info de Orden.
+
+### Detalles técnicos
+- `amazon_client.py`: nuevo método `get_order_financial_events(order_id)` — llama
+  `GET /finances/v0/orders/{id}/financialEvents` protegido con `_ORDERS_SEMAPHORE`.
+- `amazon_orders.py`: 
+  - `_parse_fees_from_events()`: parsea ShipmentEventList → extracts Commission
+    (referral fee), FBAPerUnitFulfillmentFee, otros. Devuelve None si no hay datos.
+  - `_estimate_fees()`: fallback 15% referral cuando aún no hay liquidación (Pending).
+  - `_build_finanzas()`: construye contexto P&L completo — revenue, fees, neto,
+    costo BM (via `_sku_cost_map` de app.main), ganancia, margen %.
+  - Badge "est." amarillo vs "real" verde según fuente de datos.
+- `partials/amazon_order_items.html`: columna 2 completamente reescrita con las tres
+  secciones de finanzas. ⚠ advertencia automática si fees son estimados.
+
+---
+
+## 2026-05-20 — FIX: Comparativa de cuentas removida del tab Ventas Amazon
+
+### Problema
+El widget "Comparativa de cuentas" aparecía en el tab Ventas de cada cuenta Amazon
+individual — comportamiento inconsistente con ML, donde este tipo de vista está
+reservada para el dashboard general, no por cuenta.
+
+### Solución
+- `amazon_dashboard.html`: removido bloque `{% if amazon_accounts|length > 1 %}` 
+  que contenía el comparativa widget del tab `amz-tab-ventas`.
+- `amazon_dashboard.js`: removida llamada `loadAmzCompare()` del handler del tab ventas.
+
+---
+
 ## 2026-05-20 — FEAT: Navbar unificado ML + Amazon
 
 ### Problema
