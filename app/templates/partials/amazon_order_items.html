@@ -1,8 +1,8 @@
 {# ─── amazon_order_items.html ────────────────────────────────────────────────
-   Expand de 3 columnas estilo MeLi:
-     Columna 1: PRODUCTOS (título, SKU, ASIN, qty, precio)
-     Columna 2: DESGLOSE DE COBROS (precios, tax, envío, descuento, total)
-     Columna 3: INFORMACIÓN DE ORDEN (ID, canal, estado, fecha, unidades)
+   Expand de 3 columnas:
+     Col 1: PRODUCTOS (título, SKU, ASIN, qty, precio unitario)
+     Col 2: FINANZAS  (cobros, fees Amazon, neto, rentabilidad)
+     Col 3: INFO ORDEN (ID, canal, estado, fecha, link SC)
 ──────────────────────────────────────────────────────────────────────────── #}
 
 {% if not items %}
@@ -12,7 +12,6 @@
 
 {% else %}
 
-{# ── Calcular totales para el desglose ─────────────────────────────────── #}
 {% set total_subtotal = items | sum(attribute='total') %}
 {% set total_tax      = items | sum(attribute='tax') %}
 {% set total_ship     = items | sum(attribute='shipping') %}
@@ -29,13 +28,9 @@
 
             {% for item in items %}
             <div class="{% if not loop.first %}mt-4 pt-4 border-t border-orange-100{% endif %}">
-
-                {# Título #}
                 <p class="text-sm font-semibold text-gray-800 leading-snug mb-2">
                     {{ item.title or '—' }}
                 </p>
-
-                {# Grid de datos del item #}
                 <div class="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
                     <span class="text-gray-400">SKU:</span>
                     <span class="font-mono font-bold text-[#146EB4]">{{ item.sku }}</span>
@@ -43,7 +38,7 @@
                     <span class="text-gray-400">ASIN:</span>
                     <span>
                         {% if item.asin != '—' %}
-                        <a href="https://www.amazon.com.mx/dp/{{ item.asin }}"
+                        <a href="https://www.amazon.com{% if order_ctx.currency != 'USD' %}.mx{% endif %}/dp/{{ item.asin }}"
                            target="_blank"
                            class="font-mono text-[#FF9900] hover:underline font-semibold">{{ item.asin }}</a>
                         {% else %}—{% endif %}
@@ -55,60 +50,146 @@
                     <span class="text-gray-400">Precio unit:</span>
                     <span class="font-medium text-gray-700">${{ "%.2f"|format(item.unit_price) }}</span>
 
+                    {% if item.qty > 1 %}
                     <span class="text-gray-400">Subtotal:</span>
                     <span class="font-bold text-gray-800">${{ "%.2f"|format(item.total) }}</span>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
-
         </div>
 
         {# ═══════════════════════════════════════════════════════════════════
-           COLUMNA 2 — DESGLOSE DE COBROS
+           COLUMNA 2 — FINANZAS
            ═══════════════════════════════════════════════════════════════ #}
         <div class="p-4">
-            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Desglose de cobros</p>
-
-            <div class="space-y-2">
-
-                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
-                    <span class="text-sm text-gray-600">Precio del producto</span>
-                    <span class="font-semibold text-gray-800">${{ "%.2f"|format(total_subtotal) }}</span>
-                </div>
-
-                {% if total_tax > 0 %}
-                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
-                    <span class="text-sm text-gray-600">Impuestos</span>
-                    <span class="font-medium text-purple-600">-${{ "%.2f"|format(total_tax) }}</span>
-                </div>
+            <div class="flex items-center justify-between mb-3">
+                <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">Finanzas</p>
+                {% if finanzas.is_estimated %}
+                <span class="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-semibold">est.</span>
+                {% else %}
+                <span class="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-semibold">real</span>
                 {% endif %}
+            </div>
 
-                {% if total_ship > 0 %}
-                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
-                    <span class="text-sm text-gray-600">Envío (comprador)</span>
-                    <span class="font-medium text-blue-600">+${{ "%.2f"|format(total_ship) }}</span>
+            {# ── Cobros al comprador ───────────────────────────────────── #}
+            <div class="mb-3">
+                <p class="text-[10px] font-semibold text-gray-400 uppercase mb-1.5">Cobros al comprador</p>
+                <div class="space-y-0.5 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Precio producto</span>
+                        <span class="font-medium text-gray-700">${{ "%.2f"|format(total_subtotal) }}</span>
+                    </div>
+                    {% if total_ship > 0 %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">+ Envío</span>
+                        <span class="text-blue-600">+${{ "%.2f"|format(total_ship) }}</span>
+                    </div>
+                    {% endif %}
+                    {% if total_discount > 0 %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">- Descuento</span>
+                        <span class="text-red-500">-${{ "%.2f"|format(total_discount) }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="flex justify-between font-semibold border-t border-orange-100 pt-1 mt-1">
+                        <span class="text-gray-600">Total facturado</span>
+                        <span class="text-gray-800">${{ "%.2f"|format(finanzas.revenue) }}</span>
+                    </div>
                 </div>
-                {% endif %}
+            </div>
 
-                {% if total_discount > 0 %}
-                <div class="flex justify-between items-center py-1.5 border-b border-orange-100">
-                    <span class="text-sm text-gray-600">Descuentos</span>
-                    <span class="font-medium text-red-500">-${{ "%.2f"|format(total_discount) }}</span>
+            {# ── Fees Amazon ───────────────────────────────────────────── #}
+            <div class="mb-3 bg-orange-50/60 rounded-lg p-2.5">
+                <p class="text-[10px] font-semibold text-orange-600 uppercase mb-1.5">Fees Amazon</p>
+                <div class="space-y-0.5 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">
+                            Referral fee
+                            {% if finanzas.is_estimated %}
+                            <span class="text-gray-400">(~{{ finanzas.referral_pct }}% est.)</span>
+                            {% else %}
+                            <span class="text-gray-400">({{ finanzas.referral_pct }}%)</span>
+                            {% endif %}
+                        </span>
+                        <span class="text-red-600 font-medium">-${{ "%.2f"|format(finanzas.referral_fee) }}</span>
+                    </div>
+                    {% if finanzas.fba_fee > 0 %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">FBA fee</span>
+                        <span class="text-red-600 font-medium">-${{ "%.2f"|format(finanzas.fba_fee) }}</span>
+                    </div>
+                    {% elif order_ctx.canal == 'FBA' and finanzas.is_estimated %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-400 italic">FBA fee</span>
+                        <span class="text-gray-400 text-[10px]">disponible tras envío</span>
+                    </div>
+                    {% endif %}
+                    {% if finanzas.other_fees > 0 %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Otros fees</span>
+                        <span class="text-red-600 font-medium">-${{ "%.2f"|format(finanzas.other_fees) }}</span>
+                    </div>
+                    {% endif %}
+                    {% if total_tax > 0 %}
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">IVA / Tax retenido</span>
+                        <span class="text-purple-600 font-medium">-${{ "%.2f"|format(total_tax) }}</span>
+                    </div>
+                    {% endif %}
                 </div>
-                {% endif %}
 
-                {# Total de la orden (desde el header de la orden, más preciso) #}
-                <div class="flex justify-between items-center py-2 mt-1 bg-green-50 rounded-lg px-2 border border-green-200">
-                    <span class="text-sm font-bold text-gray-700">Total</span>
-                    <span class="text-lg font-bold text-green-700">
-                        ${{ "%.2f"|format(desglose.order_total if desglose.order_total > 0 else total_subtotal) }}
+                {# Neto Amazon — caja destacada #}
+                <div class="flex justify-between items-center mt-2 py-1.5 px-2 rounded-lg border
+                    {% if finanzas.neto > 0 %}bg-green-50 border-green-200{% else %}bg-red-50 border-red-200{% endif %}">
+                    <span class="text-xs font-bold text-gray-700">Neto Amazon</span>
+                    <span class="text-sm font-bold
+                        {% if finanzas.neto > 0 %}text-green-700{% else %}text-red-600{% endif %}">
+                        ${{ "%.2f"|format(finanzas.neto) }}
+                        <span class="text-[10px] font-normal text-gray-400 ml-0.5">{{ finanzas.currency }}</span>
                     </span>
                 </div>
-
-                <p class="text-xs text-gray-400 mt-1">
-                    {{ desglose.currency }} · Amazon SP-API
+                {% if finanzas.is_estimated %}
+                <p class="text-[10px] text-yellow-600 mt-1.5 leading-snug">
+                    ⚠ Fees estimados. Se actualizan automáticamente tras liquidación Amazon.
                 </p>
+                {% endif %}
             </div>
+
+            {# ── Rentabilidad (si hay costo BM) ───────────────────────── #}
+            {% if finanzas.costo_usd is not none %}
+            <div>
+                <p class="text-[10px] font-semibold text-gray-400 uppercase mb-1.5">Rentabilidad</p>
+                <div class="space-y-0.5 text-xs">
+                    <div class="flex justify-between">
+                        <span class="text-gray-500">Costo producto (BM)</span>
+                        <span class="text-red-600 font-medium">-${{ "%.2f"|format(finanzas.costo_usd) }}</span>
+                    </div>
+                </div>
+                {% if finanzas.ganancia is not none %}
+                <div class="flex justify-between items-center mt-1.5 py-1.5 px-2 rounded-lg border
+                    {% if finanzas.ganancia > 0 %}bg-green-50 border-green-200{% else %}bg-red-50 border-red-200{% endif %}">
+                    <span class="text-xs font-bold text-gray-700">Ganancia neta</span>
+                    <div class="text-right">
+                        <div class="text-sm font-bold
+                            {% if finanzas.ganancia > 0 %}text-green-700{% else %}text-red-600{% endif %}">
+                            ${{ "%.2f"|format(finanzas.ganancia) }}
+                        </div>
+                        {% if finanzas.margen_pct is not none %}
+                        <div class="text-[10px]
+                            {% if finanzas.margen_pct > 0 %}text-green-600{% else %}text-red-500{% endif %}">
+                            {{ "%.1f"|format(finanzas.margen_pct) }}% margen
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% else %}
+            <p class="text-[11px] text-gray-400 italic">Costo BM no disponible para este SKU.</p>
+            {% endif %}
+
+            <p class="text-[10px] text-gray-400 mt-2">{{ finanzas.currency }} · Amazon SP-API</p>
         </div>
 
         {# ═══════════════════════════════════════════════════════════════════
@@ -122,20 +203,20 @@
                 <span class="text-gray-400">No. Orden:</span>
                 <span class="font-mono font-semibold text-gray-700 break-all">{{ order_ctx.order_id }}</span>
 
+                <span class="text-gray-400">Fecha:</span>
+                <span class="text-gray-600">{{ order_ctx.date }}</span>
+
                 <span class="text-gray-400">Canal:</span>
                 <span>
                     {% if order_ctx.canal == 'FBA' %}
-                    <span class="bg-orange-100 text-orange-700 font-bold px-1.5 py-0.5 rounded text-xs">FBA</span>
+                    <span class="bg-orange-100 text-orange-700 font-bold px-1.5 py-0.5 rounded text-xs">FBA (Amazon)</span>
                     {% else %}
-                    <span class="bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded text-xs">FBM</span>
+                    <span class="bg-blue-100 text-blue-700 font-bold px-1.5 py-0.5 rounded text-xs">FBM (Tú envías)</span>
                     {% endif %}
                 </span>
 
                 <span class="text-gray-400">Estado:</span>
                 <span class="font-semibold text-gray-700">{{ order_ctx.status }}</span>
-
-                <span class="text-gray-400">Fecha:</span>
-                <span class="text-gray-600">{{ order_ctx.date }}</span>
 
                 <span class="text-gray-400">Unidades:</span>
                 <span class="font-semibold text-gray-700">{{ order_ctx.units }}</span>
@@ -145,9 +226,8 @@
 
             </div>
 
-            {# Link a Seller Central #}
-            <div class="mt-4 pt-3 border-t border-orange-100">
-                <a href="https://sellercentral.amazon.com.mx/orders-v3/order/{{ order_ctx.order_id }}"
+            <div class="mt-4 pt-3 border-t border-orange-100 space-y-2">
+                <a href="https://sellercentral.amazon.com{% if order_ctx.currency != 'USD' %}.mx{% endif %}/orders-v3/order/{{ order_ctx.order_id }}"
                    target="_blank"
                    class="inline-flex items-center gap-1 text-xs text-[#FF9900] hover:underline font-medium">
                     Ver en Seller Central →

@@ -26,6 +26,7 @@ from app.services.amazon_client import get_amazon_client
 def _save_amazon_items_history_bg(
     order_id: str, seller_id: str, items: list,
     order_date_str: str, status_es: str, currency: str,
+    real_fees: dict | None = None,
 ) -> None:
     """Fire-and-forget: persiste items de orden Amazon en order_history."""
     async def _do():
@@ -53,10 +54,16 @@ def _save_amazon_items_history_bg(
                 if unit_price <= 0:
                     continue
                 subtotal   = unit_price * qty
-                # Amazon referral fee estimado ~10% + tax/retenciones ~9%
-                sale_fee   = subtotal * 0.10
-                taxes      = subtotal * 0.09
                 ship       = float(it.get("shipping") or 0)
+                taxes      = float(it.get("tax") or 0)
+                if real_fees and not real_fees.get("is_estimated"):
+                    # Distribuir fees reales proporcionalmente por item
+                    ratio    = (unit_price / max(sum(i.get("unit_price",0) for i in items), 1))
+                    sale_fee = round((real_fees["referral_fee"] + real_fees["fba_fee"] + real_fees["other_fees"]) * ratio, 2)
+                    data_src = "finances_api"
+                else:
+                    sale_fee = subtotal * 0.10  # estimado 10%
+                    data_src = "estimated"
                 neto_plat  = subtotal - sale_fee - taxes - ship
                 costo_mxn  = _sku_cost_map.get(sku, 0) if sku else 0
                 retail_mxn = _sku_retail_map.get(sku, 0) if sku else 0
@@ -76,7 +83,7 @@ def _save_amazon_items_history_bg(
                     "margen_pct": margen_pct, "recup_retail_pct": recup,
                     "fx_rate": round(fx, 4), "currency": currency or "MXN",
                     "order_date": order_date, "order_month": order_month,
-                    "status": status_es, "data_source": "estimated",
+                    "status": status_es, "data_source": data_src,
                 })
             if rows:
                 await _ts.upsert_order_history(rows)
@@ -98,11 +105,13 @@ _templates = Jinja2Templates(
 # ─────────────────────────────────────────────────────────────────────────────
 # CACHÉ en memoria
 # ─────────────────────────────────────────────────────────────────────────────
-_orders_cache: dict[str, tuple[float, tuple]] = {}
-_items_cache:  dict[str, tuple[float, list]]  = {}
+_orders_cache:     dict[str, tuple[float, tuple]] = {}
+_items_cache:      dict[str, tuple[float, list]]  = {}
+_financials_cache: dict[str, tuple[float, dict]]  = {}
 
-_ORDERS_TTL = 300   # 5 minutos
-_ITEMS_TTL  = 600   # 10 minutos
+_ORDERS_TTL     = 300    # 5 minutos
+_ITEMS_TTL      = 600    # 10 minutos
+_FINANCIALS_TTL = 3600   # 1 hora (fees no cambian una vez liquidados)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ESTADO → ESPAÑOL + CSS badge
@@ -266,12 +275,102 @@ async def get_amazon_orders(
 # ENDPOINT 2: Items de una orden (lazy — click en botón "Ver")
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _safe_float(obj: dict, key: str) -> float:
+def _safe_float(obj: dict, key: str = "Amount") -> float:
     """Lee Amount de un sub-dict SP-API de forma segura."""
     try:
         return float((obj or {}).get("Amount") or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parse_fees_from_events(events: dict) -> dict | None:
+    """
+    Extrae fees reales de FinancialEvents (Finances API).
+    Returns None si la orden aún no tiene eventos (Pending / no liquidada).
+    Tipos conocidos: Commission (referral), FBAPerUnitFulfillmentFee, etc.
+    Los amounts vienen negativos — Amazon los deduce del pago al seller.
+    """
+    shipment_events = events.get("ShipmentEventList", [])
+    if not shipment_events:
+        return None
+    referral = fba = other = 0.0
+    for event in shipment_events:
+        for item in event.get("ShipmentItemList", []):
+            for fee in item.get("ItemFeeList", []):
+                ftype = fee.get("FeeType", "")
+                amt   = abs(_safe_float(fee.get("FeeAmount") or {}))
+                if ftype == "Commission":
+                    referral += amt
+                elif "FBA" in ftype or "Fulfillment" in ftype:
+                    fba += amt
+                else:
+                    other += amt
+    if referral + fba + other == 0:
+        return None
+    return {"referral_fee": round(referral, 2), "fba_fee": round(fba, 2),
+            "other_fees": round(other, 2), "is_estimated": False}
+
+
+def _estimate_fees(revenue: float, canal: str) -> dict:
+    """Fees estimados cuando Finances API no tiene datos aún (orden Pending/reciente)."""
+    return {
+        "referral_fee": round(revenue * 0.15, 2),  # 15% conservador
+        "fba_fee":      0.0,                        # no estimamos FBA — muy variable
+        "other_fees":   0.0,
+        "is_estimated": True,
+    }
+
+
+def _build_finanzas(
+    items: list, desglose: dict, fees: dict, canal: str, currency: str
+) -> dict:
+    """Construye el bloque de rentabilidad para el template."""
+    revenue  = desglose["subtotal"] + desglose["shipping"] - desglose["discount"]
+    tax      = desglose["tax"]
+    total_fees = fees["referral_fee"] + fees["fba_fee"] + fees["other_fees"] + tax
+    neto     = round(revenue - total_fees, 2)
+
+    # Pct referral para mostrar en UI
+    ref_pct  = round(fees["referral_fee"] / revenue * 100, 1) if revenue > 0 else 0.0
+
+    # Costo desde caché BM (lazy import)
+    costo_usd = None
+    try:
+        from app.main import _sku_cost_map, _last_fx_rate, _PARTNER_COMMISSION_PCT  # type: ignore
+        from app.services.sku_utils import normalize_to_bm_sku as _norm
+        fx = float(_last_fx_rate or 17.0)
+        commission_pct = float(_PARTNER_COMMISSION_PCT or 0.07)
+        total_cost = 0.0
+        for it in items:
+            sku_bm = _norm(it["sku"]) if it["sku"] not in ("—", "", None) else ""
+            if sku_bm:
+                costo_mxn = _sku_cost_map.get(sku_bm, 0) or 0
+                if costo_mxn > 0 and fx > 0:
+                    total_cost += (costo_mxn / fx) * int(it.get("qty") or 1)
+        if total_cost > 0:
+            costo_usd = round(total_cost, 2)
+    except Exception:
+        commission_pct = 0.07
+
+    ganancia = margen_pct = None
+    if costo_usd is not None and neto > 0:
+        ganancia  = round(neto * (1 - commission_pct) - costo_usd, 2)
+        margen_pct = round(ganancia / revenue * 100, 1) if revenue > 0 else None
+
+    return {
+        "revenue":      round(revenue, 2),
+        "referral_fee": fees["referral_fee"],
+        "referral_pct": ref_pct,
+        "fba_fee":      fees["fba_fee"],
+        "other_fees":   fees["other_fees"],
+        "tax":          tax,
+        "neto":         neto,
+        "costo_usd":    costo_usd,
+        "ganancia":     ganancia,
+        "margen_pct":   margen_pct,
+        "is_estimated": fees["is_estimated"],
+        "currency":     currency,
+    }
 
 
 @router.get("/orders/{order_id}/items", response_class=HTMLResponse)
@@ -323,23 +422,44 @@ async def get_order_items_partial(
                     "currency":   ip.get("CurrencyCode", "MXN"),
                 })
             _items_cache[order_id] = (_time.time(), items)
-            # Persistir en order_history (fire-and-forget)
-            _save_amazon_items_history_bg(
-                order_id, client.seller_id, items, date, status, currency
-            )
         except Exception as exc:
             logger.error("[Amazon Orders] Error fetching items for %s: %s", order_id, exc)
             items = []
 
-    # Totales calculados de los items (para DESGLOSE)
+    # Totales calculados de los items
     desglose = {
-        "subtotal":   round(sum(i["total"]    for i in items), 2),
-        "tax":        round(sum(i["tax"]      for i in items), 2),
-        "shipping":   round(sum(i["shipping"] for i in items), 2),
-        "discount":   round(sum(i["discount"] for i in items), 2),
+        "subtotal":    round(sum(i["total"]    for i in items), 2),
+        "tax":         round(sum(i["tax"]      for i in items), 2),
+        "shipping":    round(sum(i["shipping"] for i in items), 2),
+        "discount":    round(sum(i["discount"] for i in items), 2),
         "order_total": round(amount, 2),
-        "currency":   currency,
+        "currency":    currency,
     }
+
+    # ── Fees reales (Finances API) o estimados ────────────────────────────
+    fin_cached = _financials_cache.get(order_id)
+    if fin_cached and (_time.time() - fin_cached[0]) < _FINANCIALS_TTL:
+        fees = fin_cached[1]
+    else:
+        fees = None
+        try:
+            events = await client.get_order_financial_events(order_id)
+            fees   = _parse_fees_from_events(events)
+        except Exception:
+            pass
+        if fees is None:
+            fees = _estimate_fees(desglose["subtotal"] + desglose["shipping"] - desglose["discount"], canal)
+        # Solo cachear datos reales; estimados se recalculan siempre
+        if not fees["is_estimated"]:
+            _financials_cache[order_id] = (_time.time(), fees)
+
+    finanzas = _build_finanzas(items, desglose, fees, canal, currency)
+
+    # Persistir en order_history (fire-and-forget, con fees reales si están disponibles)
+    _save_amazon_items_history_bg(
+        order_id, client.seller_id, items, date, status, currency,
+        real_fees=None if fees["is_estimated"] else fees,
+    )
 
     order_ctx = {
         "order_id": order_id,
@@ -352,8 +472,10 @@ async def get_order_items_partial(
     }
 
     return _templates.TemplateResponse(
-        request, "partials/amazon_order_items.html", {            "items":     items,
+        request, "partials/amazon_order_items.html", {
+            "items":     items,
             "desglose":  desglose,
+            "finanzas":  finanzas,
             "order_ctx": order_ctx,
         },
     )

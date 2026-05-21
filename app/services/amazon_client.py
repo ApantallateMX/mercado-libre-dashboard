@@ -322,6 +322,21 @@ class AmazonClient:
             )
         return result.get("payload", {}).get("OrderItems", [])
 
+    async def get_order_financial_events(self, order_id: str) -> dict:
+        """
+        Retorna eventos financieros de una orden (Finances API v0).
+        Disponible solo después de que Amazon shippe/liquide la orden.
+        Returns {} vacío si la orden está Pending o aún no procesada.
+        """
+        try:
+            async with _ORDERS_SEMAPHORE:
+                result = await self._request(
+                    "GET", f"/finances/v0/orders/{order_id}/financialEvents"
+                )
+            return result.get("payload", {}).get("FinancialEvents", {})
+        except Exception:
+            return {}
+
     async def get_sales_summary_30d(self) -> dict:
         """
         Calcula ventas por SKU en los últimos 30 días.
