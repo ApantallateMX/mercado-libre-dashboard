@@ -1528,3 +1528,899 @@ Los schemas completos están en: `https://github.com/amzn/selling-partner-api-mo
 | `product-pricing-api-model/productPricingV2022-05-01.json` | Product Pricing v2022 |
 | `product-fees-api-model/productFeesV0.json` | Product Fees |
 | `feeds-api-model/feeds_2021-06-30.json` | Feeds |
+| `listings-restrictions-api-model/listingsRestrictions_2021-08-01.json` | Listings Restrictions |
+| `product-type-definitions-api-model/definitionsProductTypes_2020-09-01.json` | Product Type Definitions |
+| `a-plus-content-api-model/aplusContent_2020-11-01.json` | A+ Content |
+| `fba-inbound-eligibility-api-model/fbaInbound.json` | FBA Inbound Eligibility |
+| `fulfillment-inbound-api-model/fulfillmentInbound_2024-03-20.json` | Fulfillment Inbound v2024 |
+| `merchant-fulfillment-api-model/merchantFulfillmentV0.json` | Merchant Fulfillment |
+| `fulfillment-outbound-api-model/fulfillmentOutbound_2020-07-01.json` | Fulfillment Outbound (Returns MCF) |
+| `messaging-api-model/messaging.json` | Messaging (Buyer-Seller) |
+
+---
+
+## 16. LISTINGS ITEMS API — REFERENCIA COMPLETA AMPLIADA
+
+> Actualización mayo 2026 — documentación oficial verificada.
+
+### Rate limits exactos v2021-08-01
+
+| Operación | Por cuenta-app (req/s) | Por app (req/s) | Burst |
+|-----------|----------------------|-----------------|-------|
+| getListingsItem | 5 | 100 | 5 |
+| putListingsItem | 5 | 100 | 5 |
+| patchListingsItem | 5 | 500 | 5 |
+| deleteListingsItem | 5 | 100 | 5 |
+| searchListingsItems | 5 | 100 | 5 |
+
+**Excepciones en patchListingsItem:**
+- Updates de relationship: 100 req/s por app
+- Updates de product data attributes: 100 req/s por app
+- Validation previews: 20 req/s por app
+
+**Excepciones en putListingsItem:**
+- Updates de relationship: 100 req/s por app
+
+### getListingsItem — Parámetros completos
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| sellerId | Sí (path) | Merchant account ID o vendor code |
+| sku | Sí (path) | SKU del listing |
+| marketplaceIds | Sí (query) | Array, máx 1 marketplace por llamada |
+| includedData | No | Opciones: `summaries`, `attributes`, `issues`, `offers`, `fulfillmentAvailability`, `procurement`, `relationships`, `productTypes` (default: `summaries`) |
+| issueLocale | No | Locale para localizar mensajes de issues (ej. `es_MX`, `en_US`) |
+
+### searchListingsItems — Parámetros completos
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| sellerId | Sí (path) | Merchant account ID |
+| marketplaceIds | Sí | Array, máx 1 |
+| identifiers | No | Hasta 20 IDs. Requiere `identifiersType` |
+| identifiersType | Cond. | SKU, ASIN, EAN, FNSKU, GTIN, ISBN, JAN, MPN, SANSKU, UPC |
+| variationParentSku | No | Filtrar por parent SKU (excluyente con `identifiers` y `packageHierarchySku`) |
+| packageHierarchySku | No | Filtrar por package hierarchy SKU |
+| createdAfter / createdBefore | No | ISO 8601 timestamp |
+| lastUpdatedAfter / lastUpdatedBefore | No | ISO 8601 timestamp |
+| withIssueSeverity | No | ERROR, WARNING |
+| withStatus | No | BUYABLE, DISCOVERABLE |
+| withoutStatus | No | BUYABLE, DISCOVERABLE |
+| sortBy | No | sku, createdDate, lastUpdatedDate (default: lastUpdatedDate) |
+| sortOrder | No | ASC o DESC (default: DESC) |
+| pageSize | No | Máx 20, default 10 |
+| pageToken | No | Token de paginación |
+| includedData | No | Mismas opciones que getListingsItem |
+| issueLocale | No | Locale para issues |
+
+### putListingsItem vs patchListingsItem — Diferencia crítica
+
+| Aspecto | putListingsItem (PUT) | patchListingsItem (PATCH) |
+|---------|----------------------|--------------------------|
+| Comportamiento | **Reemplaza completo** — atributos omitidos se ELIMINAN | **Actualización parcial** — solo modifica lo especificado |
+| Uso principal | Crear listing nuevo o actualización masiva de atributos | Actualizar precio, qty, o atributos específicos |
+| Riesgo | Alto — puede borrar bullets, imágenes si no se incluyen | Bajo — solo toca los paths especificados |
+| requirements | LISTING, LISTING_PRODUCT_ONLY, LISTING_OFFER_ONLY | Igual |
+| Cuándo usar | Listing nuevo o rewrite completo intencional | Cambios operativos: precio, stock, atributos individuales |
+
+**Advertencia CRÍTICA sobre putListingsItem:** Si usas `LISTING_OFFER_ONLY` con PUT, solo actualizas precio/qty y eso es seguro. Pero si usas `LISTING` o `LISTING_PRODUCT_ONLY` con PUT sin incluir todos los atributos existentes, perderás datos del listing (bullets, imágenes, descripción).
+
+### Crear un listing desde cero — Flujo correcto
+
+**Paso 1:** Obtener el product type correcto:
+```
+GET /definitions/2020-09-01/productTypes?marketplaceIds=A1AM78C64UM0Y8&keywords=television
+```
+
+**Paso 2:** Obtener el schema de atributos requeridos:
+```
+GET /definitions/2020-09-01/productTypes/TELEVISION?marketplaceIds=A1AM78C64UM0Y8&requirements=LISTING
+```
+La respuesta incluye un link a un JSON Schema que define todos los campos requeridos vs opcionales para ese product type.
+
+**Paso 3:** Verificar restricciones (si el ASIN ya existe):
+```
+GET /listings/2021-08-01/restrictions?asin=B0...&sellerId=SELLER&marketplaceIds=A1AM78C64UM0Y8&conditionType=new_new
+```
+
+**Paso 4:** Validar antes de crear (VALIDATION_PREVIEW):
+```
+PUT /listings/2021-08-01/items/{sellerId}/{sku}?marketplaceIds=A1AM78C64UM0Y8&mode=VALIDATION_PREVIEW
+```
+
+**Paso 5:** Crear el listing real con `putListingsItem`.
+
+### putListingsItem — Request body completo para TV nuevo
+
+```json
+{
+  "productType": "TELEVISION",
+  "requirements": "LISTING",
+  "attributes": {
+    "item_name": [{"value": "Samsung 55 Pulgadas 4K Smart TV QLED 2024", "marketplace_id": "A1AM78C64UM0Y8"}],
+    "brand": [{"value": "Samsung", "marketplace_id": "A1AM78C64UM0Y8"}],
+    "bullet_point": [
+      {"value": "RESOLUCIÓN 4K ULTRA HD: 3840x2160p con soporte HDR10+", "marketplace_id": "A1AM78C64UM0Y8"},
+      {"value": "PANTALLA QLED: Tecnología Quantum Dot para colores vívidos", "marketplace_id": "A1AM78C64UM0Y8"}
+    ],
+    "product_description": [{"value": "Descripción larga aquí...", "marketplace_id": "A1AM78C64UM0Y8"}],
+    "purchasable_offer": [
+      {
+        "marketplace_id": "A1AM78C64UM0Y8",
+        "currency": "MXN",
+        "our_price": [{"schedule": [{"value_with_tax": 12999.00}]}]
+      }
+    ],
+    "fulfillment_availability": [
+      {"fulfillment_channel_code": "DEFAULT", "quantity": 10}
+    ]
+  }
+}
+```
+
+### patchListingsItem — Actualizar precio únicamente
+
+```json
+{
+  "productType": "TELEVISION",
+  "patches": [
+    {
+      "op": "replace",
+      "path": "/attributes/purchasable_offer",
+      "value": [
+        {
+          "marketplace_id": "A1AM78C64UM0Y8",
+          "currency": "MXN",
+          "our_price": [{"schedule": [{"value_with_tax": 11999.00}]}]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### patchListingsItem — Actualizar cantidad únicamente
+
+```json
+{
+  "productType": "TELEVISION",
+  "patches": [
+    {
+      "op": "replace",
+      "path": "/attributes/fulfillment_availability",
+      "value": [
+        {"fulfillment_channel_code": "DEFAULT", "quantity": 15}
+      ]
+    }
+  ]
+}
+```
+
+### patchListingsItem — Actualizar precio Y cantidad en una llamada
+
+```json
+{
+  "productType": "TELEVISION",
+  "patches": [
+    {
+      "op": "replace",
+      "path": "/attributes/purchasable_offer",
+      "value": [
+        {
+          "marketplace_id": "A1AM78C64UM0Y8",
+          "currency": "MXN",
+          "our_price": [{"schedule": [{"value_with_tax": 11999.00}]}]
+        }
+      ]
+    },
+    {
+      "op": "replace",
+      "path": "/attributes/fulfillment_availability",
+      "value": [{"fulfillment_channel_code": "DEFAULT", "quantity": 15}]
+    }
+  ]
+}
+```
+
+### patchListingsItem — Actualizar precios en múltiples marketplaces
+
+Para actualizar precio en CA, US y MX simultáneamente, enviar el array con múltiples objetos:
+
+```json
+{
+  "productType": "TELEVISION",
+  "patches": [
+    {
+      "op": "replace",
+      "path": "/attributes/purchasable_offer",
+      "value": [
+        {
+          "marketplace_id": "A1AM78C64UM0Y8",
+          "currency": "MXN",
+          "our_price": [{"schedule": [{"value_with_tax": 11999.00}]}]
+        },
+        {
+          "marketplace_id": "ATVPDKIKX0DER",
+          "currency": "USD",
+          "our_price": [{"schedule": [{"value_with_tax": 599.99}]}]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Nota:** La llamada PATCH solo acepta 1 marketplace en `marketplaceIds` query param, pero el `value` del patch puede contener múltiples marketplaces en el array de `purchasable_offer`.
+
+### Operaciones PATCH — tipos disponibles
+
+| op | Comportamiento |
+|----|----------------|
+| `add` | Agrega o reemplaza la propiedad objetivo |
+| `replace` | Agrega o reemplaza la propiedad objetivo (idéntico a `add` en la práctica) |
+| `merge` | Fusiona con la propiedad objetivo. Usado para actualizar `quantity` dentro de `fulfillment_availability` sin reemplazar otros campos |
+| `delete` | Elimina la propiedad objetivo. **No soportado para vendors.** Requiere especificar selector properties (no se puede borrar solo por nombre) |
+
+### fulfillment_channel_code valores
+
+| Valor | Descripción |
+|-------|-------------|
+| `DEFAULT` | Seller-fulfilled (MFN) — envío desde bodega del vendedor |
+| `AMAZON_NA` | FBA — Amazon fulfills desde sus centros de distribución |
+
+### Respuesta de submission
+
+```json
+{
+  "sku": "SNTV001234",
+  "status": "ACCEPTED",
+  "submissionId": "f1dc2914-75dd-11ea-bc55-0242ac130003",
+  "issues": []
+}
+```
+
+- `ACCEPTED` = la solicitud fue recibida para procesamiento. **No significa que el listing está activo** — puede haber issues post-procesamiento.
+- `INVALID` = la solicitud fue rechazada con issues bloqueantes.
+- Los issues que ocurren DESPUÉS de la aceptación solo son visibles con `getListingsItem` (con `includedData=issues`).
+
+---
+
+## 17. LISTINGS RESTRICTIONS API v2021-08-01
+
+### Endpoints y rate limits
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| getListingsRestrictions | GET | `/listings/2021-08-01/restrictions` | 5 | 10 |
+
+**Rol requerido:** Product Listing
+
+### Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| asin | Sí | ASIN del producto a verificar |
+| sellerId | Sí | Merchant account ID |
+| marketplaceIds | Sí | Array de marketplace IDs |
+| conditionType | No | Filtrar por condición: `new_new`, `new_open_box`, `new_oem`, `refurbished_refurbished`, `used_like_new`, `used_very_good`, `used_good`, `used_acceptable`, `collectible_like_new`, `collectible_very_good`, `collectible_good`, `collectible_acceptable`, `club_club` |
+| reasonLocale | No | Locale para localizar el texto de razones (default: idioma primario del marketplace) |
+
+### Cómo interpretar la respuesta
+
+```json
+{
+  "restrictions": [
+    {
+      "marketplaceId": "A1AM78C64UM0Y8",
+      "conditionType": "new_new",
+      "reasons": [
+        {
+          "message": "El producto requiere aprobación de la marca X para listar en esta condición.",
+          "reasonCode": "APPROVAL_REQUIRED",
+          "links": [
+            {
+              "resource": "https://sellercentral.amazon.com.mx/...",
+              "verb": "REQUEST",
+              "title": "Solicitar aprobación",
+              "type": "application/vnd.hal+json"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+- **Sin restrictions en el array** = no hay restricciones, puedes listar ese ASIN con esa condición.
+- **`reasonCode: "APPROVAL_REQUIRED"`** = necesitas solicitar aprobación de la marca o categoría.
+- **`links[]`** = contiene la URL donde solicitar el permiso (normalmente Seller Central).
+- **Cuándo usar esta API:** Antes de intentar `putListingsItem` para un ASIN nuevo, verificar si hay restricciones para evitar errores de "listing not permitted".
+
+---
+
+## 18. PRODUCT TYPE DEFINITIONS API v2020-09-01
+
+### Endpoints y rate limits
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| searchDefinitionsProductTypes | GET | `/definitions/2020-09-01/productTypes` | 5 | 10 |
+| getDefinitionsProductType | GET | `/definitions/2020-09-01/productTypes/{productType}` | 5 | 10 |
+
+**Rol requerido:** Inventory and Order Tracking o Product Listing
+
+### searchDefinitionsProductTypes — Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| marketplaceIds | Sí | Array de marketplace IDs |
+| keywords | No | Array de keywords para buscar product types. No combinable con `itemName` |
+| itemName | No | Título del ASIN para obtener recomendación de product type. No combinable con `keywords` |
+| locale | No | Locale para display names. Default: primario del marketplace |
+| searchLocale | No | Locale para keywords/itemName. Default: primario del marketplace |
+
+**Ejemplo:** Para encontrar el product type de una TV:
+```
+GET /definitions/2020-09-01/productTypes?marketplaceIds=A1AM78C64UM0Y8&keywords=television
+```
+
+### getDefinitionsProductType — Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| productType | Sí (path) | Nombre del product type (ej. `TELEVISION`, `MONITOR`, `LAPTOP`) |
+| marketplaceIds | Sí | Array de marketplace IDs |
+| sellerId | No | Incluir para obtener atributos específicos del seller y valores B2B si el seller participa en Amazon Business |
+| productTypeVersion | No | Default: `LATEST`. Acepta `RELEASE_CANDIDATE` para versiones pre-release |
+| requirements | No | `LISTING` (default), `LISTING_PRODUCT_ONLY`, `LISTING_OFFER_ONLY` |
+| requirementsEnforced | No | `ENFORCED` (default) — solo atributos requeridos; `NOT_ENFORCED` — todos los atributos posibles |
+| locale | No | Default: `DEFAULT`. Soporta 38+ códigos de idioma/región |
+
+### Cómo usar el schema retornado
+
+La respuesta incluye `schema.link` que apunta a un JSON Schema descargable (válido 7 días).
+
+El JSON Schema extiende JSON Schema 2019-09 con vocabulario custom de Amazon:
+
+- **`x-amazon-attributes-required`:** Lista de atributos requeridos según el `requirements` solicitado.
+- Cada campo tiene `minItems`, `maxItems`, `x-amazon-attributes-label` (nombre display).
+- Los atributos con `selectors` (ej. `marketplace_id`) indican que el valor depende del marketplace.
+
+**Product types comunes para electrónica:**
+
+| Categoría | productType |
+|-----------|-------------|
+| Televisores | `TELEVISION` |
+| Monitores | `MONITOR` |
+| Laptops | `LAPTOP` |
+| Accesorios electrónicos | `ACCESSORY` |
+| Proyectores | `PROJECTOR` |
+| Cámaras | `CAMERA` |
+| Audio | `HOME_AUDIO` |
+| Reproductores | `MEDIA_PLAYER` |
+
+**Nota importante:** Algunos product types no están completamente soportados en la Listings API. Para tipos no soportados, usar `PRODUCT` como productType en el request (soporta offer-only submissions para ASINs existentes).
+
+---
+
+## 19. A+ CONTENT API v2020-11-01
+
+### Endpoints y rate limits
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| searchContentDocuments | GET | `/aplus/2020-11-01/contentDocuments` | 10 | 10 |
+| createContentDocument | POST | `/aplus/2020-11-01/contentDocuments` | 10 | 10 |
+| getContentDocument | GET | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}` | 10 | 10 |
+| updateContentDocument | POST | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}` | 10 | 10 |
+| listContentDocumentAsinRelations | GET | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}/asins` | 10 | 10 |
+| postContentDocumentAsinRelations | POST | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}/asins` | 10 | 10 |
+| validateContentDocumentAsinRelations | POST | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}/asins/validation` | 10 | 10 |
+| searchContentPublishRecords | GET | `/aplus/2020-11-01/contentPublishRecords` | 10 | 10 |
+| postContentDocumentApprovalSubmission | POST | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}/approvalSubmissions` | 10 | 10 |
+| postContentDocumentSuspendSubmission | POST | `/aplus/2020-11-01/contentDocuments/{contentReferenceKey}/suspendSubmissions` | 10 | 10 |
+
+**Roles requeridos:** Brand Analytics o Product Listing  
+**Disponibilidad:** Sellers y Vendors en NA, EU, FE
+
+### Flujo para crear contenido A+
+
+1. **createContentDocument** — Crear el documento con módulos de contenido
+2. **postContentDocumentAsinRelations** — Asociar el documento a uno o más ASINs
+3. **validateContentDocumentAsinRelations** — Validar que la asociación es válida
+4. **postContentDocumentApprovalSubmission** — Enviar para revisión/publicación de Amazon
+5. **searchContentPublishRecords** — Monitorear estado de publicación
+
+### Tipos de módulo A+ — Lista completa
+
+| contentModuleType | Descripción | Campos requeridos |
+|-------------------|-------------|-------------------|
+| `StandardCompanyLogoModule` | Logo de la empresa | `companyLogo` (imagen + alt text) |
+| `StandardImageTextOverlayModule` | Imagen con texto superpuesto | `overlayColorType`, imagen + alt text |
+| `StandardHeaderImageTextModule` | Imagen de header con texto | Imagen + alt text |
+| `StandardMultipleImageTextModule` | Múltiples imágenes con texto | Highlight image + alt text |
+| `StandardSingleSideImageModule` | Imagen a un lado con texto | `imagePositionType`, imagen principal + alt text |
+| `StandardImageSidebarModule` | Sidebar con imagen | Headline, sub-headline, body, imágenes principal y sidebar + alt texts |
+| `StandardSingleImageHighlightsModule` | Imagen con highlights de características | Imagen + alt text, 2 bloques de texto (subheadline + body), tech specs headline, bullets |
+| `StandardSingleImageSpecsDetailModule` | Imagen con specs técnicas | Imagen, description body, tech specs body |
+| `StandardThreeImageTextModule` | Tres imágenes con texto | Headline principal, 3 sets de (headline + imagen + alt + body) |
+| `StandardFourImageTextModule` | Cuatro imágenes con texto | 4 sets de (imagen + alt text) |
+| `StandardComparisonTableModule` | Tabla comparativa de productos | Hasta 6 columnas de productos, filas de métricas/specs |
+| `StandardFourImageTextQuadrantModule` | Cuatro cuadrantes | 4 bloques de (imagen + alt + headline + body) |
+| `StandardTextModule` | Solo texto | Ninguno estrictamente requerido |
+| `StandardProductDescriptionModule` | Descripción del producto | Ninguno estrictamente requerido |
+| `StandardTechSpecsModule` | Especificaciones técnicas en tabla | Headline principal, lista de specs (mínimo 4, máximo 16), `tableCount` |
+
+**Restricciones de imágenes:** La mayoría requiere mínimo 300x300 píxeles.  
+**Restricciones de texto:** Generalmente 100–6000 caracteres según el campo.  
+**`StandardComparisonTableModule`:** Máximo 6 columnas de productos.
+
+### createContentDocument — Request body
+
+```json
+{
+  "contentDocument": {
+    "name": "A+ Content - Samsung 55 QLED",
+    "contentType": "EBC",
+    "contentSubType": "STANDARD",
+    "locale": "es_MX",
+    "contentModuleList": [
+      {
+        "contentModuleType": "STANDARD_HEADER_IMAGE_TEXT",
+        "standardHeaderImageTextModule": {
+          "headline": {"value": "Calidad de imagen excepcional"},
+          "block": {
+            "image": {
+              "uploadDestinationId": "SelfService/2026/05/...",
+              "imageCropSpecification": {
+                "size": {"width": {"value": 970, "units": "pixels"}, "height": {"value": 300, "units": "pixels"}},
+                "offset": {"x": {"value": 0, "units": "pixels"}, "y": {"value": 0, "units": "pixels"}}
+              },
+              "altText": "Samsung 55 QLED con colores vibrantes"
+            },
+            "body": {"value": "Experimenta colores únicos con la tecnología Quantum Dot..."}
+          }
+        }
+      },
+      {
+        "contentModuleType": "STANDARD_TECH_SPECS",
+        "standardTechSpecsModule": {
+          "headline": {"value": "Especificaciones técnicas"},
+          "specificationList": [
+            {"label": {"value": "Resolución"}, "description": {"value": "3840 x 2160 (4K UHD)"}},
+            {"label": {"value": "Tecnología"}, "description": {"value": "QLED"}},
+            {"label": {"value": "Smart TV"}, "description": {"value": "Tizen OS"}},
+            {"label": {"value": "Conectividad"}, "description": {"value": "Wi-Fi, Bluetooth, 4x HDMI, 2x USB"}}
+          ],
+          "tableCount": 1
+        }
+      }
+    ]
+  }
+}
+```
+
+**contentType valores:** `EBC` (Enhanced Brand Content — para Sellers), `EMC` (A+ para Vendors)  
+**contentSubType valores:** `STANDARD`, `PREMIUM_A1` a `PREMIUM_A8` (módulos premium requieren elegibilidad adicional)
+
+### getContentDocument — Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| contentReferenceKey | Sí (path) | Clave única del documento A+ |
+| marketplaceId | Sí | ID del marketplace |
+| includedDataSet | Sí | Array: `CONTENTS`, `METADATA`, `CONTENTSMETADATA` |
+
+---
+
+## 20. FBA INBOUND ELIGIBILITY API v1
+
+### Endpoints y rate limits
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| getItemEligibilityPreview | GET | `/fba/inbound/v1/eligibility/itemPreview` | No documentado | No documentado |
+
+**Roles requeridos:** Amazon Fulfillment  
+**Propósito:** Verificar si un item puede enviarse a Amazon FBA en un marketplace específico, y si es elegible para tracking por barcode del fabricante.
+
+### Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| asin | Sí | ASIN del producto a verificar |
+| marketplaceIds | Sí | Array de marketplace IDs |
+| program | No | Programa de elegibilidad: `INBOUND` (envío a FC) o `COMMINGLING` (mezcla de inventario) |
+
+### Respuesta
+
+Devuelve `isEligibleForProgram` (boolean) y cuando no es elegible, incluye `ineligibilityReasonList` con los motivos.
+
+---
+
+## 21. FBA INBOUND SHIPMENT API v2024-03-20
+
+**Base path:** `/inbound/v2024-03-20/`
+
+### Todos los endpoints
+
+**Inbound Plans:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listInboundPlans | GET | `/inbound/v2024-03-20/inboundPlans` | 2 | 2 |
+| createInboundPlan | POST | `/inbound/v2024-03-20/inboundPlans` | 2 | 2 |
+| getInboundPlan | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}` | 2 | 2 |
+| cancelInboundPlan | PUT | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}` | 2 | 2 |
+| updateInboundPlanName | PUT | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/name` | 2 | 2 |
+| listInboundPlanBoxes | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/boxes` | 2 | 30 |
+| listInboundPlanItems | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/items` | 2 | 2 |
+| listInboundPlanPallets | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/pallets` | 2 | 2 |
+
+**Packing:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listPackingOptions | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingOptions` | 2 | 2 |
+| generatePackingOptions | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingOptions/generate` | 2 | 2 |
+| confirmPackingOption | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingOptions/{packingOptionId}/confirm` | 2 | 2 |
+| listPackingGroupBoxes | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingGroups/{packingGroupId}/boxes` | 2 | 30 |
+| listPackingGroupItems | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingGroups/{packingGroupId}/items` | 2 | 2 |
+| setPackingInformation | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/packingGroups/{packingGroupId}/setPackingInformation` | 2 | 2 |
+
+**Placement:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listPlacementOptions | GET | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/placementOptions` | 2 | 2 |
+| generatePlacementOptions | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/placementOptions/generate` | 2 | 2 |
+| confirmPlacementOption | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/placementOptions/{placementOptionId}/confirm` | 2 | 2 |
+
+**Shipments:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| getShipment | GET | `/inbound/v2024-03-20/shipments/{shipmentId}` | 5 | 6 |
+| listShipmentBoxes | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/boxes` | 5 | 30 |
+| listShipmentItems | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/items` | 2 | 2 |
+| listShipmentPallets | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/pallets` | 2 | 2 |
+| updateShipmentName | PUT | `/inbound/v2024-03-20/shipments/{shipmentId}/name` | 2 | 2 |
+| updateShipmentSourceAddress | PUT | `/inbound/v2024-03-20/shipments/{shipmentId}/sourceAddress` | 2 | 2 |
+| updateShipmentTrackingDetails | PUT | `/inbound/v2024-03-20/shipments/{shipmentId}/trackingDetails` | 2 | 2 |
+
+**Transportation:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listTransportationOptions | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/transportationOptions` | 5 | 6 |
+| generateTransportationOptions | POST | `/inbound/v2024-03-20/shipments/{shipmentId}/transportationOptions/generate` | 2 | 2 |
+| confirmTransportationOptions | POST | `/inbound/v2024-03-20/inboundPlans/{inboundPlanId}/transportationOptions/confirmation` | 2 | 2 |
+
+**Delivery Windows:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listDeliveryWindowOptions | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/deliveryWindowOptions` | 5 | 30 |
+| generateDeliveryWindowOptions | POST | `/inbound/v2024-03-20/shipments/{shipmentId}/deliveryWindowOptions/generate` | 2 | 2 |
+| confirmDeliveryWindowOptions | POST | `/inbound/v2024-03-20/shipments/{shipmentId}/deliveryWindowOptions/confirm` | 2 | 2 |
+
+**Labels y Compliance:**
+| Operación | Método | Path |
+|-----------|--------|------|
+| createMarketplaceItemLabels | POST | `/inbound/v2024-03-20/shipments/{shipmentId}/marketplaceItemLabels` |
+| listItemComplianceDetails | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/itemComplianceDetails` |
+| updateItemComplianceDetails | PUT | `/inbound/v2024-03-20/shipments/{shipmentId}/itemComplianceDetails` |
+| setPrepDetails | POST | `/inbound/v2024-03-20/shipments/{shipmentId}/prepDetails` |
+| listPrepDetails | GET | `/inbound/v2024-03-20/shipments/{shipmentId}/prepDetails` |
+
+**Operations Status:**
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| getInboundOperationStatus | GET | `/inbound/v2024-03-20/operations/{operationId}/status` | 5 | 6 |
+
+**Nota:** La mayoría de operaciones POST devuelven un `operationId` asíncrono. Usar `getInboundOperationStatus` para verificar completitud.
+
+### createInboundPlan — Request body completo
+
+```json
+{
+  "destinationMarketplaces": ["A1AM78C64UM0Y8"],
+  "items": [
+    {
+      "msku": "SNTV001764",
+      "quantity": 10,
+      "labelOwner": "SELLER",
+      "prepOwner": "SELLER",
+      "expiration": "2027-12-31",
+      "manufacturingLotCode": "LOT-2026-05"
+    }
+  ],
+  "name": "Envío TVs Mayo 2026",
+  "sourceAddress": {
+    "name": "Apantallate MX — Bodega MTY",
+    "addressLine1": "Calle Industrial 123",
+    "city": "Monterrey",
+    "stateOrProvinceCode": "NL",
+    "postalCode": "64000",
+    "countryCode": "MX"
+  }
+}
+```
+
+**Restricciones:**
+- `destinationMarketplaces`: Solo 1 marketplace soportado actualmente.
+- `items`: 1 a 2,000 items por plan.
+- `msku`: 1–255 caracteres.
+- `quantity`: 1–500,000.
+- `labelOwner` y `prepOwner`: `AMAZON`, `SELLER`, o `NONE`.
+
+### confirmTransportationOptions — Request body
+
+```json
+{
+  "transportationSelections": [
+    {
+      "shipmentId": "ShipmentID38CharsExactly00000000000000",
+      "transportationOptionId": "TransportOptionID38Chars00000000000",
+      "contactInformation": {}
+    }
+  ]
+}
+```
+
+**Nota:** El campo `inboundPlanId` va en el PATH (longitud exacta: 38 caracteres).
+
+### Flujo completo para crear un inbound shipment (FBA)
+
+```
+1. createInboundPlan                    → inboundPlanId
+2. generatePackingOptions               → operationId (async)
+3. listPackingOptions                   → packingOptionId
+4. listPackingGroupItems                → items por grupo
+5. setPackingInformation (por grupo)    → operationId (async)
+   [confirmar con setPackingInformation si box content conocido]
+6. confirmPackingOption                 → operationId (async)
+7. generatePlacementOptions             → operationId (async)
+8. listPlacementOptions                 → placementOptionId
+9. getShipment + listShipmentItems      → verificar contenido
+10. generateTransportationOptions       → operationId (async)
+11. listTransportationOptions           → transportationOptionId
+12. generateDeliveryWindowOptions       → operationId (async) [para no-partnered]
+13. listDeliveryWindowOptions           → deliveryWindowOptionId
+14. confirmPlacementOption              → operationId (async)
+15. confirmDeliveryWindowOptions        → operationId (async) [si aplica]
+16. confirmTransportationOptions        → operationId (async)
+17. createMarketplaceItemLabels         → etiquetas para imprimir
+18. updateShipmentTrackingDetails       → tracking del carrier
+```
+
+**Carrier partnered vs no-partnered:**
+- **Amazon-partnered carrier:** Solo disponible en USA contiguous. La tarifa se calcula automáticamente y se cobra en la cuenta. No requiere configurar carrier externo.
+- **No-partnered carrier:** Tú contratas el carrier. Requiere proporcionar tracking en `updateShipmentTrackingDetails`. Para LTL: PRO number. Para parcel: tracking por caja.
+
+**Carrier info en transportation options:**
+- `shippingSolution: "AMAZON_PARTNERED_CARRIER"` → Amazon maneja el transporte
+- `shippingMode: "GROUND_SMALL_PARCEL"` o `"FREIGHT_LTL"` → pequeños paquetes vs pallets
+- Para multi-shipment con parcel: todos los shipments deben usar el mismo carrier.
+
+---
+
+## 22. MERCHANT FULFILLMENT API v0 (FBM — Etiquetas de envío)
+
+**Base path:** `/mfn/v0/`
+
+> Nota: Para nuevas integraciones Amazon recomienda usar **Shipping API v2** en su lugar. MFN v0 sigue funcionando para integraciones existentes.
+
+### Endpoints y rate limits
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| getEligibleShipmentServices | POST | `/mfn/v0/eligibleShippingServices` | 6 | 12 |
+| createShipment | POST | `/mfn/v0/shipments` | 2 | 2 |
+| getShipment | GET | `/mfn/v0/shipments/{shipmentId}` | — | — |
+| cancelShipment | DELETE | `/mfn/v0/shipments/{shipmentId}` | — | — |
+| getAdditionalSellerInputs | POST | `/mfn/v0/additionalSellerInputs` | — | — |
+
+**Roles requeridos:** "Direct to Consumer Shipping (Restricted)" (todas las regiones) o "Buyer Communication" (NA, FE — solo para `getAdditionalSellerInputs`)
+
+### getEligibleShipmentServices — Obtener servicios disponibles
+
+**Request body:**
+```json
+{
+  "ShipmentRequestDetails": {
+    "AmazonOrderId": "402-7654321-1234567",
+    "SellerOrderId": "my-order-123",
+    "ItemList": [
+      {
+        "OrderItemId": "1234567890",
+        "Quantity": 1
+      }
+    ],
+    "ShipFromAddress": {
+      "Name": "Apantallate MX",
+      "AddressLine1": "Calle Industrial 123",
+      "City": "Monterrey",
+      "StateOrRegion": "NL",
+      "PostalCode": "64000",
+      "CountryCode": "MX"
+    },
+    "PackageDimensions": {
+      "Length": 40, "Width": 30, "Height": 20, "Unit": "centimeters"
+    },
+    "Weight": {
+      "Value": 5.0, "Unit": "kilograms"
+    },
+    "ShippingServiceOptions": {
+      "DeliveryExperience": "DeliveryConfirmationWithoutSignature",
+      "CarrierWillPickUp": false
+    }
+  },
+  "ShippingOfferingFilter": {
+    "IncludeComplexShippingOptions": false
+  }
+}
+```
+
+### createShipment — Crear etiqueta de envío
+
+**Request body:**
+```json
+{
+  "ShipmentRequestDetails": {
+    "AmazonOrderId": "402-7654321-1234567",
+    "ItemList": [{"OrderItemId": "1234567890", "Quantity": 1}],
+    "ShipFromAddress": { /* igual que arriba */ },
+    "PackageDimensions": { /* igual que arriba */ },
+    "Weight": { /* igual que arriba */ },
+    "ShippingServiceOptions": {
+      "DeliveryExperience": "DeliveryConfirmationWithoutSignature",
+      "CarrierWillPickUp": false
+    }
+  },
+  "ShippingServiceId": "UPS_PTP_GND",
+  "ShippingServiceOfferId": "SO1234...",
+  "HazmatType": "None",
+  "LabelFormatOption": {
+    "IncludePackingSlipWithLabel": false
+  }
+}
+```
+
+**Respuesta incluye:** `Label.FileContents` (base64 PDF), `Label.Dimensions`, `TrackingId`, `ShipmentId`
+
+**Restricciones:**
+- Solo para órdenes MFN (seller-fulfilled), no FBA.
+- `HazmatType`: `None` o `LQHazmat` (Limited Quantity Hazmat).
+
+---
+
+## 23. RETURNS API — DEVOLUCIONES FBA (Fulfillment Outbound)
+
+> Amazon no tiene un "Returns API" dedicado para seller-fulfilled en SP-API. Para FBA (MCF), las devoluciones se manejan vía Fulfillment Outbound API.
+
+**Base path:** `/fba/outbound/2020-07-01/`
+
+**Rol requerido:** Amazon Fulfillment
+
+### Endpoints de devolución
+
+| Operación | Método | Path | Rate (req/s) | Burst |
+|-----------|--------|------|-------------|-------|
+| listReturnReasonCodes | GET | `/fba/outbound/2020-07-01/returnReasonCodes` | 2 | 30 |
+| createFulfillmentReturn | PUT | `/fba/outbound/2020-07-01/fulfillmentOrders/{sellerFulfillmentOrderId}/return` | 2 | 30 |
+
+### listReturnReasonCodes — Parámetros
+
+| Parámetro | Req | Descripción |
+|-----------|-----|-------------|
+| sellerSku | Sí | SKU del producto |
+| marketplaceId | No | ID del marketplace (requerido si no se especifica `sellerFulfillmentOrderId`) |
+| sellerFulfillmentOrderId | No | ID de la orden para determinar el marketplace |
+| language | No | Idioma para las descripciones traducidas |
+
+**Flujo:** Primero llamar `listReturnReasonCodes` para obtener los reason codes válidos para ese SKU, luego incluirlos en `createFulfillmentReturn`.
+
+### createFulfillmentReturn — Request body
+
+```json
+{
+  "items": [
+    {
+      "sellerReturnItemId": "mi-return-123",
+      "sellerFulfillmentOrderItemId": "order-item-456",
+      "amazonShipmentId": "AMZN_SHIPMENT_ID",
+      "returnReasonCode": "CUSTOMER_RETURN",
+      "returnComment": "El cliente reportó que el producto llegó dañado"
+    }
+  ]
+}
+```
+
+**Nota crítica:** Los `returnReasonCode` en el request DEBEN ser valores devueltos por `listReturnReasonCodes` — no se pueden inventar.
+
+### Devoluciones MFN — via Reportes (no hay API directa)
+
+Para seller-fulfilled (FBM), no existe endpoint de SP-API para consultar devoluciones directamente. Se usa la Reports API:
+
+| reportType | Descripción |
+|-----------|-------------|
+| `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE` | Devoluciones MFN por fecha |
+| `GET_XML_RETURNS_DATA_BY_RETURN_DATE` | Devoluciones MFN en XML |
+| `GET_FLAT_FILE_MFN_SKU_RETURN_ATTRIBUTES_REPORT` | Atributos de devolución por SKU |
+| `GET_FBA_FULFILLMENT_CUSTOMER_RETURNS_DATA` | Devoluciones FBA (Report API) |
+
+### External Fulfillment Returns API v2024-09-11 (para warehouse externo)
+
+Solo aplica si usas **External Fulfillment** (warehouse integration de Amazon).
+
+| Operación | Método | Path |
+|-----------|--------|------|
+| listReturns | GET | `/external-fulfillment/returns` |
+| getReturn | GET | `/external-fulfillment/returns/{returnId}` |
+
+---
+
+## 24. MESSAGING API v1 (Buyer-Seller Messaging)
+
+**Base path:** `/messaging/v1/`
+
+> Permite enviar mensajes a compradores dentro de los límites de las políticas de Amazon.
+
+### Endpoints disponibles
+
+| Operación | Método | Descripción |
+|-----------|--------|-------------|
+| getMessagingActionsForOrder | GET | Obtener tipos de mensajes disponibles para una orden |
+| confirmCustomizationDetails | POST | Confirmar detalles de personalización con el comprador |
+| createConfirmDeliveryDetails | POST | Enviar confirmación de detalles de entrega |
+| createLegalDisclosure | POST | Enviar divulgación legal |
+| createConfirmOrderDetails | POST | Confirmar detalles de orden |
+| createConfirmServiceDetails | POST | Confirmar detalles de servicio |
+| createWarranty | POST | Enviar información de garantía |
+| getAttributes | GET | Obtener atributos de mensajes |
+| createDigitalAccessKey | POST | Enviar clave de acceso digital |
+| createUnexpectedProblem | POST | Notificar problema inesperado al comprador |
+| sendInvoice | POST | Enviar factura al comprador |
+
+**Base path por operación:** `/messaging/v1/orders/{amazonOrderId}/messages/[tipo]`
+
+**Nota:** El formato de respuesta sigue el estándar **JSON Hypertext Application Language (HAL)**. Primero llamar `getMessagingActionsForOrder` para obtener qué tipos de mensajes están disponibles para esa orden específica.
+
+---
+
+## 25. RESTRICCIONES IMPORTANTES — BRAND REGISTRY
+
+**Brand Registry NO tiene API en SP-API.** La gestión de Brand Registry se hace 100% via Seller Central / Vendor Central:
+
+- **Registro de marca:** https://brandregistry.amazon.com
+- **Informe de infracción:** Formulario web en Brand Registry
+- **ASIN protegido:** El API de Listings Restrictions devuelve `APPROVAL_REQUIRED` cuando el ASIN es de una marca registrada que requiere autorización.
+
+**Lo que SÍ está disponible via SP-API para brand owners:**
+- Notificación `BRANDED_ITEM_CONTENT_CHANGE` — alertas cuando alguien cambia el contenido de tus ASINs
+- A+ Content API — crear y gestionar contenido A+ (requiere ser brand owner o tener autorización de la marca)
+- Brand Analytics reports — disponibles vía Reports API si la cuenta tiene Brand Analytics habilitado
+
+---
+
+## 26. GUÍA RÁPIDA — QUÉ API USAR PARA CADA OPERACIÓN
+
+| Operación | API a usar | Método |
+|-----------|-----------|--------|
+| Crear listing nuevo | Listings Items API | PUT |
+| Actualizar precio (1 SKU) | Listings Items API | PATCH |
+| Actualizar precio (muchos SKUs) | Feeds API (JSON_LISTINGS_FEED) | POST |
+| Actualizar stock (1 SKU) | Listings Items API | PATCH |
+| Obtener info de un listing | Listings Items API | GET |
+| Buscar listings por ASIN/EAN | Listings Items API (searchListingsItems) | GET |
+| Eliminar listing | Listings Items API | DELETE |
+| Verificar si puedo listar un ASIN | Listings Restrictions API | GET |
+| Obtener campos requeridos por categoría | Product Type Definitions API | GET |
+| Buscar ASIN en catálogo Amazon | Catalog Items API | GET |
+| Ver stock FBA real | FBA Inventory API | GET |
+| Ver órdenes recientes | Orders API | GET |
+| Ver fees estimados | Product Fees API | POST |
+| Ver precio Buy Box / competidores | Product Pricing API | GET |
+| Crear contenido A+ | A+ Content API | POST |
+| Verificar elegibilidad FBA | FBA Inbound Eligibility API | GET |
+| Crear envío a FBA | Fulfillment Inbound API v2024 | POST |
+| Crear etiqueta FBM | Merchant Fulfillment API | POST |
+| Consultar devoluciones MFN | Reports API | POST |
+| Crear devolución FBA (MCF) | Fulfillment Outbound API | PUT |
+| Enviar mensaje a comprador | Messaging API | POST |
