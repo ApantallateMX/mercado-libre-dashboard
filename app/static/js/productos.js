@@ -224,10 +224,13 @@
            class="text-xs px-2 py-1 rounded-lg border text-green-600 border-green-200 hover:bg-green-50 transition">▶ Activar</button>`
       : `<button onclick="toggleStatus('${itemId}', 'paused')"
            class="text-xs px-2 py-1 rounded-lg border text-orange-500 border-orange-200 hover:bg-orange-50 transition">⏸ Pausar</button>`;
+    const iaBtn = `<button onclick="event.stopPropagation();openHiggsfieldModal('${escHtml(item.title||'')}','${escHtml(item.thumbnail||'')}','${escHtml(item.sku||itemId)}')"
+      class="text-xs px-2 py-1 rounded-lg border text-purple-600 border-purple-200 hover:bg-purple-50 transition">✨ IA</button>`;
     return `<div class="flex flex-col gap-1">
       <button onclick="openPanel('${itemId}')"
         class="text-xs px-2 py-1 rounded-lg bg-yellow-100 hover:bg-yellow-200 text-yellow-800 font-medium transition">✏ Editar</button>
       ${optimizeBtn}
+      ${iaBtn}
       ${toggleBtn}
       ${videoBtn}
     </div>`;
