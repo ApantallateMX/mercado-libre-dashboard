@@ -31,6 +31,7 @@ from app.api.binmanager import router as binmanager_router
 from app.api.lanzar import router as lanzar_router, start_gap_scan_loop
 from app.api.productos import router as productos_router
 from app.api.facturacion import router as facturacion_router
+from app.api.higgsfield import router as higgsfield_router
 from app.services.price_monitor import price_monitor
 from app.services import token_store
 from app.services import user_store
@@ -893,6 +894,7 @@ app.include_router(binmanager_router)
 app.include_router(lanzar_router)
 app.include_router(productos_router)
 app.include_router(facturacion_router)
+app.include_router(higgsfield_router)
 
 
 # ---------- Account switcher ----------

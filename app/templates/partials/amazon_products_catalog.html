@@ -179,6 +179,11 @@
                                 💲
                             </button>
                             {% endif %}
+                            <button onclick="event.stopPropagation();openHiggsfieldModal('{{ item.title|e }}','{{ item.image_url or '' }}','{{ item.sku }}')"
+                                    class="text-xs text-purple-500 hover:text-purple-700 font-semibold transition"
+                                    title="Generar contenido con IA">
+                                ✨
+                            </button>
                         </div>
                     </td>
                 </tr>

@@ -1,0 +1,288 @@
+{# ─── higgsfield_modal.html ───────────────────────────────────────────────
+   Modal global para generación de imagen/video con Higgsfield AI.
+   Se abre con: openHiggsfieldModal(title, thumbnailUrl, sku)
+────────────────────────────────────────────────────────────────────────── #}
+
+<div id="hf-modal"
+     class="fixed inset-0 z-50 hidden"
+     onclick="if(event.target===this) closeHiggsfieldModal()">
+
+    {# Overlay #}
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+
+    {# Panel #}
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+
+        {# Header #}
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <div class="flex items-center gap-2">
+                <span class="text-lg">✨</span>
+                <span class="font-bold text-gray-800">Generar con IA</span>
+                <span class="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-semibold">Higgsfield</span>
+            </div>
+            <button onclick="closeHiggsfieldModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        </div>
+
+        {# Body #}
+        <div class="p-5 space-y-4">
+
+            {# Producto #}
+            <div id="hf-product-info" class="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
+                <img id="hf-thumb" src="" alt="" class="w-14 h-14 rounded-lg object-cover border border-gray-200 hidden">
+                <div class="min-w-0">
+                    <p id="hf-title" class="text-sm font-semibold text-gray-800 truncate"></p>
+                    <p id="hf-sku"   class="text-xs text-gray-400 font-mono mt-0.5"></p>
+                </div>
+            </div>
+
+            {# Tipo de generación #}
+            <div id="hf-mode-selector">
+                <p class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">¿Qué quieres generar?</p>
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="hfSelectMode('image')"
+                            id="hf-btn-image"
+                            class="hf-mode-btn flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 border-gray-200 hover:border-purple-400 transition text-center">
+                        <span class="text-2xl">🖼️</span>
+                        <span class="text-xs font-bold text-gray-700">Foto lifestyle</span>
+                        <span class="text-[10px] text-gray-400">~8 créditos</span>
+                    </button>
+                    <button onclick="hfSelectMode('video')"
+                            id="hf-btn-video"
+                            class="hf-mode-btn flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 border-gray-200 hover:border-purple-400 transition text-center">
+                        <span class="text-2xl">🎬</span>
+                        <span class="text-xs font-bold text-gray-700">Animar producto</span>
+                        <span class="text-[10px] text-gray-400">~6 créditos · 5s</span>
+                    </button>
+                </div>
+            </div>
+
+            {# Prompt personalizado #}
+            <div>
+                <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Prompt personalizado <span class="font-normal text-gray-400">(opcional)</span></label>
+                <textarea id="hf-custom-prompt"
+                          rows="2"
+                          placeholder="Ej: fondo negro, iluminación dramática, vista lateral..."
+                          class="mt-1.5 w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-300 resize-none text-gray-700 placeholder-gray-300"></textarea>
+            </div>
+
+            {# Estado / progreso #}
+            <div id="hf-status" class="hidden">
+                {# Generando #}
+                <div id="hf-loading" class="hidden flex items-center gap-3 bg-purple-50 rounded-xl p-3">
+                    <div class="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+                    <div>
+                        <p class="text-sm font-semibold text-purple-700">Generando...</p>
+                        <p class="text-xs text-purple-500" id="hf-elapsed">Procesando con Higgsfield AI</p>
+                    </div>
+                </div>
+
+                {# Resultado #}
+                <div id="hf-result" class="hidden">
+                    <p class="text-xs font-semibold text-green-600 mb-2">✓ Generación completada</p>
+                    <div class="relative rounded-xl overflow-hidden border border-gray-200 bg-gray-50">
+                        <img id="hf-result-img" src="" alt="Resultado" class="w-full max-h-64 object-contain hidden">
+                        <video id="hf-result-video" src="" controls class="w-full max-h-64 hidden" preload="metadata"></video>
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                        <a id="hf-download-btn" href="#" download
+                           class="flex-1 text-center py-2 text-sm font-semibold text-white bg-purple-600 hover:bg-purple-700 rounded-xl transition">
+                            ⬇ Descargar
+                        </a>
+                        <button onclick="hfGenerateAgain()"
+                                class="px-4 py-2 text-sm font-semibold text-purple-600 border border-purple-200 hover:bg-purple-50 rounded-xl transition">
+                            Otra versión
+                        </button>
+                    </div>
+                </div>
+
+                {# Error #}
+                <div id="hf-error" class="hidden bg-red-50 rounded-xl p-3">
+                    <p class="text-sm font-semibold text-red-600">Error en la generación</p>
+                    <p id="hf-error-msg" class="text-xs text-red-500 mt-0.5"></p>
+                </div>
+            </div>
+
+        </div>
+
+        {# Footer #}
+        <div class="px-5 pb-4 flex gap-2" id="hf-footer">
+            <button onclick="closeHiggsfieldModal()"
+                    class="flex-1 py-2.5 text-sm font-semibold text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition">
+                Cancelar
+            </button>
+            <button id="hf-generate-btn"
+                    onclick="hfStartGeneration()"
+                    disabled
+                    class="flex-1 py-2.5 text-sm font-semibold text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl transition">
+                Generar ✨
+            </button>
+        </div>
+
+    </div>
+    </div>
+</div>
+
+<script>
+(function() {
+
+var _hfState = {
+    title: '', thumbnail: '', sku: '', mode: null,
+    pollTimer: null, startTs: null, requestId: null,
+};
+
+window.openHiggsfieldModal = function(title, thumbnailUrl, sku) {
+    _hfState.title     = title     || '';
+    _hfState.thumbnail = thumbnailUrl || '';
+    _hfState.sku       = sku       || '';
+    _hfState.mode      = null;
+    _hfState.requestId = null;
+
+    // Rellenar info del producto
+    document.getElementById('hf-title').textContent = title || '—';
+    document.getElementById('hf-sku').textContent   = sku   || '';
+    var thumb = document.getElementById('hf-thumb');
+    if (thumbnailUrl) {
+        thumb.src = thumbnailUrl;
+        thumb.classList.remove('hidden');
+    } else {
+        thumb.classList.add('hidden');
+    }
+
+    // Reset UI
+    document.querySelectorAll('.hf-mode-btn').forEach(function(b){ b.classList.remove('border-purple-500','bg-purple-50'); b.classList.add('border-gray-200'); });
+    document.getElementById('hf-custom-prompt').value = '';
+    document.getElementById('hf-status').classList.add('hidden');
+    document.getElementById('hf-loading').classList.add('hidden');
+    document.getElementById('hf-result').classList.add('hidden');
+    document.getElementById('hf-error').classList.add('hidden');
+    document.getElementById('hf-mode-selector').classList.remove('hidden');
+    document.getElementById('hf-footer').classList.remove('hidden');
+    document.getElementById('hf-generate-btn').disabled = true;
+
+    document.getElementById('hf-modal').classList.remove('hidden');
+};
+
+window.closeHiggsfieldModal = function() {
+    if (_hfState.pollTimer) { clearInterval(_hfState.pollTimer); _hfState.pollTimer = null; }
+    document.getElementById('hf-modal').classList.add('hidden');
+};
+
+window.hfSelectMode = function(mode) {
+    _hfState.mode = mode;
+    document.querySelectorAll('.hf-mode-btn').forEach(function(b){ b.classList.remove('border-purple-500','bg-purple-50'); b.classList.add('border-gray-200'); });
+    var btn = document.getElementById('hf-btn-' + mode);
+    btn.classList.add('border-purple-500','bg-purple-50');
+    btn.classList.remove('border-gray-200');
+    document.getElementById('hf-generate-btn').disabled = false;
+};
+
+window.hfStartGeneration = function() {
+    if (!_hfState.mode) return;
+
+    // Ocultar modo selector, mostrar loading
+    document.getElementById('hf-mode-selector').classList.add('hidden');
+    document.getElementById('hf-footer').classList.add('hidden');
+    document.getElementById('hf-status').classList.remove('hidden');
+    document.getElementById('hf-loading').classList.remove('hidden');
+    document.getElementById('hf-result').classList.add('hidden');
+    document.getElementById('hf-error').classList.add('hidden');
+
+    _hfState.startTs = Date.now();
+
+    // Actualizar elapsed time
+    if (_hfState.pollTimer) clearInterval(_hfState.pollTimer);
+    var elapsedTimer = setInterval(function() {
+        var secs = Math.floor((Date.now() - _hfState.startTs) / 1000);
+        document.getElementById('hf-elapsed').textContent = 'Procesando... ' + secs + 's';
+    }, 1000);
+
+    fetch('/api/higgsfield/generate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mode:          _hfState.mode,
+            title:         _hfState.title,
+            thumbnail_url: _hfState.thumbnail,
+            custom_prompt: document.getElementById('hf-custom-prompt').value,
+            sku:           _hfState.sku,
+        })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.detail) { clearInterval(elapsedTimer); hfShowError(data.detail); return; }
+        _hfState.requestId = data.request_id;
+        // Polling cada 3 segundos
+        _hfState.pollTimer = setInterval(function() {
+            fetch('/api/higgsfield/status/' + _hfState.requestId)
+                .then(function(r){ return r.json(); })
+                .then(function(s) {
+                    if (s.status === 'completed' && s.result_url) {
+                        clearInterval(_hfState.pollTimer);
+                        clearInterval(elapsedTimer);
+                        hfShowResult(s.result_url);
+                    } else if (s.status === 'failed' || s.status === 'nsfw') {
+                        clearInterval(_hfState.pollTimer);
+                        clearInterval(elapsedTimer);
+                        hfShowError(s.status === 'nsfw' ? 'Contenido bloqueado por Higgsfield' : 'La generación falló');
+                    }
+                })
+                .catch(function(e) { /* ignorar errores de red en polling */ });
+        }, 3000);
+    })
+    .catch(function(e) {
+        clearInterval(elapsedTimer);
+        hfShowError('Error de conexión: ' + e.message);
+    });
+};
+
+function hfShowResult(url) {
+    document.getElementById('hf-loading').classList.add('hidden');
+    document.getElementById('hf-result').classList.remove('hidden');
+    document.getElementById('hf-footer').classList.remove('hidden');
+
+    var isVideo = url.includes('.mp4') || url.includes('.webm') || url.includes('.mov');
+    var img   = document.getElementById('hf-result-img');
+    var video = document.getElementById('hf-result-video');
+
+    if (isVideo) {
+        video.src = url;
+        video.classList.remove('hidden');
+        img.classList.add('hidden');
+    } else {
+        img.src = url;
+        img.classList.remove('hidden');
+        video.classList.add('hidden');
+    }
+
+    var dlBtn = document.getElementById('hf-download-btn');
+    dlBtn.href = url;
+    dlBtn.download = 'higgsfield_' + (_hfState.sku || 'asset') + (isVideo ? '.mp4' : '.png');
+
+    // Cambiar botón de footer a "Cerrar"
+    document.getElementById('hf-generate-btn').textContent = 'Otra versión ✨';
+    document.getElementById('hf-generate-btn').disabled = false;
+    document.getElementById('hf-generate-btn').onclick = hfGenerateAgain;
+}
+
+function hfShowError(msg) {
+    document.getElementById('hf-loading').classList.add('hidden');
+    document.getElementById('hf-error').classList.remove('hidden');
+    document.getElementById('hf-error-msg').textContent = msg;
+    document.getElementById('hf-footer').classList.remove('hidden');
+    document.getElementById('hf-generate-btn').textContent = 'Reintentar ✨';
+    document.getElementById('hf-generate-btn').disabled = false;
+    document.getElementById('hf-generate-btn').onclick = hfStartGeneration;
+}
+
+window.hfGenerateAgain = function() {
+    if (_hfState.pollTimer) { clearInterval(_hfState.pollTimer); _hfState.pollTimer = null; }
+    document.getElementById('hf-status').classList.add('hidden');
+    document.getElementById('hf-mode-selector').classList.remove('hidden');
+    document.getElementById('hf-footer').classList.remove('hidden');
+    document.getElementById('hf-generate-btn').textContent = 'Generar ✨';
+    document.getElementById('hf-generate-btn').onclick = hfStartGeneration;
+};
+
+})();
+</script>

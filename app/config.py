@@ -87,6 +87,10 @@ AMAZON3_MARKETPLACE_NAME = os.getenv("AMAZON3_MARKETPLACE_NAME", "US")
 AMAZON3_APP_SOLUTION_ID = os.getenv("AMAZON3_APP_SOLUTION_ID", "")
 AMAZON3_NICKNAME = os.getenv("AMAZON3_NICKNAME", "ExclusiveBulbs")
 
+# ── Higgsfield AI — Generación de imágenes y videos ───────────────────────
+HIGGSFIELD_KEY_ID = os.getenv("HIGGSFIELD_KEY_ID", "")
+HIGGSFIELD_SECRET  = os.getenv("HIGGSFIELD_SECRET", "")
+
 # API Key externa — para el planeador de flujo de caja y otros sistemas externos
 CASHFLOW_API_KEY = os.getenv("CASHFLOW_API_KEY", "")
 

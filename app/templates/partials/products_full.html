@@ -227,6 +227,8 @@
                                 class="text-[10px] text-cyan-600 hover:underline">
                             Gestionar FULL
                         </button>
+                        <button onclick="event.stopPropagation();openHiggsfieldModal('{{ p.title|e }}','{{ p.thumbnail or '' }}','{{ p.sku or p.id }}')"
+                                class="text-[10px] text-purple-500 hover:text-purple-700 font-semibold">✨ IA</button>
                     </div>
                 </td>
             </tr>
