@@ -1,0 +1,289 @@
+{% if error is defined and error %}
+<div class="bg-white rounded-xl shadow p-8 text-center">
+    <p class="text-red-500 font-semibold mb-1">Error cargando Repricing</p>
+    <p class="text-gray-400 text-sm">{{ error }}</p>
+</div>
+{% else %}
+
+<!-- ─── KPI bar ─────────────────────────────────────────────────────────────── -->
+{% set with_rule   = rows | selectattr('rule_type') | list | length %}
+{% set with_action = rows | selectattr('suggested') | list | length %}
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-[#FF9900]">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Listings activos</p>
+        <p class="text-2xl font-extrabold text-gray-800">{{ total }}</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-blue-500">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Con regla activa</p>
+        <p class="text-2xl font-extrabold text-blue-700">{{ with_rule }}</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Acciones pendientes</p>
+        <p class="text-2xl font-extrabold text-green-700">{{ with_action }}</p>
+    </div>
+    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-purple-400">
+        <p class="text-xs text-gray-400 uppercase tracking-wide mb-1">Regla global</p>
+        <p class="text-sm font-bold text-purple-700 truncate">
+            {% if global_rule and global_rule.enabled %}
+                {% if global_rule.rule_type == 'match_buybox' %}Match BB{% elif global_rule.rule_type == 'beat_buybox' %}Beat BB -{{ global_rule.beat_pct }}%{% else %}Fijo{% endif %}
+            {% else %}Sin configurar{% endif %}
+        </p>
+    </div>
+</div>
+
+<!-- ─── Regla global ────────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5 p-4">
+    <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-gray-700">Regla Global (aplica a todos los SKUs sin regla específica)</h3>
+        <button onclick="window._amzRepricingToggleRule()"
+                class="text-xs text-[#FF9900] hover:underline font-medium">
+            ✏️ Configurar
+        </button>
+    </div>
+    <div id="amz-repricing-rule-form" class="hidden">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Tipo de regla</label>
+                <select id="rp-rule-type" class="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg">
+                    <option value="match_buybox" {% if global_rule and global_rule.rule_type == 'match_buybox' %}selected{% endif %}>Match Buy Box</option>
+                    <option value="beat_buybox"  {% if global_rule and global_rule.rule_type == 'beat_buybox' %}selected{% endif %}>Ganar Buy Box (-X%)</option>
+                    <option value="fixed"        {% if global_rule and global_rule.rule_type == 'fixed' %}selected{% endif %}>Precio fijo</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Beat % (solo si beat)</label>
+                <input id="rp-beat-pct" type="number" min="0.1" max="20" step="0.1"
+                       value="{{ global_rule.beat_pct if global_rule else 1.0 }}"
+                       class="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Precio mínimo (piso)</label>
+                <input id="rp-min-price" type="number" min="0" step="1"
+                       value="{{ global_rule.min_price if global_rule else 0 }}"
+                       class="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Precio máximo (techo)</label>
+                <input id="rp-max-price" type="number" min="0" step="1"
+                       value="{{ global_rule.max_price if global_rule else 0 }}"
+                       class="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg">
+            </div>
+        </div>
+        <div class="flex items-center gap-3 mt-3">
+            <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" id="rp-enabled" {% if not global_rule or global_rule.enabled %}checked{% endif %}
+                       class="accent-[#FF9900]">
+                Regla activa
+            </label>
+            <button onclick="window._amzSaveGlobalRule('{{ seller_id }}')"
+                    class="px-4 py-1.5 text-xs font-semibold bg-[#FF9900] text-white rounded-lg hover:bg-orange-600 transition">
+                Guardar regla
+            </button>
+            <span id="rp-rule-status" class="text-xs text-gray-400"></span>
+        </div>
+    </div>
+    {% if global_rule and global_rule.enabled %}
+    <div class="flex gap-4 text-xs text-gray-500">
+        <span>Tipo: <strong class="text-gray-700">{% if global_rule.rule_type == 'match_buybox' %}Match Buy Box{% elif global_rule.rule_type == 'beat_buybox' %}Beat Buy Box -{{ global_rule.beat_pct }}%{% else %}Precio fijo{% endif %}</strong></span>
+        {% if global_rule.min_price %}<span>Piso: <strong class="text-gray-700">${{ "{:,.0f}".format(global_rule.min_price) }}</strong></span>{% endif %}
+        {% if global_rule.max_price %}<span>Techo: <strong class="text-gray-700">${{ "{:,.0f}".format(global_rule.max_price) }}</strong></span>{% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- ─── Tabla de listings ───────────────────────────────────────────────────── -->
+{% if not rows %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <p class="text-gray-400">No hay listings activos para repricing</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+
+    <!-- Barra de acciones -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <div class="flex items-center gap-3">
+            <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" id="rp-select-all" onchange="window._amzRpSelectAll(this.checked)"
+                       class="accent-[#FF9900]">
+                Seleccionar todos
+            </label>
+            <span id="rp-selected-count" class="text-xs text-gray-400">0 seleccionados</span>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="window._amzRpRefreshBB('{{ seller_id }}')"
+                    class="text-xs text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:border-gray-400 transition">
+                🔄 Actualizar BB
+            </button>
+            <button onclick="window._amzRpApplySelected('{{ seller_id }}')"
+                    id="rp-apply-btn"
+                    class="text-xs font-semibold bg-[#FF9900] text-white px-4 py-1.5 rounded-lg hover:bg-orange-600 transition disabled:opacity-40"
+                    disabled>
+                ✓ Aplicar seleccionados
+            </button>
+        </div>
+    </div>
+
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm" id="rp-table">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-3 text-center w-10"></th>
+                    <th class="py-3 px-4 text-left font-semibold">SKU / Producto</th>
+                    <th class="py-3 px-3 text-right font-semibold">Precio Actual</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Buy Box</th>
+                    <th class="py-3 px-3 text-center font-semibold hidden md:table-cell">Estado BB</th>
+                    <th class="py-3 px-3 text-right font-semibold">Precio Sugerido</th>
+                    <th class="py-3 px-3 text-center font-semibold hidden lg:table-cell">Stock FBA</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr class="border-b border-gray-50 hover:bg-gray-50 transition {% if r.suggested %}bg-yellow-50/30{% endif %}"
+                    data-sku="{{ r.sku }}" data-suggested="{{ r.suggested or '' }}" data-current="{{ r.our_price }}">
+                    <td class="py-2.5 px-3 text-center">
+                        {% if r.suggested %}
+                        <input type="checkbox" class="rp-row-check accent-[#FF9900]"
+                               onchange="window._amzRpUpdateCount()"
+                               data-sku="{{ r.sku }}" data-price="{{ r.suggested }}">
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-4">
+                        <p class="text-xs font-medium text-gray-700 truncate max-w-[220px]">{{ r.title or r.sku }}</p>
+                        <p class="text-[11px] text-gray-400 font-mono">{{ r.sku }}</p>
+                        {% if r.asin %}<p class="text-[10px] text-gray-300 font-mono">{{ r.asin }}</p>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right font-mono text-sm text-gray-700">
+                        ${{ "{:,.0f}".format(r.our_price) if r.our_price else "—" }}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden md:table-cell font-mono text-sm">
+                        {% if r.bb_price %}
+                            <span class="text-gray-700">${{ "{:,.0f}".format(r.bb_price) }}</span>
+                            {% if r.competitors %}<span class="text-[10px] text-gray-400 ml-1">({{ r.competitors }} comp)</span>{% endif %}
+                        {% else %}
+                            <span class="text-gray-300">Sin datos</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center hidden md:table-cell">
+                        {% if r.bb_won %}
+                            <span class="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">✓ Tenemos BB</span>
+                        {% elif r.bb_price %}
+                            <span class="text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">✗ Sin BB</span>
+                        {% else %}
+                            <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right">
+                        {% if r.suggested %}
+                            <span class="font-mono text-sm font-bold {% if r.suggested < r.our_price %}text-orange-600{% else %}text-green-600{% endif %}">
+                                ${{ "{:,.0f}".format(r.suggested) }}
+                            </span>
+                            {% if r.our_price %}
+                            <p class="text-[10px] {% if r.suggested < r.our_price %}text-orange-400{% else %}text-green-400{% endif %}">
+                                {{ "▼" if r.suggested < r.our_price else "▲" }}
+                                {{ "{:,.0f}".format((r.our_price - r.suggested)|abs) }}
+                            </p>
+                            {% endif %}
+                        {% else %}
+                            <span class="text-gray-300 text-xs">Sin cambio</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center hidden lg:table-cell">
+                        {% if r.fba_stock > 0 %}
+                            <span class="text-xs text-gray-600">{{ r.fba_stock }}</span>
+                        {% else %}
+                            <span class="text-gray-300 text-xs">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="px-4 py-2 bg-gray-50 border-t border-gray-100">
+        <p class="text-xs text-gray-400">{{ total }} listings activos · Buy Box basado en último caché (actualiza cada 10 min)</p>
+    </div>
+</div>
+{% endif %}
+
+<!-- ─── JS ─────────────────────────────────────────────────────────────────── -->
+<script>
+window._amzRepricingToggleRule = function() {
+    var f = document.getElementById('amz-repricing-rule-form');
+    f.classList.toggle('hidden');
+};
+
+window._amzRpSelectAll = function(checked) {
+    document.querySelectorAll('.rp-row-check').forEach(function(cb) { cb.checked = checked; });
+    window._amzRpUpdateCount();
+};
+
+window._amzRpUpdateCount = function() {
+    var checks = document.querySelectorAll('.rp-row-check:checked');
+    var span   = document.getElementById('rp-selected-count');
+    var btn    = document.getElementById('rp-apply-btn');
+    if (span) span.textContent = checks.length + ' seleccionados';
+    if (btn)  btn.disabled = checks.length === 0;
+};
+
+window._amzSaveGlobalRule = function(sellerId) {
+    var rt       = document.getElementById('rp-rule-type').value;
+    var beatPct  = parseFloat(document.getElementById('rp-beat-pct').value) || 1.0;
+    var minPrice = parseFloat(document.getElementById('rp-min-price').value) || 0;
+    var maxPrice = parseFloat(document.getElementById('rp-max-price').value) || 0;
+    var enabled  = document.getElementById('rp-enabled').checked;
+    var status   = document.getElementById('rp-rule-status');
+    if (status) status.textContent = 'Guardando…';
+    fetch('/api/amazon/products/repricing/rule?seller_id=' + encodeURIComponent(sellerId), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({sku: '*', rule_type: rt, beat_pct: beatPct,
+                              min_price: minPrice, max_price: maxPrice, enabled: enabled})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+        if (status) status.textContent = '✓ Guardado';
+        setTimeout(function() { window.switchAmzProdTab('repricing'); }, 800);
+    })
+    .catch(function(e) { if (status) status.textContent = 'Error: ' + e.message; });
+};
+
+window._amzRpApplySelected = function(sellerId) {
+    var checks  = document.querySelectorAll('.rp-row-check:checked');
+    var updates = [];
+    checks.forEach(function(cb) {
+        updates.push({sku: cb.dataset.sku, new_price: parseFloat(cb.dataset.price)});
+    });
+    if (!updates.length) return;
+    var label = updates.length === 1 ? '1 listing' : updates.length + ' listings';
+    if (!confirm('¿Aplicar precios nuevos a ' + label + '?\n\nEsta acción actualiza los precios en Amazon Seller Central.')) return;
+    var btn = document.getElementById('rp-apply-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Aplicando…'; }
+    fetch('/api/amazon/products/repricing/apply?seller_id=' + encodeURIComponent(sellerId), {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({updates: updates})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        var ok  = data.results.filter(function(r) { return r.ok; }).length;
+        var err = data.results.filter(function(r) { return !r.ok; }).length;
+        alert('Repricing completado: ' + ok + ' OK' + (err ? ', ' + err + ' errores' : ''));
+        window.switchAmzProdTab('repricing');
+    })
+    .catch(function(e) {
+        alert('Error: ' + e.message);
+        if (btn) { btn.disabled = false; btn.textContent = '✓ Aplicar seleccionados'; }
+    });
+};
+
+window._amzRpRefreshBB = function(sellerId) {
+    var btn = event.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Actualizando…';
+    window.switchAmzProdTab('repricing');
+};
+</script>
+
+{% endif %}

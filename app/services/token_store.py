@@ -753,6 +753,21 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_amz_sku_gaps_seller ON amz_sku_gaps(seller_id, status)"
         )
+        # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_repricing_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '*',
+                rule_type TEXT NOT NULL DEFAULT 'match_buybox',
+                beat_pct REAL NOT NULL DEFAULT 0.0,
+                min_price REAL NOT NULL DEFAULT 0.0,
+                max_price REAL NOT NULL DEFAULT 0.0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(seller_id, sku)
+            )
+        """)
         await db.commit()
 
 

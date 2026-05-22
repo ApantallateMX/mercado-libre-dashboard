@@ -1297,6 +1297,52 @@ class AmazonClient:
             logger.warning(f"[Amazon] get_refunds_30d error: {e}")
             return {"count": 0, "total": 0, "currency": "MXN", "error": str(e)}
 
+    async def get_refunds_detail(self, days: int = 30) -> list:
+        """
+        Devoluciones detalladas por SKU para los últimos N días.
+        Returns: list of {sku, order_id, posted_date, qty, amount, currency, reason}
+        """
+        try:
+            posted_after = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            items_out = []
+            next_token = None
+            pages = 0
+            while pages < 5:
+                params: dict = {"PostedAfter": posted_after, "MaxResultsPerPage": 100}
+                if next_token:
+                    params["NextToken"] = next_token
+                result = await self._request("GET", "/finances/v0/financialEvents", params=params)
+                payload = result.get("payload", {}).get("FinancialEvents", {})
+                for event in payload.get("RefundEventList", []):
+                    order_id    = event.get("AmazonOrderId", "")
+                    posted_date = event.get("PostedDate", "")[:10]
+                    for item in event.get("ShipmentItemAdjustmentList", []):
+                        sku     = item.get("SellerSKU", "")
+                        qty     = int(item.get("QuantityShipped") or 0)
+                        amount  = 0.0
+                        currency = "MXN"
+                        for charge in item.get("ItemChargeAdjustmentList", []):
+                            amt = charge.get("ChargeAmount", {})
+                            amount += abs(float(amt.get("CurrencyAmount", 0) or 0))
+                            if amt.get("CurrencyCode"):
+                                currency = amt["CurrencyCode"]
+                        items_out.append({
+                            "sku":         sku,
+                            "order_id":    order_id,
+                            "posted_date": posted_date,
+                            "qty":         qty,
+                            "amount":      round(amount, 2),
+                            "currency":    currency,
+                        })
+                next_token = result.get("payload", {}).get("NextToken")
+                pages += 1
+                if not next_token:
+                    break
+            return items_out
+        except Exception as e:
+            logger.warning(f"[Amazon] get_refunds_detail error: {e}")
+            return []
+
     async def get_financial_event_groups(self, max_results: int = 10) -> list:
         """
         Retorna los grupos de liquidación (períodos de pago) más recientes.

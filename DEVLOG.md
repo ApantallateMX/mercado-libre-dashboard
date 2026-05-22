@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-22 — FEAT: Amazon — Repricing automático + Devoluciones por SKU + renombrar tabs
+
+### Resumen
+Tres mejoras en el Centro de Productos Amazon:
+1. **Renombrado de tabs**: "Sin Publicar" → "⚠️ Inactivos", "Sin Lanzar" → "🚀 Sin Publicar" (claridad semántica)
+2. **Tab Repricing (💲)**: reglas globales Match BB / Beat BB / Precio fijo con piso y techo, previsualización de cambios y aplicación en un clic con confirmación.
+3. **Tab Devoluciones (🔄)**: historial de reembolsos de los últimos 7–90 días agrupado por SKU, con monto total y nivel de impacto.
+
+### Archivos modificados
+- `app/templates/amazon_products.html`: tabs renombrados + 2 nuevos tabs (repricing, devoluciones)
+- `app/templates/partials/amazon_products_resumen.html`: texto "Sin Publicar" → "Inactivos"
+- `app/templates/partials/amazon_ignorados.html`: referencia "Sin Lanzar" → "Sin Publicar"
+- `app/services/token_store.py`: tabla `amz_repricing_rules` (seller_id, sku, rule_type, beat_pct, min_price, max_price, enabled)
+- `app/services/amazon_client.py`: método `get_refunds_detail(days)` — devoluciones por SKU
+- `app/api/amazon_products.py`: endpoints `GET /products/repricing`, `POST /products/repricing/rule`, `POST /products/repricing/apply`, `GET /products/devoluciones`
+- `app/templates/partials/amazon_products_repricing.html` (nuevo): tabla con BB status + formulario de regla global + botón apply
+- `app/templates/partials/amazon_products_devoluciones.html` (nuevo): KPIs + tabla por SKU con filtro de período
+
+---
+
 ## 2026-05-22 — FEAT: Higgsfield AI — Generación de contenido visual en todas las plataformas
 
 ### Resumen

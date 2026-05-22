@@ -4409,3 +4409,335 @@ async def amazon_products_sin_bm(
         "marketplace": client.marketplace_name,
     }
     return _templates.TemplateResponse(request, "partials/amazon_products_sin_bm.html", ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REPRICING — Reglas automáticas de precios
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RepricingRuleIn(BaseModel):
+    sku:       str = "*"
+    rule_type: str = "match_buybox"   # match_buybox | beat_buybox | fixed
+    beat_pct:  float = 1.0
+    min_price: float = 0.0
+    max_price: float = 0.0
+    enabled:   bool = True
+
+
+class RepricingApplyIn(BaseModel):
+    updates: list[dict]  # [{sku, new_price}]
+
+
+@router.get("/products/repricing", response_class=HTMLResponse)
+async def amazon_products_repricing(
+    request:   Request,
+    seller_id: Optional[str] = Query(None),
+):
+    """Repricing: muestra listings activos con BB status y permite definir/aplicar reglas."""
+    import aiosqlite
+    from app.services.token_store import DATABASE_PATH
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return _render_no_account(request, "amazon_products_repricing.html")
+
+    try:
+        listings, fba_summaries = await asyncio.gather(
+            _get_listings_cached(client),
+            _get_fba_cached(client),
+        )
+        fba_index = _build_fba_index(fba_summaries)
+
+        # Build candidate list (active only)
+        candidates = []
+        for item in listings:
+            sku       = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            offers    = item.get("offers", [])
+            if _listing_status(summaries) != "ACTIVE":
+                continue
+            price     = _parse_price(offers)
+            fba_data  = fba_index.get(sku, {})
+            fba_stock = int((fba_data.get("inventoryDetails") or {}).get("fulfillableQuantity") or 0)
+            summary_0 = summaries[0] if summaries else {}
+            title     = summary_0.get("itemName", sku)[:70]
+            asin      = fba_data.get("asin") or summary_0.get("asin") or ""
+            candidates.append({
+                "sku": sku, "asin": asin, "title": title,
+                "our_price": price, "fba_stock": fba_stock,
+            })
+        candidates.sort(key=lambda x: x["fba_stock"], reverse=True)
+
+        # Use cached buy box data (don't refetch to avoid rate limits)
+        now_ts = _time.time()
+        buybox_rows = []
+        for c in candidates:
+            cache_key = f"{client.seller_id}:{c['sku']}"
+            bb_price  = None
+            bb_won    = False
+            competitors = 0
+            if cache_key in _buybox_cache:
+                ts, cached = _buybox_cache[cache_key]
+                if now_ts - ts < _BUYBOX_TTL * 3:  # longer TTL for repricing view
+                    bb_price    = cached.get("bb_price")
+                    bb_won      = cached.get("bb_won", False)
+                    competitors = cached.get("competitors", 0)
+
+            # Compute suggested price based on rule (applied below after loading rules)
+            buybox_rows.append({
+                **c,
+                "bb_price":    bb_price,
+                "bb_won":      bb_won,
+                "competitors": competitors,
+                "suggested":   None,
+            })
+
+        # Load rules from DB
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM amz_repricing_rules WHERE seller_id = ? ORDER BY sku",
+                (client.seller_id,),
+            )
+            rules_rows = await cursor.fetchall()
+
+        rules_by_sku: dict = {}
+        global_rule:  dict = None
+        for r in rules_rows:
+            rd = dict(r)
+            if rd["sku"] == "*":
+                global_rule = rd
+            else:
+                rules_by_sku[rd["sku"]] = rd
+
+        # Apply rules to compute suggested prices
+        for row in buybox_rows:
+            rule = rules_by_sku.get(row["sku"]) or global_rule
+            if not rule or not rule.get("enabled"):
+                continue
+            bb  = row["bb_price"]
+            our = row["our_price"]
+            rt  = rule["rule_type"]
+
+            if rt == "match_buybox" and bb:
+                suggested = bb
+            elif rt == "beat_buybox" and bb:
+                pct = float(rule.get("beat_pct") or 1.0)
+                suggested = round(bb * (1 - pct / 100), 2)
+            elif rt == "fixed":
+                suggested = float(rule.get("min_price") or our)
+            else:
+                continue
+
+            # Apply floor/ceiling
+            if rule.get("min_price") and suggested < rule["min_price"]:
+                suggested = rule["min_price"]
+            if rule.get("max_price") and suggested > rule["max_price"]:
+                suggested = rule["max_price"]
+
+            row["suggested"] = round(suggested, 2) if suggested != our else None
+            row["rule_type"] = rt
+
+        ctx = {
+            "rows":        buybox_rows,
+            "total":       len(buybox_rows),
+            "global_rule": global_rule,
+            "rules_by_sku": rules_by_sku,
+            "seller_id":   client.seller_id,
+            "nickname":    client.nickname,
+            "marketplace": client.marketplace_name,
+        }
+        return _templates.TemplateResponse(request, "partials/amazon_products_repricing.html", ctx)
+
+    except Exception as e:
+        logger.exception("[Amazon Repricing] Error")
+        return _templates.TemplateResponse(
+            request, "partials/amazon_products_repricing.html",
+            {"error": str(e)[:200], "rows": [], "total": 0,
+             "seller_id": seller_id or "", "nickname": "", "marketplace": ""}
+        )
+
+
+@router.post("/products/repricing/rule", response_class=JSONResponse)
+async def amazon_save_repricing_rule(
+    request:   Request,
+    seller_id: Optional[str] = Query(None),
+    rule_in:   RepricingRuleIn = None,
+):
+    """Guarda o actualiza una regla de repricing para seller_id+sku."""
+    import aiosqlite
+    from app.services.token_store import DATABASE_PATH
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        raise HTTPException(status_code=400, detail="Cuenta no encontrada")
+
+    if rule_in is None:
+        body = await request.json()
+        rule_in = RepricingRuleIn(**body)
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO amz_repricing_rules
+               (seller_id, sku, rule_type, beat_pct, min_price, max_price, enabled, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(seller_id, sku) DO UPDATE SET
+                   rule_type=excluded.rule_type,
+                   beat_pct=excluded.beat_pct,
+                   min_price=excluded.min_price,
+                   max_price=excluded.max_price,
+                   enabled=excluded.enabled,
+                   updated_at=CURRENT_TIMESTAMP""",
+            (client.seller_id, rule_in.sku, rule_in.rule_type,
+             rule_in.beat_pct, rule_in.min_price, rule_in.max_price,
+             1 if rule_in.enabled else 0),
+        )
+        await db.commit()
+
+    return JSONResponse({"ok": True})
+
+
+@router.post("/products/repricing/apply", response_class=JSONResponse)
+async def amazon_apply_repricing(
+    request:   Request,
+    seller_id: Optional[str] = Query(None),
+    body:      RepricingApplyIn = None,
+):
+    """Aplica precios nuevos a los SKUs seleccionados. Confirmación explícita requerida."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        raise HTTPException(status_code=400, detail="Cuenta no encontrada")
+
+    if body is None:
+        raw = await request.json()
+        body = RepricingApplyIn(**raw)
+
+    results = []
+    for upd in body.updates:
+        sku       = upd.get("sku", "")
+        new_price = float(upd.get("new_price", 0))
+        if not sku or new_price <= 0:
+            results.append({"sku": sku, "ok": False, "error": "Datos inválidos"})
+            continue
+        try:
+            resp = await client.update_listing_price(sku, new_price)
+            ok   = resp.get("status") == "ACCEPTED" or "issues" not in resp
+            results.append({"sku": sku, "ok": ok, "new_price": new_price})
+            _buybox_cache.pop(f"{client.seller_id}:{sku}", None)
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            results.append({"sku": sku, "ok": False, "error": str(e)[:100]})
+
+    await _audit(request, "repricing_apply",
+                 detail={"seller_id": client.seller_id, "count": len(results)})
+    return JSONResponse({"results": results})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEVOLUCIONES — Historial de reembolsos por SKU
+# ─────────────────────────────────────────────────────────────────────────────
+
+_refunds_cache: dict[str, tuple[float, list]] = {}
+_REFUNDS_TTL = 1800  # 30 min
+
+
+@router.get("/products/devoluciones", response_class=HTMLResponse)
+async def amazon_products_devoluciones(
+    request:   Request,
+    seller_id: Optional[str] = Query(None),
+    days:      int = Query(30, ge=7, le=90),
+    force:     bool = Query(False),
+):
+    """Devoluciones/reembolsos agrupados por SKU para los últimos N días."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return _render_no_account(request, "amazon_products_devoluciones.html")
+
+    cache_key = f"{client.seller_id}:{days}"
+    now_ts    = _time.time()
+    detail    = []
+
+    if not force:
+        cached = _refunds_cache.get(cache_key)
+        if cached:
+            ts, detail = cached
+            if now_ts - ts < _REFUNDS_TTL:
+                detail = detail  # use cached
+            else:
+                detail = []
+
+    if not detail:
+        try:
+            detail = await client.get_refunds_detail(days=days)
+            _refunds_cache[cache_key] = (_time.time(), detail)
+        except Exception as e:
+            logger.exception("[Amazon Devoluciones] Error")
+            return _templates.TemplateResponse(
+                request, "partials/amazon_products_devoluciones.html",
+                {"error": str(e)[:200], "by_sku": [], "total_count": 0,
+                 "total_amount": 0, "currency": "MXN", "days": days,
+                 "seller_id": client.seller_id, "nickname": client.nickname}
+            )
+
+    # Aggregate by SKU
+    from collections import defaultdict
+    sku_map: dict = defaultdict(lambda: {"count": 0, "qty": 0, "amount": 0.0,
+                                          "currency": "MXN", "orders": set()})
+    total_count  = 0
+    total_amount = 0.0
+    currency     = "MXN"
+
+    for ev in detail:
+        sku = ev.get("sku") or "—"
+        sku_map[sku]["count"]  += 1
+        sku_map[sku]["qty"]    += ev.get("qty", 0)
+        sku_map[sku]["amount"] += ev.get("amount", 0)
+        sku_map[sku]["currency"] = ev.get("currency", "MXN")
+        sku_map[sku]["orders"].add(ev.get("order_id", ""))
+        total_count  += 1
+        total_amount += ev.get("amount", 0)
+        currency      = ev.get("currency", "MXN")
+
+    by_sku = sorted([
+        {
+            "sku":      sku,
+            "count":    data["count"],
+            "qty":      data["qty"],
+            "amount":   round(data["amount"], 2),
+            "currency": data["currency"],
+            "orders":   len(data["orders"]),
+        }
+        for sku, data in sku_map.items()
+    ], key=lambda x: x["amount"], reverse=True)
+
+    # Enrich with listing title from BM/listings cache
+    listing_titles: dict = {}
+    try:
+        listings = await _get_listings_cached(client)
+        for item in listings:
+            sku_key  = item.get("sku", "")
+            summaries = item.get("summaries", [{}])
+            title    = (summaries[0] if summaries else {}).get("itemName", "") if summaries else ""
+            if sku_key and title:
+                listing_titles[sku_key] = title[:70]
+    except Exception:
+        pass
+
+    for row in by_sku:
+        row["title"] = listing_titles.get(row["sku"], "")
+
+    cached_ago = int(now_ts - _refunds_cache.get(cache_key, (now_ts,))[0])
+
+    ctx = {
+        "by_sku":       by_sku,
+        "total_count":  total_count,
+        "total_amount": round(total_amount, 2),
+        "currency":     currency,
+        "days":         days,
+        "force":        force,
+        "cached_ago":   cached_ago,
+        "seller_id":    client.seller_id,
+        "nickname":     client.nickname,
+        "marketplace":  client.marketplace_name,
+    }
+    return _templates.TemplateResponse(request, "partials/amazon_products_devoluciones.html", ctx)
