@@ -1,0 +1,108 @@
+{% if not rows %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <div class="text-4xl mb-3">🚀</div>
+    <p class="font-semibold text-gray-700">Sin lanzamientos registrados</p>
+    <p class="text-sm text-gray-400 mt-1">Los SKUs que publiques desde el wizard aparecerán aquí.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-4 text-left font-semibold">Producto</th>
+                    <th class="py-3 px-3 text-left font-semibold hidden md:table-cell">ASIN</th>
+                    <th class="py-3 px-3 text-right font-semibold">Precio</th>
+                    <th class="py-3 px-3 text-center font-semibold hidden md:table-cell">Estado</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Lanzado</th>
+                    <th class="py-3 px-3 text-center font-semibold">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                {% set display_asin = r.live_asin or r.asin %}
+                {% set display_title = r.live_title or r.product_title or r.sku %}
+                {% set display_price = r.live_price if r.live_price and r.live_price > 0 else r.launched_price %}
+                {% set live_status = r.live_status or 'ACTIVE' %}
+                <tr class="border-b border-gray-50 hover:bg-green-50/20 transition">
+                    <td class="py-2.5 px-4">
+                        <div class="flex items-center gap-2.5">
+                            {% if r.image_url %}
+                            <img src="{{ r.image_url }}" alt="" class="w-9 h-9 rounded object-contain bg-gray-50 border border-gray-100 shrink-0" loading="lazy">
+                            {% else %}
+                            <div class="w-9 h-9 rounded bg-green-100 flex items-center justify-center shrink-0 text-green-500 text-xs font-bold">AMZ</div>
+                            {% endif %}
+                            <div class="min-w-0">
+                                <p class="text-sm font-medium text-gray-800 truncate max-w-[240px]">{{ display_title }}</p>
+                                <p class="text-xs text-gray-400 font-mono mt-0.5">{{ r.sku }}</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 hidden md:table-cell">
+                        {% if display_asin %}
+                        <a href="https://www.amazon.com.mx/dp/{{ display_asin }}" target="_blank"
+                           class="text-xs text-orange-500 hover:text-orange-700 font-mono">{{ display_asin }}</a>
+                        {% else %}
+                        <span class="text-gray-300 text-xs">Pendiente</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right font-semibold text-gray-800">
+                        {% if display_price > 0 %}${{ "{:,.0f}".format(display_price) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center hidden md:table-cell">
+                        {% if live_status == 'ACTIVE' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium">Activo</span>
+                        {% elif live_status == 'DISCOVERABLE' %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-medium">Visible</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">{{ live_status or 'En proceso' }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell">
+                        {% if r.launched_at %}
+                        <span class="text-xs text-gray-400">{{ r.launched_at[:10] }}</span>
+                        {% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        <div class="flex items-center justify-center gap-1.5">
+                            {% if display_asin %}
+                            <a href="https://www.amazon.com.mx/dp/{{ display_asin }}" target="_blank"
+                               class="text-xs text-orange-500 hover:text-orange-700 font-medium transition whitespace-nowrap">
+                                Ver →
+                            </a>
+                            {% endif %}
+                            <a href="https://sellercentral.amazon.com.mx/inventory?search={{ r.sku | urlencode }}" target="_blank"
+                               class="text-xs bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 rounded px-1.5 py-0.5 font-medium transition whitespace-nowrap">
+                                ✏️ SC
+                            </a>
+                            <button onclick="window._amzLanzarUpdatePrice('{{ r.sku }}', {{ display_price or 0 }}, '{{ seller_id }}')"
+                                    class="text-xs text-gray-400 hover:text-orange-600 transition" title="Actualizar precio">
+                                💲
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% if pages > 1 %}
+    <div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400">
+        <span>{{ total }} lanzados · Página {{ page }} de {{ pages }}</span>
+        <div class="flex gap-1">
+            {% if page > 1 %}
+            <button onclick="window._loadAmzLanzados({{ page - 1 }})"
+                    class="px-2.5 py-1 bg-white border border-gray-200 rounded hover:border-orange-400 hover:text-orange-600 transition">← Anterior</button>
+            {% endif %}
+            {% if page < pages %}
+            <button onclick="window._loadAmzLanzados({{ page + 1 }})"
+                    class="px-2.5 py-1 bg-white border border-gray-200 rounded hover:border-orange-400 hover:text-orange-600 transition">Siguiente →</button>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    <div class="px-4 py-2 bg-green-50 border-t border-green-100">
+        <p class="text-xs text-green-700">✓ {{ total }} SKU{{ 's' if total != 1 else '' }} lanzado{{ 's' if total != 1 else '' }} en Amazon {{ marketplace }} · Los cambios en SC pueden tardar hasta 15 min en reflejarse.</p>
+    </div>
+</div>
+{% endif %}

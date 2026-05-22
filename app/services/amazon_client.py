@@ -1037,6 +1037,85 @@ class AmazonClient:
             logger.warning(f"[Amazon] Error obteniendo catalog para ASIN {asin}: {e}")
             return None
 
+    async def search_catalog(self, keyword: str = "", identifiers: Optional[list] = None) -> list:
+        """
+        Busca productos en el catálogo Amazon por UPC/EAN o keyword.
+
+        Flujo 1 (ASIN match): pasar identifiers=[upc] para encontrar el ASIN existente.
+        Flujo 2 (producto nuevo): pasar keyword=título para verificar si ya existe.
+
+        Rate limit: 2 req/s — Catalog Items API.
+        """
+        try:
+            params: list = [
+                ("marketplaceIds", self.marketplace_id),
+                ("includedData", "summaries,images"),
+            ]
+            if identifiers:
+                for id_ in identifiers:
+                    params.append(("identifiers", id_))
+                params.append(("identifiersType", "UPC"))
+            else:
+                params.append(("keywords", keyword[:200]))
+                params.append(("pageSize", "10"))
+            result = await self._request("GET", "/catalog/2022-04-01/items", params=params)
+            items = result.get("items", []) if isinstance(result, dict) else []
+            parsed = []
+            for item in items[:10]:
+                summaries = item.get("summaries", [{}])
+                s = summaries[0] if summaries else {}
+                img_url = ""
+                for img_set in item.get("images", []):
+                    for img in img_set.get("images", []):
+                        if img.get("variant") == "MAIN":
+                            img_url = img.get("link", "")
+                            break
+                    if img_url:
+                        break
+                parsed.append({
+                    "asin":         item.get("asin", ""),
+                    "title":        s.get("itemName", ""),
+                    "brand":        s.get("brand", ""),
+                    "product_type": s.get("productType", "PRODUCT"),
+                    "image_url":    img_url,
+                })
+            return parsed
+        except Exception as e:
+            logger.warning(f"[Amazon] Error buscando catálogo '{keyword}': {e}")
+            return []
+
+    async def create_listing_full(
+        self,
+        sku: str,
+        product_type: str,
+        attributes: dict,
+        requirements: str = "LISTING_OFFER_ONLY",
+    ) -> dict:
+        """
+        Crea o actualiza un listing completo via Listings Items API (PUT).
+
+        requirements:
+          - "LISTING_OFFER_ONLY" → agrega oferta a ASIN existente (Flujo 1)
+          - "LISTING"            → crea producto nuevo (Flujo 2, Amazon asigna ASIN)
+
+        Respuesta incluye 'status' ('ACCEPTED'/'INVALID') e 'issues' si hay errores.
+        El ASIN asignado llega en identifiers[marketplace_id].asin cuando status=ACCEPTED.
+        """
+        body = {
+            "productType": product_type,
+            "requirements": requirements,
+            "attributes": attributes,
+        }
+        return await self._request(
+            "PUT",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={
+                "marketplaceIds": self.marketplace_id,
+                "issueLocale": "es_MX",
+            },
+            json_body=body,
+        )
+
     async def get_listing_offers(self, sku: str) -> Optional[dict]:
         """
         Obtiene las ofertas competitivas de un listing propio (por SellerSKU).

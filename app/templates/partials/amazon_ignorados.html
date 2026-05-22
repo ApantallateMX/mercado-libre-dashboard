@@ -1,0 +1,57 @@
+{% if not rows %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <div class="text-4xl mb-3">🚫</div>
+    <p class="font-semibold text-gray-700">Sin SKUs ignorados</p>
+    <p class="text-sm text-gray-400 mt-1">Los SKUs que ignores en "Sin Lanzar" aparecerán aquí.</p>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow overflow-hidden">
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-gray-50 border-b border-gray-200 text-xs text-gray-500 uppercase tracking-wide">
+                    <th class="py-3 px-4 text-left font-semibold">SKU</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">Stock BM</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Ignorado el</th>
+                    <th class="py-3 px-3 text-center font-semibold">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr class="border-b border-gray-50 hover:bg-gray-50 transition">
+                    <td class="py-2.5 px-4">
+                        <div class="flex items-center gap-2.5">
+                            {% if r.image_url %}
+                            <img src="{{ r.image_url }}" alt="" class="w-9 h-9 rounded object-contain bg-gray-50 border border-gray-100 shrink-0" loading="lazy">
+                            {% else %}
+                            <div class="w-9 h-9 rounded bg-gray-100 flex items-center justify-center shrink-0 text-gray-400 text-xs font-bold">BM</div>
+                            {% endif %}
+                            <div>
+                                <p class="text-sm font-medium text-gray-700 truncate max-w-[240px]">{{ r.product_title or r.sku }}</p>
+                                <p class="text-xs text-gray-400 font-mono">{{ r.sku }}</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden md:table-cell">
+                        {% if r.avail_qty > 0 %}<span class="text-gray-600">{{ r.avail_qty }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-right hidden lg:table-cell">
+                        {% if r.created_at %}<span class="text-xs text-gray-400">{{ r.created_at[:10] }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        <button onclick="window._amzRestoreGap('{{ r.sku }}', '{{ seller_id }}')"
+                                class="text-xs text-blue-500 hover:text-blue-700 border border-blue-200 hover:border-blue-400 px-2.5 py-1.5 rounded-lg transition"
+                                title="Restaurar a Sin Lanzar">
+                            ↩ Restaurar
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="px-4 py-2 bg-gray-50 border-t border-gray-100">
+        <p class="text-xs text-gray-400">{{ total }} SKU{{ 's' if total != 1 else '' }} ignorado{{ 's' if total != 1 else '' }}</p>
+    </div>
+</div>
+{% endif %}

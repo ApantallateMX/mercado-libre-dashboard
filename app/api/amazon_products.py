@@ -4275,6 +4275,7 @@ async def amazon_sin_lanzar(
         "cached_ago":    cached_ago,
         "force":         force,
         "marketplace":   client.marketplace_name,
+        "seller_id":     client.seller_id,
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
 

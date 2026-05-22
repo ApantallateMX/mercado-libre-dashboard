@@ -725,6 +725,34 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_suggestions_to ON suggestions(to_account, status)"
         )
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: amz_sku_gaps — SKUs con stock BM sin lanzar en Amazon
+        # Persiste status (unlaunched/launched/ignored) + ASIN capturado al crear
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_sku_gaps (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id        TEXT NOT NULL,
+                sku              TEXT NOT NULL,
+                asin             TEXT NOT NULL DEFAULT '',
+                product_title    TEXT NOT NULL DEFAULT '',
+                brand            TEXT NOT NULL DEFAULT '',
+                image_url        TEXT NOT NULL DEFAULT '',
+                avail_qty        INTEGER NOT NULL DEFAULT 0,
+                cost_usd         REAL NOT NULL DEFAULT 0,
+                cost_mxn         REAL NOT NULL DEFAULT 0,
+                suggested_price  REAL NOT NULL DEFAULT 0,
+                upc              TEXT NOT NULL DEFAULT '',
+                status           TEXT NOT NULL DEFAULT 'unlaunched',
+                launched_price   REAL NOT NULL DEFAULT 0,
+                launched_at      TIMESTAMP DEFAULT NULL,
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(seller_id, sku)
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_amz_sku_gaps_seller ON amz_sku_gaps(seller_id, status)"
+        )
         await db.commit()
 
 
