@@ -855,10 +855,20 @@
                       class="flex-1 text-xs bg-purple-500 hover:bg-purple-600 active:bg-purple-700 text-white font-semibold py-2 rounded-lg transition">
                 ✨ Generar 8 imágenes con IA
               </button>
+              <button onclick="window._wizGenHiggsfield()" id="wiz-btn-higgsfield"
+                      class="text-xs bg-pink-500 hover:bg-pink-600 active:bg-pink-700 text-white font-semibold px-3 py-2 rounded-lg transition whitespace-nowrap"
+                      title="Generar foto lifestyle con Higgsfield AI">
+                🌟 Lifestyle
+              </button>
               <button onclick="window._wizGenVideo()" id="wiz-btn-gen-video"
                       class="text-xs bg-indigo-500 hover:bg-indigo-600 active:bg-indigo-700 text-white font-semibold px-3 py-2 rounded-lg transition whitespace-nowrap">
                 🎬 Video
               </button>
+            </div>
+            <!-- Higgsfield status -->
+            <div id="wiz-higgsfield-status" class="hidden text-[10px] text-pink-600 font-medium mb-1.5 flex items-center gap-1.5">
+              <svg class="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+              <span id="wiz-higgsfield-status-text">Generando lifestyle…</span>
             </div>
             <!-- AI image grid — thumbnails render here -->
             <div id="wiz-ai-grid" class="grid grid-cols-4 gap-1.5"></div>
@@ -1109,6 +1119,7 @@
         '<td class="px-3 py-3"><div class="flex items-center justify-center gap-1.5">' +
           '<button onclick="window._openWizard(' + gJson + ')" ' +
             'class="text-xs bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold px-2.5 py-1.5 rounded-lg transition">Lanzar</button>' +
+          '<button onclick="event.stopPropagation();openHiggsfieldModal(\'' + (g.product_title||g.sku).replace(/\\/g,'\\\\').replace(/'/g,"&#39;") + '\',\'' + (g.image_url||'') + '\',\'' + g.sku + '\')" class="text-xs border border-purple-200 hover:border-purple-400 text-purple-600 hover:text-purple-700 px-2.5 py-1.5 rounded-lg transition whitespace-nowrap" title="Generar contenido con IA">✨ IA</button>' +
           (g.status === 'unlaunched'
             ? '<button onclick="window._openRegisterLaunched(\'' + g.sku + '\')" class="text-xs text-green-600 hover:text-green-800 border border-green-200 hover:border-green-400 px-2 py-1.5 rounded-lg transition whitespace-nowrap" title="Ya está publicado en ML — registrar">✅ Ya en ML</button>' +
               '<button onclick="window._ignoreGap(\'' + g.sku + '\')" class="text-xs text-gray-400 hover:text-red-500 border border-gray-200 hover:border-red-300 px-2 py-1.5 rounded-lg transition" title="Ignorar">✕</button>'
@@ -2425,6 +2436,58 @@
       _renderSelectedStrip();
       _wizRenderAIGrid();
       _wizRefreshBMGrid();
+    }
+  };
+
+  // ── Higgsfield lifestyle image — genera 1 foto lifestyle y la agrega al grid
+  window._wizGenHiggsfield = async function() {
+    var btn    = document.getElementById('wiz-btn-higgsfield');
+    var status = document.getElementById('wiz-higgsfield-status');
+    var stText = document.getElementById('wiz-higgsfield-status-text');
+    var errEl  = document.getElementById('wiz-img-gen-err');
+    errEl.classList.add('hidden');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Generando…'; }
+    status.classList.remove('hidden');
+    var gap = _wiz.gap || {};
+    var thumb = (_wiz.reference_images || [])[0] || (_wiz.selected_images || [])[0] || gap.image_url || '';
+    try {
+      var resp = await fetch('/api/higgsfield/generate', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ mode:'image', title: gap.product_title || gap.sku || '', thumbnail_url: thumb, sku: gap.sku || '' })
+      });
+      var d = await resp.json();
+      if (!resp.ok || d.error) throw new Error(d.error || d.detail || 'Error Higgsfield');
+      // Poll if pending
+      var requestId = d.request_id;
+      var imageUrl  = d.image_url || null;
+      if (!imageUrl && requestId) {
+        stText.textContent = 'Procesando…';
+        var tries = 0;
+        while (tries < 60 && !imageUrl) {
+          await new Promise(function(r){ setTimeout(r, 3000); });
+          tries++;
+          var pr = await fetch('/api/higgsfield/status/' + requestId);
+          var pd = await pr.json();
+          if (pd.status === 'succeeded' || pd.status === 'completed') { imageUrl = pd.image_url; break; }
+          if (pd.status === 'failed') throw new Error(pd.error || 'Falló generación');
+          stText.textContent = 'Procesando… ' + (tries * 3) + 's';
+        }
+        if (!imageUrl) throw new Error('Timeout — reintenta');
+      }
+      // Add to ai_images and selected
+      _wiz.ai_images = _wiz.ai_images || [];
+      _wiz.ai_images.unshift({ url: imageUrl, prompt: 'Higgsfield lifestyle', mode: 'higgsfield' });
+      _wizAddImageToSelected(imageUrl, 0);
+      _wizRenderAIGrid();
+      stText.textContent = '✓ Lifestyle agregada';
+      setTimeout(function(){ status.classList.add('hidden'); }, 3000);
+    } catch(e) {
+      status.classList.add('hidden');
+      errEl.textContent = '⚠ Higgsfield: ' + e.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '🌟 Lifestyle'; }
     }
   };
 

@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-22 — FEAT: Higgsfield AI — Generación de contenido visual en todas las plataformas
+
+### Resumen
+Integración completa de Higgsfield AI para generación de fotos lifestyle y videos de producto.
+Botón ✨ IA disponible en todos los lugares donde aparecen productos:
+ML Top Ventas, ML Todos los productos, Amazon Listings, Gaps/Sin publicar, y el Wizard de lanzamiento.
+
+### Fases implementadas
+
+**Phase 1 — Botón ✨ IA en tablas de producto**
+- `app/services/higgsfield_client.py` (nuevo): cliente async — `check_credits()`, `generate_image()`,
+  `generate_video()`, `get_status()`, `upload_from_url()`, prompt builders.
+  URL base correcta: `https://platform.higgsfield.ai`. Auth: `Authorization: Key {id}:{secret}`.
+- `app/api/higgsfield.py` (nuevo): router `/api/higgsfield` — `GET /check`, `POST /generate`,
+  `GET /status/{id}`. Mode "image" usa `soul/standard`; mode "video" usa `dop/lite` (5s).
+- `app/templates/partials/higgsfield_modal.html` (nuevo): modal global con selector de modo
+  (Foto ~8cr / Video ~6cr), prompt customizable, polling cada 3s, descarga, "Otra versión".
+- `app/templates/base.html`: incluye el modal antes de `</body>`.
+- Botones ✨ agregados en: `products_top_sellers.html`, `products_full.html`,
+  `amazon_products_catalog.html`, `app/static/js/productos.js` (renderActions).
+- `app/config.py`: `HIGGSFIELD_KEY_ID` y `HIGGSFIELD_SECRET` desde env.
+- Railway: vars `HIGGSFIELD_KEY_ID` + `HIGGSFIELD_SECRET` + `SECRET_KEY` seteadas via GraphQL API.
+
+**Phase 2 — Botón ✨ IA en Gaps/Sin publicar**
+- `lanzar_gaps.html` línea ~1112: botón `✨ IA` en la celda de acción de cada gap,
+  abre `openHiggsfieldModal()` con `product_title`, `image_url`, `sku` del gap.
+
+**Phase 3 — Higgsfield en wizard de lanzamiento (paso Fotos)**
+- `lanzar_gaps.html` botón `🌟 Lifestyle` junto a "Generar 8 imágenes con IA".
+- `window._wizGenHiggsfield()`: llama `/api/higgsfield/generate?mode=image`, hace polling,
+  agrega la imagen generada a `_wiz.ai_images` y la inserta en `selected_images` como portada.
+  Muestra spinner inline y error si falla.
+
+### Modelos Higgsfield
+- `higgsfield-ai/soul/standard` → foto lifestyle (imagen única, ~8 créditos)
+- `higgsfield-ai/dop/lite` → video 5s desde imagen (requiere upload previo, ~6 créditos)
+
+---
+
 ## 2026-05-21 — FIX: Amazon órdenes recientes — 429 QuotaExceeded
 
 ### Problema
