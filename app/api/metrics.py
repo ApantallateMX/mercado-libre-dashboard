@@ -910,7 +910,7 @@ async def get_amazon_daily_sales(
 # Caché de órdenes crudas — compartida entre todos los endpoints Amazon
 _amazon_orders_cache: dict[str, tuple[float, list]] = {}
 _amazon_orders_locks: dict[str, asyncio.Lock] = {}
-_AMAZON_ORDERS_TTL = 300  # 5 minutos
+_AMAZON_ORDERS_TTL = 900  # 15 minutos
 
 # Caché para Sales API — métricas diarias (totalSales OPS, unitCount, orderCount)
 _amazon_metrics_cache: dict[str, tuple[float, list]] = {}
@@ -944,27 +944,27 @@ async def _get_cached_amazon_orders(client, date_from: str, date_to: str) -> lis
             if _time.time() - ts < _AMAZON_ORDERS_TTL:
                 return orders
 
-        # ── Call 1: Shipped + Unshipped + PartiallyShipped ────────────────
-        orders_active = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
-
-        # ── Call 2: Pending por separado ──────────────────────────────────
-        # SP-API quirk: mezclar Pending+Shipped en mismo query devuelve SOLO Pending.
-        # Por eso se hace una segunda llamada separada y se mergean los resultados.
-        # Esto permite que "Hoy" refleje todas las órdenes nuevas (aún en Pending).
+        # ── Intentar fetch — si hay 429 y tenemos datos obsoletos, usarlos ──
         try:
-            orders_pending = await client.fetch_orders_range(
-                date_from=date_from, date_to=date_to, statuses=["Pending"]
-            )
-            # Deduplicar por AmazonOrderId (algunos pueden aparecer en ambas listas)
-            active_ids = {o.get("AmazonOrderId") for o in orders_active}
-            new_pending = [o for o in orders_pending if o.get("AmazonOrderId") not in active_ids]
-            all_orders = orders_active + new_pending
-        except Exception:
-            # Si el fetch de Pending falla (429, etc.) usar solo los activos
-            all_orders = orders_active
-
-        _amazon_orders_cache[cache_key] = (_time.time(), all_orders)
-        return all_orders
+            orders_active = await client.fetch_orders_range(date_from=date_from, date_to=date_to)
+            try:
+                orders_pending = await client.fetch_orders_range(
+                    date_from=date_from, date_to=date_to, statuses=["Pending"]
+                )
+                active_ids = {o.get("AmazonOrderId") for o in orders_active}
+                new_pending = [o for o in orders_pending if o.get("AmazonOrderId") not in active_ids]
+                all_orders = orders_active + new_pending
+            except Exception:
+                all_orders = orders_active
+            _amazon_orders_cache[cache_key] = (_time.time(), all_orders)
+            return all_orders
+        except Exception as exc:
+            exc_str = str(exc)
+            if ("429" in exc_str or "QuotaExceeded" in exc_str) and cache_key in _amazon_orders_cache:
+                # Datos obsoletos disponibles — sirven mejor que un error en bucle
+                _, stale = _amazon_orders_cache[cache_key]
+                return stale
+            raise
 
 
 async def _orders_api_fallback_metrics(client, date_from: str, date_to: str) -> list:
