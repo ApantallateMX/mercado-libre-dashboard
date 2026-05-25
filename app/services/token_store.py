@@ -753,6 +753,30 @@ async def init_db():
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_amz_sku_gaps_seller ON amz_sku_gaps(seller_id, status)"
         )
+        # TABLA: amz_gap_scan_status — estado del scan background por seller_id
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_gap_scan_status (
+                seller_id    TEXT PRIMARY KEY,
+                status       TEXT NOT NULL DEFAULT 'idle',
+                started_at   TEXT DEFAULT NULL,
+                finished_at  TEXT DEFAULT NULL,
+                bm_total     INTEGER DEFAULT 0,
+                amazon_active INTEGER DEFAULT 0,
+                gaps_found   INTEGER DEFAULT 0,
+                error        TEXT DEFAULT NULL
+            )
+        """)
+        # Columnas adicionales en amz_sku_gaps (pueden ya existir — ignorar error)
+        for _col_sql in [
+            "ALTER TABLE amz_sku_gaps ADD COLUMN category TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE amz_sku_gaps ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE amz_sku_gaps ADD COLUMN margin_pct REAL DEFAULT NULL",
+            "ALTER TABLE amz_sku_gaps ADD COLUMN last_scan TEXT DEFAULT NULL",
+        ]:
+            try:
+                await db.execute(_col_sql)
+            except Exception:
+                pass  # columna ya existe
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_repricing_rules (

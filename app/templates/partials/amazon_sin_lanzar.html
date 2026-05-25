@@ -49,18 +49,45 @@
         <p class="text-[10px] text-gray-400 mt-0.5">total con stock ≥ 1</p>
     </div>
     <div class="bg-white rounded-xl shadow p-4">
-        <p class="text-xs text-gray-400 mb-1">Caché</p>
-        <p class="text-lg font-bold text-gray-600">
-            {% if cached_ago < 60 %}< 1 min
+        <p class="text-xs text-gray-400 mb-1">Último scan</p>
+        <p class="text-lg font-bold
+            {% if scan_status == 'running' %}text-orange-500 animate-pulse
+            {% elif scan_status == 'error' %}text-red-500
+            {% elif scan_status == 'never' %}text-gray-300
+            {% else %}text-gray-600{% endif %}">
+            {% if scan_status == 'running' %}En progreso…
+            {% elif scan_status == 'never' %}Nunca
+            {% elif scan_status == 'error' %}Error
+            {% elif cached_ago < 60 %}< 1 min
             {% elif cached_ago < 3600 %}{{ (cached_ago // 60) }} min
             {% else %}{{ (cached_ago // 3600) }} h{% endif %}
         </p>
         <p class="text-[10px] text-gray-400 mt-0.5">
-            <button onclick="window._loadAmzSinLanzar(1,true)"
-                    class="text-orange-500 hover:underline">↻ Actualizar</button>
+            <button id="amz-scan-btn"
+                    onclick="window._amzTriggerScan('{{ seller_id }}')"
+                    class="text-orange-500 hover:underline disabled:text-gray-300 disabled:cursor-not-allowed">
+                🔍 Escanear
+            </button>
         </p>
     </div>
 </div>
+
+{% if scan_status == 'running' %}
+<div id="amz-scan-banner" class="bg-orange-50 border border-orange-200 rounded-xl p-3 mb-4 flex items-center gap-3">
+    <div class="w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full animate-spin flex-shrink-0"></div>
+    <div>
+        <p class="text-sm font-semibold text-orange-700">Escaneo en progreso…</p>
+        <p class="text-xs text-orange-400 mt-0.5">Comparando BM vs Amazon. Se actualizará al terminar.</p>
+    </div>
+</div>
+{% elif scan_status == 'error' and scan_error %}
+<div class="bg-red-50 border border-red-200 rounded-xl p-3 mb-4">
+    <p class="text-sm font-semibold text-red-700">⚠ Error en el último escaneo</p>
+    <p class="text-xs text-red-500 mt-1">{{ scan_error }}</p>
+    <button onclick="window._amzTriggerScan('{{ seller_id }}')"
+            class="mt-2 text-xs text-orange-500 hover:underline">Reintentar →</button>
+</div>
+{% endif %}
 
 <!-- ─── Búsqueda ─────────────────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow p-3 mb-4 flex items-center gap-3">
@@ -80,11 +107,31 @@
 
 <!-- ─── Tabla ─────────────────────────────────────────────────────────────────── -->
 {% if not gaps %}
+{% if scan_status == 'never' %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <div class="text-5xl mb-4">🔍</div>
+    <p class="font-semibold text-gray-700 text-lg">Nunca escaneado</p>
+    <p class="text-sm text-gray-400 mt-2 mb-6 max-w-xs mx-auto">
+        Compara el inventario de BinManager con tus listings Amazon para descubrir productos que puedes lanzar.
+    </p>
+    <button onclick="window._amzTriggerScan('{{ seller_id }}')"
+            class="px-6 py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-semibold text-sm transition">
+        🔍 Escanear ahora
+    </button>
+</div>
+{% elif scan_status == 'running' %}
+<div class="bg-white rounded-xl shadow py-16 text-center">
+    <div class="w-10 h-10 border-4 border-orange-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+    <p class="font-semibold text-gray-700">Escaneo en progreso…</p>
+    <p class="text-sm text-gray-400 mt-1">Espera un momento, comparando BM con Amazon.</p>
+</div>
+{% else %}
 <div class="bg-white rounded-xl shadow py-16 text-center">
     <div class="text-4xl mb-3">🚀</div>
     <p class="font-semibold text-gray-700">¡Todos los SKUs de BM ya están en Amazon!</p>
-    <p class="text-sm text-gray-400 mt-1">No se encontraron gaps en este momento.</p>
+    <p class="text-sm text-gray-400 mt-1">No se encontraron gaps. <button onclick="window._amzTriggerScan('{{ seller_id }}')" class="text-orange-500 hover:underline text-sm">Re-escanear</button></p>
 </div>
+{% endif %}
 {% else %}
 <div class="bg-white rounded-xl shadow overflow-hidden">
     <div class="overflow-x-auto">
@@ -304,6 +351,52 @@
       .then(function(r){ return r.text(); })
       .then(function(html){ cont.innerHTML = html; });
   };
+
+  // ── Trigger background scan ───────────────────────────────────────────────
+  var _amzScanInterval = null;
+
+  window._amzTriggerScan = function(sellerId) {
+    var sid = sellerId || _currentSellerId;
+    var btn = document.getElementById('amz-scan-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Iniciando…'; }
+    fetch('/api/amazon/lanzar/scan?seller_id=' + encodeURIComponent(sid), { method: 'POST' })
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.status === 'started' || d.status === 'running') {
+          window._amzPollScan(sid);
+        } else {
+          if (btn) { btn.disabled = false; btn.textContent = '🔍 Escanear'; }
+        }
+      })
+      .catch(function(){
+        if (btn) { btn.disabled = false; btn.textContent = '🔍 Escanear'; }
+      });
+  };
+
+  window._amzPollScan = function(sellerId) {
+    var sid = sellerId || _currentSellerId;
+    if (_amzScanInterval) clearInterval(_amzScanInterval);
+    _amzScanInterval = setInterval(function(){
+      fetch('/api/amazon/lanzar/scan/status?seller_id=' + encodeURIComponent(sid))
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d.status !== 'running') {
+            clearInterval(_amzScanInterval);
+            _amzScanInterval = null;
+            window._loadAmzSinLanzar(1);
+          }
+        })
+        .catch(function(){
+          clearInterval(_amzScanInterval);
+          _amzScanInterval = null;
+        });
+    }, 3000);
+  };
+
+  // Auto-start polling if scan was already running when page loaded
+  {% if scan_status == 'running' %}
+  window._amzPollScan('{{ seller_id }}');
+  {% endif %}
 })();
 </script>
 

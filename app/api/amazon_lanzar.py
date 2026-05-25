@@ -5,10 +5,12 @@ Flujo 1: SKU con ASIN existente → LISTING_OFFER_ONLY (solo agrega oferta)
 Flujo 2: SKU sin ASIN            → LISTING (crea producto, Amazon asigna ASIN)
 Flujo 3: Lanzados                → editar/actualizar listing activo
 """
+import asyncio
 import json
 import logging
 import math
 import time as _time
+from datetime import datetime
 from typing import Optional
 
 import aiosqlite
@@ -23,6 +25,240 @@ from app.services.amazon_client import get_amazon_client
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/amazon/lanzar", tags=["amazon-lanzar"])
 _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCAN BACKGROUND — Gap BM → Amazon (mismo patrón que ML Lanzador)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_amz_scan_locks: dict[str, asyncio.Lock] = {}
+
+_AMZ_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-FLX01", "-FLX02")
+
+
+def _amz_base(sku: str) -> str:
+    u = (sku or "").upper()
+    for s in _AMZ_SUFFIXES:
+        if u.endswith(s):
+            return u[:-len(s)]
+    return u
+
+
+async def _run_amz_gap_scan(seller_id: str) -> None:
+    """Background task: compara BM stock vs Amazon activos → actualiza amz_sku_gaps."""
+    if seller_id not in _amz_scan_locks:
+        _amz_scan_locks[seller_id] = asyncio.Lock()
+    lock = _amz_scan_locks[seller_id]
+    if lock.locked():
+        return
+
+    async with lock:
+        logger.info(f"[AMZ Gap Scan] Iniciando para seller {seller_id}")
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            await db.execute(
+                """INSERT INTO amz_gap_scan_status (seller_id, status, started_at, finished_at, error)
+                   VALUES (?, 'running', ?, NULL, NULL)
+                   ON CONFLICT(seller_id) DO UPDATE SET
+                       status='running', started_at=excluded.started_at,
+                       finished_at=NULL, error=NULL""",
+                (seller_id, datetime.utcnow().isoformat()),
+            )
+            await db.commit()
+
+        try:
+            client = await get_amazon_client(seller_id=seller_id)
+            if not client:
+                raise Exception("Cuenta Amazon no encontrada")
+
+            from app.services.binmanager_client import get_shared_bm
+            bm_cli = await get_shared_bm()
+
+            # Fetch en paralelo
+            bm_items, listings = await asyncio.gather(
+                bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC"),
+                client.get_all_listings(),
+            )
+
+            # Construir set de base-SKUs activos en Amazon
+            amazon_base_skus: set[str] = set()
+            for listing in listings:
+                sku = listing.get("sku", "")
+                if not sku:
+                    continue
+                summaries = listing.get("summaries", [])
+                is_active = any(s.get("status") == "ACTIVE" for s in summaries)
+                if is_active:
+                    amazon_base_skus.add(sku.upper())
+                    base = _amz_base(sku)
+                    if base:
+                        amazon_base_skus.add(base)
+
+            amazon_active = sum(
+                1 for l in listings
+                if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
+            )
+
+            FX = 18.5
+            now_iso = datetime.utcnow().isoformat()
+            gaps: list[dict] = []
+            current_bm_skus: set[str] = set()
+
+            for item in bm_items:
+                bm_sku = (item.get("SKU") or "").strip()
+                if not bm_sku:
+                    continue
+                avail_qty = int(item.get("AvailableQTY") or item.get("TotalQty") or 0)
+                if avail_qty <= 0:
+                    continue
+
+                bm_sku_up = bm_sku.upper()
+                current_bm_skus.add(bm_sku_up)
+
+                already = bm_sku_up in amazon_base_skus or any(
+                    (bm_sku_up + sfx) in amazon_base_skus for sfx in _AMZ_SUFFIXES
+                )
+                if already:
+                    continue
+
+                cost_usd = float(
+                    item.get("LastRetailPricePurchaseHistory") or item.get("AvgCostQTY") or 0
+                )
+                cost_mxn = round(cost_usd * FX, 2) if cost_usd > 0 else 0
+                price_sug = round(cost_mxn / 0.62, 0) if cost_mxn > 0 else 0
+                margin_pct = None
+                if cost_mxn > 0 and price_sug > 0:
+                    margin_pct = round(
+                        (price_sug - cost_mxn - price_sug * 0.18) / price_sug * 100, 1
+                    )
+
+                gaps.append({
+                    "seller_id":      seller_id,
+                    "sku":            bm_sku,
+                    "product_title":  (item.get("Title") or item.get("Description") or "")[:120],
+                    "brand":          item.get("Brand") or "",
+                    "model":          item.get("Model") or "",
+                    "category":       item.get("CategoryName") or "",
+                    "image_url":      item.get("ImageURL") or "",
+                    "upc":            item.get("UPC") or item.get("Upc") or "",
+                    "avail_qty":      avail_qty,
+                    "cost_usd":       round(cost_usd, 2),
+                    "cost_mxn":       cost_mxn,
+                    "suggested_price": price_sug,
+                    "margin_pct":     margin_pct,
+                    "last_scan":      now_iso,
+                })
+
+            # ── Guardar en DB ──────────────────────────────────────────────
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                # 1. Eliminar unlaunched que ya no tienen stock en BM
+                if current_bm_skus:
+                    placeholders = ",".join("?" * len(current_bm_skus))
+                    await db.execute(
+                        f"""DELETE FROM amz_sku_gaps
+                            WHERE seller_id=? AND status='unlaunched'
+                            AND UPPER(sku) NOT IN ({placeholders})""",
+                        [seller_id] + list(current_bm_skus),
+                    )
+
+                # 2. Eliminar unlaunched que ahora están activos en Amazon
+                for chunk_s in range(0, len(amazon_base_skus), 500):
+                    chunk = list(amazon_base_skus)[chunk_s:chunk_s + 500]
+                    if chunk:
+                        ph = ",".join("?" * len(chunk))
+                        await db.execute(
+                            f"""DELETE FROM amz_sku_gaps
+                                WHERE seller_id=? AND status='unlaunched'
+                                AND UPPER(sku) IN ({ph})""",
+                            [seller_id] + chunk,
+                        )
+
+                # 3. Upsert gaps (no toca los ignored ni launched)
+                for g in gaps:
+                    await db.execute(
+                        """INSERT INTO amz_sku_gaps
+                               (seller_id, sku, product_title, brand, model, category,
+                                image_url, upc, avail_qty, cost_usd, cost_mxn,
+                                suggested_price, margin_pct, last_scan, status)
+                           VALUES
+                               (:seller_id,:sku,:product_title,:brand,:model,:category,
+                                :image_url,:upc,:avail_qty,:cost_usd,:cost_mxn,
+                                :suggested_price,:margin_pct,:last_scan,'unlaunched')
+                           ON CONFLICT(seller_id, sku) DO UPDATE SET
+                               product_title=excluded.product_title,
+                               brand=excluded.brand, model=excluded.model,
+                               category=excluded.category, image_url=excluded.image_url,
+                               upc=excluded.upc, avail_qty=excluded.avail_qty,
+                               cost_usd=excluded.cost_usd, cost_mxn=excluded.cost_mxn,
+                               suggested_price=excluded.suggested_price,
+                               margin_pct=excluded.margin_pct, last_scan=excluded.last_scan
+                           WHERE amz_sku_gaps.status='unlaunched'""",
+                        g,
+                    )
+
+                # 4. Actualizar estado del scan
+                await db.execute(
+                    """INSERT INTO amz_gap_scan_status
+                           (seller_id, status, finished_at, bm_total, amazon_active, gaps_found)
+                       VALUES (?, 'done', ?, ?, ?, ?)
+                       ON CONFLICT(seller_id) DO UPDATE SET
+                           status='done', finished_at=excluded.finished_at,
+                           bm_total=excluded.bm_total, amazon_active=excluded.amazon_active,
+                           gaps_found=excluded.gaps_found, error=NULL""",
+                    (seller_id, datetime.utcnow().isoformat(),
+                     len(bm_items), amazon_active, len(gaps)),
+                )
+                await db.commit()
+
+            logger.info(
+                f"[AMZ Gap Scan] {seller_id}: {len(gaps)} gaps, "
+                f"{len(bm_items)} BM SKUs, {amazon_active} Amazon activos"
+            )
+
+        except Exception as exc:
+            logger.exception(f"[AMZ Gap Scan] Error para seller {seller_id}")
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                await db.execute(
+                    """INSERT INTO amz_gap_scan_status (seller_id, status, finished_at, error)
+                       VALUES (?, 'error', ?, ?)
+                       ON CONFLICT(seller_id) DO UPDATE SET
+                           status='error', finished_at=excluded.finished_at, error=excluded.error""",
+                    (seller_id, datetime.utcnow().isoformat(), str(exc)[:300]),
+                )
+                await db.commit()
+
+
+@router.post("/scan", response_class=JSONResponse)
+async def trigger_amz_scan(
+    seller_id: Optional[str] = Query(None),
+):
+    """Lanza el escaneo de gaps BM→Amazon en background."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    sid = client.seller_id
+    if sid in _amz_scan_locks and _amz_scan_locks[sid].locked():
+        return JSONResponse({"status": "running"})
+    asyncio.create_task(_run_amz_gap_scan(sid))
+    return JSONResponse({"status": "started", "seller_id": sid})
+
+
+@router.get("/scan/status", response_class=JSONResponse)
+async def get_amz_scan_status(
+    seller_id: Optional[str] = Query(None),
+):
+    """Polling del estado del scan actual."""
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"status": "no_account"})
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT * FROM amz_gap_scan_status WHERE seller_id=?",
+            (client.seller_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return JSONResponse({"status": "never", "seller_id": client.seller_id})
+    return JSONResponse(dict(row))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

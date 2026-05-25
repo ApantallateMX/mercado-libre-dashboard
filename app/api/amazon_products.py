@@ -4102,12 +4102,9 @@ async def amazon_deal_candidates(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AMAZON LANZADOR — SKUs de BM con stock que NO tienen listing activo en Amazon
+# AMAZON LANZADOR — Lee gaps desde DB (poblada por scan background)
+# El scan se lanza desde /api/amazon/lanzar/scan
 # ─────────────────────────────────────────────────────────────────────────────
-
-_sin_lanzar_cache: dict[str, tuple[float, dict]] = {}  # {seller_id: (ts, resp)}
-_SIN_LANZAR_TTL = 900  # 15 min — BM fetch es lento, cachear agresivo
-
 
 @router.get("/products/sin-lanzar", response_class=HTMLResponse)
 async def amazon_sin_lanzar(
@@ -4116,167 +4113,89 @@ async def amazon_sin_lanzar(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=5, le=100),
     q: str = Query("", description="Filtro por SKU o título"),
-    force: bool = Query(False),
 ):
-    """
-    SKUs de BinManager con stock vendible que NO tienen listing activo en Amazon.
-    Equivalente al Lanzador de ML pero adaptado para Amazon.
-    """
+    """Sin Publicar: lee gaps desde DB. Escaneo en background vía /api/amazon/lanzar/scan."""
+    import aiosqlite as _aiosqlite
+    from app.services.token_store import DATABASE_PATH as _DB
+
     client = await get_amazon_client(seller_id=seller_id)
     if not client:
-        return _render_no_account(request, "partials/amazon_sin_lanzar.html")
+        return _render_no_account(request, "amazon_sin_lanzar.html")
 
-    cache_key = client.seller_id
-    now = _time.time()
+    sid = client.seller_id
 
-    if not force:
-        cached = _sin_lanzar_cache.get(cache_key)
-        if cached and (now - cached[0]) < _SIN_LANZAR_TTL:
-            gaps_all = cached[1]["gaps"]
-            bm_total = cached[1]["bm_total"]
-            amazon_active = cached[1]["amazon_active"]
-            cached_at = cached[0]
-        else:
-            cached = None
-    else:
-        cached = None
+    async with _aiosqlite.connect(_DB) as db:
+        db.row_factory = _aiosqlite.Row
 
-    if cached is None:
-        try:
-            from app.services.binmanager_client import get_shared_bm
-            bm_cli = await get_shared_bm()
+        # Scan status
+        cur = await db.execute(
+            "SELECT * FROM amz_gap_scan_status WHERE seller_id=?", (sid,)
+        )
+        scan_row = await cur.fetchone()
+        scan_status = dict(scan_row) if scan_row else {}
 
-            # get_bulk_stock usa LOCATIONID correcto + pagina todos los SKUs
-            # get_global_inventory omite LOCATIONID y retorna 0 resultados
-            listings, bm_items = await asyncio.gather(
-                _get_listings_cached(client),
-                bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC"),
-            )
+        # Build filter
+        where = "seller_id=? AND status='unlaunched'"
+        params: list = [sid]
+        q_s = q.strip()
+        if q_s:
+            ql = f"%{q_s.upper()}%"
+            where += " AND (UPPER(sku) LIKE ? OR UPPER(product_title) LIKE ? OR UPPER(brand) LIKE ?)"
+            params += [ql, ql, ql]
 
-            # Build set of active Amazon base SKUs
-            amazon_base_skus: set[str] = set()
-            for listing in listings:
-                sku = listing.get("sku", "")
-                if not sku:
-                    continue
-                summaries = listing.get("summaries", [])
-                status = _listing_status(summaries)
-                if status == "ACTIVE":
-                    amazon_base_skus.add(sku.upper())
-                    base = _amz_base_sku(sku).upper()
-                    if base:
-                        amazon_base_skus.add(base)
+        cnt = (await (await db.execute(
+            f"SELECT COUNT(*) FROM amz_sku_gaps WHERE {where}", params
+        )).fetchone())[0]
 
-            gaps_all = []
-            for item in bm_items:
-                bm_sku = (item.get("SKU") or "").strip()
-                if not bm_sku:
-                    continue
+        pages = max(1, math.ceil(cnt / per_page))
+        page  = max(1, min(page, pages))
+        off   = (page - 1) * per_page
 
-                bm_sku_up = bm_sku.upper()
-                # Check if BM SKU (or its suffixed variants) is on Amazon
-                already_on_amz = (
-                    bm_sku_up in amazon_base_skus
-                    or any(
-                        (bm_sku_up + sfx) in amazon_base_skus
-                        for sfx in ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-FLX01", "-FLX02")
-                    )
-                )
-                if already_on_amz:
-                    continue
+        rows = await (await db.execute(
+            f"""SELECT * FROM amz_sku_gaps WHERE {where}
+                ORDER BY avail_qty DESC LIMIT ? OFFSET ?""",
+            params + [per_page, off],
+        )).fetchall()
 
-                avail_qty = int(item.get("AvailableQTY") or item.get("TotalQty") or 0)
-                if avail_qty <= 0:
-                    continue
+    # Map DB fields → template fields (template uses 'title' and 'price_sug')
+    gaps_page = []
+    for r in rows:
+        d = dict(r)
+        d["title"]     = d.get("product_title", "")
+        d["price_sug"] = d.get("suggested_price", 0)
+        gaps_page.append(d)
 
-                cost_usd = float(
-                    item.get("LastRetailPricePurchaseHistory")
-                    or item.get("AvgCostQTY")
-                    or 0
-                )
-                FX = 18.5
-                cost_mxn = round(cost_usd * FX, 2) if cost_usd > 0 else 0
-                # Suggested price: cover cost + 18% Amazon fee + target ~20% margin
-                # price = cost_mxn / (1 - 0.18 - 0.20) = cost_mxn / 0.62
-                price_sug = round(cost_mxn / 0.62, 0) if cost_mxn > 0 else 0
-                margin_pct: Optional[float] = None
-                if cost_mxn > 0 and price_sug > 0:
-                    margin_pct = round(
-                        (price_sug - cost_mxn - price_sug * 0.18) / price_sug * 100, 1
-                    )
-
-                gaps_all.append({
-                    "sku":          bm_sku,
-                    "title":        (item.get("Title") or item.get("Description") or "")[:120],
-                    "brand":        item.get("Brand") or "",
-                    "model":        item.get("Model") or "",
-                    "category":     item.get("CategoryName") or "",
-                    "avail_qty":    avail_qty,
-                    "cost_usd":     round(cost_usd, 2),
-                    "cost_mxn":     cost_mxn,
-                    "price_sug":    price_sug,
-                    "margin_pct":   margin_pct,
-                    "upc":          item.get("UPC") or item.get("Upc") or "",
-                    "image_url":    item.get("ImageURL") or "",
-                })
-
-            # Sort by available qty desc
-            gaps_all.sort(key=lambda x: x["avail_qty"], reverse=True)
-
-            bm_total = len(bm_items)
-            amazon_active = len([l for l in listings if _listing_status(l.get("summaries", [])) == "ACTIVE"])
-            cached_at = now
-            _sin_lanzar_cache[cache_key] = (now, {
-                "gaps": gaps_all, "bm_total": bm_total, "amazon_active": amazon_active,
-            })
-
-        except Exception as e:
-            logger.exception("[Amazon Sin Lanzar] Error")
-            ctx = {"error": str(e)[:200], "gaps": [], "total": 0, "page": 1, "pages": 1,
-                   "per_page": per_page, "q": q, "bm_total": 0, "amazon_active": 0,
-                   "cached_at": "", "force": force}
-            return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
-
-    # Filter by search query
-    q_lower = q.strip().lower()
-    if q_lower:
-        gaps_filtered = [
-            g for g in gaps_all
-            if q_lower in g["sku"].lower()
-            or q_lower in g["title"].lower()
-            or q_lower in (g["brand"] or "").lower()
-        ]
-    else:
-        gaps_filtered = gaps_all
-
-    # Paginate
-    total = len(gaps_filtered)
-    pages = max(1, math.ceil(total / per_page))
-    page = max(1, min(page, pages))
-    offset = (page - 1) * per_page
-    gaps_page = gaps_filtered[offset: offset + per_page]
-
-    # Enriquecer página actual con MTY/CDMX/TJ de BM (warehouse breakdown)
+    # Enriquecer con MTY/CDMX/TJ (fire-and-forget — no bloquea si falla)
     try:
         await _enrich_bm_amz(gaps_page)
     except Exception:
-        pass  # no bloquear si falla — los datos de avail_qty siguen disponibles
+        pass
 
-    cached_ago = int(now - cached_at) if cached_at else 0
+    # Calcular tiempo desde último scan
+    cached_ago = 0
+    finished_at = scan_status.get("finished_at", "")
+    if finished_at:
+        try:
+            scan_dt = datetime.fromisoformat(finished_at)
+            cached_ago = int((datetime.utcnow() - scan_dt).total_seconds())
+        except Exception:
+            pass
 
     ctx = {
         "gaps":          gaps_page,
-        "total":         total,
+        "total":         cnt,
         "page":          page,
         "pages":         pages,
         "per_page":      per_page,
-        "q":             q,
-        "bm_total":      bm_total,
-        "amazon_active": amazon_active,
+        "q":             q_s,
+        "bm_total":      scan_status.get("bm_total", 0),
+        "amazon_active": scan_status.get("amazon_active", 0),
         "cached_ago":    cached_ago,
-        "force":         force,
+        "scan_status":   scan_status.get("status", "never"),
+        "scan_error":    scan_status.get("error") or "",
+        "force":         False,
         "marketplace":   client.marketplace_name,
-        "seller_id":     client.seller_id,
+        "seller_id":     sid,
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
 
