@@ -4113,6 +4113,8 @@ async def amazon_sin_lanzar(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=5, le=100),
     q: str = Query("", description="Filtro por SKU o título"),
+    category: str = Query("", description="Filtro por categoría BM"),
+    show_sin_precio: bool = Query(False, description="Mostrar SKUs sin retail price"),
 ):
     """Sin Publicar: lee gaps desde DB. Escaneo en background vía /api/amazon/lanzar/scan."""
     import aiosqlite as _aiosqlite
@@ -4135,13 +4137,18 @@ async def amazon_sin_lanzar(
         scan_status = dict(scan_row) if scan_row else {}
 
         # Build filter
-        where = "seller_id=? AND status='unlaunched'"
-        params: list = [sid]
+        tab_status = "sin_precio" if show_sin_precio else "unlaunched"
+        where = "seller_id=? AND status=?"
+        params: list = [sid, tab_status]
         q_s = q.strip()
+        cat_s = category.strip()
         if q_s:
             ql = f"%{q_s.upper()}%"
             where += " AND (UPPER(sku) LIKE ? OR UPPER(product_title) LIKE ? OR UPPER(brand) LIKE ?)"
             params += [ql, ql, ql]
+        if cat_s:
+            where += " AND category=?"
+            params.append(cat_s)
 
         cnt = (await (await db.execute(
             f"SELECT COUNT(*) FROM amz_sku_gaps WHERE {where}", params
@@ -4157,15 +4164,32 @@ async def amazon_sin_lanzar(
             params + [per_page, off],
         )).fetchall()
 
-    # Map DB fields → template fields (template uses 'title' and 'price_sug')
+        # Categorías disponibles (solo de unlaunched con retail price)
+        cat_rows = await (await db.execute(
+            """SELECT DISTINCT category FROM amz_sku_gaps
+               WHERE seller_id=? AND status='unlaunched' AND category!=''
+               ORDER BY category""",
+            (sid,),
+        )).fetchall()
+        categories = [r[0] for r in cat_rows]
+
+        # Conteo sin precio
+        sin_precio_cnt = (await (await db.execute(
+            "SELECT COUNT(*) FROM amz_sku_gaps WHERE seller_id=? AND status='sin_precio'",
+            (sid,),
+        )).fetchone())[0]
+
+    # Map DB fields → template fields
     gaps_page = []
     for r in rows:
         d = dict(r)
-        d["title"]     = d.get("product_title", "")
-        d["price_sug"] = d.get("suggested_price", 0)
+        d["title"]      = d.get("product_title", "")
+        d["price_sug"]  = d.get("suggested_price", 0)
+        d["retail_usd"] = d.get("cost_usd", 0)
+        d["retail_mxn"] = d.get("cost_mxn", 0)
         gaps_page.append(d)
 
-    # Enriquecer con MTY/CDMX/TJ (fire-and-forget — no bloquea si falla)
+    # Enriquecer con MTY/CDMX/TJ
     try:
         await _enrich_bm_amz(gaps_page)
     except Exception:
@@ -4182,20 +4206,24 @@ async def amazon_sin_lanzar(
             pass
 
     ctx = {
-        "gaps":          gaps_page,
-        "total":         cnt,
-        "page":          page,
-        "pages":         pages,
-        "per_page":      per_page,
-        "q":             q_s,
-        "bm_total":      scan_status.get("bm_total", 0),
-        "amazon_active": scan_status.get("amazon_active", 0),
-        "cached_ago":    cached_ago,
-        "scan_status":   scan_status.get("status", "never"),
-        "scan_error":    scan_status.get("error") or "",
-        "force":         False,
-        "marketplace":   client.marketplace_name,
-        "seller_id":     sid,
+        "gaps":            gaps_page,
+        "total":           cnt,
+        "page":            page,
+        "pages":           pages,
+        "per_page":        per_page,
+        "q":               q_s,
+        "category":        cat_s,
+        "categories":      categories,
+        "show_sin_precio": show_sin_precio,
+        "sin_precio_cnt":  sin_precio_cnt,
+        "bm_total":        scan_status.get("bm_total", 0),
+        "amazon_active":   scan_status.get("amazon_active", 0),
+        "cached_ago":      cached_ago,
+        "scan_status":     scan_status.get("status", "never"),
+        "scan_error":      scan_status.get("error") or "",
+        "force":           False,
+        "marketplace":     client.marketplace_name,
+        "seller_id":       sid,
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
 

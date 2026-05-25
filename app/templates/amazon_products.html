@@ -770,11 +770,27 @@ document.addEventListener('keydown', function(e) {
 // SIN LANZAR — funciones para el tab 🚀
 // ─────────────────────────────────────────────────────────────────────────────
 
+var _amzSlActiveCategory = '';
+var _amzSlShowSinPrecio = false;
+
+window._amzSlFilterCat = function(cat) {
+    _amzSlActiveCategory = cat;
+    _amzSlShowSinPrecio = false;
+    window._loadAmzSinLanzar(1);
+};
+window._amzSlFilterSinPrecio = function() {
+    _amzSlShowSinPrecio = true;
+    _amzSlActiveCategory = '';
+    window._loadAmzSinLanzar(1);
+};
+
 window._loadAmzSinLanzar = function(page, force) {
     var q = (document.getElementById('sl-search') || {}).value || '';
     var url = '/api/amazon/products/sin-lanzar?page=' + (page || 1) +
               '&per_page=20' +
               (q ? '&q=' + encodeURIComponent(q) : '') +
+              (_amzSlActiveCategory ? '&category=' + encodeURIComponent(_amzSlActiveCategory) : '') +
+              (_amzSlShowSinPrecio ? '&show_sin_precio=true' : '') +
               (force ? '&force=1' : '');
     var container = document.getElementById('amz-prod-tab-content');
     container.innerHTML =

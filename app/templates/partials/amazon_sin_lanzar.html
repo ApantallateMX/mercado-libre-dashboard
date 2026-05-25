@@ -37,16 +37,16 @@
 
 
 <!-- ─── KPI header ──────────────────────────────────────────────────────────── -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
     <div class="bg-white rounded-xl shadow p-4">
-        <p class="text-xs text-gray-400 mb-1">SKUs sin lanzar</p>
+        <p class="text-xs text-gray-400 mb-1">Sin publicar</p>
         <p class="text-2xl font-bold text-orange-600">{{ total }}</p>
-        <p class="text-[10px] text-gray-400 mt-0.5">con stock disponible en BM</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">con retail price · stock BM ≥ 1</p>
     </div>
     <div class="bg-white rounded-xl shadow p-4">
         <p class="text-xs text-gray-400 mb-1">Activos en Amazon</p>
         <p class="text-2xl font-bold text-green-600">{{ amazon_active }}</p>
-        <p class="text-[10px] text-gray-400 mt-0.5">listings activos actualmente</p>
+        <p class="text-[10px] text-gray-400 mt-0.5">listings detectados en el scan</p>
     </div>
     <div class="bg-white rounded-xl shadow p-4">
         <p class="text-xs text-gray-400 mb-1">SKUs en BM</p>
@@ -91,6 +91,32 @@
     <p class="text-xs text-red-500 mt-1">{{ scan_error }}</p>
     <button onclick="window._amzTriggerScan('{{ seller_id }}')"
             class="mt-2 text-xs text-orange-500 hover:underline">Reintentar →</button>
+</div>
+{% endif %}
+
+<!-- ─── Filtros de categoría ──────────────────────────────────────────────── -->
+{% if categories or sin_precio_cnt > 0 %}
+<div class="bg-white rounded-xl shadow px-4 py-3 mb-3 flex flex-wrap items-center gap-2">
+    <span class="text-xs text-gray-400 mr-1">Categoría:</span>
+    <button onclick="window._amzSlFilterCat('')"
+            class="px-3 py-1 rounded-full text-xs font-medium transition
+                   {% if not category and not show_sin_precio %}bg-orange-500 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700{% endif %}">
+        Todas
+    </button>
+    {% for cat in categories %}
+    <button onclick="window._amzSlFilterCat('{{ cat|replace("'","&#39;") }}')"
+            class="px-3 py-1 rounded-full text-xs font-medium transition
+                   {% if category == cat %}bg-orange-500 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700{% endif %}">
+        {{ cat }}
+    </button>
+    {% endfor %}
+    {% if sin_precio_cnt > 0 %}
+    <button onclick="window._amzSlFilterSinPrecio()"
+            class="px-3 py-1 rounded-full text-xs font-medium transition
+                   {% if show_sin_precio %}bg-gray-600 text-white{% else %}bg-gray-100 text-gray-500 hover:bg-gray-200{% endif %}">
+        Sin precio <span class="ml-1 opacity-70">{{ sin_precio_cnt }}</span>
+    </button>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -148,10 +174,10 @@
                     <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">MTY</th>
                     <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">CDMX</th>
                     <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">TJ</th>
-                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Costo USD</th>
-                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Costo MXN</th>
-                    <th class="py-3 px-3 text-right font-semibold">Precio Sug.</th>
-                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Margen</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Retail USD</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Retail MXN</th>
+                    <th class="py-3 px-3 text-right font-semibold">P. Sugerido</th>
+                    <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">% Recup.</th>
                     <th class="py-3 px-3 text-center font-semibold">Acción</th>
                 </tr>
             </thead>
@@ -202,25 +228,19 @@
                         {{ g.bm_tj if g.bm_tj is defined else '—' }}
                     </td>
                     <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
-                        {% if g.cost_usd > 0 %}${{ "%.2f"|format(g.cost_usd) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% if g.retail_usd > 0 %}<span class="font-mono">${{ "%.2f"|format(g.retail_usd) }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
-                        {% if g.cost_mxn > 0 %}${{ "{:,.0f}".format(g.cost_mxn) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% if g.retail_mxn > 0 %}${{ "{:,.0f}".format(g.retail_mxn) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right font-semibold text-gray-800">
                         {% if g.price_sug > 0 %}${{ "{:,.0f}".format(g.price_sug) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right hidden lg:table-cell">
                         {% if g.margin_pct is not none %}
-                        {% if g.margin_pct >= 20 %}
-                        <span class="text-green-600 font-bold">{{ g.margin_pct }}%</span>
-                        {% elif g.margin_pct >= 10 %}
-                        <span class="text-yellow-600 font-semibold">{{ g.margin_pct }}%</span>
+                        <span class="text-green-600 font-bold">{{ g.margin_pct|int }}%</span>
                         {% else %}
-                        <span class="text-red-600 font-bold">{{ g.margin_pct }}%</span>
-                        {% endif %}
-                        {% else %}
-                        <span class="text-gray-300">—</span>
+                        <span class="text-red-400 text-xs">Sin precio</span>
                         {% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-center">
@@ -271,7 +291,7 @@
     <!-- Footer info -->
     <div class="px-4 py-2 bg-orange-50 border-t border-orange-100">
         <p class="text-xs text-orange-700">
-            💡 Precio sugerido = costo BM × 1.61 (cubre fees 18% + margen ~20%). Ajusta antes de publicar.
+            💡 P. Sugerido = Retail MXN ÷ 0.75 — recupera 100% del retail tras Amazon 18% + socio 7%.
             <span class="text-orange-400 ml-2">· {{ marketplace }}</span>
         </p>
     </div>

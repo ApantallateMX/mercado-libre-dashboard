@@ -80,24 +80,42 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
 
             # Construir set de base-SKUs activos en Amazon
             amazon_base_skus: set[str] = set()
-            for listing in listings:
-                sku = listing.get("sku", "")
-                if not sku:
-                    continue
-                summaries = listing.get("summaries", [])
-                is_active = any(s.get("status") == "ACTIVE" for s in summaries)
-                if is_active:
-                    amazon_base_skus.add(sku.upper())
-                    base = _amz_base(sku)
-                    if base:
-                        amazon_base_skus.add(base)
+            amazon_active = 0
 
-            amazon_active = sum(
-                1 for l in listings
-                if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
-            )
+            if listings:
+                for listing in listings:
+                    sku = listing.get("sku", "")
+                    if not sku:
+                        continue
+                    summaries = listing.get("summaries", [])
+                    is_active = any(s.get("status") == "ACTIVE" for s in summaries)
+                    if is_active:
+                        amazon_base_skus.add(sku.upper())
+                        base = _amz_base(sku)
+                        if base:
+                            amazon_base_skus.add(base)
+                amazon_active = sum(
+                    1 for l in listings
+                    if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
+                )
+            else:
+                # Fallback: get_all_listings() devolvió vacío → intentar FBA inventory
+                logger.info(f"[AMZ Gap Scan] get_all_listings() vacío → FBA fallback")
+                try:
+                    fba_items = await client.get_fba_inventory_all()
+                    for fba in fba_items:
+                        sku = fba.get("sellerSku") or ""
+                        if sku:
+                            amazon_base_skus.add(sku.upper())
+                            base = _amz_base(sku)
+                            if base:
+                                amazon_base_skus.add(base)
+                    amazon_active = len({f.get("sellerSku") for f in fba_items if f.get("sellerSku")})
+                    logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
+                except Exception as _fba_err:
+                    logger.warning(f"[AMZ Gap Scan] FBA fallback falló: {_fba_err}")
 
-            FX = 18.5
+            FX = 18.0  # FX fijo USD → MXN
             now_iso = datetime.utcnow().isoformat()
             gaps: list[dict] = []
             current_bm_skus: set[str] = set()
@@ -119,60 +137,62 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 if already:
                     continue
 
-                cost_usd = float(
-                    item.get("LastRetailPricePurchaseHistory") or item.get("AvgCostQTY") or 0
-                )
-                cost_mxn = round(cost_usd * FX, 2) if cost_usd > 0 else 0
-                price_sug = round(cost_mxn / 0.62, 0) if cost_mxn > 0 else 0
-                margin_pct = None
-                if cost_mxn > 0 and price_sug > 0:
-                    margin_pct = round(
-                        (price_sug - cost_mxn - price_sug * 0.18) / price_sug * 100, 1
-                    )
+                # Retail price — NUNCA usar AvgCostQTY (centinela 9999.99)
+                retail_usd = float(item.get("LastRetailPricePurchaseHistory") or 0)
+                if retail_usd >= 9000:
+                    retail_usd = 0.0
+                has_price = retail_usd > 0
+                retail_mxn = round(retail_usd * FX, 2) if has_price else 0
+                # Recuperar 100% retail tras Amazon 18% + socio 7% = 25% fees
+                price_sug = round(retail_mxn / 0.75, 0) if has_price else 0
+                margin_pct = 100.0 if has_price else None
+                gap_status = "unlaunched" if has_price else "sin_precio"
 
                 gaps.append({
-                    "seller_id":      seller_id,
-                    "sku":            bm_sku,
-                    "product_title":  (item.get("Title") or item.get("Description") or "")[:120],
-                    "brand":          item.get("Brand") or "",
-                    "model":          item.get("Model") or "",
-                    "category":       item.get("CategoryName") or "",
-                    "image_url":      item.get("ImageURL") or "",
-                    "upc":            item.get("UPC") or item.get("Upc") or "",
-                    "avail_qty":      avail_qty,
-                    "cost_usd":       round(cost_usd, 2),
-                    "cost_mxn":       cost_mxn,
+                    "seller_id":       seller_id,
+                    "sku":             bm_sku,
+                    "product_title":   (item.get("Title") or item.get("Description") or "")[:120],
+                    "brand":           item.get("Brand") or "",
+                    "model":           item.get("Model") or "",
+                    "category":        item.get("CategoryName") or "",
+                    "image_url":       item.get("ImageURL") or "",
+                    "upc":             item.get("UPC") or item.get("Upc") or "",
+                    "avail_qty":       avail_qty,
+                    "cost_usd":        round(retail_usd, 2),
+                    "cost_mxn":        retail_mxn,
                     "suggested_price": price_sug,
-                    "margin_pct":     margin_pct,
-                    "last_scan":      now_iso,
+                    "margin_pct":      margin_pct,
+                    "last_scan":       now_iso,
+                    "_gap_status":     gap_status,
                 })
 
             # ── Guardar en DB ──────────────────────────────────────────────
             async with aiosqlite.connect(DATABASE_PATH) as db:
-                # 1. Eliminar unlaunched que ya no tienen stock en BM
+                # 1. Eliminar unlaunched/sin_precio que ya no tienen stock en BM
                 if current_bm_skus:
                     placeholders = ",".join("?" * len(current_bm_skus))
                     await db.execute(
                         f"""DELETE FROM amz_sku_gaps
-                            WHERE seller_id=? AND status='unlaunched'
+                            WHERE seller_id=? AND status IN ('unlaunched','sin_precio')
                             AND UPPER(sku) NOT IN ({placeholders})""",
                         [seller_id] + list(current_bm_skus),
                     )
 
-                # 2. Eliminar unlaunched que ahora están activos en Amazon
+                # 2. Eliminar unlaunched/sin_precio que ahora están activos en Amazon
                 for chunk_s in range(0, len(amazon_base_skus), 500):
                     chunk = list(amazon_base_skus)[chunk_s:chunk_s + 500]
                     if chunk:
                         ph = ",".join("?" * len(chunk))
                         await db.execute(
                             f"""DELETE FROM amz_sku_gaps
-                                WHERE seller_id=? AND status='unlaunched'
+                                WHERE seller_id=? AND status IN ('unlaunched','sin_precio')
                                 AND UPPER(sku) IN ({ph})""",
                             [seller_id] + chunk,
                         )
 
                 # 3. Upsert gaps (no toca los ignored ni launched)
                 for g in gaps:
+                    gap_status = g.pop("_gap_status", "unlaunched")
                     await db.execute(
                         """INSERT INTO amz_sku_gaps
                                (seller_id, sku, product_title, brand, model, category,
@@ -181,7 +201,7 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                            VALUES
                                (:seller_id,:sku,:product_title,:brand,:model,:category,
                                 :image_url,:upc,:avail_qty,:cost_usd,:cost_mxn,
-                                :suggested_price,:margin_pct,:last_scan,'unlaunched')
+                                :suggested_price,:margin_pct,:last_scan,:status)
                            ON CONFLICT(seller_id, sku) DO UPDATE SET
                                product_title=excluded.product_title,
                                brand=excluded.brand, model=excluded.model,
@@ -189,9 +209,10 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                upc=excluded.upc, avail_qty=excluded.avail_qty,
                                cost_usd=excluded.cost_usd, cost_mxn=excluded.cost_mxn,
                                suggested_price=excluded.suggested_price,
-                               margin_pct=excluded.margin_pct, last_scan=excluded.last_scan
-                           WHERE amz_sku_gaps.status='unlaunched'""",
-                        g,
+                               margin_pct=excluded.margin_pct, last_scan=excluded.last_scan,
+                               status=excluded.status
+                           WHERE amz_sku_gaps.status IN ('unlaunched','sin_precio')""",
+                        {**g, "status": gap_status},
                     )
 
                 # 4. Actualizar estado del scan
