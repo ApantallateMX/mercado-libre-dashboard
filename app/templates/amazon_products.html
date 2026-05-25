@@ -782,16 +782,135 @@ window._loadAmzSinLanzar = function(page, force) {
         '<svg class="animate-spin h-7 w-7 mx-auto mb-3 text-[#FF9900]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">' +
         '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
         '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' +
-        'Analizando gaps BM ↔ Amazon…<br><span class="text-xs mt-1 block">Esto puede tardar 10-20s la primera vez</span></div>';
+        'Cargando gaps BM ↔ Amazon…</div>';
     fetch(url)
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
-        .then(function(html) { container.innerHTML = html; })
+        .then(function(html) {
+            container.innerHTML = html;
+            // Auto-start scan polling if partial loaded with scan in progress
+            var meta = document.getElementById('amz-sl-meta');
+            if (meta && meta.getAttribute('data-scan-status') === 'running') {
+                window._amzPollScan(meta.getAttribute('data-seller-id'));
+            }
+        })
         .catch(function(e) {
             container.innerHTML =
                 '<div class="bg-white rounded-xl p-8 text-center">' +
                 '<p class="text-red-500 font-semibold">Error</p>' +
                 '<p class="text-gray-400 text-sm">' + e.message + '</p></div>';
         });
+};
+
+// ─── SIN LANZAR — funciones del partial (aquí por innerHTML no ejecuta scripts) ─
+function _amzSlSellerId() {
+    var meta = document.getElementById('amz-sl-meta');
+    return (meta && meta.getAttribute('data-seller-id')) || '';
+}
+
+window._amzSlTab = function(tab) {
+    ['sinlanzar','lanzados','ignorados'].forEach(function(t) {
+        var btn = document.getElementById('amz-sl-tab-' + t);
+        if (!btn) return;
+        if (t === tab) {
+            btn.className = 'flex-1 md:flex-none px-5 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition border-orange-500 text-orange-700 bg-orange-50';
+        } else {
+            btn.className = 'flex-1 md:flex-none px-5 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300';
+        }
+    });
+    var cont = document.getElementById('amz-sl-tab-content');
+    if (!cont) return;
+    if (tab === 'sinlanzar') {
+        window._loadAmzSinLanzar(1);
+    } else if (tab === 'lanzados') {
+        cont.innerHTML = '<div class="text-center text-gray-400 py-8 animate-pulse text-sm">Cargando lanzados…</div>';
+        fetch('/api/amazon/lanzar/launched?seller_id=' + encodeURIComponent(_amzSlSellerId()))
+            .then(function(r){ return r.text(); })
+            .then(function(html){ cont.innerHTML = html; })
+            .catch(function(e){ cont.innerHTML = '<p class="text-red-500 p-4">' + e.message + '</p>'; });
+    } else if (tab === 'ignorados') {
+        cont.innerHTML = '<div class="text-center text-gray-400 py-8 animate-pulse text-sm">Cargando ignorados…</div>';
+        fetch('/api/amazon/lanzar/ignored?seller_id=' + encodeURIComponent(_amzSlSellerId()))
+            .then(function(r){ return r.text(); })
+            .then(function(html){ cont.innerHTML = html; })
+            .catch(function(e){ cont.innerHTML = '<p class="text-red-500 p-4">' + e.message + '</p>'; });
+    }
+};
+
+window._amzIgnoreGap = function(sku, sellerId) {
+    fetch('/api/amazon/lanzar/ignore/' + encodeURIComponent(sku), {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ seller_id: sellerId || _amzSlSellerId() }),
+    }).then(function(){ window._loadAmzSinLanzar(1); });
+};
+
+window._amzRestoreGap = function(sku, sellerId) {
+    fetch('/api/amazon/lanzar/restore/' + encodeURIComponent(sku), {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ seller_id: sellerId || _amzSlSellerId() }),
+    }).then(function(){ window._amzSlTab('ignorados'); });
+};
+
+window._amzLanzarUpdatePrice = function(sku, currentPrice, sellerId) {
+    var newPrice = prompt('Nuevo precio para ' + sku + ' (MXN):', currentPrice || '');
+    if (!newPrice || isNaN(parseFloat(newPrice))) return;
+    fetch('/api/amazon/products/' + encodeURIComponent(sku) + '/price', {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ price: parseFloat(newPrice), seller_id: sellerId || _amzSlSellerId() }),
+    }).then(function(r){ return r.json(); })
+      .then(function(d){ alert(d.ok ? '✓ Precio actualizado' : '⚠ ' + (d.error || 'Error')); })
+      .catch(function(e){ alert('Error: ' + e.message); });
+};
+
+window._loadAmzLanzados = function(page) {
+    var cont = document.getElementById('amz-sl-tab-content');
+    if (!cont) return;
+    cont.innerHTML = '<div class="text-center text-gray-400 py-8 animate-pulse text-sm">Cargando…</div>';
+    fetch('/api/amazon/lanzar/launched?seller_id=' + encodeURIComponent(_amzSlSellerId()) + '&page=' + (page || 1))
+        .then(function(r){ return r.text(); })
+        .then(function(html){ cont.innerHTML = html; });
+};
+
+var _amzScanInterval = null;
+
+window._amzTriggerScan = function(sellerId) {
+    var sid = sellerId || _amzSlSellerId();
+    var btn = document.getElementById('amz-scan-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Iniciando…'; }
+    fetch('/api/amazon/lanzar/scan?seller_id=' + encodeURIComponent(sid), { method: 'POST' })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.status === 'started' || d.status === 'running') {
+                window._amzPollScan(sid);
+            } else {
+                if (btn) { btn.disabled = false; btn.textContent = '🔍 Escanear'; }
+            }
+        })
+        .catch(function(){
+            if (btn) { btn.disabled = false; btn.textContent = '🔍 Escanear'; }
+        });
+};
+
+window._amzPollScan = function(sellerId) {
+    var sid = sellerId || _amzSlSellerId();
+    if (_amzScanInterval) clearInterval(_amzScanInterval);
+    _amzScanInterval = setInterval(function(){
+        fetch('/api/amazon/lanzar/scan/status?seller_id=' + encodeURIComponent(sid))
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                if (d.status !== 'running') {
+                    clearInterval(_amzScanInterval);
+                    _amzScanInterval = null;
+                    window._loadAmzSinLanzar(1);
+                }
+            })
+            .catch(function(){
+                clearInterval(_amzScanInterval);
+                _amzScanInterval = null;
+            });
+    }, 3000);
 };
 
 // Modal de lanzamiento rápido desde Sin Lanzar
