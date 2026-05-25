@@ -7,6 +7,35 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-25 — FEAT: Amazon Sin Publicar — background scan (BM vs Amazon gap detection)
+
+### Resumen
+Tab "🚀 Sin Publicar" migrado de carga síncrona a patrón background scan (igual que ML Lanzador):
+- El escaneo corre en segundo plano (asyncio.Lock por seller_id), sin bloquear la UI
+- Los gaps se persisten en `amz_sku_gaps` (DB); la tabla siempre sirve instantáneamente
+- La UI muestra estado del scan: Nunca / En progreso / Error / hace X min
+- Polling automático cada 3s mientras corre, recarga la tabla al terminar
+
+### Flujo
+1. Usuario abre tab → lee gaps de DB (instantáneo)
+2. Pulsa "🔍 Escanear" → POST `/api/amazon/lanzar/scan`
+3. Background: `_run_amz_gap_scan` — `get_bulk_stock` + `get_all_listings` en paralelo → diff → upsert `amz_sku_gaps`
+4. JS polling cada 3s → al terminar, recarga el tab con datos frescos
+
+### Estados de UI
+- **Nunca**: CTA prominente "🔍 Escanear ahora"
+- **En progreso**: banner naranja animado + spinner en tarjeta KPI + polling activo
+- **Error**: banner rojo con mensaje + link "Reintentar"
+- **Done**: "hace X min" en tarjeta KPI + tabla con gaps
+
+### Archivos modificados
+- `app/services/token_store.py`: tabla `amz_gap_scan_status` + columnas `category/model/margin_pct/last_scan` en `amz_sku_gaps`
+- `app/api/amazon_lanzar.py`: `_run_amz_gap_scan()`, `POST /scan`, `GET /scan/status`
+- `app/api/amazon_products.py`: reescritura `amazon_sin_lanzar` — lee DB, pasa `scan_status`/`scan_error`/`bm_total`/`amazon_active`
+- `app/templates/partials/amazon_sin_lanzar.html`: KPI card scan + banners + empty states contextuales + JS trigger+polling
+
+---
+
 ## 2026-05-22 — FEAT: Amazon — Repricing automático + Devoluciones por SKU + renombrar tabs
 
 ### Resumen
