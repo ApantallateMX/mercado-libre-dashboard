@@ -4146,10 +4146,11 @@ async def amazon_sin_lanzar(
             from app.services.binmanager_client import get_shared_bm
             bm_cli = await get_shared_bm()
 
-            # Fetch BM + Amazon listings in parallel
+            # get_bulk_stock usa LOCATIONID correcto + pagina todos los SKUs
+            # get_global_inventory omite LOCATIONID y retorna 0 resultados
             listings, bm_items = await asyncio.gather(
                 _get_listings_cached(client),
-                bm_cli.get_global_inventory(min_qty=1),
+                bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC"),
             )
 
             # Build set of active Amazon base SKUs
