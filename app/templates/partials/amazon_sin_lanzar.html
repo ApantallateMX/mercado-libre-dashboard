@@ -104,11 +104,20 @@
         Todas
     </button>
     {% for cat in categories %}
-    <button onclick="window._amzSlFilterCat('{{ cat|replace("'","&#39;") }}')"
-            class="px-3 py-1 rounded-full text-xs font-medium transition
-                   {% if category == cat %}bg-orange-500 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700{% endif %}">
-        {{ cat }}
-    </button>
+    <span class="inline-flex items-center rounded-full overflow-hidden
+                 {% if category == cat %}bg-orange-500{% else %}bg-gray-100 hover:bg-orange-100{% endif %} transition">
+        <button onclick="window._amzSlFilterCat('{{ cat|replace("'","&#39;") }}')"
+                class="px-3 py-1 text-xs font-medium
+                       {% if category == cat %}text-white{% else %}text-gray-600 hover:text-orange-700{% endif %}">
+            {{ cat }}
+        </button>
+        <button onclick="window._amzIgnoreCategory('{{ cat|replace("'","&#39;") }}','{{ seller_id }}')"
+                title="Ignorar toda esta categoría"
+                class="pr-2 text-xs leading-none
+                       {% if category == cat %}text-orange-200 hover:text-white{% else %}text-gray-300 hover:text-red-500{% endif %} transition">
+            ✕
+        </button>
+    </span>
     {% endfor %}
     {% if sin_precio_cnt > 0 %}
     <button onclick="window._amzSlFilterSinPrecio()"

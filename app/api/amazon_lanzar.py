@@ -508,6 +508,30 @@ async def ignore_gap(sku: str, request: Request):
     return {"ok": True}
 
 
+# ── 5b. Ignorar toda una categoría ───────────────────────────────────────────
+
+@router.post("/ignore-category")
+async def ignore_category(request: Request):
+    """Marca como 'ignored' todos los gaps unlaunched/sin_precio de una categoría."""
+    body = await request.json()
+    category = (body.get("category") or "").strip()
+    sid_param = body.get("seller_id")
+    if not category:
+        return JSONResponse({"error": "category requerido"}, status_code=400)
+    client = await get_amazon_client(seller_id=sid_param)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            """UPDATE amz_sku_gaps SET status='ignored'
+               WHERE seller_id=? AND category=? AND status IN ('unlaunched','sin_precio')""",
+            (client.seller_id, category),
+        )
+        await db.commit()
+        affected = cur.rowcount
+    return JSONResponse({"ok": True, "ignored": affected, "category": category})
+
+
 # ── 5. Restaurar gap ignorado ─────────────────────────────────────────────────
 
 @router.post("/restore/{sku}")

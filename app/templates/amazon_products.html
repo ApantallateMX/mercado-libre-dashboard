@@ -783,6 +783,22 @@ window._amzSlFilterSinPrecio = function() {
     _amzSlActiveCategory = '';
     window._loadAmzSinLanzar(1);
 };
+window._amzIgnoreCategory = function(cat, sellerId) {
+    var sid = sellerId || _amzSlSellerId();
+    if (!confirm('¿Ignorar TODOS los SKUs de "' + cat + '"?\nNo aparecerán más en Sin Publicar.')) return;
+    fetch('/api/amazon/lanzar/ignore-category', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({seller_id: sid, category: cat}),
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+        if (d.ok) {
+            _amzSlActiveCategory = '';
+            window._loadAmzSinLanzar(1);
+        }
+    });
+};
 
 window._loadAmzSinLanzar = function(page, force) {
     var q = (document.getElementById('sl-search') || {}).value || '';
