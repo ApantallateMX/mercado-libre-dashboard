@@ -96,34 +96,27 @@
 
 <!-- ─── Filtros de categoría ──────────────────────────────────────────────── -->
 {% if categories or sin_precio_cnt > 0 %}
-<div class="bg-white rounded-xl shadow px-4 py-3 mb-3 flex flex-wrap items-center gap-2">
-    <span class="text-xs text-gray-400 mr-1">Categoría:</span>
-    <button onclick="window._amzSlFilterCat('')"
-            class="px-3 py-1 rounded-full text-xs font-medium transition
-                   {% if not category and not show_sin_precio %}bg-orange-500 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-orange-100 hover:text-orange-700{% endif %}">
-        Todas
+<div class="bg-white rounded-xl shadow px-4 py-3 mb-3 flex items-center gap-3 flex-wrap">
+    <label class="text-xs text-gray-400 shrink-0">Categoría</label>
+    <select id="sl-cat-select"
+            onchange="window._amzSlFilterCat(this.value)"
+            class="flex-1 min-w-[180px] text-sm px-3 py-1.5 border border-gray-200 rounded-lg outline-none focus:border-orange-400 transition bg-white">
+        <option value="">— Todas —</option>
+        {% for cat in categories %}
+        <option value="{{ cat }}" {% if category == cat %}selected{% endif %}>{{ cat }}</option>
+        {% endfor %}
+    </select>
+    {% if category %}
+    <button onclick="window._amzIgnoreCategory('{{ category|replace("'","&#39;") }}','{{ seller_id }}')"
+            class="shrink-0 px-3 py-1.5 text-xs font-medium text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition">
+        ✕ Ignorar "{{ category }}"
     </button>
-    {% for cat in categories %}
-    <span class="inline-flex items-center rounded-full overflow-hidden
-                 {% if category == cat %}bg-orange-500{% else %}bg-gray-100 hover:bg-orange-100{% endif %} transition">
-        <button onclick="window._amzSlFilterCat('{{ cat|replace("'","&#39;") }}')"
-                class="px-3 py-1 text-xs font-medium
-                       {% if category == cat %}text-white{% else %}text-gray-600 hover:text-orange-700{% endif %}">
-            {{ cat }}
-        </button>
-        <button onclick="window._amzIgnoreCategory('{{ cat|replace("'","&#39;") }}','{{ seller_id }}')"
-                title="Ignorar toda esta categoría"
-                class="pr-2 text-xs leading-none
-                       {% if category == cat %}text-orange-200 hover:text-white{% else %}text-gray-300 hover:text-red-500{% endif %} transition">
-            ✕
-        </button>
-    </span>
-    {% endfor %}
+    {% endif %}
     {% if sin_precio_cnt > 0 %}
     <button onclick="window._amzSlFilterSinPrecio()"
-            class="px-3 py-1 rounded-full text-xs font-medium transition
+            class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg transition
                    {% if show_sin_precio %}bg-gray-600 text-white{% else %}bg-gray-100 text-gray-500 hover:bg-gray-200{% endif %}">
-        Sin precio <span class="ml-1 opacity-70">{{ sin_precio_cnt }}</span>
+        ⚠ Sin precio ({{ sin_precio_cnt }})
     </button>
     {% endif %}
 </div>
