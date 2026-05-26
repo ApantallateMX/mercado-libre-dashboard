@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-26 — FIX: Verificación individual por SKU — solución definitiva ExclusiveBulbs
+
+### Problema
+`searchListingsItems` y FBA inventory devuelven 0 para ExclusiveBulbs (156K listings).
+Resultado: todos los SKUs BM aparecen como "Sin Lanzar" aunque sí estén en Amazon.
+
+### Arquitectura 3 capas
+1. **Listings API** — si devuelve SKUs, usarlos. Ahora incluye activos E inactivos (out-of-stock ≠ gap).
+2. **Reports API** (`GET_MERCHANT_LISTINGS_ALL_DATA`) — descarga catálogo completo (sin límite de paginación)
+3. **Individual lookup** (fallback definitivo) — si amazon_base_skus sigue vacío:
+   - Verifica cada BM SKU individualmente via `GET /listings/{sellerId}/{sku}`
+   - Prueba variantes: base, -FBA, `_FBA_0`, -FBA-0, -FBM
+   - Cache 24h en `amz_catalog_cache` (Semaphore 5, concurrente)
+   - Primera vez: ~1951 API calls; siguiente scan: instantáneo desde cache
+
+### Archivos modificados
+- `app/api/amazon_lanzar.py`: `_verify_bm_skus_individually()` + integración en scan
+- `app/services/amazon_client.py`: `get_listing_item(sku)` — lookup individual
+- `app/services/token_store.py`: tabla `amz_catalog_cache` (seller_id, sku_upper, found, checked_at)
+
+---
+
 ## 2026-05-26 — FIX: SKU matching — FBA suffix regex + Reports API para catálogos grandes
 
 ### Problema
