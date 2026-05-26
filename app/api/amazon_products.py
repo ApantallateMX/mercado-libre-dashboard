@@ -4689,3 +4689,56 @@ async def amazon_products_devoluciones(
         "marketplace":  client.marketplace_name,
     }
     return _templates.TemplateResponse(request, "partials/amazon_products_devoluciones.html", ctx)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIAGNÓSTICO — Test lookup de SKU específico (para debug de gaps falsos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/diag/check-sku", response_class=JSONResponse)
+async def diag_check_sku(
+    sku: str = Query(..., description="SKU a verificar en Amazon"),
+    seller_id: Optional[str] = Query(None),
+):
+    """
+    Diagnóstico: verifica si un SKU específico existe en Amazon.
+    Retorna el resultado completo con marketplace_id, errores y variantes probadas.
+    Accesible sin login para diagnóstico desde Railway logs.
+    """
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    sku_up = sku.strip().upper()
+    _AMZ_CHECK_SUFFIXES = ("-FBA", "_FBA_0", "-FBA-0", "-FBM")
+    variants = [sku_up] + [sku_up + sfx for sfx in _AMZ_CHECK_SUFFIXES]
+
+    results = []
+    for variant in variants:
+        try:
+            res = await client.get_listing_item(variant)
+            if res is not None:
+                summaries = res.get("summaries", [{}])
+                s = summaries[0] if summaries else {}
+                results.append({
+                    "variant": variant,
+                    "found": True,
+                    "asin": s.get("asin", ""),
+                    "status": s.get("status", ""),
+                    "product_type": res.get("productType", ""),
+                })
+            else:
+                results.append({"variant": variant, "found": False, "reason": "404"})
+        except Exception as e:
+            results.append({"variant": variant, "found": False, "reason": str(e)[:200]})
+
+    found_any = any(r["found"] for r in results)
+    return JSONResponse({
+        "sku": sku_up,
+        "seller_id": client.seller_id,
+        "marketplace_id": client.marketplace_id,
+        "marketplace_name": client.marketplace_name,
+        "nickname": client.nickname,
+        "found": found_any,
+        "variants": results,
+    })

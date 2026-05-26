@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-26 — FIX: get_listing_item benefit-of-doubt + diagnóstico gap falso (SNAC000046)
+
+### Problema raíz
+`get_listing_item` devolvía `None` para CUALQUIER error (403, 429, red), no solo 404. Esto causaba que SKUs como SNAC000046 se marcaran como gap aunque existieran en Amazon — cualquier error transitorio de API se confundía con "no existe".
+
+### Fixes
+1. **`get_listing_item` re-raise no-404** — ahora solo devuelve `None` para 404/NOT_FOUND. Cualquier otro error se relanza, y `_check_gap` lo captura en `asyncio.gather(return_exceptions=True)` → el SKU se descarta de gaps (beneficio de la duda).
+2. **Logging detallado en scan** — log de `marketplace_id` + `nickname` al inicio del scan. Log cuando un SKU se confirma como gap con las variantes probadas y el marketplace usado.
+3. **Endpoint diagnóstico** — `GET /api/amazon/diag/check-sku?sku=SKU&seller_id=ID` — prueba lookup en tiempo real con resultado completo: marketplace_id, variantes, errores exactos.
+
+### Archivos modificados
+- `app/services/amazon_client.py`: `get_listing_item` — re-raise en errores no-404 + log warning
+- `app/api/amazon_lanzar.py`: `_check_gap` — manejo explícito de non-404, logging detallado
+- `app/api/amazon_products.py`: nuevo endpoint `/api/amazon/diag/check-sku`
+
+---
+
 ## 2026-05-26 — FIX: Verificación individual por SKU — solución definitiva ExclusiveBulbs
 
 ### Problema

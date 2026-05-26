@@ -161,6 +161,13 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             if not client:
                 raise Exception("Cuenta Amazon no encontrada")
 
+            logger.info(
+                f"[AMZ Gap Scan] seller={client.seller_id} | "
+                f"marketplace_id={client.marketplace_id} | "
+                f"marketplace_name={client.marketplace_name} | "
+                f"nickname={client.nickname}"
+            )
+
             from app.services.binmanager_client import get_shared_bm
             bm_cli = await get_shared_bm()
 
@@ -318,8 +325,17 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                     if bm_sku_u in gap_cache_found:
                         return None  # Cache: ya confirmado en Amazon → no es gap
                     async with sem_gap:
-                        for variant in [bm_sku_u] + [bm_sku_u + sfx for sfx in _AMZ_CHECK_SUFFIXES]:
-                            res = await client.get_listing_item(variant)
+                        variants = [bm_sku_u] + [bm_sku_u + sfx for sfx in _AMZ_CHECK_SUFFIXES]
+                        for variant in variants:
+                            try:
+                                res = await client.get_listing_item(variant)
+                            except Exception as _e:
+                                # Error no-404 (429, 403, red) → benefit of doubt: no confirmar como gap
+                                logger.warning(
+                                    f"[AMZ Gap Scan] _check_gap({bm_sku_u}) variante={variant} "
+                                    f"error no-404 → benefit of doubt: {_e}"
+                                )
+                                raise  # Propagate → asyncio.gather lo captura → no es gap
                             if res is not None:
                                 # Guardar en cache como encontrado
                                 async with aiosqlite.connect(DATABASE_PATH) as _db2:
@@ -333,6 +349,10 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                 amazon_base_skus.add(bm_sku_u)
                                 logger.info(f"[AMZ Gap Scan] {bm_sku_u} confirmado en Amazon via {variant}")
                                 return None  # No es gap
+                        logger.info(
+                            f"[AMZ Gap Scan] {bm_sku_u} CONFIRMADO GAP "
+                            f"(marketplace={client.marketplace_id}, variantes probadas={variants})"
+                        )
                         return g  # Confirmado: no existe en Amazon
 
                 gap_results = await asyncio.gather(*[_check_gap(g) for g in gaps], return_exceptions=True)

@@ -1121,6 +1121,8 @@ class AmazonClient:
 
         Usa GET /listings/{sellerId}/{sku} — endpoint directo que no requiere
         permisos especiales de búsqueda. Retorna dict si existe, None si no (404).
+        Re-lanza cualquier error que NO sea 404 para que el caller pueda dar
+        "benefit of doubt" (no marcar como gap si hay error de red/auth/rate-limit).
 
         Útil para confirmar si un BM SKU (o variante -FBA) está lanzado en Amazon,
         incluso si está out of stock o inactivo.
@@ -1141,8 +1143,10 @@ class AmazonClient:
             err_str = str(e)
             if "404" in err_str or "NOT_FOUND" in err_str.upper():
                 return None
-            logger.debug(f"[Amazon] get_listing_item({sku}): {err_str[:100]}")
-            return None
+            # Re-lanzar errores NO 404 (403, 429, red, etc.) para que el caller
+            # trate el SKU como "beneficio de la duda" (no confirmar como gap)
+            logger.warning(f"[Amazon] get_listing_item({sku}) error no-404 marketplace={self.marketplace_id}: {err_str[:200]}")
+            raise
 
     async def get_catalog_item(self, asin: str) -> Optional[dict]:
         """
