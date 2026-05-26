@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import math
+import re as _re
 import time as _time
 from datetime import datetime
 from typing import Optional
@@ -33,6 +34,8 @@ _templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templ
 _amz_scan_locks: dict[str, asyncio.Lock] = {}
 
 _AMZ_SUFFIXES = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-FLX01", "-FLX02")
+# Matches: SKU-FBA, SKU_FBA, SKU-FBA-0, SKU_FBA_0, SKU-FBM, etc.
+_AMZ_FBA_RE = _re.compile(r'^(.+?)[-_](?:FBA|FBM)(?:[-_]\d+)?$', _re.IGNORECASE)
 
 
 def _amz_base(sku: str) -> str:
@@ -40,6 +43,9 @@ def _amz_base(sku: str) -> str:
     for s in _AMZ_SUFFIXES:
         if u.endswith(s):
             return u[:-len(s)]
+    m = _AMZ_FBA_RE.match(u)
+    if m:
+        return m.group(1)
     return u
 
 
@@ -82,6 +88,18 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             amazon_base_skus: set[str] = set()
             amazon_active = 0
 
+            # get_all_listings() tiene max_pages=50 → máximo ~1000 SKUs.
+            # Si el catálogo es grande (ExclusiveBulbs tiene 156K listings),
+            # el resultado estará truncado. Detectar y usar Reports API en ese caso.
+            _LISTINGS_PAGE_CAP = 990  # 50 páginas × 20 ítems ≈ 1000 → si llegamos cerca, está truncado
+
+            if listings and len(listings) >= _LISTINGS_PAGE_CAP:
+                logger.warning(
+                    f"[AMZ Gap Scan] get_all_listings() devolvió {len(listings)} SKUs "
+                    f"(probablemente truncado) → usando Reports API para catálogo completo"
+                )
+                listings = []  # Descartar — incompleto
+
             if listings:
                 for listing in listings:
                     sku = listing.get("sku", "")
@@ -98,22 +116,42 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                     1 for l in listings
                     if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
                 )
+                logger.info(f"[AMZ Gap Scan] Listings API: {amazon_active} activos de {len(listings)} total")
             else:
-                # Fallback: get_all_listings() devolvió vacío → intentar FBA inventory
-                logger.info(f"[AMZ Gap Scan] get_all_listings() vacío → FBA fallback")
+                # Listings vacío o truncado → usar Reports API (GET_MERCHANT_LISTINGS_ALL_DATA)
+                logger.info(f"[AMZ Gap Scan] Usando Reports API para catálogo completo de {seller_id}")
                 try:
-                    fba_items = await client.get_fba_inventory_all()
-                    for fba in fba_items:
-                        sku = fba.get("sellerSku") or ""
-                        if sku:
-                            amazon_base_skus.add(sku.upper())
-                            base = _amz_base(sku)
-                            if base:
-                                amazon_base_skus.add(base)
-                    amazon_active = len({f.get("sellerSku") for f in fba_items if f.get("sellerSku")})
-                    logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
-                except Exception as _fba_err:
-                    logger.warning(f"[AMZ Gap Scan] FBA fallback falló: {_fba_err}")
+                    report_skus = await client.get_merchant_listings_report()
+                    for entry in report_skus:
+                        sku = entry.get("sku") or ""
+                        if not sku:
+                            continue
+                        sku_up = sku.upper()
+                        amazon_base_skus.add(sku_up)
+                        base = _amz_base(sku)
+                        if base:
+                            amazon_base_skus.add(base)
+                        if entry.get("status", "").upper() == "ACTIVE":
+                            amazon_active += 1
+                    logger.info(
+                        f"[AMZ Gap Scan] Reports API: {amazon_active} activos de {len(report_skus)} total"
+                    )
+                except Exception as _rpt_err:
+                    logger.error(f"[AMZ Gap Scan] Reports API falló: {_rpt_err}", exc_info=True)
+                    # Último recurso: FBA inventory
+                    try:
+                        fba_items = await client.get_fba_inventory_all()
+                        for fba in fba_items:
+                            sku = fba.get("sellerSku") or ""
+                            if sku:
+                                amazon_base_skus.add(sku.upper())
+                                base = _amz_base(sku)
+                                if base:
+                                    amazon_base_skus.add(base)
+                        amazon_active = len({f.get("sellerSku") for f in fba_items if f.get("sellerSku")})
+                        logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
+                    except Exception as _fba_err:
+                        logger.warning(f"[AMZ Gap Scan] FBA fallback también falló: {_fba_err}")
 
             FX = 18.0  # FX fijo USD → MXN
             now_iso = datetime.utcnow().isoformat()

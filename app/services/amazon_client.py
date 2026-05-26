@@ -787,9 +787,10 @@ class AmazonClient:
 
         all_items = []
         page_token = None
-        max_pages = 50  # Seguridad: máximo 50 páginas (1000 listings)
+        # Cap bajo intencionado: para catálogos grandes usar get_merchant_listings_report()
+        max_pages = 50  # 50 páginas × 20 ítems = 1000 listings máx
 
-        for _ in range(max_pages):
+        for page_num in range(max_pages):
             params: list = [
                 ("marketplaceIds", self.marketplace_id),
                 ("includedData", ",".join(included_data)),
@@ -805,7 +806,10 @@ class AmazonClient:
                     params=params,
                 )
             except Exception as e:
-                logger.warning(f"[Amazon] Error en searchListingsItems: {e}")
+                logger.error(
+                    f"[Amazon] Error en searchListingsItems página {page_num + 1}: {e}",
+                    exc_info=True,
+                )
                 break
 
             items = result.get("items", [])
@@ -816,6 +820,13 @@ class AmazonClient:
                 break
 
             await asyncio.sleep(0.2)  # Rate limit: 5 req/s
+        else:
+            # Loop completó max_pages sin agotar nextToken → catálogo truncado
+            logger.warning(
+                f"[Amazon] get_all_listings: límite {max_pages} páginas alcanzado para {self.seller_id}. "
+                f"Catálogo truncado en ~{len(all_items)} ítems. "
+                f"Usar get_merchant_listings_report() para catálogos grandes."
+            )
 
         # Deduplicar por SKU (Amazon puede repetir items entre páginas)
         seen: dict = {}
@@ -823,6 +834,9 @@ class AmazonClient:
             sku = item.get("sku", "")
             if sku and sku not in seen:
                 seen[sku] = item
+        logger.info(
+            f"[Amazon] get_all_listings: {len(seen)} SKUs únicos para {self.seller_id}"
+        )
         return list(seen.values()) if seen else all_items
 
     async def get_fba_inventory_all(self) -> list:
@@ -1010,6 +1024,96 @@ class AmazonClient:
         # Timeout
         logger.warning(f"[Amazon Reports] Timeout esperando reporte {report_id} ({max_wait_secs}s)")
         return {}
+
+    async def get_merchant_listings_report(self, max_wait_secs: int = 300) -> list:
+        """
+        Obtiene TODOS los listings del vendedor via Reports API.
+
+        Usa GET_MERCHANT_LISTINGS_ALL_DATA que incluye listings activos, inactivos
+        y suprimidos — funciona para catálogos de cualquier tamaño (ej. 156K SKUs).
+
+        Retorna lista de dicts: {sku, asin, status, channel}
+        status: "Active" | "Inactive"
+        channel: "DEFAULT" (merchant) | "AMAZON_NA" (FBA)
+
+        Rate limit del report create: 0.0167 req/s (1 por minuto) — solo usar en cache-miss.
+        """
+        import csv, io as _io
+
+        logger.info("[Amazon Reports] Creando reporte GET_MERCHANT_LISTINGS_ALL_DATA…")
+        body = {
+            "reportType": "GET_MERCHANT_LISTINGS_ALL_DATA",
+            "marketplaceIds": [self.marketplace_id],
+        }
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
+        report_id = result.get("reportId", "")
+        if not report_id:
+            raise ValueError(f"Amazon no devolvió reportId: {result}")
+
+        attempts = max(6, max_wait_secs // 30)
+        wait_interval = 30
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(
+                f"[Amazon Reports] {report_id} → {proc_status} (intento {attempt + 1}/{attempts})"
+            )
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+
+                items = []
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                for row in reader:
+                    sku = (
+                        row.get("seller-sku")
+                        or row.get("Seller SKU")
+                        or row.get("item-id")
+                        or ""
+                    ).strip()
+                    if not sku:
+                        continue
+                    asin = (
+                        row.get("asin1") or row.get("ASIN") or row.get("asin") or ""
+                    ).strip()
+                    status = (
+                        row.get("status") or row.get("Status") or ""
+                    ).strip()
+                    channel = (
+                        row.get("fulfillment-channel")
+                        or row.get("Fulfillment Channel")
+                        or "DEFAULT"
+                    ).strip()
+                    items.append({
+                        "sku": sku,
+                        "asin": asin,
+                        "status": status,
+                        "channel": channel,
+                    })
+
+                logger.info(
+                    f"[Amazon Reports] GET_MERCHANT_LISTINGS_ALL_DATA: {len(items)} listings para {self.seller_id}"
+                )
+                return items
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(
+                    f"Reporte {report_id} terminó con estado {proc_status}: "
+                    f"{status_data.get('processingStatus', '')}"
+                )
+
+        logger.warning(
+            f"[Amazon Reports] Timeout ({max_wait_secs}s) esperando reporte {report_id}"
+        )
+        return []
 
     async def get_catalog_item(self, asin: str) -> Optional[dict]:
         """
