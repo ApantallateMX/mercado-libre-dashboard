@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-26 — FIX: SKU matching — FBA suffix regex + Reports API para catálogos grandes
+
+### Problema
+SKUs como `SNAC000029-FBA` y `SNAC000029_FBA_0` no se reconocían como lanzados — `_amz_base()` no manejaba los sufijos FBA/FBM. Además, `get_all_listings()` tenía cap de 50 páginas × 20 ítems = 1000 SKUs, truncando silenciosamente catálogos grandes (ExclusiveBulbs: 156K listings).
+
+### Fixes
+1. **`_amz_base()` regex** — `_AMZ_FBA_RE` extrae base de `SKU-FBA`, `SKU_FBA_0`, `SKU-FBM`, etc.
+2. **`get_all_listings()` logging** — detecta truncado, avisa en logs con `else` en el `for`
+3. **`get_merchant_listings_report()`** — nuevo método que usa `GET_MERCHANT_LISTINGS_ALL_DATA` (Reports API) para descargar TODO el catálogo en un solo archivo TSV, sin límite de paginación
+4. **`_run_amz_gap_scan()`** — si listings ≥ 990 (truncado) → descarta y usa Reports API; si Reports falla → FBA fallback
+
+### Archivos modificados
+- `app/api/amazon_lanzar.py`: `_amz_base()` regex, lógica de detección de truncado en scan
+- `app/services/amazon_client.py`: `get_all_listings()` mejor logging, nuevo `get_merchant_listings_report()`
+
+---
+
 ## 2026-05-25 — FEAT: Amazon Sin Publicar — background scan (BM vs Amazon gap detection)
 
 ### Resumen
