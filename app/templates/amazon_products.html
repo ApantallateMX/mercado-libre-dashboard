@@ -819,10 +819,14 @@ window._loadAmzSinLanzar = function(page, force) {
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
         .then(function(html) {
             container.innerHTML = html;
-            // Auto-start scan polling if partial loaded with scan in progress
+            // Auto-start scan polling if scan is in progress
             var meta = document.getElementById('amz-sl-meta');
-            if (meta && meta.getAttribute('data-scan-status') === 'running') {
-                window._amzPollScan(meta.getAttribute('data-seller-id'));
+            if (meta) {
+                var scanSt = meta.getAttribute('data-scan-status');
+                var sid2   = meta.getAttribute('data-seller-id');
+                if (scanSt === 'running') {
+                    window._amzPollScan(sid2);
+                }
             }
         })
         .catch(function(e) {
@@ -935,7 +939,8 @@ window._amzPollScan = function(sellerId) {
                 if (d.status !== 'running') {
                     clearInterval(_amzScanInterval);
                     _amzScanInterval = null;
-                    window._loadAmzSinLanzar(1);
+                    // Recargar el tab Sin Publicar con datos frescos
+                    window._loadAmzSinLanzar(1, true);
                 }
             })
             .catch(function(){
