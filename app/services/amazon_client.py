@@ -1115,6 +1115,35 @@ class AmazonClient:
         )
         return []
 
+    async def get_listing_item(self, sku: str) -> Optional[dict]:
+        """
+        Verifica si un SKU específico existe como listing en Amazon.
+
+        Usa GET /listings/{sellerId}/{sku} — endpoint directo que no requiere
+        permisos especiales de búsqueda. Retorna dict si existe, None si no (404).
+
+        Útil para confirmar si un BM SKU (o variante -FBA) está lanzado en Amazon,
+        incluso si está out of stock o inactivo.
+
+        Rate limit: 5 req/s.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+                params=[
+                    ("marketplaceIds", self.marketplace_id),
+                    ("includedData", "summaries"),
+                ],
+            )
+            return result
+        except Exception as e:
+            err_str = str(e)
+            if "404" in err_str or "NOT_FOUND" in err_str.upper():
+                return None
+            logger.debug(f"[Amazon] get_listing_item({sku}): {err_str[:100]}")
+            return None
+
     async def get_catalog_item(self, asin: str) -> Optional[dict]:
         """
         Obtiene datos del catálogo Amazon para un ASIN específico.

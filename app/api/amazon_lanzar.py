@@ -49,6 +49,92 @@ def _amz_base(sku: str) -> str:
     return u
 
 
+_AMZ_CACHE_TTL_H = 24  # horas de validez del cache por SKU
+
+# Variantes FBA/FBM a probar cuando el SKU base no se encuentra
+_AMZ_CHECK_SUFFIXES = ("-FBA", "_FBA_0", "-FBA-0", "-FBM")
+
+
+async def _verify_bm_skus_individually(client, seller_id: str, bm_items: list) -> set:
+    """
+    Verifica cada BM SKU individualmente en Amazon vía getListingsItem.
+    Usa cache en DB (amz_catalog_cache, TTL 24h) para evitar re-verificar.
+    Retorna set de base-SKUs que SÍ existen en Amazon (en cualquier estado).
+    """
+    from datetime import timedelta
+    found_skus: set[str] = set()
+    sem = asyncio.Semaphore(5)  # max 5 calls concurrentes
+    cutoff = (datetime.utcnow() - timedelta(hours=_AMZ_CACHE_TTL_H)).isoformat()
+
+    # Cargar cache existente
+    cache_found: set[str] = set()
+    cache_not_found: set[str] = set()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT sku_upper, found FROM amz_catalog_cache WHERE seller_id=? AND checked_at > ?",
+            (seller_id, cutoff),
+        )
+        rows = await cur.fetchall()
+        for r in rows:
+            if r["found"]:
+                cache_found.add(r["sku_upper"])
+            else:
+                cache_not_found.add(r["sku_upper"])
+
+    bm_skus = [(item.get("SKU") or "").strip().upper() for item in bm_items if item.get("SKU")]
+    to_check = [s for s in bm_skus if s and s not in cache_found and s not in cache_not_found]
+
+    logger.info(
+        f"[AMZ Gap Scan] Verificación individual: {len(bm_skus)} SKUs BM, "
+        f"{len(cache_found)} en caché (found), {len(cache_not_found)} en caché (not found), "
+        f"{len(to_check)} a verificar via API"
+    )
+
+    # Add cached found SKUs immediately
+    found_skus.update(cache_found)
+
+    async def _check_one(bm_sku: str) -> tuple[str, bool]:
+        async with sem:
+            # Try base SKU first
+            result = await client.get_listing_item(bm_sku)
+            if result is not None:
+                return bm_sku, True
+            # Try FBA/FBM variants
+            for sfx in _AMZ_CHECK_SUFFIXES:
+                result = await client.get_listing_item(bm_sku + sfx)
+                if result is not None:
+                    return bm_sku, True
+            return bm_sku, False
+
+    if to_check:
+        tasks = [_check_one(s) for s in to_check]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        new_cache_entries = []
+        now_iso = datetime.utcnow().isoformat()
+        for res in results:
+            if isinstance(res, Exception):
+                continue
+            sku, is_found = res
+            if is_found:
+                found_skus.add(sku)
+            new_cache_entries.append((seller_id, sku, 1 if is_found else 0, now_iso))
+
+        if new_cache_entries:
+            async with aiosqlite.connect(DATABASE_PATH) as db:
+                await db.executemany(
+                    """INSERT INTO amz_catalog_cache (seller_id, sku_upper, found, checked_at)
+                       VALUES (?, ?, ?, ?)
+                       ON CONFLICT(seller_id, sku_upper) DO UPDATE SET
+                           found=excluded.found, checked_at=excluded.checked_at""",
+                    new_cache_entries,
+                )
+                await db.commit()
+
+    return found_skus
+
+
 async def _run_amz_gap_scan(seller_id: str) -> None:
     """Background task: compara BM stock vs Amazon activos → actualiza amz_sku_gaps."""
     if seller_id not in _amz_scan_locks:
@@ -105,13 +191,12 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                     sku = listing.get("sku", "")
                     if not sku:
                         continue
-                    summaries = listing.get("summaries", [])
-                    is_active = any(s.get("status") == "ACTIVE" for s in summaries)
-                    if is_active:
-                        amazon_base_skus.add(sku.upper())
-                        base = _amz_base(sku)
-                        if base:
-                            amazon_base_skus.add(base)
+                    # Incluir TODOS los listings (activos e inactivos)
+                    # Un SKU out-of-stock ya está lanzado — no es un gap
+                    amazon_base_skus.add(sku.upper())
+                    base = _amz_base(sku)
+                    if base:
+                        amazon_base_skus.add(base)
                 amazon_active = sum(
                     1 for l in listings
                     if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
@@ -152,6 +237,21 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                         logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
                     except Exception as _fba_err:
                         logger.warning(f"[AMZ Gap Scan] FBA fallback también falló: {_fba_err}")
+
+            # Si amazon_base_skus sigue vacío después de todos los intentos,
+            # hacer verificación individual por SKU (con cache 24h en DB)
+            if not amazon_base_skus:
+                logger.warning(
+                    f"[AMZ Gap Scan] amazon_base_skus vacío — "
+                    f"verificando SKUs BM individualmente en Amazon"
+                )
+                amazon_base_skus = await _verify_bm_skus_individually(
+                    client, seller_id, bm_items
+                )
+                amazon_active = len(amazon_base_skus)
+                logger.info(
+                    f"[AMZ Gap Scan] Verificación individual: {amazon_active} SKUs encontrados en Amazon"
+                )
 
             FX = 18.0  # FX fijo USD → MXN
             now_iso = datetime.utcnow().isoformat()

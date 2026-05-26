@@ -777,6 +777,17 @@ async def init_db():
                 await db.execute(_col_sql)
             except Exception:
                 pass  # columna ya existe
+        # TABLA: amz_catalog_cache — SKUs confirmados en Amazon por seller_id
+        # Evita re-verificar el mismo SKU en cada scan (TTL 24h)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_catalog_cache (
+                seller_id    TEXT NOT NULL,
+                sku_upper    TEXT NOT NULL,
+                found        INTEGER NOT NULL DEFAULT 0,
+                checked_at   TEXT NOT NULL,
+                PRIMARY KEY (seller_id, sku_upper)
+            )
+        """)
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_repricing_rules (
