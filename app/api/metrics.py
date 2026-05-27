@@ -1609,8 +1609,40 @@ async def get_amazon_recent_orders(
                 pass
             if not items_currency:
                 items_currency = ip.get("CurrencyCode", "")
+
+        # Fallback: Amazon no devuelve ItemPrice en órdenes "Awaiting payment verification".
+        # En ese caso buscar el precio del listing en nuestra DB por SKU de cada item.
+        if subtotal == 0.0 and order.get("_items"):
+            import aiosqlite as _aio
+            from app.config import DATABASE_PATH as _DB_P
+            for it in order["_items"]:
+                sku = (it.get("SellerSKU") or "").strip()
+                qty = max(1, int(it.get("QuantityOrdered") or 1))
+                if not sku:
+                    continue
+                try:
+                    async with _aio.connect(_DB_P) as _db:
+                        _cur = await _db.execute(
+                            "SELECT price FROM amazon_listings WHERE seller_id=? AND sku=? LIMIT 1",
+                            (client.seller_id, sku),
+                        )
+                        _row = await _cur.fetchone()
+                    if _row and _row[0] and float(_row[0]) > 0:
+                        subtotal += float(_row[0]) * qty
+                        order["_price_source"] = "listing"
+                except Exception:
+                    pass
+
+        # Moneda: preferir lo que vino de ItemPrice; fallback = moneda del marketplace
+        _mkt_currency = {"US": "USD", "MX": "MXN", "CA": "CAD"}.get(client.marketplace_name, "USD")
         order["_items_subtotal"] = round(subtotal, 2)
-        order["_items_currency"] = items_currency or (order.get("OrderTotal") or {}).get("CurrencyCode", "USD")
+        order["_items_currency"] = (
+            items_currency
+            or (order.get("OrderTotal") or {}).get("CurrencyCode", "")
+            or _mkt_currency
+        )
+        if not order.get("_price_source"):
+            order["_price_source"] = "items" if subtotal > 0 else "none"
 
         enriched.append(order)
     recent = enriched

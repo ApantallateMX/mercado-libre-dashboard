@@ -13,10 +13,12 @@
     {% set amount_official = order.get('OrderTotal', {}).get('Amount', '0') | float %}
     {% set items_subtotal  = order.get('_items_subtotal', 0) | float %}
     {% set items_currency  = order.get('_items_currency', '') %}
-    {# Si Amazon no provee OrderTotal (Pending), usar subtotal calculado desde items #}
+    {% set price_source    = order.get('_price_source', 'none') %}
+    {# Si Amazon no provee OrderTotal (Pending), usar subtotal calculado desde items o listing #}
     {% set amount   = amount_official if amount_official > 0 else items_subtotal %}
     {% set currency = order.get('OrderTotal', {}).get('CurrencyCode', '') or items_currency or 'USD' %}
     {% set is_estimated = (amount_official == 0 and items_subtotal > 0) %}
+    {% set from_listing = (price_source == 'listing') %}
     {% set raw_date   = order.get('PurchaseDate', '') %}
     {% set units_ship = order.get('NumberOfItemsShipped', 0) | int %}
     {% set units_pend = order.get('NumberOfItemsUnshipped', 0) | int %}
@@ -72,7 +74,12 @@
                     ${{ "{:,.2f}".format(amount) }}
                     <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
                 </span>
-                {% if is_estimated %}
+                {% if is_estimated and from_listing %}
+                <span class="text-[10px] text-gray-500 font-medium bg-gray-50 px-1.5 py-0.5 rounded"
+                      title="Precio del listing — Amazon no confirma el monto hasta liberar el pago">
+                    precio listing
+                </span>
+                {% elif is_estimated %}
                 <span class="text-[10px] text-amber-600 font-medium bg-amber-50 px-1.5 py-0.5 rounded"
                       title="Subtotal de venta — fees de Amazon se descuentan cuando se libera el pago">
                     fees pend.
@@ -155,13 +162,17 @@
                     </div>
                     <div class="px-4 py-3 flex justify-between bg-orange-50 border-t-2 border-orange-300">
                         <span class="text-orange-800 font-bold">
-                            {{ 'Subtotal venta' if is_estimated else 'Total' }}
+                            {% if is_estimated and from_listing %}Precio listing
+                            {% elif is_estimated %}Subtotal venta
+                            {% else %}Total{% endif %}
                         </span>
                         <div class="text-right">
                             <span class="text-orange-800 font-bold text-base">
                                 {% if amount > 0 %}${{ "{:,.2f}".format(amount) }} {{ currency }}{% else %}—{% endif %}
                             </span>
-                            {% if is_estimated %}
+                            {% if is_estimated and from_listing %}
+                            <p class="text-[10px] text-gray-500 mt-0.5">Amazon no confirma el monto hasta liberar el pago</p>
+                            {% elif is_estimated %}
                             <p class="text-[10px] text-amber-600 mt-0.5">Fees Amazon descontados al liberar pago</p>
                             {% endif %}
                         </div>
