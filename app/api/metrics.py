@@ -1596,6 +1596,22 @@ async def get_amazon_recent_orders(
                 # Rate limit alcanzado — detener enriquecimiento, mostrar los que tenemos
                 enriched.append(order)
                 break
+
+        # Calcular subtotal desde items (útil para Pending donde OrderTotal = 0)
+        # ItemPrice.Amount ya es el total de la línea (precio × qty), no unitario
+        subtotal = 0.0
+        items_currency = ""
+        for it in order.get("_items", []):
+            ip = it.get("ItemPrice") or {}
+            try:
+                subtotal += float(ip.get("Amount") or 0)
+            except (TypeError, ValueError):
+                pass
+            if not items_currency:
+                items_currency = ip.get("CurrencyCode", "")
+        order["_items_subtotal"] = round(subtotal, 2)
+        order["_items_currency"] = items_currency or (order.get("OrderTotal") or {}).get("CurrencyCode", "USD")
+
         enriched.append(order)
     recent = enriched
 
