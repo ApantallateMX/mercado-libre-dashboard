@@ -15,12 +15,14 @@ import time as _time
 
 logger = logging.getLogger(__name__)
 
-_FULL_INTERVAL     = 6 * 3600   # 6 horas entre syncs completos
-_QTY_SYNC_INTERVAL = 10 * 60   # 10 minutos entre qty-only syncs
-_sync_running      = False
-_qty_sync_running  = False
-_last_sync_ts      = 0.0
-_last_qty_sync_ts  = 0.0
+_FULL_INTERVAL      = 6 * 3600   # 6 horas entre syncs completos
+_QTY_SYNC_INTERVAL  = 10 * 60   # 10 minutos entre qty-only syncs
+_GAP_SCAN_INTERVAL  = 3 * 3600  # 3 horas entre gap scans automáticos
+_sync_running       = False
+_qty_sync_running   = False
+_last_sync_ts       = 0.0
+_last_qty_sync_ts   = 0.0
+_last_gap_scan_ts   = 0.0
 _sync_error    = ""
 _sync_status: dict = {"accounts_synced": 0, "items_total": 0, "last_run_iso": None, "elapsed_s": 0}
 
@@ -358,27 +360,56 @@ async def run_amazon_qty_sync() -> dict:
         _qty_sync_running = False
 
 
+async def _run_gap_scan_background() -> None:
+    """Dispara gap scan para todas las cuentas en background, sin bloquear el loop."""
+    global _last_gap_scan_ts
+    try:
+        from app.api.amazon_lanzar import run_gap_scan_all_accounts
+        logger.info("[AMZ-AUTO-SCAN] Iniciando gap scan automático para todas las cuentas")
+        await run_gap_scan_all_accounts()
+        _last_gap_scan_ts = _time.time()
+        logger.info("[AMZ-AUTO-SCAN] Gap scan automático completado")
+    except Exception as e:
+        logger.error(f"[AMZ-AUTO-SCAN] Error: {e}")
+
+
 async def _loop():
     """Loop periódico:
-    - Arranque (60s): full sync
+    - Arranque (60s): full sync → gap scan
     - Cada 10 min: qty-only sync
-    - Cada 6h: full reconciliation
+    - Cada 6h: full reconciliation → gap scan
+    - Cada 3h (si no hubo full sync): gap scan (cambios de stock BM)
     """
+    global _last_gap_scan_ts
     await asyncio.sleep(60)   # esperar a que el servidor esté listo
     await run_amazon_listing_sync()
+    # Gap scan inicial (después del primer full sync)
+    await asyncio.sleep(5)  # dar 5s para que el DB se asiente
+    await _run_gap_scan_background()
+
     while True:
         await asyncio.sleep(_QTY_SYNC_INTERVAL)   # despertar cada 10 min
+
         # qty-only sync (siempre)
         try:
             await run_amazon_qty_sync()
         except Exception as e:
             logger.error(f"[AMZ-QTY-LOOP] Error: {e}")
-        # full sync si pasaron ≥6h
+
+        # full sync si pasaron ≥6h → seguido de gap scan
         if (_time.time() - _last_sync_ts) >= _FULL_INTERVAL:
             try:
                 await run_amazon_listing_sync()
+                await asyncio.sleep(5)
+                await _run_gap_scan_background()
             except Exception as e:
                 logger.error(f"[AMZ-LISTING-SYNC-LOOP] Error: {e}")
+        # gap scan independiente si pasaron ≥3h (sin full sync)
+        elif (_time.time() - _last_gap_scan_ts) >= _GAP_SCAN_INTERVAL:
+            try:
+                await _run_gap_scan_background()
+            except Exception as e:
+                logger.error(f"[AMZ-GAP-SCAN-LOOP] Error: {e}")
 
 
 def start_amazon_listing_sync():
@@ -386,14 +417,16 @@ def start_amazon_listing_sync():
     asyncio.create_task(_loop())
     logger.info(
         f"[AMZ-LISTING-SYNC] Iniciado — qty cada {_QTY_SYNC_INTERVAL//60}min, "
-        f"full sync cada {_FULL_INTERVAL//3600}h"
+        f"full sync cada {_FULL_INTERVAL//3600}h, "
+        f"gap scan auto cada {_GAP_SCAN_INTERVAL//3600}h"
     )
 
 
 def get_sync_status() -> dict:
     return {
-        "running":      _sync_running,
-        "error":        _sync_error,
-        "last_sync_ts": _last_sync_ts,
+        "running":           _sync_running,
+        "error":             _sync_error,
+        "last_sync_ts":      _last_sync_ts,
+        "last_gap_scan_ts":  _last_gap_scan_ts,
         **_sync_status,
     }

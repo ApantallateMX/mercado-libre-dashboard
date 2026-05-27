@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-27 — FEAT: Gap scan automático en background (sin click "Escanear")
+
+El gap scan ahora corre automáticamente, igual que el sync de listings. No es necesario hacer click manual.
+
+### Horario
+- **Arranque**: full sync → gap scan (60s después de iniciar)
+- **Cada 6h**: full listing sync → gap scan (listings y gaps siempre frescos)
+- **Cada 3h** (entre full syncs): gap scan solo (captura cambios de stock BM)
+- **Manual**: el botón "Escanear" sigue disponible para forzar si se necesita
+
+### Archivos modificados
+- `app/api/amazon_lanzar.py`: nueva `run_gap_scan_all_accounts()` — itera todas las cuentas, respeta locks
+- `app/services/amazon_listing_sync.py`: `_run_gap_scan_background()`, `_GAP_SCAN_INTERVAL`, loop actualizado, `last_gap_scan_ts` en status
+
+---
+
+## 2026-05-27 — FIX: gap scan — 3 bugs en persistencia de falsos positivos (SNAC000046)
+
+### Bugs
+1. **Cache hit sin limpieza**: `_check_gap()` regresaba `None` por cache hit pero no agregaba a `amazon_base_skus` → fila vieja en `amz_sku_gaps` no se borraba → SKU confirmado como lanzado seguía en UI
+2. **Benefit-of-doubt sin limpieza**: excepción 429/403 hacía `raise` → gap filtrado de lista nueva (correcto) pero fila vieja nunca se borraba de `amz_sku_gaps`
+3. **DB-first saltaba `_check_gap()`**: mi cambio anterior usaba `if gaps and not db_first:` → items confirmados en cache nunca limpiaban la gaps table
+
+### Fix
+- Antes del loop de gaps: augmentar `amazon_base_skus` con `amz_catalog_cache WHERE found=1` → garantiza que cleanup borre filas viejas
+- Cache hit ahora agrega a `amazon_base_skus` explícitamente
+- Benefit-of-doubt: en vez de `raise`, agrega a `amazon_base_skus` + return `None` → old row se borra via cleanup
+- `_check_gap()` corre siempre (removido el guard `not db_first`)
+
+---
+
 ## 2026-05-27 — FEAT: Amazon listing sync DB-first + Reports API full sync
 
 ### Problema

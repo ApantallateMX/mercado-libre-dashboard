@@ -494,6 +494,32 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 await db.commit()
 
 
+async def run_gap_scan_all_accounts() -> None:
+    """Ejecuta el gap scan para TODAS las cuentas Amazon registradas.
+    Llamar desde el loop automático (amazon_listing_sync) o desde endpoints manuales.
+    Cada cuenta corre secuencialmente para no saturar la API ni BM.
+    """
+    try:
+        from app.services import token_store
+        accounts = await token_store.get_all_amazon_accounts()
+        if not accounts:
+            return
+        for acc in accounts:
+            sid = acc.get("seller_id", "")
+            if not sid:
+                continue
+            # Respetar lock: si ya hay un scan en progreso para esta cuenta, saltar
+            if sid in _amz_scan_locks and _amz_scan_locks[sid].locked():
+                logger.debug(f"[AMZ-AUTO-SCAN] seller={sid} ya tiene scan en progreso, saltando")
+                continue
+            try:
+                await _run_amz_gap_scan(sid)
+            except Exception as _e:
+                logger.warning(f"[AMZ-AUTO-SCAN] Error en seller={sid}: {_e}")
+    except Exception as e:
+        logger.warning(f"[AMZ-AUTO-SCAN] Error global: {e}")
+
+
 @router.post("/scan", response_class=JSONResponse)
 async def trigger_amz_scan(
     seller_id: Optional[str] = Query(None),
