@@ -1,6 +1,10 @@
 <!-- ─────────────────────────────────────────────────────────────────────────
      amazon_recent_orders.html — Últimas órdenes Amazon con detalle por item
      Variables: orders (lista de dicts SP-API Orders v0 enriquecidos con _items)
+     Color system:
+       Verde  → precio confirmado (OrderTotal disponible, pago procesado)
+       Ámbar  → precio de la orden pero fees aún pendientes (ItemPrice sin liquidar)
+       Gris   → precio del listing como referencia (Amazon no confirmó monto aún)
 ───────────────────────────────────────────────────────────────────────── -->
 
 {% if not orders %}
@@ -14,11 +18,26 @@
     {% set items_subtotal  = order.get('_items_subtotal', 0) | float %}
     {% set items_currency  = order.get('_items_currency', '') %}
     {% set price_source    = order.get('_price_source', 'none') %}
-    {# Si Amazon no provee OrderTotal (Pending), usar subtotal calculado desde items o listing #}
+    {% set est_fees        = order.get('_est_fees') %}
+
     {% set amount   = amount_official if amount_official > 0 else items_subtotal %}
     {% set currency = order.get('OrderTotal', {}).get('CurrencyCode', '') or items_currency or 'USD' %}
-    {% set is_estimated = (amount_official == 0 and items_subtotal > 0) %}
-    {% set from_listing = (price_source == 'listing') %}
+
+    {# Estados del precio:
+       confirmed  = OrderTotal confirmado por Amazon (verde)
+       pending    = ItemPrice disponible pero fees pendientes (ámbar)
+       listing    = fallback al precio del listing, no confirmado (gris)
+       none       = sin precio disponible #}
+    {% if amount_official > 0 %}
+        {% set price_state = 'confirmed' %}
+    {% elif items_subtotal > 0 and price_source == 'items' %}
+        {% set price_state = 'pending' %}
+    {% elif items_subtotal > 0 and price_source == 'listing' %}
+        {% set price_state = 'listing' %}
+    {% else %}
+        {% set price_state = 'none' %}
+    {% endif %}
+
     {% set raw_date   = order.get('PurchaseDate', '') %}
     {% set units_ship = order.get('NumberOfItemsShipped', 0) | int %}
     {% set units_pend = order.get('NumberOfItemsUnshipped', 0) | int %}
@@ -39,7 +58,6 @@
                     <span class="text-orange-600 text-sm font-bold">📦</span>
                 </div>
                 <div class="min-w-0">
-                    <!-- Título del primer producto -->
                     {% if title %}
                     <p class="text-sm font-semibold text-gray-800 leading-snug truncate max-w-xs md:max-w-sm">
                         {{ title[:70] }}{% if title|length > 70 %}…{% endif %}
@@ -47,7 +65,6 @@
                     {% else %}
                     <p class="text-sm font-semibold text-gray-600 italic">Sin descripción disponible</p>
                     {% endif %}
-                    <!-- Chips: SKU + ASIN + Fecha + Unidades -->
                     <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                         {% if sku %}
                         <span class="text-xs font-mono text-orange-700 bg-orange-50 px-1.5 py-0.5 rounded font-semibold">SKU: {{ sku }}</span>
@@ -60,34 +77,52 @@
                         <span class="text-xs text-gray-500">· {{ units }} ud{{ 's' if units != 1 else '' }}</span>
                         {% endif %}
                         {% if items|length > 1 %}
-                        <span class="text-xs text-gray-400">(+{{ items|length - 1 }} producto{{ 's' if items|length - 1 != 1 else '' }} más)</span>
+                        <span class="text-xs text-gray-400">(+{{ items|length - 1 }} más)</span>
                         {% endif %}
                     </div>
-                    <!-- Número de orden -->
                     <p class="text-xs text-gray-400 font-mono mt-0.5">{{ order_id }}</p>
                 </div>
             </div>
-            <!-- Derecha: monto + badge -->
-            <div class="flex flex-col items-end gap-1.5 shrink-0">
-                {% if amount > 0 %}
-                <span class="text-sm font-bold text-orange-700">
-                    ${{ "{:,.2f}".format(amount) }}
-                    <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
-                </span>
-                {% if is_estimated and from_listing %}
-                <span class="text-[10px] text-gray-500 font-medium bg-gray-50 px-1.5 py-0.5 rounded"
-                      title="Precio del listing — Amazon no confirma el monto hasta liberar el pago">
-                    precio listing
-                </span>
-                {% elif is_estimated %}
-                <span class="text-[10px] text-amber-600 font-medium bg-amber-50 px-1.5 py-0.5 rounded"
-                      title="Subtotal de venta — fees de Amazon se descuentan cuando se libera el pago">
-                    fees pend.
-                </span>
-                {% endif %}
+
+            <!-- Derecha: precio + estado -->
+            <div class="flex flex-col items-end gap-1 shrink-0">
+                {# ── Precio con color según estado ── #}
+                {% if price_state == 'confirmed' %}
+                    <span class="text-sm font-bold text-green-700">
+                        ${{ "{:,.2f}".format(amount) }}
+                        <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
+                    </span>
+                {% elif price_state == 'pending' %}
+                    <span class="text-sm font-bold text-amber-600">
+                        ${{ "{:,.2f}".format(amount) }}
+                        <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
+                    </span>
+                    <span class="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded"
+                          title="Precio de venta confirmado — fees de Amazon se descuentan al liberar el pago">
+                        fees pend.
+                    </span>
+                {% elif price_state == 'listing' %}
+                    <span class="text-sm font-bold text-amber-600">
+                        ${{ "{:,.2f}".format(amount) }}
+                        <span class="text-xs font-normal text-gray-400">{{ currency }}</span>
+                    </span>
+                    <span class="text-[10px] font-medium text-gray-500 bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded"
+                          title="Precio del listing como referencia — Amazon no confirma el monto hasta liberar el pago">
+                        ref. listing
+                    </span>
                 {% else %}
-                <span class="text-sm font-bold text-gray-400">—</span>
+                    <span class="text-sm font-bold text-gray-300">—</span>
                 {% endif %}
+
+                {# ── Fees estimados (solo Pending) ── #}
+                {% if est_fees and est_fees.is_estimated and amount > 0 %}
+                <span class="text-[10px] text-gray-400"
+                      title="Referral fee estimado ~15% — FBA fee variable según peso/tamaño">
+                    ~fees: ${{ "{:,.2f}".format(est_fees.referral) }}
+                </span>
+                {% endif %}
+
+                {# ── Badge de estado ── #}
                 {% if status == 'Shipped' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-800 font-medium">Enviado</span>
                 {% elif status == 'Unshipped' %}
@@ -95,7 +130,7 @@
                 {% elif status == 'Delivered' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 font-medium">Entregado</span>
                 {% elif status == 'Pending' %}
-                    <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600 font-medium">Pendiente</span>
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-700 font-medium">Pendiente</span>
                 {% else %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500 font-medium">{{ status }}</span>
                 {% endif %}
@@ -105,7 +140,7 @@
     </div>
 
     <!-- Fila expandible — oculta por defecto -->
-    <div class="hidden bg-orange-50/50 border-l-4 border-orange-300 px-4 py-4 mb-1">
+    <div class="hidden {% if price_state == 'confirmed' %}bg-green-50/40 border-l-4 border-green-300{% elif price_state in ('pending','listing') %}bg-amber-50/40 border-l-4 border-amber-300{% else %}bg-gray-50/40 border-l-4 border-gray-200{% endif %} px-4 py-4 mb-1">
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 
             <!-- Col 1: Productos de la orden -->
@@ -119,7 +154,7 @@
                 {% set item_qty   = item.get('QuantityOrdered', 1) | int %}
                 {% set item_price_obj = item.get('ItemPrice', {}) %}
                 {% set item_price = item_price_obj.get('Amount', '0') | float if item_price_obj else 0.0 %}
-                <div class="mb-3 {% if not loop.last %}pb-3 border-b border-orange-200{% endif %}">
+                <div class="mb-3 {% if not loop.last %}pb-3 border-b border-gray-200{% endif %}">
                     <p class="text-sm font-medium text-gray-800 leading-snug">{{ item_title[:65] }}{% if item_title|length > 65 %}…{% endif %}</p>
                     <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 mt-1.5 text-xs">
                         <span class="text-gray-400">ASIN:</span>
@@ -129,21 +164,23 @@
                         <span class="text-gray-400">Cantidad:</span>
                         <span class="text-gray-700">{{ item_qty }} ud{{ 's' if item_qty != 1 else '' }}</span>
                         {% if item_price > 0 %}
-                        <span class="text-gray-400">Subtotal línea:</span>
-                        <span class="text-gray-700 font-semibold">${{ "{:,.2f}".format(item_price) }}</span>
+                        <span class="text-gray-400">Subtotal:</span>
+                        <span class="font-semibold {% if price_state == 'confirmed' %}text-green-700{% else %}text-amber-700{% endif %}">
+                            ${{ "{:,.2f}".format(item_price) }}
+                        </span>
                         {% endif %}
                     </div>
                 </div>
                 {% endfor %}
                 {% else %}
-                <p class="text-xs text-gray-400 italic">Items no disponibles — usar SP-API v0 para ver detalle</p>
+                <p class="text-xs text-gray-400 italic">Items no disponibles</p>
                 {% endif %}
             </div>
 
-            <!-- Col 2: Resumen de la orden -->
+            <!-- Col 2: Resumen financiero -->
             <div>
                 <p class="text-xs font-semibold text-gray-500 uppercase mb-2 tracking-wide">Detalle de la orden</p>
-                <div class="bg-white rounded-lg border border-orange-200 overflow-hidden text-sm">
+                <div class="bg-white rounded-lg border {% if price_state == 'confirmed' %}border-green-200{% elif price_state in ('pending','listing') %}border-amber-200{% else %}border-gray-200{% endif %} overflow-hidden text-sm">
                     <div class="px-4 py-2.5 flex justify-between border-b border-gray-100">
                         <span class="text-gray-500">No. Orden</span>
                         <span class="font-mono text-xs text-gray-700">{{ order_id }}</span>
@@ -158,31 +195,51 @@
                     </div>
                     <div class="px-4 py-2.5 flex justify-between border-b border-gray-100">
                         <span class="text-gray-500">Canal</span>
-                        <span class="text-gray-700">{{ order.get('SalesChannel', 'Amazon.com.mx') }}</span>
+                        <span class="text-gray-700">{{ order.get('SalesChannel', 'Amazon.com') }}</span>
                     </div>
-                    <div class="px-4 py-3 flex justify-between bg-orange-50 border-t-2 border-orange-300">
-                        <span class="text-orange-800 font-bold">
-                            {% if is_estimated and from_listing %}Precio listing
-                            {% elif is_estimated %}Subtotal venta
-                            {% else %}Total{% endif %}
-                        </span>
-                        <div class="text-right">
-                            <span class="text-orange-800 font-bold text-base">
-                                {% if amount > 0 %}${{ "{:,.2f}".format(amount) }} {{ currency }}{% else %}—{% endif %}
+
+                    {# ── Precio de venta ── #}
+                    {% if price_state == 'confirmed' %}
+                    <div class="px-4 py-3 flex justify-between bg-green-50 border-t-2 border-green-400">
+                        <span class="text-green-800 font-bold">Total confirmado</span>
+                        <span class="text-green-800 font-bold text-base">${{ "{:,.2f}".format(amount) }} {{ currency }}</span>
+                    </div>
+                    {% elif price_state in ('pending', 'listing') %}
+                    <div class="px-4 py-3 {% if price_state == 'listing' %}bg-amber-50/60{% else %}bg-amber-50{% endif %} border-t-2 border-amber-400">
+                        <div class="flex justify-between items-start">
+                            <span class="text-amber-800 font-bold">
+                                {{ 'Precio venta' if price_state == 'pending' else 'Ref. listing' }}
                             </span>
-                            {% if is_estimated and from_listing %}
-                            <p class="text-[10px] text-gray-500 mt-0.5">Amazon no confirma el monto hasta liberar el pago</p>
-                            {% elif is_estimated %}
-                            <p class="text-[10px] text-amber-600 mt-0.5">Fees Amazon descontados al liberar pago</p>
-                            {% endif %}
+                            <div class="text-right">
+                                <span class="text-amber-800 font-bold text-base">${{ "{:,.2f}".format(amount) }} {{ currency }}</span>
+                                {% if price_state == 'listing' %}
+                                <p class="text-[10px] text-gray-500 mt-0.5">Precio listing × qty — pago no confirmado</p>
+                                {% else %}
+                                <p class="text-[10px] text-amber-600 mt-0.5">Fees se descuentan al liberar el pago</p>
+                                {% endif %}
+                            </div>
                         </div>
+                        {# Fees estimados #}
+                        {% if est_fees and est_fees.is_estimated %}
+                        <div class="mt-2 pt-2 border-t border-amber-200 grid grid-cols-2 gap-x-3 text-xs text-amber-700">
+                            <span>~Referral fee (15%):</span>
+                            <span class="text-right font-medium">-${{ "{:,.2f}".format(est_fees.referral) }}</span>
+                            <span class="text-gray-400 col-span-2 mt-0.5">FBA fee variable según peso/tamaño</span>
+                        </div>
+                        {% endif %}
                     </div>
+                    {% else %}
+                    <div class="px-4 py-3 flex justify-between bg-gray-50 border-t border-gray-200">
+                        <span class="text-gray-500 font-medium">Total</span>
+                        <span class="text-gray-400">—</span>
+                    </div>
+                    {% endif %}
                 </div>
-                <!-- Estado FBA / MFN -->
+
                 {% set fulfillment = order.get('FulfillmentChannel', '') %}
                 {% if fulfillment %}
                 <p class="mt-2 text-xs text-gray-400">
-                    Canal de fulfillment:
+                    Fulfillment:
                     <strong class="{% if fulfillment == 'AFN' %}text-orange-600{% else %}text-blue-600{% endif %}">
                         {{ 'FBA (Amazon)' if fulfillment == 'AFN' else 'MFN (Vendedor)' }}
                     </strong>

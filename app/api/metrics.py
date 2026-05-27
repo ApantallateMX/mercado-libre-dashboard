@@ -1597,8 +1597,8 @@ async def get_amazon_recent_orders(
                 enriched.append(order)
                 break
 
-        # Calcular subtotal desde items (útil para Pending donde OrderTotal = 0)
-        # ItemPrice.Amount ya es el total de la línea (precio × qty), no unitario
+        # ── Calcular subtotal de venta ────────────────────────────────────────
+        # Capa 1: ItemPrice de order_items (disponible cuando Amazon confirma pago)
         subtotal = 0.0
         items_currency = ""
         for it in order.get("_items", []):
@@ -1610,28 +1610,46 @@ async def get_amazon_recent_orders(
             if not items_currency:
                 items_currency = ip.get("CurrencyCode", "")
 
-        # Fallback: Amazon no devuelve ItemPrice en órdenes "Awaiting payment verification".
-        # En ese caso buscar el precio del listing en nuestra DB por SKU de cada item.
+        # Capa 2 (solo si capa 1 falla): Amazon no devuelve ItemPrice para
+        # órdenes "Awaiting payment verification". Buscar en amazon_listings por
+        # SKU exacto → SKU base → ASIN (orden de prioridad).
         if subtotal == 0.0 and order.get("_items"):
             import aiosqlite as _aio
             from app.config import DATABASE_PATH as _DB_P
             for it in order["_items"]:
-                sku = (it.get("SellerSKU") or "").strip()
-                qty = max(1, int(it.get("QuantityOrdered") or 1))
-                if not sku:
-                    continue
+                sku_raw = (it.get("SellerSKU") or "").strip()
+                asin    = (it.get("ASIN") or "").strip()
+                qty     = max(1, int(it.get("QuantityOrdered") or 1))
+                # Extraer SKU base: primer segmento antes de " / ", " - " o "_"
+                sku_base = sku_raw.split(" / ")[0].split(" - ")[0].strip()
+                candidates = [c for c in [sku_raw, sku_base] if c]
+                unit_price = 0.0
                 try:
                     async with _aio.connect(_DB_P) as _db:
-                        _cur = await _db.execute(
-                            "SELECT price FROM amazon_listings WHERE seller_id=? AND sku=? LIMIT 1",
-                            (client.seller_id, sku),
-                        )
-                        _row = await _cur.fetchone()
-                    if _row and _row[0] and float(_row[0]) > 0:
-                        subtotal += float(_row[0]) * qty
-                        order["_price_source"] = "listing"
+                        # Intentar por SKU exacto o base
+                        for cand in candidates:
+                            _cur = await _db.execute(
+                                "SELECT price FROM amazon_listings WHERE seller_id=? AND LOWER(sku)=LOWER(?) AND price>0 LIMIT 1",
+                                (client.seller_id, cand),
+                            )
+                            _row = await _cur.fetchone()
+                            if _row and _row[0]:
+                                unit_price = float(_row[0])
+                                break
+                        # Fallback por ASIN si SKU no encontró
+                        if unit_price == 0.0 and asin:
+                            _cur = await _db.execute(
+                                "SELECT price FROM amazon_listings WHERE seller_id=? AND asin=? AND price>0 LIMIT 1",
+                                (client.seller_id, asin),
+                            )
+                            _row = await _cur.fetchone()
+                            if _row and _row[0]:
+                                unit_price = float(_row[0])
                 except Exception:
                     pass
+                if unit_price > 0:
+                    subtotal += unit_price * qty
+                    order["_price_source"] = "listing"
 
         # Moneda: preferir lo que vino de ItemPrice; fallback = moneda del marketplace
         _mkt_currency = {"US": "USD", "MX": "MXN", "CA": "CAD"}.get(client.marketplace_name, "USD")
@@ -1643,6 +1661,14 @@ async def get_amazon_recent_orders(
         )
         if not order.get("_price_source"):
             order["_price_source"] = "items" if subtotal > 0 else "none"
+
+        # Fees estimados para órdenes Pending (15% referral + FBA variable)
+        # Solo se muestran cuando el precio viene de items confirmados o listing
+        if subtotal > 0 and order.get("OrderStatus") == "Pending":
+            _est_referral = round(subtotal * 0.15, 2)  # 15% referral fee (conservador)
+            order["_est_fees"] = {"referral": _est_referral, "is_estimated": True}
+        else:
+            order["_est_fees"] = None
 
         enriched.append(order)
     recent = enriched
