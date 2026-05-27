@@ -81,17 +81,84 @@ def _listing_to_row(item: dict, seller_id: str) -> dict | None:
     }
 
 
+def _report_entry_to_row(entry: dict, seller_id: str) -> dict | None:
+    """Convierte una entrada del Reports API a row de amazon_listings.
+    Reports incluye title, price, quantity (a diferencia de entradas de gap scan que solo tienen sku/asin/status/channel).
+    """
+    sku = entry.get("sku", "")
+    if not sku:
+        return None
+
+    channel = (entry.get("channel") or "DEFAULT").upper()
+    status  = (entry.get("status") or "ACTIVE").upper()
+    asin    = entry.get("asin") or ""
+    title   = (entry.get("title") or "")[:200]
+
+    try:
+        price = float(entry.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+
+    try:
+        quantity = int(entry.get("quantity") or 0)
+    except (TypeError, ValueError):
+        quantity = 0
+
+    is_fba = "AMAZON" in channel
+    is_flx = "-FLX" in sku.upper()
+    can_update = 0 if (is_fba or is_flx) else 1
+
+    try:
+        from app.services.sku_utils import normalize_to_bm_sku
+        base_sku = normalize_to_bm_sku(sku) or sku[:10]
+    except Exception:
+        base_sku = sku[:10]
+
+    return {
+        "seller_id":     seller_id,
+        "sku":           sku,
+        "base_sku":      base_sku,
+        "asin":          asin,
+        "title":         title,
+        "status":        status,
+        "price":         price,
+        "available_qty": quantity,
+        "can_update":    can_update,
+        "fulfillment":   channel,
+        "synced_at":     _time.time(),
+    }
+
+
 async def _sync_account_full(seller_id: str, client) -> tuple[int, str]:
     """Descarga todos los listings de una cuenta Amazon y los guarda en DB.
+    Intenta Reports API primero (sin límite de SKUs), con fallback a Listings API.
     Retorna (count, error_msg)."""
     from app.services import token_store
     try:
-        listings = await client.get_all_listings()
-        logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: get_all_listings devolvió {len(listings)} items")
-        rows = [_listing_to_row(item, seller_id) for item in listings]
-        rows = [r for r in rows if r]
+        rows = []
+        use_report = True
+
+        try:
+            report_entries = await client.get_merchant_listings_report()
+            rows = [_report_entry_to_row(e, seller_id) for e in report_entries]
+            rows = [r for r in rows if r]
+            logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: Reports API → {len(rows)} listings")
+        except Exception as _rpt_err:
+            logger.warning(
+                f"[AMZ-LISTING-SYNC] Reports API falló seller={seller_id}: {_rpt_err}. "
+                f"Fallback a Listings API."
+            )
+            use_report = False
+            listings = await client.get_all_listings()
+            logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: Listings API → {len(listings)} items")
+            rows = [_listing_to_row(item, seller_id) for item in listings]
+            rows = [r for r in rows if r]
+
         if rows:
-            await token_store.upsert_amazon_listings(rows)
+            if use_report:
+                await token_store.upsert_amazon_listings_report(rows)
+            else:
+                await token_store.upsert_amazon_listings(rows)
         logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(rows)} listings guardados en DB")
 
         # ── Detección de huérfanos ──────────────────────────────────────────
@@ -200,9 +267,13 @@ async def run_amazon_listing_sync() -> dict:
         _sync_running = False
 
 
+_QTY_LARGE_CATALOG = 1000  # umbral para usar FBA Inventory en lugar de Listings API
+
+
 async def _sync_qty_only_account(seller_id: str, client) -> int:
-    """Sync ligero: solo fulfillmentAvailability para listings conocidos de esta cuenta.
-    Usa get_all_listings con includedData=fulfillmentAvailability únicamente.
+    """Sync ligero de qty para listings conocidos.
+    Catalogo grande (>1000 SKUs en DB): usa FBA Inventory API (sin límite de páginas).
+    Catálogo pequeño: usa Listings API con fulfillmentAvailability.
     Retorna número de listings cuya qty cambió en DB.
     """
     from app.services import token_store
@@ -211,16 +282,38 @@ async def _sync_qty_only_account(seller_id: str, client) -> int:
         if not current:
             return 0  # Sin listings en DB — esperar al full sync
 
-        items = await client.get_all_listings(included_data=["fulfillmentAvailability"])
         updates: list[tuple[str, str, int]] = []
-        for item in items:
-            sku = item.get("sku", "")
-            if not sku or sku not in current:
-                continue
-            fa  = (item.get("fulfillmentAvailability") or [{}])[0]
-            qty = int(fa.get("quantity") or 0)
-            if current.get(sku, -1) != qty:
-                updates.append((seller_id, sku, qty))
+
+        if len(current) > _QTY_LARGE_CATALOG:
+            # Catálogo grande: FBA Inventory API
+            try:
+                fba_items = await client.get_fba_inventory_all()
+                for fba in fba_items:
+                    sku = fba.get("sellerSku") or ""
+                    if not sku or sku not in current:
+                        continue
+                    details = fba.get("inventoryDetails") or {}
+                    qty = int(details.get("fulfillableQuantity") or 0)
+                    if current.get(sku, -1) != qty:
+                        updates.append((seller_id, sku, qty))
+                logger.debug(
+                    f"[AMZ-QTY] seller={seller_id}: FBA inventory {len(fba_items)} items, "
+                    f"{len(updates)} cambios"
+                )
+            except Exception as _fba_err:
+                logger.warning(f"[AMZ-QTY] FBA inventory falló seller={seller_id}: {_fba_err}")
+                return 0
+        else:
+            # Catálogo pequeño: Listings API (capped at 1000, suficiente)
+            items = await client.get_all_listings(included_data=["fulfillmentAvailability"])
+            for item in items:
+                sku = item.get("sku", "")
+                if not sku or sku not in current:
+                    continue
+                fa  = (item.get("fulfillmentAvailability") or [{}])[0]
+                qty = int(fa.get("quantity") or 0)
+                if current.get(sku, -1) != qty:
+                    updates.append((seller_id, sku, qty))
 
         if not updates:
             return 0

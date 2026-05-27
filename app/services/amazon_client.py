@@ -1092,11 +1092,25 @@ class AmazonClient:
                         or row.get("Fulfillment Channel")
                         or "DEFAULT"
                     ).strip()
+                    title = (
+                        row.get("item-name") or row.get("Item Name") or ""
+                    ).strip()[:200]
+                    try:
+                        price = float(row.get("price") or row.get("Price") or 0)
+                    except (ValueError, TypeError):
+                        price = 0.0
+                    try:
+                        quantity = int(row.get("quantity") or row.get("Quantity") or 0)
+                    except (ValueError, TypeError):
+                        quantity = 0
                     items.append({
                         "sku": sku,
                         "asin": asin,
                         "status": status,
                         "channel": channel,
+                        "title": title,
+                        "price": price,
+                        "quantity": quantity,
                     })
 
                 logger.info(

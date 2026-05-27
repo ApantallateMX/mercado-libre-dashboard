@@ -171,79 +171,110 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
             from app.services.binmanager_client import get_shared_bm
             bm_cli = await get_shared_bm()
 
-            # Fetch en paralelo
-            bm_items, listings = await asyncio.gather(
-                bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC"),
-                client.get_all_listings(),
-            )
-
-            # Construir set de base-SKUs activos en Amazon
+            # Construir set de base-SKUs conocidos en Amazon
             amazon_base_skus: set[str] = set()
             amazon_active = 0
 
-            # get_all_listings() tiene max_pages=50 → máximo ~1000 SKUs.
-            # Si el catálogo es grande (ExclusiveBulbs tiene 156K listings),
-            # el resultado estará truncado. Detectar y usar Reports API en ese caso.
-            _LISTINGS_PAGE_CAP = 990  # 50 páginas × 20 ítems ≈ 1000 → si llegamos cerca, está truncado
+            # ── Paso 1: Verificar cobertura de DB ─────────────────────────────
+            _DB_MIN_COVERAGE = 500  # SKUs mínimos en DB para confiar en ella
+            db_count = 0
+            async with aiosqlite.connect(DATABASE_PATH) as _dbcheck:
+                _row = await (await _dbcheck.execute(
+                    "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?",
+                    (seller_id,)
+                )).fetchone()
+                db_count = _row[0] if _row else 0
 
-            if listings and len(listings) >= _LISTINGS_PAGE_CAP:
-                logger.warning(
-                    f"[AMZ Gap Scan] get_all_listings() devolvió {len(listings)} SKUs "
-                    f"(probablemente truncado) → usando Reports API para catálogo completo"
-                )
-                listings = []  # Descartar — incompleto
+            db_first = db_count >= _DB_MIN_COVERAGE
 
-            if listings:
-                for listing in listings:
-                    sku = listing.get("sku", "")
-                    if not sku:
-                        continue
-                    # Incluir TODOS los listings (activos e inactivos)
-                    # Un SKU out-of-stock ya está lanzado — no es un gap
-                    amazon_base_skus.add(sku.upper())
-                    base = _amz_base(sku)
-                    if base:
-                        amazon_base_skus.add(base)
-                amazon_active = sum(
-                    1 for l in listings
-                    if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
+            if db_first:
+                # ── DB-first: sin llamadas API para descubrimiento de SKUs ──────
+                logger.info(f"[AMZ Gap Scan] DB-first: {db_count} listings en DB para {seller_id}")
+                async with aiosqlite.connect(DATABASE_PATH) as _adb:
+                    _adb.row_factory = aiosqlite.Row
+                    _cur = await _adb.execute(
+                        "SELECT sku, base_sku FROM amazon_listings WHERE seller_id=?",
+                        (seller_id,)
+                    )
+                    for _r in await _cur.fetchall():
+                        sku_u = (_r["sku"] or "").upper()
+                        base_u = (_r["base_sku"] or "").upper()
+                        amazon_base_skus.add(sku_u)
+                        if base_u:
+                            amazon_base_skus.add(base_u)
+                        base_derived = _amz_base(sku_u)
+                        if base_derived:
+                            amazon_base_skus.add(base_derived)
+                        amazon_active += 1
+                logger.info(
+                    f"[AMZ Gap Scan] DB: {amazon_active} listings, "
+                    f"{len(amazon_base_skus)} base-SKUs únicos"
                 )
-                logger.info(f"[AMZ Gap Scan] Listings API: {amazon_active} activos de {len(listings)} total")
             else:
-                # Listings vacío o truncado → usar Reports API (GET_MERCHANT_LISTINGS_ALL_DATA)
-                logger.info(f"[AMZ Gap Scan] Usando Reports API para catálogo completo de {seller_id}")
-                try:
-                    report_skus = await client.get_merchant_listings_report()
-                    for entry in report_skus:
-                        sku = entry.get("sku") or ""
+                # ── Sparse/empty DB: usar API directamente ────────────────────
+                logger.info(
+                    f"[AMZ Gap Scan] API-first: DB tiene {db_count} listings < {_DB_MIN_COVERAGE}. "
+                    f"Usando API para descubrimiento."
+                )
+                listings = await client.get_all_listings()
+                _LISTINGS_PAGE_CAP = 990
+                if listings and len(listings) >= _LISTINGS_PAGE_CAP:
+                    logger.warning(
+                        f"[AMZ Gap Scan] get_all_listings() devolvió {len(listings)} SKUs "
+                        f"(truncado) → usando Reports API"
+                    )
+                    listings = []
+
+                if listings:
+                    for listing in listings:
+                        sku = listing.get("sku", "")
                         if not sku:
                             continue
-                        sku_up = sku.upper()
-                        amazon_base_skus.add(sku_up)
+                        amazon_base_skus.add(sku.upper())
                         base = _amz_base(sku)
                         if base:
                             amazon_base_skus.add(base)
-                        if entry.get("status", "").upper() == "ACTIVE":
-                            amazon_active += 1
-                    logger.info(
-                        f"[AMZ Gap Scan] Reports API: {amazon_active} activos de {len(report_skus)} total"
+                    amazon_active = sum(
+                        1 for l in listings
+                        if any(s.get("status") == "ACTIVE" for s in l.get("summaries", []))
                     )
-                except Exception as _rpt_err:
-                    logger.error(f"[AMZ Gap Scan] Reports API falló: {_rpt_err}", exc_info=True)
-                    # Último recurso: FBA inventory
+                    logger.info(f"[AMZ Gap Scan] Listings API: {amazon_active} activos de {len(listings)} total")
+                else:
                     try:
-                        fba_items = await client.get_fba_inventory_all()
-                        for fba in fba_items:
-                            sku = fba.get("sellerSku") or ""
-                            if sku:
-                                amazon_base_skus.add(sku.upper())
-                                base = _amz_base(sku)
-                                if base:
-                                    amazon_base_skus.add(base)
-                        amazon_active = len({f.get("sellerSku") for f in fba_items if f.get("sellerSku")})
-                        logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
-                    except Exception as _fba_err:
-                        logger.warning(f"[AMZ Gap Scan] FBA fallback también falló: {_fba_err}")
+                        report_skus = await client.get_merchant_listings_report()
+                        for entry in report_skus:
+                            sku = entry.get("sku") or ""
+                            if not sku:
+                                continue
+                            sku_up = sku.upper()
+                            amazon_base_skus.add(sku_up)
+                            base = _amz_base(sku)
+                            if base:
+                                amazon_base_skus.add(base)
+                            if entry.get("status", "").upper() == "ACTIVE":
+                                amazon_active += 1
+                        logger.info(
+                            f"[AMZ Gap Scan] Reports API: {amazon_active} activos de {len(report_skus)} total"
+                        )
+                    except Exception as _rpt_err:
+                        logger.error(f"[AMZ Gap Scan] Reports API falló: {_rpt_err}", exc_info=True)
+                        try:
+                            fba_items = await client.get_fba_inventory_all()
+                            for fba in fba_items:
+                                sku = fba.get("sellerSku") or ""
+                                if sku:
+                                    amazon_base_skus.add(sku.upper())
+                                    base = _amz_base(sku)
+                                    if base:
+                                        amazon_base_skus.add(base)
+                            amazon_active = len({f.get("sellerSku") for f in fba_items if f.get("sellerSku")})
+                            logger.info(f"[AMZ Gap Scan] FBA fallback: {amazon_active} SKUs")
+                        except Exception as _fba_err:
+                            logger.warning(f"[AMZ Gap Scan] FBA fallback también falló: {_fba_err}")
+
+            # Fetch BM stock (en paralelo ya no es posible con el flujo condicional,
+            # pero BM es rápido por caché)
+            bm_items = await bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC")
 
             FX = 18.0  # FX fijo USD → MXN
             now_iso = datetime.utcnow().isoformat()
@@ -296,18 +327,17 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                     "_gap_status":     gap_status,
                 })
 
-            # ── Verificación individual de cada gap (siempre, con cache 24h) ──────
-            # Reports API o Listings API pueden perder listings DISCOVERABLE, inactivos
-            # o con variantes FBA. Para cada gap restante, verificar directamente en AMZ.
-            # Con pocos gaps (típicamente < 50), esto es rápido (< 30s).
-            if gaps:
+            # ── Verificación individual de gaps (solo si NO usamos DB-first) ──────
+            # Cuando DB está bien poblada, es la fuente de verdad → no hacemos llamadas individuales.
+            # Solo para catálogos sparse/primer-run donde la DB no tiene cobertura suficiente.
+            if gaps and not db_first:
                 logger.info(
-                    f"[AMZ Gap Scan] Verificando {len(gaps)} gaps individualmente en Amazon"
+                    f"[AMZ Gap Scan] Verificando {len(gaps)} gaps individualmente en Amazon "
+                    f"(DB-first=False, db_count={db_count})"
                 )
                 sem_gap = asyncio.Semaphore(5)
                 now_cache_iso = datetime.utcnow().isoformat()
 
-                # Cargar cache de gaps ya verificados
                 from datetime import timedelta
                 cutoff = (datetime.utcnow() - timedelta(hours=_AMZ_CACHE_TTL_H)).isoformat()
                 gap_cache_found: set[str] = set()
@@ -330,14 +360,12 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                             try:
                                 res = await client.get_listing_item(variant)
                             except Exception as _e:
-                                # Error no-404 (429, 403, red) → benefit of doubt: no confirmar como gap
                                 logger.warning(
                                     f"[AMZ Gap Scan] _check_gap({bm_sku_u}) variante={variant} "
                                     f"error no-404 → benefit of doubt: {_e}"
                                 )
-                                raise  # Propagate → asyncio.gather lo captura → no es gap
+                                raise
                             if res is not None:
-                                # Guardar en cache como encontrado
                                 async with aiosqlite.connect(DATABASE_PATH) as _db2:
                                     await _db2.execute(
                                         """INSERT INTO amz_catalog_cache (seller_id,sku_upper,found,checked_at)
@@ -348,16 +376,21 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                     await _db2.commit()
                                 amazon_base_skus.add(bm_sku_u)
                                 logger.info(f"[AMZ Gap Scan] {bm_sku_u} confirmado en Amazon via {variant}")
-                                return None  # No es gap
+                                return None
                         logger.info(
                             f"[AMZ Gap Scan] {bm_sku_u} CONFIRMADO GAP "
                             f"(marketplace={client.marketplace_id}, variantes probadas={variants})"
                         )
-                        return g  # Confirmado: no existe en Amazon
+                        return g
 
                 gap_results = await asyncio.gather(*[_check_gap(g) for g in gaps], return_exceptions=True)
                 gaps = [r for r in gap_results if r is not None and not isinstance(r, Exception)]
                 logger.info(f"[AMZ Gap Scan] Gaps confirmados tras verificación individual: {len(gaps)}")
+            elif gaps and db_first:
+                logger.info(
+                    f"[AMZ Gap Scan] DB-first: {len(gaps)} gaps pre-confirmados desde DB — "
+                    f"sin verificación API individual"
+                )
 
             # ── Guardar en DB ──────────────────────────────────────────────
             async with aiosqlite.connect(DATABASE_PATH) as db:

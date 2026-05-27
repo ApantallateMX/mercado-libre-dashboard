@@ -1779,6 +1779,35 @@ async def upsert_amazon_listings(rows: list[dict]) -> None:
         await db.commit()
 
 
+async def upsert_amazon_listings_report(rows: list[dict]) -> None:
+    """Upsert de listings Amazon desde Reports API.
+    Preserva price y available_qty existentes cuando los nuevos valores son 0
+    (Reports API no siempre incluye precio/qty actualizados para FBA).
+    """
+    if not rows:
+        return
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.executemany(
+            """INSERT INTO amazon_listings
+               (seller_id, sku, base_sku, asin, title, status, price,
+                available_qty, can_update, fulfillment, synced_at)
+               VALUES (:seller_id,:sku,:base_sku,:asin,:title,:status,:price,
+                       :available_qty,:can_update,:fulfillment,:synced_at)
+               ON CONFLICT(seller_id, sku) DO UPDATE SET
+                   base_sku   = excluded.base_sku,
+                   asin       = CASE WHEN excluded.asin != '' THEN excluded.asin ELSE amazon_listings.asin END,
+                   title      = CASE WHEN excluded.title != '' THEN excluded.title ELSE amazon_listings.title END,
+                   status     = excluded.status,
+                   price      = CASE WHEN excluded.price > 0 THEN excluded.price ELSE amazon_listings.price END,
+                   available_qty = CASE WHEN excluded.available_qty > 0 THEN excluded.available_qty ELSE amazon_listings.available_qty END,
+                   can_update = excluded.can_update,
+                   fulfillment = excluded.fulfillment,
+                   synced_at  = excluded.synced_at""",
+            rows,
+        )
+        await db.commit()
+
+
 async def count_amazon_listings(seller_id: str) -> int:
     """Retorna cuántos listings tiene la cuenta Amazon en DB."""
     async with aiosqlite.connect(DATABASE_PATH) as db:

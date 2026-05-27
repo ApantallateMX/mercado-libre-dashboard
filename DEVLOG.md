@@ -7,6 +7,60 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-27 — FEAT: Amazon listing sync DB-first + Reports API full sync
+
+### Problema
+`amazon_listing_sync.py` usaba `get_all_listings()` (capped at 1000 SKUs) para el full sync. ExclusiveBulbs con 156K listings nunca se sincronizaba completo → DB vacía → gap scan veía todos los SKUs BM como gaps (falsos positivos masivos).
+
+### Arquitectura nueva
+
+**Full sync (`_sync_account_full`)**:
+- Intenta `get_merchant_listings_report()` primero (Reports API, sin límite, incluye title/price/qty)
+- Fallback a `get_all_listings()` si Reports falla (cuentas que no tienen Reports habilitado)
+- Nuevo `_report_entry_to_row()` para convertir formato TSV a row DB
+- Nueva función `upsert_amazon_listings_report()` en token_store — preserva price/qty existentes cuando el nuevo valor es 0 (para FBA items cuya qty viene de FBA Inventory API aparte)
+
+**Qty sync (`_sync_qty_only_account`)**:
+- Si cuenta tiene >1000 SKUs en DB → usa `get_fba_inventory_all()` (sin límite de páginas)
+- Si cuenta tiene ≤1000 SKUs → sigue usando `get_all_listings(fulfillmentAvailability)` (suficiente)
+
+**Gap scan (`_run_amz_gap_scan`)**:
+- **DB-first**: si DB tiene ≥500 listings para este seller → construye `amazon_base_skus` desde DB local, sin ninguna llamada API de descubrimiento
+- **Sin `_check_gap()`**: cuando DB-first, no hay verificación individual por SKU → scan instantáneo
+- **API-fallback**: si DB tiene <500 listings (primer run) → mantiene flujo anterior (Listings API → Reports API → FBA inventory) + verificación individual con cache
+
+### Resultado esperado
+- ExclusiveBulbs: primer full sync (Reports API, ~30-60s wait) pobla los 156K SKUs
+- Siguientes gap scans: consulta DB local, <1s para construir `amazon_base_skus`
+- Sin más falsos positivos por SKUs perdidos en truncado de paginación
+
+### Archivos modificados
+- `app/services/amazon_client.py`: `get_merchant_listings_report()` — agrega title, price, quantity al TSV parse
+- `app/services/token_store.py`: nueva `upsert_amazon_listings_report()` con ON CONFLICT preserve
+- `app/services/amazon_listing_sync.py`: `_report_entry_to_row()`, `_sync_account_full()` Reports-first, `_sync_qty_only_account()` FBA-first para catálogos grandes
+- `app/api/amazon_lanzar.py`: `_run_amz_gap_scan()` DB-first path, `_check_gap()` solo cuando DB sparse
+
+---
+
+## 2026-05-26 — FIX: Amazon Pending orders — mostrar precio venta con fees pendientes
+
+### Problema
+Órdenes Amazon con status "Pending" mostraban $0.00 — Amazon no libera `OrderTotal` hasta confirmar el pago. El dashboard no mostraba ningún valor.
+
+### Fix
+Enriquecimiento multi-capa en `get_amazon_recent_orders`:
+1. `ItemPrice.Amount` (línea total, ya incluye qty) — disponible cuando pago está en verificación
+2. Fallback DB: lookup por SKU exacto → SKU base → ASIN en `amazon_listings`
+3. Fees estimados: Referral 15% mostrado como referencia
+
+Sistema de colores: verde = OrderTotal confirmado, ámbar = precio pendiente/referencia, gris = sin precio.
+
+### Archivos modificados
+- `app/api/metrics.py`: `get_amazon_recent_orders()` — lógica de enriquecimiento
+- `app/templates/partials/amazon_recent_orders.html` — rewrite completo con color system
+
+---
+
 ## 2026-05-26 — FIX: get_listing_item benefit-of-doubt + diagnóstico gap falso (SNAC000046)
 
 ### Problema raíz
