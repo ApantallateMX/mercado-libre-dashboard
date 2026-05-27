@@ -272,8 +272,29 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                         except Exception as _fba_err:
                             logger.warning(f"[AMZ Gap Scan] FBA fallback también falló: {_fba_err}")
 
-            # Fetch BM stock (en paralelo ya no es posible con el flujo condicional,
-            # pero BM es rápido por caché)
+            # ── Paso 2: Augmentar amazon_base_skus con confirmaciones previas del cache ──
+            # Esto asegura que SKUs ya verificados como "found" en scans anteriores
+            # se traten como "ya lanzados" incluso si Reports API no los devolvió.
+            # Es lo que permite que el cleanup borre filas viejas de amz_sku_gaps.
+            from datetime import timedelta
+            _cache_cutoff = (datetime.utcnow() - timedelta(hours=_AMZ_CACHE_TTL_H)).isoformat()
+            async with aiosqlite.connect(DATABASE_PATH) as _caug:
+                _caug.row_factory = aiosqlite.Row
+                _caug_cur = await _caug.execute(
+                    "SELECT sku_upper FROM amz_catalog_cache WHERE seller_id=? AND found=1 AND checked_at>?",
+                    (seller_id, _cache_cutoff),
+                )
+                for _cr in await _caug_cur.fetchall():
+                    _cu = _cr["sku_upper"]
+                    amazon_base_skus.add(_cu)
+                    _cb = _amz_base(_cu)
+                    if _cb:
+                        amazon_base_skus.add(_cb)
+            logger.debug(
+                f"[AMZ Gap Scan] amazon_base_skus tras augmentar cache: {len(amazon_base_skus)} entradas"
+            )
+
+            # Fetch BM stock (BM es rápido por caché)
             bm_items = await bm_cli.get_bulk_stock(conditions="GRA,GRB,GRC,NEW,ICB,ICC")
 
             FX = 18.0  # FX fijo USD → MXN
@@ -327,25 +348,25 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                     "_gap_status":     gap_status,
                 })
 
-            # ── Verificación individual de gaps (solo si NO usamos DB-first) ──────
-            # Cuando DB está bien poblada, es la fuente de verdad → no hacemos llamadas individuales.
-            # Solo para catálogos sparse/primer-run donde la DB no tiene cobertura suficiente.
-            if gaps and not db_first:
+            # ── Verificación individual de gaps ───────────────────────────────────
+            # Siempre corre (tanto DB-first como API-first).
+            # Con DB-first: DB+cache ya eliminaron casi todos → pocos llegan aquí → pocas API calls.
+            # Con API-first: verifica todos usando cache primero, luego API si necesario.
+            if gaps:
                 logger.info(
-                    f"[AMZ Gap Scan] Verificando {len(gaps)} gaps individualmente en Amazon "
-                    f"(DB-first=False, db_count={db_count})"
+                    f"[AMZ Gap Scan] Verificando {len(gaps)} gaps individualmente "
+                    f"(db_first={db_first}, db_count={db_count})"
                 )
                 sem_gap = asyncio.Semaphore(5)
                 now_cache_iso = datetime.utcnow().isoformat()
 
-                from datetime import timedelta
-                cutoff = (datetime.utcnow() - timedelta(hours=_AMZ_CACHE_TTL_H)).isoformat()
+                # Recargar cache (ya cargada arriba para augmentación, pero aquí necesitamos set local)
                 gap_cache_found: set[str] = set()
                 async with aiosqlite.connect(DATABASE_PATH) as _cdb:
                     _cdb.row_factory = aiosqlite.Row
                     _cur = await _cdb.execute(
                         "SELECT sku_upper FROM amz_catalog_cache WHERE seller_id=? AND found=1 AND checked_at>?",
-                        (seller_id, cutoff),
+                        (seller_id, _cache_cutoff),
                     )
                     for _r in await _cur.fetchall():
                         gap_cache_found.add(_r["sku_upper"])
@@ -353,18 +374,23 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 async def _check_gap(g: dict):
                     bm_sku_u = g["sku"].upper()
                     if bm_sku_u in gap_cache_found:
-                        return None  # Cache: ya confirmado en Amazon → no es gap
+                        # Cache: confirmado en Amazon → agregar a base_skus para que cleanup lo borre de gaps DB
+                        amazon_base_skus.add(bm_sku_u)
+                        return None
                     async with sem_gap:
                         variants = [bm_sku_u] + [bm_sku_u + sfx for sfx in _AMZ_CHECK_SUFFIXES]
                         for variant in variants:
                             try:
                                 res = await client.get_listing_item(variant)
                             except Exception as _e:
+                                # Error no-404 (429, 403, red) → benefit of doubt: asumir que existe
+                                # Agregamos a base_skus para que cleanup borre fila vieja de amz_sku_gaps
                                 logger.warning(
                                     f"[AMZ Gap Scan] _check_gap({bm_sku_u}) variante={variant} "
-                                    f"error no-404 → benefit of doubt: {_e}"
+                                    f"error no-404 → benefit of doubt, asumiendo existe: {_e}"
                                 )
-                                raise
+                                amazon_base_skus.add(bm_sku_u)
+                                return None  # No confirmar como gap
                             if res is not None:
                                 async with aiosqlite.connect(DATABASE_PATH) as _db2:
                                     await _db2.execute(
@@ -386,11 +412,6 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 gap_results = await asyncio.gather(*[_check_gap(g) for g in gaps], return_exceptions=True)
                 gaps = [r for r in gap_results if r is not None and not isinstance(r, Exception)]
                 logger.info(f"[AMZ Gap Scan] Gaps confirmados tras verificación individual: {len(gaps)}")
-            elif gaps and db_first:
-                logger.info(
-                    f"[AMZ Gap Scan] DB-first: {len(gaps)} gaps pre-confirmados desde DB — "
-                    f"sin verificación API individual"
-                )
 
             # ── Guardar en DB ──────────────────────────────────────────────
             async with aiosqlite.connect(DATABASE_PATH) as db:
