@@ -16,7 +16,7 @@
      data-page="{{ page }}"
      data-per-page="{{ per_page }}"
      data-ts="{{ last_updated_ts }}"
-     data-bg-loading="{{ 'true' if (sku_sales_loading or bm_loading or flx_loading) else 'false' }}">
+     data-bg-loading="{{ 'true' if (sku_sales_loading or bm_loading or flx_loading or fba_loading) else 'false' }}">
 </div>
 
 <!-- ─── FILTER CHIPS ──────────────────────────────────────────────────────── -->
@@ -80,10 +80,10 @@
     <!-- Badge de frescura + chip BG + Refresh forzado -->
     <div class="flex items-center gap-1">
         <span id="inv-freshness" class="text-xs text-gray-400 px-1"></span>
-        {% if sku_sales_loading or bm_loading or flx_loading %}
+        {% if sku_sales_loading or bm_loading or flx_loading or fba_loading %}
         <span id="inv-bg-chip"
               class="flex items-center gap-1 text-xs text-gray-400 animate-pulse px-1"
-              title="{% if sku_sales_loading %}Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
+              title="{% if fba_loading %}FBA Stock{% endif %}{% if sku_sales_loading %} · Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
             <span class="inline-block animate-spin">↻</span> actualizando
         </span>
         {% endif %}

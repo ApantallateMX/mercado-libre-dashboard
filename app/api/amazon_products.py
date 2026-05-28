@@ -86,7 +86,8 @@ _DEAL_CANDS_TTL = 900   # 15 min
 
 _LISTINGS_TTL    = 600   # 10 min — DB se actualiza c/qty-sync (10 min)
 _LISTINGS_TTL_API = 300  # 5 min para API fallback (primer run / DB sparse)
-_FBA_TTL      = 300   # 5 minutos
+_FBA_TTL      = 1800  # 30 minutos (costoso — paginación completa, stale-while-revalidate)
+_fba_refreshing: set = set()  # seller_ids con BG refresh activo
 
 
 def invalidate_listings_cache(seller_id: str | None = None) -> None:
@@ -349,17 +350,42 @@ async def _get_listings_cached(client) -> list:
     return data
 
 
+async def _refresh_fba_bg(client) -> None:
+    """Descarga FBA inventory completo en background — no bloquea requests."""
+    try:
+        data = await client.get_fba_inventory_all()
+        _fba_cache[client.seller_id] = (_time.time(), data)
+        logger.info(f"[FBA-BG] {len(data)} summaries para {client.seller_id}")
+    except Exception as _e:
+        logger.warning(f"[FBA-BG] Error: {_e}")
+    finally:
+        _fba_refreshing.discard(client.seller_id)
+
+
 async def _get_fba_cached(client) -> list:
-    """Obtiene FBA inventory del caché o lo descarga si expiró."""
+    """Stale-while-revalidate: NUNCA bloquea el request.
+
+    - Caché fresco  → devuelve datos inmediatamente
+    - Caché stale   → devuelve datos viejos + lanza BG refresh
+    - Sin caché     → devuelve [] + lanza BG refresh (Inventario carga con FBA vacío,
+                       se rellena cuando el BG termina — el usuario recarga o espera el poll)
+    """
     now = _time.time()
     key = client.seller_id
     if key in _fba_cache:
         ts, data = _fba_cache[key]
         if now - ts < _FBA_TTL:
             return data
-    data = await client.get_fba_inventory_all()
-    _fba_cache[key] = (now, data)
-    return data
+        # Stale: devolver lo que hay y refrescar en BG
+        if key not in _fba_refreshing:
+            _fba_refreshing.add(key)
+            asyncio.create_task(_refresh_fba_bg(client))
+        return data
+    # Cold start: no hay datos, iniciar BG y devolver lista vacía
+    if key not in _fba_refreshing:
+        _fba_refreshing.add(key)
+        asyncio.create_task(_refresh_fba_bg(client))
+    return []
 
 
 async def _get_bsr_cached(client, asins: list) -> dict:
@@ -2158,6 +2184,7 @@ async def amazon_products_inventario(
             "flx_loading":       flx_loading,        # True = BG refresh de FLX activo
             "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
             "bm_loading":        bm_loading,         # True = BG pre-fetch BM activo
+            "fba_loading":       client.seller_id in _fba_refreshing,  # True = FBA BG activo
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_inventario.html", ctx)
 
@@ -2183,11 +2210,13 @@ async def inventario_bg_status(request: Request):
     sku_sales_active = sid in _sku_sales_refreshing
     bm_active        = "bm_all" in _bm_all_refreshing
     flx_active       = sid in _flx_stock_refreshing
+    fba_active       = sid in _fba_refreshing
     return JSONResponse({
-        "ready":     not sku_sales_active and not bm_active and not flx_active,
+        "ready":     not sku_sales_active and not bm_active and not flx_active and not fba_active,
         "sku_sales": sku_sales_active,
         "bm":        bm_active,
         "flx":       flx_active,
+        "fba":       fba_active,
     })
 
 
