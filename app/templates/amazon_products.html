@@ -250,6 +250,7 @@ function loadAmzProdTab(tabName, url, btn) {
                 window._applyInvColState();
                 _updateFreshnessBadge();
                 _invStartAutoRefresh();
+                _invBgPoll();  // inicia polling si hay BG tasks activos (listings/fba/sales/bm)
             }
             if (tabName === 'seller-flex' && document.getElementById('sfx-auto-sync-trigger')) {
                 _sfxStartPollingOnly('');

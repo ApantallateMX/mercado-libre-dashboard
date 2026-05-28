@@ -87,7 +87,8 @@ _DEAL_CANDS_TTL = 900   # 15 min
 _LISTINGS_TTL    = 600   # 10 min — DB se actualiza c/qty-sync (10 min)
 _LISTINGS_TTL_API = 300  # 5 min para API fallback (primer run / DB sparse)
 _FBA_TTL      = 1800  # 30 minutos (costoso — paginación completa, stale-while-revalidate)
-_fba_refreshing: set = set()  # seller_ids con BG refresh activo
+_fba_refreshing:      set = set()  # seller_ids con BG refresh activo
+_listings_loading:   set = set()  # seller_ids con BG fetch de listings activo
 
 
 def invalidate_listings_cache(seller_id: str | None = None) -> None:
@@ -286,13 +287,75 @@ def _db_status_to_api(status_str: str) -> list:
     return [s] if s else ["INACTIVE"]
 
 
-async def _get_listings_cached(client) -> list:
-    """Obtiene listings del caché in-memory o construye desde DB local.
+def _build_listings_from_rows(rows, key: str, now: float) -> list:
+    """Convierte filas DB → lista de listing dicts compatible con todos los tabs."""
+    data = []
+    for _r in rows:
+        _ts   = _r["synced_at"] or 0
+        _lu   = (datetime.fromtimestamp(_ts).strftime("%Y-%m-%dT%H:%M:%SZ") if _ts else "")
+        _sta  = _db_status_to_api(_r["status"])
+        _chan = (_r["fulfillment"] or "DEFAULT").upper()
+        _qty  = _r["available_qty"] or 0
+        _price = float(_r["price"] or 0)
+        data.append({
+            "sku": _r["sku"],
+            "summaries": [{"asin": _r["asin"] or "", "itemName": _r["title"] or _r["sku"],
+                           "status": _sta, "lastUpdatedDate": _lu}],
+            "offers":    ([{"offerType": "B2C", "price": {"amount": _price,
+                            "listingPrice": {"amount": _price}}}] if _price else []),
+            "fulfillmentAvailability": [{"fulfillmentChannelCode": _chan, "quantity": _qty}],
+            "issues":    [],
+            "attributes": {},
+        })
+    return data
 
-    DB-first: si amazon_listings tiene ≥500 filas para este seller, construye
-    objetos listing compatibles con todos los tabs (status mapeado a formato API).
-    Fallback a live API solo cuando DB está vacía (primer run / cuenta nueva).
-    TTL en caché: 30 min si viene de DB, 5 min si viene de API.
+
+async def _refresh_listings_bg(client) -> None:
+    """Descarga listings en background — no bloquea el request handler.
+
+    Intenta DB-first (el startup sync puede haber completado mientras esperábamos).
+    Fallback a API (máx 1000 items) si DB sigue vacía.
+    """
+    key = client.seller_id
+    try:
+        now = _time.time()
+        try:
+            import aiosqlite as _aio
+            from app.services.token_store import DATABASE_PATH as _DB_PATH
+            async with _aio.connect(_DB_PATH) as _db:
+                _db.row_factory = _aio.Row
+                _cnt = (await (await _db.execute(
+                    "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?", (key,)
+                )).fetchone())[0]
+                if _cnt >= 500:
+                    _rows = await (await _db.execute(
+                        "SELECT sku, asin, title, status, price, available_qty, fulfillment, synced_at "
+                        "FROM amazon_listings WHERE seller_id=?", (key,)
+                    )).fetchall()
+                    data = _build_listings_from_rows(_rows, key, now)
+                    _listings_cache[key] = (now, data)
+                    logger.info("[Listings-BG] DB-first seller=%s rows=%d", key, len(data))
+                    return
+        except Exception as _e:
+            logger.warning("[Listings-BG] DB check failed seller=%s: %s", key, _e)
+        # API fallback (max 1000 items)
+        data = await client.get_all_listings()
+        _listings_cache[key] = (now - (_LISTINGS_TTL - _LISTINGS_TTL_API), data)
+        logger.info("[Listings-BG] API fallback seller=%s items=%d", key, len(data))
+    except Exception as e:
+        logger.warning("[Listings-BG] Error seller=%s: %s", key, e)
+    finally:
+        _listings_loading.discard(key)
+
+
+async def _get_listings_cached(client) -> list:
+    """Stale-while-revalidate: NUNCA bloquea el request handler.
+
+    - Caché fresco  → devuelve datos inmediatamente
+    - Caché stale   → devuelve datos viejos + lanza BG refresh
+    - DB ≥500 filas → carga desde DB (rápido, sin API call)
+    - Sin caché/DB  → devuelve [] + lanza BG fetch; inventario muestra banner
+                      "sincronizando" hasta que _invBgPoll detecte que ready=true
     """
     now = _time.time()
     key = client.seller_id
@@ -300,6 +363,11 @@ async def _get_listings_cached(client) -> list:
         ts, data = _listings_cache[key]
         if now - ts < _LISTINGS_TTL:
             return data
+        # Stale: devolver datos viejos y refrescar en BG
+        if key not in _listings_loading:
+            _listings_loading.add(key)
+            asyncio.create_task(_refresh_listings_bg(client))
+        return data
 
     # ── DB-first path ──
     try:
@@ -318,36 +386,18 @@ async def _get_listings_cached(client) -> list:
                     "FROM amazon_listings WHERE seller_id=?",
                     (client.seller_id,)
                 )).fetchall()
-                data = []
-                for _r in _rows:
-                    _ts   = _r["synced_at"] or 0
-                    _lu   = (datetime.fromtimestamp(_ts).strftime("%Y-%m-%dT%H:%M:%SZ") if _ts else "")
-                    _sta  = _db_status_to_api(_r["status"])
-                    _chan = (_r["fulfillment"] or "DEFAULT").upper()
-                    _qty  = _r["available_qty"] or 0
-                    _price = float(_r["price"] or 0)
-                    data.append({
-                        "sku": _r["sku"],
-                        "summaries": [{"asin": _r["asin"] or "", "itemName": _r["title"] or _r["sku"],
-                                       "status": _sta, "lastUpdatedDate": _lu}],
-                        "offers":    ([{"offerType": "B2C", "price": {"amount": _price,
-                                        "listingPrice": {"amount": _price}}}]
-                                      if _price else []),
-                        "fulfillmentAvailability": [{"fulfillmentChannelCode": _chan, "quantity": _qty}],
-                        "issues":    [],
-                        "attributes": {},
-                    })
+                data = _build_listings_from_rows(_rows, key, now)
                 _listings_cache[key] = (now, data)
                 logger.info("[Amazon Products] listings DB-first seller=%s rows=%d", client.seller_id, len(data))
                 return data
     except Exception as _e:
-        logger.warning("[Amazon Products] DB-first listings failed, falling back to API: %s", _e)
+        logger.warning("[Amazon Products] DB-first listings failed, falling back to BG: %s", _e)
 
-    # ── API fallback (primer run / DB sparse) ──
-    data = await client.get_all_listings()
-    # API fallback: TTL más corto (5 min), DB-first usa 10 min (línea arriba)
-    _listings_cache[key] = (now - (_LISTINGS_TTL - _LISTINGS_TTL_API), data)
-    return data
+    # ── Cold start: no hay caché ni DB suficiente → BG fetch, devolver [] inmediatamente ──
+    if key not in _listings_loading:
+        _listings_loading.add(key)
+        asyncio.create_task(_refresh_listings_bg(client))
+    return []
 
 
 async def _refresh_fba_bg(client) -> None:
@@ -1770,6 +1820,8 @@ async def _refresh_bm_all_bg(listings: list) -> None:
 
 def _trigger_bm_prefetch(listings: list) -> None:
     """Lanza BG pre-fetch de BM si el caché global está frío o stale."""
+    if not listings:
+        return  # Sin listings (catálogo aún cargando) — no iniciar BM prefetch
     now = _time.time()
     if "bm_all" not in _bm_all_refreshing and (now - _bm_all_last_refresh) > _BM_AMZ_TTL:
         _bm_all_refreshing.add("bm_all")
@@ -2184,7 +2236,8 @@ async def amazon_products_inventario(
             "flx_loading":       flx_loading,        # True = BG refresh de FLX activo
             "sku_sales_loading": sku_sales_loading,  # True = BG refresh de ventas activo
             "bm_loading":        bm_loading,         # True = BG pre-fetch BM activo
-            "fba_loading":       client.seller_id in _fba_refreshing,  # True = FBA BG activo
+            "fba_loading":       client.seller_id in _fba_refreshing,   # True = FBA BG activo
+            "listings_loading":  client.seller_id in _listings_loading,  # True = catálogo BG
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_inventario.html", ctx)
 
@@ -2211,12 +2264,14 @@ async def inventario_bg_status(request: Request):
     bm_active        = "bm_all" in _bm_all_refreshing
     flx_active       = sid in _flx_stock_refreshing
     fba_active       = sid in _fba_refreshing
+    listings_active  = sid in _listings_loading
     return JSONResponse({
-        "ready":     not sku_sales_active and not bm_active and not flx_active and not fba_active,
+        "ready":     not any([sku_sales_active, bm_active, flx_active, fba_active, listings_active]),
         "sku_sales": sku_sales_active,
         "bm":        bm_active,
         "flx":       flx_active,
         "fba":       fba_active,
+        "listings":  listings_active,
     })
 
 

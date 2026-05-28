@@ -16,7 +16,7 @@
      data-page="{{ page }}"
      data-per-page="{{ per_page }}"
      data-ts="{{ last_updated_ts }}"
-     data-bg-loading="{{ 'true' if (sku_sales_loading or bm_loading or flx_loading or fba_loading) else 'false' }}">
+     data-bg-loading="{{ 'true' if (listings_loading or sku_sales_loading or bm_loading or flx_loading or fba_loading) else 'false' }}">
 </div>
 
 <!-- ─── FILTER CHIPS ──────────────────────────────────────────────────────── -->
@@ -80,10 +80,10 @@
     <!-- Badge de frescura + chip BG + Refresh forzado -->
     <div class="flex items-center gap-1">
         <span id="inv-freshness" class="text-xs text-gray-400 px-1"></span>
-        {% if sku_sales_loading or bm_loading or flx_loading or fba_loading %}
+        {% if listings_loading or sku_sales_loading or bm_loading or flx_loading or fba_loading %}
         <span id="inv-bg-chip"
               class="flex items-center gap-1 text-xs text-gray-400 animate-pulse px-1"
-              title="{% if fba_loading %}FBA Stock{% endif %}{% if sku_sales_loading %} · Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
+              title="{% if listings_loading %}Catálogo{% endif %}{% if fba_loading %} · FBA Stock{% endif %}{% if sku_sales_loading %} · Ventas 30d{% endif %}{% if bm_loading %} · BM Stock{% endif %}{% if flx_loading %} · FLX{% endif %} actualizando…">
             <span class="inline-block animate-spin">↻</span> actualizando
         </span>
         {% endif %}
@@ -504,7 +504,17 @@
 
 {% else %}
 <div class="bg-white rounded-xl shadow p-10 text-center">
-    {% if sku_sales_loading and filter in ("top", "low", "all") and not q %}
+    {% if listings_loading %}
+    <!-- Catálogo descargándose en background — primer boot tras deploy -->
+    <p class="text-4xl mb-3">🔄</p>
+    <p class="text-gray-600 font-semibold animate-pulse">Sincronizando catálogo Amazon…</p>
+    <p class="text-gray-400 text-sm mt-1">La primera carga descarga el catálogo completo.<br>
+       Puede tardar 1–3 minutos. La página se actualizará sola.</p>
+    <button onclick="window._loadInvTab('/api/amazon/products/inventario')"
+            class="mt-4 px-4 py-2 text-xs bg-[#FF9900] text-white rounded-lg hover:bg-orange-600 transition">
+        Verificar ahora
+    </button>
+    {% elif sku_sales_loading and filter in ("top", "low", "all") and not q %}
     <!-- Ventas aún cargando en background — no es un resultado vacío real -->
     <p class="text-3xl mb-3">⏳</p>
     <p class="text-gray-500 font-semibold animate-pulse">Calculando ventas 30d…</p>
