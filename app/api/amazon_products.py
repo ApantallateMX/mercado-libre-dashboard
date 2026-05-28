@@ -84,7 +84,7 @@ _DEALS_TTL      = 300   # 5 min
 _COMP_PRICE_TTL = 600   # 10 min
 _DEAL_CANDS_TTL = 900   # 15 min
 
-_LISTINGS_TTL = 300   # 5 minutos
+_LISTINGS_TTL = 1800  # 30 minutos (DB-first para catálogos grandes)
 _FBA_TTL      = 300   # 5 minutos
 _BUYBOX_TTL   = 600   # 10 minutos
 _SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
@@ -265,13 +265,68 @@ def _is_amz_onsite(item: dict) -> bool:
 
 
 async def _get_listings_cached(client) -> list:
-    """Obtiene listings del caché o los descarga si expiró."""
+    """Obtiene listings del caché o los descarga si expiró.
+
+    DB-first: si amazon_listings tiene ≥500 filas para este seller, construye
+    los objetos listing desde la DB local (sub-segundo). Fallback a API solo
+    cuando la DB está vacía o sparse (primer run / cuenta nueva).
+    """
     now = _time.time()
     key = client.seller_id
     if key in _listings_cache:
         ts, data = _listings_cache[key]
         if now - ts < _LISTINGS_TTL:
             return data
+
+    # ── DB-first path ──
+    try:
+        import aiosqlite as _aiosqlite
+        from app.services.token_store import DATABASE_PATH as _DB
+        async with _aiosqlite.connect(_DB) as _db:
+            _db.row_factory = _aiosqlite.Row
+            _cnt_row = await (await _db.execute(
+                "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?",
+                (client.seller_id,)
+            )).fetchone()
+            _cnt = _cnt_row[0] if _cnt_row else 0
+            if _cnt >= 500:
+                _rows = await (await _db.execute(
+                    "SELECT sku, asin, title, status, price, available_qty, fulfillment, synced_at "
+                    "FROM amazon_listings WHERE seller_id=?",
+                    (client.seller_id,)
+                )).fetchall()
+                data = []
+                for _r in _rows:
+                    _ts = _r["synced_at"] or 0
+                    _lu = (datetime.fromtimestamp(_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+                           if _ts else "")
+                    data.append({
+                        "sku": _r["sku"],
+                        "summaries": [{
+                            "asin": _r["asin"] or "",
+                            "itemName": _r["title"] or _r["sku"],
+                            "status": _r["status"] or "ACTIVE",
+                            "lastUpdatedDate": _lu,
+                        }],
+                        "offers": ([{"price": {"amount": _r["price"]}}]
+                                   if _r["price"] else []),
+                        "fulfillmentAvailability": [{
+                            "fulfillmentChannel": _r["fulfillment"] or "DEFAULT",
+                            "quantity": _r["available_qty"] or 0,
+                        }],
+                        "issues": [],
+                        "attributes": {},
+                    })
+                _listings_cache[key] = (now, data)
+                logger.info(
+                    "[Amazon Products] listings DB-first seller=%s count=%d",
+                    client.seller_id, len(data)
+                )
+                return data
+    except Exception as _db_err:
+        logger.warning("[Amazon Products] DB-first listings error: %s", _db_err)
+
+    # ── API fallback (cuentas sparse / primer run) ──
     data = await client.get_all_listings()
     _listings_cache[key] = (now, data)
     return data
