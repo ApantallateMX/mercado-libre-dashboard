@@ -251,6 +251,7 @@ class AmazonClient:
         created_before: str = None,
         marketplace_ids: list = None,
         order_statuses: list = None,
+        max_pages: int = 0,
     ) -> list:
         """
         Obtiene órdenes del marketplace.
@@ -262,6 +263,7 @@ class AmazonClient:
             order_statuses:  Lista de estados a filtrar (default: Shipped+Unshipped+PartiallyShipped)
                              NOTA: NO mezclar Pending con otros — SP-API quirk devuelve solo Pending.
                              Usar fetch_orders_range(statuses=["Pending"]) por separado.
+            max_pages:       Límite de páginas (0 = sin límite). Usar max_pages=1 para "recent only".
 
         Returns:
             Lista de órdenes con campos: AmazonOrderId, OrderStatus,
@@ -269,6 +271,7 @@ class AmazonClient:
 
         Notas:
             - Paginación automática via NextToken
+            - getOrders rate limit: 0.0167 req/s, burst 20 → sleep entre páginas
         """
         if marketplace_ids is None:
             marketplace_ids = [self.marketplace_id]
@@ -290,8 +293,13 @@ class AmazonClient:
         orders = result.get("payload", {}).get("Orders", [])
 
         # Paginación: Amazon devuelve NextToken cuando hay más resultados
+        # Sleep entre páginas para no agotar el burst (20 req) en catálogos grandes
         next_token = result.get("payload", {}).get("NextToken")
+        page = 1
         while next_token:
+            if max_pages and page >= max_pages:
+                break
+            await asyncio.sleep(0.5)  # ~2 req/s — conservador frente al burst/20
             async with _ORDERS_SEMAPHORE:
                 next_result = await self._request(
                     "GET",
@@ -303,6 +311,7 @@ class AmazonClient:
                 )
             orders.extend(next_result.get("payload", {}).get("Orders", []))
             next_token = next_result.get("payload", {}).get("NextToken")
+            page += 1
 
         return orders
 

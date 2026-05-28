@@ -1478,12 +1478,13 @@ async def _refresh_sku_sales_bg(client) -> None:
             except Exception as e:
                 logger.debug(f"[SKU-Sales-BG] Error en orden {order_id}: {e}")
 
-        batch_size = 5
-        for i in range(0, len(valid_orders), batch_size):
-            batch = valid_orders[i:i + batch_size]
-            await asyncio.gather(*[_fetch_items(o) for o in batch])
-            if i + batch_size < len(valid_orders):
-                await asyncio.sleep(0.5)
+        # getOrderItems: 0.5 req/s, burst 30 — secuencial con 2s de espera
+        # Procesar máx 150 órdenes (≈5 min); suficiente para Top 10 representativo
+        _cap = 150
+        for i, order in enumerate(valid_orders[:_cap]):
+            await _fetch_items(order)
+            if i < min(_cap, len(valid_orders)) - 1:
+                await asyncio.sleep(2.0)
 
         logger.info(f"[SKU-Sales-BG] Listo — {len(sku_data)} SKUs con ventas en 30d")
         _sku_sales_cache[key] = (_time.time(), sku_data)

@@ -912,6 +912,10 @@ _amazon_orders_cache: dict[str, tuple[float, list]] = {}
 _amazon_orders_locks: dict[str, asyncio.Lock] = {}
 _AMAZON_ORDERS_TTL = 900  # 15 minutos
 
+# Caché dedicado para "Últimas Órdenes" (ventana corta, sin paginación completa)
+_amazon_recent_orders_cache: dict[str, tuple[float, list]] = {}
+_AMAZON_RECENT_ORDERS_TTL = 600  # 10 minutos
+
 # Caché para Sales API — métricas diarias (totalSales OPS, unitCount, orderCount)
 _amazon_metrics_cache: dict[str, tuple[float, list]] = {}
 _amazon_metrics_locks: dict[str, asyncio.Lock] = {}
@@ -1559,21 +1563,31 @@ async def get_amazon_recent_orders(
             '<p class="text-center text-gray-400 py-6 text-sm">Sin cuenta Amazon conectada</p>'
         )
 
-    now = datetime.utcnow()
-    # IMPORTANTE: usar el mismo rango que amazon-dashboard-data (29 días)
-    # para que compartan el mismo cache key y evitar 429 QuotaExceeded
-    date_from = (now - timedelta(days=29)).strftime("%Y-%m-%d")
-    date_to = now.strftime("%Y-%m-%d")
-
-    try:
-        orders = await _get_cached_amazon_orders(client, date_from, date_to)
-    except Exception as exc:
-        exc_str = str(exc)
-        if "429" in exc_str or "QuotaExceeded" in exc_str:
-            return Response(status_code=429, content="Rate limit Amazon SP-API")
-        return HTMLResponse(
-            f'<p class="text-center text-red-400 py-6 text-sm">Error: {exc_str[:120]}</p>'
-        )
+    # Caché dedicado: ventana de 3 días, solo primera página (100 órdenes max).
+    # Evita paginar 15-20 páginas (25 días de historial) que agota el burst de 20 req de getOrders.
+    _rkey = f"recent:{client.seller_id}"
+    _cached_recent = _amazon_recent_orders_cache.get(_rkey)
+    if _cached_recent and (_time.time() - _cached_recent[0]) < _AMAZON_RECENT_ORDERS_TTL:
+        orders = _cached_recent[1]
+    else:
+        now = datetime.utcnow()
+        created_after = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        created_before = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            # max_pages=1 → solo primera página (100 órdenes) — suficiente para mostrar 5 recientes
+            orders = await client.get_orders(
+                created_after=created_after,
+                created_before=created_before,
+                max_pages=1,
+            )
+            _amazon_recent_orders_cache[_rkey] = (_time.time(), orders)
+        except Exception as exc:
+            exc_str = str(exc)
+            if "429" in exc_str or "QuotaExceeded" in exc_str:
+                return Response(status_code=429, content="Rate limit Amazon SP-API")
+            return HTMLResponse(
+                f'<p class="text-center text-red-400 py-6 text-sm">Error: {exc_str[:120]}</p>'
+            )
 
     valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending")]
     valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
