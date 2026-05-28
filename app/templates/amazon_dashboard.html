@@ -72,6 +72,11 @@
     </div>
 </div>
 
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TAB: DASHBOARD (análisis de período: filtro, métricas, meta, gráfico)
+     ══════════════════════════════════════════════════════════════════════ -->
+<div id="amz-tab-dashboard" {% if active_amazon_tab != 'dashboard' %}class="hidden"{% endif %}>
+
 <!-- ══ Stats cards — igual estructura a ML ══════════════════════════════ -->
 <div id="amz-stats-row" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
   <div class="bg-white rounded-xl border p-3 flex items-center gap-3 animate-pulse">
@@ -92,7 +97,6 @@
   </div>
 </div>
 
-
 <!-- ── Panel de alertas críticas ──────────────────────────────────────────── -->
 <div id="amz-alerts-panel" class="mb-4">
   <div id="amz-alerts-content">
@@ -106,11 +110,6 @@
     </div>
   </div>
 </div>
-
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TAB: DASHBOARD (análisis de período: filtro, métricas, meta, gráfico)
-     ══════════════════════════════════════════════════════════════════════ -->
-<div id="amz-tab-dashboard" {% if active_amazon_tab != 'dashboard' %}class="hidden"{% endif %}>
 
 <!-- ─── Filtro de fechas ───────────────────────────────────────────────── -->
 <div class="bg-white p-3 md:p-4 rounded-xl shadow mb-5">

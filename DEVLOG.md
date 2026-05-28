@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-28 — FIX: Amazon Dashboard — stats cards y alertas solo en tab Dashboard
+
+### Problema
+`amz-stats-row` (Activos/Inactivos/Suprimidos/Sin Stock) y `amz-alerts-panel` estaban fuera de todos los tabs — se mostraban en Ventas, Salud y todos los demás tabs, duplicando información del Dashboard.
+
+### Solución
+Movidos ambos divs al interior de `amz-tab-dashboard`. El `switchAmzTab()` ya aplica `classList.toggle('hidden')` sobre el div padre, por lo que los cards desaparecen automáticamente al cambiar de tab.
+
+### Archivos modificados
+- `app/templates/amazon_dashboard.html`: `amz-stats-row` y `amz-alerts-panel` movidos dentro de `amz-tab-dashboard`
+
+---
+
 ## 2026-05-28 — FEAT: Sin Publicar — botón "Nuevo Producto" (sin SKU BM)
 
 ### Problema
