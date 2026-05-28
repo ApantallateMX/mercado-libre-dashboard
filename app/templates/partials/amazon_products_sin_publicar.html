@@ -9,11 +9,29 @@
 
 {% set total = suprimidos|length + inactivos|length + con_issues|length %}
 
-{% if total == 0 %}
+<!-- Info de fuente de datos -->
+<div class="mb-3 text-xs text-gray-400 flex items-center gap-2">
+    {% if db_total > 0 %}
+    <span class="w-2 h-2 rounded-full bg-green-400 inline-block"></span>
+    {{ db_total | int }} listings en DB · Sync: {{ synced_at or '—' }}
+    {% else %}
+    <span class="w-2 h-2 rounded-full bg-orange-400 inline-block animate-pulse"></span>
+    Sync inicial en progreso — los listings se cargarán en ~2 min
+    {% endif %}
+</div>
+
+{% if db_total == 0 %}
+<div class="bg-white rounded-xl shadow p-10 text-center">
+    <div class="w-10 h-10 border-4 border-orange-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+    <h3 class="text-base font-bold text-gray-700 mb-1">Sincronizando listings…</h3>
+    <p class="text-gray-400 text-sm max-w-xs mx-auto">El sync inicial descarga todos los listings de Amazon (~2 min para catálogos grandes). Recarga en unos minutos.</p>
+</div>
+
+{% elif total == 0 %}
 <div class="bg-white rounded-xl shadow p-10 text-center">
     <div class="text-4xl mb-3">✅</div>
     <h3 class="text-lg font-bold text-gray-700 mb-1">Todos los listings están activos</h3>
-    <p class="text-gray-400 text-sm">No hay listings inactivos, suprimidos o con issues.</p>
+    <p class="text-gray-400 text-sm">No hay listings inactivos ni suprimidos.</p>
 </div>
 
 {% else %}
@@ -177,6 +195,6 @@
 </div>
 {% endif %}
 
-{% endif %}
+{% endif %}  {# total == 0 / db_total == 0 #}
 
-{% endif %}
+{% endif %}  {# no_account / error #}
