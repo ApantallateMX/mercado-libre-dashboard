@@ -7,6 +7,24 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-28 — FEAT: Sin Publicar — botón "Nuevo Producto" (sin SKU BM)
+
+### Problema
+El wizard de lanzamiento solo podía abrirse desde un SKU de BM (gap scan). No había forma de lanzar un producto que no estuviera en BM (producto nuevo, test, compra directa de distribuidor).
+
+### Solución
+Botón **"➕ Nuevo Producto"** en la barra de búsqueda de la tab Sin Publicar. Abre un mini-modal con:
+- Marca y Modelo (requeridos)
+- Categoría, UPC/EAN, SKU (opcionales)
+- Precio MXN (requerido)
+
+Al confirmar, llama `openAmzLanzar()` y luego `_amzWizSkipAsin()` para saltar directamente al Paso 2 en Flujo 2 (crear nuevo — sin buscar ASIN). El wizard genera contenido AI, fotos y checklist de calidad igual que siempre.
+
+### Archivos modificados
+- `app/templates/partials/amazon_sin_lanzar.html`: botón + mini-modal + JS `_amzOpenNuevoProducto`, `_amzNuevoProductoLanzar`
+
+---
+
 ## 2026-05-28 — FEAT: Amazon Lanzar Wizard v2 — SEO/CRO completo, fotos BM, Higgsfield, checklist
 
 ### Problemas resueltos
