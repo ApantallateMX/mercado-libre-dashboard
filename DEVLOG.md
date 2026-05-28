@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-28 — FEAT: Amazon Lanzar Wizard v2 — SEO/CRO completo, fotos BM, Higgsfield, checklist
+
+### Problemas resueltos
+- Wizard anterior pedía datos mínimos (solo precio/ASIN/qty) — Amazon requiere ~15 atributos para ranking
+- IA usaba `claude-haiku` → contenido genérico y pobre. Reemplazado por `claude-sonnet-4-6`
+- Sin fotos: Amazon necesita imágenes de alta calidad para conversión
+- Sin `generic_keyword` (backend keywords) — invisibles para SEO interno
+- Sin `product_type` — Amazon no sabía en qué árbol categórico colocar el producto
+- Sin revisión de calidad antes de publicar
+
+### Nuevas funcionalidades
+
+**Wizard v2 — 4 pasos**:
+- **Paso 1**: Búsqueda ASIN o lanzamiento desde cero (igual que antes)
+- **Paso 2**: Precio, condición, fulfillment (igual que antes)
+- **Paso 3** *(Flujo 2 — nuevo)*: Contenido + Fotos en sub-tabs
+  - **Tab Contenido**: Título (200 chars, counter con colores), 5 bullets (200 chars c/u), descripción (2000), keywords backend (249 chars), product type
+  - **Tab Fotos**: checkbox para imagen BM, 4 inputs de URL extra, botón Higgsfield AI, indicador de fotos seleccionadas
+- **Paso 4**: Checklist visual de calidad (✅/⚠️/❌) para 8 criterios antes de publicar
+
+**AI content (claude-sonnet-4-6)**:
+- Prompt con reglas Amazon SEO: título sin promo-text, bullets con beneficio primero, description HTML-ready, keywords sin repetir, product_type técnico
+- Recibe: `sku`, `title_bm`, `brand`, `category`, `model`, `upc`, `price_mxn`
+- Regresa: `title`, `bullets[5]`, `description`, `keywords_backend` (≤249), `product_type`
+
+**Backend (`create_listing`)**:
+- Nuevo campo `generic_keyword` → `generic_keyword[0].value`
+- Nuevo campo `product_type` → usado en `put_listings_item`
+- Nuevo campo `photo_urls[]` → `main_product_image_locator` + `other_product_image_locator_1..8`
+
+### Archivos modificados
+- `app/api/amazon_lanzar.py`: `generate_content` rewrite (model, prompt, response), `create_listing` (keywords, photos, product_type)
+- `app/templates/partials/amazon_lanzar_wizard.html`: rewrite completo (~600 líneas), modal más ancho, contexto BM en header, 4 pasos, checklist
+- `app/templates/partials/amazon_sin_lanzar.html`: `openAmzLanzar()` pasa `g.model` como 10° parámetro
+
+---
+
 ## 2026-05-27 — FEAT: Gap scan automático en background (sin click "Escanear")
 
 El gap scan ahora corre automáticamente, igual que el sync de listings. No es necesario hacer click manual.

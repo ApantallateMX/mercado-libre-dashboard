@@ -1,50 +1,61 @@
 <!-- ═══════════════════════════════════════════════════════════════════════════
-     AMAZON LANZAR WIZARD — modal de 4 pasos para crear listings en Amazon
-     Flujo 1: SKU con ASIN → LISTING_OFFER_ONLY
-     Flujo 2: SKU sin ASIN → LISTING (Amazon asigna ASIN)
-     Flujo 3: Lanzados     → editar listing existente
+     AMAZON LANZAR WIZARD v2 — 4 pasos, claude-sonnet-4-6, SEO/CRO completo
+     Flujo 1 (ASIN match): Paso 1 → 2 → 4  (sin contenido: producto ya existe)
+     Flujo 2 (nuevo):      Paso 1 → 2 → 3 → 4
      ═══════════════════════════════════════════════════════════════════════════ -->
 <div id="amz-lanzar-wizard"
      class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9000] hidden items-center justify-center p-4"
      onclick="if(event.target===this) window.closeAmzLanzarWizard()">
 
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[92vh] flex flex-col overflow-hidden">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[94vh] flex flex-col overflow-hidden">
 
     <!-- ── Header ── -->
-    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-      <div>
-        <h2 class="text-base font-bold text-gray-800">🚀 Lanzar en Amazon</h2>
-        <p id="amz-wiz-sku-label" class="text-xs text-gray-400 mt-0.5"></p>
-      </div>
-      <div class="flex items-center gap-3">
-        <!-- Steps indicator -->
-        <div class="hidden sm:flex items-center gap-1 text-[10px] font-semibold">
-          <span id="amz-wiz-step-1" class="px-2 py-0.5 rounded-full bg-orange-500 text-white">1</span>
-          <span class="text-gray-300">→</span>
-          <span id="amz-wiz-step-2" class="px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">2</span>
-          <span class="text-gray-300">→</span>
-          <span id="amz-wiz-step-3" class="px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">3</span>
-          <span class="text-gray-300">→</span>
-          <span id="amz-wiz-step-4" class="px-2 py-0.5 rounded-full bg-gray-200 text-gray-500">4</span>
+    <div class="shrink-0 px-5 pt-4 pb-3 border-b border-gray-100">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0 flex-1">
+          <h2 class="text-sm font-bold text-gray-800">🚀 Lanzar en Amazon</h2>
+          <!-- BM product context card -->
+          <div id="amz-wiz-bm-card" class="hidden mt-2 flex items-center gap-2.5 bg-orange-50 border border-orange-100 rounded-xl px-3 py-2">
+            <img id="amz-wiz-bm-img" src="" alt="" class="w-10 h-10 object-contain rounded border border-gray-200 bg-white shrink-0" onerror="this.style.display='none'">
+            <div class="min-w-0 flex-1">
+              <p id="amz-wiz-bm-title" class="text-xs font-semibold text-gray-800 truncate"></p>
+              <p id="amz-wiz-bm-meta" class="text-[10px] text-gray-400 mt-0.5"></p>
+            </div>
+            <div class="shrink-0 text-right">
+              <p id="amz-wiz-bm-price" class="text-xs font-bold text-orange-600"></p>
+            </div>
+          </div>
         </div>
-        <button onclick="window.closeAmzLanzarWizard()" class="text-gray-400 hover:text-gray-600 text-xl font-light transition">✕</button>
+        <div class="flex items-center gap-3 shrink-0">
+          <!-- Steps indicator -->
+          <div class="hidden sm:flex items-center gap-1 text-[10px] font-semibold">
+            <span id="amz-wiz-step-1" class="w-6 h-6 flex items-center justify-center rounded-full bg-orange-500 text-white">1</span>
+            <span class="text-gray-300 text-xs">—</span>
+            <span id="amz-wiz-step-2" class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 text-gray-500">2</span>
+            <span class="text-gray-300 text-xs">—</span>
+            <span id="amz-wiz-step-3" class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 text-gray-500">3</span>
+            <span class="text-gray-300 text-xs">—</span>
+            <span id="amz-wiz-step-4" class="w-6 h-6 flex items-center justify-center rounded-full bg-gray-200 text-gray-500">4</span>
+          </div>
+          <button onclick="window.closeAmzLanzarWizard()" class="text-gray-400 hover:text-gray-600 text-lg font-light transition">✕</button>
+        </div>
       </div>
     </div>
 
     <!-- ── Body (scrollable) ── -->
     <div class="flex-1 overflow-y-auto">
 
-      <!-- STEP 1: ASIN Search -->
-      <div id="amz-wiz-panel-1" class="p-6">
-        <h3 class="font-semibold text-gray-700 mb-1">Paso 1 — Buscar ASIN</h3>
-        <p class="text-xs text-gray-400 mb-4">¿Este producto ya existe en el catálogo Amazon? Buscamos por UPC o título para encontrar el ASIN correcto.</p>
+      <!-- ════════════════════════════════════════════════════════════
+           PASO 1 — Buscar ASIN
+           ════════════════════════════════════════════════════════════ -->
+      <div id="amz-wiz-panel-1" class="p-5">
+        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 1 — Buscar ASIN en Amazon</h3>
+        <p class="text-xs text-gray-400 mb-4">¿El producto ya existe en el catálogo Amazon? Buscamos por UPC para encontrar el ASIN y agregarlo como oferta (más rápido y con menos riesgo de rechazo).</p>
 
-        <!-- Auto-search status -->
         <div id="amz-wiz-upc-info" class="hidden mb-3 text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2"></div>
 
-        <!-- Search box -->
         <div class="flex gap-2 mb-4">
-          <input id="amz-wiz-search-input" type="text" placeholder="Buscar por UPC, EAN o título del producto…"
+          <input id="amz-wiz-search-input" type="text" placeholder="UPC, EAN o título del producto…"
                  class="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition"
                  onkeydown="if(event.key==='Enter') window._amzWizSearch()">
           <button onclick="window._amzWizSearch()" id="amz-wiz-search-btn"
@@ -53,15 +64,13 @@
           </button>
         </div>
 
-        <!-- Search results -->
         <div id="amz-wiz-search-results" class="space-y-2 mb-4"></div>
 
-        <!-- Selected ASIN confirmation -->
         <div id="amz-wiz-asin-selected" class="hidden bg-green-50 border border-green-200 rounded-xl p-3 mb-4">
           <div class="flex items-center gap-3">
             <img id="amz-wiz-asin-img" src="" alt="" class="w-12 h-12 object-contain rounded border border-gray-100 bg-white shrink-0">
             <div class="min-w-0 flex-1">
-              <p class="text-xs font-semibold text-green-700">✓ ASIN seleccionado</p>
+              <p class="text-xs font-semibold text-green-700">✓ ASIN seleccionado — se agregará como oferta</p>
               <p id="amz-wiz-asin-title" class="text-xs text-gray-700 truncate mt-0.5"></p>
               <p id="amz-wiz-asin-value" class="text-xs text-orange-500 font-mono mt-0.5"></p>
             </div>
@@ -69,43 +78,46 @@
           </div>
         </div>
 
-        <!-- Skip option -->
-        <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-          <p class="text-xs text-yellow-700 font-medium mb-1">¿No encuentras el ASIN?</p>
-          <p class="text-xs text-yellow-600 mb-2">Si el producto no existe en Amazon, créalo como producto nuevo (Flujo 2). Amazon asignará un ASIN cuando apruebes el listing.</p>
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <p class="text-xs text-amber-700 font-semibold mb-1">¿No encuentras el ASIN?</p>
+          <p class="text-xs text-amber-600 mb-2.5">Crea el producto como nuevo. Necesitarás título, bullets, descripción, fotos y palabras clave. Amazon asignará un ASIN nuevo.</p>
           <button onclick="window._amzWizSkipAsin()"
-                  class="text-xs text-yellow-700 border border-yellow-300 hover:bg-yellow-100 px-3 py-1.5 rounded-lg transition font-medium">
-            Continuar sin ASIN (producto nuevo)
+                  class="text-xs text-amber-700 border border-amber-300 hover:bg-amber-100 px-3 py-1.5 rounded-lg transition font-semibold">
+            Continuar sin ASIN → Crear producto nuevo
           </button>
         </div>
       </div>
 
-      <!-- STEP 2: Listing Details -->
-      <div id="amz-wiz-panel-2" class="p-6 hidden">
-        <h3 class="font-semibold text-gray-700 mb-1">Paso 2 — Detalles del listing</h3>
-        <p class="text-xs text-gray-400 mb-4">Configura precio, condición y cómo enviarás el producto.</p>
+      <!-- ════════════════════════════════════════════════════════════
+           PASO 2 — Precio y configuración
+           ════════════════════════════════════════════════════════════ -->
+      <div id="amz-wiz-panel-2" class="p-5 hidden">
+        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 2 — Precio y configuración</h3>
+        <p class="text-xs text-gray-400 mb-4">Define el precio de venta, condición del producto y método de envío.</p>
 
-        <!-- Price -->
-        <div class="mb-4">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Precio de venta (MXN) *</label>
-          <div class="relative">
-            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-            <input id="amz-wiz-price" type="number" min="1" step="0.01" placeholder="0.00"
-                   class="w-full pl-7 pr-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-orange-400 transition">
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          <!-- Price -->
+          <div class="col-span-2 sm:col-span-1">
+            <label class="block text-xs font-semibold text-gray-600 mb-1.5">Precio de venta (MXN) <span class="text-red-400">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+              <input id="amz-wiz-price" type="number" min="1" step="1" placeholder="0"
+                     class="w-full pl-7 pr-3 py-2.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:border-orange-400 transition"
+                     oninput="window._amzWizUpdateMarginHint()">
+            </div>
+            <p id="amz-wiz-margin-hint" class="text-[10px] text-gray-400 mt-1"></p>
           </div>
-          <p id="amz-wiz-margin-hint" class="text-[10px] text-gray-400 mt-1"></p>
-        </div>
-
-        <!-- Condition -->
-        <div class="mb-4">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Condición</label>
-          <select id="amz-wiz-condition" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-orange-400 transition bg-white">
-            <option value="new_new">Nuevo</option>
-            <option value="used_like_new">Usado — Como nuevo</option>
-            <option value="used_very_good">Usado — Muy bueno</option>
-            <option value="used_good">Usado — Bueno</option>
-            <option value="refurbished_refurbished">Reacondicionado certificado</option>
-          </select>
+          <!-- Condition -->
+          <div class="col-span-2 sm:col-span-1">
+            <label class="block text-xs font-semibold text-gray-600 mb-1.5">Condición</label>
+            <select id="amz-wiz-condition" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-orange-400 transition bg-white">
+              <option value="new_new">Nuevo</option>
+              <option value="used_like_new">Usado — Como nuevo</option>
+              <option value="used_very_good">Usado — Muy bueno</option>
+              <option value="used_good">Usado — Bueno</option>
+              <option value="refurbished_refurbished">Reacondicionado certificado</option>
+            </select>
+          </div>
         </div>
 
         <!-- Fulfillment -->
@@ -116,94 +128,208 @@
               <input type="radio" name="amz-wiz-fulfillment" value="FBM" class="mt-0.5 accent-orange-500" checked>
               <div>
                 <p class="text-xs font-semibold text-gray-700">FBM — Tú envías</p>
-                <p class="text-[10px] text-gray-400 mt-0.5">Tú gestionas el envío desde tu bodega</p>
+                <p class="text-[10px] text-gray-400 mt-0.5">Gestión de envío desde tu bodega. Sin almacenaje en Amazon.</p>
               </div>
             </label>
             <label class="flex items-start gap-2 border border-gray-200 rounded-xl p-3 cursor-pointer hover:border-orange-300 transition has-[:checked]:border-orange-500 has-[:checked]:bg-orange-50">
               <input type="radio" name="amz-wiz-fulfillment" value="FBA" class="mt-0.5 accent-orange-500">
               <div>
                 <p class="text-xs font-semibold text-gray-700">FBA — Amazon envía</p>
-                <p class="text-[10px] text-gray-400 mt-0.5">Amazon gestiona envío desde su almacén</p>
+                <p class="text-[10px] text-gray-400 mt-0.5">Amazon gestiona envío. Prime badge. Requiere enviar inventario a Amazon.</p>
               </div>
             </label>
           </div>
         </div>
 
-        <!-- Quantity (FBM only) -->
-        <div id="amz-wiz-qty-wrap" class="mb-4">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Cantidad inicial disponible</label>
+        <div id="amz-wiz-qty-wrap" class="mb-2">
+          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Cantidad inicial disponible (FBM)</label>
           <input id="amz-wiz-qty" type="number" min="0" step="1" value="1"
                  class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-orange-400 transition">
-          <p class="text-[10px] text-gray-400 mt-1">Unidades disponibles para venta inmediata (FBM)</p>
         </div>
       </div>
 
-      <!-- STEP 3: AI Content (solo Flujo 2 — producto nuevo) -->
-      <div id="amz-wiz-panel-3" class="p-6 hidden">
-        <h3 class="font-semibold text-gray-700 mb-1">Paso 3 — Contenido del producto</h3>
-        <p class="text-xs text-gray-400 mb-4">Título, bullets y descripción. Usa IA para generarlos automáticamente o edítalos manualmente.</p>
-
-        <!-- Generate button -->
-        <button onclick="window._amzWizGenerateContent()" id="amz-wiz-gen-btn"
-                class="w-full mb-4 py-2.5 bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold rounded-xl transition flex items-center justify-center gap-2">
-          ✨ Generar contenido con IA
-        </button>
-
-        <!-- Title -->
-        <div class="mb-3">
-          <label class="block text-xs font-semibold text-gray-600 mb-1">Título (máx. 200 caracteres)</label>
-          <input id="amz-wiz-title" type="text" maxlength="200" placeholder="Título del producto para Amazon…"
-                 class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition"
-                 oninput="document.getElementById('amz-wiz-title-count').textContent=this.value.length+'/200'">
-          <p class="text-[10px] text-gray-400 mt-0.5 text-right"><span id="amz-wiz-title-count">0/200</span></p>
+      <!-- ════════════════════════════════════════════════════════════
+           PASO 3 — Contenido IA + Fotos (solo Flujo 2)
+           ════════════════════════════════════════════════════════════ -->
+      <div id="amz-wiz-panel-3" class="hidden">
+        <!-- Sub-tabs -->
+        <div class="flex border-b border-gray-100 shrink-0">
+          <button id="amz-wiz-tab-content" onclick="window._amzWizShowTab('content')"
+                  class="flex-1 py-3 text-xs font-semibold text-orange-600 border-b-2 border-orange-500 transition">
+            ✍️ Contenido SEO
+          </button>
+          <button id="amz-wiz-tab-photos" onclick="window._amzWizShowTab('photos')"
+                  class="flex-1 py-3 text-xs font-semibold text-gray-400 border-b-2 border-transparent hover:text-gray-600 transition">
+            🖼️ Fotos
+          </button>
         </div>
 
-        <!-- Bullets -->
-        <div class="mb-3">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Bullets (5 puntos clave)</label>
-          <div class="space-y-1.5" id="amz-wiz-bullets-wrap">
-            <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="Bullet 1">
-            <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="Bullet 2">
-            <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="Bullet 3">
-            <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="Bullet 4">
-            <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="Bullet 5">
+        <!-- Sub-panel: Content -->
+        <div id="amz-wiz-subpanel-content" class="p-5">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h3 class="font-semibold text-gray-700 text-sm">Contenido optimizado para Amazon MX</h3>
+              <p class="text-[10px] text-gray-400 mt-0.5">SEO + CRO con IA. Edita cualquier campo después de generar.</p>
+            </div>
+            <button onclick="window._amzWizGenerateContent()" id="amz-wiz-gen-btn"
+                    class="ml-3 shrink-0 px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 whitespace-nowrap">
+              <span id="amz-wiz-gen-icon">✨</span>
+              <span id="amz-wiz-gen-label">Generar con IA</span>
+            </button>
+          </div>
+
+          <!-- Title -->
+          <div class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-gray-600">Título</label>
+              <span id="amz-wiz-title-count" class="text-[10px] text-gray-400">0 / 200 chars</span>
+            </div>
+            <input id="amz-wiz-title" type="text" maxlength="200"
+                   placeholder="Marca Modelo Característica Principal Uso Especificación…"
+                   class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition"
+                   oninput="window._amzWizTitleCount()">
+            <p id="amz-wiz-title-hint" class="text-[10px] mt-0.5 text-gray-400">Incluye los keywords más buscados en los primeros 80 caracteres</p>
+          </div>
+
+          <!-- Bullets -->
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-1.5">5 Bullets — características clave</label>
+            <div id="amz-wiz-bullets-wrap" class="space-y-1.5">
+              <div class="relative">
+                <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="FEATURE CLAVE: Descripción con beneficio concreto y spec medible" oninput="window._amzWizBulletCount(this)">
+                <span class="amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-300">0/200</span>
+              </div>
+              <div class="relative">
+                <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="ESPECIFICACIONES TÉCNICAS: Datos medibles que el comprador busca" oninput="window._amzWizBulletCount(this)">
+                <span class="amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-300">0/200</span>
+              </div>
+              <div class="relative">
+                <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="COMPATIBILIDAD: Casos de uso y con qué funciona" oninput="window._amzWizBulletCount(this)">
+                <span class="amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-300">0/200</span>
+              </div>
+              <div class="relative">
+                <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="INCLUYE: Contenido del paquete, accesorios, qué viene en la caja" oninput="window._amzWizBulletCount(this)">
+                <span class="amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-300">0/200</span>
+              </div>
+              <div class="relative">
+                <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="GARANTÍA Y SOPORTE: Por qué elegir esta marca vs competencia" oninput="window._amzWizBulletCount(this)">
+                <span class="amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-300">0/200</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Description -->
+          <div class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-gray-600">Descripción</label>
+              <span id="amz-wiz-desc-count" class="text-[10px] text-gray-400">0 / 2000 chars</span>
+            </div>
+            <textarea id="amz-wiz-description" rows="4" maxlength="2000"
+                      placeholder="Describe el producto en 3 párrafos: problema que resuelve → características y specs → por qué elegirlo…"
+                      class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition resize-none"
+                      oninput="document.getElementById('amz-wiz-desc-count').textContent=this.value.length+' / 2000 chars'"></textarea>
+          </div>
+
+          <!-- Keywords backend + Product type (2 col) -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="text-xs font-semibold text-gray-600">Keywords de backend</label>
+                <span id="amz-wiz-kw-count" class="text-[10px] text-gray-400">0 / 249</span>
+              </div>
+              <textarea id="amz-wiz-keywords" rows="3" maxlength="249"
+                        placeholder="palabras clave adicionales que no están en el título ni bullets, separadas por espacio…"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition resize-none"
+                        oninput="document.getElementById('amz-wiz-kw-count').textContent=this.value.length+' / 249'"></textarea>
+              <p class="text-[9px] text-gray-400 mt-0.5">No repetir keywords del título. Separar con espacios.</p>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
+              <input id="amz-wiz-product-type" type="text" placeholder="ej: LIGHT_BULB, AIR_CONDITIONER…"
+                     class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition">
+              <p class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
+            </div>
           </div>
         </div>
 
-        <!-- Description -->
-        <div class="mb-1">
-          <label class="block text-xs font-semibold text-gray-600 mb-1">Descripción</label>
-          <textarea id="amz-wiz-description" rows="3" maxlength="2000"
-                    placeholder="Descripción detallada del producto…"
-                    class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition resize-none"></textarea>
-        </div>
+        <!-- Sub-panel: Photos -->
+        <div id="amz-wiz-subpanel-photos" class="p-5 hidden">
+          <h3 class="font-semibold text-gray-700 text-sm mb-1">Fotos del producto</h3>
+          <p class="text-xs text-gray-400 mb-4">Amazon requiere mínimo 1 foto. La imagen principal debe tener fondo blanco y el producto debe ocupar ≥85% del encuadre. Mínimo 1000×1000px.</p>
 
-        <!-- Higgsfield lifestyle -->
-        <button onclick="window._amzWizLaunchHighsfield()"
-                class="text-xs border border-purple-200 text-purple-600 hover:bg-purple-50 px-3 py-1.5 rounded-lg transition">
-          🌟 Generar foto lifestyle con IA
-        </button>
+          <!-- BM main image -->
+          <div id="amz-wiz-bm-photo-wrap" class="hidden mb-4">
+            <p class="text-xs font-semibold text-gray-600 mb-2">Imagen disponible en BM</p>
+            <div class="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <img id="amz-wiz-bm-photo-thumb" src="" alt="" class="w-20 h-20 object-contain rounded border border-gray-200 bg-white shrink-0">
+              <div class="flex-1">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" id="amz-wiz-use-bm-photo" class="accent-orange-500 w-4 h-4" checked
+                         onchange="window._amzWizPhotoSync()">
+                  <span class="text-xs font-medium text-gray-700">Usar esta imagen como foto principal</span>
+                </label>
+                <p class="text-[10px] text-gray-400 mt-1">Imagen del catálogo BM. Amazon la descargará desde la URL.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Additional photo URLs -->
+          <div class="mb-4">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs font-semibold text-gray-600">URLs de fotos adicionales (hasta 4)</p>
+              <button onclick="window._amzWizLaunchHighsfield()"
+                      class="text-[10px] border border-purple-200 text-purple-600 hover:bg-purple-50 px-2.5 py-1 rounded-lg transition font-semibold">
+                🌟 Generar con Higgsfield IA
+              </button>
+            </div>
+            <div class="space-y-2" id="amz-wiz-extra-photos">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 1" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 2" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto lifestyle / infográfica" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto detalle / dimensiones" oninput="window._amzWizPhotoSync()">
+            </div>
+          </div>
+
+          <!-- Photo count indicator -->
+          <div id="amz-wiz-photo-count-indicator" class="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 text-center">
+            <span id="amz-wiz-photo-count-text">0 fotos configuradas</span>
+          </div>
+
+          <!-- Amazon image guidelines reminder -->
+          <div class="mt-3 text-[10px] text-gray-400 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 space-y-0.5">
+            <p><strong class="text-blue-600">Imagen principal:</strong> Fondo blanco puro (#FFFFFF), producto ≥85% del encuadre, sin logos, sin marcas de agua, sin texto.</p>
+            <p><strong class="text-blue-600">Fotos adicionales:</strong> Lifestyle, ángulos diferentes, infografías con specs, comparativas, diagrama de dimensiones.</p>
+            <p><strong class="text-blue-600">Resolución:</strong> Mínimo 1000×1000px. Recomendado: 2000×2000px para zoom.</p>
+          </div>
+        </div>
       </div>
 
-      <!-- STEP 4: Review + Publish -->
-      <div id="amz-wiz-panel-4" class="p-6 hidden">
-        <h3 class="font-semibold text-gray-700 mb-1">Paso 4 — Revisar y publicar</h3>
-        <p class="text-xs text-gray-400 mb-4">Confirma los datos antes de enviar a Amazon.</p>
+      <!-- ════════════════════════════════════════════════════════════
+           PASO 4 — Review + Checklist + Lanzar
+           ════════════════════════════════════════════════════════════ -->
+      <div id="amz-wiz-panel-4" class="p-5 hidden">
+        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 4 — Revisar y publicar</h3>
+        <p class="text-xs text-gray-400 mb-4">Confirma todos los datos antes de enviar a Amazon Seller Central.</p>
 
-        <div id="amz-wiz-review" class="space-y-2 mb-5 text-sm">
-          <!-- populated by JS -->
+        <!-- Summary table -->
+        <div id="amz-wiz-review" class="mb-4 border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50"></div>
+
+        <!-- Checklist (only Flujo 2) -->
+        <div id="amz-wiz-checklist-wrap" class="hidden mb-4">
+          <p class="text-xs font-semibold text-gray-600 mb-2">Checklist de calidad del listing</p>
+          <div id="amz-wiz-checklist" class="space-y-1.5"></div>
         </div>
 
         <!-- Submit error -->
-        <div id="amz-wiz-submit-error" class="hidden mb-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2"></div>
+        <div id="amz-wiz-submit-error" class="hidden mb-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5"></div>
 
         <!-- Success state -->
-        <div id="amz-wiz-success" class="hidden text-center py-6">
+        <div id="amz-wiz-success" class="hidden text-center py-8">
           <div class="text-5xl mb-3">🎉</div>
           <p class="font-bold text-green-700 text-lg">¡Listing enviado a Amazon!</p>
           <p id="amz-wiz-success-asin" class="text-sm text-gray-500 mt-1"></p>
           <p class="text-xs text-gray-400 mt-2">Amazon puede tardar 15–30 min en activarlo. Aparecerá en el tab "Lanzados".</p>
-          <div class="flex justify-center gap-3 mt-4">
+          <div class="flex justify-center gap-3 mt-5">
             <button onclick="window.closeAmzLanzarWizard()"
                     class="px-4 py-2 bg-green-500 text-white text-sm font-semibold rounded-xl hover:bg-green-600 transition">
               Cerrar
@@ -218,8 +344,8 @@
 
     </div><!-- /body -->
 
-    <!-- ── Footer con botones de navegación ── -->
-    <div id="amz-wiz-footer" class="px-6 py-4 border-t border-gray-100 flex items-center justify-between shrink-0">
+    <!-- ── Footer con navegación ── -->
+    <div id="amz-wiz-footer" class="px-5 py-3.5 border-t border-gray-100 flex items-center justify-between shrink-0">
       <button id="amz-wiz-btn-back" onclick="window._amzWizBack()"
               class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-xl transition">
         ← Atrás
@@ -236,392 +362,493 @@
 
 <script>
 (function() {
-  // ─── Estado del wizard ────────────────────────────────────────────────────
-  var _wiz = {
-    sku: '', title: '', brand: '', category: '', image_url: '', upc: '',
-    price_sug: 0, cost_mxn: 0, seller_id: '',
-    asin: '',            // confirmado en step 1 (vacío = producto nuevo)
-    asin_title: '',
-    asin_image: '',
-    step: 1,
-    is_new_product: false,  // true si saltó step 1 sin ASIN
-    submitting: false,
-  };
+'use strict';
 
-  var STEPS_WITH_CONTENT = [1, 2, 3, 4];  // Flujo 2 tiene step 3
-  var STEPS_NO_CONTENT   = [1, 2, 4];     // Flujo 1 salta step 3
+// ─── Estado del wizard ────────────────────────────────────────────────────────
+var _wiz = {
+  sku: '', title: '', brand: '', model: '', category: '',
+  image_url: '', upc: '',
+  price_sug: 0, cost_mxn: 0, seller_id: '',
+  asin: '', asin_title: '', asin_image: '',
+  step: 1,
+  is_new_product: false,
+  submitting: false,
+};
 
-  // ─── Abrir wizard ──────────────────────────────────────────────────────────
-  window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, brand, category, imageUrl) {
-    _wiz.sku        = sku || '';
-    _wiz.title      = title || '';
-    _wiz.price_sug  = parseFloat(priceSug) || 0;
-    _wiz.upc        = upc || '';
-    _wiz.seller_id  = sellerId || _amzGetCurrentSeller();
-    _wiz.cost_mxn   = parseFloat(costMxn) || 0;
-    _wiz.brand      = brand || '';
-    _wiz.category   = category || '';
-    _wiz.image_url  = imageUrl || '';
-    _wiz.asin       = '';
-    _wiz.asin_title = '';
-    _wiz.asin_image = '';
-    _wiz.step       = 1;
-    _wiz.is_new_product = false;
-    _wiz.submitting = false;
+var STEPS_OFFER  = [1, 2, 4];      // Flujo 1: ASIN match (sin contenido)
+var STEPS_NEW    = [1, 2, 3, 4];   // Flujo 2: producto nuevo
 
-    // Reset UI
-    _amzWizGoStep(1);
-    document.getElementById('amz-wiz-sku-label').textContent = sku + (title ? ' — ' + title.substring(0, 40) : '');
-    document.getElementById('amz-wiz-price').value = _wiz.price_sug || '';
-    document.getElementById('amz-wiz-search-input').value = upc || title || '';
-    document.getElementById('amz-wiz-search-results').innerHTML = '';
-    document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
-    document.getElementById('amz-wiz-submit-error').classList.add('hidden');
-    document.getElementById('amz-wiz-success').classList.add('hidden');
-    document.getElementById('amz-wiz-review').innerHTML = '';
-    _amzWizUpdateMarginHint();
+// ─── Abrir / cerrar ───────────────────────────────────────────────────────────
+window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, brand, category, imageUrl, model) {
+  _wiz.sku        = sku || '';
+  _wiz.title      = title || '';
+  _wiz.price_sug  = parseFloat(priceSug) || 0;
+  _wiz.upc        = upc || '';
+  _wiz.seller_id  = sellerId || (window.amzActiveSellerId || '');
+  _wiz.cost_mxn   = parseFloat(costMxn) || 0;
+  _wiz.brand      = brand || '';
+  _wiz.model      = model || '';
+  _wiz.category   = category || '';
+  _wiz.image_url  = imageUrl || '';
+  _wiz.asin = _wiz.asin_title = _wiz.asin_image = '';
+  _wiz.step = 1;
+  _wiz.is_new_product = false;
+  _wiz.submitting = false;
 
-    // Show modal
-    var el = document.getElementById('amz-lanzar-wizard');
-    el.classList.remove('hidden');
-    el.classList.add('flex');
-
-    // Auto-search by UPC
-    if (upc) {
-      document.getElementById('amz-wiz-upc-info').textContent = '🔍 Buscando en catálogo Amazon por UPC: ' + upc + '…';
-      document.getElementById('amz-wiz-upc-info').classList.remove('hidden');
-      window._amzWizSearch(true);
-    }
-  };
-
-  window.closeAmzLanzarWizard = function() {
-    var el = document.getElementById('amz-lanzar-wizard');
-    el.classList.add('hidden');
-    el.classList.remove('flex');
-  };
-
-  // ─── Obtener seller_id activo ──────────────────────────────────────────────
-  function _amzGetCurrentSeller() {
-    return window.amzActiveSellerId || '';
+  // BM card
+  var card = document.getElementById('amz-wiz-bm-card');
+  if (_wiz.title || _wiz.image_url) {
+    document.getElementById('amz-wiz-bm-img').src = _wiz.image_url || '';
+    document.getElementById('amz-wiz-bm-title').textContent = (_wiz.title || _wiz.sku).substring(0, 60);
+    document.getElementById('amz-wiz-bm-meta').textContent =
+      [_wiz.sku, _wiz.brand, _wiz.category].filter(Boolean).join(' · ');
+    document.getElementById('amz-wiz-bm-price').textContent =
+      _wiz.price_sug > 0 ? '$' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN' : '';
+    card.classList.remove('hidden');
+  } else {
+    card.classList.add('hidden');
   }
 
-  // ─── Navegación de pasos ──────────────────────────────────────────────────
-  function _amzWizGoStep(n) {
-    _wiz.step = n;
-    [1, 2, 3, 4].forEach(function(i) {
-      document.getElementById('amz-wiz-panel-' + i).classList.add('hidden');
-      var dot = document.getElementById('amz-wiz-step-' + i);
-      if (dot) {
-        dot.className = i === n
-          ? 'px-2 py-0.5 rounded-full bg-orange-500 text-white'
-          : (i < n ? 'px-2 py-0.5 rounded-full bg-green-500 text-white'
-                   : 'px-2 py-0.5 rounded-full bg-gray-200 text-gray-500');
-      }
-    });
-    document.getElementById('amz-wiz-panel-' + n).classList.remove('hidden');
+  // Reset fields
+  document.getElementById('amz-wiz-price').value = _wiz.price_sug || '';
+  document.getElementById('amz-wiz-search-input').value = _wiz.upc || _wiz.title || '';
+  document.getElementById('amz-wiz-search-results').innerHTML = '';
+  document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
+  document.getElementById('amz-wiz-submit-error').classList.add('hidden');
+  document.getElementById('amz-wiz-success').classList.add('hidden');
+  document.getElementById('amz-wiz-review').innerHTML = '';
+  document.querySelectorAll('.amz-wiz-bullet').forEach(function(el) { el.value = ''; });
+  document.getElementById('amz-wiz-title').value = '';
+  document.getElementById('amz-wiz-description').value = '';
+  document.getElementById('amz-wiz-keywords').value = '';
+  document.getElementById('amz-wiz-product-type').value = '';
+  document.querySelectorAll('.amz-wiz-photo-url').forEach(function(el) { el.value = ''; });
+  document.getElementById('amz-wiz-upc-info').classList.add('hidden');
+  document.getElementById('amz-wiz-title-count').textContent = '0 / 200 chars';
+  document.getElementById('amz-wiz-desc-count').textContent = '0 / 2000 chars';
+  document.getElementById('amz-wiz-kw-count').textContent = '0 / 249';
+  document.querySelectorAll('.amz-wiz-bullet-count').forEach(function(el) { el.textContent = '0/200'; });
+  document.querySelector('input[name="amz-wiz-fulfillment"][value="FBM"]').checked = true;
+  document.getElementById('amz-wiz-qty-wrap').classList.remove('hidden');
+  document.getElementById('amz-wiz-qty').value = 1;
 
-    var btnBack = document.getElementById('amz-wiz-btn-back');
-    var btnNext = document.getElementById('amz-wiz-btn-next');
-    var footer  = document.getElementById('amz-wiz-footer');
-
-    btnBack.style.display = n > 1 ? 'block' : 'none';
-
-    var steps = _wiz.is_new_product ? STEPS_WITH_CONTENT : STEPS_NO_CONTENT;
-    var lastStep = steps[steps.length - 1];
-
-    if (n === lastStep) {
-      btnNext.textContent = '🚀 Publicar en Amazon';
-      btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-green-500 hover:bg-green-600 rounded-xl transition';
-    } else {
-      btnNext.textContent = 'Siguiente →';
-      btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition';
-    }
-
-    if (n === lastStep && document.getElementById('amz-wiz-success').classList.contains('hidden') === false) {
-      footer.classList.add('hidden');
-    } else {
-      footer.classList.remove('hidden');
-    }
-
-    if (n === lastStep) _amzWizBuildReview();
+  // BM photo in photos tab
+  var bmpw = document.getElementById('amz-wiz-bm-photo-wrap');
+  if (_wiz.image_url) {
+    document.getElementById('amz-wiz-bm-photo-thumb').src = _wiz.image_url;
+    document.getElementById('amz-wiz-use-bm-photo').checked = true;
+    bmpw.classList.remove('hidden');
+  } else {
+    bmpw.classList.add('hidden');
   }
+  window._amzWizPhotoSync();
 
-  window._amzWizBack = function() {
-    var steps = _wiz.is_new_product ? STEPS_WITH_CONTENT : STEPS_NO_CONTENT;
-    var idx   = steps.indexOf(_wiz.step);
-    if (idx > 0) _amzWizGoStep(steps[idx - 1]);
-  };
+  _amzWizGoStep(1);
+  _amzWizShowTab('content');
+  window._amzWizUpdateMarginHint();
 
-  window._amzWizNext = function() {
-    var steps    = _wiz.is_new_product ? STEPS_WITH_CONTENT : STEPS_NO_CONTENT;
-    var lastStep = steps[steps.length - 1];
-    if (_wiz.step === lastStep) { _amzWizSubmit(); return; }
+  var el = document.getElementById('amz-lanzar-wizard');
+  el.classList.remove('hidden');
+  el.classList.add('flex');
 
-    // Validation per step
-    if (_wiz.step === 2) {
-      var price = parseFloat(document.getElementById('amz-wiz-price').value);
-      if (!price || price <= 0) {
-        alert('Ingresa un precio válido'); return;
-      }
-    }
-    var idx = steps.indexOf(_wiz.step);
-    if (idx < steps.length - 1) _amzWizGoStep(steps[idx + 1]);
-  };
-
-  // ─── Step 1: ASIN search ──────────────────────────────────────────────────
-  window._amzWizSearch = async function(auto) {
-    var btn   = document.getElementById('amz-wiz-search-btn');
-    var input = document.getElementById('amz-wiz-search-input');
-    var res   = document.getElementById('amz-wiz-search-results');
-    var q     = input.value.trim();
-    if (!q) return;
-
-    btn.disabled = true;
-    btn.textContent = '⏳';
-    res.innerHTML = '<p class="text-xs text-gray-400 animate-pulse">Buscando en catálogo Amazon…</p>';
-
-    try {
-      var isUPC = /^\d{8,14}$/.test(q);
-      var url   = '/api/amazon/lanzar/search-catalog?' + (isUPC ? 'upc=' : 'q=') + encodeURIComponent(q) +
-                  (_wiz.seller_id ? '&seller_id=' + encodeURIComponent(_wiz.seller_id) : '');
-      var r     = await fetch(url);
-      var d     = await r.json();
-      var items = d.items || [];
-
-      if (auto && items.length === 1) {
-        // Solo 1 resultado con UPC → auto-seleccionar
-        document.getElementById('amz-wiz-upc-info').textContent = '✓ ASIN encontrado automáticamente por UPC';
-        _amzWizSelectAsin(items[0]);
-        res.innerHTML = '';
-        return;
-      }
-      if (!items.length) {
-        res.innerHTML = '<p class="text-xs text-yellow-600 bg-yellow-50 rounded-lg px-3 py-2">No se encontraron resultados. Prueba con otro término o continúa sin ASIN.</p>';
-        if (auto) document.getElementById('amz-wiz-upc-info').textContent = '⚠ No se encontró ASIN por UPC — busca manualmente o continúa sin ASIN';
-        return;
-      }
-      res.innerHTML = items.map(function(item) {
-        return '<div class="flex items-center gap-2.5 border border-gray-200 hover:border-orange-400 rounded-xl p-2.5 cursor-pointer transition" onclick="window._amzWizSelectAsinById(\'' + item.asin + '\')">' +
-          '<img src="' + (item.image_url || '') + '" alt="" class="w-10 h-10 object-contain rounded border border-gray-100 bg-gray-50 shrink-0" onerror="this.style.display=\'none\'">' +
-          '<div class="min-w-0 flex-1">' +
-            '<p class="text-xs font-medium text-gray-800 truncate">' + (item.title || item.asin) + '</p>' +
-            '<div class="flex items-center gap-2 mt-0.5">' +
-              '<span class="text-[10px] text-orange-500 font-mono">' + item.asin + '</span>' +
-              (item.brand ? '<span class="text-[10px] text-gray-400">' + item.brand + '</span>' : '') +
-            '</div>' +
-          '</div>' +
-          '<span class="text-xs text-orange-500 font-semibold shrink-0">Seleccionar →</span>' +
-        '</div>';
-      }).join('');
-      // Store items for selection by ASIN
-      window._amzWizCatalogItems = items;
-    } catch(e) {
-      res.innerHTML = '<p class="text-xs text-red-500">Error buscando: ' + e.message + '</p>';
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Buscar';
-    }
-  };
-
-  window._amzWizSelectAsinById = function(asin) {
-    var items = window._amzWizCatalogItems || [];
-    var item  = items.find(function(i) { return i.asin === asin; });
-    if (item) _amzWizSelectAsin(item);
-  };
-
-  function _amzWizSelectAsin(item) {
-    _wiz.asin        = item.asin;
-    _wiz.asin_title  = item.title || item.asin;
-    _wiz.asin_image  = item.image_url || '';
-    _wiz.is_new_product = false;
-
-    document.getElementById('amz-wiz-asin-img').src           = item.image_url || '';
-    document.getElementById('amz-wiz-asin-title').textContent = item.title || item.asin;
-    document.getElementById('amz-wiz-asin-value').textContent = item.asin;
-    document.getElementById('amz-wiz-asin-selected').classList.remove('hidden');
-    document.getElementById('amz-wiz-search-results').innerHTML = '';
+  // Auto-search by UPC
+  if (_wiz.upc) {
+    document.getElementById('amz-wiz-upc-info').textContent = '🔍 Buscando en catálogo Amazon por UPC: ' + _wiz.upc + '…';
+    document.getElementById('amz-wiz-upc-info').classList.remove('hidden');
+    window._amzWizSearch(true);
   }
+};
 
-  window._amzWizClearAsin = function() {
-    _wiz.asin = '';
-    _wiz.asin_title = '';
-    _wiz.asin_image = '';
-    document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
-  };
+window.closeAmzLanzarWizard = function() {
+  var el = document.getElementById('amz-lanzar-wizard');
+  el.classList.add('hidden');
+  el.classList.remove('flex');
+};
 
-  window._amzWizSkipAsin = function() {
-    _wiz.asin = '';
-    _wiz.is_new_product = true;
-    _amzWizGoStep(2);
-  };
+// ─── Sub-tabs (Content / Photos dentro del paso 3) ───────────────────────────
+window._amzWizShowTab = function(tab) {
+  var isContent = tab === 'content';
+  document.getElementById('amz-wiz-subpanel-content').classList.toggle('hidden', !isContent);
+  document.getElementById('amz-wiz-subpanel-photos').classList.toggle('hidden', isContent);
+  document.getElementById('amz-wiz-tab-content').className =
+    'flex-1 py-3 text-xs font-semibold transition ' +
+    (isContent ? 'text-orange-600 border-b-2 border-orange-500' : 'text-gray-400 border-b-2 border-transparent hover:text-gray-600');
+  document.getElementById('amz-wiz-tab-photos').className =
+    'flex-1 py-3 text-xs font-semibold transition ' +
+    (!isContent ? 'text-orange-600 border-b-2 border-orange-500' : 'text-gray-400 border-b-2 border-transparent hover:text-gray-600');
+};
 
-  // ─── Precio: hint de margen ───────────────────────────────────────────────
-  function _amzWizUpdateMarginHint() {
-    var hint  = document.getElementById('amz-wiz-margin-hint');
-    if (!hint) return;
-    var price = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
-    var cost  = _wiz.cost_mxn || 0;
-    if (price > 0 && cost > 0) {
-      var margin = ((price - cost - price * 0.18) / price * 100).toFixed(1);
-      hint.textContent = 'Margen estimado: ' + margin + '% (precio - costo BM - 18% fees Amazon)';
-      hint.className   = 'text-[10px] mt-1 ' + (parseFloat(margin) >= 20 ? 'text-green-600' : parseFloat(margin) >= 10 ? 'text-yellow-600' : 'text-red-500');
-    } else if (_wiz.price_sug > 0) {
-      hint.textContent = 'Precio sugerido: $' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN (cubre fees + ~20% margen)';
-      hint.className   = 'text-[10px] mt-1 text-gray-400';
-    }
-  }
-  document.addEventListener('input', function(e) {
-    if (e.target && e.target.id === 'amz-wiz-price') _amzWizUpdateMarginHint();
+// ─── Navegación ──────────────────────────────────────────────────────────────
+function _amzWizGoStep(n) {
+  _wiz.step = n;
+  [1, 2, 3, 4].forEach(function(i) {
+    document.getElementById('amz-wiz-panel-' + i).classList.add('hidden');
+    var dot = document.getElementById('amz-wiz-step-' + i);
+    if (dot) dot.className = 'w-6 h-6 flex items-center justify-center rounded-full ' +
+      (i === n ? 'bg-orange-500 text-white' : i < n ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500');
   });
-  document.querySelectorAll('input[name="amz-wiz-fulfillment"]').forEach(function(radio) {
-    radio.addEventListener('change', function() {
-      var qtyWrap = document.getElementById('amz-wiz-qty-wrap');
-      if (this.value === 'FBA') qtyWrap.classList.add('hidden');
-      else qtyWrap.classList.remove('hidden');
-    });
-  });
+  document.getElementById('amz-wiz-panel-' + n).classList.remove('hidden');
 
-  // ─── Step 3: Generar contenido IA ─────────────────────────────────────────
-  window._amzWizGenerateContent = async function() {
-    var btn = document.getElementById('amz-wiz-gen-btn');
-    btn.disabled = true;
-    btn.textContent = '⏳ Generando…';
-    try {
-      var r = await fetch('/api/amazon/lanzar/generate-content', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ title: _wiz.title, brand: _wiz.brand, category: _wiz.category }),
-      });
-      var d = await r.json();
-      if (d.title) document.getElementById('amz-wiz-title').value = d.title;
-      var bulletInputs = document.querySelectorAll('.amz-wiz-bullet');
-      (d.bullets || []).forEach(function(b, i) {
-        if (bulletInputs[i]) bulletInputs[i].value = b;
-      });
-      if (d.description) document.getElementById('amz-wiz-description').value = d.description;
-      document.getElementById('amz-wiz-title-count').textContent = (d.title || '').length + '/200';
-    } catch(e) {
-      alert('Error generando contenido: ' + e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '✨ Generar contenido con IA';
+  var btnBack = document.getElementById('amz-wiz-btn-back');
+  var btnNext = document.getElementById('amz-wiz-btn-next');
+  var footer  = document.getElementById('amz-wiz-footer');
+
+  var steps    = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
+  var lastStep = steps[steps.length - 1];
+  var isLast   = n === lastStep;
+
+  btnBack.style.display = n > 1 ? '' : 'none';
+
+  if (isLast) {
+    btnNext.textContent = '🚀 Publicar en Amazon';
+    btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-green-500 hover:bg-green-600 rounded-xl transition';
+  } else {
+    btnNext.textContent = 'Siguiente →';
+    btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition';
+  }
+
+  footer.classList.toggle('hidden',
+    isLast && !document.getElementById('amz-wiz-success').classList.contains('hidden'));
+
+  if (isLast) _amzWizBuildReview();
+}
+
+window._amzWizBack = function() {
+  var steps = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
+  var idx   = steps.indexOf(_wiz.step);
+  if (idx > 0) _amzWizGoStep(steps[idx - 1]);
+};
+
+window._amzWizNext = function() {
+  var steps    = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
+  var lastStep = steps[steps.length - 1];
+  if (_wiz.step === lastStep) { _amzWizSubmit(); return; }
+  if (_wiz.step === 2) {
+    var p = parseFloat(document.getElementById('amz-wiz-price').value);
+    if (!p || p <= 0) { alert('Ingresa un precio válido'); return; }
+  }
+  var idx = steps.indexOf(_wiz.step);
+  if (idx < steps.length - 1) _amzWizGoStep(steps[idx + 1]);
+};
+
+// ─── Step 1: ASIN search ──────────────────────────────────────────────────────
+window._amzWizSearch = async function(auto) {
+  var btn   = document.getElementById('amz-wiz-search-btn');
+  var input = document.getElementById('amz-wiz-search-input');
+  var res   = document.getElementById('amz-wiz-search-results');
+  var q     = input.value.trim();
+  if (!q) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  res.innerHTML = '<p class="text-xs text-gray-400 animate-pulse py-2">Buscando en catálogo Amazon…</p>';
+  try {
+    var isUPC = /^\d{8,14}$/.test(q);
+    var url   = '/api/amazon/lanzar/search-catalog?' + (isUPC ? 'upc=' : 'q=') + encodeURIComponent(q) +
+                (_wiz.seller_id ? '&seller_id=' + encodeURIComponent(_wiz.seller_id) : '');
+    var d     = await (await fetch(url)).json();
+    var items = d.items || [];
+    if (auto && items.length === 1) {
+      document.getElementById('amz-wiz-upc-info').textContent = '✓ ASIN encontrado automáticamente por UPC';
+      _amzWizSelectAsin(items[0]); res.innerHTML = ''; return;
     }
-  };
-
-  // ─── Step 3: Higgsfield ───────────────────────────────────────────────────
-  window._amzWizLaunchHighsfield = function() {
-    openHiggsfieldModal(_wiz.title || _wiz.sku, _wiz.image_url || '', _wiz.sku);
-  };
-
-  // ─── Step 4: Build review ─────────────────────────────────────────────────
-  function _amzWizBuildReview() {
-    var price       = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
-    var condition   = document.getElementById('amz-wiz-condition').value;
-    var fulfillment = document.querySelector('input[name="amz-wiz-fulfillment"]:checked').value;
-    var qty         = document.getElementById('amz-wiz-qty').value;
-    var condLabels  = {new_new:'Nuevo', used_like_new:'Usado — Como nuevo', used_very_good:'Usado — Muy bueno', used_good:'Usado — Bueno', refurbished_refurbished:'Reacondicionado'};
-
-    var rows = [
-      ['SKU',           _wiz.sku],
-      ['ASIN',          _wiz.asin || '(producto nuevo — Amazon asignará ASIN)'],
-      ['Precio',        '$' + price.toLocaleString('es-MX', {minimumFractionDigits:2}) + ' MXN'],
-      ['Condición',     condLabels[condition] || condition],
-      ['Fulfillment',   fulfillment === 'FBA' ? 'FBA (Amazon envía)' : 'FBM (tú envías) — ' + qty + ' uds'],
-    ];
-    if (_wiz.is_new_product) {
-      var title = document.getElementById('amz-wiz-title').value;
-      rows.push(['Título', title.substring(0,60) + (title.length > 60 ? '…' : '')]);
+    if (!items.length) {
+      res.innerHTML = '<p class="text-xs text-yellow-600 bg-yellow-50 rounded-lg px-3 py-2">Sin resultados. Prueba con otro término o crea el producto nuevo.</p>';
+      if (auto) document.getElementById('amz-wiz-upc-info').textContent = '⚠ No se encontró ASIN por UPC — busca manualmente o crea producto nuevo';
+      return;
     }
-
-    document.getElementById('amz-wiz-review').innerHTML = rows.map(function(row) {
-      return '<div class="flex items-start justify-between py-1.5 border-b border-gray-50 last:border-0">' +
-        '<span class="text-xs text-gray-400 shrink-0 w-28">' + row[0] + '</span>' +
-        '<span class="text-xs text-gray-700 font-medium text-right">' + row[1] + '</span>' +
-      '</div>';
+    res.innerHTML = items.map(function(item) {
+      return '<div class="flex items-center gap-2.5 border border-gray-200 hover:border-orange-400 rounded-xl p-2.5 cursor-pointer transition" onclick="window._amzWizSelectAsinById(\'' + item.asin + '\')">' +
+        '<img src="' + (item.image_url || '') + '" alt="" class="w-10 h-10 object-contain rounded border border-gray-100 bg-gray-50 shrink-0" onerror="this.style.display=\'none\'">' +
+        '<div class="min-w-0 flex-1">' +
+          '<p class="text-xs font-medium text-gray-800 truncate">' + (item.title || item.asin) + '</p>' +
+          '<div class="flex items-center gap-2 mt-0.5">' +
+            '<span class="text-[10px] text-orange-500 font-mono">' + item.asin + '</span>' +
+            (item.brand ? '<span class="text-[10px] text-gray-400">' + item.brand + '</span>' : '') +
+          '</div></div>' +
+        '<span class="text-xs text-orange-500 font-semibold shrink-0 whitespace-nowrap">Seleccionar →</span></div>';
     }).join('');
+    window._amzWizCatalogItems = items;
+  } catch(e) {
+    res.innerHTML = '<p class="text-xs text-red-500">Error: ' + e.message + '</p>';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Buscar';
+  }
+};
+
+window._amzWizSelectAsinById = function(asin) {
+  var item = (window._amzWizCatalogItems || []).find(function(i){ return i.asin === asin; });
+  if (item) _amzWizSelectAsin(item);
+};
+
+function _amzWizSelectAsin(item) {
+  _wiz.asin = item.asin; _wiz.asin_title = item.title || item.asin; _wiz.asin_image = item.image_url || '';
+  _wiz.is_new_product = false;
+  document.getElementById('amz-wiz-asin-img').src = item.image_url || '';
+  document.getElementById('amz-wiz-asin-title').textContent = item.title || item.asin;
+  document.getElementById('amz-wiz-asin-value').textContent = item.asin;
+  document.getElementById('amz-wiz-asin-selected').classList.remove('hidden');
+  document.getElementById('amz-wiz-search-results').innerHTML = '';
+}
+
+window._amzWizClearAsin = function() {
+  _wiz.asin = _wiz.asin_title = _wiz.asin_image = '';
+  document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
+};
+
+window._amzWizSkipAsin = function() {
+  _wiz.asin = ''; _wiz.is_new_product = true;
+  _amzWizGoStep(2);
+};
+
+// ─── Margin hint ──────────────────────────────────────────────────────────────
+window._amzWizUpdateMarginHint = function() {
+  var hint  = document.getElementById('amz-wiz-margin-hint');
+  if (!hint) return;
+  var price = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
+  var cost  = _wiz.cost_mxn || 0;
+  if (price > 0 && cost > 0) {
+    var net    = price - cost - price * 0.18;
+    var margin = (net / price * 100).toFixed(1);
+    hint.textContent = 'Margen estimado: ' + margin + '% · Neto: $' + net.toFixed(0) + ' MXN (precio - costo BM - 18% fees)';
+    hint.className   = 'text-[10px] mt-1 ' + (parseFloat(margin) >= 20 ? 'text-green-600' : parseFloat(margin) >= 10 ? 'text-yellow-600' : 'text-red-500');
+  } else if (_wiz.price_sug > 0) {
+    hint.textContent = 'Precio sugerido: $' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN';
+    hint.className   = 'text-[10px] mt-1 text-gray-400';
+  }
+};
+
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.name === 'amz-wiz-fulfillment')
+    document.getElementById('amz-wiz-qty-wrap').classList.toggle('hidden', e.target.value === 'FBA');
+});
+
+// ─── Content counters ────────────────────────────────────────────────────────
+window._amzWizTitleCount = function() {
+  var val = document.getElementById('amz-wiz-title').value;
+  var len = val.length;
+  var el  = document.getElementById('amz-wiz-title-count');
+  el.textContent = len + ' / 200 chars';
+  el.className   = 'text-[10px] ' + (len < 80 ? 'text-yellow-500' : len <= 200 ? 'text-green-600' : 'text-red-500');
+  var hint = document.getElementById('amz-wiz-title-hint');
+  if (hint) hint.textContent = len < 80
+    ? '⚠ Muy corto — apunta a ≥80 chars con keywords principales en los primeros 80'
+    : '✓ Longitud óptima — keywords visibles antes del corte de Amazon';
+};
+
+window._amzWizBulletCount = function(input) {
+  var count = input.parentElement.querySelector('.amz-wiz-bullet-count');
+  if (!count) return;
+  var len = input.value.length;
+  count.textContent = len + '/200';
+  count.className = 'amz-wiz-bullet-count absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] ' +
+    (len > 200 ? 'text-red-500' : len > 150 ? 'text-yellow-500' : 'text-gray-300');
+};
+
+// ─── AI content generation ───────────────────────────────────────────────────
+window._amzWizGenerateContent = async function() {
+  var icon  = document.getElementById('amz-wiz-gen-icon');
+  var label = document.getElementById('amz-wiz-gen-label');
+  var btn   = document.getElementById('amz-wiz-gen-btn');
+  btn.disabled = true; icon.textContent = '⏳'; label.textContent = 'Generando…';
+  try {
+    var r = await fetch('/api/amazon/lanzar/generate-content', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        title:     _wiz.title,
+        brand:     _wiz.brand,
+        model:     _wiz.model,
+        category:  _wiz.category,
+        upc:       _wiz.upc,
+        price_mxn: _wiz.price_sug,
+      }),
+    });
+    var d = await r.json();
+    if (d.error && !d.title) { alert('Error IA: ' + d.error); return; }
+    if (d.title) {
+      document.getElementById('amz-wiz-title').value = d.title;
+      window._amzWizTitleCount();
+    }
+    var bullets = document.querySelectorAll('.amz-wiz-bullet');
+    (d.bullets || []).forEach(function(b, i) {
+      if (bullets[i]) { bullets[i].value = b; window._amzWizBulletCount(bullets[i]); }
+    });
+    if (d.description) {
+      document.getElementById('amz-wiz-description').value = d.description;
+      document.getElementById('amz-wiz-desc-count').textContent = d.description.length + ' / 2000 chars';
+    }
+    if (d.keywords_backend) {
+      document.getElementById('amz-wiz-keywords').value = d.keywords_backend;
+      document.getElementById('amz-wiz-kw-count').textContent = d.keywords_backend.length + ' / 249';
+    }
+    if (d.product_type) document.getElementById('amz-wiz-product-type').value = d.product_type;
+    icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
+    btn.className = btn.className.replace('bg-purple-500 hover:bg-purple-600', 'bg-green-500 hover:bg-green-600');
+  } catch(e) {
+    alert('Error de red: ' + e.message);
+    icon.textContent = '✨'; label.textContent = 'Generar con IA';
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// ─── Photos sync ─────────────────────────────────────────────────────────────
+window._amzWizPhotoSync = function() {
+  var urls = _amzWizCollectPhotos();
+  var count = urls.length;
+  var ind = document.getElementById('amz-wiz-photo-count-indicator');
+  var txt = document.getElementById('amz-wiz-photo-count-text');
+  if (ind && txt) {
+    txt.textContent = count + ' foto' + (count !== 1 ? 's' : '') + ' configurada' + (count !== 1 ? 's' : '');
+    ind.className = 'text-xs rounded-lg px-3 py-2 text-center ' +
+      (count === 0 ? 'text-red-500 bg-red-50 border border-red-200' :
+       count >= 3   ? 'text-green-600 bg-green-50 border border-green-200' :
+                      'text-amber-600 bg-amber-50 border border-amber-200');
+  }
+};
+
+function _amzWizCollectPhotos() {
+  var urls = [];
+  var useBm = document.getElementById('amz-wiz-use-bm-photo');
+  if (useBm && useBm.checked && _wiz.image_url) urls.push(_wiz.image_url);
+  document.querySelectorAll('.amz-wiz-photo-url').forEach(function(el) {
+    var v = el.value.trim();
+    if (v) urls.push(v);
+  });
+  return urls;
+}
+
+window._amzWizLaunchHighsfield = function() {
+  if (typeof window.openHiggsfieldModal === 'function')
+    openHiggsfieldModal(_wiz.title || _wiz.sku, _wiz.image_url || '', _wiz.sku);
+  else
+    alert('Higgsfield no disponible en este contexto');
+};
+
+// ─── Step 4: Build review + checklist ────────────────────────────────────────
+function _amzWizBuildReview() {
+  var price       = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
+  var condition   = document.getElementById('amz-wiz-condition').value;
+  var fulfillment = document.querySelector('input[name="amz-wiz-fulfillment"]:checked').value;
+  var qty         = document.getElementById('amz-wiz-qty').value;
+  var condLabel   = {new_new:'Nuevo', used_like_new:'Como nuevo', used_very_good:'Muy bueno', used_good:'Bueno', refurbished_refurbished:'Reacondicionado'}[condition] || condition;
+
+  var rows = [
+    ['SKU', _wiz.sku],
+    ['Cuenta', _wiz.seller_id],
+    ['ASIN', _wiz.asin || '— (producto nuevo)'],
+    ['Precio', '$' + price.toLocaleString('es-MX', {minimumFractionDigits:0}) + ' MXN'],
+    ['Condición', condLabel],
+    ['Fulfillment', fulfillment === 'FBA' ? 'FBA (Amazon envía)' : 'FBM — ' + qty + ' uds iniciales'],
+  ];
+
+  if (_wiz.is_new_product) {
+    var title    = document.getElementById('amz-wiz-title').value;
+    var bullets  = Array.from(document.querySelectorAll('.amz-wiz-bullet')).filter(function(el){ return el.value.trim(); });
+    var kw       = document.getElementById('amz-wiz-keywords').value;
+    var pt       = document.getElementById('amz-wiz-product-type').value;
+    var photos   = _amzWizCollectPhotos();
+    rows.push(['Título', title.substring(0,55) + (title.length > 55 ? '…' : '')]);
+    rows.push(['Bullets', bullets.length + '/5 completados']);
+    rows.push(['Keywords backend', kw.length > 0 ? kw.length + ' chars' : '— sin completar']);
+    rows.push(['Product type', pt || '— sin especificar']);
+    rows.push(['Fotos', photos.length + ' configuradas']);
+
+    // Checklist
+    var title2       = document.getElementById('amz-wiz-title').value;
+    var description  = document.getElementById('amz-wiz-description').value;
+    var filledBullets = Array.from(document.querySelectorAll('.amz-wiz-bullet')).filter(function(el){ return el.value.trim().length > 10; }).length;
+    var checks = [
+      { label: 'Título ≥80 chars', ok: title2.length >= 80, warn: title2.length >= 40 && title2.length < 80 },
+      { label: 'Título ≤200 chars', ok: title2.length > 0 && title2.length <= 200, warn: false },
+      { label: '5 bullets completos', ok: filledBullets >= 5, warn: filledBullets >= 3 },
+      { label: 'Descripción ≥300 chars', ok: description.length >= 300, warn: description.length >= 100 },
+      { label: 'Keywords de backend', ok: kw.length >= 20, warn: kw.length > 0 },
+      { label: 'Tipo de producto Amazon', ok: pt.length > 0, warn: false },
+      { label: 'Al menos 1 foto', ok: photos.length >= 1, warn: false },
+      { label: '3+ fotos (recomendado)', ok: photos.length >= 3, warn: photos.length >= 1 },
+    ];
+
+    document.getElementById('amz-wiz-checklist-wrap').classList.remove('hidden');
+    document.getElementById('amz-wiz-checklist').innerHTML = checks.map(function(c) {
+      var icon = c.ok ? '✅' : c.warn ? '⚠️' : '❌';
+      var cls  = c.ok ? 'text-green-700' : c.warn ? 'text-yellow-600' : 'text-red-500';
+      return '<div class="flex items-center gap-2 text-xs ' + cls + '">' +
+        '<span class="shrink-0">' + icon + '</span>' +
+        '<span>' + c.label + '</span></div>';
+    }).join('');
+  } else {
+    document.getElementById('amz-wiz-checklist-wrap').classList.add('hidden');
   }
 
-  // ─── Submit ───────────────────────────────────────────────────────────────
-  async function _amzWizSubmit() {
-    if (_wiz.submitting) return;
-    _wiz.submitting = true;
+  document.getElementById('amz-wiz-review').innerHTML = rows.map(function(row) {
+    return '<div class="flex items-start justify-between px-4 py-2.5">' +
+      '<span class="text-xs text-gray-400 shrink-0 w-32">' + row[0] + '</span>' +
+      '<span class="text-xs text-gray-700 font-medium text-right break-all">' + row[1] + '</span></div>';
+  }).join('');
+}
 
-    var errEl = document.getElementById('amz-wiz-submit-error');
-    errEl.classList.add('hidden');
+// ─── Submit ───────────────────────────────────────────────────────────────────
+async function _amzWizSubmit() {
+  if (_wiz.submitting) return;
+  _wiz.submitting = true;
+  var errEl   = document.getElementById('amz-wiz-submit-error');
+  var btnNext = document.getElementById('amz-wiz-btn-next');
+  errEl.classList.add('hidden');
+  btnNext.disabled = true; btnNext.textContent = '⏳ Publicando…';
 
-    var btnNext = document.getElementById('amz-wiz-btn-next');
-    btnNext.disabled = true;
-    btnNext.textContent = '⏳ Publicando…';
+  var price       = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
+  var condition   = document.getElementById('amz-wiz-condition').value;
+  var fulfillment = document.querySelector('input[name="amz-wiz-fulfillment"]:checked').value;
+  var qty         = parseInt(document.getElementById('amz-wiz-qty').value) || 0;
 
-    var price       = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
-    var condition   = document.getElementById('amz-wiz-condition').value;
-    var fulfillment = document.querySelector('input[name="amz-wiz-fulfillment"]:checked').value;
-    var qty         = parseInt(document.getElementById('amz-wiz-qty').value) || 0;
+  var payload = {
+    seller_id:   _wiz.seller_id,
+    sku:         _wiz.sku,
+    asin:        _wiz.asin,
+    price:       price,
+    condition:   condition,
+    fulfillment: fulfillment,
+    quantity:    qty,
+  };
 
-    var payload = {
-      seller_id:   _wiz.seller_id,
-      sku:         _wiz.sku,
-      asin:        _wiz.asin,
-      price:       price,
-      condition:   condition,
-      fulfillment: fulfillment,
-      quantity:    qty,
-    };
+  if (_wiz.is_new_product) {
+    payload.title            = document.getElementById('amz-wiz-title').value.trim();
+    payload.description      = document.getElementById('amz-wiz-description').value.trim();
+    payload.bullets          = Array.from(document.querySelectorAll('.amz-wiz-bullet')).map(function(el){ return el.value.trim(); }).filter(Boolean);
+    payload.keywords_backend = document.getElementById('amz-wiz-keywords').value.trim();
+    payload.product_type     = document.getElementById('amz-wiz-product-type').value.trim() || 'PRODUCT';
+    payload.photo_urls       = _amzWizCollectPhotos();
+  }
 
-    if (_wiz.is_new_product) {
-      payload.title       = document.getElementById('amz-wiz-title').value.trim();
-      payload.description = document.getElementById('amz-wiz-description').value.trim();
-      payload.bullets     = Array.from(document.querySelectorAll('.amz-wiz-bullet')).map(function(el){ return el.value.trim(); }).filter(Boolean);
-    }
-
-    try {
-      var r = await fetch('/api/amazon/lanzar/create', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload),
-      });
-      var d = await r.json();
-      if (!r.ok || d.error) {
-        errEl.textContent = '⚠ ' + (d.error || 'Error al publicar');
-        errEl.classList.remove('hidden');
-        _wiz.submitting = false;
-        btnNext.disabled = false;
-        btnNext.textContent = '🚀 Publicar en Amazon';
-        return;
-      }
-      // Success
-      var successEl = document.getElementById('amz-wiz-success');
-      var asinEl    = document.getElementById('amz-wiz-success-asin');
-      successEl.classList.remove('hidden');
-      document.getElementById('amz-wiz-review').classList.add('hidden');
-      asinEl.textContent = d.asin ? 'ASIN: ' + d.asin : 'Amazon procesará el listing en breve.';
-      document.getElementById('amz-wiz-footer').classList.add('hidden');
-
-      // Refresh "Sin Lanzar" tab if visible
-      if (typeof window._loadAmzSinLanzar === 'function') {
-        setTimeout(function() { window._loadAmzSinLanzar(1, true); }, 2000);
-      }
-    } catch(e) {
-      errEl.textContent = '⚠ Error de red: ' + e.message;
+  try {
+    var r = await fetch('/api/amazon/lanzar/create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    var d = await r.json();
+    if (!r.ok || d.error) {
+      errEl.textContent = '⚠ ' + (d.error || 'Error al publicar');
       errEl.classList.remove('hidden');
       _wiz.submitting = false;
-      btnNext.disabled = false;
-      btnNext.textContent = '🚀 Publicar en Amazon';
+      btnNext.disabled = false; btnNext.textContent = '🚀 Publicar en Amazon';
+      return;
     }
+    document.getElementById('amz-wiz-success').classList.remove('hidden');
+    document.getElementById('amz-wiz-review').classList.add('hidden');
+    document.getElementById('amz-wiz-checklist-wrap').classList.add('hidden');
+    document.getElementById('amz-wiz-success-asin').textContent =
+      d.asin ? 'ASIN: ' + d.asin : 'Amazon procesará el listing en breve.';
+    document.getElementById('amz-wiz-footer').classList.add('hidden');
+    if (typeof window._loadAmzSinLanzar === 'function')
+      setTimeout(function() { window._loadAmzSinLanzar(1, true); }, 2500);
+  } catch(e) {
+    errEl.textContent = '⚠ Error de red: ' + e.message;
+    errEl.classList.remove('hidden');
+    _wiz.submitting = false;
+    btnNext.disabled = false; btnNext.textContent = '🚀 Publicar en Amazon';
   }
+}
 
-  window._amzWizLanzarOtro = function() {
-    window.closeAmzLanzarWizard();
-  };
-
-  // ─── Fulfillment toggle ───────────────────────────────────────────────────
-  document.addEventListener('change', function(e) {
-    if (e.target && e.target.name === 'amz-wiz-fulfillment') {
-      var qtyWrap = document.getElementById('amz-wiz-qty-wrap');
-      if (e.target.value === 'FBA') qtyWrap.classList.add('hidden');
-      else qtyWrap.classList.remove('hidden');
-    }
-  });
+window._amzWizLanzarOtro = function() { window.closeAmzLanzarWizard(); };
 
 })();
 </script>

@@ -126,9 +126,68 @@ Para self-authorization (desarrollador = vendedor) el flujo es DIFERENTE:
 | API | Rate | Burst |
 |-----|------|-------|
 | Listings search | 5/s | 5 |
+| Listings get/put/patch/delete | 5/s | 5–10 |
 | Catalog single | 2/s | 2 |
 | FBA Inventory | 2/s | 2 |
 | Orders | ~2/s | ~15 |
 | Pricing competitive | 0.5/s | 1 |
 | Pricing listing offers | 1/s | 2 |
 | Reports create | 1/min | 15 |
+| Listings Restrictions | 5/s | 10 |
+| Product Type Definitions | 5/s | 10 |
+| A+ Content | 10/s | 10 |
+| Fulfillment Inbound v2024 (standard) | 2/s | 2–30 |
+| Fulfillment Inbound v2024 (getShipment/status) | 5/s | 6 |
+| Merchant Fulfillment getEligible | 6/s | 12 |
+| Merchant Fulfillment createShipment | 2/s | 2 |
+| Fulfillment Outbound returns | 2/s | 30 |
+
+## Listings Items API — Patch paths para precio/cantidad
+```json
+// Actualizar precio:
+{"op": "replace", "path": "/attributes/purchasable_offer", "value": [{"marketplace_id": "A1AM78C64UM0Y8", "currency": "MXN", "our_price": [{"schedule": [{"value_with_tax": 8999.00}]}]}]}
+
+// Actualizar cantidad:
+{"op": "replace", "path": "/attributes/fulfillment_availability", "value": [{"fulfillment_channel_code": "DEFAULT", "quantity": 5}]}
+```
+
+## Listings Restrictions API
+- GET /listings/2021-08-01/restrictions?asin=XXX&sellerId=YYY&marketplaceIds=ZZZ
+- `conditionType` opcional: new_new, used_like_new, refurbished_refurbished, etc.
+- Sin restrictions en respuesta = puede listar sin problema
+- `reasonCode: APPROVAL_REQUIRED` = necesita aprobación de marca/categoría
+
+## Product Type Definitions API
+- GET /definitions/2020-09-01/productTypes?marketplaceIds=A1AM78C64UM0Y8&keywords=television
+- GET /definitions/2020-09-01/productTypes/{productType}?requirements=LISTING&marketplaceIds=...
+- Respuesta incluye link a JSON Schema (válido 7 días) con campos requeridos vs opcionales
+- Product types comunes: TELEVISION, MONITOR, LAPTOP, HOME_AUDIO, CAMERA, PROJECTOR
+
+## A+ Content API — Base path /aplus/2020-11-01/
+- contentDocument = colección de módulos (contentModuleList)
+- Módulos principales: StandardHeaderImageTextModule, StandardTechSpecsModule, StandardComparisonTableModule, StandardFourImageTextModule, StandardTextModule
+- Flujo: createContentDocument → postAsinRelations → validate → postApprovalSubmission
+
+## FBA Inbound v2024 — Flujo
+1. createInboundPlan (items: msku, qty, labelOwner, prepOwner, sourceAddress)
+2. generatePackingOptions → confirmPackingOption
+3. setPackingInformation (box dimensions, contents)
+4. generatePlacementOptions → confirmPlacementOption
+5. generateTransportationOptions → confirmTransportationOptions
+6. generateDeliveryWindowOptions → confirmDeliveryWindowOptions (no-partnered)
+7. createMarketplaceItemLabels
+8. updateShipmentTrackingDetails
+
+## Merchant Fulfillment (FBM labels)
+- POST /mfn/v0/eligibleShippingServices → obtener servicios disponibles
+- POST /mfn/v0/shipments → crear shipment y obtener etiqueta PDF (base64)
+- Respuesta incluye: Label.FileContents (base64), TrackingId
+
+## Returns
+- FBA/MCF: listReturnReasonCodes → createFulfillmentReturn (PUT /fba/outbound/2020-07-01/fulfillmentOrders/{id}/return)
+- MFN: via Reports API (GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE)
+- No hay Returns API directa para MFN en SP-API
+
+## Brand Registry
+- NO tiene API en SP-API — solo web (brandregistry.amazon.com)
+- SP-API relacionado: Listings Restrictions (APPROVAL_REQUIRED), A+ Content API, BRANDED_ITEM_CONTENT_CHANGE notification

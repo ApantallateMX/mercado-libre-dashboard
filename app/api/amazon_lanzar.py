@@ -593,47 +593,103 @@ async def search_catalog(
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
-# ── 2. Generar contenido IA (título + bullets) ───────────────────────────────
+# ── 2. Generar contenido IA — claude-sonnet-4-6, prompt completo ─────────────
 
 @router.post("/generate-content")
 async def generate_content(request: Request):
-    body = await request.json()
-    title    = body.get("title", "")
-    brand    = body.get("brand", "")
-    category = body.get("category", "")
+    body      = await request.json()
+    title     = body.get("title", "")
+    brand     = body.get("brand", "")
+    model_num = (body.get("model") or "").strip()
+    category  = body.get("category", "")
+    upc       = (body.get("upc") or "").strip()
+    price_mxn = float(body.get("price_mxn") or 0)
+
+    ctx_parts = []
+    if model_num:
+        ctx_parts.append(f"Modelo: {model_num}")
+    if upc:
+        ctx_parts.append(f"UPC/EAN: {upc}")
+    if price_mxn > 0:
+        ctx_parts.append(f"Precio de venta: ${price_mxn:,.0f} MXN")
+    extra_ctx = "\n".join(ctx_parts)
+
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        prompt = f"""Genera contenido optimizado para Amazon México para este producto:
-Título BM: {title}
+        ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
+
+Crea contenido completo y de alta conversión para este producto:
+
+Título catálogo: {title}
 Marca: {brand}
 Categoría: {category}
+{extra_ctx}
+Marketplace: Amazon México (amazon.com.mx) — compradores en español mexicano
 
-Responde SOLO con JSON válido, sin texto extra:
+━━━ REGLAS CRÍTICAS (cumplirlas al pie de la letra) ━━━
+
+TÍTULO (máx 200 chars):
+• Formato: [Marca] [Modelo] [Característica principal] [Uso/Compatibilidad] [Especificación clave]
+• Primeros 80 chars = keywords de mayor volumen de búsqueda
+• NO emojis, NO "oferta/gratis/mejor/top", NO signos finales, NO mayúsculas excesivas
+• Incluir unidades si aplica (Watts, Pulgadas, Litros, etc.)
+
+BULLETS (exactamente 5, máx 200 chars c/u):
+• Empiezan en MAYÚSCULAS con la feature clave
+• Estructura: FEATURE CLAVE: Especificación medible + beneficio concreto al usuario
+• Bullet 1: Diferenciador principal / USP
+• Bullet 2: Especificaciones técnicas más buscadas
+• Bullet 3: Compatibilidad / casos de uso
+• Bullet 4: Contenido del paquete / lo que incluye
+• Bullet 5: Garantía / soporte / certificaciones / por qué elegirlo
+
+DESCRIPCIÓN (máx 2000 chars):
+• Párrafo 1: Problema que resuelve + quién lo necesita
+• Párrafo 2: Características y especificaciones clave en detalle
+• Párrafo 3: Call to action + propuesta de valor final
+• Texto natural, sin repetir exactamente el título o bullets
+
+KEYWORDS BACKEND (máx 249 caracteres, NO bytes — caracteres):
+• Solo palabras que NO aparecen en título ni bullets
+• Mezcla español + inglés + variaciones comunes
+• Términos genéricos, sinónimos, usos alternativos, errores ortográficos frecuentes
+• Separados por espacios (NO comas)
+
+PRODUCT_TYPE:
+• Elige el tipo Amazon MX más específico y correcto (SCREAMING_SNAKE_CASE)
+• Ejemplos: LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER, MEDICAL_GLOVE
+• Basa tu elección en la categoría y el título del producto
+
+━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
-  "title": "Título para Amazon MX (máx 200 chars, incluye marca, modelo, atributo clave)",
-  "bullets": [
-    "✓ Bullet 1 — característica + beneficio concreto",
-    "✓ Bullet 2",
-    "✓ Bullet 3",
-    "✓ Bullet 4",
-    "✓ Bullet 5"
-  ],
-  "description": "Descripción en español, 2-3 párrafos, orientada a conversión"
+  "title": "...",
+  "bullets": ["...", "...", "...", "...", "..."],
+  "description": "...",
+  "keywords_backend": "...",
+  "product_type": "..."
 }}"""
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=900,
+
+        msg = ai.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2000,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = msg.content[0].text
+        text  = msg.content[0].text.strip()
         start = text.index("{")
         end   = text.rindex("}") + 1
         data  = json.loads(text[start:end])
+        # Asegurar que keywords_backend no supere 249 chars
+        if len(data.get("keywords_backend", "")) > 249:
+            data["keywords_backend"] = data["keywords_backend"][:249].rsplit(" ", 1)[0]
         return data
     except Exception as e:
         logger.warning(f"[AMZ Lanzar] generate-content error: {e}")
-        return {"title": title, "bullets": [], "description": "", "error": str(e)[:100]}
+        return {
+            "title": title, "bullets": [], "description": "",
+            "keywords_backend": "", "product_type": "PRODUCT",
+            "error": str(e)[:150],
+        }
 
 
 # ── 3. Crear listing (Flujo 1 o Flujo 2) ────────────────────────────────────
@@ -641,17 +697,19 @@ Responde SOLO con JSON válido, sin texto extra:
 @router.post("/create")
 async def create_listing(request: Request):
     body = await request.json()
-    seller_id   = body.get("seller_id")
-    sku         = (body.get("sku") or "").strip()
-    asin        = (body.get("asin") or "").strip()
-    price       = float(body.get("price") or 0)
-    condition   = body.get("condition", "new_new")
-    fulfillment = body.get("fulfillment", "FBM")
-    quantity    = int(body.get("quantity") or 0)
-    title       = (body.get("title") or "")[:200]
-    bullets     = body.get("bullets") or []
-    description = (body.get("description") or "")[:2000]
-    product_type = body.get("product_type") or "PRODUCT"
+    seller_id        = body.get("seller_id")
+    sku              = (body.get("sku") or "").strip()
+    asin             = (body.get("asin") or "").strip()
+    price            = float(body.get("price") or 0)
+    condition        = body.get("condition", "new_new")
+    fulfillment      = body.get("fulfillment", "FBM")
+    quantity         = int(body.get("quantity") or 0)
+    title            = (body.get("title") or "")[:200]
+    bullets          = body.get("bullets") or []
+    description      = (body.get("description") or "")[:2000]
+    keywords_backend = (body.get("keywords_backend") or "")[:249]
+    product_type     = body.get("product_type") or "PRODUCT"
+    photo_urls       = [u.strip() for u in (body.get("photo_urls") or []) if (u or "").strip()]
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -706,6 +764,19 @@ async def create_listing(request: Request):
             attributes["product_description"] = [
                 {"value": description, "marketplace_id": client.marketplace_id}
             ]
+        if keywords_backend:
+            attributes["generic_keyword"] = [
+                {"value": keywords_backend, "marketplace_id": client.marketplace_id}
+            ]
+        if photo_urls:
+            attributes["main_product_image_locator"] = [
+                {"media_location": photo_urls[0], "marketplace_id": client.marketplace_id}
+            ]
+            for _i, _url in enumerate(photo_urls[1:8], 1):
+                if _url:
+                    attributes[f"other_product_image_locator_{_i}"] = [
+                        {"media_location": _url, "marketplace_id": client.marketplace_id}
+                    ]
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
                 "fulfillment_channel_code": "DEFAULT",
