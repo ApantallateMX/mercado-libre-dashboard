@@ -380,6 +380,7 @@ function _updateFreshnessBadge() {
 
 // Refresh silencioso: actualiza datos SIN mostrar spinner (no interrumpe al usuario)
 function _invSilentRefresh() {
+    if (_amzProdActiveTab !== 'inventario') return;  // no sobrescribir otros tabs
     if (_invRefreshPending) return;
     _invRefreshPending = true;
     var scrollY = window.scrollY;

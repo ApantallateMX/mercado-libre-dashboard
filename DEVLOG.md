@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-28 — FIX: Inventario skeleton infinito — listings stale-while-revalidate
+
+### Problema
+`_get_listings_cached` bloqueaba el request handler cuando la DB tenía <500 filas
+(ocurre siempre en el primer boot tras cada deploy — Railway borra DB en redeploy).
+La función llamaba `get_all_listings()` de forma sincrónica: 50 páginas × 0.2s + red = 15-30s.
+Railway tiene un timeout de request de ~30s → el endpoint nunca respondía → skeleton infinito.
+
+Mismo problema ya resuelto para FBA en commit 14e4656 (stale-while-revalidate).
+El `loadAmzProdTab` tampoco llamaba `_invBgPoll()`, así que el auto-poll de BG tasks
+nunca arrancaba al hacer click en el tab de Inventario.
+
+### Solución
+- `_listings_loading: set` rastrea fetches BG activos por seller_id
+- `_refresh_listings_bg()`: BG fetch que reintenta DB-first, fallback API
+- `_build_listings_from_rows()`: helper extraído para reusar lógica DB→listing
+- `_get_listings_cached()`: stale-while-revalidate — cold start devuelve `[]`
+  inmediatamente + lanza BG; stale devuelve datos viejos + lanza BG
+- `bg-status` incluye `listings_active` en el check `ready`
+- Contexto inventario incluye `listings_loading`
+- Template: `data-bg-loading=true` cuando `listings_loading`; banner
+  "Sincronizando catálogo…" en estado vacío con auto-poll de 5s
+- `loadAmzProdTab`: ahora llama `_invBgPoll()` para el tab inventario (faltaba)
+- `_trigger_bm_prefetch`: guard `if not listings: return` para no quemar
+  `_bm_all_last_refresh` cuando catálogo está vacío
+
+### Commit: 5274948
+
+---
+
 ## 2026-05-28 — FIX: Amazon rate limits — Últimas Órdenes y Top 10 Productos
 
 ### Problema 1: Últimas Órdenes siempre mostraba "Rate limit Amazon SP-API"
