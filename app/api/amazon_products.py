@@ -84,8 +84,19 @@ _DEALS_TTL      = 300   # 5 min
 _COMP_PRICE_TTL = 600   # 10 min
 _DEAL_CANDS_TTL = 900   # 15 min
 
-_LISTINGS_TTL = 300   # 5 minutos
+_LISTINGS_TTL    = 600   # 10 min — DB se actualiza c/qty-sync (10 min)
+_LISTINGS_TTL_API = 300  # 5 min para API fallback (primer run / DB sparse)
 _FBA_TTL      = 300   # 5 minutos
+
+
+def invalidate_listings_cache(seller_id: str | None = None) -> None:
+    """Limpia el cache de listings para forzar rebuild desde DB en el próximo request.
+    Llamado por el sync de qty/listings cuando hay cambios.
+    """
+    if seller_id:
+        _listings_cache.pop(seller_id, None)
+    else:
+        _listings_cache.clear()
 _BUYBOX_TTL   = 600   # 10 minutos
 _SKU_SALES_TTL = 1800  # 30 minutos (costo alto: get_order_items por cada orden)
 
@@ -264,16 +275,77 @@ def _is_amz_onsite(item: dict) -> bool:
     return False
 
 
+def _db_status_to_api(status_str: str) -> list:
+    """Convierte status de DB ('Active','Inactive'...) al formato de la Listings API (['BUYABLE',...])."""
+    s = (status_str or "").strip().upper()
+    if s in ("ACTIVE", "BUYABLE"):
+        return ["BUYABLE"]
+    if s == "DISCOVERABLE":
+        return ["DISCOVERABLE"]
+    return [s] if s else ["INACTIVE"]
+
+
 async def _get_listings_cached(client) -> list:
-    """Obtiene listings del caché o los descarga si expiró."""
+    """Obtiene listings del caché in-memory o construye desde DB local.
+
+    DB-first: si amazon_listings tiene ≥500 filas para este seller, construye
+    objetos listing compatibles con todos los tabs (status mapeado a formato API).
+    Fallback a live API solo cuando DB está vacía (primer run / cuenta nueva).
+    TTL en caché: 30 min si viene de DB, 5 min si viene de API.
+    """
     now = _time.time()
     key = client.seller_id
     if key in _listings_cache:
         ts, data = _listings_cache[key]
         if now - ts < _LISTINGS_TTL:
             return data
+
+    # ── DB-first path ──
+    try:
+        import aiosqlite as _aio
+        from app.services.token_store import DATABASE_PATH as _DB_PATH
+        async with _aio.connect(_DB_PATH) as _db:
+            _db.row_factory = _aio.Row
+            _cnt = (await (await _db.execute(
+                "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?",
+                (client.seller_id,)
+            )).fetchone())[0]
+
+            if _cnt >= 500:
+                _rows = await (await _db.execute(
+                    "SELECT sku, asin, title, status, price, available_qty, fulfillment, synced_at "
+                    "FROM amazon_listings WHERE seller_id=?",
+                    (client.seller_id,)
+                )).fetchall()
+                data = []
+                for _r in _rows:
+                    _ts   = _r["synced_at"] or 0
+                    _lu   = (datetime.fromtimestamp(_ts).strftime("%Y-%m-%dT%H:%M:%SZ") if _ts else "")
+                    _sta  = _db_status_to_api(_r["status"])
+                    _chan = (_r["fulfillment"] or "DEFAULT").upper()
+                    _qty  = _r["available_qty"] or 0
+                    _price = float(_r["price"] or 0)
+                    data.append({
+                        "sku": _r["sku"],
+                        "summaries": [{"asin": _r["asin"] or "", "itemName": _r["title"] or _r["sku"],
+                                       "status": _sta, "lastUpdatedDate": _lu}],
+                        "offers":    ([{"offerType": "B2C", "price": {"amount": _price,
+                                        "listingPrice": {"amount": _price}}}]
+                                      if _price else []),
+                        "fulfillmentAvailability": [{"fulfillmentChannelCode": _chan, "quantity": _qty}],
+                        "issues":    [],
+                        "attributes": {},
+                    })
+                _listings_cache[key] = (now, data)
+                logger.info("[Amazon Products] listings DB-first seller=%s rows=%d", client.seller_id, len(data))
+                return data
+    except Exception as _e:
+        logger.warning("[Amazon Products] DB-first listings failed, falling back to API: %s", _e)
+
+    # ── API fallback (primer run / DB sparse) ──
     data = await client.get_all_listings()
-    _listings_cache[key] = (now, data)
+    # API fallback: TTL más corto (5 min), DB-first usa 10 min (línea arriba)
+    _listings_cache[key] = (now - (_LISTINGS_TTL - _LISTINGS_TTL_API), data)
     return data
 
 

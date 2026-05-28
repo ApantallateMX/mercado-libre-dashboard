@@ -3,8 +3,8 @@ amazon_listing_sync.py — Sincronización de listings Amazon → DB local
 
 Estrategia:
   - Arranque: sync completo para todas las cuentas Amazon (60s después del arranque)
-  - Cada 10 min: qty-only sync — solo fulfillmentAvailability para listings conocidos
-  - Cada 6h: reconciliación completa automática
+  - Cada 10 min: qty-only sync — solo available_qty (rápido, mantiene stock fresco)
+  - 1x/día (8 PM México ≈ 02:00 UTC): full reconciliation completa + gap scan
   - Manual: trigger via POST /api/listings/refresh
 
 Solo descarga datos — cero escrituras a Amazon Seller Central.
@@ -12,12 +12,13 @@ Solo descarga datos — cero escrituras a Amazon Seller Central.
 import asyncio
 import logging
 import time as _time
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-_FULL_INTERVAL      = 6 * 3600   # 6 horas entre syncs completos
+_FULL_INTERVAL      = 24 * 3600  # 24 horas entre syncs completos (1x/día)
 _QTY_SYNC_INTERVAL  = 10 * 60   # 10 minutos entre qty-only syncs
-_GAP_SCAN_INTERVAL  = 3 * 3600  # 3 horas entre gap scans automáticos
+_GAP_SCAN_INTERVAL  = 6 * 3600  # 6 horas entre gap scans automáticos
 _sync_running       = False
 _qty_sync_running   = False
 _last_sync_ts       = 0.0
@@ -248,6 +249,12 @@ async def run_amazon_listing_sync() -> dict:
             _sync_error = first_error
 
         _last_sync_ts = _time.time()
+        # Invalidar cache de productos para que el próximo request reconstruya desde DB fresca
+        try:
+            from app.api.amazon_products import invalidate_listings_cache
+            invalidate_listings_cache()   # todas las cuentas
+        except Exception:
+            pass
         from datetime import datetime
         _sync_status = {
             "accounts_synced": accounts_done,
@@ -323,6 +330,12 @@ async def _sync_qty_only_account(seller_id: str, client) -> int:
         changed = await token_store.update_amazon_qty_batch(updates)
         if changed > 0:
             logger.info(f"[AMZ-QTY] seller={seller_id}: {changed}/{len(updates)} listings qty actualizada")
+            # Invalidar cache de productos para que el próximo request vea qty actualizada
+            try:
+                from app.api.amazon_products import invalidate_listings_cache
+                invalidate_listings_cache(seller_id)
+            except Exception:
+                pass
         return changed
     except Exception as e:
         logger.warning(f"[AMZ-QTY] Error seller={seller_id}: {e}")
@@ -373,30 +386,39 @@ async def _run_gap_scan_background() -> None:
         logger.error(f"[AMZ-AUTO-SCAN] Error: {e}")
 
 
+def _next_8pm_mexico_secs() -> float:
+    """Segundos hasta las 20:00 hora México (CST = UTC-6)."""
+    mex = datetime.now(timezone.utc) + timedelta(hours=-6)
+    target = mex.replace(hour=20, minute=0, second=0, microsecond=0)
+    if mex >= target:
+        target += timedelta(days=1)
+    return (target - mex).total_seconds()
+
+
 async def _loop():
     """Loop periódico:
     - Arranque (60s): full sync → gap scan
-    - Cada 10 min: qty-only sync
-    - Cada 6h: full reconciliation → gap scan
-    - Cada 3h (si no hubo full sync): gap scan (cambios de stock BM)
+    - Cada 10 min: qty-only sync (mantiene stock fresco en DB)
+    - 1x/día a las 8 PM México: full reconciliation → gap scan
+    - Cada 6h (si no hubo full sync): gap scan (cambios de stock BM)
     """
     global _last_gap_scan_ts
     await asyncio.sleep(60)   # esperar a que el servidor esté listo
     await run_amazon_listing_sync()
     # Gap scan inicial (después del primer full sync)
-    await asyncio.sleep(5)  # dar 5s para que el DB se asiente
+    await asyncio.sleep(5)
     await _run_gap_scan_background()
 
     while True:
         await asyncio.sleep(_QTY_SYNC_INTERVAL)   # despertar cada 10 min
 
-        # qty-only sync (siempre)
+        # qty-only sync (siempre — mantiene available_qty fresco en DB)
         try:
             await run_amazon_qty_sync()
         except Exception as e:
             logger.error(f"[AMZ-QTY-LOOP] Error: {e}")
 
-        # full sync si pasaron ≥6h → seguido de gap scan
+        # full sync 1x/día si pasaron ≥24h → seguido de gap scan
         if (_time.time() - _last_sync_ts) >= _FULL_INTERVAL:
             try:
                 await run_amazon_listing_sync()
@@ -404,7 +426,7 @@ async def _loop():
                 await _run_gap_scan_background()
             except Exception as e:
                 logger.error(f"[AMZ-LISTING-SYNC-LOOP] Error: {e}")
-        # gap scan independiente si pasaron ≥3h (sin full sync)
+        # gap scan independiente si pasaron ≥6h (sin full sync)
         elif (_time.time() - _last_gap_scan_ts) >= _GAP_SCAN_INTERVAL:
             try:
                 await _run_gap_scan_background()
@@ -416,9 +438,8 @@ def start_amazon_listing_sync():
     """Inicia el loop en background. Llamar desde lifespan de FastAPI."""
     asyncio.create_task(_loop())
     logger.info(
-        f"[AMZ-LISTING-SYNC] Iniciado — qty cada {_QTY_SYNC_INTERVAL//60}min, "
-        f"full sync cada {_FULL_INTERVAL//3600}h, "
-        f"gap scan auto cada {_GAP_SCAN_INTERVAL//3600}h"
+        f"[AMZ-LISTING-SYNC] Iniciado — qty c/{_QTY_SYNC_INTERVAL//60}min, "
+        f"full sync 1x/día, gap scan c/{_GAP_SCAN_INTERVAL//3600}h"
     )
 
 
