@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-05-28 — FIX: Amazon rate limits — Últimas Órdenes y Top 10 Productos
+
+### Problema 1: Últimas Órdenes siempre mostraba "Rate limit Amazon SP-API"
+`get_amazon_recent_orders` paginaba 29 días de historial (~17 páginas = 17 API calls).
+El burst de `getOrders` SP-API es solo 20 requests → se agotaba en cold start.
+
+### Solución 1
+- `get_amazon_recent_orders` ahora usa ventana de **3 días** + **max_pages=1** (1 página = 100 órdenes, suficiente para mostrar las 5 más recientes)
+- Solo 2 API calls (active + pending) independientemente del tamaño del catálogo
+- Caché propio 10 min (`_amazon_recent_orders_cache`) separado del caché de 29 días del Dashboard
+- `get_orders()` en el cliente acepta `max_pages` y añade `sleep(0.5s)` entre páginas
+
+### Problema 2: Top 10 Productos tardaba 5+ min (o nunca cargaba)
+`_refresh_sku_sales_bg` lanzaba 5 `getOrderItems` concurrentes (≈5 rps vs límite 0.5 rps).
+Saturaba el burst en los primeros batches → 429 → datos incompletos.
+
+### Solución 2
+- Items fetched secuencialmente (1 a la vez) con 2s de delay → 0.5 req/s = respeta el rate limit
+- Cap de 150 órdenes para el BG task inicial (~5 min) → suficiente para Top 10 representativo
+
+### Archivos modificados
+- `app/services/amazon_client.py`: `get_orders` + `max_pages` + sleep entre páginas
+- `app/api/metrics.py`: `get_amazon_recent_orders` reescrito, nuevo caché dedicado
+- `app/api/amazon_products.py`: `_refresh_sku_sales_bg` — items secuenciales, cap 150
+
+---
+
 ## 2026-05-28 — FIX: Amazon Dashboard — stats cards y alertas solo en tab Dashboard
 
 ### Problema
