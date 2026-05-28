@@ -152,6 +152,16 @@
     </div>
 </div>
 
+<!-- ─── Fondos pendientes Amazon ──────────────────────────────────────── -->
+<div id="amz-balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
+    <div class="flex items-center gap-2">
+        <span class="text-lg">💳</span>
+        <span class="text-sm font-semibold text-gray-700">Fondos pendientes Amazon (30d):</span>
+        <span id="amz-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
+    </div>
+    <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
+</div>
+
 <!-- ─── Meta diaria ────────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5 overflow-hidden" id="amz-daily-goal-section">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -250,16 +260,6 @@
       <div class="animate-pulse h-12 bg-white/5 rounded-lg"></div>
     </div>
   </div>
-</div>
-
-<!-- ─── Fondos pendientes Amazon ──────────────────────────────────────── -->
-<div id="amz-balance-banner" class="bg-white rounded-xl shadow mb-5 px-4 md:px-6 py-3 flex flex-wrap items-center gap-4">
-    <div class="flex items-center gap-2">
-        <span class="text-lg">💳</span>
-        <span class="text-sm font-semibold text-gray-700">Fondos pendientes Amazon (30d):</span>
-        <span id="amz-balance-val" class="text-sm font-bold text-gray-500">Cargando…</span>
-    </div>
-    <button onclick="loadAmzBalance()" class="ml-auto text-xs text-orange-500 hover:underline">↺ Actualizar</button>
 </div>
 
 <!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
@@ -554,62 +554,6 @@
   </div>
 
 </div><!-- /amz-tab-deals -->
-
-<!-- ══ AI ADVISOR DRAWER ═══════════════════════════════════════════════════ -->
-<button id="amz-ai-btn"
-  onclick="toggleAmzAIDrawer()"
-  class="fixed bottom-6 right-6 z-40 flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white font-semibold px-4 py-3 rounded-2xl shadow-xl transition text-sm">
-  <span class="text-base">🤖</span> Asesor IA
-</button>
-
-<div id="amz-ai-drawer"
-  class="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white shadow-2xl transform translate-x-full transition-transform duration-300 flex flex-col">
-  <!-- Header -->
-  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50">
-    <div>
-      <h2 class="font-bold text-gray-800 text-base">🤖 Asesor Amazon IA</h2>
-      <p class="text-xs text-gray-400 mt-0.5">Powered by Claude · datos en tiempo real</p>
-    </div>
-    <button onclick="toggleAmzAIDrawer()" class="text-gray-400 hover:text-gray-700 text-xl font-bold transition">✕</button>
-  </div>
-  <!-- Mode selector -->
-  <div class="px-5 py-3 border-b border-gray-100 flex flex-wrap gap-1.5">
-    <button data-mode="general"   onclick="setAmzAIMode('general')"   class="amz-ai-mode-btn active-mode text-xs font-medium px-3 py-1.5 rounded-full border border-orange-400 bg-orange-50 text-orange-700">General</button>
-    <button data-mode="restock"   onclick="setAmzAIMode('restock')"   class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Restock</button>
-    <button data-mode="listings"  onclick="setAmzAIMode('listings')"  class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Listings</button>
-    <button data-mode="pricing"   onclick="setAmzAIMode('pricing')"   class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Precios</button>
-    <button data-mode="strategy"  onclick="setAmzAIMode('strategy')"  class="amz-ai-mode-btn text-xs font-medium px-3 py-1.5 rounded-full border border-gray-200 text-gray-600 hover:border-orange-300">Estrategia</button>
-  </div>
-  <!-- Chat messages -->
-  <div id="amz-ai-messages" class="flex-1 overflow-y-auto p-5 space-y-4">
-    <div class="bg-orange-50 rounded-xl p-4 text-sm text-orange-800 border border-orange-100">
-      <p class="font-semibold mb-1">👋 Hola! Soy tu Asesor Amazon IA</p>
-      <p class="text-xs text-orange-600">Tengo acceso a datos de tu tienda en tiempo real. Selecciona un modo y hazme cualquier pregunta sobre tu operación.</p>
-    </div>
-    <!-- Quick prompts -->
-    <div class="space-y-1.5">
-      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Preguntas rápidas:</p>
-      <button onclick="askAmzAI('¿Cuáles son mis productos con más riesgo de quedarse sin stock?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">📦 ¿Qué productos están en riesgo de stock out?</button>
-      <button onclick="askAmzAI('¿Qué listings necesitan optimización urgente?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">🏷️ ¿Qué listings necesitan optimización urgente?</button>
-      <button onclick="askAmzAI('Dame un plan de acción para aumentar ventas esta semana')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">📈 Plan de acción para aumentar ventas esta semana</button>
-      <button onclick="askAmzAI('¿Cómo está la salud general de mi cuenta Amazon?')" class="w-full text-left text-xs bg-gray-50 hover:bg-orange-50 border border-gray-200 hover:border-orange-200 rounded-xl px-4 py-2.5 transition text-gray-700">💚 Diagnóstico de salud de cuenta</button>
-    </div>
-  </div>
-  <!-- Input -->
-  <div class="px-5 py-4 border-t border-gray-100 bg-gray-50">
-    <div class="flex gap-2">
-      <textarea id="amz-ai-input" rows="2" placeholder="Escribe tu pregunta..."
-        class="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2 resize-none focus:outline-none focus:border-orange-400 focus:ring-1 focus:ring-orange-200"
-        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAmzAI();}"></textarea>
-      <button onclick="sendAmzAI()" id="amz-ai-send"
-        class="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-2 rounded-xl transition text-sm self-end">
-        Enviar
-      </button>
-    </div>
-  </div>
-</div>
-<!-- Overlay -->
-<div id="amz-ai-overlay" onclick="toggleAmzAIDrawer()" class="hidden fixed inset-0 bg-black/30 z-40 backdrop-blur-sm"></div>
 
 <!-- ══════════════════════════════════════════════════════════════
      PANEL LATERAL AMAZON — slide from right (igual a ML)
