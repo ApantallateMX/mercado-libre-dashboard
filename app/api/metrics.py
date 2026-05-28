@@ -1563,23 +1563,38 @@ async def get_amazon_recent_orders(
             '<p class="text-center text-gray-400 py-6 text-sm">Sin cuenta Amazon conectada</p>'
         )
 
-    # Caché dedicado: ventana de 3 días, solo primera página (100 órdenes max).
-    # Evita paginar 15-20 páginas (25 días de historial) que agota el burst de 20 req de getOrders.
+    # Caché dedicado: ventana de 1 día, max 2 páginas (200 órdenes max).
+    # Amazon devuelve órdenes en orden ASCENDENTE (más antiguas primero).
+    # Con ventana de 3 días y ~60 ord/día, página 1 solo cubre día 1 — nunca llega a hoy.
+    # Ventana de 1 día: ~60 órdenes = caben en 1 página; garantiza mostrar órdenes de hoy.
     _rkey = f"recent:{client.seller_id}"
     _cached_recent = _amazon_recent_orders_cache.get(_rkey)
     if _cached_recent and (_time.time() - _cached_recent[0]) < _AMAZON_RECENT_ORDERS_TTL:
         orders = _cached_recent[1]
     else:
         now = datetime.utcnow()
-        created_after = (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Hoy completo: desde las 00:00 UTC de hace 1 día hasta hace 5 minutos
+        created_after = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
         created_before = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            # max_pages=1 → solo primera página (100 órdenes) — suficiente para mostrar 5 recientes
-            orders = await client.get_orders(
+            # Active (Shipped/Unshipped/PartiallyShipped) — max 2 páginas (200 órdenes)
+            active = await client.get_orders(
                 created_after=created_after,
                 created_before=created_before,
-                max_pages=1,
+                max_pages=2,
             )
+            # Pending — SP-API quirk: no se puede mezclar con otros estados
+            try:
+                pending = await client.get_orders(
+                    created_after=created_after,
+                    created_before=created_before,
+                    order_statuses=["Pending"],
+                    max_pages=1,
+                )
+                active_ids = {o.get("AmazonOrderId") for o in active}
+                orders = active + [o for o in pending if o.get("AmazonOrderId") not in active_ids]
+            except Exception:
+                orders = active
             _amazon_recent_orders_cache[_rkey] = (_time.time(), orders)
         except Exception as exc:
             exc_str = str(exc)
@@ -1589,7 +1604,7 @@ async def get_amazon_recent_orders(
                 f'<p class="text-center text-red-400 py-6 text-sm">Error: {exc_str[:120]}</p>'
             )
 
-    valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending")]
+    valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending", "PartiallyShipped")]
     valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
     recent = valid[:5]
 
