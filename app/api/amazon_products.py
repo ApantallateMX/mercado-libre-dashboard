@@ -1655,14 +1655,15 @@ def _bm_from_cache(sku: str) -> dict:
     return _BM_EMPTY
 
 
-async def _enrich_bm_amz(items: list) -> None:
+async def _enrich_bm_amz(items: list, timeout_s: float | None = None) -> None:
     """
     Enriquece items in-place con datos BinManager (bm_mty, bm_cdmx, bm_tj, bm_avail, bm_reserved).
 
     - Condiciones siempre: GRA,GRB,GRC,NEW (aplica para todos los SKUs Amazon).
     - Deduplica por SKU base: SNFN000941-NEW-02 y SNFN000941-FLX01 → 1 sola llamada BM.
     - Caché 15 min por Amazon SKU.
-    - Logging completo para diagnóstico en Railway.
+    - timeout_s: si se especifica, cancela el gather tras N segundos (page requests).
+      Items sin enriquecer quedan con _BM_EMPTY (valores 0). BG prefetch usa None (sin límite).
     """
     if not items:
         return
@@ -1791,10 +1792,20 @@ async def _enrich_bm_amz(items: list) -> None:
             for item in sku_to_items.get(amz_sku, []):
                 item.update(inv)
 
-    await asyncio.gather(
+    _gather = asyncio.gather(
         *[_fetch_base(base, skus) for base, skus in base_to_amz_skus.items()],
         return_exceptions=True,
     )
+    if timeout_s is not None:
+        try:
+            await asyncio.wait_for(_gather, timeout=timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[BM-AMZ] Timeout {timeout_s}s — {len(base_to_amz_skus)} SKUs sin enriquecer "
+                f"(probablemente no existen en BM, mostrando columnas BM en 0)"
+            )
+    else:
+        await _gather
 
 
 async def _refresh_bm_all_bg(listings: list) -> None:
@@ -2126,7 +2137,7 @@ async def amazon_products_inventario(
         # BM  = total bodega propia (dato de BinManager, puede incluir stock no asignado a Amazon)
         flx_pre = [e for e in enriched if e.get("fulfillment_type") == "FLX"]
         if flx_pre:
-            await _enrich_bm_amz(flx_pre)
+            await _enrich_bm_amz(flx_pre, timeout_s=8.0)
 
         # ── Filtrar ────────────────────────────────────────────────────────
         if filter == "fba":
@@ -2196,8 +2207,8 @@ async def amazon_products_inventario(
         start      = (page - 1) * per_page
         page_items = enriched[start: start + per_page]
 
-        # ── BM: solo para la página actual ────────────────────────────────
-        await _enrich_bm_amz(page_items)
+        # ── BM: solo para la página actual — timeout 5s para no bloquear el request ──
+        await _enrich_bm_amz(page_items, timeout_s=5.0)
 
         # ── action_needed: calculado con BM fresco post-enrich ─────────────
         for _e in page_items:
