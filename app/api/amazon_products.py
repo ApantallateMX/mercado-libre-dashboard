@@ -4375,9 +4375,9 @@ async def amazon_sin_lanzar(
         d["retail_mxn"] = d.get("cost_mxn", 0)
         gaps_page.append(d)
 
-    # Enriquecer con MTY/CDMX/TJ
+    # Enriquecer con MTY/CDMX/TJ (timeout para no bloquear la página)
     try:
-        await _enrich_bm_amz(gaps_page)
+        await _enrich_bm_amz(gaps_page, timeout_s=5.0)
     except Exception:
         pass
 
