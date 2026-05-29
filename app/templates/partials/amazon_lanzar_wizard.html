@@ -231,7 +231,7 @@
           </div>
 
           <!-- Keywords backend + Product type (2 col) -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
             <div>
               <div class="flex items-center justify-between mb-1">
                 <label class="text-xs font-semibold text-gray-600">Keywords de backend</label>
@@ -245,9 +245,41 @@
             </div>
             <div>
               <label class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
-              <input id="amz-wiz-product-type" type="text" placeholder="ej: LIGHT_BULB, AIR_CONDITIONER…"
+              <input id="amz-wiz-product-type" type="text" placeholder="ej: TELEVISION, LIGHT_BULB…"
                      class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition">
               <p class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
+            </div>
+          </div>
+
+          <!-- Atributos del producto -->
+          <div class="border-t border-gray-100 pt-3">
+            <p class="text-xs font-semibold text-gray-600 mb-2">Atributos del producto <span class="font-normal text-gray-400">(recomendados por Amazon)</span></p>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Marca</label>
+                <input id="amz-wiz-brand" type="text" placeholder="ej: Samsung"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Número de modelo</label>
+                <input id="amz-wiz-model-num" type="text" placeholder="ej: QN32LS03CBFXZA"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Color</label>
+                <input id="amz-wiz-color" type="text" placeholder="ej: Black, Silver"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
+                <input id="amz-wiz-weight" type="number" step="0.1" min="0" placeholder="ej: 5.5"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Tamaño pantalla (pulgadas)</label>
+                <input id="amz-wiz-display-size" type="number" step="0.1" min="0" placeholder="ej: 32"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
             </div>
           </div>
         </div>
@@ -423,6 +455,12 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   document.getElementById('amz-wiz-keywords').value = '';
   document.getElementById('amz-wiz-product-type').value = '';
   document.querySelectorAll('.amz-wiz-photo-url').forEach(function(el) { el.value = ''; });
+  // Atributos: pre-llenar marca/modelo desde BM
+  var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
+  var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
+  var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = '';
+  var wEl = document.getElementById('amz-wiz-weight'); if (wEl) wEl.value = '';
+  var dEl = document.getElementById('amz-wiz-display-size'); if (dEl) dEl.value = '';
   document.getElementById('amz-wiz-upc-info').classList.add('hidden');
   document.getElementById('amz-wiz-title-count').textContent = '0 / 200 chars';
   document.getElementById('amz-wiz-desc-count').textContent = '0 / 2000 chars';
@@ -662,7 +700,12 @@ window._amzWizGenerateContent = async function() {
       }),
     });
     var d = await r.json();
-    if (d.error && !d.title) { alert('Error IA: ' + d.error); return; }
+    if (d.error) {
+      alert('Error IA: ' + d.error);
+      icon.textContent = '✨'; label.textContent = 'Generar con IA';
+      btn.disabled = false;
+      return;
+    }
     if (d.title) {
       document.getElementById('amz-wiz-title').value = d.title;
       window._amzWizTitleCount();
@@ -680,6 +723,7 @@ window._amzWizGenerateContent = async function() {
       document.getElementById('amz-wiz-kw-count').textContent = d.keywords_backend.length + ' / 249';
     }
     if (d.product_type) document.getElementById('amz-wiz-product-type').value = d.product_type;
+    if (d.color) { var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = d.color; }
     icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
     btn.className = btn.className.replace('bg-purple-500 hover:bg-purple-600', 'bg-green-500 hover:bg-green-600');
   } catch(e) {
@@ -751,6 +795,12 @@ function _amzWizBuildReview() {
     rows.push(['Keywords backend', kw.length > 0 ? kw.length + ' chars' : '— sin completar']);
     rows.push(['Product type', pt || '— sin especificar']);
     rows.push(['Fotos', photos.length + ' configuradas']);
+    // Atributos adicionales
+    var aBrand = document.getElementById('amz-wiz-brand'); if (aBrand && aBrand.value) rows.push(['Marca', aBrand.value]);
+    var aModel = document.getElementById('amz-wiz-model-num'); if (aModel && aModel.value) rows.push(['Modelo', aModel.value]);
+    var aColor = document.getElementById('amz-wiz-color'); if (aColor && aColor.value) rows.push(['Color', aColor.value]);
+    var aWeight = document.getElementById('amz-wiz-weight'); if (aWeight && aWeight.value) rows.push(['Peso', aWeight.value + ' kg']);
+    var aDisp = document.getElementById('amz-wiz-display-size'); if (aDisp && aDisp.value) rows.push(['Pantalla', aDisp.value + '"']);
 
     // Checklist
     var title2       = document.getElementById('amz-wiz-title').value;
@@ -817,6 +867,12 @@ async function _amzWizSubmit() {
     payload.keywords_backend = document.getElementById('amz-wiz-keywords').value.trim();
     payload.product_type     = document.getElementById('amz-wiz-product-type').value.trim() || 'PRODUCT';
     payload.photo_urls       = _amzWizCollectPhotos();
+    // Atributos adicionales
+    var bEl2 = document.getElementById('amz-wiz-brand'); if (bEl2) payload.brand = bEl2.value.trim();
+    var mEl2 = document.getElementById('amz-wiz-model-num'); if (mEl2) payload.model_number = mEl2.value.trim();
+    var cEl2 = document.getElementById('amz-wiz-color'); if (cEl2) payload.color = cEl2.value.trim();
+    var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && wEl2.value) payload.weight_kg = parseFloat(wEl2.value) || 0;
+    var dEl2 = document.getElementById('amz-wiz-display-size'); if (dEl2 && dEl2.value) payload.display_size_in = parseFloat(dEl2.value) || 0;
   }
 
   try {

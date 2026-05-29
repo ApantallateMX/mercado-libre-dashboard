@@ -638,8 +638,13 @@ async def generate_content(request: Request):
     extra_ctx = "\n".join(ctx_parts)
 
     try:
-        import anthropic
-        ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        import os, base64 as _b64
+        _p1 = os.getenv("AI_KEY_P1", "")
+        _p2 = os.getenv("AI_KEY_P2", "")
+        api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY no configurada")
+
         prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
 
 Crea contenido completo y de alta conversión para este producto:
@@ -681,8 +686,13 @@ KEYWORDS BACKEND (máx 249 caracteres, NO bytes — caracteres):
 
 PRODUCT_TYPE:
 • Elige el tipo Amazon MX más específico y correcto (SCREAMING_SNAKE_CASE)
-• Ejemplos: LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER, MEDICAL_GLOVE
+• Ejemplos: TELEVISION, LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER, MEDICAL_GLOVE
+• Para TVs: TELEVISION. Para monitores: COMPUTER_MONITOR. Para bocinas: SPEAKER.
 • Basa tu elección en la categoría y el título del producto
+
+COLOR:
+• Color principal del producto en inglés (ej: Black, White, Silver, Blue)
+• Si no aplica o no está claro: ""
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -690,15 +700,28 @@ PRODUCT_TYPE:
   "bullets": ["...", "...", "...", "...", "..."],
   "description": "...",
   "keywords_backend": "...",
-  "product_type": "..."
+  "product_type": "...",
+  "color": "..."
 }}"""
 
-        msg = ai.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text  = msg.content[0].text.strip()
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=45) as _http:
+            _resp = await _http.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 2048,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            _resp.raise_for_status()
+            text = _resp.json()["content"][0]["text"].strip()
+
         start = text.index("{")
         end   = text.rindex("}") + 1
         data  = json.loads(text[start:end])
@@ -710,8 +733,8 @@ PRODUCT_TYPE:
         logger.warning(f"[AMZ Lanzar] generate-content error: {e}")
         return {
             "title": title, "bullets": [], "description": "",
-            "keywords_backend": "", "product_type": "PRODUCT",
-            "error": str(e)[:150],
+            "keywords_backend": "", "product_type": "PRODUCT", "color": "",
+            "error": str(e)[:200],
         }
 
 
@@ -733,6 +756,12 @@ async def create_listing(request: Request):
     keywords_backend = (body.get("keywords_backend") or "")[:249]
     product_type     = body.get("product_type") or "PRODUCT"
     photo_urls       = [u.strip() for u in (body.get("photo_urls") or []) if (u or "").strip()]
+    # Atributos adicionales
+    brand            = (body.get("brand") or "").strip()
+    model_number     = (body.get("model_number") or "").strip()
+    color            = (body.get("color") or "").strip()
+    weight_kg        = float(body.get("weight_kg") or 0)
+    display_size_in  = float(body.get("display_size_in") or 0)
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -800,6 +829,16 @@ async def create_listing(request: Request):
                     attributes[f"other_product_image_locator_{_i}"] = [
                         {"media_location": _url, "marketplace_id": client.marketplace_id}
                     ]
+        if brand:
+            attributes["brand"] = [{"value": brand, "marketplace_id": client.marketplace_id}]
+        if model_number:
+            attributes["model_number"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
+        if color:
+            attributes["color"] = [{"value": color, "marketplace_id": client.marketplace_id}]
+        if weight_kg > 0:
+            attributes["item_weight"] = [{"value": weight_kg, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
+        if display_size_in > 0:
+            attributes["display_size"] = [{"value": display_size_in, "unit": "inches", "marketplace_id": client.marketplace_id}]
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
                 "fulfillment_channel_code": "DEFAULT",
