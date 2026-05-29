@@ -2769,7 +2769,7 @@ async def amazon_products_stock_alerts(request: Request):
             })
 
         # Enriquecer con BM (bm_avail, bm_reserved, bm_mty, bm_cdmx, bm_tj, _bm_retail_ph)
-        await _enrich_bm_amz(all_items)
+        await _enrich_bm_amz(all_items, timeout_s=8.0)
 
         # ── Clasificar en 7 categorías ───────────────────────────────────────
         sin_stock        = []
@@ -3036,7 +3036,7 @@ async def amazon_products_seller_flex(
             ]
 
         # Enriquecer con BinManager (reutiliza la función del tab inventario)
-        await _enrich_bm_amz(flx_items)
+        await _enrich_bm_amz(flx_items, timeout_s=8.0)
 
         # FLX loading state — para mostrar "···" en template si BG activo
         flx_loading = client.seller_id in _flx_stock_refreshing
