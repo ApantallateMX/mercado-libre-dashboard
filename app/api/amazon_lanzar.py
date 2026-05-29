@@ -360,16 +360,27 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                 sem_gap = asyncio.Semaphore(5)
                 now_cache_iso = datetime.utcnow().isoformat()
 
-                # Recargar cache (ya cargada arriba para augmentación, pero aquí necesitamos set local)
+                # Recargar cache: found=1 (ya en Amazon) y found=0 (gap confirmado, TTL 6h)
+                _gap_not_found_ttl = (datetime.utcnow() - timedelta(hours=6)).isoformat()
                 gap_cache_found: set[str] = set()
+                gap_cache_not_found: set[str] = set()
                 async with aiosqlite.connect(DATABASE_PATH) as _cdb:
                     _cdb.row_factory = aiosqlite.Row
                     _cur = await _cdb.execute(
-                        "SELECT sku_upper FROM amz_catalog_cache WHERE seller_id=? AND found=1 AND checked_at>?",
-                        (seller_id, _cache_cutoff),
+                        "SELECT sku_upper, found FROM amz_catalog_cache WHERE seller_id=? AND ("
+                        "  (found=1 AND checked_at>?) OR (found=0 AND checked_at>?)"
+                        ")",
+                        (seller_id, _cache_cutoff, _gap_not_found_ttl),
                     )
                     for _r in await _cur.fetchall():
-                        gap_cache_found.add(_r["sku_upper"])
+                        if _r["found"] == 1:
+                            gap_cache_found.add(_r["sku_upper"])
+                        else:
+                            gap_cache_not_found.add(_r["sku_upper"])
+                logger.info(
+                    f"[AMZ Gap Scan] Cache: {len(gap_cache_found)} found=1, "
+                    f"{len(gap_cache_not_found)} found=0 (gaps conocidos)"
+                )
 
                 async def _check_gap(g: dict):
                     bm_sku_u = g["sku"].upper()
@@ -377,6 +388,9 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                         # Cache: confirmado en Amazon → agregar a base_skus para que cleanup lo borre de gaps DB
                         amazon_base_skus.add(bm_sku_u)
                         return None
+                    if bm_sku_u in gap_cache_not_found:
+                        # Cache: confirmado como gap → no hacer llamada API, retornar directamente
+                        return g
                     async with sem_gap:
                         variants = [bm_sku_u] + [bm_sku_u + sfx for sfx in _AMZ_CHECK_SUFFIXES]
                         for variant in variants:
@@ -403,6 +417,15 @@ async def _run_amz_gap_scan(seller_id: str) -> None:
                                 amazon_base_skus.add(bm_sku_u)
                                 logger.info(f"[AMZ Gap Scan] {bm_sku_u} confirmado en Amazon via {variant}")
                                 return None
+                        # Gap confirmado → cachear found=0 (TTL 6h) para no re-verificar en próximo scan
+                        async with aiosqlite.connect(DATABASE_PATH) as _db3:
+                            await _db3.execute(
+                                """INSERT INTO amz_catalog_cache (seller_id,sku_upper,found,checked_at)
+                                   VALUES(?,?,0,?) ON CONFLICT(seller_id,sku_upper) DO UPDATE SET
+                                   found=0,checked_at=excluded.checked_at""",
+                                (seller_id, bm_sku_u, now_cache_iso),
+                            )
+                            await _db3.commit()
                         logger.info(
                             f"[AMZ Gap Scan] {bm_sku_u} CONFIRMADO GAP "
                             f"(marketplace={client.marketplace_id}, variantes probadas={variants})"
