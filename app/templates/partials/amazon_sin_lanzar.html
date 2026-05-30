@@ -212,6 +212,7 @@
 <script>
 (function() {
   var _npSellerId = '';
+  var _npCurrency = '{{ 'USD' if is_usd else 'MXN' }}';
 
   window._amzOpenNuevoProducto = function(sellerId) {
     _npSellerId = sellerId || (window.amzActiveSellerId || '');
@@ -245,7 +246,7 @@
 
     var title = brand + ' ' + model;
     window._amzCloseNuevoProducto();
-    window.openAmzLanzar(sku, title, price, upc, _npSellerId, 0, brand, category, '', model);
+    window.openAmzLanzar(sku, title, price, upc, _npSellerId, 0, brand, category, '', model, 0, _npCurrency);
     // Saltar directo a Flujo 2 (sin buscar ASIN)
     window._amzWizSkipAsin();
   };
@@ -361,7 +362,7 @@
                     </td>
                     <td class="py-2.5 px-3 text-center">
                         <div class="flex items-center justify-center gap-1.5">
-                            <button onclick="window.openAmzLanzar('{{ g.sku }}','{{ g.title|replace("'","&#39;")|replace('"','&quot;') }}',{{ g.price_sug }},'{{ g.upc }}','{{ seller_id }}',{{ g.cost_mxn }},'{{ g.brand|replace("'","&#39;") }}','{{ g.category|replace("'","&#39;") }}','{{ g.image_url }}','{{ g.model|replace("'","&#39;")|replace('"','&quot;') }}')"
+                            <button onclick="window.openAmzLanzar('{{ g.sku }}','{{ g.title|replace("'","&#39;")|replace('"','&quot;') }}',{{ g.price_sug }},'{{ g.upc }}','{{ seller_id }}',{{ g.cost_mxn }},'{{ g.brand|replace("'","&#39;") }}','{{ g.category|replace("'","&#39;") }}','{{ g.image_url }}','{{ g.model|replace("'","&#39;")|replace('"','&quot;') }}',{{ g.cost_usd }},'{{ 'USD' if is_usd else 'MXN' }}')"
                                     class="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold rounded-lg transition whitespace-nowrap">
                                 🚀 Lanzar
                             </button>

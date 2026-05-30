@@ -98,7 +98,7 @@
         <div class="grid grid-cols-2 gap-4 mb-4">
           <!-- Price -->
           <div class="col-span-2 sm:col-span-1">
-            <label class="block text-xs font-semibold text-gray-600 mb-1.5">Precio de venta (MXN) <span class="text-red-400">*</span></label>
+            <label id="amz-wiz-price-label" class="block text-xs font-semibold text-gray-600 mb-1.5">Precio de venta (MXN) <span class="text-red-400">*</span></label>
             <div class="relative">
               <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
               <input id="amz-wiz-price" type="number" min="1" step="1" placeholder="0"
@@ -400,7 +400,7 @@
 var _wiz = {
   sku: '', title: '', brand: '', model: '', category: '',
   image_url: '', upc: '',
-  price_sug: 0, cost_mxn: 0, seller_id: '',
+  price_sug: 0, cost_mxn: 0, cost_usd: 0, currency: 'MXN', seller_id: '',
   asin: '', asin_title: '', asin_image: '',
   step: 1,
   is_new_product: false,
@@ -411,17 +411,22 @@ var STEPS_OFFER  = [1, 2, 4];      // Flujo 1: ASIN match (sin contenido)
 var STEPS_NEW    = [1, 2, 3, 4];   // Flujo 2: producto nuevo
 
 // ─── Abrir / cerrar ───────────────────────────────────────────────────────────
-window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, brand, category, imageUrl, model) {
+window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, brand, category, imageUrl, model, costUsd, currency) {
   _wiz.sku        = sku || '';
   _wiz.title      = title || '';
-  _wiz.price_sug  = parseFloat(priceSug) || 0;
   _wiz.upc        = upc || '';
   _wiz.seller_id  = sellerId || (window.amzActiveSellerId || '');
   _wiz.cost_mxn   = parseFloat(costMxn) || 0;
+  _wiz.cost_usd   = parseFloat(costUsd) || 0;
+  _wiz.currency   = currency || 'MXN';       // 'USD' para cuentas US, 'MXN' para MX
   _wiz.brand      = brand || '';
   _wiz.model      = model || '';
   _wiz.category   = category || '';
   _wiz.image_url  = imageUrl || '';
+  // Precio sugerido en la moneda correcta
+  _wiz.price_sug  = (_wiz.currency === 'USD' && _wiz.cost_usd > 0)
+    ? Math.round(_wiz.cost_usd / 0.75 * 100) / 100   // USD: costo / 0.75
+    : (parseFloat(priceSug) || 0);                    // MXN: valor del gap scan
   _wiz.asin = _wiz.asin_title = _wiz.asin_image = '';
   _wiz.step = 1;
   _wiz.is_new_product = false;
@@ -434,15 +439,29 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
     document.getElementById('amz-wiz-bm-title').textContent = (_wiz.title || _wiz.sku).substring(0, 60);
     document.getElementById('amz-wiz-bm-meta').textContent =
       [_wiz.sku, _wiz.brand, _wiz.category].filter(Boolean).join(' · ');
-    document.getElementById('amz-wiz-bm-price').textContent =
-      _wiz.price_sug > 0 ? '$' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN' : '';
+    if (_wiz.price_sug > 0) {
+      var _isUsd = _wiz.currency === 'USD';
+      var _mainPrice = _isUsd
+        ? '$' + _wiz.price_sug.toFixed(2) + ' USD'
+        : '$' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN';
+      var _secPrice = _isUsd && _wiz.cost_usd > 0
+        ? '<br><span style="font-size:10px;color:#9ca3af">≈ $' + Math.round(_wiz.price_sug * 18).toLocaleString('es-MX') + ' MXN</span>'
+        : '';
+      document.getElementById('amz-wiz-bm-price').innerHTML = _mainPrice + _secPrice;
+    } else {
+      document.getElementById('amz-wiz-bm-price').textContent = '';
+    }
     card.classList.remove('hidden');
   } else {
     card.classList.add('hidden');
   }
 
+  // Label del precio según moneda
+  var _pLabel = document.getElementById('amz-wiz-price-label');
+  if (_pLabel) _pLabel.innerHTML = 'Precio de venta (' + _wiz.currency + ') <span class="text-red-400">*</span>';
+
   // Reset fields
-  document.getElementById('amz-wiz-price').value = _wiz.price_sug || '';
+  document.getElementById('amz-wiz-price').value = _wiz.price_sug ? (_wiz.currency === 'USD' ? _wiz.price_sug.toFixed(2) : Math.round(_wiz.price_sug)) : '';
   document.getElementById('amz-wiz-search-input').value = _wiz.upc || _wiz.title || '';
   document.getElementById('amz-wiz-search-results').innerHTML = '';
   document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
@@ -642,14 +661,19 @@ window._amzWizUpdateMarginHint = function() {
   var hint  = document.getElementById('amz-wiz-margin-hint');
   if (!hint) return;
   var price = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
-  var cost  = _wiz.cost_mxn || 0;
+  var isUsd = _wiz.currency === 'USD';
+  // Costo en la misma moneda que el precio
+  var cost = isUsd ? (_wiz.cost_usd || 0) : (_wiz.cost_mxn || 0);
+  var cur  = isUsd ? 'USD' : 'MXN';
   if (price > 0 && cost > 0) {
     var net    = price - cost - price * 0.18;
     var margin = (net / price * 100).toFixed(1);
-    hint.textContent = 'Margen estimado: ' + margin + '% · Neto: $' + net.toFixed(0) + ' MXN (precio - costo BM - 18% fees)';
+    var netFmt = isUsd ? '$' + net.toFixed(2) + ' USD' : '$' + net.toFixed(0) + ' MXN';
+    hint.textContent = 'Margen estimado: ' + margin + '% · Neto: ' + netFmt + ' (precio - costo BM - 18% fees)';
     hint.className   = 'text-[10px] mt-1 ' + (parseFloat(margin) >= 20 ? 'text-green-600' : parseFloat(margin) >= 10 ? 'text-yellow-600' : 'text-red-500');
   } else if (_wiz.price_sug > 0) {
-    hint.textContent = 'Precio sugerido: $' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN';
+    var sugFmt = isUsd ? '$' + _wiz.price_sug.toFixed(2) + ' USD' : '$' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN';
+    hint.textContent = 'Precio sugerido: ' + sugFmt;
     hint.className   = 'text-[10px] mt-1 text-gray-400';
   }
 };
@@ -779,7 +803,7 @@ function _amzWizBuildReview() {
     ['SKU', _wiz.sku],
     ['Cuenta', _wiz.seller_id],
     ['ASIN', _wiz.asin || '— (producto nuevo)'],
-    ['Precio', '$' + price.toLocaleString('es-MX', {minimumFractionDigits:0}) + ' MXN'],
+    ['Precio', _wiz.currency === 'USD' ? '$' + price.toFixed(2) + ' USD' : '$' + price.toLocaleString('es-MX', {minimumFractionDigits:0}) + ' MXN'],
     ['Condición', condLabel],
     ['Fulfillment', fulfillment === 'FBA' ? 'FBA (Amazon envía)' : 'FBM — ' + qty + ' uds iniciales'],
   ];
@@ -858,6 +882,7 @@ async function _amzWizSubmit() {
     condition:   condition,
     fulfillment: fulfillment,
     quantity:    qty,
+    currency:    _wiz.currency,
   };
 
   if (_wiz.is_new_product) {

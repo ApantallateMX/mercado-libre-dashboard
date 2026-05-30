@@ -4409,7 +4409,9 @@ async def amazon_sin_lanzar(
         "scan_error":      scan_status.get("error") or "",
         "force":           False,
         "marketplace":     client.marketplace_name,
+        "marketplace_id":  client.marketplace_id,
         "seller_id":       sid,
+        "is_usd":          client.marketplace_id != "A1AM78C64UM0Y8",
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
 

@@ -756,6 +756,7 @@ async def create_listing(request: Request):
     keywords_backend = (body.get("keywords_backend") or "")[:249]
     product_type     = body.get("product_type") or "PRODUCT"
     photo_urls       = [u.strip() for u in (body.get("photo_urls") or []) if (u or "").strip()]
+    currency         = (body.get("currency") or "MXN").upper()
     # Atributos adicionales
     brand            = (body.get("brand") or "").strip()
     model_number     = (body.get("model_number") or "").strip()
@@ -778,7 +779,7 @@ async def create_listing(request: Request):
         attributes: dict = {
             "condition_type": [{"value": condition, "marketplace_id": client.marketplace_id}],
             "purchasable_offer": [{
-                "currency": "MXN",
+                "currency": currency,
                 "our_price": [{"schedule": [{"value_with_tax": price}]}],
                 "marketplace_id": client.marketplace_id,
             }],
@@ -801,7 +802,7 @@ async def create_listing(request: Request):
         attributes = {
             "condition_type": [{"value": condition, "marketplace_id": client.marketplace_id}],
             "purchasable_offer": [{
-                "currency": "MXN",
+                "currency": currency,
                 "our_price": [{"schedule": [{"value_with_tax": price}]}],
                 "marketplace_id": client.marketplace_id,
             }],
