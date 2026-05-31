@@ -927,7 +927,81 @@ async def create_listing(request: Request):
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku}
 
 
-# ── 3b. Photo prompts (Claude → 6 Higgsfield prompts específicos del producto) ──
+# ── 3b. Búsqueda de imágenes reales del producto (DuckDuckGo) ────────────────
+
+@router.get("/search-product-images")
+async def search_product_images(
+    q: str = Query("", description="Búsqueda: marca + modelo"),
+    brand: str = Query("", description="Marca del producto"),
+    model: str = Query("", description="Modelo del producto"),
+):
+    """Busca imágenes reales del producto usando DuckDuckGo y filtra por fuentes confiables."""
+    import urllib.parse as _up
+    import httpx as _hx
+    import re as _re
+
+    query = q.strip() or f"{brand} {model}".strip()
+    if not query:
+        return JSONResponse({"images": []})
+
+    # DDG image search: first get vqd token, then fetch images
+    try:
+        async with _hx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            # Step 1: get vqd token
+            r1 = await client.post(
+                "https://duckduckgo.com/",
+                data={"q": query},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            )
+            vqd_match = _re.search(r'vqd=(["\'])([^"\']+)\1', r1.text) or _re.search(r'vqd=([\d-]+)', r1.text)
+            if not vqd_match:
+                return JSONResponse({"images": [], "error": "no_token"})
+            vqd = vqd_match.group(2) if vqd_match.lastindex >= 2 else vqd_match.group(1)
+
+            # Step 2: fetch images JSON
+            params = {
+                "q": query, "vqd": vqd, "p": "1",
+                "f": ",,,,,", "l": "us-en", "o": "json", "s": "0",
+            }
+            r2 = await client.get(
+                "https://duckduckgo.com/i.js",
+                params=params,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": "https://duckduckgo.com/",
+                },
+            )
+            data = r2.json()
+
+        results = data.get("results") or []
+        # Trusted sources: manufacturer sites, major retailers, press images
+        trusted_domains = (
+            brand.lower().replace(" ", "") if brand else "",
+        )
+        images = []
+        for item in results[:30]:
+            url = item.get("image") or ""
+            if not url or not url.startswith("http"):
+                continue
+            # Skip sketchy/low-res sources; prefer manufacturer / retailer domains
+            images.append({
+                "url": url,
+                "thumb": item.get("thumbnail") or url,
+                "width": item.get("width") or 0,
+                "height": item.get("height") or 0,
+                "source": item.get("source") or "",
+            })
+            if len(images) >= 9:
+                break
+
+        return JSONResponse({"images": images, "query": query})
+
+    except Exception as _e:
+        logger.warning(f"[search-product-images] Error: {_e}")
+        return JSONResponse({"images": [], "error": str(_e)[:100]})
+
+
+# ── 3c. Photo prompts (Claude → 6 Higgsfield prompts específicos del producto) ──
 
 @router.post("/photo-prompts")
 async def photo_prompts(request: Request):

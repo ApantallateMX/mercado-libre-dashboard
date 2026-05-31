@@ -303,48 +303,82 @@
         <!-- Sub-panel: Photos -->
         <div id="amz-wiz-subpanel-photos" class="p-5 hidden">
           <h3 class="font-semibold text-gray-700 text-sm mb-1">Fotos del producto</h3>
-          <p class="text-xs text-gray-400 mb-4">Amazon requiere mínimo 1 foto. La imagen principal debe tener fondo blanco y el producto debe ocupar ≥85% del encuadre. Mínimo 1000×1000px.</p>
 
-          <!-- BM main image -->
-          <div id="amz-wiz-bm-photo-wrap" class="hidden mb-4">
-            <p class="text-xs font-semibold text-gray-600 mb-2">Imagen disponible en BM</p>
-            <div class="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl p-3">
-              <img id="amz-wiz-bm-photo-thumb" src="" alt="" class="w-20 h-20 object-contain rounded border border-gray-200 bg-white shrink-0">
-              <div class="flex-1">
-                <label class="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" id="amz-wiz-use-bm-photo" class="accent-orange-500 w-4 h-4" checked
-                         onchange="window._amzWizPhotoSync()">
-                  <span class="text-xs font-medium text-gray-700">Usar esta imagen como foto principal</span>
-                </label>
-                <p class="text-[10px] text-gray-400 mt-1">Imagen del catálogo BM. Amazon la descargará desde la URL.</p>
+          <!-- ⚠️ Aviso claro sobre imágenes reales -->
+          <div class="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[10px] text-amber-800">
+            <p class="font-bold mb-0.5">⚠️ Amazon exige fotos reales del producto</p>
+            <p>Las imágenes generadas por IA NO pueden usarse como fotos principales — Amazon puede suspender el listing y los clientes pueden reclamar por "no como se describe". Usa siempre imágenes reales del fabricante o fotos propias.</p>
+          </div>
+
+          <!-- ══════════════════════════════════════════════════════
+               SECCIÓN 1 — Foto principal (imagen real)
+               ══════════════════════════════════════════════════════ -->
+          <div class="mb-5">
+            <p class="text-xs font-semibold text-gray-700 mb-2">📸 Foto principal (real)</p>
+
+            <!-- BM main image -->
+            <div id="amz-wiz-bm-photo-wrap" class="hidden mb-3">
+              <div class="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                <img id="amz-wiz-bm-photo-thumb" src="" alt="" class="w-20 h-20 object-contain rounded border border-gray-200 bg-white shrink-0">
+                <div class="flex-1">
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="amz-wiz-use-bm-photo" class="accent-orange-500 w-4 h-4" checked
+                           onchange="window._amzWizPhotoSync()">
+                    <span class="text-xs font-medium text-gray-700">Usar imagen BM como foto principal</span>
+                  </label>
+                  <p class="text-[10px] text-gray-400 mt-1">Imagen real del catálogo BinManager.</p>
+                </div>
               </div>
+            </div>
+
+            <!-- Search real product images -->
+            <div class="mb-3">
+              <div class="flex items-center gap-2 mb-2">
+                <button id="amz-wiz-search-img-btn" onclick="window._amzWizSearchImages()"
+                        class="text-[10px] bg-blue-600 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                  🔍 Buscar imágenes reales del fabricante
+                </button>
+                <span class="text-[10px] text-gray-400">Busca en internet fotos oficiales del producto</span>
+              </div>
+              <!-- Real images grid -->
+              <div id="amz-wiz-real-img-grid" class="hidden">
+                <p class="text-[10px] text-gray-500 mb-1.5 font-semibold">Selecciona las imágenes a usar (clic para agregar URL):</p>
+                <div class="grid grid-cols-3 gap-2" id="amz-wiz-real-img-results"></div>
+              </div>
+              <div id="amz-wiz-real-img-status" class="hidden text-[10px] text-gray-400 py-2"></div>
+            </div>
+
+            <!-- Manual URL inputs -->
+            <div class="space-y-2" id="amz-wiz-extra-photos">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real principal (fondo blanco)" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real — ángulo lateral" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real — parte trasera/puertos" oninput="window._amzWizPhotoSync()">
             </div>
           </div>
 
-          <!-- Additional photo URLs -->
-          <div class="mb-4">
-            <div class="flex items-center justify-between mb-2">
-              <p class="text-xs font-semibold text-gray-600">URLs de fotos adicionales (hasta 4)</p>
+          <!-- ══════════════════════════════════════════════════════
+               SECCIÓN 2 — Fotos de lifestyle (IA — NO para producto)
+               ══════════════════════════════════════════════════════ -->
+          <div class="mb-4 border-t border-gray-100 pt-4">
+            <div class="flex items-center justify-between mb-1">
+              <p class="text-xs font-semibold text-gray-700">🎨 Lifestyle &amp; ambientación (IA)</p>
               <button id="amz-wiz-hf-btn" onclick="window._amzWizLaunchHighsfield()"
                       class="text-[10px] border border-purple-200 text-purple-600 hover:bg-purple-50 px-2.5 py-1 rounded-lg transition font-semibold disabled:opacity-50 disabled:cursor-not-allowed">
                 🌟 Generar con Higgsfield IA
               </button>
             </div>
+            <p class="text-[10px] text-amber-600 font-medium mb-2">⚠️ Estas imágenes son generadas por IA — úsalas solo como fotos de ambientación/lifestyle, nunca como foto principal del producto.</p>
+
             <!-- Preview gallery — visible cuando Higgsfield genera imágenes -->
             <div id="amz-wiz-photo-gallery" class="hidden mb-3">
-              <p class="text-[10px] text-gray-500 mb-2 font-semibold">Previsualizaciones generadas</p>
-              <div class="grid grid-cols-3 gap-2" id="amz-wiz-gallery-grid">
-                <!-- Slots filled dynamically by _amzWizLaunchHighsfield -->
-              </div>
+              <p class="text-[10px] text-gray-500 mb-2 font-semibold">Previsualizaciones lifestyle generadas:</p>
+              <div class="grid grid-cols-3 gap-2" id="amz-wiz-gallery-grid"></div>
             </div>
 
-            <div class="space-y-2" id="amz-wiz-extra-photos">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 1" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 2" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto lifestyle / infográfica" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto detalle / dimensiones" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 5" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 6" oninput="window._amzWizPhotoSync()">
+            <div class="space-y-2">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-purple-100 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400 transition" placeholder="https://… URL lifestyle / infográfica (IA)" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-purple-100 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400 transition" placeholder="https://… URL lifestyle 2 (IA)" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-purple-100 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400 transition" placeholder="https://… URL lifestyle 3 (IA)" oninput="window._amzWizPhotoSync()">
             </div>
           </div>
 
@@ -353,11 +387,11 @@
             <span id="amz-wiz-photo-count-text">0 fotos configuradas</span>
           </div>
 
-          <!-- Amazon image guidelines reminder -->
+          <!-- Amazon image guidelines -->
           <div class="mt-3 text-[10px] text-gray-400 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 space-y-0.5">
-            <p><strong class="text-blue-600">Imagen principal:</strong> Fondo blanco puro (#FFFFFF), producto ≥85% del encuadre, sin logos, sin marcas de agua, sin texto.</p>
-            <p><strong class="text-blue-600">Fotos adicionales:</strong> Lifestyle, ángulos diferentes, infografías con specs, comparativas, diagrama de dimensiones.</p>
-            <p><strong class="text-blue-600">Resolución:</strong> Mínimo 1000×1000px. Recomendado: 2000×2000px para zoom.</p>
+            <p><strong class="text-blue-600">Foto principal:</strong> Real, fondo blanco puro (#FFFFFF), producto ≥85% del encuadre, sin texto.</p>
+            <p><strong class="text-blue-600">Fotos adicionales:</strong> Ángulos reales del producto + lifestyle de ambientación.</p>
+            <p><strong class="text-blue-600">Resolución:</strong> Mínimo 1000×1000px. Recomendado: 2000×2000px.</p>
           </div>
         </div>
       </div>
@@ -502,6 +536,9 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   document.querySelectorAll('.amz-wiz-photo-url').forEach(function(el) { el.value = ''; });
   var _gal = document.getElementById('amz-wiz-photo-gallery'); if (_gal) _gal.classList.add('hidden');
   var _hfBtn = document.getElementById('amz-wiz-hf-btn'); if (_hfBtn) { _hfBtn.disabled = false; _hfBtn.textContent = '🌟 Generar con Higgsfield IA'; }
+  var _riGrid = document.getElementById('amz-wiz-real-img-grid'); if (_riGrid) _riGrid.classList.add('hidden');
+  var _riStatus = document.getElementById('amz-wiz-real-img-status'); if (_riStatus) _riStatus.classList.add('hidden');
+  var _sBtn = document.getElementById('amz-wiz-search-img-btn'); if (_sBtn) { _sBtn.disabled = false; _sBtn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
   // Atributos: pre-llenar marca/modelo desde BM
   var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
   var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
@@ -819,6 +856,77 @@ function _amzWizCollectPhotos() {
   });
   return urls;
 }
+
+// ─── Real product image search ───────────────────────────────────────────────
+window._amzWizSearchImages = function() {
+  var btn    = document.getElementById('amz-wiz-search-img-btn');
+  var grid   = document.getElementById('amz-wiz-real-img-results');
+  var wrap   = document.getElementById('amz-wiz-real-img-grid');
+  var status = document.getElementById('amz-wiz-real-img-status');
+  var inputs = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
+
+  if (btn && btn.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Buscando…'; }
+  if (status) { status.textContent = 'Buscando imágenes reales del producto…'; status.classList.remove('hidden'); }
+  if (wrap) wrap.classList.add('hidden');
+
+  var brand = (document.getElementById('amz-wiz-brand') || {}).value || (_wiz.brand || '');
+  var model = (document.getElementById('amz-wiz-model-num') || {}).value || (_wiz.model || '');
+  var params = new URLSearchParams({ brand: brand, model: model, q: [brand, model].filter(Boolean).join(' ') });
+
+  fetch('/api/amazon/lanzar/search-product-images?' + params)
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
+      var imgs = d.images || [];
+      if (!imgs.length) {
+        if (status) status.textContent = 'Sin resultados. Prueba buscar manualmente en Google Images: ' + [brand, model].join(' ');
+        return;
+      }
+      if (status) status.classList.add('hidden');
+      if (wrap)  wrap.classList.remove('hidden');
+      grid.innerHTML = '';
+
+      // Track which URL inputs are available
+      var usedInputs = [];
+
+      imgs.forEach(function(img, idx) {
+        var div = document.createElement('div');
+        div.className = 'relative group cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-400 transition';
+        div.innerHTML = (
+          '<img src="' + img.thumb + '" class="w-full aspect-square object-cover bg-gray-100" ' +
+               'onerror="this.closest(\'div\').style.display=\'none\'" ' +
+               'title="' + (img.source || '') + '">' +
+          '<div class="absolute inset-0 bg-blue-600/0 group-hover:bg-blue-600/20 transition flex items-end justify-center pb-1">' +
+            '<span class="text-[9px] text-white bg-blue-700/80 px-1.5 py-0.5 rounded hidden group-hover:block">+ Agregar</span>' +
+          '</div>' +
+          '<div id="amz-real-added-' + idx + '" class="absolute top-1 right-1 hidden">' +
+            '<span class="text-[9px] bg-green-500 text-white px-1 py-0.5 rounded">✓</span>' +
+          '</div>'
+        );
+        div.addEventListener('click', function() {
+          // Find next empty input
+          var target = null;
+          for (var i = 0; i < Math.min(3, inputs.length); i++) {
+            if (!inputs[i].value.trim()) { target = inputs[i]; break; }
+          }
+          if (!target) target = inputs[0]; // overwrite first if all full
+          target.value = img.url;
+          target.dispatchEvent(new Event('input'));
+          target.style.borderColor = '#3b82f6';
+          setTimeout(function() { if (target) target.style.borderColor = ''; }, 2000);
+          var badge = document.getElementById('amz-real-added-' + idx);
+          if (badge) badge.classList.remove('hidden');
+          window._amzWizPhotoSync();
+        });
+        grid.appendChild(div);
+      });
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
+      if (status) status.textContent = 'Error al buscar. Intenta de nuevo.';
+    });
+};
 
 window._amzWizLaunchHighsfield = function() {
   var btn = document.getElementById('amz-wiz-hf-btn');
