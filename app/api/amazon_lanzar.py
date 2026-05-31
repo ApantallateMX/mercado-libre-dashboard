@@ -657,6 +657,13 @@ Marketplace: Amazon México (amazon.com.mx) — compradores en español mexicano
 
 ━━━ REGLAS CRÍTICAS (cumplirlas al pie de la letra) ━━━
 
+⚠ GARANTÍA — REGLA ABSOLUTA:
+• NUNCA mencionar garantía del fabricante (1 año, garantía oficial, garantía Sony/Samsung/etc.)
+• Somos REVENDEDORES, no distribuidores autorizados
+• La garantía que ofrecemos es "3 meses directamente con el vendedor"
+• Ejemplo correcto: "3 meses de garantía con el vendedor. Atención personalizada post-venta."
+• Ejemplo PROHIBIDO: "Garantía oficial Sony 1 año" / "Garantía del fabricante"
+
 TÍTULO (máx 200 chars):
 • Formato: [Marca] [Modelo] [Característica principal] [Uso/Compatibilidad] [Especificación clave]
 • Primeros 80 chars = keywords de mayor volumen de búsqueda
@@ -670,7 +677,7 @@ BULLETS (exactamente 5, máx 200 chars c/u):
 • Bullet 2: Especificaciones técnicas más buscadas
 • Bullet 3: Compatibilidad / casos de uso
 • Bullet 4: Contenido del paquete / lo que incluye
-• Bullet 5: Garantía / soporte / certificaciones / por qué elegirlo
+• Bullet 5: Por qué elegirlo / soporte al cliente / propuesta de valor — NO mencionar garantía del fabricante. Somos revendedores: la garantía es "3 meses directamente con el vendedor". Ejemplo: "SOPORTE GARANTIZADO: 3 meses de garantía directamente con el vendedor. Contáctanos para cualquier duda antes y después de tu compra."
 
 DESCRIPCIÓN (máx 2000 chars):
 • Párrafo 1: Problema que resuelve + quién lo necesita
