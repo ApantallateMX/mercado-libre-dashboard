@@ -947,22 +947,31 @@ async def create_listing(request: Request):
             attributes["item_type_keyword"] = [{"value": item_type_keyword, "marketplace_id": client.marketplace_id}]
 
         # ── display — atributo compuesto para TVs/monitores ───────────────────
-        # Reemplaza item_display_size, display_type, resolution sueltos (inválidos en TELEVISION)
-        _RESOLUTION_PIXELS = {"720p": "1280", "1080p": "1920", "4K": "3840", "8K": "7680"}
-        _RESOLUTION_STR    = {"720p": "1280 x 720 pixels", "1080p": "1920 x 1080 pixels",
-                               "4K": "3840 x 2160 pixels", "8K": "7680 x 4320 pixels"}
-        display_obj: dict = {}
+        # Sub-atributos con nombres internos del schema de Amazon (TELEVISION/USA)
+        _RESOLUTION_MAX = {"720p": "1280 x 720", "1080p": "1920 x 1080", "4K": "3840 x 2160", "8K": "7680 x 4320"}
+        _RESOLUTION_STR = {"720p": "1280 x 720 pixels", "1080p": "1920 x 1080 pixels",
+                            "4K": "3840 x 2160 pixels", "8K": "7680 x 4320 pixels"}
+        display_obj: dict = {"marketplace_id": client.marketplace_id}
+        _has_display = False
         if display_size_in > 0:
-            display_obj["display_size"] = {"value": display_size_in, "unit": "inches"}
+            display_obj["size"] = [{"value": display_size_in, "unit": "inches"}]
+            _has_display = True
         if display_type:
-            display_obj["display_type"] = display_type
+            display_obj["technology"] = [{"value": display_type, "language_tag": "en_US"}]
+            _has_display = True
         if resolution:
-            display_obj["resolution"] = {"value": _RESOLUTION_PIXELS.get(resolution, resolution), "unit": "pixels"}
-        if display_obj:
-            display_obj["marketplace_id"] = client.marketplace_id
+            _res_max = _RESOLUTION_MAX.get(resolution, resolution)
+            display_obj["resolution_maximum"] = [{"value": _res_max, "unit": "pixels", "language_tag": "en_US"}]
+            _has_display = True
+        if refresh_rate:
+            try:
+                display_obj["refresh_rate_in_hertz"] = [{"value": int(refresh_rate)}]
+            except (ValueError, TypeError):
+                pass
+        if _has_display:
             attributes["display"] = [display_obj]
 
-        # resolution — también como campo independiente (requerido en USA marketplace)
+        # resolution — campo independiente requerido en USA marketplace
         if resolution:
             attributes["resolution"] = [{"value": _RESOLUTION_STR.get(resolution, resolution), "marketplace_id": client.marketplace_id}]
 
@@ -971,20 +980,26 @@ async def create_listing(request: Request):
         if _ar:
             attributes["image_aspect_ratio"] = [{"value": _ar, "marketplace_id": client.marketplace_id}]
 
-        # ── Atributos de conectividad y smart TV ──────────────────────────────
+        # ── Conectividad ──────────────────────────────────────────────────────
         if connectivity_tech:
             attributes["connectivity_technology"] = [
                 {"value": c, "marketplace_id": client.marketplace_id}
                 for c in connectivity_tech if c
             ]
 
+        # refresh_rate standalone (además de dentro de display)
         if refresh_rate:
             try:
                 attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError):
                 pass
+
+        # mounting_type — valores individuales separados (no string compuesto)
         if mounting_type:
-            attributes["mounting_type"] = [{"value": mounting_type, "marketplace_id": client.marketplace_id}]
+            _mt_map = {"Tabletop, Wall Mount": ["Table Mount", "Wall Mount"],
+                       "Tabletop": ["Table Mount"], "Wall Mount": ["Wall Mount"]}
+            _mt_vals = _mt_map.get(mounting_type, [mounting_type])
+            attributes["mounting_type"] = [{"value": v, "marketplace_id": client.marketplace_id} for v in _mt_vals]
 
         # ── Puertos ───────────────────────────────────────────────────────────
         try:
@@ -992,11 +1007,7 @@ async def create_listing(request: Request):
                 attributes["total_hdmi_ports"] = [{"value": int(total_hdmi_ports), "marketplace_id": client.marketplace_id}]
         except (ValueError, TypeError):
             pass
-        try:
-            if usb_port_count is not None and int(usb_port_count) > 0:
-                attributes["usb_port_count"] = [{"value": int(usb_port_count), "marketplace_id": client.marketplace_id}]
-        except (ValueError, TypeError):
-            pass
+        # usb_port_count no es válido para TELEVISION en Amazon — omitir
 
         # ── Características y componentes ─────────────────────────────────────
         if special_feature:
