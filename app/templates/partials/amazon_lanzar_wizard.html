@@ -280,7 +280,23 @@
                 <input id="amz-wiz-display-size" type="number" step="0.1" min="0" placeholder="ej: 32"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Largo (cm)</label>
+                <input id="amz-wiz-length" type="number" step="0.1" min="0" placeholder="ej: 73.5"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Ancho (cm)</label>
+                <input id="amz-wiz-width" type="number" step="0.1" min="0" placeholder="ej: 45.2"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Alto (cm)</label>
+                <input id="amz-wiz-height" type="number" step="0.1" min="0" placeholder="ej: 8.3"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
             </div>
+            <p class="text-[9px] text-gray-400 mt-1.5">La IA intenta completar especificaciones técnicas. Verifica y ajusta si es necesario.</p>
           </div>
         </div>
 
@@ -462,7 +478,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
 
   // Reset fields
   document.getElementById('amz-wiz-price').value = _wiz.price_sug ? (_wiz.currency === 'USD' ? _wiz.price_sug.toFixed(2) : Math.round(_wiz.price_sug)) : '';
-  document.getElementById('amz-wiz-search-input').value = _wiz.upc || _wiz.title || '';
+  document.getElementById('amz-wiz-search-input').value = _wiz.upc || _wiz.model || '';
   document.getElementById('amz-wiz-search-results').innerHTML = '';
   document.getElementById('amz-wiz-asin-selected').classList.add('hidden');
   document.getElementById('amz-wiz-submit-error').classList.add('hidden');
@@ -480,6 +496,9 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = '';
   var wEl = document.getElementById('amz-wiz-weight'); if (wEl) wEl.value = '';
   var dEl = document.getElementById('amz-wiz-display-size'); if (dEl) dEl.value = '';
+  var lEl = document.getElementById('amz-wiz-length'); if (lEl) lEl.value = '';
+  var wdEl = document.getElementById('amz-wiz-width'); if (wdEl) wdEl.value = '';
+  var htEl = document.getElementById('amz-wiz-height'); if (htEl) htEl.value = '';
   document.getElementById('amz-wiz-upc-info').classList.add('hidden');
   document.getElementById('amz-wiz-title-count').textContent = '0 / 200 chars';
   document.getElementById('amz-wiz-desc-count').textContent = '0 / 2000 chars';
@@ -748,6 +767,11 @@ window._amzWizGenerateContent = async function() {
     }
     if (d.product_type) document.getElementById('amz-wiz-product-type').value = d.product_type;
     if (d.color) { var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = d.color; }
+    if (d.weight_kg) { var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && !wEl2.value) wEl2.value = d.weight_kg; }
+    if (d.display_size_in) { var dsEl = document.getElementById('amz-wiz-display-size'); if (dsEl && !dsEl.value) dsEl.value = d.display_size_in; }
+    if (d.length_cm) { var lEl2 = document.getElementById('amz-wiz-length'); if (lEl2 && !lEl2.value) lEl2.value = d.length_cm; }
+    if (d.width_cm) { var wdEl2 = document.getElementById('amz-wiz-width'); if (wdEl2 && !wdEl2.value) wdEl2.value = d.width_cm; }
+    if (d.height_cm) { var htEl2 = document.getElementById('amz-wiz-height'); if (htEl2 && !htEl2.value) htEl2.value = d.height_cm; }
     icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
     btn.className = btn.className.replace('bg-purple-500 hover:bg-purple-600', 'bg-green-500 hover:bg-green-600');
   } catch(e) {
@@ -825,11 +849,24 @@ function _amzWizBuildReview() {
     var aColor = document.getElementById('amz-wiz-color'); if (aColor && aColor.value) rows.push(['Color', aColor.value]);
     var aWeight = document.getElementById('amz-wiz-weight'); if (aWeight && aWeight.value) rows.push(['Peso', aWeight.value + ' kg']);
     var aDisp = document.getElementById('amz-wiz-display-size'); if (aDisp && aDisp.value) rows.push(['Pantalla', aDisp.value + '"']);
+    var aLen = document.getElementById('amz-wiz-length');
+    var aWd = document.getElementById('amz-wiz-width');
+    var aHt = document.getElementById('amz-wiz-height');
+    if (aLen && aLen.value && aWd && aWd.value && aHt && aHt.value)
+      rows.push(['Dimensiones', aLen.value + ' × ' + aWd.value + ' × ' + aHt.value + ' cm']);
 
     // Checklist
     var title2       = document.getElementById('amz-wiz-title').value;
     var description  = document.getElementById('amz-wiz-description').value;
     var filledBullets = Array.from(document.querySelectorAll('.amz-wiz-bullet')).filter(function(el){ return el.value.trim().length > 10; }).length;
+    var _chkWeight = document.getElementById('amz-wiz-weight');
+    var _chkLen = document.getElementById('amz-wiz-length');
+    var _hasWeight = _chkWeight && parseFloat(_chkWeight.value) > 0;
+    var _hasDims = _chkLen && parseFloat(_chkLen.value) > 0;
+    var _chkBrand = document.getElementById('amz-wiz-brand');
+    var _hasBrand = _chkBrand && _chkBrand.value.trim().length > 0;
+    var _chkModel = document.getElementById('amz-wiz-model-num');
+    var _hasModel = _chkModel && _chkModel.value.trim().length > 0;
     var checks = [
       { label: 'Título ≥80 chars', ok: title2.length >= 80, warn: title2.length >= 40 && title2.length < 80 },
       { label: 'Título ≤200 chars', ok: title2.length > 0 && title2.length <= 200, warn: false },
@@ -839,6 +876,9 @@ function _amzWizBuildReview() {
       { label: 'Tipo de producto Amazon', ok: pt.length > 0, warn: false },
       { label: 'Al menos 1 foto', ok: photos.length >= 1, warn: false },
       { label: '3+ fotos (recomendado)', ok: photos.length >= 3, warn: photos.length >= 1 },
+      { label: 'Marca y número de modelo', ok: _hasBrand && _hasModel, warn: _hasBrand || _hasModel },
+      { label: 'Peso del producto', ok: _hasWeight, warn: false },
+      { label: 'Dimensiones (L×A×H)', ok: _hasDims, warn: false },
     ];
 
     document.getElementById('amz-wiz-checklist-wrap').classList.remove('hidden');
@@ -898,6 +938,9 @@ async function _amzWizSubmit() {
     var cEl2 = document.getElementById('amz-wiz-color'); if (cEl2) payload.color = cEl2.value.trim();
     var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && wEl2.value) payload.weight_kg = parseFloat(wEl2.value) || 0;
     var dEl2 = document.getElementById('amz-wiz-display-size'); if (dEl2 && dEl2.value) payload.display_size_in = parseFloat(dEl2.value) || 0;
+    var lEl3 = document.getElementById('amz-wiz-length'); if (lEl3 && lEl3.value) payload.length_cm = parseFloat(lEl3.value) || 0;
+    var wdEl3 = document.getElementById('amz-wiz-width'); if (wdEl3 && wdEl3.value) payload.width_cm = parseFloat(wdEl3.value) || 0;
+    var htEl3 = document.getElementById('amz-wiz-height'); if (htEl3 && htEl3.value) payload.height_cm = parseFloat(htEl3.value) || 0;
   }
 
   try {

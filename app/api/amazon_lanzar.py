@@ -701,6 +701,14 @@ COLOR:
 • Color principal del producto en inglés (ej: Black, White, Silver, Blue)
 • Si no aplica o no está claro: ""
 
+ESPECIFICACIONES FÍSICAS (usa tu conocimiento del modelo/marca para estimar):
+• weight_kg: Peso en kilogramos (número decimal, ej: 6.7). Si no lo sabes con certeza, estima razonablemente.
+• display_size_in: Tamaño de pantalla en pulgadas (solo si aplica — TVs, monitores, tablets). Número entero o decimal.
+• length_cm: Largo del producto en cm (dimensión mayor sin empaque)
+• width_cm: Ancho del producto en cm
+• height_cm: Alto/profundidad del producto en cm
+• Si no conoces las dimensiones del modelo específico, usa null.
+
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
   "title": "...",
@@ -708,7 +716,12 @@ COLOR:
   "description": "...",
   "keywords_backend": "...",
   "product_type": "...",
-  "color": "..."
+  "color": "...",
+  "weight_kg": null,
+  "display_size_in": null,
+  "length_cm": null,
+  "width_cm": null,
+  "height_cm": null
 }}"""
 
         import httpx as _httpx
@@ -770,6 +783,9 @@ async def create_listing(request: Request):
     color            = (body.get("color") or "").strip()
     weight_kg        = float(body.get("weight_kg") or 0)
     display_size_in  = float(body.get("display_size_in") or 0)
+    length_cm        = float(body.get("length_cm") or 0)
+    width_cm         = float(body.get("width_cm") or 0)
+    height_cm        = float(body.get("height_cm") or 0)
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -847,6 +863,13 @@ async def create_listing(request: Request):
             attributes["item_weight"] = [{"value": weight_kg, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
         if display_size_in > 0:
             attributes["display_size"] = [{"value": display_size_in, "unit": "inches", "marketplace_id": client.marketplace_id}]
+        if length_cm > 0 and width_cm > 0 and height_cm > 0:
+            attributes["item_dimensions"] = [{
+                "length": {"value": length_cm, "unit": "centimeters"},
+                "width":  {"value": width_cm,  "unit": "centimeters"},
+                "height": {"value": height_cm, "unit": "centimeters"},
+                "marketplace_id": client.marketplace_id,
+            }]
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
                 "fulfillment_channel_code": "DEFAULT",
