@@ -1134,7 +1134,51 @@ window._amzWizSearchImages = function() {
 };
 
 // ─── Scrape product URL for images ───────────────────────────────────────────
-window._amzWizScrapeUrl = function() {
+// Renders a grid of found images; each is clickable to add its URL to the inputs.
+function _amzWizRenderScrapeImages(imgs, status, wrap, grid) {
+  if (!imgs || !imgs.length) {
+    if (status) { status.textContent = 'No se encontraron imágenes. Intenta con la URL de la página del producto específico.'; status.classList.remove('hidden'); }
+    return;
+  }
+  if (status) { status.textContent = imgs.length + ' imagen(es) encontrada(s). Clic para agregar.'; status.classList.remove('hidden'); }
+  if (wrap) wrap.classList.remove('hidden');
+  if (grid) grid.innerHTML = '';
+
+  var inputs = Array.from(document.querySelectorAll('#amz-wiz-extra-photos .amz-wiz-photo-url'));
+
+  imgs.forEach(function(img, idx) {
+    var imgUrl = img.url || img;
+    var div = document.createElement('div');
+    div.className = 'relative group cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-orange-400 transition bg-gray-100';
+    div.innerHTML = (
+      '<img src="' + imgUrl + '" class="w-full aspect-square object-cover bg-gray-100" ' +
+           'onerror="this.closest(\'div\').style.display=\'none\'" loading="lazy">' +
+      '<div class="absolute inset-0 bg-orange-500/0 group-hover:bg-orange-500/20 transition flex items-end justify-center pb-1">' +
+        '<span class="text-[9px] text-white bg-orange-600/80 px-1.5 py-0.5 rounded hidden group-hover:block">+ Agregar</span>' +
+      '</div>' +
+      '<div id="amz-scrape-added-' + idx + '" class="absolute top-1 right-1 hidden">' +
+        '<span class="text-[9px] bg-green-500 text-white px-1 py-0.5 rounded">✓</span>' +
+      '</div>'
+    );
+    div.addEventListener('click', function() {
+      var target = null;
+      for (var i = 0; i < inputs.length; i++) {
+        if (!inputs[i].value.trim()) { target = inputs[i]; break; }
+      }
+      if (!target) target = inputs[0];
+      target.value = imgUrl;
+      target.dispatchEvent(new Event('input'));
+      target.style.borderColor = '#f97316';
+      setTimeout(function() { if (target) target.style.borderColor = ''; }, 2000);
+      var badge = document.getElementById('amz-scrape-added-' + idx);
+      if (badge) badge.classList.remove('hidden');
+      window._amzWizPhotoSync();
+    });
+    if (grid) grid.appendChild(div);
+  });
+}
+
+window._amzWizScrapeUrl = async function() {
   var btn    = document.getElementById('amz-wiz-scrape-btn');
   var urlEl  = document.getElementById('amz-wiz-product-url');
   var status = document.getElementById('amz-wiz-scrape-status');
@@ -1142,66 +1186,77 @@ window._amzWizScrapeUrl = function() {
   var grid   = document.getElementById('amz-wiz-scrape-results');
 
   var productUrl = urlEl ? urlEl.value.trim() : '';
-  if (!productUrl) { if (status) { status.textContent = 'Pega una URL primero.'; status.classList.remove('hidden'); } return; }
+  if (!productUrl) {
+    if (status) { status.textContent = 'Pega una URL primero.'; status.classList.remove('hidden'); }
+    return;
+  }
 
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Extrayendo…'; }
   if (status) { status.textContent = 'Analizando página del producto…'; status.classList.remove('hidden'); }
   if (wrap) wrap.classList.add('hidden');
   if (grid) grid.innerHTML = '';
 
-  var inputs = Array.from(document.querySelectorAll('#amz-wiz-extra-photos .amz-wiz-photo-url'));
+  try {
+    var parsed = new URL(productUrl);
+    var pathClean = parsed.pathname.replace(/\/$/, '');
 
-  fetch('/api/amazon/lanzar/scrape-product-url?url=' + encodeURIComponent(productUrl))
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
-      if (d.error && (!d.images || !d.images.length)) {
-        if (status) { status.textContent = '⚠ ' + d.error; status.classList.remove('hidden'); }
-        return;
-      }
-      var imgs = d.images || [];
-      if (!imgs.length) {
-        if (status) { status.textContent = 'No se encontraron imágenes en esa URL. Intenta con la página del producto específico (no la home).'; status.classList.remove('hidden'); }
-        return;
-      }
-      if (status) { status.textContent = imgs.length + ' imágenes encontradas. Clic para agregar a la lista.'; status.classList.remove('hidden'); }
-      if (wrap) wrap.classList.remove('hidden');
-
-      imgs.forEach(function(img, idx) {
-        var div = document.createElement('div');
-        div.className = 'relative group cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-orange-400 transition bg-gray-100';
-        var thumbUrl = img.url;
-        div.innerHTML = (
-          '<img src="' + thumbUrl + '" class="w-full aspect-square object-cover bg-gray-100" ' +
-               'onerror="this.closest(\'div\').style.display=\'none\'" loading="lazy">' +
-          '<div class="absolute inset-0 bg-orange-500/0 group-hover:bg-orange-500/20 transition flex items-end justify-center pb-1">' +
-            '<span class="text-[9px] text-white bg-orange-600/80 px-1.5 py-0.5 rounded hidden group-hover:block">+ Agregar</span>' +
-          '</div>' +
-          '<div id="amz-scrape-added-' + idx + '" class="absolute top-1 right-1 hidden">' +
-            '<span class="text-[9px] bg-green-500 text-white px-1 py-0.5 rounded">✓</span>' +
-          '</div>'
-        );
-        div.addEventListener('click', function() {
-          var target = null;
-          for (var i = 0; i < inputs.length; i++) {
-            if (!inputs[i].value.trim()) { target = inputs[i]; break; }
+    // ── Strategy A: Shopify — fetch .json DIRECTLY from browser ──────────────
+    // Shopify public product JSON has no CORS restrictions.
+    // Done client-side to bypass Cloudflare blocking server IPs (Railway).
+    if (pathClean.includes('/products/')) {
+      try {
+        var shopifyJsonUrl = parsed.origin + pathClean + '.json';
+        if (status) status.textContent = 'Probando API de Shopify…';
+        var sjResp = await fetch(shopifyJsonUrl, { headers: { 'Accept': 'application/json' } });
+        if (sjResp.ok) {
+          var sjData = await sjResp.json();
+          var shopifyImgs = (sjData.product && sjData.product.images) ? sjData.product.images : [];
+          if (shopifyImgs.length) {
+            if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+            _amzWizRenderScrapeImages(shopifyImgs.slice(0, 9).map(function(i) {
+              // Remove size suffix from Shopify CDN URLs to get full-res
+              return { url: i.src.replace(/_\d+x\d*\.(jpg|jpeg|png|webp)/i, '.$1') };
+            }), status, wrap, grid);
+            return;
           }
-          if (!target) target = inputs[0];
-          target.value = img.url;
-          target.dispatchEvent(new Event('input'));
-          target.style.borderColor = '#f97316';
-          setTimeout(function() { if (target) target.style.borderColor = ''; }, 2000);
-          var badge = document.getElementById('amz-scrape-added-' + idx);
-          if (badge) badge.classList.remove('hidden');
-          window._amzWizPhotoSync();
-        });
-        grid.appendChild(div);
-      });
-    })
-    .catch(function(e) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
-      if (status) { status.textContent = 'Error de red: ' + e.message; status.classList.remove('hidden'); }
-    });
+        }
+      } catch(e) { /* fall through to server-side */ }
+    }
+
+    // ── Strategy B: WooCommerce — REST API directly from browser ──────────────
+    try {
+      var slug = pathClean.split('/').filter(Boolean).pop();
+      var wooUrl = parsed.origin + '/wp-json/wc/v3/products?slug=' + encodeURIComponent(slug) + '&per_page=1';
+      if (status) status.textContent = 'Probando API de WooCommerce…';
+      var wResp = await fetch(wooUrl, { headers: { 'Accept': 'application/json' } });
+      if (wResp.ok) {
+        var wData = await wResp.json();
+        if (Array.isArray(wData) && wData.length && wData[0].images && wData[0].images.length) {
+          if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+          _amzWizRenderScrapeImages(wData[0].images.slice(0, 9).map(function(i) { return { url: i.src }; }), status, wrap, grid);
+          return;
+        }
+      }
+    } catch(e) { /* fall through */ }
+
+    // ── Strategy C: Server-side scraper (og:image, JSON-LD, CDN patterns, etc.) ─
+    if (status) status.textContent = 'Buscando imágenes en la página…';
+    var resp = await fetch('/api/amazon/lanzar/scrape-product-url?url=' + encodeURIComponent(productUrl));
+    var d = await resp.json();
+
+    if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+
+    if (d.images && d.images.length) {
+      _amzWizRenderScrapeImages(d.images, status, wrap, grid);
+    } else {
+      var errMsg = d.error || 'No se encontraron imágenes.';
+      if (status) { status.textContent = '⚠ ' + errMsg; status.classList.remove('hidden'); }
+    }
+
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+    if (status) { status.textContent = '⚠ Error: ' + e.message; status.classList.remove('hidden'); }
+  }
 };
 
 window._amzWizLaunchHighsfield = function() {
