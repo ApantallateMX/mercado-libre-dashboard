@@ -702,12 +702,21 @@ COLOR:
 • Si no aplica o no está claro: ""
 
 ESPECIFICACIONES FÍSICAS (usa tu conocimiento del modelo/marca para estimar):
-• weight_kg: Peso en kilogramos (número decimal, ej: 6.7). Si no lo sabes con certeza, estima razonablemente.
-• display_size_in: Tamaño de pantalla en pulgadas (solo si aplica — TVs, monitores, tablets). Número entero o decimal.
-• length_cm: Largo del producto en cm (dimensión mayor sin empaque)
-• width_cm: Ancho del producto en cm
-• height_cm: Alto/profundidad del producto en cm
-• Si no conoces las dimensiones del modelo específico, usa null.
+• weight_kg: Peso en kilogramos (número decimal, ej: 6.7). Estima si no lo sabes con certeza.
+• display_size_in: Tamaño de pantalla en pulgadas (TVs, monitores, tablets). Número entero o decimal.
+• length_cm: Largo del producto en cm (sin empaque)
+• width_cm: Ancho en cm
+• height_cm: Alto/profundidad en cm
+• country_of_origin: País de fabricación en inglés (ej: "China", "Mexico", "South Korea", "Vietnam", "Taiwan", "United States")
+• Si no conoces un dato específico, usa null.
+
+ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
+• display_type: Tecnología de pantalla — uno de: "LED", "QLED", "OLED", "Mini LED", "LCD", "QNED", null
+• resolution: Resolución — uno de: "720p", "1080p", "4K", "8K", null
+• smart_tv_flag: true si es Smart TV, false si no, null si no aplica
+• refresh_rate: Tasa de refresco en Hz como número entero (ej: 60, 120, 240), null si no aplica
+• mounting_type: Uno de "Tabletop", "Wall Mount", "Tabletop, Wall Mount", null
+• item_type_keyword: keyword de categoría (ej: "televisions", "computer-monitors", "light-bulbs", "speakers", "air-conditioners"), null si no sabes
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -721,7 +730,14 @@ ESPECIFICACIONES FÍSICAS (usa tu conocimiento del modelo/marca para estimar):
   "display_size_in": null,
   "length_cm": null,
   "width_cm": null,
-  "height_cm": null
+  "height_cm": null,
+  "country_of_origin": null,
+  "display_type": null,
+  "resolution": null,
+  "smart_tv_flag": null,
+  "refresh_rate": null,
+  "mounting_type": null,
+  "item_type_keyword": null
 }}"""
 
         import httpx as _httpx
@@ -786,6 +802,14 @@ async def create_listing(request: Request):
     length_cm        = float(body.get("length_cm") or 0)
     width_cm         = float(body.get("width_cm") or 0)
     height_cm        = float(body.get("height_cm") or 0)
+    # Atributos requeridos por Amazon (comprehensive)
+    country_of_origin  = (body.get("country_of_origin") or "China").strip()
+    item_type_keyword  = (body.get("item_type_keyword") or "").strip()
+    display_type       = (body.get("display_type") or "").strip()
+    resolution         = (body.get("resolution") or "").strip()
+    smart_tv_flag      = body.get("smart_tv_flag")   # bool or None
+    refresh_rate       = body.get("refresh_rate")     # int or None
+    mounting_type      = (body.get("mounting_type") or "").strip()
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -872,6 +896,31 @@ async def create_listing(request: Request):
             }]
         # is_refurbished — required by product types like TELEVISION, MONITOR, etc.
         attributes["is_refurbished"] = [{"value": condition == "refurbished_refurbished", "marketplace_id": client.marketplace_id}]
+
+        # ── Atributos universales requeridos por Amazon ───────────────────────
+        attributes["country_of_origin"] = [{"value": country_of_origin or "China", "marketplace_id": client.marketplace_id}]
+        attributes["supplier_declared_has_product_identifier_exemption"] = [{"value": True, "marketplace_id": client.marketplace_id}]
+        attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
+        attributes["batteries_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
+        attributes["batteries_included"] = [{"value": False, "marketplace_id": client.marketplace_id}]
+        if item_type_keyword:
+            attributes["item_type_keyword"] = [{"value": item_type_keyword, "marketplace_id": client.marketplace_id}]
+
+        # ── Atributos por tipo de producto ────────────────────────────────────
+        if display_type:
+            attributes["display_type"] = [{"value": display_type, "marketplace_id": client.marketplace_id}]
+        if resolution:
+            attributes["resolution"] = [{"value": resolution, "marketplace_id": client.marketplace_id}]
+        if smart_tv_flag is not None:
+            attributes["smart_tv_flag"] = [{"value": bool(smart_tv_flag), "marketplace_id": client.marketplace_id}]
+        if refresh_rate:
+            try:
+                attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "Hertz", "marketplace_id": client.marketplace_id}]
+            except (ValueError, TypeError):
+                pass
+        if mounting_type:
+            attributes["mounting_type"] = [{"value": mounting_type, "marketplace_id": client.marketplace_id}]
+
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
                 "fulfillment_channel_code": "DEFAULT",

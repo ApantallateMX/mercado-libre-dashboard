@@ -253,8 +253,9 @@
 
           <!-- Atributos del producto -->
           <div class="border-t border-gray-100 pt-3">
-            <p class="text-xs font-semibold text-gray-600 mb-2">Atributos del producto <span class="font-normal text-gray-400">(recomendados por Amazon)</span></p>
+            <p class="text-xs font-semibold text-gray-600 mb-2">Atributos del producto <span class="font-normal text-gray-400">(requeridos por Amazon)</span></p>
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <!-- Básicos -->
               <div>
                 <label class="block text-[10px] text-gray-500 mb-0.5">Marca</label>
                 <input id="amz-wiz-brand" type="text" placeholder="ej: Samsung"
@@ -270,13 +271,91 @@
                 <input id="amz-wiz-color" type="text" placeholder="ej: Black, Silver"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
+              <!-- País de origen -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">País de origen *</label>
+                <select id="amz-wiz-country-origin"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="China">China</option>
+                  <option value="Mexico">Mexico</option>
+                  <option value="United States">United States</option>
+                  <option value="South Korea">South Korea</option>
+                  <option value="Japan">Japan</option>
+                  <option value="Taiwan">Taiwan</option>
+                  <option value="Vietnam">Vietnam</option>
+                  <option value="Malaysia">Malaysia</option>
+                  <option value="Thailand">Thailand</option>
+                  <option value="India">India</option>
+                </select>
+              </div>
+              <!-- Tipo de pantalla -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Tipo de pantalla</label>
+                <select id="amz-wiz-display-type"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="">— N/A —</option>
+                  <option value="LED">LED</option>
+                  <option value="QLED">QLED</option>
+                  <option value="OLED">OLED</option>
+                  <option value="Mini LED">Mini LED</option>
+                  <option value="LCD">LCD</option>
+                  <option value="QNED">QNED</option>
+                </select>
+              </div>
+              <!-- Resolución -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Resolución</label>
+                <select id="amz-wiz-resolution"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="">— N/A —</option>
+                  <option value="720p">720p HD</option>
+                  <option value="1080p">1080p Full HD</option>
+                  <option value="4K">4K Ultra HD</option>
+                  <option value="8K">8K Ultra HD</option>
+                </select>
+              </div>
+              <!-- Tasa de refresco -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Refresco (Hz)</label>
+                <select id="amz-wiz-refresh-rate"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="">— N/A —</option>
+                  <option value="60">60 Hz</option>
+                  <option value="75">75 Hz</option>
+                  <option value="120">120 Hz</option>
+                  <option value="144">144 Hz</option>
+                  <option value="240">240 Hz</option>
+                </select>
+              </div>
+              <!-- Smart TV -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Smart TV</label>
+                <select id="amz-wiz-smart-tv"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="">— N/A —</option>
+                  <option value="true">Sí — Smart TV</option>
+                  <option value="false">No</option>
+                </select>
+              </div>
+              <!-- Tipo de montaje -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Montaje</label>
+                <select id="amz-wiz-mounting-type"
+                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                  <option value="">— N/A —</option>
+                  <option value="Tabletop">Mesa</option>
+                  <option value="Wall Mount">Pared</option>
+                  <option value="Tabletop, Wall Mount">Mesa y Pared</option>
+                </select>
+              </div>
+              <!-- Físicos -->
               <div>
                 <label class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
                 <input id="amz-wiz-weight" type="number" step="0.1" min="0" placeholder="ej: 5.5"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Tamaño pantalla (pulgadas)</label>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Pantalla (pulgadas)</label>
                 <input id="amz-wiz-display-size" type="number" step="0.1" min="0" placeholder="ej: 32"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
@@ -296,7 +375,7 @@
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
             </div>
-            <p class="text-[9px] text-gray-400 mt-1.5">La IA intenta completar especificaciones técnicas. Verifica y ajusta si es necesario.</p>
+            <p class="text-[9px] text-gray-400 mt-1.5">* País de origen, tipo de pantalla, resolución y Smart TV son requeridos por Amazon para la mayoría de productos electrónicos. La IA los completa automáticamente.</p>
           </div>
         </div>
 
@@ -546,6 +625,13 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var wEl = document.getElementById('amz-wiz-weight'); if (wEl) wEl.value = '';
   var dEl = document.getElementById('amz-wiz-display-size'); if (dEl) dEl.value = '';
   var lEl = document.getElementById('amz-wiz-length'); if (lEl) lEl.value = '';
+  // Reset new fields
+  var coEl = document.getElementById('amz-wiz-country-origin'); if (coEl) coEl.value = 'China';
+  var dtEl = document.getElementById('amz-wiz-display-type'); if (dtEl) dtEl.value = '';
+  var resEl = document.getElementById('amz-wiz-resolution'); if (resEl) resEl.value = '';
+  var rrEl = document.getElementById('amz-wiz-refresh-rate'); if (rrEl) rrEl.value = '';
+  var stEl = document.getElementById('amz-wiz-smart-tv'); if (stEl) stEl.value = '';
+  var mtEl = document.getElementById('amz-wiz-mounting-type'); if (mtEl) mtEl.value = '';
   var wdEl = document.getElementById('amz-wiz-width'); if (wdEl) wdEl.value = '';
   var htEl = document.getElementById('amz-wiz-height'); if (htEl) htEl.value = '';
   document.getElementById('amz-wiz-upc-info').classList.add('hidden');
@@ -819,6 +905,13 @@ window._amzWizGenerateContent = async function() {
     if (d.weight_kg) { var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && !wEl2.value) wEl2.value = d.weight_kg; }
     if (d.display_size_in) { var dsEl = document.getElementById('amz-wiz-display-size'); if (dsEl && !dsEl.value) dsEl.value = d.display_size_in; }
     if (d.length_cm) { var lEl2 = document.getElementById('amz-wiz-length'); if (lEl2 && !lEl2.value) lEl2.value = d.length_cm; }
+    // New AI-filled fields
+    if (d.country_of_origin) { var coEl2 = document.getElementById('amz-wiz-country-origin'); if (coEl2) coEl2.value = d.country_of_origin; }
+    if (d.display_type) { var dtEl2 = document.getElementById('amz-wiz-display-type'); if (dtEl2 && !dtEl2.value) dtEl2.value = d.display_type; }
+    if (d.resolution) { var resEl2 = document.getElementById('amz-wiz-resolution'); if (resEl2 && !resEl2.value) resEl2.value = d.resolution; }
+    if (d.refresh_rate) { var rrEl2 = document.getElementById('amz-wiz-refresh-rate'); if (rrEl2 && !rrEl2.value) rrEl2.value = String(d.refresh_rate); }
+    if (d.smart_tv_flag !== null && d.smart_tv_flag !== undefined) { var stEl2 = document.getElementById('amz-wiz-smart-tv'); if (stEl2 && !stEl2.value) stEl2.value = String(d.smart_tv_flag); }
+    if (d.mounting_type) { var mtEl2 = document.getElementById('amz-wiz-mounting-type'); if (mtEl2 && !mtEl2.value) mtEl2.value = d.mounting_type; }
     if (d.width_cm) { var wdEl2 = document.getElementById('amz-wiz-width'); if (wdEl2 && !wdEl2.value) wdEl2.value = d.width_cm; }
     if (d.height_cm) { var htEl2 = document.getElementById('amz-wiz-height'); if (htEl2 && !htEl2.value) htEl2.value = d.height_cm; }
     icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
@@ -1173,6 +1266,13 @@ async function _amzWizSubmit() {
     var lEl3 = document.getElementById('amz-wiz-length'); if (lEl3 && lEl3.value) payload.length_cm = parseFloat(lEl3.value) || 0;
     var wdEl3 = document.getElementById('amz-wiz-width'); if (wdEl3 && wdEl3.value) payload.width_cm = parseFloat(wdEl3.value) || 0;
     var htEl3 = document.getElementById('amz-wiz-height'); if (htEl3 && htEl3.value) payload.height_cm = parseFloat(htEl3.value) || 0;
+    // New comprehensive attributes
+    var coEl3 = document.getElementById('amz-wiz-country-origin'); if (coEl3 && coEl3.value) payload.country_of_origin = coEl3.value;
+    var dtEl3 = document.getElementById('amz-wiz-display-type'); if (dtEl3 && dtEl3.value) payload.display_type = dtEl3.value;
+    var resEl3 = document.getElementById('amz-wiz-resolution'); if (resEl3 && resEl3.value) payload.resolution = resEl3.value;
+    var rrEl3 = document.getElementById('amz-wiz-refresh-rate'); if (rrEl3 && rrEl3.value) payload.refresh_rate = parseInt(rrEl3.value) || 0;
+    var stEl3 = document.getElementById('amz-wiz-smart-tv'); if (stEl3 && stEl3.value !== '') payload.smart_tv_flag = stEl3.value === 'true';
+    var mtEl3 = document.getElementById('amz-wiz-mounting-type'); if (mtEl3 && mtEl3.value) payload.mounting_type = mtEl3.value;
   }
 
   try {
