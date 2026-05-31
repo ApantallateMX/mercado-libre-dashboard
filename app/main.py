@@ -13995,28 +13995,55 @@ async def diag_import_config(request: Request, token: str = ""):  # noqa
 
 
 @app.get("/api/diag/amazon-accounts")
-async def diag_amazon_accounts(token: str = ""):  # noqa
-    """Muestra las cuentas Amazon en DB (para diagnóstico — client_id y token parciales)."""
+async def diag_amazon_accounts(token: str = "", fix: int = 0):  # noqa
+    """Muestra las cuentas Amazon en DB (marketplace_id, marketplace_name).
+    Pasa fix=1 para corregir marketplace de ExclusiveBulbs usando env vars."""
     _DIAG_TOKEN = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
     if token != _DIAG_TOKEN:
         return JSONResponse({"error": "token inválido"}, status_code=403)
-    import aiosqlite
+    import aiosqlite, os as _os
+    # Si fix=1: actualizar todas las cuentas con los valores correctos del env
+    if fix:
+        updates = []
+        for _prefix, _default_mkt, _default_name in [
+            ("AMAZON3_", "ATVPDKIKX0DER", "US"),
+            ("AMAZON2_", "A1AM78C64UM0Y8", "MX"),
+            ("AMAZON_",  "A1AM78C64UM0Y8", "MX"),
+        ]:
+            _sid  = _os.getenv(f"{_prefix}SELLER_ID", "")
+            _mid  = _os.getenv(f"{_prefix}MARKETPLACE_ID", _default_mkt)
+            _mname = _os.getenv(f"{_prefix}MARKETPLACE_NAME", _default_name)
+            if _sid:
+                updates.append((_mid, _mname, _sid))
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            for _mid, _mname, _sid in updates:
+                await db.execute(
+                    "UPDATE amazon_accounts SET marketplace_id=?, marketplace_name=? WHERE seller_id=?",
+                    (_mid, _mname, _sid),
+                )
+            await db.commit()
     results = []
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT seller_id, nickname, client_id, refresh_token FROM amazon_accounts")
+        cur = await db.execute(
+            "SELECT seller_id, nickname, client_id, refresh_token, marketplace_id, marketplace_name FROM amazon_accounts"
+        )
         rows = await cur.fetchall()
         for r in rows:
             rt = r["refresh_token"] or ""
             cid = r["client_id"] or ""
+            mkt_id = r["marketplace_id"] or ""
             results.append({
-                "seller_id": r["seller_id"],
-                "nickname": r["nickname"],
-                "client_id_prefix": cid[:50],
+                "seller_id":          r["seller_id"],
+                "nickname":           r["nickname"],
+                "marketplace_id":     mkt_id,
+                "marketplace_name":   r["marketplace_name"] or "",
+                "is_usd":             mkt_id != "A1AM78C64UM0Y8",
+                "client_id_prefix":   cid[:50],
                 "refresh_token_prefix": rt[:30],
-                "refresh_token_len": len(rt),
+                "refresh_token_len":  len(rt),
             })
-    return JSONResponse({"accounts": results})
+    return JSONResponse({"accounts": results, "fixed": bool(fix)})
 
 
 @app.get("/api/diag/exclusivebulbs-probe")
