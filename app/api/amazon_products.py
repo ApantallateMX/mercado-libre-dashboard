@@ -4411,7 +4411,10 @@ async def amazon_sin_lanzar(
         "marketplace":     client.marketplace_name,
         "marketplace_id":  client.marketplace_id,
         "seller_id":       sid,
-        "is_usd":          client.marketplace_id != "A1AM78C64UM0Y8",
+        "is_usd":          (
+            client.marketplace_id != "A1AM78C64UM0Y8"
+            or (client.marketplace_name or "MX").upper() in ("US", "CA", "UK", "JP", "DE", "FR", "AU", "BR", "IN")
+        ),
     }
     return _templates.TemplateResponse(request, "partials/amazon_sin_lanzar.html", ctx)
 
