@@ -28,14 +28,15 @@ def _bm_product_block(bm_product: dict) -> str:
 def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed,
                                   buyer_history=None, user_context=None, bm_product=None,
                                   product_permalink=None, product_attributes=None,
-                                  same_item_history=None, related_listings=None):
+                                  same_item_history=None, related_listings=None, seller_name=None):
+    firma = f", {seller_name}" if seller_name else ""
     system = (
-        "Eres Monica, asistente de ventas profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
+        "Eres un asistente de ventas profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
         "ESTRUCTURA OBLIGATORIA de cada respuesta:\n"
         "1. SALUDO — breve y calido (ej: 'Hola! Gracias por tu pregunta.')\n"
         "2. RESPUESTA — directa, concreta, responde exactamente lo que preguntaron\n"
         "3. PROPUESTA — CTA sutil que invite a comprar (ej: 'Dale click en Comprar y te lo enviamos hoy mismo')\n"
-        "4. DESPEDIDA — cordial, 1 linea (ej: 'Quedamos al pendiente, saludos!')\n\n"
+        f"4. DESPEDIDA — cordial, 1 linea, firmada con el nombre del vendedor (ej: 'Saludos{firma}!')\n\n"
         "TIPOS DE PREGUNTA y como manejarlas:\n"
         "- OPERATIVA (envio, garantia, factura): responde con certeza, menciona beneficios de MeLi (envio gratis, Compra Protegida)\n"
         "- TECNICA (especificaciones, compatibilidad): usa SOLO las especificaciones listadas en los datos del producto; NUNCA inventes ni asumas specs por el nombre del producto\n"
@@ -134,6 +135,8 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
             user += f"  - {rl.get('title', '')[:60]} — ${rl.get('price', 0)} — {rl.get('permalink', '')}\n"
         user += "(No menciones estos productos a menos que el comprador pregunte por alternativas o compatibilidad)\n"
 
+    if seller_name:
+        user += f"\nFirma la despedida con tu nombre: {seller_name} (ej: 'Saludos, {seller_name}!' o 'Quedo al pendiente, {seller_name}')\n"
     user += "\nGenera una respuesta profesional siguiendo la estructura Saludo+Respuesta+Propuesta+Despedida:"
 
     return system, user, 800

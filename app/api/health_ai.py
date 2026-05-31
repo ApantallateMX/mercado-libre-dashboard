@@ -152,6 +152,22 @@ async def _sse_stream(system: str, prompt: str, max_tokens: int):
         yield f"data: [ERROR] {e}\n\n"
 
 
+async def _get_seller_nickname(request: Request) -> str:
+    """Devuelve el nickname del vendedor activo desde la DB, o '' si no se encuentra."""
+    import aiosqlite
+    from app.services.token_store import DATABASE_PATH
+    uid = request.cookies.get("active_account_id", "")
+    if not uid:
+        return ""
+    try:
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            cur = await db.execute("SELECT nickname FROM tokens WHERE user_id=?", (uid,))
+            row = await cur.fetchone()
+            return (row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
 @router.post("/suggest-answer")
 async def suggest_answer(request: Request):
     """SSE stream: suggest an answer for a buyer question."""
@@ -160,6 +176,7 @@ async def suggest_answer(request: Request):
     body = await request.json()
     sku = body.get("sku", "")
     bm_product = await _fetch_bm_product(sku)
+    seller_name = await _get_seller_nickname(request)
     system, prompt, max_tokens = build_question_answer_prompt(
         body.get("question_text", ""),
         body.get("product_title", ""),
@@ -173,6 +190,7 @@ async def suggest_answer(request: Request):
         product_attributes=body.get("product_attributes", []),
         same_item_history=body.get("same_item_history", []),
         related_listings=body.get("related_listings", []),
+        seller_name=seller_name,
     )
     return StreamingResponse(
         _sse_stream(system, prompt, max_tokens),
