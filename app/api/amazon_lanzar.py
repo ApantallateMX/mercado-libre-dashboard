@@ -994,12 +994,11 @@ async def create_listing(request: Request):
             except (ValueError, TypeError):
                 pass
 
-        # mounting_type — valores individuales separados (no string compuesto)
+        # mounting_type — solo 1 valor permitido por Amazon
         if mounting_type:
-            _mt_map = {"Tabletop, Wall Mount": ["Table Mount", "Wall Mount"],
-                       "Tabletop": ["Table Mount"], "Wall Mount": ["Wall Mount"]}
-            _mt_vals = _mt_map.get(mounting_type, [mounting_type])
-            attributes["mounting_type"] = [{"value": v, "marketplace_id": client.marketplace_id} for v in _mt_vals]
+            _mt_map = {"Tabletop, Wall Mount": "Wall Mount", "Tabletop": "Table Mount", "Wall Mount": "Wall Mount"}
+            _mt_val = _mt_map.get(mounting_type, mounting_type)
+            attributes["mounting_type"] = [{"value": _mt_val, "marketplace_id": client.marketplace_id}]
 
         # ── Puertos ───────────────────────────────────────────────────────────
         try:
@@ -1025,7 +1024,7 @@ async def create_listing(request: Request):
         if list_price_msrp > 0:
             attributes["list_price"] = [{
                 "currency": currency,
-                "value_with_tax": list_price_msrp,
+                "value": list_price_msrp,
                 "marketplace_id": client.marketplace_id,
             }]
         if model_year:
