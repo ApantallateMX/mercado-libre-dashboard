@@ -348,6 +348,29 @@
                   <option value="Tabletop, Wall Mount">Mesa y Pared</option>
                 </select>
               </div>
+              <!-- Puertos HDMI / USB -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Puertos HDMI</label>
+                <input id="amz-wiz-hdmi-count" type="number" min="0" max="10" placeholder="ej: 3"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-0.5">Puertos USB</label>
+                <input id="amz-wiz-usb-count" type="number" min="0" max="10" placeholder="ej: 2"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <!-- Características especiales -->
+              <div class="col-span-2">
+                <label class="block text-[10px] text-gray-500 mb-0.5">Características especiales <span class="text-gray-400">(separadas por coma)</span></label>
+                <input id="amz-wiz-special-feature" type="text" placeholder="ej: Smart TV, Built-In WiFi, HDR, Dolby Vision"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
+              <!-- Componentes incluidos -->
+              <div class="col-span-2">
+                <label class="block text-[10px] text-gray-500 mb-0.5">Componentes incluidos <span class="text-gray-400">(separados por coma)</span></label>
+                <input id="amz-wiz-included-components" type="text" placeholder="ej: Remote Control, Power Cable, Stand, User Manual"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
+              </div>
               <!-- Físicos -->
               <div>
                 <label class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
@@ -631,6 +654,10 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var resEl = document.getElementById('amz-wiz-resolution'); if (resEl) resEl.value = '';
   var rrEl = document.getElementById('amz-wiz-refresh-rate'); if (rrEl) rrEl.value = '';
   var stEl = document.getElementById('amz-wiz-smart-tv'); if (stEl) stEl.value = '';
+  var hdmiElR = document.getElementById('amz-wiz-hdmi-count'); if (hdmiElR) hdmiElR.value = '';
+  var usbElR = document.getElementById('amz-wiz-usb-count'); if (usbElR) usbElR.value = '';
+  var sfElR = document.getElementById('amz-wiz-special-feature'); if (sfElR) sfElR.value = '';
+  var icElR = document.getElementById('amz-wiz-included-components'); if (icElR) icElR.value = '';
   var mtEl = document.getElementById('amz-wiz-mounting-type'); if (mtEl) mtEl.value = '';
   var wdEl = document.getElementById('amz-wiz-width'); if (wdEl) wdEl.value = '';
   var htEl = document.getElementById('amz-wiz-height'); if (htEl) htEl.value = '';
@@ -912,6 +939,10 @@ window._amzWizGenerateContent = async function() {
     if (d.refresh_rate) { var rrEl2 = document.getElementById('amz-wiz-refresh-rate'); if (rrEl2 && !rrEl2.value) rrEl2.value = String(d.refresh_rate); }
     if (d.smart_tv_flag !== null && d.smart_tv_flag !== undefined) { var stEl2 = document.getElementById('amz-wiz-smart-tv'); if (stEl2 && !stEl2.value) stEl2.value = String(d.smart_tv_flag); }
     if (d.mounting_type) { var mtEl2 = document.getElementById('amz-wiz-mounting-type'); if (mtEl2 && !mtEl2.value) mtEl2.value = d.mounting_type; }
+    if (d.hdmi_port_count) { var hdmiEl2 = document.getElementById('amz-wiz-hdmi-count'); if (hdmiEl2 && !hdmiEl2.value) hdmiEl2.value = d.hdmi_port_count; }
+    if (d.usb_port_count) { var usbEl2 = document.getElementById('amz-wiz-usb-count'); if (usbEl2 && !usbEl2.value) usbEl2.value = d.usb_port_count; }
+    if (d.special_feature) { var sfEl2 = document.getElementById('amz-wiz-special-feature'); if (sfEl2 && !sfEl2.value) sfEl2.value = Array.isArray(d.special_feature) ? d.special_feature.join(', ') : d.special_feature; }
+    if (d.included_components) { var icEl2 = document.getElementById('amz-wiz-included-components'); if (icEl2 && !icEl2.value) icEl2.value = Array.isArray(d.included_components) ? d.included_components.join(', ') : d.included_components; }
     if (d.width_cm) { var wdEl2 = document.getElementById('amz-wiz-width'); if (wdEl2 && !wdEl2.value) wdEl2.value = d.width_cm; }
     if (d.height_cm) { var htEl2 = document.getElementById('amz-wiz-height'); if (htEl2 && !htEl2.value) htEl2.value = d.height_cm; }
     icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
@@ -1273,6 +1304,12 @@ async function _amzWizSubmit() {
     var rrEl3 = document.getElementById('amz-wiz-refresh-rate'); if (rrEl3 && rrEl3.value) payload.refresh_rate = parseInt(rrEl3.value) || 0;
     var stEl3 = document.getElementById('amz-wiz-smart-tv'); if (stEl3 && stEl3.value !== '') payload.smart_tv_flag = stEl3.value === 'true';
     var mtEl3 = document.getElementById('amz-wiz-mounting-type'); if (mtEl3 && mtEl3.value) payload.mounting_type = mtEl3.value;
+    var hdmiEl = document.getElementById('amz-wiz-hdmi-count'); if (hdmiEl && hdmiEl.value) payload.hdmi_port_count = parseInt(hdmiEl.value) || 0;
+    var usbEl = document.getElementById('amz-wiz-usb-count'); if (usbEl && usbEl.value) payload.usb_port_count = parseInt(usbEl.value) || 0;
+    var sfEl = document.getElementById('amz-wiz-special-feature');
+    if (sfEl && sfEl.value.trim()) payload.special_feature = sfEl.value.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    var icEl = document.getElementById('amz-wiz-included-components');
+    if (icEl && icEl.value.trim()) payload.included_components = icEl.value.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
   }
 
   try {

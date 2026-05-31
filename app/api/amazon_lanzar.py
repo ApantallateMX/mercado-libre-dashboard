@@ -717,6 +717,10 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • refresh_rate: Tasa de refresco en Hz como número entero (ej: 60, 120, 240), null si no aplica
 • mounting_type: Uno de "Tabletop", "Wall Mount", "Tabletop, Wall Mount", null
 • item_type_keyword: keyword de categoría (ej: "televisions", "computer-monitors", "light-bulbs", "speakers", "air-conditioners"), null si no sabes
+• hdmi_port_count: Número entero de puertos HDMI (ej: 3), null si no aplica
+• usb_port_count: Número entero de puertos USB (ej: 2), null si no aplica
+• special_feature: Lista de características destacadas (ej: ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] si no aplica
+• included_components: Lista de lo que incluye la caja (ej: ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] si no aplica
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -737,7 +741,11 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
   "smart_tv_flag": null,
   "refresh_rate": null,
   "mounting_type": null,
-  "item_type_keyword": null
+  "item_type_keyword": null,
+  "hdmi_port_count": null,
+  "usb_port_count": null,
+  "special_feature": [],
+  "included_components": []
 }}"""
 
         import httpx as _httpx
@@ -810,6 +818,11 @@ async def create_listing(request: Request):
     smart_tv_flag      = body.get("smart_tv_flag")   # bool or None
     refresh_rate       = body.get("refresh_rate")     # int or None
     mounting_type      = (body.get("mounting_type") or "").strip()
+    item_shape         = (body.get("item_shape") or "").strip()
+    special_feature    = body.get("special_feature") or []   # list of strings
+    included_components = body.get("included_components") or []  # list of strings
+    hdmi_port_count    = body.get("hdmi_port_count")   # int or None
+    usb_port_count     = body.get("usb_port_count")    # int or None
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -879,14 +892,16 @@ async def create_listing(request: Request):
                     ]
         if brand:
             attributes["brand"] = [{"value": brand, "marketplace_id": client.marketplace_id}]
+            attributes["manufacturer"] = [{"value": brand, "marketplace_id": client.marketplace_id}]
         if model_number:
             attributes["model_number"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
+            attributes["part_number"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
         if color:
             attributes["color"] = [{"value": color, "marketplace_id": client.marketplace_id}]
         if weight_kg > 0:
             attributes["item_weight"] = [{"value": weight_kg, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
         if display_size_in > 0:
-            attributes["display_size"] = [{"value": display_size_in, "unit": "inches", "marketplace_id": client.marketplace_id}]
+            attributes["item_display_size"] = [{"value": display_size_in, "unit": "inches", "marketplace_id": client.marketplace_id}]
         if length_cm > 0 and width_cm > 0 and height_cm > 0:
             attributes["item_dimensions"] = [{
                 "length": {"value": length_cm, "unit": "centimeters"},
@@ -915,11 +930,35 @@ async def create_listing(request: Request):
             attributes["smart_tv_flag"] = [{"value": bool(smart_tv_flag), "marketplace_id": client.marketplace_id}]
         if refresh_rate:
             try:
-                attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "Hertz", "marketplace_id": client.marketplace_id}]
+                attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError):
                 pass
         if mounting_type:
             attributes["mounting_type"] = [{"value": mounting_type, "marketplace_id": client.marketplace_id}]
+        if item_shape:
+            attributes["item_shape"] = [{"value": item_shape, "marketplace_id": client.marketplace_id}]
+        elif display_size_in > 0 or display_type:
+            attributes["item_shape"] = [{"value": "Rectangular", "marketplace_id": client.marketplace_id}]
+        if special_feature:
+            attributes["special_feature"] = [
+                {"value": f, "marketplace_id": client.marketplace_id}
+                for f in special_feature[:5] if f
+            ]
+        if included_components:
+            attributes["included_components"] = [
+                {"value": c, "marketplace_id": client.marketplace_id}
+                for c in included_components[:10] if c
+            ]
+        try:
+            if hdmi_port_count is not None and int(hdmi_port_count) > 0:
+                attributes["hdmi_port_count"] = [{"value": int(hdmi_port_count), "marketplace_id": client.marketplace_id}]
+        except (ValueError, TypeError):
+            pass
+        try:
+            if usb_port_count is not None and int(usb_port_count) > 0:
+                attributes["usb_port_count"] = [{"value": int(usb_port_count), "marketplace_id": client.marketplace_id}]
+        except (ValueError, TypeError):
+            pass
 
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
