@@ -1183,7 +1183,15 @@ async def search_product_images(
 
 @router.get("/scrape-product-url")
 async def scrape_product_url(url: str = Query("", description="URL de la página del producto")):
-    """Extrae imágenes y specs de la página web de un producto."""
+    """
+    Extrae imágenes de un producto usando estrategias en cascada:
+    1. Shopify /products/{handle}.json  (westinghouse.com, etc.)
+    2. WooCommerce product JSON embed
+    3. og:image / twitter:image / JSON-LD
+    4. Next.js __NEXT_DATA__ / Nuxt __NUXT__ state
+    5. Cloudinary / imgix / CDN pattern matching
+    6. img tags con lazy-load y srcset
+    """
     import httpx as _hx
     import re as _re
     import urllib.parse as _up
@@ -1198,124 +1206,244 @@ async def scrape_product_url(url: str = Query("", description="URL de la página
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
     }
 
-    try:
-        async with _hx.AsyncClient(timeout=20, follow_redirects=True, headers=_HEADERS) as _client:
-            resp = await _client.get(url)
-            resp.raise_for_status()
-            html = resp.text
-            base_url = str(resp.url)
-            parsed_base = _up.urlparse(base_url)
-            domain = parsed_base.netloc
+    parsed = _up.urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path_clean = parsed.path.rstrip("/")  # without query params
 
-        images_seen: set = set()
-        images: list = []
+    images_seen: set = set()
+    images: list = []
+    strategies_tried: list = []
 
-        def _abs(src: str) -> str:
-            if not src:
-                return ""
-            src = src.strip()
-            if src.startswith("//"):
-                return f"{parsed_base.scheme}:{src}"
-            if src.startswith("/"):
-                return f"{parsed_base.scheme}://{parsed_base.netloc}{src}"
-            if not src.startswith("http"):
-                return ""
+    def _abs(src: str) -> str:
+        if not src:
+            return ""
+        src = src.strip()
+        if src.startswith("//"):
+            return f"{parsed.scheme}:{src}"
+        if src.startswith("/"):
+            return f"{origin}{src}"
+        if src.startswith("http"):
             return src
+        return ""
 
-        def _add(src: str, priority: int = 0):
-            abs_src = _abs(src)
-            if not abs_src or abs_src in images_seen:
-                return
-            # Skip tiny icons, SVGs, gifs, data URIs
-            low = abs_src.lower()
-            if any(low.endswith(ext) for ext in (".svg", ".gif", ".ico")):
-                return
-            if "data:" in abs_src or "placeholder" in low or "spinner" in low:
-                return
-            # Skip clearly small images (thumbnails often have size hints)
-            if _re.search(r'[_-](icon|logo|avatar|badge|button)[_-]', low):
-                return
-            images_seen.add(abs_src)
-            images.append({"url": abs_src, "priority": priority, "source": domain})
+    def _is_skip(src: str) -> bool:
+        low = src.lower()
+        if any(low.endswith(ext) for ext in (".svg", ".gif", ".ico", ".webp.html")):
+            return True
+        if "data:" in src or len(src) < 10:
+            return True
+        skip_kw = ("placeholder", "spinner", "loading", "blank", "pixel", "spacer",
+                   "icon", "logo", "avatar", "badge", "button", "arrow", "star-",
+                   "rating", "flag-", "payment", "social-", "share-", "cart-icon")
+        return any(kw in low for kw in skip_kw)
 
-        # 1) og:image / twitter:image — highest priority
-        for m in _re.finditer(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image(?::src)?)["\'][^>]+content=["\']([^"\']+)["\']', html, _re.IGNORECASE):
-            _add(m.group(1), priority=10)
-        for m in _re.finditer(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\']', html, _re.IGNORECASE):
-            _add(m.group(1), priority=10)
+    def _add(src: str, priority: int = 0, source: str = ""):
+        abs_src = _abs(src)
+        if not abs_src or abs_src in images_seen:
+            return
+        if _is_skip(abs_src):
+            return
+        # Upscale Shopify thumbnails to full size (remove _100x, _200x, _480x suffixes)
+        abs_src = _re.sub(r'_(\d+)x(\d+)?\.(jpg|jpeg|png|webp)', r'.\3', abs_src, flags=_re.IGNORECASE)
+        images_seen.add(abs_src)
+        images.append({"url": abs_src, "priority": priority, "source": source or parsed.netloc})
 
-        # 2) JSON-LD product schema
-        for jld in _re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, _re.IGNORECASE | _re.DOTALL):
-            try:
-                obj = _json.loads(jld.group(1))
-                def _harvest_ld(o):
-                    if isinstance(o, dict):
-                        for k in ("image", "photo", "thumbnail", "contentUrl", "url"):
-                            v = o.get(k)
-                            if isinstance(v, str):
-                                _add(v, priority=9)
-                            elif isinstance(v, list):
-                                for item in v:
-                                    if isinstance(item, str):
-                                        _add(item, priority=9)
-                                    elif isinstance(item, dict):
-                                        _add(item.get("url") or item.get("contentUrl") or "", priority=9)
-                        for v in o.values():
-                            _harvest_ld(v)
-                    elif isinstance(o, list):
-                        for item in o:
-                            _harvest_ld(item)
-                _harvest_ld(obj)
-            except Exception:
-                pass
+    def _harvest_json(obj, priority: int = 0):
+        """Recursively extract image URLs from a JSON object."""
+        if isinstance(obj, str):
+            if obj.startswith("http") and any(ext in obj.lower() for ext in (".jpg", ".jpeg", ".png", ".webp")):
+                _add(obj, priority)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                if k.lower() in ("src", "url", "image", "images", "photo", "photos",
+                                  "thumbnail", "contenturl", "imageurl", "picture",
+                                  "full", "large", "original", "zoom"):
+                    _harvest_json(v, priority)
+                else:
+                    _harvest_json(v, priority - 1)
+        elif isinstance(obj, list):
+            for item in obj:
+                _harvest_json(item, priority)
 
-        # 3) <img> with data-src / srcset (lazy-loaded) — prefer large
-        for m in _re.finditer(r'<img[^>]+>', html, _re.IGNORECASE):
-            tag = m.group(0)
-            # Try data-src first (lazy load), then src
-            src = ""
-            for attr in ("data-zoom-image", "data-large", "data-original", "data-src", "src"):
-                am = _re.search(rf'{attr}=["\']([^"\']+)["\']', tag, _re.IGNORECASE)
-                if am:
-                    src = am.group(1)
-                    break
-            if not src:
-                continue
-            # Prefer images with size hints suggesting large images
-            width_m = _re.search(r'width=["\']?(\d+)', tag, _re.IGNORECASE)
-            w = int(width_m.group(1)) if width_m else 0
-            if w and w < 200:
-                continue  # skip small img tags
-            _add(src, priority=5 if w >= 600 else 2)
+    try:
+        async with _hx.AsyncClient(timeout=20, follow_redirects=True, headers=_HEADERS) as _c:
 
-        # 4) srcset — grab largest
-        for m in _re.finditer(r'srcset=["\']([^"\']+)["\']', html, _re.IGNORECASE):
-            parts = m.group(1).split(",")
-            for p in parts:
-                p = p.strip().split(" ")[0]
-                _add(p, priority=3)
+            # ── Strategy 1: Shopify /products/{handle}.json ───────────────────
+            # Shopify exposes a public JSON API for every product page
+            if "/products/" in path_clean:
+                try:
+                    json_url = f"{origin}{path_clean}.json"
+                    strategies_tried.append("shopify_json")
+                    rj = await _c.get(json_url, headers={**_HEADERS, "Accept": "application/json"})
+                    if rj.status_code == 200:
+                        pdata = rj.json().get("product", {})
+                        for img in pdata.get("images", []):
+                            src = img.get("src") or ""
+                            _add(src, priority=20, source="shopify")
+                        # Also check variants for images
+                        for v in pdata.get("variants", []):
+                            fi = v.get("featured_image") or {}
+                            _add(fi.get("src", ""), priority=18, source="shopify")
+                except Exception:
+                    pass
 
-        # Sort by priority desc, deduplicate, return top 9
+            # ── Strategy 2: WooCommerce /{slug}/?format=json ──────────────────
+            if not images:
+                try:
+                    woo_url = f"{origin}/wp-json/wc/v3/products"
+                    # Try the REST API with slug extracted from path
+                    slug = path_clean.split("/")[-1]
+                    rw = await _c.get(f"{woo_url}?slug={slug}", headers={**_HEADERS, "Accept": "application/json"})
+                    if rw.status_code == 200:
+                        strategies_tried.append("woocommerce_api")
+                        for prod in rw.json()[:1]:
+                            for img in prod.get("images", []):
+                                _add(img.get("src", ""), priority=19, source="woocommerce")
+                except Exception:
+                    pass
+
+            # ── Strategy 3: Fetch HTML and parse ─────────────────────────────
+            strategies_tried.append("html_parse")
+            rh = await _c.get(url)
+            rh.raise_for_status()
+            html = rh.text
+            final_url = str(rh.url)
+            final_parsed = _up.urlparse(final_url)
+
+            # 3a) og:image / twitter:image
+            for pat in [
+                r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::secure_url)?|twitter:image(?::src)?)["\'][^>]+content=["\']([^"\']+)["\']',
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\']',
+            ]:
+                for m in _re.finditer(pat, html, _re.IGNORECASE):
+                    _add(m.group(1), priority=15, source="og:image")
+
+            # 3b) JSON-LD structured data (Product, ImageObject)
+            for jld in _re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, _re.IGNORECASE | _re.DOTALL):
+                try:
+                    _harvest_json(_json.loads(jld.group(1)), priority=14)
+                except Exception:
+                    pass
+
+            # 3c) Next.js __NEXT_DATA__ (React SSR apps)
+            nd = _re.search(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html, _re.IGNORECASE | _re.DOTALL)
+            if nd:
+                try:
+                    _harvest_json(_json.loads(nd.group(1)), priority=13)
+                    strategies_tried.append("nextjs")
+                except Exception:
+                    pass
+
+            # 3d) Nuxt.js __NUXT__ state
+            nuxt = _re.search(r'window\.__NUXT__\s*=\s*(\{.+?\});?\s*</script>', html, _re.DOTALL)
+            if nuxt:
+                try:
+                    _harvest_json(_json.loads(nuxt.group(1)), priority=13)
+                    strategies_tried.append("nuxt")
+                except Exception:
+                    pass
+
+            # 3e) Generic window.__INITIAL_STATE__ / window.__STATE__ / window.PRODUCT
+            for pat in [r'window\.__(?:INITIAL_STATE|STATE|STORE|APP_STATE|preloadedState)__\s*=\s*(\{.+?\});\s*</script>',
+                        r'window\.(?:PRODUCT|product|catalog)\s*=\s*(\{.+?\});\s*(?:</script>|var )',
+                        r'var\s+(?:product|item|__data)\s*=\s*(\{.+?\});\s*(?:</script>|var |\n)']:
+                for m in _re.finditer(pat, html, _re.DOTALL | _re.IGNORECASE):
+                    try:
+                        _harvest_json(_json.loads(m.group(1)), priority=12)
+                    except Exception:
+                        pass
+
+            # 3f) Shopify CDN images referenced anywhere in HTML/JS
+            for m in _re.finditer(r'(https://cdn\.shopify\.com/s/files/[^\s"\'?]+\.(?:jpg|jpeg|png|webp))', html, _re.IGNORECASE):
+                _add(m.group(1), priority=11, source="shopify_cdn")
+
+            # 3g) Common CDN patterns (Cloudinary, imgix, Scene7/Adobe, FastLy)
+            cdn_patterns = [
+                r'(https://res\.cloudinary\.com/[^\s"\'?]+\.(?:jpg|jpeg|png|webp)[^\s"\']*)',
+                r'(https://[^/]+\.imgix\.net/[^\s"\'?]+\.(?:jpg|jpeg|png|webp)[^\s"\']*)',
+                r'(https://[^/]+\.scene7\.com/is/image/[^\s"\'?]+)',
+                r'(https://[^/]+\.akamaized\.net/[^\s"\'?]+\.(?:jpg|jpeg|png|webp)[^\s"\']*)',
+            ]
+            for cpat in cdn_patterns:
+                for m in _re.finditer(cpat, html, _re.IGNORECASE):
+                    _add(m.group(1), priority=10, source="cdn")
+
+            # 3h) img tags — lazy-load attributes, prefer large
+            for m in _re.finditer(r'<img[^>]+>', html, _re.IGNORECASE):
+                tag = m.group(0)
+                src = ""
+                for attr in ("data-zoom-image", "data-large-image", "data-full-image",
+                             "data-original", "data-src", "data-lazy-src", "data-bg",
+                             "data-lazy", "data-image", "src"):
+                    am = _re.search(rf'\b{attr}=["\']([^"\']+)["\']', tag, _re.IGNORECASE)
+                    if am and am.group(1).startswith("http"):
+                        src = am.group(1)
+                        break
+                if not src:
+                    continue
+                w_m = _re.search(r'\bwidth=["\']?(\d+)', tag, _re.IGNORECASE)
+                w = int(w_m.group(1)) if w_m else 0
+                if w and w < 150:
+                    continue
+                priority = 8 if w >= 800 else (6 if w >= 400 else 3)
+                _add(src, priority=priority, source="img_tag")
+
+            # 3i) srcset — grab highest resolution
+            for m in _re.finditer(r'srcset=["\']([^"\']+)["\']', html, _re.IGNORECASE):
+                parts = [p.strip() for p in m.group(1).split(",")]
+                # Sort by width descriptor desc, take largest
+                best = ""
+                best_w = 0
+                for p in parts:
+                    pieces = p.split()
+                    if len(pieces) >= 2 and pieces[1].endswith("w"):
+                        try:
+                            w = int(pieces[1][:-1])
+                            if w > best_w:
+                                best_w = w
+                                best = pieces[0]
+                        except ValueError:
+                            pass
+                    elif pieces:
+                        best = best or pieces[0]
+                if best:
+                    _add(best, priority=4 if best_w >= 800 else 2, source="srcset")
+
+        # Final sort by priority, deduplicate, return top 9
         images.sort(key=lambda x: -x["priority"])
         top = [{"url": img["url"], "source": img["source"]} for img in images[:9]]
 
-        # Extract basic specs from meta description
+        # Extract meta description for specs
         desc_m = _re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{20,})["\']', html, _re.IGNORECASE)
         specs = {}
         if desc_m:
             specs["description"] = desc_m.group(1)[:300]
 
-        return JSONResponse({"images": top, "specs": specs, "source_url": url})
+        if not top:
+            return JSONResponse({
+                "images": [],
+                "specs": specs,
+                "strategies_tried": strategies_tried,
+                "error": "No se encontraron imágenes. La página puede requerir JavaScript o estar protegida por CAPTCHA.",
+            })
+
+        return JSONResponse({"images": top, "specs": specs, "strategies_tried": strategies_tried, "source_url": url})
 
     except _hx.TimeoutException:
         return JSONResponse({"images": [], "specs": {}, "error": "Tiempo de espera agotado. La página tardó demasiado."})
     except _hx.HTTPStatusError as e:
-        return JSONResponse({"images": [], "specs": {}, "error": f"Error HTTP {e.response.status_code}"})
+        code = e.response.status_code
+        msg = {403: "Acceso denegado (403) — el sitio bloquea scrapers. Copia las URLs manualmente.",
+               404: "Página no encontrada (404). Verifica la URL.",
+               429: "Demasiadas solicitudes (429). Espera unos minutos e intenta de nuevo.",
+               }.get(code, f"Error HTTP {code}")
+        return JSONResponse({"images": [], "specs": {}, "error": msg})
     except Exception as _e:
         logger.warning(f"[scrape-product-url] {_e}")
-        return JSONResponse({"images": [], "specs": {}, "error": str(_e)[:120]})
+        return JSONResponse({"images": [], "specs": {}, "error": str(_e)[:200]})
 
 
 # ── 3c. Photo prompts (Claude → 6 Higgsfield prompts específicos del producto) ──
