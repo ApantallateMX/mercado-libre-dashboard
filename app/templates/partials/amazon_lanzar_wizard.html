@@ -330,11 +330,21 @@
                 🌟 Generar con Higgsfield IA
               </button>
             </div>
+            <!-- Preview gallery — visible cuando Higgsfield genera imágenes -->
+            <div id="amz-wiz-photo-gallery" class="hidden mb-3">
+              <p class="text-[10px] text-gray-500 mb-2 font-semibold">Previsualizaciones generadas</p>
+              <div class="grid grid-cols-3 gap-2" id="amz-wiz-gallery-grid">
+                <!-- Slots filled dynamically by _amzWizLaunchHighsfield -->
+              </div>
+            </div>
+
             <div class="space-y-2" id="amz-wiz-extra-photos">
               <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 1" oninput="window._amzWizPhotoSync()">
               <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 2" oninput="window._amzWizPhotoSync()">
               <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto lifestyle / infográfica" oninput="window._amzWizPhotoSync()">
               <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto detalle / dimensiones" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 5" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL de foto adicional 6" oninput="window._amzWizPhotoSync()">
             </div>
           </div>
 
@@ -490,6 +500,8 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   document.getElementById('amz-wiz-keywords').value = '';
   document.getElementById('amz-wiz-product-type').value = '';
   document.querySelectorAll('.amz-wiz-photo-url').forEach(function(el) { el.value = ''; });
+  var _gal = document.getElementById('amz-wiz-photo-gallery'); if (_gal) _gal.classList.add('hidden');
+  var _hfBtn = document.getElementById('amz-wiz-hf-btn'); if (_hfBtn) { _hfBtn.disabled = false; _hfBtn.textContent = '🌟 Generar con Higgsfield IA'; }
   // Atributos: pre-llenar marca/modelo desde BM
   var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
   var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
@@ -811,72 +823,119 @@ function _amzWizCollectPhotos() {
 window._amzWizLaunchHighsfield = function() {
   var btn = document.getElementById('amz-wiz-hf-btn');
   if (btn && btn.disabled) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Preparando prompts…'; }
 
-  var inputs = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
+  var inputs  = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
   var title   = _wiz.title || _wiz.sku || '';
   var thumb   = _wiz.image_url || '';
   var sku     = _wiz.sku || '';
+  var brand   = (document.getElementById('amz-wiz-brand') || {}).value || (_wiz.brand || '');
+  var model   = (document.getElementById('amz-wiz-model-num') || {}).value || (_wiz.model || '');
+  var category = _wiz.category || 'Electronics';
 
-  var prompts = [
-    'Product on pure white background #FFFFFF, studio photo, product fills 85% of frame, professional clean lighting, no text no watermarks',
-    'Product from 3/4 angle on white background, professional studio lighting, all sides visible, clean product shot',
-    'Product in lifestyle setting, natural warm lighting, aspirational in-use scene',
-    'Product close-up detail, key features visible, high detail, white background'
-  ];
-
-  if (btn) { btn.disabled = true; btn.textContent = '✨ Generando… 0/' + prompts.length; }
-
+  var NUM = 6;
   var completed = 0;
-  var polls = [];
 
-  function finish() {
-    if (btn) {
+  // Build + show gallery slots
+  var gallery = document.getElementById('amz-wiz-photo-gallery');
+  var grid    = document.getElementById('amz-wiz-gallery-grid');
+  grid.innerHTML = '';
+  for (var g = 0; g < NUM; g++) {
+    grid.innerHTML += (
+      '<div id="amz-wiz-slot-' + g + '" class="relative bg-gray-100 rounded-lg overflow-hidden aspect-square flex items-center justify-center border border-gray-200">' +
+        '<div id="amz-wiz-slot-spin-' + g + '" class="text-center">' +
+          '<svg class="animate-spin h-5 w-5 mx-auto text-purple-400 mb-1" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>' +
+          '<span class="text-[9px] text-gray-400">Generando…</span>' +
+        '</div>' +
+        '<img id="amz-wiz-slot-img-' + g + '" src="" alt="" class="hidden w-full h-full object-cover">' +
+        '<div id="amz-wiz-slot-err-' + g + '" class="hidden text-center p-2"><span class="text-[9px] text-red-400">Error</span></div>' +
+      '</div>'
+    );
+  }
+  gallery.classList.remove('hidden');
+
+  function updateBtn() {
+    if (!btn) return;
+    if (completed < NUM) {
+      btn.textContent = '✨ Generando… ' + completed + '/' + NUM;
+    } else {
       btn.disabled = false;
       btn.textContent = '🔄 Regenerar con Higgsfield IA';
+      window._amzWizPhotoSync();
     }
-    window._amzWizPhotoSync();
   }
 
-  prompts.forEach(function(prompt, idx) {
-    fetch('/api/higgsfield/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: 'image', title: title, thumbnail_url: thumb, custom_prompt: prompt, sku: sku })
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.request_id) throw new Error('no id');
-      var timer = setInterval(function() {
-        fetch('/api/higgsfield/status/' + data.request_id)
-          .then(function(r) { return r.json(); })
-          .then(function(s) {
-            if (s.status === 'completed' && s.result_url) {
-              clearInterval(timer);
-              if (inputs[idx]) {
-                inputs[idx].value = s.result_url;
-                inputs[idx].dispatchEvent(new Event('input'));
-                inputs[idx].style.borderColor = '#22c55e';
-                setTimeout(function() { inputs[idx].style.borderColor = ''; }, 2500);
+  function slotDone(idx, url) {
+    var spin = document.getElementById('amz-wiz-slot-spin-' + idx);
+    var img  = document.getElementById('amz-wiz-slot-img-' + idx);
+    if (spin) spin.classList.add('hidden');
+    if (img)  { img.src = url; img.classList.remove('hidden'); }
+    if (inputs[idx]) {
+      inputs[idx].value = url;
+      inputs[idx].dispatchEvent(new Event('input'));
+      inputs[idx].style.borderColor = '#22c55e';
+      setTimeout(function() { if (inputs[idx]) inputs[idx].style.borderColor = ''; }, 2500);
+    }
+    completed++;
+    updateBtn();
+  }
+
+  function slotError(idx) {
+    var spin = document.getElementById('amz-wiz-slot-spin-' + idx);
+    var err  = document.getElementById('amz-wiz-slot-err-' + idx);
+    if (spin) spin.classList.add('hidden');
+    if (err)  err.classList.remove('hidden');
+    completed++;
+    updateBtn();
+  }
+
+  function fireGeneration(prompts) {
+    if (btn) btn.textContent = '✨ Generando… 0/' + NUM;
+    prompts.forEach(function(prompt, idx) {
+      fetch('/api/higgsfield/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'image', title: title, thumbnail_url: thumb, custom_prompt: prompt, sku: sku })
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.request_id) throw new Error('no id');
+        var timer = setInterval(function() {
+          fetch('/api/higgsfield/status/' + data.request_id)
+            .then(function(r) { return r.json(); })
+            .then(function(s) {
+              if (s.status === 'completed' && s.result_url) {
+                clearInterval(timer); slotDone(idx, s.result_url);
+              } else if (s.status === 'failed' || s.status === 'error') {
+                clearInterval(timer); slotError(idx);
               }
-              completed++;
-              if (btn) btn.textContent = completed < prompts.length ? '✨ Generando… ' + completed + '/' + prompts.length : '✓ ' + completed + '/' + prompts.length + ' generadas';
-              if (completed >= prompts.length) finish();
-            } else if (s.status === 'failed' || s.status === 'error') {
-              clearInterval(timer);
-              completed++;
-              if (btn) btn.textContent = '✨ Generando… ' + completed + '/' + prompts.length;
-              if (completed >= prompts.length) finish();
-            }
-          })
-          .catch(function() {});
-      }, 3000);
-      polls.push(timer);
-    })
-    .catch(function() {
-      completed++;
-      if (btn) btn.textContent = '✨ Generando… ' + completed + '/' + prompts.length;
-      if (completed >= prompts.length) finish();
+            })
+            .catch(function() {});
+        }, 3000);
+      })
+      .catch(function() { slotError(idx); });
     });
+  }
+
+  // Step 1 — ask backend for product-specific prompts
+  fetch('/api/amazon/lanzar/photo-prompts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title, brand: brand, model: model, category: category })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) { fireGeneration(d.prompts || []); })
+  .catch(function() {
+    // Fallback prompts
+    var pd = [brand, model, title].filter(Boolean).join(' ');
+    fireGeneration([
+      'Professional studio product photo, ' + pd + ', pure white background #FFFFFF, Amazon listing compliant, soft even lighting',
+      pd + ', front view, white background, professional photography, all details visible',
+      pd + ', 3/4 angle showing all sides, white background, studio lighting',
+      pd + ', lifestyle in modern home setting, aspirational warm ambiance, in use',
+      pd + ', close-up feature detail shot, key specs visible, white background',
+      pd + ', size context in real environment, scale reference, clean modern interior',
+    ]);
   });
 };
 

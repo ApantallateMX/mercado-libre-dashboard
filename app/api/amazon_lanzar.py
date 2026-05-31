@@ -870,6 +870,8 @@ async def create_listing(request: Request):
                 "height": {"value": height_cm, "unit": "centimeters"},
                 "marketplace_id": client.marketplace_id,
             }]
+        # is_refurbished — required by product types like TELEVISION, MONITOR, etc.
+        attributes["is_refurbished"] = [{"value": condition == "refurbished_refurbished", "marketplace_id": client.marketplace_id}]
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
                 "fulfillment_channel_code": "DEFAULT",
@@ -923,6 +925,82 @@ async def create_listing(request: Request):
         await db.commit()
 
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku}
+
+
+# ── 3b. Photo prompts (Claude → 6 Higgsfield prompts específicos del producto) ──
+
+@router.post("/photo-prompts")
+async def photo_prompts(request: Request):
+    """Genera 6 prompts optimizados para Higgsfield IA basados en el producto."""
+    import os, base64 as _b64
+    import httpx as _httpx
+
+    body = await request.json()
+    title    = (body.get("title") or "").strip()
+    brand    = (body.get("brand") or "").strip()
+    model    = (body.get("model") or "").strip()
+    category = (body.get("category") or "Electronics").strip()
+
+    product_desc = " ".join(filter(None, [brand, model, title])) or title
+
+    _p1 = os.getenv("AI_KEY_P1", "")
+    _p2 = os.getenv("AI_KEY_P2", "")
+    api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
+
+    fallback = [
+        f"Professional Amazon product photo, {product_desc}, pure white background #FFFFFF, product fills 85% of frame, studio lighting, no text, 2000x2000px",
+        f"{product_desc}, front view, white background, professional product photography, crystal clear, Amazon listing compliant",
+        f"{product_desc}, 3/4 angle showing all sides and ports, white background, studio lighting",
+        f"{product_desc}, lifestyle in modern home setting, aspirational warm lighting, product in use",
+        f"{product_desc}, feature close-up detail shot, key specs visible, white background, macro photography",
+        f"{product_desc}, size comparison in real environment, scale reference, clean modern interior",
+    ]
+
+    if not api_key:
+        return JSONResponse({"prompts": fallback})
+
+    try:
+        prompt_text = (
+            f"Product: {product_desc}\nCategory: {category}\n\n"
+            "Generate exactly 6 Higgsfield AI image prompts for Amazon product listing photos. "
+            "Each prompt must be ultra-specific to THIS exact product (include brand and model). "
+            "Image types:\n"
+            "1. Main hero — white background, product centered, Amazon compliant (≥85% frame)\n"
+            "2. Second angle — different framing, white background\n"
+            "3. Rear/side view — all ports, connections, back panel visible\n"
+            "4. Lifestyle — product in use in a modern aspirational home setting\n"
+            "5. Feature close-up — highlight key feature or screen/display detail\n"
+            "6. Scale/size context — showing product size in real environment\n\n"
+            "Rules: photorealistic, professional, no watermarks, no text overlay. "
+            "Output ONLY a valid JSON array of exactly 6 strings, nothing else."
+        )
+        async with _httpx.AsyncClient(timeout=20) as hc:
+            resp = await hc.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 800,
+                    "messages": [{"role": "user", "content": prompt_text}],
+                },
+            )
+        data = resp.json()
+        raw = (data.get("content") or [{}])[0].get("text", "")
+        # Extract JSON array
+        import re as _re
+        m = _re.search(r'\[.*\]', raw, _re.DOTALL)
+        if m:
+            prompts = json.loads(m.group())
+            if isinstance(prompts, list) and len(prompts) >= 6:
+                return JSONResponse({"prompts": [str(p) for p in prompts[:6]]})
+    except Exception as _e:
+        logger.warning(f"[photo-prompts] Claude error: {_e}")
+
+    return JSONResponse({"prompts": fallback})
 
 
 # ── 4. Ignorar gap ────────────────────────────────────────────────────────────
