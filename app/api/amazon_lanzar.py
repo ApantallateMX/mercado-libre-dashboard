@@ -717,10 +717,14 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • refresh_rate: Tasa de refresco en Hz como número entero (ej: 60, 120, 240), null si no aplica
 • mounting_type: Uno de "Tabletop", "Wall Mount", "Tabletop, Wall Mount", null
 • item_type_keyword: keyword de categoría (ej: "televisions", "computer-monitors", "light-bulbs", "speakers", "air-conditioners"), null si no sabes
-• hdmi_port_count: Número entero de puertos HDMI (ej: 3), null si no aplica
+• total_hdmi_ports: Número entero de puertos HDMI (ej: 3), null si no aplica
 • usb_port_count: Número entero de puertos USB (ej: 2), null si no aplica
 • special_feature: Lista de características destacadas (ej: ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] si no aplica
 • included_components: Lista de lo que incluye la caja (ej: ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] si no aplica
+• connectivity_technology: Lista de tecnologías de conectividad (ej: ["Wi-Fi", "Bluetooth", "HDMI", "USB"]), [] si no aplica
+• model_year: Año del modelo como entero (ej: 2024), null si no sabes
+• warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
+• list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -742,10 +746,14 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
   "refresh_rate": null,
   "mounting_type": null,
   "item_type_keyword": null,
-  "hdmi_port_count": null,
+  "total_hdmi_ports": null,
   "usb_port_count": null,
   "special_feature": [],
-  "included_components": []
+  "included_components": [],
+  "connectivity_technology": [],
+  "model_year": null,
+  "warranty_description": null,
+  "list_price_msrp": null
 }}"""
 
         import httpx as _httpx
@@ -811,18 +819,26 @@ async def create_listing(request: Request):
     width_cm         = float(body.get("width_cm") or 0)
     height_cm        = float(body.get("height_cm") or 0)
     # Atributos requeridos por Amazon (comprehensive)
-    country_of_origin  = (body.get("country_of_origin") or "China").strip()
-    item_type_keyword  = (body.get("item_type_keyword") or "").strip()
-    display_type       = (body.get("display_type") or "").strip()
-    resolution         = (body.get("resolution") or "").strip()
-    smart_tv_flag      = body.get("smart_tv_flag")   # bool or None
-    refresh_rate       = body.get("refresh_rate")     # int or None
-    mounting_type      = (body.get("mounting_type") or "").strip()
-    item_shape         = (body.get("item_shape") or "").strip()
-    special_feature    = body.get("special_feature") or []   # list of strings
-    included_components = body.get("included_components") or []  # list of strings
-    hdmi_port_count    = body.get("hdmi_port_count")   # int or None
-    usb_port_count     = body.get("usb_port_count")    # int or None
+    country_of_origin    = (body.get("country_of_origin") or "China").strip()
+    item_type_keyword    = (body.get("item_type_keyword") or "").strip()
+    display_type         = (body.get("display_type") or "").strip()
+    resolution           = (body.get("resolution") or "").strip()
+    refresh_rate         = body.get("refresh_rate")     # int or None
+    mounting_type        = (body.get("mounting_type") or "").strip()
+    special_feature      = body.get("special_feature") or []
+    included_components  = body.get("included_components") or []
+    total_hdmi_ports     = body.get("total_hdmi_ports") or body.get("hdmi_port_count")
+    usb_port_count       = body.get("usb_port_count")
+    connectivity_tech    = body.get("connectivity_technology") or []
+    model_year           = body.get("model_year")
+    warranty_desc        = (body.get("warranty_description") or "").strip()
+    list_price_msrp      = float(body.get("list_price_msrp") or 0)
+    aspect_ratio         = (body.get("aspect_ratio") or "").strip()
+    # Package dims/weight (separate from product dims — includes box)
+    pkg_weight_kg        = float(body.get("pkg_weight_kg") or 0)
+    pkg_length_cm        = float(body.get("pkg_length_cm") or 0)
+    pkg_width_cm         = float(body.get("pkg_width_cm") or 0)
+    pkg_height_cm        = float(body.get("pkg_height_cm") or 0)
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -900,34 +916,68 @@ async def create_listing(request: Request):
             attributes["color"] = [{"value": color, "marketplace_id": client.marketplace_id}]
         if weight_kg > 0:
             attributes["item_weight"] = [{"value": weight_kg, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
-        if display_size_in > 0:
-            attributes["item_display_size"] = [{"value": display_size_in, "unit": "inches", "marketplace_id": client.marketplace_id}]
+        # ── Dimensiones del producto ──────────────────────────────────────────
         if length_cm > 0 and width_cm > 0 and height_cm > 0:
+            # item_dimensions — estándar
             attributes["item_dimensions"] = [{
                 "length": {"value": length_cm, "unit": "centimeters"},
                 "width":  {"value": width_cm,  "unit": "centimeters"},
                 "height": {"value": height_cm, "unit": "centimeters"},
                 "marketplace_id": client.marketplace_id,
             }]
-        # is_refurbished — required by product types like TELEVISION, MONITOR, etc.
+            # item_depth_width_height — requerido por Amazon USA (TELEVISION)
+            attributes["item_depth_width_height"] = [{
+                "depth":  {"value": width_cm,  "unit": "centimeters"},
+                "width":  {"value": length_cm, "unit": "centimeters"},
+                "height": {"value": height_cm, "unit": "centimeters"},
+                "marketplace_id": client.marketplace_id,
+            }]
+
+        # ── is_refurbished ────────────────────────────────────────────────────
         attributes["is_refurbished"] = [{"value": condition == "refurbished_refurbished", "marketplace_id": client.marketplace_id}]
 
         # ── Atributos universales requeridos por Amazon ───────────────────────
         attributes["country_of_origin"] = [{"value": country_of_origin or "China", "marketplace_id": client.marketplace_id}]
         attributes["supplier_declared_has_product_identifier_exemption"] = [{"value": True, "marketplace_id": client.marketplace_id}]
+        attributes["supplier_declared_dg_hz_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
         attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
         attributes["batteries_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
         attributes["batteries_included"] = [{"value": False, "marketplace_id": client.marketplace_id}]
         if item_type_keyword:
             attributes["item_type_keyword"] = [{"value": item_type_keyword, "marketplace_id": client.marketplace_id}]
 
-        # ── Atributos por tipo de producto ────────────────────────────────────
+        # ── display — atributo compuesto para TVs/monitores ───────────────────
+        # Reemplaza item_display_size, display_type, resolution sueltos (inválidos en TELEVISION)
+        _RESOLUTION_PIXELS = {"720p": "1280", "1080p": "1920", "4K": "3840", "8K": "7680"}
+        _RESOLUTION_STR    = {"720p": "1280 x 720 pixels", "1080p": "1920 x 1080 pixels",
+                               "4K": "3840 x 2160 pixels", "8K": "7680 x 4320 pixels"}
+        display_obj: dict = {}
+        if display_size_in > 0:
+            display_obj["display_size"] = {"value": display_size_in, "unit": "inches"}
         if display_type:
-            attributes["display_type"] = [{"value": display_type, "marketplace_id": client.marketplace_id}]
+            display_obj["display_type"] = display_type
         if resolution:
-            attributes["resolution"] = [{"value": resolution, "marketplace_id": client.marketplace_id}]
-        if smart_tv_flag is not None:
-            attributes["smart_tv_flag"] = [{"value": bool(smart_tv_flag), "marketplace_id": client.marketplace_id}]
+            display_obj["resolution"] = {"value": _RESOLUTION_PIXELS.get(resolution, resolution), "unit": "pixels"}
+        if display_obj:
+            display_obj["marketplace_id"] = client.marketplace_id
+            attributes["display"] = [display_obj]
+
+        # resolution — también como campo independiente (requerido en USA marketplace)
+        if resolution:
+            attributes["resolution"] = [{"value": _RESOLUTION_STR.get(resolution, resolution), "marketplace_id": client.marketplace_id}]
+
+        # image_aspect_ratio — requerido para TELEVISION en USA
+        _ar = aspect_ratio or ("16:9" if (display_size_in > 0 or display_type) else "")
+        if _ar:
+            attributes["image_aspect_ratio"] = [{"value": _ar, "marketplace_id": client.marketplace_id}]
+
+        # ── Atributos de conectividad y smart TV ──────────────────────────────
+        if connectivity_tech:
+            attributes["connectivity_technology"] = [
+                {"value": c, "marketplace_id": client.marketplace_id}
+                for c in connectivity_tech if c
+            ]
+
         if refresh_rate:
             try:
                 attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
@@ -935,10 +985,20 @@ async def create_listing(request: Request):
                 pass
         if mounting_type:
             attributes["mounting_type"] = [{"value": mounting_type, "marketplace_id": client.marketplace_id}]
-        if item_shape:
-            attributes["item_shape"] = [{"value": item_shape, "marketplace_id": client.marketplace_id}]
-        elif display_size_in > 0 or display_type:
-            attributes["item_shape"] = [{"value": "Rectangular", "marketplace_id": client.marketplace_id}]
+
+        # ── Puertos ───────────────────────────────────────────────────────────
+        try:
+            if total_hdmi_ports is not None and int(total_hdmi_ports) > 0:
+                attributes["total_hdmi_ports"] = [{"value": int(total_hdmi_ports), "marketplace_id": client.marketplace_id}]
+        except (ValueError, TypeError):
+            pass
+        try:
+            if usb_port_count is not None and int(usb_port_count) > 0:
+                attributes["usb_port_count"] = [{"value": int(usb_port_count), "marketplace_id": client.marketplace_id}]
+        except (ValueError, TypeError):
+            pass
+
+        # ── Características y componentes ─────────────────────────────────────
         if special_feature:
             attributes["special_feature"] = [
                 {"value": f, "marketplace_id": client.marketplace_id}
@@ -949,16 +1009,36 @@ async def create_listing(request: Request):
                 {"value": c, "marketplace_id": client.marketplace_id}
                 for c in included_components[:10] if c
             ]
-        try:
-            if hdmi_port_count is not None and int(hdmi_port_count) > 0:
-                attributes["hdmi_port_count"] = [{"value": int(hdmi_port_count), "marketplace_id": client.marketplace_id}]
-        except (ValueError, TypeError):
-            pass
-        try:
-            if usb_port_count is not None and int(usb_port_count) > 0:
-                attributes["usb_port_count"] = [{"value": int(usb_port_count), "marketplace_id": client.marketplace_id}]
-        except (ValueError, TypeError):
-            pass
+
+        # ── Precio de lista (MSRP), año del modelo, garantía ─────────────────
+        if list_price_msrp > 0:
+            attributes["list_price"] = [{
+                "currency": currency,
+                "value_with_tax": list_price_msrp,
+                "marketplace_id": client.marketplace_id,
+            }]
+        if model_year:
+            try:
+                attributes["model_year"] = [{"value": int(model_year), "marketplace_id": client.marketplace_id}]
+            except (ValueError, TypeError):
+                pass
+        _warranty = warranty_desc or "90 days seller warranty"
+        attributes["warranty_description"] = [{"value": _warranty, "marketplace_id": client.marketplace_id}]
+
+        # ── Peso y dimensiones del paquete ────────────────────────────────────
+        _pkg_w = pkg_weight_kg or (round(weight_kg * 1.25, 1) if weight_kg > 0 else 0)
+        if _pkg_w > 0:
+            attributes["item_package_weight"] = [{"value": _pkg_w, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
+        _pl = pkg_length_cm or (round(length_cm + 10, 1) if length_cm > 0 else 0)
+        _pw = pkg_width_cm  or (round(width_cm  + 5,  1) if width_cm  > 0 else 0)
+        _ph = pkg_height_cm or (round(height_cm + 10, 1) if height_cm > 0 else 0)
+        if _pl > 0 and _pw > 0 and _ph > 0:
+            attributes["item_package_dimensions"] = [{
+                "length": {"value": _pl, "unit": "centimeters"},
+                "width":  {"value": _pw, "unit": "centimeters"},
+                "height": {"value": _ph, "unit": "centimeters"},
+                "marketplace_id": client.marketplace_id,
+            }]
 
         if fulfillment == "FBM" and quantity > 0:
             attributes["fulfillment_availability"] = [{
