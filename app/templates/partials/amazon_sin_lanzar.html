@@ -293,7 +293,7 @@
                     <th class="py-3 px-3 text-right font-semibold hidden md:table-cell">TJ</th>
                     <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Retail USD</th>
                     <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">Retail MXN</th>
-                    <th class="py-3 px-3 text-right font-semibold">P. Sugerido</th>
+                    <th class="py-3 px-3 text-right font-semibold">P. Sugerido {% if is_usd %}<span class="text-blue-500 font-normal text-[10px]">USD</span>{% endif %}</th>
                     <th class="py-3 px-3 text-right font-semibold hidden lg:table-cell">% Recup.</th>
                     <th class="py-3 px-3 text-center font-semibold">Acción</th>
                 </tr>
@@ -345,13 +345,24 @@
                         {{ g.bm_tj if g.bm_tj is defined else '—' }}
                     </td>
                     <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
-                        {% if g.retail_usd > 0 %}<span class="font-mono">${{ "%.2f"|format(g.retail_usd) }}</span>{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% if g.retail_usd > 0 %}
+                            <span class="font-mono {% if is_usd %}text-gray-700 font-semibold{% endif %}">${{ "%.2f"|format(g.retail_usd) }}</span>
+                        {% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right text-gray-500 hidden lg:table-cell">
-                        {% if g.retail_mxn > 0 %}${{ "{:,.0f}".format(g.retail_mxn) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% if g.retail_mxn > 0 %}
+                            <span class="{% if is_usd %}text-gray-400 text-[11px]{% endif %}">${{ "{:,.0f}".format(g.retail_mxn) }}</span>
+                        {% else %}<span class="text-gray-300">—</span>{% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right font-semibold text-gray-800">
-                        {% if g.price_sug > 0 %}${{ "{:,.0f}".format(g.price_sug) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% if is_usd %}
+                            {% if g.cost_usd > 0 %}
+                                <span class="text-blue-700">${{ "%.2f"|format(g.cost_usd / 0.75) }}</span>
+                                <br><span class="text-[10px] text-gray-400 font-normal">≈ ${{ "{:,.0f}".format(g.price_sug) }} MXN</span>
+                            {% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% else %}
+                            {% if g.price_sug > 0 %}${{ "{:,.0f}".format(g.price_sug) }}{% else %}<span class="text-gray-300">—</span>{% endif %}
+                        {% endif %}
                     </td>
                     <td class="py-2.5 px-3 text-right hidden lg:table-cell">
                         {% if g.margin_pct is not none %}
