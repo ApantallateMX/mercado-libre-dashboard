@@ -1179,6 +1179,145 @@ async def search_product_images(
         return JSONResponse({"images": [], "error": str(_e)[:100]})
 
 
+# ── 3b2. Scraper de URL de producto — extrae imágenes y specs ────────────────
+
+@router.get("/scrape-product-url")
+async def scrape_product_url(url: str = Query("", description="URL de la página del producto")):
+    """Extrae imágenes y specs de la página web de un producto."""
+    import httpx as _hx
+    import re as _re
+    import urllib.parse as _up
+    import json as _json
+
+    url = url.strip()
+    if not url or not url.startswith("http"):
+        return JSONResponse({"images": [], "specs": {}, "error": "URL inválida"})
+
+    _HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+    }
+
+    try:
+        async with _hx.AsyncClient(timeout=20, follow_redirects=True, headers=_HEADERS) as _client:
+            resp = await _client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+            base_url = str(resp.url)
+            parsed_base = _up.urlparse(base_url)
+            domain = parsed_base.netloc
+
+        images_seen: set = set()
+        images: list = []
+
+        def _abs(src: str) -> str:
+            if not src:
+                return ""
+            src = src.strip()
+            if src.startswith("//"):
+                return f"{parsed_base.scheme}:{src}"
+            if src.startswith("/"):
+                return f"{parsed_base.scheme}://{parsed_base.netloc}{src}"
+            if not src.startswith("http"):
+                return ""
+            return src
+
+        def _add(src: str, priority: int = 0):
+            abs_src = _abs(src)
+            if not abs_src or abs_src in images_seen:
+                return
+            # Skip tiny icons, SVGs, gifs, data URIs
+            low = abs_src.lower()
+            if any(low.endswith(ext) for ext in (".svg", ".gif", ".ico")):
+                return
+            if "data:" in abs_src or "placeholder" in low or "spinner" in low:
+                return
+            # Skip clearly small images (thumbnails often have size hints)
+            if _re.search(r'[_-](icon|logo|avatar|badge|button)[_-]', low):
+                return
+            images_seen.add(abs_src)
+            images.append({"url": abs_src, "priority": priority, "source": domain})
+
+        # 1) og:image / twitter:image — highest priority
+        for m in _re.finditer(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image(?::src)?)["\'][^>]+content=["\']([^"\']+)["\']', html, _re.IGNORECASE):
+            _add(m.group(1), priority=10)
+        for m in _re.finditer(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\']', html, _re.IGNORECASE):
+            _add(m.group(1), priority=10)
+
+        # 2) JSON-LD product schema
+        for jld in _re.finditer(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, _re.IGNORECASE | _re.DOTALL):
+            try:
+                obj = _json.loads(jld.group(1))
+                def _harvest_ld(o):
+                    if isinstance(o, dict):
+                        for k in ("image", "photo", "thumbnail", "contentUrl", "url"):
+                            v = o.get(k)
+                            if isinstance(v, str):
+                                _add(v, priority=9)
+                            elif isinstance(v, list):
+                                for item in v:
+                                    if isinstance(item, str):
+                                        _add(item, priority=9)
+                                    elif isinstance(item, dict):
+                                        _add(item.get("url") or item.get("contentUrl") or "", priority=9)
+                        for v in o.values():
+                            _harvest_ld(v)
+                    elif isinstance(o, list):
+                        for item in o:
+                            _harvest_ld(item)
+                _harvest_ld(obj)
+            except Exception:
+                pass
+
+        # 3) <img> with data-src / srcset (lazy-loaded) — prefer large
+        for m in _re.finditer(r'<img[^>]+>', html, _re.IGNORECASE):
+            tag = m.group(0)
+            # Try data-src first (lazy load), then src
+            src = ""
+            for attr in ("data-zoom-image", "data-large", "data-original", "data-src", "src"):
+                am = _re.search(rf'{attr}=["\']([^"\']+)["\']', tag, _re.IGNORECASE)
+                if am:
+                    src = am.group(1)
+                    break
+            if not src:
+                continue
+            # Prefer images with size hints suggesting large images
+            width_m = _re.search(r'width=["\']?(\d+)', tag, _re.IGNORECASE)
+            w = int(width_m.group(1)) if width_m else 0
+            if w and w < 200:
+                continue  # skip small img tags
+            _add(src, priority=5 if w >= 600 else 2)
+
+        # 4) srcset — grab largest
+        for m in _re.finditer(r'srcset=["\']([^"\']+)["\']', html, _re.IGNORECASE):
+            parts = m.group(1).split(",")
+            for p in parts:
+                p = p.strip().split(" ")[0]
+                _add(p, priority=3)
+
+        # Sort by priority desc, deduplicate, return top 9
+        images.sort(key=lambda x: -x["priority"])
+        top = [{"url": img["url"], "source": img["source"]} for img in images[:9]]
+
+        # Extract basic specs from meta description
+        desc_m = _re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{20,})["\']', html, _re.IGNORECASE)
+        specs = {}
+        if desc_m:
+            specs["description"] = desc_m.group(1)[:300]
+
+        return JSONResponse({"images": top, "specs": specs, "source_url": url})
+
+    except _hx.TimeoutException:
+        return JSONResponse({"images": [], "specs": {}, "error": "Tiempo de espera agotado. La página tardó demasiado."})
+    except _hx.HTTPStatusError as e:
+        return JSONResponse({"images": [], "specs": {}, "error": f"Error HTTP {e.response.status_code}"})
+    except Exception as _e:
+        logger.warning(f"[scrape-product-url] {_e}")
+        return JSONResponse({"images": [], "specs": {}, "error": str(_e)[:120]})
+
+
 # ── 3c. Photo prompts (Claude → 6 Higgsfield prompts específicos del producto) ──
 
 @router.post("/photo-prompts")

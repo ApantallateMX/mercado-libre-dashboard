@@ -508,6 +508,25 @@
               <div id="amz-wiz-real-img-status" class="hidden text-[10px] text-gray-400 py-2"></div>
             </div>
 
+            <!-- Scrape from product URL -->
+            <div class="mb-3 bg-gray-50 border border-gray-200 rounded-xl p-3">
+              <p class="text-[10px] font-semibold text-gray-600 mb-1.5">🔗 Extraer de URL del producto</p>
+              <p class="text-[9px] text-gray-400 mb-2">Pega la URL de la página oficial del fabricante (westinghouse.com, lg.com, etc.) para extraer imágenes y specs automáticamente.</p>
+              <div class="flex gap-2">
+                <input id="amz-wiz-product-url" type="url" placeholder="https://westinghouse.com/products/WR58UE4100"
+                       class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
+                <button id="amz-wiz-scrape-btn" onclick="window._amzWizScrapeUrl()"
+                        class="shrink-0 text-[10px] bg-orange-500 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-600 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                  🔗 Extraer
+                </button>
+              </div>
+              <div id="amz-wiz-scrape-status" class="hidden text-[10px] text-gray-500 mt-1.5"></div>
+              <div id="amz-wiz-scrape-grid" class="hidden mt-2">
+                <p class="text-[10px] text-gray-500 mb-1.5 font-semibold">Imágenes encontradas (clic para agregar):</p>
+                <div class="grid grid-cols-3 gap-2" id="amz-wiz-scrape-results"></div>
+              </div>
+            </div>
+
             <!-- Manual URL inputs -->
             <div class="space-y-2" id="amz-wiz-extra-photos">
               <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real principal (fondo blanco)" oninput="window._amzWizPhotoSync()">
@@ -1111,6 +1130,77 @@ window._amzWizSearchImages = function() {
     .catch(function(e) {
       if (btn) { btn.disabled = false; btn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
       if (status) status.textContent = 'Error al buscar. Intenta de nuevo.';
+    });
+};
+
+// ─── Scrape product URL for images ───────────────────────────────────────────
+window._amzWizScrapeUrl = function() {
+  var btn    = document.getElementById('amz-wiz-scrape-btn');
+  var urlEl  = document.getElementById('amz-wiz-product-url');
+  var status = document.getElementById('amz-wiz-scrape-status');
+  var wrap   = document.getElementById('amz-wiz-scrape-grid');
+  var grid   = document.getElementById('amz-wiz-scrape-results');
+
+  var productUrl = urlEl ? urlEl.value.trim() : '';
+  if (!productUrl) { if (status) { status.textContent = 'Pega una URL primero.'; status.classList.remove('hidden'); } return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Extrayendo…'; }
+  if (status) { status.textContent = 'Analizando página del producto…'; status.classList.remove('hidden'); }
+  if (wrap) wrap.classList.add('hidden');
+  if (grid) grid.innerHTML = '';
+
+  var inputs = Array.from(document.querySelectorAll('#amz-wiz-extra-photos .amz-wiz-photo-url'));
+
+  fetch('/api/amazon/lanzar/scrape-product-url?url=' + encodeURIComponent(productUrl))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+      if (d.error && (!d.images || !d.images.length)) {
+        if (status) { status.textContent = '⚠ ' + d.error; status.classList.remove('hidden'); }
+        return;
+      }
+      var imgs = d.images || [];
+      if (!imgs.length) {
+        if (status) { status.textContent = 'No se encontraron imágenes en esa URL. Intenta con la página del producto específico (no la home).'; status.classList.remove('hidden'); }
+        return;
+      }
+      if (status) { status.textContent = imgs.length + ' imágenes encontradas. Clic para agregar a la lista.'; status.classList.remove('hidden'); }
+      if (wrap) wrap.classList.remove('hidden');
+
+      imgs.forEach(function(img, idx) {
+        var div = document.createElement('div');
+        div.className = 'relative group cursor-pointer rounded-lg overflow-hidden border-2 border-transparent hover:border-orange-400 transition bg-gray-100';
+        var thumbUrl = img.url;
+        div.innerHTML = (
+          '<img src="' + thumbUrl + '" class="w-full aspect-square object-cover bg-gray-100" ' +
+               'onerror="this.closest(\'div\').style.display=\'none\'" loading="lazy">' +
+          '<div class="absolute inset-0 bg-orange-500/0 group-hover:bg-orange-500/20 transition flex items-end justify-center pb-1">' +
+            '<span class="text-[9px] text-white bg-orange-600/80 px-1.5 py-0.5 rounded hidden group-hover:block">+ Agregar</span>' +
+          '</div>' +
+          '<div id="amz-scrape-added-' + idx + '" class="absolute top-1 right-1 hidden">' +
+            '<span class="text-[9px] bg-green-500 text-white px-1 py-0.5 rounded">✓</span>' +
+          '</div>'
+        );
+        div.addEventListener('click', function() {
+          var target = null;
+          for (var i = 0; i < inputs.length; i++) {
+            if (!inputs[i].value.trim()) { target = inputs[i]; break; }
+          }
+          if (!target) target = inputs[0];
+          target.value = img.url;
+          target.dispatchEvent(new Event('input'));
+          target.style.borderColor = '#f97316';
+          setTimeout(function() { if (target) target.style.borderColor = ''; }, 2000);
+          var badge = document.getElementById('amz-scrape-added-' + idx);
+          if (badge) badge.classList.remove('hidden');
+          window._amzWizPhotoSync();
+        });
+        grid.appendChild(div);
+      });
+    })
+    .catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+      if (status) { status.textContent = 'Error de red: ' + e.message; status.classList.remove('hidden'); }
     });
 };
 
