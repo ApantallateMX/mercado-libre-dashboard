@@ -213,6 +213,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 var _amzProdActiveTab = null;
+window.amzActiveSellerId = "{{ active_amazon_id or '' }}";
 
 function loadAmzProdTab(tabName, url, btn) {
     if (_amzProdActiveTab === tabName) return;
@@ -562,11 +563,12 @@ function _applyColVis(col, visible) {
 // Clic en tabs
 document.querySelectorAll('.amz-prod-tab').forEach(function(btn) {
     btn.addEventListener('click', function() {
-        loadAmzProdTab(
-            this.getAttribute('data-tab'),
-            this.getAttribute('data-url'),
-            this
-        );
+        var tabName = this.getAttribute('data-tab');
+        var url = this.getAttribute('data-url');
+        if (tabName === 'sin-lanzar' && window.amzActiveSellerId) {
+            url += '?seller_id=' + encodeURIComponent(window.amzActiveSellerId);
+        }
+        loadAmzProdTab(tabName, url, this);
     });
 });
 
@@ -581,7 +583,11 @@ window.switchAmzProdTab = function(tabName) {
     var btn = document.querySelector('.amz-prod-tab[data-tab="' + tabName + '"]');
     if (btn) {
         _amzProdActiveTab = null; // Forzar recarga
-        loadAmzProdTab(tabName, btn.getAttribute('data-url'), btn);
+        var url = btn.getAttribute('data-url');
+        if (tabName === 'sin-lanzar' && window.amzActiveSellerId) {
+            url += '?seller_id=' + encodeURIComponent(window.amzActiveSellerId);
+        }
+        loadAmzProdTab(tabName, url, btn);
     }
 };
 
@@ -804,8 +810,10 @@ window._amzIgnoreCategory = function(cat, sellerId) {
 
 window._loadAmzSinLanzar = function(page, force) {
     var q = (document.getElementById('sl-search') || {}).value || '';
+    var sid = _amzSlSellerId() || window.amzActiveSellerId || '';
     var url = '/api/amazon/products/sin-lanzar?page=' + (page || 1) +
               '&per_page=20' +
+              (sid ? '&seller_id=' + encodeURIComponent(sid) : '') +
               (q ? '&q=' + encodeURIComponent(q) : '') +
               (_amzSlActiveCategory ? '&category=' + encodeURIComponent(_amzSlActiveCategory) : '') +
               (_amzSlShowSinPrecio ? '&show_sin_precio=true' : '') +
