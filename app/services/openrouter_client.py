@@ -20,10 +20,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _OR_BASE  = "https://openrouter.ai/api/v1"
-_OR_KEY   = os.getenv(
-    "OPENROUTER_API_KEY",
-    "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",
-)
+_OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OR_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
 _HEADERS = {
