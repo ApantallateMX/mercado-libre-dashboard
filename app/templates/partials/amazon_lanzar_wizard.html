@@ -56,8 +56,8 @@
            PASO 1 — Buscar ASIN
            ════════════════════════════════════════════════════════════ -->
       <div id="amz-wiz-panel-1" class="p-5">
-        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 1 — Buscar ASIN en Amazon</h3>
-        <p class="text-xs text-gray-400 mb-4">¿El producto ya existe en el catálogo Amazon? Buscamos por UPC para encontrar el ASIN y agregarlo como oferta (más rápido y con menos riesgo de rechazo).</p>
+        <h3 id="amz-wiz-l-step1-title" class="font-semibold text-gray-700 mb-1 text-sm">Paso 1 — Buscar ASIN en Amazon</h3>
+        <p id="amz-wiz-l-step1-desc" class="text-xs text-gray-400 mb-4">¿El producto ya existe en el catálogo Amazon? Buscamos por UPC para encontrar el ASIN y agregarlo como oferta (más rápido y con menos riesgo de rechazo).</p>
 
         <div id="amz-wiz-upc-info" class="hidden mb-3 text-xs text-indigo-600 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2"></div>
 
@@ -77,7 +77,7 @@
           <div class="flex items-center gap-3">
             <img id="amz-wiz-asin-img" src="" alt="" class="w-12 h-12 object-contain rounded border border-gray-100 bg-white shrink-0">
             <div class="min-w-0 flex-1">
-              <p class="text-xs font-semibold text-green-700">✓ ASIN seleccionado — se agregará como oferta</p>
+              <p id="amz-wiz-l-asin-chk" class="text-xs font-semibold text-green-700">✓ ASIN seleccionado — se agregará como oferta</p>
               <p id="amz-wiz-asin-title" class="text-xs text-gray-700 truncate mt-0.5"></p>
               <p id="amz-wiz-asin-value" class="text-xs text-orange-500 font-mono mt-0.5"></p>
             </div>
@@ -86,9 +86,9 @@
         </div>
 
         <div class="bg-amber-50 border border-amber-200 rounded-xl p-3">
-          <p class="text-xs text-amber-700 font-semibold mb-1">¿No encuentras el ASIN?</p>
-          <p class="text-xs text-amber-600 mb-2.5">Crea el producto como nuevo. Necesitarás título, bullets, descripción, fotos y palabras clave. Amazon asignará un ASIN nuevo.</p>
-          <button onclick="window._amzWizSkipAsin()"
+          <p id="amz-wiz-l-no-asin-title" class="text-xs text-amber-700 font-semibold mb-1">¿No encuentras el ASIN?</p>
+          <p id="amz-wiz-l-no-asin-desc" class="text-xs text-amber-600 mb-2.5">Crea el producto como nuevo. Necesitarás título, bullets, descripción, fotos y palabras clave. Amazon asignará un ASIN nuevo.</p>
+          <button id="amz-wiz-l-skip-btn" onclick="window._amzWizSkipAsin()"
                   class="text-xs text-amber-700 border border-amber-300 hover:bg-amber-100 px-3 py-1.5 rounded-lg transition font-semibold">
             Continuar sin ASIN → Crear producto nuevo
           </button>
@@ -99,8 +99,8 @@
            PASO 2 — Precio y configuración
            ════════════════════════════════════════════════════════════ -->
       <div id="amz-wiz-panel-2" class="p-5 hidden">
-        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 2 — Precio y configuración</h3>
-        <p class="text-xs text-gray-400 mb-4">Define el precio de venta, condición del producto y método de envío.</p>
+        <h3 id="amz-wiz-l-step2-title" class="font-semibold text-gray-700 mb-1 text-sm">Paso 2 — Precio y configuración</h3>
+        <p id="amz-wiz-l-step2-desc" class="text-xs text-gray-400 mb-4">Define el precio de venta, condición del producto y método de envío.</p>
 
         <div class="grid grid-cols-2 gap-4 mb-4">
           <!-- Price -->
@@ -116,7 +116,7 @@
           </div>
           <!-- Condition -->
           <div class="col-span-2 sm:col-span-1">
-            <label class="block text-xs font-semibold text-gray-600 mb-1.5">Condición</label>
+            <label id="amz-wiz-l-cond-label" class="block text-xs font-semibold text-gray-600 mb-1.5">Condición</label>
             <select id="amz-wiz-condition" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-orange-400 transition bg-white">
               <option value="new_new">Nuevo</option>
               <option value="used_like_new">Usado — Como nuevo</option>
@@ -129,27 +129,27 @@
 
         <!-- Fulfillment -->
         <div class="mb-4">
-          <label class="block text-xs font-semibold text-gray-600 mb-2">Fulfillment</label>
+          <label id="amz-wiz-l-ff-label" class="block text-xs font-semibold text-gray-600 mb-2">Fulfillment</label>
           <div class="grid grid-cols-2 gap-2">
             <label class="flex items-start gap-2 border border-gray-200 rounded-xl p-3 cursor-pointer hover:border-orange-300 transition has-[:checked]:border-orange-500 has-[:checked]:bg-orange-50">
               <input type="radio" name="amz-wiz-fulfillment" value="FBM" class="mt-0.5 accent-orange-500" checked>
               <div>
-                <p class="text-xs font-semibold text-gray-700">FBM — Tú envías</p>
-                <p class="text-[10px] text-gray-400 mt-0.5">Gestión de envío desde tu bodega. Sin almacenaje en Amazon.</p>
+                <p id="amz-wiz-l-fbm-title" class="text-xs font-semibold text-gray-700">FBM — Tú envías</p>
+                <p id="amz-wiz-l-fbm-desc" class="text-[10px] text-gray-400 mt-0.5">Gestión de envío desde tu bodega. Sin almacenaje en Amazon.</p>
               </div>
             </label>
             <label class="flex items-start gap-2 border border-gray-200 rounded-xl p-3 cursor-pointer hover:border-orange-300 transition has-[:checked]:border-orange-500 has-[:checked]:bg-orange-50">
               <input type="radio" name="amz-wiz-fulfillment" value="FBA" class="mt-0.5 accent-orange-500">
               <div>
-                <p class="text-xs font-semibold text-gray-700">FBA — Amazon envía</p>
-                <p class="text-[10px] text-gray-400 mt-0.5">Amazon gestiona envío. Prime badge. Requiere enviar inventario a Amazon.</p>
+                <p id="amz-wiz-l-fba-title" class="text-xs font-semibold text-gray-700">FBA — Amazon envía</p>
+                <p id="amz-wiz-l-fba-desc" class="text-[10px] text-gray-400 mt-0.5">Amazon gestiona envío. Prime badge. Requiere enviar inventario a Amazon.</p>
               </div>
             </label>
           </div>
         </div>
 
         <div id="amz-wiz-qty-wrap" class="mb-2">
-          <label class="block text-xs font-semibold text-gray-600 mb-1.5">Cantidad inicial disponible (FBM)</label>
+          <label id="amz-wiz-l-qty-label" class="block text-xs font-semibold text-gray-600 mb-1.5">Cantidad inicial disponible (FBM)</label>
           <input id="amz-wiz-qty" type="number" min="0" step="1" value="1"
                  class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 focus:outline-none focus:border-orange-400 transition">
         </div>
@@ -175,8 +175,8 @@
         <div id="amz-wiz-subpanel-content" class="p-5">
           <div class="flex items-center justify-between mb-3">
             <div>
-              <h3 class="font-semibold text-gray-700 text-sm">Contenido optimizado para Amazon MX</h3>
-              <p class="text-[10px] text-gray-400 mt-0.5">SEO + CRO con IA. Edita cualquier campo después de generar.</p>
+              <h3 id="amz-wiz-l-content-title" class="font-semibold text-gray-700 text-sm">Contenido optimizado para Amazon MX</h3>
+              <p id="amz-wiz-l-content-desc" class="text-[10px] text-gray-400 mt-0.5">SEO + CRO con IA. Edita cualquier campo después de generar.</p>
             </div>
             <button onclick="window._amzWizGenerateContent()" id="amz-wiz-gen-btn"
                     class="ml-3 shrink-0 px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 whitespace-nowrap">
@@ -188,7 +188,7 @@
           <!-- Title -->
           <div class="mb-3">
             <div class="flex items-center justify-between mb-1">
-              <label class="text-xs font-semibold text-gray-600">Título</label>
+              <label id="amz-wiz-l-title-lbl" class="text-xs font-semibold text-gray-600">Título</label>
               <span id="amz-wiz-title-count" class="text-[10px] text-gray-400">0 / 200 chars</span>
             </div>
             <input id="amz-wiz-title" type="text" maxlength="200"
@@ -200,7 +200,7 @@
 
           <!-- Bullets -->
           <div class="mb-3">
-            <label class="block text-xs font-semibold text-gray-600 mb-1.5">5 Bullets — características clave</label>
+            <label id="amz-wiz-l-bullets-lbl" class="block text-xs font-semibold text-gray-600 mb-1.5">5 Bullets — características clave</label>
             <div id="amz-wiz-bullets-wrap" class="space-y-1.5">
               <div class="relative">
                 <input type="text" class="amz-wiz-bullet w-full text-xs border border-gray-200 rounded-lg pl-3 pr-14 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="FEATURE CLAVE: Descripción con beneficio concreto y spec medible" oninput="window._amzWizBulletCount(this)">
@@ -228,7 +228,7 @@
           <!-- Description -->
           <div class="mb-3">
             <div class="flex items-center justify-between mb-1">
-              <label class="text-xs font-semibold text-gray-600">Descripción</label>
+              <label id="amz-wiz-l-desc-lbl" class="text-xs font-semibold text-gray-600">Descripción</label>
               <span id="amz-wiz-desc-count" class="text-[10px] text-gray-400">0 / 2000 chars</span>
             </div>
             <textarea id="amz-wiz-description" rows="4" maxlength="2000"
@@ -241,46 +241,46 @@
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
             <div>
               <div class="flex items-center justify-between mb-1">
-                <label class="text-xs font-semibold text-gray-600">Keywords de backend</label>
+                <label id="amz-wiz-l-kw-lbl" class="text-xs font-semibold text-gray-600">Keywords de backend</label>
                 <span id="amz-wiz-kw-count" class="text-[10px] text-gray-400">0 / 249</span>
               </div>
               <textarea id="amz-wiz-keywords" rows="3" maxlength="249"
                         placeholder="palabras clave adicionales que no están en el título ni bullets, separadas por espacio…"
                         class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition resize-none"
                         oninput="document.getElementById('amz-wiz-kw-count').textContent=this.value.length+' / 249'"></textarea>
-              <p class="text-[9px] text-gray-400 mt-0.5">No repetir keywords del título. Separar con espacios.</p>
+              <p id="amz-wiz-l-kw-desc" class="text-[9px] text-gray-400 mt-0.5">No repetir keywords del título. Separar con espacios.</p>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
+              <label id="amz-wiz-l-pt-lbl" class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
               <input id="amz-wiz-product-type" type="text" placeholder="ej: TELEVISION, LIGHT_BULB…"
                      class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition">
-              <p class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
+              <p id="amz-wiz-l-pt-desc" class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
             </div>
           </div>
 
           <!-- Atributos del producto -->
           <div class="border-t border-gray-100 pt-3">
-            <p class="text-xs font-semibold text-gray-600 mb-2">Atributos del producto <span class="font-normal text-gray-400">(requeridos por Amazon)</span></p>
+            <p class="text-xs font-semibold text-gray-600 mb-2"><span id="amz-wiz-l-attrs-title">Atributos del producto</span> <span id="amz-wiz-l-attrs-req" class="font-normal text-gray-400">(requeridos por Amazon)</span></p>
             <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
               <!-- Básicos -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Marca</label>
+                <label id="amz-wiz-l-brand-lbl" class="block text-[10px] text-gray-500 mb-0.5">Marca</label>
                 <input id="amz-wiz-brand" type="text" placeholder="ej: Samsung"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Número de modelo</label>
+                <label id="amz-wiz-l-model-lbl" class="block text-[10px] text-gray-500 mb-0.5">Número de modelo</label>
                 <input id="amz-wiz-model-num" type="text" placeholder="ej: QN32LS03CBFXZA"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Color</label>
+                <label id="amz-wiz-l-color-lbl" class="block text-[10px] text-gray-500 mb-0.5">Color</label>
                 <input id="amz-wiz-color" type="text" placeholder="ej: Black, Silver"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- País de origen -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">País de origen *</label>
+                <label id="amz-wiz-l-country-lbl" class="block text-[10px] text-gray-500 mb-0.5">País de origen *</label>
                 <select id="amz-wiz-country-origin"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="China">China</option>
@@ -297,7 +297,7 @@
               </div>
               <!-- Tipo de pantalla -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Tipo de pantalla</label>
+                <label id="amz-wiz-l-disp-type-lbl" class="block text-[10px] text-gray-500 mb-0.5">Tipo de pantalla</label>
                 <select id="amz-wiz-display-type"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="">— N/A —</option>
@@ -311,7 +311,7 @@
               </div>
               <!-- Resolución -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Resolución</label>
+                <label id="amz-wiz-l-res-lbl" class="block text-[10px] text-gray-500 mb-0.5">Resolución</label>
                 <select id="amz-wiz-resolution"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="">— N/A —</option>
@@ -323,7 +323,7 @@
               </div>
               <!-- Tasa de refresco -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Refresco (Hz)</label>
+                <label id="amz-wiz-l-refresh-lbl" class="block text-[10px] text-gray-500 mb-0.5">Refresco (Hz)</label>
                 <select id="amz-wiz-refresh-rate"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="">— N/A —</option>
@@ -336,7 +336,7 @@
               </div>
               <!-- Smart TV -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Smart TV</label>
+                <label id="amz-wiz-l-smart-tv-lbl" class="block text-[10px] text-gray-500 mb-0.5">Smart TV</label>
                 <select id="amz-wiz-smart-tv"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="">— N/A —</option>
@@ -346,7 +346,7 @@
               </div>
               <!-- Tipo de montaje -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Montaje</label>
+                <label id="amz-wiz-l-mount-lbl" class="block text-[10px] text-gray-500 mb-0.5">Montaje</label>
                 <select id="amz-wiz-mounting-type"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
                   <option value="">— N/A —</option>
@@ -357,50 +357,50 @@
               </div>
               <!-- Puertos HDMI / USB -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Puertos HDMI</label>
+                <label id="amz-wiz-l-hdmi-lbl" class="block text-[10px] text-gray-500 mb-0.5">Puertos HDMI</label>
                 <input id="amz-wiz-hdmi-count" type="number" min="0" max="10" placeholder="ej: 3"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Puertos USB</label>
+                <label id="amz-wiz-l-usb-lbl" class="block text-[10px] text-gray-500 mb-0.5">Puertos USB</label>
                 <input id="amz-wiz-usb-count" type="number" min="0" max="10" placeholder="ej: 2"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Características especiales -->
               <div class="col-span-2">
-                <label class="block text-[10px] text-gray-500 mb-0.5">Características especiales <span class="text-gray-400">(separadas por coma)</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-sf-lbl">Características especiales</span> <span class="text-gray-400">(separadas por coma)</span></label>
                 <input id="amz-wiz-special-feature" type="text" placeholder="ej: Smart TV, Built-In WiFi, HDR, Dolby Vision"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Componentes incluidos -->
               <div class="col-span-2">
-                <label class="block text-[10px] text-gray-500 mb-0.5">Componentes incluidos <span class="text-gray-400">(separados por coma)</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-ic-lbl">Componentes incluidos</span> <span class="text-gray-400">(separados por coma)</span></label>
                 <input id="amz-wiz-included-components" type="text" placeholder="ej: Remote Control, Power Cable, Stand, User Manual"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Físicos -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
+                <label id="amz-wiz-l-weight-lbl" class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
                 <input id="amz-wiz-weight" type="number" step="0.1" min="0" placeholder="ej: 5.5"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Pantalla (pulgadas)</label>
+                <label id="amz-wiz-l-screen-lbl" class="block text-[10px] text-gray-500 mb-0.5">Pantalla (pulgadas)</label>
                 <input id="amz-wiz-display-size" type="number" step="0.1" min="0" placeholder="ej: 32"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Largo (cm)</label>
+                <label id="amz-wiz-l-length-lbl" class="block text-[10px] text-gray-500 mb-0.5">Largo (cm)</label>
                 <input id="amz-wiz-length" type="number" step="0.1" min="0" placeholder="ej: 73.5"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Ancho (cm)</label>
+                <label id="amz-wiz-l-width-lbl" class="block text-[10px] text-gray-500 mb-0.5">Ancho (cm)</label>
                 <input id="amz-wiz-width" type="number" step="0.1" min="0" placeholder="ej: 45.2"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Alto (cm)</label>
+                <label id="amz-wiz-l-height-lbl" class="block text-[10px] text-gray-500 mb-0.5">Alto (cm)</label>
                 <input id="amz-wiz-height" type="number" step="0.1" min="0" placeholder="ej: 8.3"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
@@ -410,66 +410,66 @@
             <div class="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-gray-100">
               <!-- MSRP -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Precio de lista MSRP <span class="text-red-400">*</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-msrp-lbl">Precio de lista MSRP</span> <span class="text-red-400">*</span></label>
                 <input id="amz-wiz-msrp" type="number" step="0.01" min="0" placeholder="ej: 599.99"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
-                <p class="text-[9px] text-gray-400 mt-0.5">Precio normal tachado en Amazon</p>
+                <p id="amz-wiz-l-msrp-desc" class="text-[9px] text-gray-400 mt-0.5">Precio normal tachado en Amazon</p>
               </div>
               <!-- Año modelo -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Año del modelo</label>
+                <label id="amz-wiz-l-my-lbl" class="block text-[10px] text-gray-500 mb-0.5">Año del modelo</label>
                 <input id="amz-wiz-model-year" type="number" min="2020" max="2030" placeholder="ej: 2024"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Garantía -->
               <div class="col-span-2">
-                <label class="block text-[10px] text-gray-500 mb-0.5">Descripción de garantía</label>
+                <label id="amz-wiz-l-warranty-lbl" class="block text-[10px] text-gray-500 mb-0.5">Descripción de garantía</label>
                 <input id="amz-wiz-warranty" type="text" placeholder="ej: 90 days seller warranty"
                        value="90 days seller warranty"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Conectividad -->
               <div class="col-span-2">
-                <label class="block text-[10px] text-gray-500 mb-0.5">Conectividad <span class="text-gray-400">(separada por coma)</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-conn-lbl">Conectividad</span> <span class="text-gray-400">(separada por coma)</span></label>
                 <input id="amz-wiz-connectivity" type="text" placeholder="ej: Wi-Fi, Bluetooth, HDMI, USB"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Peso paquete -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Peso paquete (kg) <span class="text-gray-400">auto-estimado</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-pkg-w-lbl">Peso paquete (kg)</span> <span class="text-gray-400">auto-estimado</span></label>
                 <input id="amz-wiz-pkg-weight" type="number" step="0.1" min="0" placeholder="ej: 18.0"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Aspect ratio -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Relación de aspecto</label>
+                <label id="amz-wiz-l-ar-lbl" class="block text-[10px] text-gray-500 mb-0.5">Relación de aspecto</label>
                 <select id="amz-wiz-aspect-ratio"
                         class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition bg-white">
-                  <option value="16:9">16:9 (TV estándar)</option>
+                  <option value="16:9">16:9 (TV estándar / standard TV)</option>
                   <option value="4:3">4:3</option>
                   <option value="21:9">21:9 (ultrawide)</option>
                 </select>
               </div>
               <!-- Dims paquete -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Largo paquete (cm) <span class="text-gray-400">auto</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-pkg-l-lbl">Largo paquete (cm)</span> <span class="text-gray-400">auto</span></label>
                 <input id="amz-wiz-pkg-length" type="number" step="0.1" min="0" placeholder="auto"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <div>
-                <label class="block text-[10px] text-gray-500 mb-0.5">Alto paquete (cm) <span class="text-gray-400">auto</span></label>
+                <label class="block text-[10px] text-gray-500 mb-0.5"><span id="amz-wiz-l-pkg-h-lbl">Alto paquete (cm)</span> <span class="text-gray-400">auto</span></label>
                 <input id="amz-wiz-pkg-height" type="number" step="0.1" min="0" placeholder="auto"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
             </div>
 
-            <p class="text-[9px] text-gray-400 mt-1.5">* La IA completa automáticamente todos los atributos. MSRP y Conectividad son requeridos por Amazon USA para TELEVISION.</p>
+            <p id="amz-wiz-l-attrs-note" class="text-[9px] text-gray-400 mt-1.5">* La IA completa automáticamente todos los atributos. MSRP y Conectividad son requeridos por Amazon USA para TELEVISION.</p>
           </div>
         </div>
 
         <!-- Sub-panel: Photos -->
         <div id="amz-wiz-subpanel-photos" class="p-5 hidden">
-          <h3 class="font-semibold text-gray-700 text-sm mb-1">Fotos del producto</h3>
+          <h3 id="amz-wiz-l-photos-title" class="font-semibold text-gray-700 text-sm mb-1">Fotos del producto</h3>
 
           <!-- ⚠️ Aviso claro sobre imágenes reales -->
           <div class="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-[10px] text-amber-800">
@@ -491,7 +491,7 @@
                   <label class="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" id="amz-wiz-use-bm-photo" class="accent-orange-500 w-4 h-4" checked
                            onchange="window._amzWizPhotoSync()">
-                    <span class="text-xs font-medium text-gray-700">Usar imagen BM como foto principal</span>
+                    <span id="amz-wiz-l-use-bm" class="text-xs font-medium text-gray-700">Usar imagen BM como foto principal</span>
                   </label>
                   <p class="text-[10px] text-gray-400 mt-1">Imagen real del catálogo BinManager.</p>
                 </div>
@@ -603,15 +603,15 @@
            PASO 4 — Review + Checklist + Lanzar
            ════════════════════════════════════════════════════════════ -->
       <div id="amz-wiz-panel-4" class="p-5 hidden">
-        <h3 class="font-semibold text-gray-700 mb-1 text-sm">Paso 4 — Revisar y publicar</h3>
-        <p class="text-xs text-gray-400 mb-4">Confirma todos los datos antes de enviar a Amazon Seller Central.</p>
+        <h3 id="amz-wiz-l-step4-title" class="font-semibold text-gray-700 mb-1 text-sm">Paso 4 — Revisar y publicar</h3>
+        <p id="amz-wiz-l-step4-desc" class="text-xs text-gray-400 mb-4">Confirma todos los datos antes de enviar a Amazon Seller Central.</p>
 
         <!-- Summary table -->
         <div id="amz-wiz-review" class="mb-4 border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50"></div>
 
         <!-- Checklist (only Flujo 2) -->
         <div id="amz-wiz-checklist-wrap" class="hidden mb-4">
-          <p class="text-xs font-semibold text-gray-600 mb-2">Checklist de calidad del listing</p>
+          <p id="amz-wiz-l-chk-title" class="text-xs font-semibold text-gray-600 mb-2">Checklist de calidad del listing</p>
           <div id="amz-wiz-checklist" class="space-y-1.5"></div>
         </div>
 
@@ -672,6 +672,151 @@ var _wiz = {
 
 var STEPS_OFFER  = [1, 2, 4];      // Flujo 1: ASIN match (sin contenido)
 var STEPS_NEW    = [1, 2, 3, 4];   // Flujo 2: producto nuevo
+
+// ─── i18n — English for USD/US accounts ──────────────────────────────────────
+var _I18N_EN = {
+  // Step 1
+  step1_title:'Step 1 — Search for ASIN on Amazon',
+  step1_desc:'Does the product already exist in the Amazon catalog? We search by UPC to find the ASIN and add it as an offer (faster, lower rejection risk).',
+  search_ph:'UPC, EAN or product title…', search_btn:'Search',
+  asin_chk:'✓ ASIN selected — will be added as an offer',
+  no_asin_title:"Can't find the ASIN?",
+  no_asin_desc:"Create the product as new. You'll need a title, bullets, description, photos, and keywords. Amazon will assign a new ASIN.",
+  skip_btn:'Continue without ASIN → Create new product',
+  // Step 2
+  step2_title:'Step 2 — Pricing & settings',
+  step2_desc:'Set the selling price, product condition, and shipping method.',
+  cond_label:'Condition',
+  opt_new:'New', opt_used_ln:'Used — Like New', opt_used_vg:'Used — Very Good',
+  opt_used_g:'Used — Good', opt_refurb:'Certified Refurbished',
+  ff_label:'Fulfillment',
+  fbm_t:'FBM — You ship', fbm_d:'Ship from your warehouse. No Amazon storage fees.',
+  fba_t:'FBA — Amazon ships', fba_d:'Amazon handles shipping. Prime badge. Requires sending inventory to Amazon.',
+  qty_label:'Initial available quantity (FBM)',
+  // Step 3 content
+  content_title:'Optimized content for Amazon US',
+  content_desc:'SEO + CRO with AI. Edit any field after generating.',
+  gen_btn:'Generate with AI', gen_done:'Generated — edit if needed',
+  title_lbl:'Title', title_hint_s:'⚠ Too short — aim for ≥80 chars with main keywords in the first 80',
+  title_hint_ok:"✓ Optimal length — keywords visible before Amazon's cut",
+  bullets_lbl:'5 Bullets — key features',
+  desc_lbl:'Description', kw_lbl:'Backend keywords',
+  kw_desc:'Do not repeat title keywords. Separate with spaces.',
+  pt_lbl:'Product type (Amazon)', pt_desc:'Determines available attributes. AI suggests it.',
+  attrs_title:'Product attributes', attrs_req:'(required by Amazon)',
+  brand_lbl:'Brand', model_lbl:'Model number', color_lbl:'Color',
+  country_lbl:'Country of origin *', disp_type_lbl:'Display type',
+  res_lbl:'Resolution', refresh_lbl:'Refresh rate (Hz)', smart_tv_lbl:'Smart TV',
+  opt_smart_y:'Yes — Smart TV', opt_smart_n:'No',
+  mount_lbl:'Mounting', opt_mt_t:'Table Mount', opt_mt_w:'Wall Mount', opt_mt_b:'Tabletop & Wall Mount',
+  hdmi_lbl:'HDMI ports', usb_lbl:'USB ports',
+  sf_lbl:'Special features', ic_lbl:'Included components',
+  weight_lbl:'Weight (kg)', screen_lbl:'Screen size (inches)',
+  length_lbl:'Length (cm)', width_lbl:'Width (cm)', height_lbl:'Height (cm)',
+  msrp_lbl:'List price MSRP *', msrp_desc:'Regular crossed-out price on Amazon',
+  my_lbl:'Model year', warranty_lbl:'Warranty description',
+  conn_lbl:'Connectivity', pkg_w_lbl:'Package weight (kg)',
+  ar_lbl:'Aspect ratio', opt_ar_169:'16:9 (standard TV)', opt_ar_43:'4:3', opt_ar_219:'21:9 (ultrawide)',
+  pkg_l_lbl:'Package length (cm)', pkg_h_lbl:'Package height (cm)',
+  attrs_note:'* AI fills all attributes automatically. MSRP and Connectivity are required by Amazon US for TELEVISION.',
+  // Step 3 photos
+  photos_title:'Product photos', use_bm:'Use BM image as main photo',
+  // Step 4
+  step4_title:'Step 4 — Review & publish',
+  step4_desc:'Confirm all details before sending to Amazon Seller Central.',
+  chk_title:'Listing quality checklist',
+  // Footer buttons
+  btn_back:'← Back', btn_next:'Next →', btn_publish:'🚀 Publish on Amazon',
+  // Dynamic
+  margin:'Estimated margin: {m}% · Net: {n} (price - BM cost - 18% fees)',
+  sug_price:'Suggested price: {p}', enter_price:'Enter a valid price',
+  publishing:'⏳ Publishing…',
+  // Review labels
+  r_sku:'SKU', r_account:'Account', r_asin:'ASIN', r_price:'Price',
+  r_cond:'Condition', r_ff:'Fulfillment', r_title:'Title', r_bullets:'Bullets',
+  r_kw:'Backend keywords', r_pt:'Product type', r_photos:'Photos',
+  r_brand:'Brand', r_model:'Model', r_color:'Color', r_weight:'Weight',
+  r_screen:'Screen', r_dims:'Dimensions',
+  r_cond_new:'New', r_cond_ln:'Like New', r_cond_vg:'Very Good',
+  r_cond_g:'Good', r_cond_ref:'Refurbished',
+  r_fba:'FBA (Amazon ships)', r_fbm:'FBM — {qty} initial units',
+  r_new_prod:'— (new product)', r_bullets_n:'{n}/5 filled',
+  r_kw_chars:'{n} chars', r_kw_none:'— not filled', r_pt_none:'— not specified', r_photos_n:'{n} configured',
+  // Checklist
+  ck_title_min:'Title ≥80 chars', ck_title_max:'Title ≤200 chars',
+  ck_bullets:'5 bullets complete', ck_desc:'Description ≥300 chars',
+  ck_kw:'Backend keywords', ck_pt:'Amazon product type',
+  ck_photo1:'At least 1 photo', ck_photo3:'3+ photos (recommended)',
+  ck_brand:'Brand and model number', ck_weight:'Product weight', ck_dims:'Dimensions (L×W×H)',
+  // Success
+  success_title:'Listing submitted to Amazon!', success_desc:'Amazon may take 15–30 min to activate it. It will appear in the "Launched" tab.',
+  close_btn:'Close', another_btn:'Launch another',
+};
+
+function _t(key) { return _wiz.currency === 'USD' ? (_I18N_EN[key] || null) : null; }
+function _te(key, params) {
+  var s = _t(key); if (!s) return null;
+  if (params) Object.keys(params).forEach(function(k) { s = s.replace(new RegExp('\\{'+k+'\\}','g'), params[k]); });
+  return s;
+}
+
+window._amzWizSetLocale = function() {
+  if (_wiz.currency !== 'USD') return;
+  var d = _I18N_EN;
+  function _idt(id, txt) { var el=document.getElementById(id); if(el && txt!=null) el.textContent=txt; }
+  function _iph(id, txt) { var el=document.getElementById(id); if(el && txt) el.placeholder=txt; }
+  function _opt(id, idx, txt) { var el=document.getElementById(id); if(el && el.options[idx]) el.options[idx].text=txt; }
+  // Step 1
+  _idt('amz-wiz-l-step1-title', d.step1_title); _idt('amz-wiz-l-step1-desc', d.step1_desc);
+  _iph('amz-wiz-search-input', d.search_ph); _idt('amz-wiz-search-btn', d.search_btn);
+  _idt('amz-wiz-l-asin-chk', d.asin_chk); _idt('amz-wiz-l-no-asin-title', d.no_asin_title);
+  _idt('amz-wiz-l-no-asin-desc', d.no_asin_desc); _idt('amz-wiz-l-skip-btn', d.skip_btn);
+  // Step 2
+  _idt('amz-wiz-l-step2-title', d.step2_title); _idt('amz-wiz-l-step2-desc', d.step2_desc);
+  _idt('amz-wiz-l-cond-label', d.cond_label);
+  _opt('amz-wiz-condition', 0, d.opt_new); _opt('amz-wiz-condition', 1, d.opt_used_ln);
+  _opt('amz-wiz-condition', 2, d.opt_used_vg); _opt('amz-wiz-condition', 3, d.opt_used_g);
+  _opt('amz-wiz-condition', 4, d.opt_refurb);
+  _idt('amz-wiz-l-ff-label', d.ff_label);
+  _idt('amz-wiz-l-fbm-title', d.fbm_t); _idt('amz-wiz-l-fbm-desc', d.fbm_d);
+  _idt('amz-wiz-l-fba-title', d.fba_t); _idt('amz-wiz-l-fba-desc', d.fba_d);
+  _idt('amz-wiz-l-qty-label', d.qty_label);
+  // Step 3 content
+  _idt('amz-wiz-l-content-title', d.content_title); _idt('amz-wiz-l-content-desc', d.content_desc);
+  _idt('amz-wiz-gen-label', d.gen_btn);
+  _idt('amz-wiz-l-title-lbl', d.title_lbl); _idt('amz-wiz-l-bullets-lbl', d.bullets_lbl);
+  _idt('amz-wiz-l-desc-lbl', d.desc_lbl); _idt('amz-wiz-l-kw-lbl', d.kw_lbl);
+  _idt('amz-wiz-l-kw-desc', d.kw_desc); _idt('amz-wiz-l-pt-lbl', d.pt_lbl);
+  _idt('amz-wiz-l-pt-desc', d.pt_desc); _idt('amz-wiz-l-attrs-title', d.attrs_title);
+  _idt('amz-wiz-l-attrs-req', d.attrs_req); _idt('amz-wiz-l-brand-lbl', d.brand_lbl);
+  _idt('amz-wiz-l-model-lbl', d.model_lbl); _idt('amz-wiz-l-color-lbl', d.color_lbl);
+  _idt('amz-wiz-l-country-lbl', d.country_lbl); _idt('amz-wiz-l-disp-type-lbl', d.disp_type_lbl);
+  _idt('amz-wiz-l-res-lbl', d.res_lbl); _idt('amz-wiz-l-refresh-lbl', d.refresh_lbl);
+  _idt('amz-wiz-l-smart-tv-lbl', d.smart_tv_lbl);
+  _opt('amz-wiz-smart-tv', 1, d.opt_smart_y); _opt('amz-wiz-smart-tv', 2, d.opt_smart_n);
+  _idt('amz-wiz-l-mount-lbl', d.mount_lbl);
+  _opt('amz-wiz-mounting-type', 1, d.opt_mt_t); _opt('amz-wiz-mounting-type', 2, d.opt_mt_w);
+  _opt('amz-wiz-mounting-type', 3, d.opt_mt_b);
+  _idt('amz-wiz-l-hdmi-lbl', d.hdmi_lbl); _idt('amz-wiz-l-usb-lbl', d.usb_lbl);
+  _idt('amz-wiz-l-sf-lbl', d.sf_lbl); _idt('amz-wiz-l-ic-lbl', d.ic_lbl);
+  _idt('amz-wiz-l-weight-lbl', d.weight_lbl); _idt('amz-wiz-l-screen-lbl', d.screen_lbl);
+  _idt('amz-wiz-l-length-lbl', d.length_lbl); _idt('amz-wiz-l-width-lbl', d.width_lbl);
+  _idt('amz-wiz-l-height-lbl', d.height_lbl); _idt('amz-wiz-l-msrp-lbl', d.msrp_lbl);
+  _idt('amz-wiz-l-msrp-desc', d.msrp_desc); _idt('amz-wiz-l-my-lbl', d.my_lbl);
+  _idt('amz-wiz-l-warranty-lbl', d.warranty_lbl); _idt('amz-wiz-l-conn-lbl', d.conn_lbl);
+  _idt('amz-wiz-l-pkg-w-lbl', d.pkg_w_lbl); _idt('amz-wiz-l-ar-lbl', d.ar_lbl);
+  _opt('amz-wiz-aspect-ratio', 0, d.opt_ar_169); _opt('amz-wiz-aspect-ratio', 1, d.opt_ar_43);
+  _opt('amz-wiz-aspect-ratio', 2, d.opt_ar_219);
+  _idt('amz-wiz-l-pkg-l-lbl', d.pkg_l_lbl); _idt('amz-wiz-l-pkg-h-lbl', d.pkg_h_lbl);
+  _idt('amz-wiz-l-attrs-note', d.attrs_note);
+  // Step 3 photos
+  _idt('amz-wiz-l-photos-title', d.photos_title); _idt('amz-wiz-l-use-bm', d.use_bm);
+  // Step 4
+  _idt('amz-wiz-l-step4-title', d.step4_title); _idt('amz-wiz-l-step4-desc', d.step4_desc);
+  _idt('amz-wiz-l-chk-title', d.chk_title);
+  // Footer back button (next handled by _amzWizGoStep)
+  _idt('amz-wiz-btn-back', d.btn_back);
+};
 
 // ─── HTML entity decoder (fixes &quot; and similar entities from Jinja2 escaping) ─
 function _wizDecode(s) {
@@ -911,6 +1056,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
 
   _amzWizGoStep(1);
   _amzWizShowTab('content');
+  window._amzWizSetLocale();
   window._amzWizUpdateMarginHint();
 
   var el = document.getElementById('amz-lanzar-wizard');
@@ -960,6 +1106,8 @@ function _amzWizGoStep(n) {
   var btnNext = document.getElementById('amz-wiz-btn-next');
   var footer  = document.getElementById('amz-wiz-footer');
 
+  btnNext.disabled = false; // reset disabled state from previous publish
+
   var steps    = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
   var lastStep = steps[steps.length - 1];
   var isLast   = n === lastStep;
@@ -967,10 +1115,10 @@ function _amzWizGoStep(n) {
   btnBack.style.display = n > 1 ? '' : 'none';
 
   if (isLast) {
-    btnNext.textContent = '🚀 Publicar en Amazon';
+    btnNext.textContent = _t('btn_publish') || '🚀 Publicar en Amazon';
     btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-green-500 hover:bg-green-600 rounded-xl transition';
   } else {
-    btnNext.textContent = 'Siguiente →';
+    btnNext.textContent = _t('btn_next') || 'Siguiente →';
     btnNext.className   = 'px-6 py-2 text-sm font-semibold text-white bg-orange-500 hover:bg-orange-600 rounded-xl transition';
   }
 
@@ -992,7 +1140,7 @@ window._amzWizNext = function() {
   if (_wiz.step === lastStep) { _amzWizSubmit(); return; }
   if (_wiz.step === 2) {
     var p = parseFloat(document.getElementById('amz-wiz-price').value);
-    if (!p || p <= 0) { alert('Ingresa un precio válido'); return; }
+    if (!p || p <= 0) { alert(_t('enter_price') || 'Ingresa un precio válido'); return; }
   }
   var idx = steps.indexOf(_wiz.step);
   if (idx < steps.length - 1) _amzWizGoStep(steps[idx + 1]);
@@ -1079,11 +1227,11 @@ window._amzWizUpdateMarginHint = function() {
     var net    = price - cost - price * 0.18;
     var margin = (net / price * 100).toFixed(1);
     var netFmt = isUsd ? '$' + net.toFixed(2) + ' USD' : '$' + net.toFixed(0) + ' MXN';
-    hint.textContent = 'Margen estimado: ' + margin + '% · Neto: ' + netFmt + ' (precio - costo BM - 18% fees)';
+    hint.textContent = _te('margin', {m: margin, n: netFmt}) || ('Margen estimado: ' + margin + '% · Neto: ' + netFmt + ' (precio - costo BM - 18% fees)');
     hint.className   = 'text-[10px] mt-1 ' + (parseFloat(margin) >= 20 ? 'text-green-600' : parseFloat(margin) >= 10 ? 'text-yellow-600' : 'text-red-500');
   } else if (_wiz.price_sug > 0) {
     var sugFmt = isUsd ? '$' + _wiz.price_sug.toFixed(2) + ' USD' : '$' + _wiz.price_sug.toLocaleString('es-MX') + ' MXN';
-    hint.textContent = 'Precio sugerido: ' + sugFmt;
+    hint.textContent = _te('sug_price', {p: sugFmt}) || ('Precio sugerido: ' + sugFmt);
     hint.className   = 'text-[10px] mt-1 text-gray-400';
   }
 };
@@ -1102,8 +1250,8 @@ window._amzWizTitleCount = function() {
   el.className   = 'text-[10px] ' + (len < 80 ? 'text-yellow-500' : len <= 200 ? 'text-green-600' : 'text-red-500');
   var hint = document.getElementById('amz-wiz-title-hint');
   if (hint) hint.textContent = len < 80
-    ? '⚠ Muy corto — apunta a ≥80 chars con keywords principales en los primeros 80'
-    : '✓ Longitud óptima — keywords visibles antes del corte de Amazon';
+    ? (_t('title_hint_s') || '⚠ Muy corto — apunta a ≥80 chars con keywords principales en los primeros 80')
+    : (_t('title_hint_ok') || '✓ Longitud óptima — keywords visibles antes del corte de Amazon');
 };
 
 window._amzWizBulletCount = function(input) {
@@ -1589,15 +1737,16 @@ function _amzWizBuildReview() {
   var condition   = document.getElementById('amz-wiz-condition').value;
   var fulfillment = document.querySelector('input[name="amz-wiz-fulfillment"]:checked').value;
   var qty         = document.getElementById('amz-wiz-qty').value;
-  var condLabel   = {new_new:'Nuevo', used_like_new:'Como nuevo', used_very_good:'Muy bueno', used_good:'Bueno', refurbished_refurbished:'Reacondicionado'}[condition] || condition;
+  var condMap = {new_new: [_t('r_cond_new')||'Nuevo', 'Nuevo'], used_like_new: [_t('r_cond_ln')||'Como nuevo', 'Como nuevo'], used_very_good: [_t('r_cond_vg')||'Muy bueno', 'Muy bueno'], used_good: [_t('r_cond_g')||'Bueno', 'Bueno'], refurbished_refurbished: [_t('r_cond_ref')||'Reacondicionado', 'Reacondicionado']};
+  var condLabel = (condMap[condition] || [condition])[0];
 
   var rows = [
-    ['SKU', _wiz.sku],
-    ['Cuenta', _wiz.seller_id],
-    ['ASIN', _wiz.asin || '— (producto nuevo)'],
-    ['Precio', _wiz.currency === 'USD' ? '$' + price.toFixed(2) + ' USD' : '$' + price.toLocaleString('es-MX', {minimumFractionDigits:0}) + ' MXN'],
-    ['Condición', condLabel],
-    ['Fulfillment', fulfillment === 'FBA' ? 'FBA (Amazon envía)' : 'FBM — ' + qty + ' uds iniciales'],
+    [_t('r_sku')||'SKU', _wiz.sku],
+    [_t('r_account')||'Cuenta', _wiz.seller_id],
+    [_t('r_asin')||'ASIN', _wiz.asin || (_t('r_new_prod')||'— (producto nuevo)')],
+    [_t('r_price')||'Precio', _wiz.currency === 'USD' ? '$' + price.toFixed(2) + ' USD' : '$' + price.toLocaleString('es-MX', {minimumFractionDigits:0}) + ' MXN'],
+    [_t('r_cond')||'Condición', condLabel],
+    [_t('r_ff')||'Fulfillment', fulfillment === 'FBA' ? (_t('r_fba')||'FBA (Amazon envía)') : (_te('r_fbm',{qty:qty})||'FBM — ' + qty + ' uds iniciales')],
   ];
 
   if (_wiz.is_new_product) {
@@ -1606,24 +1755,22 @@ function _amzWizBuildReview() {
     var kw       = document.getElementById('amz-wiz-keywords').value;
     var pt       = document.getElementById('amz-wiz-product-type').value;
     var photos   = _amzWizCollectPhotos();
-    rows.push(['Título', title.substring(0,55) + (title.length > 55 ? '…' : '')]);
-    rows.push(['Bullets', bullets.length + '/5 completados']);
-    rows.push(['Keywords backend', kw.length > 0 ? kw.length + ' chars' : '— sin completar']);
-    rows.push(['Product type', pt || '— sin especificar']);
-    rows.push(['Fotos', photos.length + ' configuradas']);
-    // Atributos adicionales
-    var aBrand = document.getElementById('amz-wiz-brand'); if (aBrand && aBrand.value) rows.push(['Marca', aBrand.value]);
-    var aModel = document.getElementById('amz-wiz-model-num'); if (aModel && aModel.value) rows.push(['Modelo', aModel.value]);
-    var aColor = document.getElementById('amz-wiz-color'); if (aColor && aColor.value) rows.push(['Color', aColor.value]);
-    var aWeight = document.getElementById('amz-wiz-weight'); if (aWeight && aWeight.value) rows.push(['Peso', aWeight.value + ' kg']);
-    var aDisp = document.getElementById('amz-wiz-display-size'); if (aDisp && aDisp.value) rows.push(['Pantalla', aDisp.value + '"']);
+    rows.push([_t('r_title')||'Título', title.substring(0,55) + (title.length > 55 ? '…' : '')]);
+    rows.push([_t('r_bullets')||'Bullets', _te('r_bullets_n',{n:bullets.length})||bullets.length + '/5 completados']);
+    rows.push([_t('r_kw')||'Keywords backend', kw.length > 0 ? (_te('r_kw_chars',{n:kw.length})||kw.length + ' chars') : (_t('r_kw_none')||'— sin completar')]);
+    rows.push([_t('r_pt')||'Product type', pt || (_t('r_pt_none')||'— sin especificar')]);
+    rows.push([_t('r_photos')||'Fotos', _te('r_photos_n',{n:photos.length})||photos.length + ' configuradas']);
+    var aBrand = document.getElementById('amz-wiz-brand'); if (aBrand && aBrand.value) rows.push([_t('r_brand')||'Marca', aBrand.value]);
+    var aModel = document.getElementById('amz-wiz-model-num'); if (aModel && aModel.value) rows.push([_t('r_model')||'Modelo', aModel.value]);
+    var aColor = document.getElementById('amz-wiz-color'); if (aColor && aColor.value) rows.push([_t('r_color')||'Color', aColor.value]);
+    var aWeight = document.getElementById('amz-wiz-weight'); if (aWeight && aWeight.value) rows.push([_t('r_weight')||'Peso', aWeight.value + ' kg']);
+    var aDisp = document.getElementById('amz-wiz-display-size'); if (aDisp && aDisp.value) rows.push([_t('r_screen')||'Pantalla', aDisp.value + '"']);
     var aLen = document.getElementById('amz-wiz-length');
     var aWd = document.getElementById('amz-wiz-width');
     var aHt = document.getElementById('amz-wiz-height');
     if (aLen && aLen.value && aWd && aWd.value && aHt && aHt.value)
-      rows.push(['Dimensiones', aLen.value + ' × ' + aWd.value + ' × ' + aHt.value + ' cm']);
+      rows.push([_t('r_dims')||'Dimensiones', aLen.value + ' × ' + aWd.value + ' × ' + aHt.value + ' cm']);
 
-    // Checklist
     var title2       = document.getElementById('amz-wiz-title').value;
     var description  = document.getElementById('amz-wiz-description').value;
     var filledBullets = Array.from(document.querySelectorAll('.amz-wiz-bullet')).filter(function(el){ return el.value.trim().length > 10; }).length;
@@ -1636,17 +1783,17 @@ function _amzWizBuildReview() {
     var _chkModel = document.getElementById('amz-wiz-model-num');
     var _hasModel = _chkModel && _chkModel.value.trim().length > 0;
     var checks = [
-      { label: 'Título ≥80 chars', ok: title2.length >= 80, warn: title2.length >= 40 && title2.length < 80 },
-      { label: 'Título ≤200 chars', ok: title2.length > 0 && title2.length <= 200, warn: false },
-      { label: '5 bullets completos', ok: filledBullets >= 5, warn: filledBullets >= 3 },
-      { label: 'Descripción ≥300 chars', ok: description.length >= 300, warn: description.length >= 100 },
-      { label: 'Keywords de backend', ok: kw.length >= 20, warn: kw.length > 0 },
-      { label: 'Tipo de producto Amazon', ok: pt.length > 0, warn: false },
-      { label: 'Al menos 1 foto', ok: photos.length >= 1, warn: false },
-      { label: '3+ fotos (recomendado)', ok: photos.length >= 3, warn: photos.length >= 1 },
-      { label: 'Marca y número de modelo', ok: _hasBrand && _hasModel, warn: _hasBrand || _hasModel },
-      { label: 'Peso del producto', ok: _hasWeight, warn: false },
-      { label: 'Dimensiones (L×A×H)', ok: _hasDims, warn: false },
+      { label: _t('ck_title_min')||'Título ≥80 chars', ok: title2.length >= 80, warn: title2.length >= 40 && title2.length < 80 },
+      { label: _t('ck_title_max')||'Título ≤200 chars', ok: title2.length > 0 && title2.length <= 200, warn: false },
+      { label: _t('ck_bullets')||'5 bullets completos', ok: filledBullets >= 5, warn: filledBullets >= 3 },
+      { label: _t('ck_desc')||'Descripción ≥300 chars', ok: description.length >= 300, warn: description.length >= 100 },
+      { label: _t('ck_kw')||'Keywords de backend', ok: kw.length >= 20, warn: kw.length > 0 },
+      { label: _t('ck_pt')||'Tipo de producto Amazon', ok: pt.length > 0, warn: false },
+      { label: _t('ck_photo1')||'Al menos 1 foto', ok: photos.length >= 1, warn: false },
+      { label: _t('ck_photo3')||'3+ fotos (recomendado)', ok: photos.length >= 3, warn: photos.length >= 1 },
+      { label: _t('ck_brand')||'Marca y número de modelo', ok: _hasBrand && _hasModel, warn: _hasBrand || _hasModel },
+      { label: _t('ck_weight')||'Peso del producto', ok: _hasWeight, warn: false },
+      { label: _t('ck_dims')||'Dimensiones (L×A×H)', ok: _hasDims, warn: false },
     ];
 
     document.getElementById('amz-wiz-checklist-wrap').classList.remove('hidden');
@@ -1675,7 +1822,7 @@ async function _amzWizSubmit() {
   var errEl   = document.getElementById('amz-wiz-submit-error');
   var btnNext = document.getElementById('amz-wiz-btn-next');
   errEl.classList.add('hidden');
-  btnNext.disabled = true; btnNext.textContent = '⏳ Publicando…';
+  btnNext.disabled = true; btnNext.textContent = _t('publishing') || '⏳ Publicando…';
 
   var price       = parseFloat(document.getElementById('amz-wiz-price').value) || 0;
   var condition   = document.getElementById('amz-wiz-condition').value;
