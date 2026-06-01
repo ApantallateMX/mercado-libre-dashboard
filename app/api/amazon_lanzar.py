@@ -819,7 +819,24 @@ async def create_listing(request: Request):
     width_cm         = float(body.get("width_cm") or 0)
     height_cm        = float(body.get("height_cm") or 0)
     # Atributos requeridos por Amazon (comprehensive)
-    country_of_origin    = (body.get("country_of_origin") or "China").strip()
+    # Amazon TELEVISION acepta códigos ISO 3166-1 alpha-2, no nombres completos
+    _COUNTRY_ISO = {
+        "china": "CN", "cn": "CN",
+        "mexico": "MX", "mx": "MX",
+        "south korea": "KR", "korea": "KR", "kr": "KR",
+        "vietnam": "VN", "vn": "VN",
+        "taiwan": "TW", "tw": "TW",
+        "united states": "US", "usa": "US", "us": "US",
+        "japan": "JP", "jp": "JP",
+        "thailand": "TH", "th": "TH",
+        "india": "IN", "in": "IN",
+        "germany": "DE", "de": "DE",
+        "malaysia": "MY", "my": "MY",
+        "indonesia": "ID", "id": "ID",
+        "philippines": "PH", "ph": "PH",
+    }
+    _raw_country = (body.get("country_of_origin") or "China").strip()
+    country_of_origin = _COUNTRY_ISO.get(_raw_country.lower(), _raw_country)
     item_type_keyword    = (body.get("item_type_keyword") or "").strip()
     display_type         = (body.get("display_type") or "").strip()
     resolution           = (body.get("resolution") or "").strip()
@@ -937,7 +954,7 @@ async def create_listing(request: Request):
         attributes["is_refurbished"] = [{"value": condition == "refurbished_refurbished", "marketplace_id": client.marketplace_id}]
 
         # ── Atributos universales requeridos por Amazon ───────────────────────
-        attributes["country_of_origin"] = [{"value": country_of_origin or "China", "marketplace_id": client.marketplace_id}]
+        attributes["country_of_origin"] = [{"value": country_of_origin or "CN", "marketplace_id": client.marketplace_id}]
         attributes["supplier_declared_has_product_identifier_exemption"] = [{"value": True, "marketplace_id": client.marketplace_id}]
         attributes["supplier_declared_dg_hz_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
         attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
