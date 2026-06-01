@@ -973,8 +973,10 @@ async def create_listing(request: Request):
         if display_size_in > 0:
             display_obj["size"] = [{"value": display_size_in, "unit": "inches"}]
             _has_display = True
-        if display_type:
-            display_obj["technology"] = [{"value": display_type, "language_tag": "en_US"}]
+        # Para TELEVISION, technology es requerido — defaultear a "LED" si no se especifica
+        _dt = display_type or ("LED" if product_type == "TELEVISION" else "")
+        if _dt:
+            display_obj["technology"] = [{"value": _dt, "language_tag": "en_US"}]
             _has_display = True
         if resolution:
             _res_max = _RESOLUTION_MAX.get(resolution, resolution)
