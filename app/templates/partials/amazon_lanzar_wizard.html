@@ -1210,6 +1210,20 @@ function _amzWizRenderScrapeImages(imgs, status, wrap, grid) {
   });
 }
 
+// Sites that block automated scraping — show manual copy instructions
+var _BLOCKED_SITES = {
+  'bestbuy.com':    { name: 'Best Buy',    icon: '🏪' },
+  'amazon.com':     { name: 'Amazon',      icon: '📦' },
+  'amazon.com.mx':  { name: 'Amazon MX',   icon: '📦' },
+  'costco.com':     { name: 'Costco',      icon: '🏬' },
+  'target.com':     { name: 'Target',      icon: '🎯' },
+  'homedepot.com':  { name: 'Home Depot',  icon: '🔨' },
+};
+
+function _amzWizIsBlocked(hostname) {
+  return Object.keys(_BLOCKED_SITES).find(function(k) { return hostname.includes(k); });
+}
+
 window._amzWizScrapeUrl = async function() {
   var btn    = document.getElementById('amz-wiz-scrape-btn');
   var urlEl  = document.getElementById('amz-wiz-product-url');
@@ -1231,6 +1245,30 @@ window._amzWizScrapeUrl = async function() {
   try {
     var parsed = new URL(productUrl);
     var pathClean = parsed.pathname.replace(/\/$/, '');
+
+    // Detect sites that block automated access and show manual instructions
+    var blockedKey = _amzWizIsBlocked(parsed.hostname);
+    if (blockedKey) {
+      if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+      var site = _BLOCKED_SITES[blockedKey];
+      if (status) {
+        status.innerHTML = (
+          '<div class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[10px] text-amber-800">' +
+          '<p class="font-bold mb-1">' + (site.icon) + ' ' + site.name + ' bloquea acceso automático</p>' +
+          '<p class="mb-1.5">Para obtener las imágenes:</p>' +
+          '<ol class="list-decimal list-inside space-y-1">' +
+          '<li>Abre el producto en ' + site.name + ' en una nueva pestaña</li>' +
+          '<li>Haz clic en la imagen principal del producto</li>' +
+          '<li><strong>Clic derecho → "Copiar dirección de la imagen"</strong></li>' +
+          '<li>Pega la URL en uno de los campos de foto de abajo</li>' +
+          '</ol>' +
+          '<p class="mt-1.5 text-amber-600">💡 Las imágenes de ' + site.name + ' están en su CDN — la URL copiada funciona directo en Amazon.</p>' +
+          '</div>'
+        );
+        status.classList.remove('hidden');
+      }
+      return;
+    }
 
     // ── Strategy A: Shopify — fetch .json DIRECTLY from browser ──────────────
     // Shopify public product JSON has no CORS restrictions.
