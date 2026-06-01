@@ -960,8 +960,10 @@ async def create_listing(request: Request):
         attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
         attributes["batteries_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
         attributes["batteries_included"] = [{"value": False, "marketplace_id": client.marketplace_id}]
-        if item_type_keyword:
-            attributes["item_type_keyword"] = [{"value": item_type_keyword, "marketplace_id": client.marketplace_id}]
+        # item_type_keyword — requerido para TELEVISION
+        _itk = item_type_keyword or ("televisions" if product_type == "TELEVISION" else "")
+        if _itk:
+            attributes["item_type_keyword"] = [{"value": _itk, "marketplace_id": client.marketplace_id}]
 
         # ── display — atributo compuesto para TVs/monitores ───────────────────
         # Sub-atributos con nombres internos del schema de Amazon (TELEVISION/USA)
@@ -973,11 +975,20 @@ async def create_listing(request: Request):
         if display_size_in > 0:
             display_obj["size"] = [{"value": display_size_in, "unit": "inches"}]
             _has_display = True
-        # Para TELEVISION, technology es requerido — defaultear a "LED" si no se especifica
+        # Amazon TELEVISION schema tiene DOS campos en display:
+        #   display.type        = "Display Type" — e.g. "LED", "OLED", "LCD"  (REQUERIDO)
+        #   display.technology  = "Display Technology" — e.g. "TFT active matrix" (REQUERIDO)
+        # Son campos DISTINTOS; technology NO es backlight sino la tecnología de matriz
         _dt = display_type or ("LED" if product_type == "TELEVISION" else "")
         if _dt:
-            display_obj["technology"] = [{"value": _dt, "language_tag": "en_US"}]
+            display_obj["type"] = [{"value": _dt, "language_tag": "en_US"}]
             _has_display = True
+            # technology = tecnología de matriz subyacente (mapeada desde el tipo de pantalla)
+            _tech_map = {"LED": "TFT active matrix", "QLED": "TFT active matrix",
+                         "Mini LED": "TFT active matrix", "LCD": "TFT active matrix",
+                         "OLED": "OLED", "QNED": "TFT active matrix"}
+            _tech = _tech_map.get(_dt, "TFT active matrix")
+            display_obj["technology"] = [{"value": _tech, "language_tag": "en_US"}]
         if resolution:
             _res_max = _RESOLUTION_MAX.get(resolution, resolution)
             display_obj["resolution_maximum"] = [{"value": _res_max, "unit": "pixels", "language_tag": "en_US"}]
@@ -999,13 +1010,6 @@ async def create_listing(request: Request):
         if _ar:
             attributes["image_aspect_ratio"] = [{"value": _ar, "marketplace_id": client.marketplace_id}]
 
-        # ── Conectividad ──────────────────────────────────────────────────────
-        if connectivity_tech:
-            attributes["connectivity_technology"] = [
-                {"value": c, "marketplace_id": client.marketplace_id}
-                for c in connectivity_tech if c
-            ]
-
         # refresh_rate standalone (además de dentro de display)
         if refresh_rate:
             try:
@@ -1019,24 +1023,37 @@ async def create_listing(request: Request):
             _mt_val = _mt_map.get(mounting_type, mounting_type)
             attributes["mounting_type"] = [{"value": _mt_val, "marketplace_id": client.marketplace_id}]
 
-        # ── Puertos ───────────────────────────────────────────────────────────
+        # ── Puertos — requerido para TELEVISION ──────────────────────────────
         try:
-            if total_hdmi_ports is not None and int(total_hdmi_ports) > 0:
-                attributes["total_hdmi_ports"] = [{"value": int(total_hdmi_ports), "marketplace_id": client.marketplace_id}]
+            _hdmi = int(total_hdmi_ports) if total_hdmi_ports is not None else 0
         except (ValueError, TypeError):
-            pass
+            _hdmi = 0
+        if _hdmi <= 0 and product_type == "TELEVISION":
+            _hdmi = 2  # default: la mayoría de TVs tiene 2+ HDMI
+        if _hdmi > 0:
+            attributes["total_hdmi_ports"] = [{"value": _hdmi, "marketplace_id": client.marketplace_id}]
         # usb_port_count no es válido para TELEVISION en Amazon — omitir
 
-        # ── Características y componentes ─────────────────────────────────────
-        if special_feature:
+        # ── Características y componentes — requeridos para TELEVISION ────────
+        _sf = special_feature or (["High Definition"] if product_type == "TELEVISION" else [])
+        if _sf:
             attributes["special_feature"] = [
                 {"value": f, "marketplace_id": client.marketplace_id}
-                for f in special_feature[:5] if f
+                for f in _sf[:5] if f
             ]
-        if included_components:
+        _ic = included_components or (["Remote Control", "Stand", "Power Cable"] if product_type == "TELEVISION" else [])
+        if _ic:
             attributes["included_components"] = [
                 {"value": c, "marketplace_id": client.marketplace_id}
-                for c in included_components[:10] if c
+                for c in _ic[:10] if c
+            ]
+
+        # ── Conectividad — requerida para TELEVISION ──────────────────────────
+        _ct = connectivity_tech or (["HDMI"] if product_type == "TELEVISION" else [])
+        if _ct:
+            attributes["connectivity_technology"] = [
+                {"value": c, "marketplace_id": client.marketplace_id}
+                for c in _ct if c
             ]
 
         # ── Precio de lista (MSRP), año del modelo, garantía ─────────────────
@@ -1046,9 +1063,12 @@ async def create_listing(request: Request):
                 "value": list_price_msrp,
                 "marketplace_id": client.marketplace_id,
             }]
-        if model_year:
+        # model_year — requerido para TELEVISION, default año actual
+        import datetime as _dt
+        _my = model_year or (str(_dt.datetime.now().year) if product_type == "TELEVISION" else None)
+        if _my:
             try:
-                attributes["model_year"] = [{"value": int(model_year), "marketplace_id": client.marketplace_id}]
+                attributes["model_year"] = [{"value": int(_my), "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError):
                 pass
         _warranty = warranty_desc or "90 days seller warranty"
