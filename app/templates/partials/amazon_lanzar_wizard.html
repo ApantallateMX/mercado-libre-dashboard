@@ -666,18 +666,26 @@ var _wiz = {
 var STEPS_OFFER  = [1, 2, 4];      // Flujo 1: ASIN match (sin contenido)
 var STEPS_NEW    = [1, 2, 3, 4];   // Flujo 2: producto nuevo
 
+// ─── HTML entity decoder (fixes &quot; and similar entities from Jinja2 escaping) ─
+function _wizDecode(s) {
+  if (!s) return '';
+  var d = document.createElement('div');
+  d.innerHTML = s;
+  return d.textContent || d.innerText || s;
+}
+
 // ─── Abrir / cerrar ───────────────────────────────────────────────────────────
 window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, brand, category, imageUrl, model, costUsd, currency) {
   _wiz.sku        = sku || '';
-  _wiz.title      = title || '';
+  _wiz.title      = _wizDecode(title);
   _wiz.upc        = upc || '';
   _wiz.seller_id  = sellerId || (window.amzActiveSellerId || '');
   _wiz.cost_mxn   = parseFloat(costMxn) || 0;
   _wiz.cost_usd   = parseFloat(costUsd) || 0;
   _wiz.currency   = currency || 'MXN';       // 'USD' para cuentas US, 'MXN' para MX
-  _wiz.brand      = brand || '';
-  _wiz.model      = model || '';
-  _wiz.category   = category || '';
+  _wiz.brand      = _wizDecode(brand);
+  _wiz.model      = _wizDecode(model);
+  _wiz.category   = _wizDecode(category);
   _wiz.image_url  = imageUrl || '';
   // Precio sugerido en la moneda correcta
   _wiz.price_sug  = (_wiz.currency === 'USD' && _wiz.cost_usd > 0)
