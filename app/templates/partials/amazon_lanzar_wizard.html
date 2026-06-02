@@ -278,6 +278,12 @@
                 <input id="amz-wiz-color" type="text" placeholder="ej: Black, Silver"
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
+              <!-- UPC -->
+              <div>
+                <label id="amz-wiz-l-upc-lbl" class="block text-[10px] text-gray-500 mb-0.5">UPC / EAN</label>
+                <input id="amz-wiz-upc-attr" type="text" maxlength="14" placeholder="012345678901"
+                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono">
+              </div>
               <!-- País de origen -->
               <div>
                 <label id="amz-wiz-l-country-lbl" class="block text-[10px] text-gray-500 mb-0.5">País de origen *</label>
@@ -379,6 +385,18 @@
                        class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition">
               </div>
               <!-- Físicos -->
+              <!-- Unit system toggle -->
+              <div class="col-span-2 sm:col-span-3 flex items-center gap-3 py-1 border-t border-gray-100 mt-1">
+                <span id="amz-wiz-l-units-label" class="text-[10px] font-semibold text-gray-500">Unidades:</span>
+                <label class="flex items-center gap-1 cursor-pointer text-[10px] text-gray-600">
+                  <input type="radio" name="amz-wiz-units" value="metric" checked class="accent-orange-500" onchange="window._amzWizUnitsChanged()">
+                  <span id="amz-wiz-l-metric">Métrico (cm, kg)</span>
+                </label>
+                <label class="flex items-center gap-1 cursor-pointer text-[10px] text-gray-600">
+                  <input type="radio" name="amz-wiz-units" value="imperial" class="accent-orange-500" onchange="window._amzWizUnitsChanged()">
+                  <span id="amz-wiz-l-imperial">Imperial (in, lb)</span>
+                </label>
+              </div>
               <div>
                 <label id="amz-wiz-l-weight-lbl" class="block text-[10px] text-gray-500 mb-0.5">Peso (kg)</label>
                 <input id="amz-wiz-weight" type="number" step="0.1" min="0" placeholder="ej: 5.5"
@@ -704,6 +722,11 @@ var _I18N_EN = {
   kw_desc:'Do not repeat title keywords. Separate with spaces.',
   pt_lbl:'Product type (Amazon)', pt_desc:'Determines available attributes. AI suggests it.',
   attrs_title:'Product attributes', attrs_req:'(required by Amazon)',
+  upc_lbl:'UPC / EAN',
+  units_label:'Units:', metric_label:'Metric (cm, kg)', imperial_label:'Imperial (in, lb)',
+  weight_lbl_m:'Weight (kg)', weight_lbl_i:'Weight (lb)',
+  screen_lbl:'Screen size (inches)',
+  length_lbl_m:'Length (cm)', width_lbl_m:'Width (cm)', height_lbl_m:'Height (cm)',
   brand_lbl:'Brand', model_lbl:'Model number', color_lbl:'Color',
   country_lbl:'Country of origin *', disp_type_lbl:'Display type',
   res_lbl:'Resolution', refresh_lbl:'Refresh rate (Hz)', smart_tv_lbl:'Smart TV',
@@ -788,7 +811,13 @@ window._amzWizSetLocale = function() {
   _idt('amz-wiz-l-desc-lbl', d.desc_lbl); _idt('amz-wiz-l-kw-lbl', d.kw_lbl);
   _idt('amz-wiz-l-kw-desc', d.kw_desc); _idt('amz-wiz-l-pt-lbl', d.pt_lbl);
   _idt('amz-wiz-l-pt-desc', d.pt_desc); _idt('amz-wiz-l-attrs-title', d.attrs_title);
-  _idt('amz-wiz-l-attrs-req', d.attrs_req); _idt('amz-wiz-l-brand-lbl', d.brand_lbl);
+  _idt('amz-wiz-l-attrs-req', d.attrs_req);
+  _idt('amz-wiz-l-upc-lbl', d.upc_lbl);
+  _idt('amz-wiz-l-units-label', d.units_label);
+  _idt('amz-wiz-l-metric', d.metric_label); _idt('amz-wiz-l-imperial', d.imperial_label);
+  _idt('amz-wiz-l-weight-lbl', d.weight_lbl_m); _idt('amz-wiz-l-screen-lbl', d.screen_lbl);
+  _idt('amz-wiz-l-length-lbl', d.length_lbl_m); _idt('amz-wiz-l-width-lbl', d.width_lbl_m); _idt('amz-wiz-l-height-lbl', d.height_lbl_m);
+  _idt('amz-wiz-l-brand-lbl', d.brand_lbl);
   _idt('amz-wiz-l-model-lbl', d.model_lbl); _idt('amz-wiz-l-color-lbl', d.color_lbl);
   _idt('amz-wiz-l-country-lbl', d.country_lbl); _idt('amz-wiz-l-disp-type-lbl', d.disp_type_lbl);
   _idt('amz-wiz-l-res-lbl', d.res_lbl); _idt('amz-wiz-l-refresh-lbl', d.refresh_lbl);
@@ -1012,6 +1041,9 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   // Atributos: pre-llenar marca/modelo desde BM
   var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
   var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
+  var upcAttrEl = document.getElementById('amz-wiz-upc-attr'); if (upcAttrEl) upcAttrEl.value = _wiz.upc || '';
+  // Reset unit system to metric
+  var metricEl = document.querySelector('input[name="amz-wiz-units"][value="metric"]'); if (metricEl) metricEl.checked = true;
   var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = '';
   var wEl = document.getElementById('amz-wiz-weight'); if (wEl) wEl.value = '';
   var dEl = document.getElementById('amz-wiz-display-size'); if (dEl) dEl.value = '';
@@ -1273,12 +1305,13 @@ window._amzWizGenerateContent = async function() {
     var r = await fetch('/api/amazon/lanzar/generate-content', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        title:     _wiz.title,
-        brand:     _wiz.brand,
-        model:     _wiz.model,
-        category:  _wiz.category,
-        upc:       _wiz.upc,
-        price_mxn: _wiz.price_sug,
+        title:    _wiz.title,
+        brand:    _wiz.brand,
+        model:    _wiz.model,
+        category: _wiz.category,
+        upc:      _wiz.upc,
+        price:    _wiz.price_sug,
+        currency: _wiz.currency,
       }),
     });
     var d = await r.json();
@@ -1361,6 +1394,37 @@ function _amzWizCollectPhotos() {
   });
   return urls;
 }
+
+// ─── Unit system toggle ───────────────────────────────────────────────────────
+function _amzWizGetUnits() {
+  var el = document.querySelector('input[name="amz-wiz-units"]:checked');
+  return el ? el.value : 'metric';
+}
+
+window._amzWizUnitsChanged = function() {
+  var u = _amzWizGetUnits();
+  var isImp = u === 'imperial';
+  var isEn = _wiz.currency === 'USD';
+  function _idt(id, t) { var el=document.getElementById(id); if(el) el.textContent=t; }
+  function _iph(id, t) { var el=document.getElementById(id); if(el) el.placeholder=t; }
+  // Update labels
+  _idt('amz-wiz-l-weight-lbl', isEn ? (isImp ? 'Weight (lb)' : 'Weight (kg)') : (isImp ? 'Peso (lb)' : 'Peso (kg)'));
+  _idt('amz-wiz-l-length-lbl', isEn ? (isImp ? 'Length (in)' : 'Length (cm)') : (isImp ? 'Largo (in)' : 'Largo (cm)'));
+  _idt('amz-wiz-l-width-lbl',  isEn ? (isImp ? 'Width (in)'  : 'Width (cm)')  : (isImp ? 'Ancho (in)' : 'Ancho (cm)'));
+  _idt('amz-wiz-l-height-lbl', isEn ? (isImp ? 'Height (in)' : 'Height (cm)') : (isImp ? 'Alto (in)'  : 'Alto (cm)'));
+  // Package dims
+  _idt('amz-wiz-l-pkg-w-lbl',  isEn ? (isImp ? 'Package weight (lb)' : 'Package weight (kg)') : (isImp ? 'Peso paquete (lb)' : 'Peso paquete (kg)'));
+  _idt('amz-wiz-l-pkg-l-lbl',  isEn ? (isImp ? 'Package length (in)' : 'Package length (cm)') : (isImp ? 'Largo paquete (in)' : 'Largo paquete (cm)'));
+  _idt('amz-wiz-l-pkg-h-lbl',  isEn ? (isImp ? 'Package height (in)' : 'Package height (cm)') : (isImp ? 'Alto paquete (in)'  : 'Alto paquete (cm)'));
+  // Placeholders
+  _iph('amz-wiz-weight',    isImp ? 'e.g. 12.1' : 'ej: 5.5');
+  _iph('amz-wiz-length',    isImp ? 'e.g. 51.6' : 'ej: 73.5');
+  _iph('amz-wiz-width',     isImp ? 'e.g. 31.0' : 'ej: 45.2');
+  _iph('amz-wiz-height',    isImp ? 'e.g. 3.3'  : 'ej: 8.3');
+  _iph('amz-wiz-pkg-weight', isImp ? 'e.g. 26'  : 'ej: 18.0');
+  _iph('amz-wiz-pkg-length', isImp ? 'auto'     : 'auto');
+  _iph('amz-wiz-pkg-height', isImp ? 'auto'     : 'auto');
+};
 
 // ─── Open external image search in new tab ───────────────────────────────────
 window._amzWizOpenSearch = function(engine) {
@@ -1851,11 +1915,19 @@ async function _amzWizSubmit() {
     var bEl2 = document.getElementById('amz-wiz-brand'); if (bEl2) payload.brand = bEl2.value.trim();
     var mEl2 = document.getElementById('amz-wiz-model-num'); if (mEl2) payload.model_number = mEl2.value.trim();
     var cEl2 = document.getElementById('amz-wiz-color'); if (cEl2) payload.color = cEl2.value.trim();
-    var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && wEl2.value) payload.weight_kg = parseFloat(wEl2.value) || 0;
+    // UPC
+    var upcEl2 = document.getElementById('amz-wiz-upc-attr');
+    var upcVal2 = (upcEl2 && upcEl2.value.trim()) ? upcEl2.value.trim() : _wiz.upc;
+    if (upcVal2) payload.upc = upcVal2;
+    // Unit normalization: convert imperial → metric before sending
+    var _units = _amzWizGetUnits();
+    var _toKg  = _units === 'imperial' ? 0.453592 : 1;
+    var _toCm  = _units === 'imperial' ? 2.54 : 1;
+    var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && wEl2.value) payload.weight_kg = Math.round(parseFloat(wEl2.value) * _toKg * 100) / 100 || 0;
     var dEl2 = document.getElementById('amz-wiz-display-size'); if (dEl2 && dEl2.value) payload.display_size_in = parseFloat(dEl2.value) || 0;
-    var lEl3 = document.getElementById('amz-wiz-length'); if (lEl3 && lEl3.value) payload.length_cm = parseFloat(lEl3.value) || 0;
-    var wdEl3 = document.getElementById('amz-wiz-width'); if (wdEl3 && wdEl3.value) payload.width_cm = parseFloat(wdEl3.value) || 0;
-    var htEl3 = document.getElementById('amz-wiz-height'); if (htEl3 && htEl3.value) payload.height_cm = parseFloat(htEl3.value) || 0;
+    var lEl3 = document.getElementById('amz-wiz-length'); if (lEl3 && lEl3.value) payload.length_cm = Math.round(parseFloat(lEl3.value) * _toCm * 10) / 10 || 0;
+    var wdEl3 = document.getElementById('amz-wiz-width'); if (wdEl3 && wdEl3.value) payload.width_cm = Math.round(parseFloat(wdEl3.value) * _toCm * 10) / 10 || 0;
+    var htEl3 = document.getElementById('amz-wiz-height'); if (htEl3 && htEl3.value) payload.height_cm = Math.round(parseFloat(htEl3.value) * _toCm * 10) / 10 || 0;
     // New comprehensive attributes
     var coEl3 = document.getElementById('amz-wiz-country-origin'); if (coEl3 && coEl3.value) payload.country_of_origin = coEl3.value;
     var dtEl3 = document.getElementById('amz-wiz-display-type'); if (dtEl3 && dtEl3.value) payload.display_type = dtEl3.value;
@@ -1875,10 +1947,10 @@ async function _amzWizSubmit() {
     var warEl = document.getElementById('amz-wiz-warranty'); if (warEl && warEl.value.trim()) payload.warranty_description = warEl.value.trim();
     var connEl = document.getElementById('amz-wiz-connectivity');
     if (connEl && connEl.value.trim()) payload.connectivity_technology = connEl.value.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
-    var pkgWEl = document.getElementById('amz-wiz-pkg-weight'); if (pkgWEl && pkgWEl.value) payload.pkg_weight_kg = parseFloat(pkgWEl.value) || 0;
+    var pkgWEl = document.getElementById('amz-wiz-pkg-weight'); if (pkgWEl && pkgWEl.value) payload.pkg_weight_kg = Math.round(parseFloat(pkgWEl.value) * _toKg * 100) / 100 || 0;
     var arEl = document.getElementById('amz-wiz-aspect-ratio'); if (arEl && arEl.value) payload.aspect_ratio = arEl.value;
-    var pkgLEl = document.getElementById('amz-wiz-pkg-length'); if (pkgLEl && pkgLEl.value) payload.pkg_length_cm = parseFloat(pkgLEl.value) || 0;
-    var pkgHEl = document.getElementById('amz-wiz-pkg-height'); if (pkgHEl && pkgHEl.value) payload.pkg_height_cm = parseFloat(pkgHEl.value) || 0;
+    var pkgLEl = document.getElementById('amz-wiz-pkg-length'); if (pkgLEl && pkgLEl.value) payload.pkg_length_cm = Math.round(parseFloat(pkgLEl.value) * _toCm * 10) / 10 || 0;
+    var pkgHEl = document.getElementById('amz-wiz-pkg-height'); if (pkgHEl && pkgHEl.value) payload.pkg_height_cm = Math.round(parseFloat(pkgHEl.value) * _toCm * 10) / 10 || 0;
   }
 
   try {

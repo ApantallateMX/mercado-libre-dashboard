@@ -626,15 +626,18 @@ async def generate_content(request: Request):
     model_num = (body.get("model") or "").strip()
     category  = body.get("category", "")
     upc       = (body.get("upc") or "").strip()
-    price_mxn = float(body.get("price_mxn") or 0)
+    price_val = float(body.get("price_mxn") or body.get("price") or 0)
+    currency  = (body.get("currency") or "MXN").upper()
+    is_us     = currency == "USD"
 
     ctx_parts = []
     if model_num:
-        ctx_parts.append(f"Modelo: {model_num}")
+        ctx_parts.append(f"Model: {model_num}" if is_us else f"Modelo: {model_num}")
     if upc:
         ctx_parts.append(f"UPC/EAN: {upc}")
-    if price_mxn > 0:
-        ctx_parts.append(f"Precio de venta: ${price_mxn:,.0f} MXN")
+    if price_val > 0:
+        price_str = f"${price_val:.2f} USD" if is_us else f"${price_val:,.0f} MXN"
+        ctx_parts.append(f"Sale price: {price_str}" if is_us else f"Precio de venta: {price_str}")
     extra_ctx = "\n".join(ctx_parts)
 
     try:
@@ -645,7 +648,91 @@ async def generate_content(request: Request):
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY no configurada")
 
-        prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
+        if is_us:
+            prompt = f"""You are an Amazon US listing optimization expert with deep knowledge of SEO, CRO, and Amazon US policies 2024.
+
+Create complete, high-converting listing content for this product. ALL content (title, bullets, description, keywords) MUST be in ENGLISH.
+
+Product title: {title}
+Brand: {brand}
+Category: {category}
+{extra_ctx}
+Marketplace: Amazon US (amazon.com) — English-speaking US buyers
+
+━━━ CRITICAL RULES ━━━
+
+⚠ WARRANTY — ABSOLUTE RULE:
+• NEVER mention manufacturer warranty (1 year, official warranty, Sony/Samsung warranty, etc.)
+• We are RESELLERS, not authorized distributors
+• The warranty we offer is "90 days seller warranty"
+• Correct: "90-day seller warranty with dedicated post-purchase support."
+• PROHIBITED: "Official Sony 1-year warranty" / "Manufacturer warranty"
+
+TITLE (max 200 chars):
+• Format: [Brand] [Model] [Main Feature] [Use/Compatibility] [Key Spec]
+• First 80 chars = highest search-volume keywords
+• NO emojis, NO "deal/free/best/top", NO trailing punctuation, NO excessive CAPS
+• Include units where applicable (Watts, Inches, Liters, etc.)
+• Write in English only
+
+BULLETS (exactly 5, max 200 chars each):
+• Start in CAPS with the key feature
+• Structure: KEY FEATURE: Measurable spec + concrete user benefit
+• Bullet 1: Main differentiator / USP
+• Bullet 2: Most-searched technical specs
+• Bullet 3: Compatibility / use cases
+• Bullet 4: Package contents / what's included
+• Bullet 5: Support — WARRANTY RULE: "90-day seller warranty. Contact us before and after purchase."
+• Write in English only
+
+DESCRIPTION (max 2000 chars):
+• Paragraph 1: Problem it solves + who needs it
+• Paragraph 2: Key features and specifications in detail
+• Paragraph 3: Call to action + final value proposition
+• Natural, flowing English text — don't repeat title or bullets verbatim
+
+BACKEND KEYWORDS (max 249 characters — count characters not bytes):
+• ONLY words NOT appearing in title or bullets
+• Mix of English search terms, synonyms, alternate uses, common misspellings
+• Separated by spaces (NOT commas)
+
+PRODUCT_TYPE:
+• Use the most specific Amazon US product type in SCREAMING_SNAKE_CASE
+• Examples: TELEVISION, LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER
+• For TVs: TELEVISION. For monitors: COMPUTER_MONITOR. For speakers: SPEAKER.
+
+COLOR:
+• Main product color in English (e.g., Black, White, Silver, Blue)
+• If not applicable or unclear: ""
+
+PHYSICAL SPECIFICATIONS (use your product knowledge to estimate):
+• weight_kg: Weight in kilograms (decimal, e.g., 6.7). Estimate if uncertain.
+• display_size_in: Screen size in inches (TVs, monitors, tablets). Integer or decimal.
+• length_cm: Product length in cm (without packaging)
+• width_cm: Width in cm
+• height_cm: Height/depth in cm
+• country_of_origin: Manufacturing country in English (e.g., "China", "Mexico", "South Korea", "Vietnam", "Taiwan", "United States")
+• Use null for unknowns.
+
+TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
+• display_type: Screen technology — one of: "LED", "QLED", "OLED", "Mini LED", "LCD", "QNED", null
+• resolution: Resolution — one of: "720p", "1080p", "4K", "8K", null
+• smart_tv_flag: true if Smart TV, false if not, null if N/A
+• refresh_rate: Refresh rate in Hz as integer (e.g., 60, 120, 240), null if N/A
+• mounting_type: One of "Tabletop", "Wall Mount", "Tabletop, Wall Mount", null
+• item_type_keyword: category keyword (e.g., "televisions", "computer-monitors", "light-bulbs", "speakers"), null if unknown
+• total_hdmi_ports: Integer number of HDMI ports (e.g., 3), null if N/A
+• usb_port_count: Integer number of USB ports (e.g., 2), null if N/A
+• special_feature: List of key features (e.g., ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] if N/A
+• included_components: List of box contents (e.g., ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] if N/A
+• connectivity_technology: List of connectivity tech (e.g., ["Wi-Fi", "Bluetooth", "HDMI", "USB"]), [] if N/A
+• model_year: Model year as integer (e.g., 2024), null if unknown
+• warranty_description: "90 days seller warranty"
+• list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
+
+━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━"""
+        else:
+            prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
 
 Crea contenido completo y de alta conversión para este producto:
 
@@ -726,7 +813,7 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
 • list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
 
-━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
+━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━"""
 {{
   "title": "...",
   "bullets": ["...", "...", "...", "...", "..."],
@@ -856,6 +943,7 @@ async def create_listing(request: Request):
     pkg_length_cm        = float(body.get("pkg_length_cm") or 0)
     pkg_width_cm         = float(body.get("pkg_width_cm") or 0)
     pkg_height_cm        = float(body.get("pkg_height_cm") or 0)
+    upc                  = (body.get("upc") or "").strip()
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -929,6 +1017,12 @@ async def create_listing(request: Request):
         if model_number:
             attributes["model_number"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
             attributes["part_number"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
+        if upc:
+            attributes["externally_assigned_product_identifier"] = [{
+                "type": "upc",
+                "value": upc,
+                "marketplace_id": client.marketplace_id,
+            }]
         if color:
             attributes["color"] = [{"value": color, "marketplace_id": client.marketplace_id}]
         if weight_kg > 0:
