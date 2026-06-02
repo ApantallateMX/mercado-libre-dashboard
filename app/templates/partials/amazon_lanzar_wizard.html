@@ -1167,6 +1167,10 @@ window._amzWizBack = function() {
 };
 
 window._amzWizNext = function() {
+  // Step 1: if no ASIN selected, treat as new product — always show content step
+  if (_wiz.step === 1 && !_wiz.asin) {
+    _wiz.is_new_product = true;
+  }
   var steps    = _wiz.is_new_product ? STEPS_NEW : STEPS_OFFER;
   var lastStep = steps[steps.length - 1];
   if (_wiz.step === lastStep) { _amzWizSubmit(); return; }
