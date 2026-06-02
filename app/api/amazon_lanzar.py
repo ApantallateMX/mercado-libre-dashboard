@@ -730,7 +730,35 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • warranty_description: "90 days seller warranty"
 • list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
 
-━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━"""
+━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━
+{{
+  "title": "...",
+  "bullets": ["...", "...", "...", "...", "..."],
+  "description": "...",
+  "keywords_backend": "...",
+  "product_type": "...",
+  "color": "...",
+  "weight_kg": null,
+  "display_size_in": null,
+  "length_cm": null,
+  "width_cm": null,
+  "height_cm": null,
+  "country_of_origin": null,
+  "display_type": null,
+  "resolution": null,
+  "smart_tv_flag": null,
+  "refresh_rate": null,
+  "mounting_type": null,
+  "item_type_keyword": null,
+  "total_hdmi_ports": null,
+  "usb_port_count": null,
+  "special_feature": [],
+  "included_components": [],
+  "connectivity_technology": [],
+  "model_year": null,
+  "warranty_description": null,
+  "list_price_msrp": null
+}}"""
         else:
             prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
 
@@ -813,7 +841,7 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
 • list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
 
-━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━"""
+━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
   "title": "...",
   "bullets": ["...", "...", "...", "...", "..."],
