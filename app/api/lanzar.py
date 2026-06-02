@@ -3120,7 +3120,40 @@ async def search_upc_endpoint(request: Request):
                 gtin = ean or upc
                 if gtin and len(gtin) >= 12:
                     logger.info(f"UPC encontrado para '{query}': {gtin}")
-                    return {"upc": gtin, "source": "upcitemdb", "title": item.get("title", "")}
+                    # Parse weight → kg
+                    weight_kg = None
+                    raw_w = (item.get("weight") or "").strip().lower()
+                    if raw_w:
+                        import re as _re
+                        _wm = _re.search(r"([\d.]+)\s*(lb|oz|kg|g)\b", raw_w)
+                        if _wm:
+                            _wv, _wu = float(_wm.group(1)), _wm.group(2)
+                            weight_kg = round(
+                                _wv * 0.453592 if _wu == "lb" else
+                                _wv * 0.0283495 if _wu == "oz" else
+                                _wv / 1000 if _wu == "g" else _wv, 2)
+                    # Parse dimension → cm (format "L in X W in X H in" or similar)
+                    dims = None
+                    raw_d = (item.get("dimension") or "").strip().lower()
+                    if raw_d:
+                        import re as _re2
+                        _parts = _re2.findall(r"([\d.]+)\s*(in|cm|mm)\b", raw_d)
+                        if len(_parts) >= 3:
+                            def _to_cm(v, u):
+                                v = float(v)
+                                return round(v * 2.54 if u == "in" else v / 10 if u == "mm" else v, 1)
+                            dims = {
+                                "length_cm": _to_cm(*_parts[0]),
+                                "width_cm":  _to_cm(*_parts[1]),
+                                "height_cm": _to_cm(*_parts[2]),
+                            }
+                    return {
+                        "upc": gtin, "source": "upcitemdb",
+                        "title": item.get("title", ""),
+                        "weight_kg": weight_kg,
+                        "dims": dims,
+                        "images": (item.get("images") or [])[:3],
+                    }
 
         logger.info(f"UPC no encontrado para '{query}' (status {resp.status_code})")
         return {"upc": None, "source": None}

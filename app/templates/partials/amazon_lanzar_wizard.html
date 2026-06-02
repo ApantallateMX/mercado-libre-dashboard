@@ -281,8 +281,16 @@
               <!-- UPC -->
               <div>
                 <label id="amz-wiz-l-upc-lbl" class="block text-[10px] text-gray-500 mb-0.5">UPC / EAN</label>
-                <input id="amz-wiz-upc-attr" type="text" maxlength="14" placeholder="012345678901"
-                       class="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono">
+                <div class="flex gap-1">
+                  <input id="amz-wiz-upc-attr" type="text" maxlength="14" placeholder="012345678901"
+                         class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono">
+                  <button id="amz-wiz-upc-search-btn" onclick="window._amzWizSearchUPC()"
+                          title="Search UPC by brand + model"
+                          class="text-xs px-2 py-1.5 bg-gray-100 hover:bg-orange-400 hover:text-white border border-gray-200 rounded-lg transition shrink-0">
+                    🔍
+                  </button>
+                </div>
+                <span id="amz-wiz-upc-status" class="text-[10px] text-gray-400 hidden mt-0.5 block"></span>
               </div>
               <!-- País de origen -->
               <div>
@@ -723,6 +731,9 @@ var _I18N_EN = {
   pt_lbl:'Product type (Amazon)', pt_desc:'Determines available attributes. AI suggests it.',
   attrs_title:'Product attributes', attrs_req:'(required by Amazon)',
   upc_lbl:'UPC / EAN',
+  upc_need_brand_model:'Fill in Brand and Model first',
+  upc_searching:'Searching UPC…',
+  upc_not_found:'UPC not found — enter manually',
   units_label:'Units:', metric_label:'Metric (cm, kg)', imperial_label:'Imperial (in, lb)',
   weight_lbl_m:'Weight (kg)', weight_lbl_i:'Weight (lb)',
   screen_lbl:'Screen size (inches)',
@@ -1363,8 +1374,11 @@ window._amzWizGenerateContent = async function() {
     if (d.list_price_msrp) { var msrpEl2 = document.getElementById('amz-wiz-msrp'); if (msrpEl2 && !msrpEl2.value) msrpEl2.value = d.list_price_msrp; }
     if (d.width_cm) { var wdEl2 = document.getElementById('amz-wiz-width'); if (wdEl2 && !wdEl2.value) wdEl2.value = d.width_cm; }
     if (d.height_cm) { var htEl2 = document.getElementById('amz-wiz-height'); if (htEl2 && !htEl2.value) htEl2.value = d.height_cm; }
-    icon.textContent = '✅'; label.textContent = 'Generado — edita si necesitas';
+    icon.textContent = '✅'; label.textContent = _t('gen_done') || 'Generado — edita si necesitas';
     btn.className = btn.className.replace('bg-purple-500 hover:bg-purple-600', 'bg-green-500 hover:bg-green-600');
+    // Auto-search UPC if not already filled
+    var _upcEl = document.getElementById('amz-wiz-upc-attr');
+    if (_upcEl && !_upcEl.value) window._amzWizSearchUPC();
   } catch(e) {
     alert('Error de red: ' + e.message);
     icon.textContent = '✨'; label.textContent = 'Generar con IA';
@@ -1428,6 +1442,61 @@ window._amzWizUnitsChanged = function() {
   _iph('amz-wiz-pkg-weight', isImp ? 'e.g. 26'  : 'ej: 18.0');
   _iph('amz-wiz-pkg-length', isImp ? 'auto'     : 'auto');
   _iph('amz-wiz-pkg-height', isImp ? 'auto'     : 'auto');
+};
+
+// ─── UPC search ──────────────────────────────────────────────────────────────
+window._amzWizSearchUPC = function(forceSearch) {
+  var btn    = document.getElementById('amz-wiz-upc-search-btn');
+  var input  = document.getElementById('amz-wiz-upc-attr');
+  var status = document.getElementById('amz-wiz-upc-status');
+  if (!input || !status) return;
+  if (input.value.trim() && !forceSearch) return; // already has value
+  var brand = (document.getElementById('amz-wiz-brand') || {}).value || _wiz.brand || '';
+  var model = (document.getElementById('amz-wiz-model-num') || {}).value || _wiz.model || '';
+  if (!brand && !model) {
+    status.textContent = _t('upc_need_brand_model') || 'Completa Marca y Modelo primero';
+    status.className = 'text-[10px] text-amber-500 block mt-0.5';
+    status.classList.remove('hidden'); return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  status.textContent = _t('upc_searching') || 'Buscando UPC…';
+  status.className = 'text-[10px] text-gray-400 block mt-0.5'; status.classList.remove('hidden');
+  fetch('/api/lanzar/search-upc', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ brand: brand, model: model, title: _wiz.title }),
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.upc) {
+      input.value = d.upc;
+      status.textContent = '✓ UPC found: ' + d.upc;
+      status.className = 'text-[10px] text-green-600 block mt-0.5';
+      // Auto-fill weight if returned and field is empty
+      if (d.weight_kg) {
+        var wEl = document.getElementById('amz-wiz-weight');
+        if (wEl && !wEl.value) wEl.value = d.weight_kg;
+      }
+      // Auto-fill dimensions if returned and fields empty
+      if (d.dims) {
+        var lEl = document.getElementById('amz-wiz-length');
+        var wdEl = document.getElementById('amz-wiz-width');
+        var htEl = document.getElementById('amz-wiz-height');
+        if (lEl && !lEl.value) lEl.value = d.dims.length_cm;
+        if (wdEl && !wdEl.value) wdEl.value = d.dims.width_cm;
+        if (htEl && !htEl.value) htEl.value = d.dims.height_cm;
+      }
+    } else {
+      status.textContent = _t('upc_not_found') || 'UPC no encontrado — ingresa manualmente';
+      status.className = 'text-[10px] text-gray-400 block mt-0.5';
+    }
+  })
+  .catch(function() {
+    status.textContent = 'Error buscando UPC';
+    status.className = 'text-[10px] text-red-400 block mt-0.5';
+  })
+  .finally(function() {
+    if (btn) { btn.disabled = false; btn.textContent = '🔍'; }
+  });
 };
 
 // ─── Open external image search in new tab ───────────────────────────────────
