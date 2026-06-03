@@ -1106,11 +1106,16 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   el.classList.remove('hidden');
   el.classList.add('flex');
 
-  // Auto-search by UPC
+  // Auto-advance flow
   if (_wiz.upc) {
+    // Has UPC — search catalog in background, then auto-advance to step 2
     document.getElementById('amz-wiz-upc-info').textContent = '🔍 Buscando en catálogo Amazon por UPC: ' + _wiz.upc + '…';
     document.getElementById('amz-wiz-upc-info').classList.remove('hidden');
     window._amzWizSearch(true);
+  } else {
+    // No UPC — skip ASIN search, go directly to step 2 as new product
+    _wiz.is_new_product = true;
+    _amzWizGoStep(2);
   }
 };
 
@@ -1169,6 +1174,14 @@ function _amzWizGoStep(n) {
     isLast && !document.getElementById('amz-wiz-success').classList.contains('hidden'));
 
   if (isLast) _amzWizBuildReview();
+
+  // Auto-generate AI content when entering step 3 with empty title (no draft loaded)
+  if (n === 3) {
+    var _titleEl = document.getElementById('amz-wiz-title');
+    if (_titleEl && !_titleEl.value.trim()) {
+      setTimeout(function() { window._amzWizGenerateContent(); }, 350);
+    }
+  }
 }
 
 window._amzWizBack = function() {
@@ -1209,14 +1222,25 @@ window._amzWizSearch = async function(auto) {
     var d     = await (await fetch(url)).json();
     var items = d.items || [];
     if (auto && items.length === 1) {
-      document.getElementById('amz-wiz-upc-info').textContent = '✓ ASIN encontrado automáticamente por UPC';
-      _amzWizSelectAsin(items[0]); res.innerHTML = ''; return;
-    }
-    if (!items.length) {
-      res.innerHTML = '<p class="text-xs text-yellow-600 bg-yellow-50 rounded-lg px-3 py-2">Sin resultados. Prueba con otro término o crea el producto nuevo.</p>';
-      if (auto) document.getElementById('amz-wiz-upc-info').textContent = '⚠ No se encontró ASIN por UPC — busca manualmente o crea producto nuevo';
+      document.getElementById('amz-wiz-upc-info').textContent = '✓ ASIN encontrado automáticamente por UPC — avanzando…';
+      _amzWizSelectAsin(items[0]); res.innerHTML = '';
+      // Auto-advance to step 2 with ASIN pre-selected
+      setTimeout(function() { if (_wiz.step === 1) _amzWizGoStep(2); }, 600);
       return;
     }
+    if (!items.length) {
+      res.innerHTML = '';
+      if (auto) {
+        _wiz.is_new_product = true;
+        document.getElementById('amz-wiz-upc-info').textContent = '⚠ Sin ASIN en catálogo — creando producto nuevo…';
+        // Auto-advance to step 2 as new product
+        setTimeout(function() { if (_wiz.step === 1) _amzWizGoStep(2); }, 600);
+      } else {
+        res.innerHTML = '<p class="text-xs text-yellow-600 bg-yellow-50 rounded-lg px-3 py-2">Sin resultados. Prueba con otro término o crea el producto nuevo.</p>';
+      }
+      return;
+    }
+    // Multiple results — show for user to pick, but also auto-advance after 4s if no selection
     res.innerHTML = items.map(function(item) {
       return '<div class="flex items-center gap-2.5 border border-gray-200 hover:border-orange-400 rounded-xl p-2.5 cursor-pointer transition" onclick="window._amzWizSelectAsinById(\'' + item.asin + '\')">' +
         '<img src="' + (item.image_url || '') + '" alt="" class="w-10 h-10 object-contain rounded border border-gray-100 bg-gray-50 shrink-0" onerror="this.style.display=\'none\'">' +
@@ -1230,9 +1254,15 @@ window._amzWizSearch = async function(auto) {
     }).join('');
     window._amzWizCatalogItems = items;
   } catch(e) {
-    res.innerHTML = '<p class="text-xs text-red-500">Error: ' + e.message + '</p>';
+    if (auto) {
+      // On error, just proceed as new product
+      _wiz.is_new_product = true;
+      setTimeout(function() { if (_wiz.step === 1) _amzWizGoStep(2); }, 400);
+    } else {
+      res.innerHTML = '<p class="text-xs text-red-500">Error: ' + e.message + '</p>';
+    }
   } finally {
-    btn.disabled = false; btn.textContent = 'Buscar';
+    btn.disabled = false; btn.textContent = _t('search_btn') || 'Buscar';
   }
 };
 
