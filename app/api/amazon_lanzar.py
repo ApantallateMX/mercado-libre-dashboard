@@ -696,10 +696,19 @@ BACKEND KEYWORDS (max 249 characters — count characters not bytes):
 • Mix of English search terms, synonyms, alternate uses, common misspellings
 • Separated by spaces (NOT commas)
 
-PRODUCT_TYPE:
-• Use the most specific Amazon US product type in SCREAMING_SNAKE_CASE
-• Examples: TELEVISION, LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER
-• For TVs: TELEVISION. For monitors: COMPUTER_MONITOR. For speakers: SPEAKER.
+PRODUCT_TYPE — CRITICAL: must be an EXACT valid Amazon US product type string. Use ONLY these:
+• TVs: TELEVISION | Monitors: COMPUTER_MONITOR | Vacuums (all kinds): VACUUM
+• Bulbs: LIGHT_BULB | Fans (all kinds): FAN | ACs: AIR_CONDITIONER
+• Speakers/soundbars: SPEAKER | Headphones/earbuds: HEADPHONES
+• Laptops: LAPTOP | Desktops: PERSONAL_COMPUTER | Tablets: TABLET
+• Coffee makers: COFFEE_MAKER | Blenders: BLENDER | Microwaves: MICROWAVE_OVEN
+• Hair dryers/tools: HAIR_DRYER | Shavers/trimmers: ELECTRIC_SHAVER
+• Cameras: CAMERA | Security cameras: SECURITY_CAMERA | Printers: PRINTER
+• Smart watches: SMARTWATCH | Power banks: POWER_BANK | Keyboards: KEYBOARD | Mice: MOUSE
+• Drills/power tools: POWER_DRILL | Light fixtures/lamps: LIGHT_FIXTURE
+• Backpacks/bags: BACKPACK | Shoes: SHOE | Kitchen knives: KITCHEN_KNIFE
+• Generic fallback: PRODUCT (ONLY if no specific type fits)
+Choose the most specific valid type. NEVER invent or modify these strings.
 
 COLOR:
 • Main product color in English (e.g., Black, White, Silver, Blue)
@@ -806,11 +815,18 @@ KEYWORDS BACKEND (máx 249 caracteres, NO bytes — caracteres):
 • Términos genéricos, sinónimos, usos alternativos, errores ortográficos frecuentes
 • Separados por espacios (NO comas)
 
-PRODUCT_TYPE:
-• Elige el tipo Amazon MX más específico y correcto (SCREAMING_SNAKE_CASE)
-• Ejemplos: TELEVISION, LIGHT_BULB, AIR_CONDITIONER, COMPUTER_MONITOR, FITNESS_TRACKER, MEDICAL_GLOVE
-• Para TVs: TELEVISION. Para monitores: COMPUTER_MONITOR. Para bocinas: SPEAKER.
-• Basa tu elección en la categoría y el título del producto
+PRODUCT_TYPE — CRÍTICO: debe ser un tipo de producto Amazon MX exacto y válido (SCREAMING_SNAKE_CASE):
+• TVs: TELEVISION | Monitores: COMPUTER_MONITOR | Aspiradoras (todo tipo): VACUUM
+• Focos: LIGHT_BULB | Ventiladores (todo tipo): FAN | Climatizadores: AIR_CONDITIONER
+• Bocinas/soundbars: SPEAKER | Audífonos/earbuds: HEADPHONES
+• Laptops: LAPTOP | Computadoras: PERSONAL_COMPUTER | Tablets: TABLET
+• Cafeteras: COFFEE_MAKER | Licuadoras: BLENDER | Microondas: MICROWAVE_OVEN
+• Secadoras/plancha cabello: HAIR_DRYER | Rasuradores: ELECTRIC_SHAVER
+• Cámaras: CAMERA | Cámaras seguridad: SECURITY_CAMERA | Impresoras: PRINTER
+• Smartwatches: SMARTWATCH | Power banks: POWER_BANK | Teclados: KEYBOARD | Mouse: MOUSE
+• Taladros/herramientas: POWER_DRILL | Lámparas/fixtures: LIGHT_FIXTURE
+• Fallback genérico: PRODUCT (solo si ningún tipo específico aplica)
+Elige el tipo más específico. NUNCA inventes ni modifiques estas cadenas.
 
 COLOR:
 • Color principal del producto en inglés (ej: Black, White, Silver, Blue)
@@ -1082,81 +1098,77 @@ async def create_listing(request: Request):
         attributes["number_of_items"] = [{"value": 1, "marketplace_id": client.marketplace_id}]
         attributes["batteries_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
         attributes["batteries_included"] = [{"value": False, "marketplace_id": client.marketplace_id}]
-        # item_type_keyword — requerido para TELEVISION
-        _itk = item_type_keyword or ("televisions" if product_type == "TELEVISION" else "")
+        # item_type_keyword
+        _ITK_DEFAULTS = {
+            "TELEVISION": "televisions", "COMPUTER_MONITOR": "computer-monitors",
+            "VACUUM": "vacuum-cleaners", "LIGHT_BULB": "light-bulbs",
+            "SPEAKER": "speakers", "HEADPHONES": "headphones",
+            "FAN": "fans", "AIR_CONDITIONER": "air-conditioners",
+            "COFFEE_MAKER": "coffee-makers", "BLENDER": "blenders",
+            "MICROWAVE_OVEN": "microwave-ovens", "LAPTOP": "laptops",
+            "PERSONAL_COMPUTER": "personal-computers", "TABLET": "tablets",
+            "CAMERA": "cameras", "PRINTER": "printers",
+            "POWER_DRILL": "power-drills", "LIGHT_FIXTURE": "light-fixtures",
+            "SMARTWATCH": "smart-watches", "KEYBOARD": "keyboards", "MOUSE": "mice",
+        }
+        _itk = item_type_keyword or _ITK_DEFAULTS.get(product_type, "")
         if _itk:
             attributes["item_type_keyword"] = [{"value": _itk, "marketplace_id": client.marketplace_id}]
 
-        # ── display — atributo compuesto para TVs/monitores ───────────────────
-        # Sub-atributos con nombres internos del schema de Amazon (TELEVISION/USA)
-        _RESOLUTION_MAX = {"720p": "1280 x 720", "1080p": "1920 x 1080", "4K": "3840 x 2160", "8K": "7680 x 4320"}
-        _RESOLUTION_STR = {"720p": "1280 x 720 pixels", "1080p": "1920 x 1080 pixels",
-                            "4K": "3840 x 2160 pixels", "8K": "7680 x 4320 pixels"}
-        display_obj: dict = {"marketplace_id": client.marketplace_id}
-        _has_display = False
-        if display_size_in > 0:
-            display_obj["size"] = [{"value": display_size_in, "unit": "inches"}]
-            _has_display = True
-        # Amazon TELEVISION schema tiene DOS campos en display:
-        #   display.type        = "Display Type" — e.g. "LED", "OLED", "LCD"  (REQUERIDO)
-        #   display.technology  = "Display Technology" — e.g. "TFT active matrix" (REQUERIDO)
-        # Son campos DISTINTOS; technology NO es backlight sino la tecnología de matriz
-        _dt = display_type or ("LED" if product_type == "TELEVISION" else "")
-        if _dt:
-            display_obj["type"] = [{"value": _dt, "language_tag": "en_US"}]
-            _has_display = True
-            # technology = tecnología de matriz subyacente (mapeada desde el tipo de pantalla)
-            _tech_map = {"LED": "TFT active matrix", "QLED": "TFT active matrix",
-                         "Mini LED": "TFT active matrix", "LCD": "TFT active matrix",
-                         "OLED": "OLED", "QNED": "TFT active matrix"}
-            _tech = _tech_map.get(_dt, "TFT active matrix")
-            display_obj["technology"] = [{"value": _tech, "language_tag": "en_US"}]
-        if resolution:
-            _res_max = _RESOLUTION_MAX.get(resolution, resolution)
-            display_obj["resolution_maximum"] = [{"value": _res_max, "unit": "pixels", "language_tag": "en_US"}]
-            _has_display = True
-        if refresh_rate:
+        # Only send display/screen-specific attributes for TV and monitor product types
+        _IS_DISPLAY_TYPE = product_type in ("TELEVISION", "COMPUTER_MONITOR", "MONITOR", "TV")
+
+        # ── Display/screen attributes — ONLY for TV and monitor product types ──
+        if _IS_DISPLAY_TYPE:
+            _RESOLUTION_MAX = {"720p": "1280 x 720", "1080p": "1920 x 1080", "4K": "3840 x 2160", "8K": "7680 x 4320"}
+            _RESOLUTION_STR = {"720p": "1280 x 720 pixels", "1080p": "1920 x 1080 pixels",
+                                "4K": "3840 x 2160 pixels", "8K": "7680 x 4320 pixels"}
+            display_obj: dict = {"marketplace_id": client.marketplace_id}
+            _has_display = False
+            if display_size_in > 0:
+                display_obj["size"] = [{"value": display_size_in, "unit": "inches"}]
+                _has_display = True
+            _dt = display_type or ("LED" if product_type == "TELEVISION" else "")
+            if _dt:
+                display_obj["type"] = [{"value": _dt, "language_tag": "en_US"}]
+                _has_display = True
+                _tech_map = {"LED": "TFT active matrix", "QLED": "TFT active matrix",
+                             "Mini LED": "TFT active matrix", "LCD": "TFT active matrix",
+                             "OLED": "OLED", "QNED": "TFT active matrix"}
+                display_obj["technology"] = [{"value": _tech_map.get(_dt, "TFT active matrix"), "language_tag": "en_US"}]
+            if resolution:
+                display_obj["resolution_maximum"] = [{"value": _RESOLUTION_MAX.get(resolution, resolution), "unit": "pixels", "language_tag": "en_US"}]
+                _has_display = True
+            if refresh_rate:
+                try:
+                    display_obj["refresh_rate_in_hertz"] = [{"value": int(refresh_rate)}]
+                except (ValueError, TypeError):
+                    pass
+            if _has_display:
+                attributes["display"] = [display_obj]
+            if resolution:
+                attributes["resolution"] = [{"value": _RESOLUTION_STR.get(resolution, resolution), "marketplace_id": client.marketplace_id}]
+            _ar = aspect_ratio or ("16:9" if (display_size_in > 0 or display_type) else "")
+            if _ar:
+                attributes["image_aspect_ratio"] = [{"value": _ar, "marketplace_id": client.marketplace_id}]
+            if refresh_rate:
+                try:
+                    attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
+                except (ValueError, TypeError):
+                    pass
+            if mounting_type:
+                _mt_map = {"Tabletop, Wall Mount": "Wall Mount", "Tabletop": "Table Mount", "Wall Mount": "Wall Mount"}
+                attributes["mounting_type"] = [{"value": _mt_map.get(mounting_type, mounting_type), "marketplace_id": client.marketplace_id}]
             try:
-                display_obj["refresh_rate_in_hertz"] = [{"value": int(refresh_rate)}]
+                _hdmi = int(total_hdmi_ports) if total_hdmi_ports is not None else 0
             except (ValueError, TypeError):
-                pass
-        if _has_display:
-            attributes["display"] = [display_obj]
+                _hdmi = 0
+            if _hdmi <= 0 and product_type == "TELEVISION":
+                _hdmi = 2  # TV default
+            if _hdmi > 0:
+                attributes["total_hdmi_ports"] = [{"value": _hdmi, "marketplace_id": client.marketplace_id}]
 
-        # resolution — campo independiente requerido en USA marketplace
-        if resolution:
-            attributes["resolution"] = [{"value": _RESOLUTION_STR.get(resolution, resolution), "marketplace_id": client.marketplace_id}]
-
-        # image_aspect_ratio — requerido para TELEVISION en USA
-        _ar = aspect_ratio or ("16:9" if (display_size_in > 0 or display_type) else "")
-        if _ar:
-            attributes["image_aspect_ratio"] = [{"value": _ar, "marketplace_id": client.marketplace_id}]
-
-        # refresh_rate standalone (además de dentro de display)
-        if refresh_rate:
-            try:
-                attributes["refresh_rate"] = [{"value": int(refresh_rate), "unit": "hertz", "marketplace_id": client.marketplace_id}]
-            except (ValueError, TypeError):
-                pass
-
-        # mounting_type — solo 1 valor permitido por Amazon
-        if mounting_type:
-            _mt_map = {"Tabletop, Wall Mount": "Wall Mount", "Tabletop": "Table Mount", "Wall Mount": "Wall Mount"}
-            _mt_val = _mt_map.get(mounting_type, mounting_type)
-            attributes["mounting_type"] = [{"value": _mt_val, "marketplace_id": client.marketplace_id}]
-
-        # ── Puertos — requerido para TELEVISION ──────────────────────────────
-        try:
-            _hdmi = int(total_hdmi_ports) if total_hdmi_ports is not None else 0
-        except (ValueError, TypeError):
-            _hdmi = 0
-        if _hdmi <= 0 and product_type == "TELEVISION":
-            _hdmi = 2  # default: la mayoría de TVs tiene 2+ HDMI
-        if _hdmi > 0:
-            attributes["total_hdmi_ports"] = [{"value": _hdmi, "marketplace_id": client.marketplace_id}]
-        # usb_port_count no es válido para TELEVISION en Amazon — omitir
-
-        # ── Características y componentes — requeridos para TELEVISION ────────
+        # ── Features, components, connectivity — universal ────────────────────
         _sf = special_feature or (["High Definition"] if product_type == "TELEVISION" else [])
         if _sf:
             attributes["special_feature"] = [
@@ -1170,7 +1182,7 @@ async def create_listing(request: Request):
                 for c in _ic[:10] if c
             ]
 
-        # ── Conectividad — requerida para TELEVISION ──────────────────────────
+        # ── Connectivity ──────────────────────────────────────────────────────
         _ct = connectivity_tech or (["HDMI"] if product_type == "TELEVISION" else [])
         if _ct:
             attributes["connectivity_technology"] = [

@@ -890,7 +890,7 @@ function _amzSlGetCurrency() {
 
 window._amzOpenNuevoProducto = function(sellerId) {
     window._npSellerId = sellerId || (window.amzActiveSellerId || '');
-    ['np-brand','np-model','np-category','np-upc','np-price','np-sku'].forEach(function(id) {
+    ['np-brand','np-model','np-upc','np-price','np-sku'].forEach(function(id) {
         var el = document.getElementById(id); if (el) el.value = '';
     });
     var errEl = document.getElementById('np-error');
@@ -909,7 +909,7 @@ window._amzCloseNuevoProducto = function() {
 window._amzNuevoProductoLanzar = function() {
     var brand    = (document.getElementById('np-brand').value || '').trim();
     var model    = (document.getElementById('np-model').value || '').trim();
-    var category = (document.getElementById('np-category').value || '').trim();
+    var category = ''; // AI determines category/product type automatically
     var upc      = (document.getElementById('np-upc').value || '').trim();
     var price    = parseFloat(document.getElementById('np-price').value) || 0;
     var sku      = (document.getElementById('np-sku').value || '').trim();

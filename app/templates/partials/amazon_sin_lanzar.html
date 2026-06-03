@@ -169,17 +169,11 @@
                  class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-400 transition">
         </div>
       </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label class="block text-xs font-semibold text-gray-600 mb-1">Categoría</label>
-          <input id="np-category" type="text" placeholder="TVs, Laptops…"
-                 class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-400 transition">
-        </div>
-        <div>
-          <label class="block text-xs font-semibold text-gray-600 mb-1">UPC / EAN</label>
-          <input id="np-upc" type="text" placeholder="012345678901"
-                 class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-400 transition">
-        </div>
+      <div>
+        <label class="block text-xs font-semibold text-gray-600 mb-1">UPC / EAN <span class="font-normal text-gray-400">(opcional)</span></label>
+        <input id="np-upc" type="text" placeholder="012345678901"
+               class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-400 transition">
+        <p class="text-[10px] text-gray-400 mt-0.5">La IA detectará la categoría y completará todos los campos automáticamente.</p>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
@@ -218,7 +212,7 @@
 
   window._amzOpenNuevoProducto = function(sellerId) {
     _npSellerId = sellerId || (window.amzActiveSellerId || '');
-    ['np-brand','np-model','np-category','np-upc','np-price','np-sku'].forEach(function(id) {
+    ['np-brand','np-model','np-upc','np-price','np-sku'].forEach(function(id) {
       document.getElementById(id).value = '';
     });
     document.getElementById('np-error').classList.add('hidden');
