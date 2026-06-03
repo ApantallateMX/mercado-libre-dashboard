@@ -882,6 +882,50 @@ window._amzSlTab = function(tab) {
     }
 };
 
+// ── Nuevo Producto modal — definidas aquí porque innerHTML no ejecuta scripts ──
+function _amzSlGetCurrency() {
+    var meta = document.getElementById('amz-sl-meta');
+    return (meta && meta.getAttribute('data-currency')) || 'MXN';
+}
+
+window._amzOpenNuevoProducto = function(sellerId) {
+    window._npSellerId = sellerId || (window.amzActiveSellerId || '');
+    ['np-brand','np-model','np-category','np-upc','np-price','np-sku'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.value = '';
+    });
+    var errEl = document.getElementById('np-error');
+    if (errEl) errEl.classList.add('hidden');
+    var m = document.getElementById('amz-nuevo-modal');
+    if (!m) return;
+    m.classList.remove('hidden'); m.classList.add('flex');
+    setTimeout(function() { var b = document.getElementById('np-brand'); if (b) b.focus(); }, 50);
+};
+
+window._amzCloseNuevoProducto = function() {
+    var m = document.getElementById('amz-nuevo-modal');
+    if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
+};
+
+window._amzNuevoProductoLanzar = function() {
+    var brand    = (document.getElementById('np-brand').value || '').trim();
+    var model    = (document.getElementById('np-model').value || '').trim();
+    var category = (document.getElementById('np-category').value || '').trim();
+    var upc      = (document.getElementById('np-upc').value || '').trim();
+    var price    = parseFloat(document.getElementById('np-price').value) || 0;
+    var sku      = (document.getElementById('np-sku').value || '').trim();
+    var err      = document.getElementById('np-error');
+    var currency = _amzSlGetCurrency();
+
+    if (!brand)           { err.textContent = 'La marca es requerida'; err.classList.remove('hidden'); return; }
+    if (!model)           { err.textContent = 'El modelo es requerido'; err.classList.remove('hidden'); return; }
+    if (!price || price <= 0) { err.textContent = 'Ingresa un precio válido'; err.classList.remove('hidden'); return; }
+    err.classList.add('hidden');
+
+    var title = brand + ' ' + model;
+    window._amzCloseNuevoProducto();
+    window.openAmzLanzar(sku, title, price, upc, window._npSellerId || _amzSlSellerId(), 0, brand, category, '', model, 0, currency);
+};
+
 window._amzIgnoreGap = function(sku, sellerId) {
     fetch('/api/amazon/lanzar/ignore/' + encodeURIComponent(sku), {
         method: 'POST',

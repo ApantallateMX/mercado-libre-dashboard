@@ -12,6 +12,8 @@
 <div id="amz-sl-meta"
      data-seller-id="{{ seller_id }}"
      data-scan-status="{{ scan_status }}"
+     data-currency="{{ 'USD' if is_usd else 'MXN' }}"
+     data-is-usd="{{ 'true' if is_usd else 'false' }}"
      class="hidden"></div>
 
 <!-- ─── TABS: Sin Lanzar / Lanzados / Ignorados ──────────────────────────── -->
@@ -181,7 +183,7 @@
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="block text-xs font-semibold text-gray-600 mb-1">Precio MXN <span class="text-red-400">*</span></label>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Precio {{ 'USD' if is_usd else 'MXN' }} <span class="text-red-400">*</span></label>
           <div class="relative">
             <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
             <input id="np-price" type="number" min="1" step="1" placeholder="0"
