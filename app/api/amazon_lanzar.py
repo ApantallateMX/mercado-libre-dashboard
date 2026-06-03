@@ -937,7 +937,27 @@ async def create_listing(request: Request):
     bullets          = body.get("bullets") or []
     description      = (body.get("description") or "")[:2000]
     keywords_backend = (body.get("keywords_backend") or "")[:249]
-    product_type     = body.get("product_type") or "PRODUCT"
+    _PT_RAW          = (body.get("product_type") or "PRODUCT").strip().upper()
+    # Normalize invalid/variant product type strings to valid Amazon SP-API values
+    _PT_MAP = {
+        "STICK_VACUUM":"VACUUM","STICK_VACUUM_CLEANER":"VACUUM",
+        "UPRIGHT_VACUUM":"VACUUM","UPRIGHT_VACUUM_CLEANER":"VACUUM",
+        "ROBOT_VACUUM":"VACUUM","ROBOT_VACUUM_CLEANER":"VACUUM",
+        "HANDHELD_VACUUM":"VACUUM","CANISTER_VACUUM":"VACUUM","WET_DRY_VACUUM":"VACUUM",
+        "CORDLESS_VACUUM":"VACUUM","BAGLESS_VACUUM":"VACUUM",
+        "CEILING_FAN":"FAN","TOWER_FAN":"FAN","BOX_FAN":"FAN",
+        "TABLE_FAN":"FAN","FLOOR_FAN":"FAN","WINDOW_FAN":"FAN","DESK_FAN":"FAN",
+        "MONITOR":"COMPUTER_MONITOR","TV":"TELEVISION","SMART_TV":"TELEVISION",
+        "WINDOW_AIR_CONDITIONER":"AIR_CONDITIONER","PORTABLE_AIR_CONDITIONER":"AIR_CONDITIONER",
+        "ESPRESSO_MACHINE":"COFFEE_MAKER","DRIP_COFFEE_MAKER":"COFFEE_MAKER","POD_COFFEE_MAKER":"COFFEE_MAKER",
+        "SOUNDBAR":"SPEAKER","SUBWOOFER":"SPEAKER","SMART_SPEAKER":"SPEAKER","BLUETOOTH_SPEAKER":"SPEAKER",
+        "EARBUDS":"HEADPHONES","EARPHONES":"HEADPHONES","WIRELESS_HEADPHONES":"HEADPHONES","GAMING_HEADSET":"HEADPHONES",
+        "FITNESS_TRACKER":"SMARTWATCH","SMART_WATCH":"SMARTWATCH",
+        "POWER_BANK":"POWER_BANK","PORTABLE_CHARGER":"POWER_BANK",
+        "SECURITY_CAMERA":"SECURITY_CAMERA","DOORBELL_CAMERA":"SECURITY_CAMERA",
+        "ELECTRIC_TOOTHBRUSH":"ELECTRIC_SHAVER","HAIR_STRAIGHTENER":"HAIR_DRYER","CURLING_IRON":"HAIR_DRYER",
+    }
+    product_type     = _PT_MAP.get(_PT_RAW, _PT_RAW) or "PRODUCT"
     photo_urls       = [u.strip() for u in (body.get("photo_urls") or []) if (u or "").strip()]
     currency         = (body.get("currency") or "MXN").upper()
     # Atributos adicionales
@@ -1632,6 +1652,7 @@ async def photo_prompts(request: Request):
     brand    = (body.get("brand") or "").strip()
     model    = (body.get("model") or "").strip()
     category = (body.get("category") or "Electronics").strip()
+    has_img  = bool((body.get("thumbnail_url") or "").strip())
 
     product_desc = " ".join(filter(None, [brand, model, title])) or title
 
@@ -1640,12 +1661,12 @@ async def photo_prompts(request: Request):
     api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
 
     fallback = [
-        f"Professional Amazon product photo, {product_desc}, pure white background #FFFFFF, product fills 85% of frame, studio lighting, no text, 2000x2000px",
-        f"{product_desc}, front view, white background, professional product photography, crystal clear, Amazon listing compliant",
-        f"{product_desc}, 3/4 angle showing all sides and ports, white background, studio lighting",
-        f"{product_desc}, lifestyle in modern home setting, aspirational warm lighting, product in use",
-        f"{product_desc}, feature close-up detail shot, key specs visible, white background, macro photography",
-        f"{product_desc}, size comparison in real environment, scale reference, clean modern interior",
+        f"Professional Amazon listing photo, {product_desc}, pure white background #FFFFFF, product fills 85% of frame, studio lighting, no text overlay",
+        f"{product_desc}, 3/4 angle showing all sides, white background, professional product photography",
+        f"Close-up detail of {product_desc} showing key features and build quality, white background, macro studio shot",
+        f"{product_desc} being used in a modern well-lit home, lifestyle photography, natural warm lighting, person interacting with product",
+        f"{product_desc} in a clean modern living space, aspirational lifestyle shot, warm ambient lighting, product prominently featured",
+        f"{product_desc} size scale reference, shown in real home environment, clean modern interior, product in foreground",
     ]
 
     if not api_key:
@@ -1653,17 +1674,18 @@ async def photo_prompts(request: Request):
 
     try:
         prompt_text = (
-            f"Product: {product_desc}\nCategory: {category}\n\n"
-            "Generate exactly 6 Higgsfield AI image prompts for Amazon product listing photos. "
-            "Each prompt must be ultra-specific to THIS exact product (include brand and model). "
-            "Image types:\n"
-            "1. Main hero — white background, product centered, Amazon compliant (≥85% frame)\n"
-            "2. Second angle — different framing, white background\n"
-            "3. Rear/side view — all ports, connections, back panel visible\n"
-            "4. Lifestyle — product in use in a modern aspirational home setting\n"
-            "5. Feature close-up — highlight key feature or screen/display detail\n"
-            "6. Scale/size context — showing product size in real environment\n\n"
-            "Rules: photorealistic, professional, no watermarks, no text overlay. "
+            f"Product: {product_desc}\nBrand: {brand}\nModel: {model}\nCategory: {category}\n\n"
+            "Generate exactly 6 highly specific Higgsfield AI image prompts for Amazon product listing.\n"
+            "CRITICAL: Each prompt MUST describe THIS EXACT PRODUCT visually — its shape, color, form factor, distinctive features.\n"
+            "Do NOT describe a generic product. Describe the actual appearance of this specific brand/model.\n\n"
+            "Prompt types (in order):\n"
+            "1. Hero shot — white background, product centered fills 85% of frame, Amazon listing compliant\n"
+            "2. Angle shot — 3/4 view showing all sides, white background\n"
+            "3. Detail close-up — macro shot of key feature, control panel, or distinctive design element\n"
+            "4. Lifestyle — product being ACTIVELY USED by a person in a modern home, showing its real use case\n"
+            "5. Lifestyle ambient — product displayed in aspirational home setting, no person, warm lighting\n"
+            "6. Scale context — product shown in real environment to convey size, clean modern space\n\n"
+            "Rules: photorealistic, professional photography, no watermarks, no text, no logos.\n"
             "Output ONLY a valid JSON array of exactly 6 strings, nothing else."
         )
         async with _httpx.AsyncClient(timeout=20) as hc:

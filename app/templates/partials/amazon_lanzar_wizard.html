@@ -1828,7 +1828,19 @@ window._amzWizLaunchHighsfield = function() {
     var spin = document.getElementById('amz-wiz-slot-spin-' + idx);
     var img  = document.getElementById('amz-wiz-slot-img-' + idx);
     if (spin) spin.classList.add('hidden');
-    if (img)  { img.src = url; img.classList.remove('hidden'); }
+    if (img) {
+      // Handle video URLs (from image-to-video mode)
+      var isVideo = url && (url.includes('.mp4') || url.includes('.webm') || url.includes('video'));
+      if (isVideo) {
+        var vid = document.createElement('video');
+        vid.src = url; vid.autoplay = true; vid.loop = true; vid.muted = true;
+        vid.className = 'w-full h-full object-cover';
+        img.parentElement.appendChild(vid);
+        img.parentElement.querySelector('.animate-spin') && img.parentElement.querySelector('.animate-spin').remove();
+      } else {
+        img.src = url; img.classList.remove('hidden');
+      }
+    }
     if (inputs[idx]) {
       inputs[idx].value = url;
       inputs[idx].dispatchEvent(new Event('input'));
@@ -1850,11 +1862,14 @@ window._amzWizLaunchHighsfield = function() {
 
   function fireGeneration(prompts) {
     if (btn) btn.textContent = '✨ Generando… 0/' + NUM;
+    // Use video mode (image-to-video) when product thumbnail is available → animates REAL product image
+    // Use image mode (text-to-image) only when no thumbnail
+    var _useVideo = !!thumb;
     prompts.forEach(function(prompt, idx) {
       fetch('/api/higgsfield/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'image', title: title, thumbnail_url: thumb, custom_prompt: prompt, sku: sku })
+        body: JSON.stringify({ mode: _useVideo ? 'video' : 'image', title: title, thumbnail_url: thumb, custom_prompt: prompt, sku: sku })
       })
       .then(function(r) { return r.json(); })
       .then(function(data) {
@@ -1880,7 +1895,7 @@ window._amzWizLaunchHighsfield = function() {
   fetch('/api/amazon/lanzar/photo-prompts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: title, brand: brand, model: model, category: category })
+    body: JSON.stringify({ title: title, brand: brand, model: model, category: category, thumbnail_url: thumb })
   })
   .then(function(r) { return r.json(); })
   .then(function(d) { fireGeneration(d.prompts || []); })
