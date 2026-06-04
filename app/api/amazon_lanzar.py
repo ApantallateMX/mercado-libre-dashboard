@@ -1049,7 +1049,7 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • usb_port_count: Integer number of USB ports (e.g., 2), null if N/A
 • special_feature: List of key features (e.g., ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] if N/A
 • included_components: List of box contents (e.g., ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] if N/A
-• connectivity_technology: REQUIRED — NEVER return empty. For corded/wired appliances: ["Corded Electric"]. For wireless: ["Wi-Fi","Bluetooth"]. For TVs: ["HDMI","Wi-Fi","Bluetooth"]. Always provide at least one value.
+• connectivity_technology: ONLY valid values: "Bluetooth", "Wi-Fi", "USB", "HDMI", "Infrared", "Auxiliary". For corded-only appliances (vacuums, fans) with NO wireless: return []. Connectivity = wireless tech only, NOT the power cord.
 • model_year: Model year as integer (e.g., 2024), null if unknown
 • warranty_description: "90 days seller warranty"
 • list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
@@ -1057,7 +1057,7 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • voltage_v: Actual operating voltage string — research the specific model spec (e.g., "120V", "220V", "100-240V", "120/240V"). null only if truly unknown.
 
 PRODUCT-SPECIFIC REQUIRED ATTRIBUTES — Fill ALL that apply to THIS product:
-• surface_type: Floor/surface type the product works on. Vacuums: "Multi-Surface"/"Carpet"/"Hardwood". null if N/A.
+• surface_type: Floor/surface type the product works on. Vacuums (stored as surface_recommendation in Amazon): "Bare Floor"/"Carpet"/"Hard Floor"/"Hardwoods"/"Laminate"/"Ceramic tile". Use "Multi-Surface" for multi-surface vacuums. null if N/A.
 • form_factor: Physical form. Vacuums: "Stick"/"Upright"/"Handheld"/"Robot"/"Canister". Fans: "Tower"/"Box"/"Desk". Speakers: "Smart Speaker"/"Portable". null if N/A.
 • power_source_type: "Corded Electric"/"Battery Powered"/"Solar Powered"/"USB"/"AC Adapter". Required for most appliances.
 • bag_type: "Bagless"/"Bagged". Vacuums only. null otherwise.
@@ -1192,7 +1192,7 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • usb_port_count: Número entero de puertos USB (ej: 2), null si no aplica
 • special_feature: Lista de características destacadas (ej: ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] si no aplica
 • included_components: Lista de lo que incluye la caja (ej: ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] si no aplica
-• connectivity_technology: REQUERIDO — NUNCA devolver vacío. Para electrodomésticos alámbricos: ["Corded Electric"]. Para inalámbricos: ["Wi-Fi","Bluetooth"]. Para TVs: ["HDMI","Wi-Fi","Bluetooth"]. Siempre al menos un valor.
+• connectivity_technology: Solo valores válidos: "Bluetooth", "Wi-Fi", "USB", "HDMI", "Infrared", "Auxiliary". Para electrodomésticos solo alámbricos (aspiradoras, ventiladores) SIN inalámbrico: devolver []. Conectividad = tecnología inalámbrica únicamente, NO el cable de poder.
 • model_year: Año del modelo como entero (ej: 2024), null si no sabes
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
 • list_price_msrp: Precio MSRP sugerido en la misma moneda (null si no puedes estimar)
@@ -1528,7 +1528,7 @@ async def create_listing(request: Request):
         # item_type_keyword
         _ITK_DEFAULTS = {
             "TELEVISION": "televisions", "COMPUTER_MONITOR": "computer-monitors",
-            "VACUUM": "vacuum-cleaners", "VACUUM_CLEANER": "vacuum-cleaners",
+            "VACUUM": "household-vacuums", "VACUUM_CLEANER": "household-vacuums",
             "LIGHT_BULB": "light-bulbs", "SPEAKER": "speakers",
             "HEADPHONES": "headphones", "FAN": "fans",
             "AIR_CONDITIONER": "air-conditioners", "COFFEE_MAKER": "coffee-makers",
@@ -1612,18 +1612,22 @@ async def create_listing(request: Request):
                 for c in _ic[:10] if c
             ]
 
-        # ── Connectivity — fallback defaults per product type ─────────────────
-        _CORDED_TYPES = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
-                         "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER"}
-        _ct_default = (["HDMI","Wi-Fi","Bluetooth"] if product_type == "TELEVISION"
-                       else ["Corded Electric"] if product_type in _CORDED_TYPES
-                       else [])
-        _ct = connectivity_tech or _ct_default
+        # ── Connectivity — ONLY valid Amazon enum values ──────────────────────
+        # Amazon VACUUM_CLEANER valid values: Auxiliary, Bluetooth, Infrared, USB, Wi-Fi
+        # "Corded Electric" is NOT a valid connectivity_technology value — it belongs to power_source_type
+        _VALID_CONNECTIVITY = {"Auxiliary","Bluetooth","Infrared","USB","Wi-Fi","HDMI",
+                               "Wi-Fi,Bluetooth","802.11"}
+        _ct_default = (["HDMI","Wi-Fi","Bluetooth"] if product_type == "TELEVISION" else [])
+        # Filter connectivity_tech to only include valid values (remove "Corded Electric" etc.)
+        _ct_raw = connectivity_tech or _ct_default
+        _ct = [c for c in _ct_raw if c and any(v.lower() in c.lower() for v in _VALID_CONNECTIVITY)]
         if _ct:
             attributes["connectivity_technology"] = [
                 {"value": c, "marketplace_id": client.marketplace_id}
                 for c in _ct if c
             ]
+        _CORDED_TYPES = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
+                         "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER"}
 
         # ── Universal attributes always required ──────────────────────────────
         # model_name (separate from model_number — marketing name)
@@ -1664,20 +1668,54 @@ async def create_listing(request: Request):
             try: attributes["capacity"] = [{"value": float(capacity_val), "unit": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
 
-        # ── VACUUM_CLEANER / VACUUM specific required attrs ───────────────────
+        # ── VACUUM_CLEANER / VACUUM — correct attribute names from Amazon schema ──
+        # Schema source: GET /definitions/2020-09-01/productTypes/VACUUM_CLEANER ATVPDKIKX0DER
         if product_type in ("VACUUM_CLEANER", "VACUUM"):
-            # wireless_capability ("¿El producto es inalámbrico?") — required
-            _is_wireless = power_source_type.lower().startswith("battery") if power_source_type else False
-            attributes["wireless_capability"] = [{"value": _is_wireless, "marketplace_id": client.marketplace_id}]
-            # capacity (dust cup) — required. Default 0.5L for stick vac if not provided.
-            _cap_v = float(capacity_val or 0) or 0.5
-            _cap_u = (capacity_unit_attr or "liters").lower()
-            attributes["capacity"] = [{"value": _cap_v, "unit": _cap_u, "marketplace_id": client.marketplace_id}]
-            # filter_type — required
-            if not filter_type_attr:
-                attributes["filter_type"] = [{"value": "Foam", "marketplace_id": client.marketplace_id}]
-            # cpsc_compliant (Certificado de conformidad del producto) — declare compliant
-            attributes["cpsc_compliant"] = [{"value": "compliant", "marketplace_id": client.marketplace_id}]
+            # is_cordless (NOT wireless_capability — that doesn't exist)
+            _is_corded = not (power_source_type or "").lower().startswith("battery")
+            attributes["is_cordless"] = [{"value": not _is_corded, "marketplace_id": client.marketplace_id}]
+            # surface_recommendation (NOT surface_type — that doesn't exist in VACUUM_CLEANER)
+            # Valid values: Bare Floor, Carpet, Ceramic tile, Hard Floor, Hardwoods, Laminate, etc.
+            _surf = surface_type or "Bare Floor"  # surface_type field reused as surface_recommendation
+            if _surf.lower() in ("multi-surface", "multi surface"):
+                # Multi-surface → send both Bare Floor and Carpet
+                attributes["surface_recommendation"] = [
+                    {"value": "Bare Floor", "marketplace_id": client.marketplace_id},
+                    {"value": "Carpet", "marketplace_id": client.marketplace_id},
+                ]
+            else:
+                attributes["surface_recommendation"] = [{"value": _surf, "marketplace_id": client.marketplace_id}]
+            # filter_type — valid: Cartridge, Cloth, Cyclonic, Disk, Foam, HEPA Filter, Multi-Stage Filtration System
+            _ft = filter_type_attr or "Foam"
+            if _ft.lower() in ("hepa", "hepa filter"):
+                _ft = "HEPA Filter"
+            elif _ft.lower() in ("multi-stage", "multi stage"):
+                _ft = "Multi-Stage Filtration System"
+            attributes["filter_type"] = [{"value": _ft, "marketplace_id": client.marketplace_id}]
+            # form_factor — valid: Cannister, Handheld, Robotic, Stick, Upright
+            _ff = form_factor or "Stick"  # default Stick for HV200-type
+            if _ff.lower() == "canister": _ff = "Cannister"
+            if _ff.lower() in ("stick",): _ff = "Stick"
+            if _ff.lower() in ("upright",): _ff = "Upright"
+            attributes["form_factor"] = [{"value": _ff, "marketplace_id": client.marketplace_id}]
+            # power_source_type — valid: AC DC Adapter, Battery Powered, Corded Electric, Hybrid
+            _pst2 = power_source_type or "Corded Electric"
+            if "battery" in _pst2.lower(): _pst2 = "Battery Powered"
+            elif "hybrid" in _pst2.lower(): _pst2 = "Hybrid (Corded And Cordless)"
+            else: _pst2 = "Corded Electric"
+            attributes["power_source_type"] = [{"value": _pst2, "marketplace_id": client.marketplace_id}]
+            # item_type_keyword for vacuum — use form_factor to pick the right value
+            _ff_lower = _ff.lower()
+            _vac_itk = {
+                "stick": "household-stick-vacuums",
+                "upright": "household-upright-vacuums",
+                "handheld": "household-handheld-vacuums",
+                "cannister": "household-canister-vacuums",
+                "robotic": "household-vacuums",
+            }.get(_ff_lower, "household-vacuums")
+            # Override item_type_keyword only if not already set or generic
+            if not item_type_keyword or item_type_keyword == "vacuum-cleaners":
+                attributes["item_type_keyword"] = [{"value": _vac_itk, "marketplace_id": client.marketplace_id}]
 
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
@@ -1804,9 +1842,11 @@ async def create_listing(request: Request):
             issues = result.get("issues") or []
             errors_now = [i for i in issues if i.get("severity") == "ERROR"]
 
-        # Retry 2: attribute errors AND not already PRODUCT → strip type-specific attrs and retry with PRODUCT
+        # Retry 2: attribute errors, NOT new product creation (PRODUCT type is invalid for LISTING)
+        # Only retry with PRODUCT for LISTING_OFFER_ONLY (ASIN match flow)
         elif (errors_now and _is_attr_validation_error(issues)
-              and product_type not in ("PRODUCT", "TELEVISION", "COMPUTER_MONITOR")):
+              and product_type not in ("PRODUCT", "TELEVISION", "COMPUTER_MONITOR")
+              and requirements == "LISTING_OFFER_ONLY"):
             logger.info(f"[AMZ Lanzar] Attribute errors for {product_type} ({len(errors_now)} errors), "
                         f"retrying with PRODUCT type to bypass attribute requirements")
             product_type = "PRODUCT"
