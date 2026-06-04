@@ -1528,15 +1528,18 @@ async def create_listing(request: Request):
         # item_type_keyword
         _ITK_DEFAULTS = {
             "TELEVISION": "televisions", "COMPUTER_MONITOR": "computer-monitors",
-            "VACUUM": "vacuum-cleaners", "LIGHT_BULB": "light-bulbs",
-            "SPEAKER": "speakers", "HEADPHONES": "headphones",
-            "FAN": "fans", "AIR_CONDITIONER": "air-conditioners",
-            "COFFEE_MAKER": "coffee-makers", "BLENDER": "blenders",
-            "MICROWAVE_OVEN": "microwave-ovens", "LAPTOP": "laptops",
-            "PERSONAL_COMPUTER": "personal-computers", "TABLET": "tablets",
-            "CAMERA": "cameras", "PRINTER": "printers",
+            "VACUUM": "vacuum-cleaners", "VACUUM_CLEANER": "vacuum-cleaners",
+            "LIGHT_BULB": "light-bulbs", "SPEAKER": "speakers",
+            "HEADPHONES": "headphones", "FAN": "fans",
+            "AIR_CONDITIONER": "air-conditioners", "COFFEE_MAKER": "coffee-makers",
+            "BLENDER": "blenders", "MICROWAVE_OVEN": "microwave-ovens",
+            "LAPTOP": "laptops", "PERSONAL_COMPUTER": "personal-computers",
+            "TABLET": "tablets", "CAMERA": "cameras", "PRINTER": "printers",
             "POWER_DRILL": "power-drills", "LIGHT_FIXTURE": "light-fixtures",
             "SMARTWATCH": "smart-watches", "KEYBOARD": "keyboards", "MOUSE": "mice",
+            "HAIR_DRYER": "hair-dryers", "ELECTRIC_SHAVER": "electric-shavers",
+            "SECURITY_CAMERA": "security-cameras", "SMART_SPEAKER": "smart-speakers",
+            "POWER_BANK": "portable-power-banks", "BACKPACK": "backpacks",
         }
         _itk = item_type_keyword or _ITK_DEFAULTS.get(product_type, "")
         if _itk:
@@ -1752,8 +1755,14 @@ async def create_listing(request: Request):
     issues = result.get("issues") or []
     errors = [i for i in issues if i.get("severity") == "ERROR"]
     if errors:
+        # Show ALL errors at once, not just the first one
+        all_msgs = " | ".join(
+            e.get("message", "Error de validación") for e in errors
+        )
+        logger.warning(f"[AMZ Lanzar] Amazon validation errors ({len(errors)}): {all_msgs}")
         return JSONResponse({
-            "error": errors[0].get("message", "Error de validación Amazon"),
+            "error": all_msgs,
+            "error_count": len(errors),
             "issues": issues,
         }, status_code=400)
 

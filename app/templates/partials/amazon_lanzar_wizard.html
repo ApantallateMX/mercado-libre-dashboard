@@ -1003,6 +1003,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   _wiz.is_new_product = false;
   _wiz.submitting = false;
   _wiz._schema = null;
+  _wiz._item_type_keyword = null;
   _wiz._watts = _wiz._voltage = _wiz._surface_type = _wiz._form_factor = null;
   _wiz._power_source = _wiz._bag_type = _wiz._filter_type = _wiz._material = null;
   _wiz._spec_uses = _wiz._compat_devs = null;
@@ -1400,6 +1401,7 @@ window._amzWizGenerateContent = async function() {
       _kwEl.dispatchEvent(new Event('input'));
     }
     // Store all extended AI-researched attributes for submit
+    if (d.item_type_keyword)             _wiz._item_type_keyword = d.item_type_keyword;
     if (d.watts)                         _wiz._watts        = d.watts;
     if (d.voltage_v)                     _wiz._voltage      = d.voltage_v;
     if (d.surface_type)                  _wiz._surface_type = d.surface_type;
@@ -2274,6 +2276,7 @@ async function _amzWizSubmit() {
     payload.bullets          = Array.from(document.querySelectorAll('.amz-wiz-bullet')).map(function(el){ return el.value.trim(); }).filter(Boolean);
     payload.keywords_backend = document.getElementById('amz-wiz-keywords').value.trim();
     payload.product_type     = document.getElementById('amz-wiz-product-type').value.trim() || 'PRODUCT';
+    if (_wiz._item_type_keyword) payload.item_type_keyword = _wiz._item_type_keyword;
     payload.photo_urls       = _amzWizCollectPhotos();
     // Atributos adicionales
     var bEl2 = document.getElementById('amz-wiz-brand'); if (bEl2) payload.brand = bEl2.value.trim();
@@ -2341,10 +2344,16 @@ async function _amzWizSubmit() {
     });
     var d = await r.json();
     if (!r.ok || d.error) {
-      errEl.textContent = '⚠ ' + (d.error || 'Error al publicar');
+      var _errCount = d.error_count || 1;
+      var _errMsgs  = (d.error || 'Error al publicar').split(' | ');
+      var _errHtml  = _errCount > 1
+        ? '<strong>Amazon encontró ' + _errCount + ' errores:</strong><br>' +
+          _errMsgs.map(function(m, i){ return '• ' + m; }).join('<br>')
+        : '⚠ ' + _errMsgs[0];
+      errEl.innerHTML = _errHtml;
       errEl.classList.remove('hidden');
       _wiz.submitting = false;
-      btnNext.disabled = false; btnNext.textContent = '🚀 Publicar en Amazon';
+      btnNext.disabled = false; btnNext.textContent = _t('btn_publish') || '🚀 Publicar en Amazon';
       return;
     }
     window._wizClearDraft(_wiz.sku);
