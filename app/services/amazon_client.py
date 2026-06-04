@@ -1276,6 +1276,25 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def fetch_product_types(self) -> list:
+        """
+        Fetches all valid product type names for this marketplace from SP-API Definitions.
+        Returns sorted list of strings, e.g. ["COMPUTER_MONITOR", "TELEVISION", "VACUUM", ...]
+        """
+        try:
+            result = await self._request(
+                "GET",
+                "/definitions/2020-09-01/productTypes",
+                params={"marketplaceIds": self.marketplace_id},
+            )
+            items = result.get("productTypes") or []
+            types = sorted({pt["name"] for pt in items if pt.get("name")})
+            logger.info(f"[Amazon] Fetched {len(types)} product types for {self.marketplace_id}")
+            return types
+        except Exception as e:
+            logger.warning(f"[Amazon] fetch_product_types failed: {e}")
+            return []
+
     async def get_listing_offers(self, sku: str) -> Optional[dict]:
         """
         Obtiene las ofertas competitivas de un listing propio (por SellerSKU).

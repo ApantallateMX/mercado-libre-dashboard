@@ -1350,13 +1350,14 @@ window._amzWizGenerateContent = async function() {
     var r = await fetch('/api/amazon/lanzar/generate-content', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        title:    _wiz.title,
-        brand:    _wiz.brand,
-        model:    _wiz.model,
-        category: _wiz.category,
-        upc:      _wiz.upc,
-        price:    _wiz.price_sug,
-        currency: _wiz.currency,
+        title:     _wiz.title,
+        brand:     _wiz.brand,
+        model:     _wiz.model,
+        category:  _wiz.category,
+        upc:       _wiz.upc,
+        price:     _wiz.price_sug,
+        currency:  _wiz.currency,
+        seller_id: _wiz.seller_id,
       }),
     });
     var d = await r.json();

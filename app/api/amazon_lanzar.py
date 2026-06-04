@@ -616,6 +616,56 @@ async def search_catalog(
         return JSONResponse({"error": str(e)[:200]}, status_code=500)
 
 
+# ── Helpers: product types cache ─────────────────────────────────────────────
+
+async def _get_valid_product_types(seller_id: str) -> list:
+    """Returns cached product types for seller's marketplace. Refreshes if >7 days old."""
+    import time as _time
+    from app.services.token_store import get_product_types_cache, save_product_types_cache
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return []
+
+    marketplace_id = client.marketplace_id
+    types, cached_at = await get_product_types_cache(marketplace_id)
+
+    if not types or (_time.time() - cached_at) > 7 * 86400:
+        logger.info(f"[AMZ Types] Cache miss for {marketplace_id} — fetching from SP-API")
+        types = await client.fetch_product_types()
+        if types:
+            await save_product_types_cache(marketplace_id, types)
+        else:
+            logger.warning(f"[AMZ Types] SP-API returned empty list for {marketplace_id}")
+
+    return types
+
+
+@router.get("/product-types")
+async def get_product_types_endpoint(seller_id: str = ""):
+    """Returns valid Amazon product types for the seller's marketplace (with 7-day cache)."""
+    types = await _get_valid_product_types(seller_id)
+    return {"product_types": types, "count": len(types), "marketplace": seller_id}
+
+
+@router.post("/product-types/refresh")
+async def refresh_product_types(request: Request):
+    """Force-refreshes the product types cache for a seller's marketplace."""
+    body = await request.json()
+    seller_id = (body.get("seller_id") or "").strip()
+    from app.services.token_store import save_product_types_cache
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    types = await client.fetch_product_types()
+    if types:
+        await save_product_types_cache(client.marketplace_id, types)
+        return {"ok": True, "count": len(types), "marketplace_id": client.marketplace_id}
+    return JSONResponse({"error": "SP-API returned empty list"}, status_code=500)
+
+
 # ── 2. Generar contenido IA — claude-sonnet-4-6, prompt completo ─────────────
 
 @router.post("/generate-content")
@@ -628,7 +678,59 @@ async def generate_content(request: Request):
     upc       = (body.get("upc") or "").strip()
     price_val = float(body.get("price_mxn") or body.get("price") or 0)
     currency  = (body.get("currency") or "MXN").upper()
+    seller_id = (body.get("seller_id") or "").strip()
     is_us     = currency == "USD"
+
+    # Fetch valid product types from Amazon API (cached 7 days)
+    valid_types: list = []
+    if seller_id:
+        try:
+            import asyncio as _aio
+            valid_types = await _aio.wait_for(_get_valid_product_types(seller_id), timeout=8)
+        except Exception as _te:
+            logger.warning(f"[generate-content] product types fetch failed: {_te}")
+
+    # Build product type instruction based on real Amazon types or fallback
+    if valid_types:
+        _types_str = ", ".join(valid_types)
+        _pt_instruction_en = (
+            f"PRODUCT_TYPE — Select EXACTLY one from this official Amazon list for this marketplace:\n"
+            f"{_types_str}\n"
+            "Rules: Use the EXACT string from the list. If multiple apply, pick the most specific. "
+            "If nothing specific fits, use PRODUCT."
+        )
+        _pt_instruction_es = (
+            f"PRODUCT_TYPE — Selecciona EXACTAMENTE uno de esta lista oficial Amazon para este marketplace:\n"
+            f"{_types_str}\n"
+            "Reglas: Usa la cadena EXACTA de la lista. Si varios aplican, elige el más específico. "
+            "Si ninguno específico aplica, usa PRODUCT."
+        )
+    else:
+        # Fallback hardcoded list
+        _pt_instruction_en = """PRODUCT_TYPE — CRITICAL: must be an EXACT valid Amazon US product type string. Use ONLY these:
+• TVs: TELEVISION | Monitors: COMPUTER_MONITOR | Vacuums (all kinds): VACUUM
+• Bulbs: LIGHT_BULB | Fans (all kinds): FAN | ACs: AIR_CONDITIONER
+• Speakers/soundbars: SPEAKER | Headphones/earbuds: HEADPHONES
+• Laptops: LAPTOP | Desktops: PERSONAL_COMPUTER | Tablets: TABLET
+• Coffee makers: COFFEE_MAKER | Blenders: BLENDER | Microwaves: MICROWAVE_OVEN
+• Hair dryers/tools: HAIR_DRYER | Shavers/trimmers: ELECTRIC_SHAVER
+• Cameras: CAMERA | Security cameras: SECURITY_CAMERA | Printers: PRINTER
+• Smart watches: SMARTWATCH | Power banks: POWER_BANK | Keyboards: KEYBOARD | Mice: MOUSE
+• Drills/power tools: POWER_DRILL | Light fixtures/lamps: LIGHT_FIXTURE
+• Generic fallback: PRODUCT (ONLY if no specific type fits)
+Choose the most specific valid type. NEVER invent or modify these strings."""
+        _pt_instruction_es = """PRODUCT_TYPE — CRÍTICO: debe ser un tipo de producto Amazon MX exacto y válido (SCREAMING_SNAKE_CASE):
+• TVs: TELEVISION | Monitores: COMPUTER_MONITOR | Aspiradoras (todo tipo): VACUUM
+• Focos: LIGHT_BULB | Ventiladores (todo tipo): FAN | Climatizadores: AIR_CONDITIONER
+• Bocinas/soundbars: SPEAKER | Audífonos/earbuds: HEADPHONES
+• Laptops: LAPTOP | Computadoras: PERSONAL_COMPUTER | Tablets: TABLET
+• Cafeteras: COFFEE_MAKER | Licuadoras: BLENDER | Microondas: MICROWAVE_OVEN
+• Secadoras/plancha cabello: HAIR_DRYER | Rasuradores: ELECTRIC_SHAVER
+• Cámaras: CAMERA | Cámaras seguridad: SECURITY_CAMERA | Impresoras: PRINTER
+• Smartwatches: SMARTWATCH | Power banks: POWER_BANK | Teclados: KEYBOARD | Mouse: MOUSE
+• Taladros/herramientas: POWER_DRILL | Lámparas/fixtures: LIGHT_FIXTURE
+• Fallback genérico: PRODUCT (solo si ningún tipo específico aplica)
+Elige el tipo más específico. NUNCA inventes ni modifiques estas cadenas."""
 
     ctx_parts = []
     if model_num:
@@ -696,19 +798,7 @@ BACKEND KEYWORDS (max 249 characters — count characters not bytes):
 • Mix of English search terms, synonyms, alternate uses, common misspellings
 • Separated by spaces (NOT commas)
 
-PRODUCT_TYPE — CRITICAL: must be an EXACT valid Amazon US product type string. Use ONLY these:
-• TVs: TELEVISION | Monitors: COMPUTER_MONITOR | Vacuums (all kinds): VACUUM
-• Bulbs: LIGHT_BULB | Fans (all kinds): FAN | ACs: AIR_CONDITIONER
-• Speakers/soundbars: SPEAKER | Headphones/earbuds: HEADPHONES
-• Laptops: LAPTOP | Desktops: PERSONAL_COMPUTER | Tablets: TABLET
-• Coffee makers: COFFEE_MAKER | Blenders: BLENDER | Microwaves: MICROWAVE_OVEN
-• Hair dryers/tools: HAIR_DRYER | Shavers/trimmers: ELECTRIC_SHAVER
-• Cameras: CAMERA | Security cameras: SECURITY_CAMERA | Printers: PRINTER
-• Smart watches: SMARTWATCH | Power banks: POWER_BANK | Keyboards: KEYBOARD | Mice: MOUSE
-• Drills/power tools: POWER_DRILL | Light fixtures/lamps: LIGHT_FIXTURE
-• Backpacks/bags: BACKPACK | Shoes: SHOE | Kitchen knives: KITCHEN_KNIFE
-• Generic fallback: PRODUCT (ONLY if no specific type fits)
-Choose the most specific valid type. NEVER invent or modify these strings.
+{_pt_instruction_en}
 
 COLOR:
 • Main product color in English (e.g., Black, White, Silver, Blue)
@@ -815,18 +905,7 @@ KEYWORDS BACKEND (máx 249 caracteres, NO bytes — caracteres):
 • Términos genéricos, sinónimos, usos alternativos, errores ortográficos frecuentes
 • Separados por espacios (NO comas)
 
-PRODUCT_TYPE — CRÍTICO: debe ser un tipo de producto Amazon MX exacto y válido (SCREAMING_SNAKE_CASE):
-• TVs: TELEVISION | Monitores: COMPUTER_MONITOR | Aspiradoras (todo tipo): VACUUM
-• Focos: LIGHT_BULB | Ventiladores (todo tipo): FAN | Climatizadores: AIR_CONDITIONER
-• Bocinas/soundbars: SPEAKER | Audífonos/earbuds: HEADPHONES
-• Laptops: LAPTOP | Computadoras: PERSONAL_COMPUTER | Tablets: TABLET
-• Cafeteras: COFFEE_MAKER | Licuadoras: BLENDER | Microondas: MICROWAVE_OVEN
-• Secadoras/plancha cabello: HAIR_DRYER | Rasuradores: ELECTRIC_SHAVER
-• Cámaras: CAMERA | Cámaras seguridad: SECURITY_CAMERA | Impresoras: PRINTER
-• Smartwatches: SMARTWATCH | Power banks: POWER_BANK | Teclados: KEYBOARD | Mouse: MOUSE
-• Taladros/herramientas: POWER_DRILL | Lámparas/fixtures: LIGHT_FIXTURE
-• Fallback genérico: PRODUCT (solo si ningún tipo específico aplica)
-Elige el tipo más específico. NUNCA inventes ni modifiques estas cadenas.
+{_pt_instruction_es}
 
 COLOR:
 • Color principal del producto en inglés (ej: Black, White, Silver, Blue)

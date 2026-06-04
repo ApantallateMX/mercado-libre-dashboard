@@ -789,6 +789,14 @@ async def init_db():
             )
         """)
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
+        # TABLA: amz_product_types_cache — tipos de producto Amazon por marketplace (TTL 7 días)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_product_types_cache (
+                marketplace_id TEXT PRIMARY KEY,
+                types_json     TEXT NOT NULL DEFAULT '[]',
+                cached_at      REAL NOT NULL DEFAULT 0
+            )
+        """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_repricing_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2684,3 +2692,32 @@ async def get_sku_sales_by_account(base_sku: str) -> list[dict]:
             (base_sku,),
         )).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Amazon Product Types Cache ────────────────────────────────────────────────
+
+async def get_product_types_cache(marketplace_id: str) -> tuple:
+    """Returns (types_list, cached_at_timestamp). Empty list + 0.0 if not cached."""
+    import json as _j
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT types_json, cached_at FROM amz_product_types_cache WHERE marketplace_id = ?",
+            (marketplace_id,),
+        )).fetchone()
+    if not row:
+        return [], 0.0
+    try:
+        return _j.loads(row[0]), float(row[1])
+    except Exception:
+        return [], 0.0
+
+
+async def save_product_types_cache(marketplace_id: str, types: list) -> None:
+    """Saves product types list to DB cache."""
+    import time as _t, json as _j
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO amz_product_types_cache (marketplace_id, types_json, cached_at) VALUES (?, ?, ?)",
+            (marketplace_id, _j.dumps(sorted(types)), _t.time()),
+        )
+        await db.commit()
