@@ -1634,9 +1634,9 @@ async def create_listing(request: Request):
         if model_number:
             attributes["model_name"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
 
-        # item_length standalone (some types require it separate from item_dimensions)
+        # item_length standalone — use unit_of_measure (not unit) for this attribute
         if length_cm > 0:
-            attributes["item_length"] = [{"value": length_cm, "unit": "centimeters", "marketplace_id": client.marketplace_id}]
+            attributes["item_length"] = [{"value": length_cm, "unit_of_measure": "centimeters", "marketplace_id": client.marketplace_id}]
 
         # ── Product-type-specific extended attributes ─────────────────────────
         # These are filled by AI based on product research and sent when available
@@ -1665,7 +1665,7 @@ async def create_listing(request: Request):
             try: attributes["noise_level_db"] = [{"value": float(noise_level_db), "unit": "decibels", "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
         if capacity_val is not None and capacity_unit_attr:
-            try: attributes["capacity"] = [{"value": float(capacity_val), "unit": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
+            try: attributes["capacity"] = [{"value": float(capacity_val), "unit_of_measure": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
 
         # ── VACUUM_CLEANER / VACUUM — correct attribute names from Amazon schema ──
@@ -1677,14 +1677,9 @@ async def create_listing(request: Request):
             # surface_recommendation (NOT surface_type — that doesn't exist in VACUUM_CLEANER)
             # Valid values: Bare Floor, Carpet, Ceramic tile, Hard Floor, Hardwoods, Laminate, etc.
             _surf = surface_type or "Bare Floor"  # surface_type field reused as surface_recommendation
-            if _surf.lower() in ("multi-surface", "multi surface"):
-                # Multi-surface → send both Bare Floor and Carpet
-                attributes["surface_recommendation"] = [
-                    {"value": "Bare Floor", "marketplace_id": client.marketplace_id},
-                    {"value": "Carpet", "marketplace_id": client.marketplace_id},
-                ]
-            else:
-                attributes["surface_recommendation"] = [{"value": _surf, "marketplace_id": client.marketplace_id}]
+            # Amazon VACUUM_CLEANER allows max 1 occurrence for surface_recommendation
+            _surf_val = "Bare Floor" if _surf.lower() in ("multi-surface", "multi surface", "hard floor", "bare floor") else _surf
+            attributes["surface_recommendation"] = [{"value": _surf_val, "marketplace_id": client.marketplace_id}]
             # filter_type — valid: Cartridge, Cloth, Cyclonic, Disk, Foam, HEPA Filter, Multi-Stage Filtration System
             _ft = filter_type_attr or "Foam"
             if _ft.lower() in ("hepa", "hepa filter"):
@@ -1714,8 +1709,14 @@ async def create_listing(request: Request):
                 "robotic": "household-vacuums",
             }.get(_ff_lower, "household-vacuums")
             # Override item_type_keyword only if not already set or generic
-            if not item_type_keyword or item_type_keyword == "vacuum-cleaners":
+            if not item_type_keyword or item_type_keyword in ("vacuum-cleaners", "household-vacuums"):
                 attributes["item_type_keyword"] = [{"value": _vac_itk, "marketplace_id": client.marketplace_id}]
+            # capacity (dust cup) with correct unit_of_measure key
+            _cap_v2 = float(capacity_val or 0) or 0.5  # 0.5L default for stick vac
+            _cap_u2 = (capacity_unit_attr or "liters").lower()
+            attributes["capacity"] = [{"value": _cap_v2, "unit_of_measure": _cap_u2, "marketplace_id": client.marketplace_id}]
+            # Compliance declaration — supplier declaration for regulatory compliance
+            attributes["supplier_declared_material_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
 
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
