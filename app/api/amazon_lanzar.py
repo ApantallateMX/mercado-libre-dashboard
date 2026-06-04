@@ -1747,6 +1747,28 @@ async def create_listing(request: Request):
                 "fulfillment_channel_code": "AMAZON_NA",
             }]
 
+    # Fix UPC: EAN-13 (13 chars) must be sent as type "ean", not "upc"
+    if upc and len(upc) == 13:
+        for attr_block in attributes.get("externally_assigned_product_identifier") or []:
+            if attr_block.get("type") == "upc":
+                attr_block["type"] = "ean"
+    # Truncate UPC to 12 chars if too long (some UPCs have leading zeros added)
+    if upc and len(upc) > 13 and "externally_assigned_product_identifier" in attributes:
+        del attributes["externally_assigned_product_identifier"]
+
+    def _is_attr_validation_error(issues_list):
+        """True if errors are attribute validation issues (not product type)."""
+        for i in issues_list:
+            if i.get("severity") == "ERROR":
+                msg = (i.get("message") or "").lower()
+                # Attribute-level errors (not product type errors)
+                if ("se requiere" in msg or "is required" in msg or
+                        "máximo permitido" in msg or "maximum" in msg or
+                        "valor no válido" in msg or "invalid value" in msg or
+                        "pero falta" in msg or "is missing" in msg):
+                    return True
+        return False
+
     def _is_product_type_error(issues_list):
         """Returns True if the error is specifically about an invalid/incompatible product type."""
         for i in issues_list:
@@ -1760,18 +1782,57 @@ async def create_listing(request: Request):
                 return True
         return False
 
+    # Minimal attribute set for PRODUCT fallback (only universal attrs)
+    _SPECIFIC_ONLY_ATTRS = {
+        "display","resolution","image_aspect_ratio","refresh_rate","total_hdmi_ports",
+        "mounting_type","wireless_capability","cpsc_compliant","surface_type",
+        "filter_type","bag_type","form_factor","power_source_type","capacity",
+        "voltage","wattage","noise_level_db","compliance_media",
+    }
+
     try:
         result = await client.create_listing_full(sku, product_type, attributes, requirements)
         issues = result.get("issues") or []
-        # Auto-retry with PRODUCT type if Amazon rejects the specific product type
+        errors_now = [i for i in issues if i.get("severity") == "ERROR"]
+
+        # Retry 1: product type invalid → retry with PRODUCT
         if _is_product_type_error(issues) and product_type not in ("PRODUCT", "TELEVISION", "COMPUTER_MONITOR"):
-            logger.info(f"[AMZ Lanzar] Product type '{product_type}' rejected by Amazon, retrying with PRODUCT")
+            logger.info(f"[AMZ Lanzar] Product type '{product_type}' rejected, retrying with PRODUCT")
             product_type = "PRODUCT"
-            # Remove TV/display-specific attributes that don't apply to PRODUCT type
-            _DISPLAY_ATTRS = {"display","resolution","image_aspect_ratio","refresh_rate","total_hdmi_ports","mounting_type"}
-            attributes = {k: v for k, v in attributes.items() if k not in _DISPLAY_ATTRS}
+            attributes = {k: v for k, v in attributes.items() if k not in _SPECIFIC_ONLY_ATTRS}
             result = await client.create_listing_full(sku, product_type, attributes, requirements)
             issues = result.get("issues") or []
+            errors_now = [i for i in issues if i.get("severity") == "ERROR"]
+
+        # Retry 2: attribute errors AND not already PRODUCT → strip type-specific attrs and retry with PRODUCT
+        elif (errors_now and _is_attr_validation_error(issues)
+              and product_type not in ("PRODUCT", "TELEVISION", "COMPUTER_MONITOR")):
+            logger.info(f"[AMZ Lanzar] Attribute errors for {product_type} ({len(errors_now)} errors), "
+                        f"retrying with PRODUCT type to bypass attribute requirements")
+            product_type = "PRODUCT"
+            # Keep only universally-safe attributes for PRODUCT type
+            _SAFE_FOR_PRODUCT = {
+                "condition_type","purchasable_offer","item_name","bullet_point",
+                "product_description","generic_keyword","main_product_image_locator",
+                "other_product_image_locator_1","other_product_image_locator_2",
+                "other_product_image_locator_3","other_product_image_locator_4",
+                "other_product_image_locator_5","other_product_image_locator_6",
+                "other_product_image_locator_7","brand","manufacturer","model_number",
+                "model_name","part_number","color","item_weight","item_dimensions",
+                "item_depth_width_height","is_refurbished","country_of_origin",
+                "supplier_declared_has_product_identifier_exemption",
+                "supplier_declared_dg_hz_regulation","number_of_items",
+                "batteries_required","batteries_included","item_type_keyword",
+                "list_price","model_year","warranty_description","item_package_weight",
+                "item_package_dimensions","fulfillment_availability",
+                "externally_assigned_product_identifier","merchant_suggested_asin",
+                "special_feature","included_components","connectivity_technology",
+                "item_length","material_type","specific_uses_for_product",
+            }
+            attributes = {k: v for k, v in attributes.items() if k in _SAFE_FOR_PRODUCT}
+            result = await client.create_listing_full(sku, product_type, attributes, requirements)
+            issues = result.get("issues") or []
+
     except Exception as e:
         logger.exception("[AMZ Lanzar] create_listing_full error")
         return JSONResponse({"error": str(e)[:300]}, status_code=500)
