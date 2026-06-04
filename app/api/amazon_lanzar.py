@@ -1053,8 +1053,25 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • model_year: Model year as integer (e.g., 2024), null if unknown
 • warranty_description: "90 days seller warranty"
 • list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
-• watts: Power consumption in watts as decimal (e.g., 500.0 for a vacuum), null if N/A or unknown
-• voltage_v: Operating voltage as a string — RESEARCH THE ACTUAL SPEC (e.g., "120V", "220V", "120/240V", "100-240V"). NEVER guess — use your knowledge of the specific model. null only if truly unknown.
+• watts: Power consumption in watts as decimal (e.g., 500.0 for a vacuum), null if N/A
+• voltage_v: Actual operating voltage string — research the specific model spec (e.g., "120V", "220V", "100-240V", "120/240V"). null only if truly unknown.
+
+PRODUCT-SPECIFIC REQUIRED ATTRIBUTES — Fill ALL that apply to THIS product:
+• surface_type: Floor/surface type the product works on. Vacuums: "Multi-Surface"/"Carpet"/"Hardwood". null if N/A.
+• form_factor: Physical form. Vacuums: "Stick"/"Upright"/"Handheld"/"Robot"/"Canister". Fans: "Tower"/"Box"/"Desk". Speakers: "Smart Speaker"/"Portable". null if N/A.
+• power_source_type: "Corded Electric"/"Battery Powered"/"Solar Powered"/"USB"/"AC Adapter". Required for most appliances.
+• bag_type: "Bagless"/"Bagged". Vacuums only. null otherwise.
+• filter_type: "HEPA"/"Foam"/"Washable"/"Replaceable Filter". Vacuums/purifiers only. null otherwise.
+• specific_uses_for_product: List of use cases (e.g., ["Pet Hair", "Hard Floor", "Carpet", "Home Use"]). [] if N/A.
+• material_type: Main construction material (e.g., "Plastic", "Stainless Steel", "Aluminum"). null if N/A.
+• number_of_settings: Number of speed/power settings as integer (fans, mixers, etc.). null if N/A.
+• noise_level_db: Noise level in decibels as decimal. null if unknown.
+• item_form: Physical form of consumable product (e.g., "Liquid", "Powder", "Capsule"). null if N/A.
+• capacity: Container/tank capacity as decimal. null if N/A.
+• capacity_unit: Unit for capacity ("Liters", "Gallons", "Ounces", "Cups", "Quarts"). null if N/A.
+• compatible_devices: List of compatible devices/systems (e.g., ["Alexa", "Google Home"]). [] if N/A.
+• pattern: Design pattern (e.g., "Solid", "Striped"). null if N/A.
+• finish_type: Surface finish (e.g., "Matte", "Glossy", "Brushed"). null if N/A.
 
 ━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━
 {{
@@ -1085,7 +1102,22 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
   "warranty_description": null,
   "list_price_msrp": null,
   "watts": null,
-  "voltage_v": null
+  "voltage_v": null,
+  "surface_type": null,
+  "form_factor": null,
+  "power_source_type": null,
+  "bag_type": null,
+  "filter_type": null,
+  "specific_uses_for_product": [],
+  "material_type": null,
+  "number_of_settings": null,
+  "noise_level_db": null,
+  "item_form": null,
+  "capacity": null,
+  "capacity_unit": null,
+  "compatible_devices": [],
+  "pattern": null,
+  "finish_type": null
 }}"""
         else:
             prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
@@ -1163,9 +1195,26 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • connectivity_technology: REQUERIDO — NUNCA devolver vacío. Para electrodomésticos alámbricos: ["Corded Electric"]. Para inalámbricos: ["Wi-Fi","Bluetooth"]. Para TVs: ["HDMI","Wi-Fi","Bluetooth"]. Siempre al menos un valor.
 • model_year: Año del modelo como entero (ej: 2024), null si no sabes
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
-• list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
-• watts: Consumo de potencia en vatios como decimal (ej: 500.0 para aspiradora), null si N/A o desconocido
-• voltage_v: Voltaje de operación como string — INVESTIGAR EL SPEC REAL (ej: "120V", "220V", "120/240V", "100-240V"). NUNCA adivinar — usa tu conocimiento del modelo específico. null solo si realmente desconocido.
+• list_price_msrp: Precio MSRP sugerido en la misma moneda (null si no puedes estimar)
+• watts: Consumo en vatios (ej: 500.0), null si N/A
+• voltage_v: Voltaje real del modelo — INVESTIGAR (ej: "120V", "220V", "100-240V"). null solo si desconocido.
+
+ATRIBUTOS REQUERIDOS POR CATEGORÍA — Llena TODOS los que apliquen al producto:
+• surface_type: Tipo de superficie. Aspiradoras: "Multi-Surface"/"Carpet"/"Hardwood". null si N/A.
+• form_factor: Forma física. Aspiradoras: "Stick"/"Upright"/"Handheld"/"Robot". Ventiladores: "Tower"/"Box". null si N/A.
+• power_source_type: "Corded Electric"/"Battery Powered"/"Solar Powered"/"USB"/"AC Adapter". Requerido para electrodomésticos.
+• bag_type: "Bagless"/"Bagged". Solo aspiradoras. null si no aplica.
+• filter_type: "HEPA"/"Foam"/"Washable"/"Replaceable Filter". Aspiradoras/purificadores. null si N/A.
+• specific_uses_for_product: Lista de usos (ej: ["Pet Hair", "Hard Floor", "Home Use"]). [] si N/A.
+• material_type: Material principal (ej: "Plastic", "Stainless Steel"). null si N/A.
+• number_of_settings: Número de velocidades/niveles (ventiladores, batidoras). null si N/A.
+• noise_level_db: Nivel de ruido en decibeles. null si desconocido.
+• item_form: Forma del consumible ("Liquid", "Powder", "Capsule"). null si N/A.
+• capacity: Capacidad del contenedor (decimal). null si N/A.
+• capacity_unit: Unidad de capacidad ("Liters", "Gallons", "Cups"). null si N/A.
+• compatible_devices: Dispositivos compatibles (ej: ["Alexa", "Google Home"]). [] si N/A.
+• pattern: Patrón de diseño ("Solid", "Striped"). null si N/A.
+• finish_type: Acabado superficial ("Matte", "Glossy", "Brushed"). null si N/A.
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -1196,7 +1245,22 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
   "warranty_description": null,
   "list_price_msrp": null,
   "watts": null,
-  "voltage_v": null
+  "voltage_v": null,
+  "surface_type": null,
+  "form_factor": null,
+  "power_source_type": null,
+  "bag_type": null,
+  "filter_type": null,
+  "specific_uses_for_product": [],
+  "material_type": null,
+  "number_of_settings": null,
+  "noise_level_db": null,
+  "item_form": null,
+  "capacity": null,
+  "capacity_unit": null,
+  "compatible_devices": [],
+  "pattern": null,
+  "finish_type": null
 }}"""
 
         import httpx as _httpx
@@ -1335,6 +1399,22 @@ async def create_listing(request: Request):
     pkg_width_cm         = float(body.get("pkg_width_cm") or 0)
     pkg_height_cm        = float(body.get("pkg_height_cm") or 0)
     upc                  = (body.get("upc") or "").strip()
+    # Extended product-type-specific attributes from AI
+    surface_type         = (body.get("surface_type") or "").strip()
+    form_factor          = (body.get("form_factor") or "").strip()
+    power_source_type    = (body.get("power_source_type") or "").strip()
+    bag_type             = (body.get("bag_type") or "").strip()
+    filter_type_attr     = (body.get("filter_type") or "").strip()
+    specific_uses        = body.get("specific_uses_for_product") or []
+    material_type        = (body.get("material_type") or "").strip()
+    num_settings         = body.get("number_of_settings")
+    noise_level_db       = body.get("noise_level_db")
+    capacity_val         = body.get("capacity")
+    capacity_unit_attr   = (body.get("capacity_unit") or "").strip()
+    compatible_devs      = body.get("compatible_devices") or []
+    pattern_attr         = (body.get("pattern") or "").strip()
+    finish_type_attr     = (body.get("finish_type") or "").strip()
+    voltage_v            = (body.get("voltage_v") or "").strip()
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -1541,6 +1621,34 @@ async def create_listing(request: Request):
                 {"value": c, "marketplace_id": client.marketplace_id}
                 for c in _ct if c
             ]
+
+        # ── Product-type-specific extended attributes ─────────────────────────
+        # These are filled by AI based on product research and sent when available
+        def _attr(val): return [{"value": val, "marketplace_id": client.marketplace_id}] if val else None
+        def _attr_list(lst): return [{"value": v, "marketplace_id": client.marketplace_id} for v in lst if v] if lst else None
+
+        if surface_type:
+            attributes["surface_type"]      = _attr(surface_type)
+        elif product_type in ("VACUUM_CLEANER","VACUUM"):
+            attributes["surface_type"]      = _attr("Multi-Surface")  # sensible default
+        if form_factor:           attributes["form_factor"]           = _attr(form_factor)
+        if power_source_type:     attributes["power_source_type"]     = _attr(power_source_type)
+        if bag_type:              attributes["bag_type"]              = _attr(bag_type)
+        if filter_type_attr:      attributes["filter_type"]           = _attr(filter_type_attr)
+        if specific_uses:         attributes["specific_uses_for_product"] = _attr_list(specific_uses)
+        if material_type:         attributes["material_type"]         = _attr(material_type)
+        if pattern_attr:          attributes["pattern"]               = _attr(pattern_attr)
+        if finish_type_attr:      attributes["finish_type"]           = _attr(finish_type_attr)
+        if compatible_devs:       attributes["compatible_devices"]    = _attr_list(compatible_devs)
+        if num_settings is not None:
+            try: attributes["number_of_settings"] = [{"value": int(num_settings), "marketplace_id": client.marketplace_id}]
+            except (ValueError, TypeError): pass
+        if noise_level_db is not None:
+            try: attributes["noise_level_db"] = [{"value": float(noise_level_db), "unit": "decibels", "marketplace_id": client.marketplace_id}]
+            except (ValueError, TypeError): pass
+        if capacity_val is not None and capacity_unit_attr:
+            try: attributes["capacity"] = [{"value": float(capacity_val), "unit": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
+            except (ValueError, TypeError): pass
 
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",

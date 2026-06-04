@@ -1003,8 +1003,11 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   _wiz.is_new_product = false;
   _wiz.submitting = false;
   _wiz._schema = null;
-  _wiz._watts   = null;
-  _wiz._voltage = null;
+  _wiz._watts = _wiz._voltage = _wiz._surface_type = _wiz._form_factor = null;
+  _wiz._power_source = _wiz._bag_type = _wiz._filter_type = _wiz._material = null;
+  _wiz._spec_uses = _wiz._compat_devs = null;
+  _wiz._num_settings = _wiz._noise_db = _wiz._capacity = _wiz._cap_unit = null;
+  _wiz._pattern = _wiz._finish = null;
 
   // BM card
   var card = document.getElementById('amz-wiz-bm-card');
@@ -1396,8 +1399,23 @@ window._amzWizGenerateContent = async function() {
       _kwEl.value = d.keywords_backend;
       _kwEl.dispatchEvent(new Event('input'));
     }
-    if (d.watts)     _wiz._watts   = d.watts;
-    if (d.voltage_v) _wiz._voltage = d.voltage_v;
+    // Store all extended AI-researched attributes for submit
+    if (d.watts)                         _wiz._watts        = d.watts;
+    if (d.voltage_v)                     _wiz._voltage      = d.voltage_v;
+    if (d.surface_type)                  _wiz._surface_type = d.surface_type;
+    if (d.form_factor)                   _wiz._form_factor  = d.form_factor;
+    if (d.power_source_type)             _wiz._power_source = d.power_source_type;
+    if (d.bag_type)                      _wiz._bag_type     = d.bag_type;
+    if (d.filter_type)                   _wiz._filter_type  = d.filter_type;
+    if (d.specific_uses_for_product && d.specific_uses_for_product.length) _wiz._spec_uses = d.specific_uses_for_product;
+    if (d.material_type)                 _wiz._material     = d.material_type;
+    if (d.number_of_settings)            _wiz._num_settings = d.number_of_settings;
+    if (d.noise_level_db)                _wiz._noise_db     = d.noise_level_db;
+    if (d.capacity)                      _wiz._capacity     = d.capacity;
+    if (d.capacity_unit)                 _wiz._cap_unit     = d.capacity_unit;
+    if (d.compatible_devices && d.compatible_devices.length) _wiz._compat_devs = d.compatible_devices;
+    if (d.pattern)                       _wiz._pattern      = d.pattern;
+    if (d.finish_type)                   _wiz._finish       = d.finish_type;
     if (d.product_type) {
       document.getElementById('amz-wiz-product-type').value = d.product_type;
       window._amzWizUpdateFieldVisibility(d.product_type);
@@ -2297,9 +2315,23 @@ async function _amzWizSubmit() {
     var arEl = document.getElementById('amz-wiz-aspect-ratio'); if (arEl && arEl.value) payload.aspect_ratio = arEl.value;
     var pkgLEl = document.getElementById('amz-wiz-pkg-length'); if (pkgLEl && pkgLEl.value) payload.pkg_length_cm = Math.round(parseFloat(pkgLEl.value) * _toCm * 10) / 10 || 0;
     var pkgHEl = document.getElementById('amz-wiz-pkg-height'); if (pkgHEl && pkgHEl.value) payload.pkg_height_cm = Math.round(parseFloat(pkgHEl.value) * _toCm * 10) / 10 || 0;
-    // Watts + voltage from AI research
-    if (_wiz._watts)   payload.watts     = _wiz._watts;
-    if (_wiz._voltage) payload.voltage_v = _wiz._voltage;
+    // AI-researched extended attributes
+    if (_wiz._watts)        payload.watts                    = _wiz._watts;
+    if (_wiz._voltage)      payload.voltage_v               = _wiz._voltage;
+    if (_wiz._surface_type) payload.surface_type             = _wiz._surface_type;
+    if (_wiz._form_factor)  payload.form_factor              = _wiz._form_factor;
+    if (_wiz._power_source) payload.power_source_type        = _wiz._power_source;
+    if (_wiz._bag_type)     payload.bag_type                 = _wiz._bag_type;
+    if (_wiz._filter_type)  payload.filter_type              = _wiz._filter_type;
+    if (_wiz._spec_uses && _wiz._spec_uses.length) payload.specific_uses_for_product = _wiz._spec_uses;
+    if (_wiz._material)     payload.material_type            = _wiz._material;
+    if (_wiz._num_settings) payload.number_of_settings       = _wiz._num_settings;
+    if (_wiz._noise_db)     payload.noise_level_db           = _wiz._noise_db;
+    if (_wiz._capacity)     payload.capacity                 = _wiz._capacity;
+    if (_wiz._cap_unit)     payload.capacity_unit            = _wiz._cap_unit;
+    if (_wiz._compat_devs && _wiz._compat_devs.length) payload.compatible_devices = _wiz._compat_devs;
+    if (_wiz._pattern)      payload.pattern                  = _wiz._pattern;
+    if (_wiz._finish)       payload.finish_type              = _wiz._finish;
   }
 
   try {
