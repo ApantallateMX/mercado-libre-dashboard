@@ -874,9 +874,9 @@ async def generate_content(request: Request):
     is_us     = currency == "USD"
 
     # ── Pre-research: get accurate specs BEFORE calling Claude for content ──────
-    import asyncio as _aio
-    _p1r = os.getenv("AI_KEY_P1", "")
-    _p2r = os.getenv("AI_KEY_P2", "")
+    import asyncio as _aio, os as _os2, base64 as _b64
+    _p1r = _os2.getenv("AI_KEY_P1", "")
+    _p2r = _os2.getenv("AI_KEY_P2", "")
     _api_key_r = (_b64.b64decode(_p1r + _p2r).decode() if (_p1r and _p2r) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
     researched: dict = {}
     try:
