@@ -1625,6 +1625,15 @@ async def create_listing(request: Request):
                 for c in _ct if c
             ]
 
+        # ── Universal attributes always required ──────────────────────────────
+        # model_name (separate from model_number — marketing name)
+        if model_number:
+            attributes["model_name"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
+
+        # item_length standalone (some types require it separate from item_dimensions)
+        if length_cm > 0:
+            attributes["item_length"] = [{"value": length_cm, "unit": "centimeters", "marketplace_id": client.marketplace_id}]
+
         # ── Product-type-specific extended attributes ─────────────────────────
         # These are filled by AI based on product research and sent when available
         def _attr(val): return [{"value": val, "marketplace_id": client.marketplace_id}] if val else None
@@ -1635,7 +1644,9 @@ async def create_listing(request: Request):
         elif product_type in ("VACUUM_CLEANER","VACUUM"):
             attributes["surface_type"]      = _attr("Multi-Surface")  # sensible default
         if form_factor:           attributes["form_factor"]           = _attr(form_factor)
-        if power_source_type:     attributes["power_source_type"]     = _attr(power_source_type)
+        # power_source_type — default "Corded Electric" for appliances if not provided
+        _pst = power_source_type or (_CORDED_TYPES and product_type in _CORDED_TYPES and "Corded Electric" or "")
+        if _pst:                  attributes["power_source_type"]     = _attr(_pst)
         if bag_type:              attributes["bag_type"]              = _attr(bag_type)
         if filter_type_attr:      attributes["filter_type"]           = _attr(filter_type_attr)
         if specific_uses:         attributes["specific_uses_for_product"] = _attr_list(specific_uses)
@@ -1652,6 +1663,21 @@ async def create_listing(request: Request):
         if capacity_val is not None and capacity_unit_attr:
             try: attributes["capacity"] = [{"value": float(capacity_val), "unit": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
+
+        # ── VACUUM_CLEANER / VACUUM specific required attrs ───────────────────
+        if product_type in ("VACUUM_CLEANER", "VACUUM"):
+            # wireless_capability ("¿El producto es inalámbrico?") — required
+            _is_wireless = power_source_type.lower().startswith("battery") if power_source_type else False
+            attributes["wireless_capability"] = [{"value": _is_wireless, "marketplace_id": client.marketplace_id}]
+            # capacity (dust cup) — required. Default 0.5L for stick vac if not provided.
+            _cap_v = float(capacity_val or 0) or 0.5
+            _cap_u = (capacity_unit_attr or "liters").lower()
+            attributes["capacity"] = [{"value": _cap_v, "unit": _cap_u, "marketplace_id": client.marketplace_id}]
+            # filter_type — required
+            if not filter_type_attr:
+                attributes["filter_type"] = [{"value": "Foam", "marketplace_id": client.marketplace_id}]
+            # cpsc_compliant (Certificado de conformidad del producto) — declare compliant
+            attributes["cpsc_compliant"] = [{"value": "compliant", "marketplace_id": client.marketplace_id}]
 
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
