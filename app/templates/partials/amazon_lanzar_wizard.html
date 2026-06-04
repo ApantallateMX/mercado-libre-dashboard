@@ -1375,12 +1375,14 @@ window._amzWizGenerateContent = async function() {
       if (bullets[i]) { bullets[i].value = b; window._amzWizBulletCount(bullets[i]); }
     });
     if (d.description) {
-      document.getElementById('amz-wiz-description').value = d.description;
-      document.getElementById('amz-wiz-desc-count').textContent = d.description.length + ' / 2000 chars';
+      var _descEl = document.getElementById('amz-wiz-description');
+      _descEl.value = d.description;
+      _descEl.dispatchEvent(new Event('input')); // triggers oninput counter update
     }
     if (d.keywords_backend) {
-      document.getElementById('amz-wiz-keywords').value = d.keywords_backend;
-      document.getElementById('amz-wiz-kw-count').textContent = d.keywords_backend.length + ' / 249';
+      var _kwEl = document.getElementById('amz-wiz-keywords');
+      _kwEl.value = d.keywords_backend;
+      _kwEl.dispatchEvent(new Event('input'));
     }
     if (d.product_type) document.getElementById('amz-wiz-product-type').value = d.product_type;
     if (d.color) { var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = d.color; }
