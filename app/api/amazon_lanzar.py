@@ -750,6 +750,7 @@ Return ONLY valid JSON (no markdown, no text):
   "hdmi_ports": <integer or null>,
   "usb_ports": <integer or null>,
   "watts": <decimal or null>,
+  "voltage_v": <"120V" or "220V" or "100-240V" or "120/240V" or null — research exact spec>,
   "model_year": <integer or null>,
   "color": <"Black" or null>
 }}"""
@@ -1053,6 +1054,7 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • warranty_description: "90 days seller warranty"
 • list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
 • watts: Power consumption in watts as decimal (e.g., 500.0 for a vacuum), null if N/A or unknown
+• voltage_v: Operating voltage as a string — RESEARCH THE ACTUAL SPEC (e.g., "120V", "220V", "120/240V", "100-240V"). NEVER guess — use your knowledge of the specific model. null only if truly unknown.
 
 ━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━
 {{
@@ -1082,7 +1084,8 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
   "model_year": null,
   "warranty_description": null,
   "list_price_msrp": null,
-  "watts": null
+  "watts": null,
+  "voltage_v": null
 }}"""
         else:
             prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
@@ -1162,6 +1165,7 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
 • list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
 • watts: Consumo de potencia en vatios como decimal (ej: 500.0 para aspiradora), null si N/A o desconocido
+• voltage_v: Voltaje de operación como string — INVESTIGAR EL SPEC REAL (ej: "120V", "220V", "120/240V", "100-240V"). NUNCA adivinar — usa tu conocimiento del modelo específico. null solo si realmente desconocido.
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -1191,7 +1195,8 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
   "model_year": null,
   "warranty_description": null,
   "list_price_msrp": null,
-  "watts": null
+  "watts": null,
+  "voltage_v": null
 }}"""
 
         import httpx as _httpx
@@ -1542,9 +1547,22 @@ async def create_listing(request: Request):
                           "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER",
                           "POWER_DRILL","LIGHT_FIXTURE","LIGHT_BULB"}
         if product_type in _NEEDS_VOLTAGE:
-            _voltage = 120 if (currency == "USD" or client.marketplace_id == "ATVPDKIKX0DER") else 127
-            attributes["voltage"] = [{"value": _voltage, "unit": "volts", "marketplace_id": client.marketplace_id}]
-            # Also add wattage if available in payload
+            # Use the AI-researched voltage — NEVER hardcode blindly
+            _voltage_str = (body.get("voltage_v") or "").strip()
+            import re as _rev
+            _voltage_num = None
+            if _voltage_str:
+                # Parse first numeric value from strings like "120V", "120/240V", "100-240V"
+                _vm = _rev.search(r"(\d+)", _voltage_str)
+                if _vm:
+                    _voltage_num = int(_vm.group(1))
+            # Fallback only when AI didn't provide voltage
+            if not _voltage_num:
+                _is_us_market = (currency == "USD" or client.marketplace_id == "ATVPDKIKX0DER")
+                _voltage_num = 120 if _is_us_market else 127
+                logger.info(f"[AMZ Lanzar] Voltage not in payload for {product_type}, using fallback {_voltage_num}V")
+            attributes["voltage"] = [{"value": _voltage_num, "unit": "volts", "marketplace_id": client.marketplace_id}]
+            # Wattage if available
             _watts = float(body.get("watts") or 0)
             if _watts > 0:
                 attributes["wattage"] = [{"value": _watts, "unit": "watts", "marketplace_id": client.marketplace_id}]

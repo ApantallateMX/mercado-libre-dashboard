@@ -1004,7 +1004,8 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   _wiz.is_new_product = false;
   _wiz.submitting = false;
   _wiz._schema = null;
-  _wiz._watts  = null;
+  _wiz._watts   = null;
+  _wiz._voltage = null;
 
   // BM card
   var card = document.getElementById('amz-wiz-bm-card');
@@ -1396,7 +1397,8 @@ window._amzWizGenerateContent = async function() {
       _kwEl.value = d.keywords_backend;
       _kwEl.dispatchEvent(new Event('input'));
     }
-    if (d.watts) _wiz._watts = d.watts;  // store watts for submit
+    if (d.watts)     _wiz._watts   = d.watts;
+    if (d.voltage_v) _wiz._voltage = d.voltage_v;
     if (d.product_type) {
       document.getElementById('amz-wiz-product-type').value = d.product_type;
       window._amzWizUpdateFieldVisibility(d.product_type);
@@ -2296,8 +2298,9 @@ async function _amzWizSubmit() {
     var arEl = document.getElementById('amz-wiz-aspect-ratio'); if (arEl && arEl.value) payload.aspect_ratio = arEl.value;
     var pkgLEl = document.getElementById('amz-wiz-pkg-length'); if (pkgLEl && pkgLEl.value) payload.pkg_length_cm = Math.round(parseFloat(pkgLEl.value) * _toCm * 10) / 10 || 0;
     var pkgHEl = document.getElementById('amz-wiz-pkg-height'); if (pkgHEl && pkgHEl.value) payload.pkg_height_cm = Math.round(parseFloat(pkgHEl.value) * _toCm * 10) / 10 || 0;
-    // Watts (from AI research, stored in _wiz)
-    if (_wiz._watts) payload.watts = _wiz._watts;
+    // Watts + voltage from AI research
+    if (_wiz._watts)   payload.watts     = _wiz._watts;
+    if (_wiz._voltage) payload.voltage_v = _wiz._voltage;
   }
 
   try {
