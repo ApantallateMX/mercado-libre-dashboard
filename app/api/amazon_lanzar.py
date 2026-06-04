@@ -1048,10 +1048,11 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
 • usb_port_count: Integer number of USB ports (e.g., 2), null if N/A
 • special_feature: List of key features (e.g., ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] if N/A
 • included_components: List of box contents (e.g., ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] if N/A
-• connectivity_technology: List of connectivity tech (e.g., ["Wi-Fi", "Bluetooth", "HDMI", "USB"]), [] if N/A
+• connectivity_technology: REQUIRED — NEVER return empty. For corded/wired appliances: ["Corded Electric"]. For wireless: ["Wi-Fi","Bluetooth"]. For TVs: ["HDMI","Wi-Fi","Bluetooth"]. Always provide at least one value.
 • model_year: Model year as integer (e.g., 2024), null if unknown
 • warranty_description: "90 days seller warranty"
 • list_price_msrp: Suggested MSRP in USD (e.g., if price is 533.32, MSRP might be 599.99), null if unable to estimate
+• watts: Power consumption in watts as decimal (e.g., 500.0 for a vacuum), null if N/A or unknown
 
 ━━━ RESPOND WITH VALID JSON ONLY (no markdown, no extra text) ━━━
 {{
@@ -1080,7 +1081,8 @@ TECHNICAL ATTRIBUTES (for TELEVISION and COMPUTER_MONITOR product types):
   "connectivity_technology": [],
   "model_year": null,
   "warranty_description": null,
-  "list_price_msrp": null
+  "list_price_msrp": null,
+  "watts": null
 }}"""
         else:
             prompt = f"""Eres un experto en optimización de listings para Amazon México con dominio de SEO, CRO y las políticas de Amazon MX 2024.
@@ -1155,10 +1157,11 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
 • usb_port_count: Número entero de puertos USB (ej: 2), null si no aplica
 • special_feature: Lista de características destacadas (ej: ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision"]), [] si no aplica
 • included_components: Lista de lo que incluye la caja (ej: ["Remote Control", "Power Cable", "Stand", "User Manual"]), [] si no aplica
-• connectivity_technology: Lista de tecnologías de conectividad (ej: ["Wi-Fi", "Bluetooth", "HDMI", "USB"]), [] si no aplica
+• connectivity_technology: REQUERIDO — NUNCA devolver vacío. Para electrodomésticos alámbricos: ["Corded Electric"]. Para inalámbricos: ["Wi-Fi","Bluetooth"]. Para TVs: ["HDMI","Wi-Fi","Bluetooth"]. Siempre al menos un valor.
 • model_year: Año del modelo como entero (ej: 2024), null si no sabes
 • warranty_description: Descripción de garantía en inglés (ej: "90 days seller warranty"), null si no aplica
 • list_price_msrp: Precio MSRP sugerido en la misma moneda que el producto (ej: si precio es 533.32 USD, MSRP podría ser 599.99), null si no puedes estimar
+• watts: Consumo de potencia en vatios como decimal (ej: 500.0 para aspiradora), null si N/A o desconocido
 
 ━━━ RESPONDE SOLO CON JSON VÁLIDO (sin markdown, sin texto extra) ━━━
 {{
@@ -1187,7 +1190,8 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
   "connectivity_technology": [],
   "model_year": null,
   "warranty_description": null,
-  "list_price_msrp": null
+  "list_price_msrp": null,
+  "watts": null
 }}"""
 
         import httpx as _httpx
@@ -1520,13 +1524,30 @@ async def create_listing(request: Request):
                 for c in _ic[:10] if c
             ]
 
-        # ── Connectivity ──────────────────────────────────────────────────────
-        _ct = connectivity_tech or (["HDMI"] if product_type == "TELEVISION" else [])
+        # ── Connectivity — fallback defaults per product type ─────────────────
+        _CORDED_TYPES = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
+                         "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER"}
+        _ct_default = (["HDMI","Wi-Fi","Bluetooth"] if product_type == "TELEVISION"
+                       else ["Corded Electric"] if product_type in _CORDED_TYPES
+                       else [])
+        _ct = connectivity_tech or _ct_default
         if _ct:
             attributes["connectivity_technology"] = [
                 {"value": c, "marketplace_id": client.marketplace_id}
                 for c in _ct if c
             ]
+
+        # ── Voltage — required for appliances by Amazon ───────────────────────
+        _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
+                          "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER",
+                          "POWER_DRILL","LIGHT_FIXTURE","LIGHT_BULB"}
+        if product_type in _NEEDS_VOLTAGE:
+            _voltage = 120 if (currency == "USD" or client.marketplace_id == "ATVPDKIKX0DER") else 127
+            attributes["voltage"] = [{"value": _voltage, "unit": "volts", "marketplace_id": client.marketplace_id}]
+            # Also add wattage if available in payload
+            _watts = float(body.get("watts") or 0)
+            if _watts > 0:
+                attributes["wattage"] = [{"value": _watts, "unit": "watts", "marketplace_id": client.marketplace_id}]
 
         # ── Precio de lista (MSRP), año del modelo, garantía ─────────────────
         if list_price_msrp > 0:
