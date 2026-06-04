@@ -785,6 +785,42 @@ Return ONLY valid JSON (no markdown, no text):
     return found
 
 
+async def _get_product_schema(product_type: str, seller_id: str) -> dict:
+    """Fetches and caches Amazon attribute schema for a product type (30-day TTL)."""
+    import time as _time
+    from app.services.token_store import get_schema_cache, save_schema_cache
+
+    if not product_type or product_type == "PRODUCT":
+        return {}  # PRODUCT is generic, no specific schema
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return {}
+
+    cache_key = f"{product_type}|{client.marketplace_id}"
+    schema, cached_at = await get_schema_cache(cache_key)
+    if schema and (_time.time() - cached_at) < 30 * 86400:
+        return schema
+
+    schema = await client.fetch_product_type_schema(product_type)
+    if schema:
+        await save_schema_cache(cache_key, schema)
+    return schema
+
+
+@router.get("/product-schema/{product_type}")
+async def get_product_schema_endpoint(product_type: str, seller_id: str = ""):
+    """
+    Returns the attribute schema for an Amazon product type.
+    Includes: required attributes, optional attributes, property groups.
+    Cached 30 days per type + marketplace.
+    """
+    schema = await _get_product_schema(product_type.upper(), seller_id)
+    if not schema:
+        return {"product_type": product_type, "required": [], "optional": [], "groups": {}}
+    return schema
+
+
 @router.post("/research-product")
 async def research_product(request: Request):
     """Research product specs from UPC ItemDB + Claude knowledge base. Cached 30 days."""
@@ -1184,6 +1220,15 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
                 data[_rk] = _rv
         # Expose researched data so wizard can pre-fill fields immediately
         data["_researched"] = researched
+        # Fetch schema for the detected product type (async, 30-day cache)
+        _pt = (data.get("product_type") or "").strip().upper()
+        if _pt and _pt != "PRODUCT" and seller_id:
+            try:
+                import asyncio as _aio2
+                _schema = await _aio2.wait_for(_get_product_schema(_pt, seller_id), timeout=10)
+                data["_schema"] = _schema
+            except Exception:
+                data["_schema"] = {}
         return data
     except Exception as e:
         logger.warning(f"[AMZ Lanzar] generate-content error: {e}")

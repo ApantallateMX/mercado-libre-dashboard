@@ -1276,6 +1276,63 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def fetch_product_type_schema(self, product_type: str) -> dict:
+        """
+        Fetches the attribute schema for a product type from Amazon Definitions API.
+        Makes two calls: ENFORCED (required attrs) and NOT_ENFORCED (all attrs).
+        Returns simplified dict: {required, optional, groups, group_titles}.
+        """
+        import asyncio as _aio
+
+        async def _fetch(enforced: bool) -> dict:
+            try:
+                return await self._request(
+                    "GET",
+                    f"/definitions/2020-09-01/productTypes/{product_type}",
+                    params={
+                        "marketplaceIds": self.marketplace_id,
+                        "requirements": "LISTING",
+                        "requirementsEnforced": "ENFORCED" if enforced else "NOT_ENFORCED",
+                        "locale": "en_US",
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"[Amazon] schema fetch error ({product_type}, enforced={enforced}): {e}")
+                return {}
+
+        enforced_resp, all_resp = await _aio.gather(_fetch(True), _fetch(False))
+
+        def _extract_props(resp: dict) -> tuple:
+            groups = {}
+            titles = {}
+            props  = set()
+            for gk, gv in (resp.get("propertyGroups") or {}).items():
+                pnames = gv.get("propertyNames") or []
+                groups[gk] = pnames
+                titles[gk] = gv.get("title", gk)
+                props.update(pnames)
+            return groups, titles, props
+
+        req_groups, req_titles, req_props = _extract_props(enforced_resp)
+        all_groups, all_titles, all_props = _extract_props(all_resp)
+
+        # Merge group info: use all_groups as base (more complete), mark required
+        merged_groups = all_groups if all_groups else req_groups
+        merged_titles = all_titles if all_titles else req_titles
+
+        optional_props = all_props - req_props
+        result = {
+            "product_type": product_type,
+            "marketplace_id": self.marketplace_id,
+            "required": sorted(req_props),
+            "optional": sorted(optional_props),
+            "all": sorted(all_props),
+            "groups": merged_groups,
+            "group_titles": merged_titles,
+        }
+        logger.info(f"[Amazon] Schema for {product_type}: {len(req_props)} required, {len(optional_props)} optional")
+        return result
+
     async def get_listing_status(self, sku: str) -> dict:
         """
         Gets current status of a listing from Amazon SP-API.

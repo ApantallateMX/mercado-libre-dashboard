@@ -808,6 +808,14 @@ async def init_db():
                 PRIMARY KEY (seller_id, sku)
             )
         """)
+        # TABLA: amz_product_type_schemas -- schema de atributos por tipo (TTL 30 dias)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_product_type_schemas (
+                cache_key   TEXT PRIMARY KEY,
+                schema_json TEXT NOT NULL DEFAULT '{}',
+                cached_at   REAL NOT NULL DEFAULT 0
+            )
+        """)
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         # TABLA: amz_product_types_cache — tipos de producto Amazon por marketplace (TTL 7 días)
         await db.execute("""
@@ -2792,3 +2800,30 @@ async def get_listing_status(seller_id: str, sku: str) -> dict:
         'status': row[0], 'asin': row[1],
         'issues': _j.loads(row[2] or '[]'), 'checked_at': row[3],
     }
+
+
+# -- Amazon Product Type Schema Cache -----------------------------------------
+
+async def get_schema_cache(cache_key: str) -> tuple:
+    import json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            'SELECT schema_json, cached_at FROM amz_product_type_schemas WHERE cache_key = ?',
+            (cache_key,),
+        )).fetchone()
+    if not row:
+        return {}, 0.0
+    try:
+        return _j.loads(row[0]), float(row[1])
+    except Exception:
+        return {}, 0.0
+
+
+async def save_schema_cache(cache_key: str, schema: dict) -> None:
+    import time as _t, json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO amz_product_type_schemas (cache_key, schema_json, cached_at) VALUES (?, ?, ?)',
+            (cache_key, _j.dumps(schema), _t.time()),
+        )
+        await db.commit()

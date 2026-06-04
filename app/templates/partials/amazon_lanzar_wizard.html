@@ -695,6 +695,7 @@ var _wiz = {
   step: 1,
   is_new_product: false,
   submitting: false,
+  _schema: null,  // Amazon attribute schema for current product type
 };
 
 var STEPS_OFFER  = [1, 2, 4];      // Flujo 1: ASIN match (sin contenido)
@@ -1002,6 +1003,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   _wiz.step = 1;
   _wiz.is_new_product = false;
   _wiz.submitting = false;
+  _wiz._schema = null;
 
   // BM card
   var card = document.getElementById('amz-wiz-bm-card');
@@ -1056,6 +1058,13 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var upcAttrEl = document.getElementById('amz-wiz-upc-attr'); if (upcAttrEl) upcAttrEl.value = _wiz.upc || '';
   // Reset unit system to metric
   var metricEl = document.querySelector('input[name="amz-wiz-units"][value="metric"]'); if (metricEl) metricEl.checked = true;
+  // Reset schema visual markers (borders, opacity) from previous wizard session
+  Object.keys(_ATTR_TO_FIELD).forEach(function(attr) {
+    var fid = _ATTR_TO_FIELD[attr]; if (!fid) return;
+    var el = document.getElementById(fid); if (!el) return;
+    var wrap = el.closest ? el.closest('div') : null; if (!wrap) return;
+    wrap.style.borderLeft = ''; wrap.style.paddingLeft = ''; wrap.style.borderRadius = ''; wrap.style.opacity = ''; wrap.title = '';
+  });
   var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = '';
   var wEl = document.getElementById('amz-wiz-weight'); if (wEl) wEl.value = '';
   var dEl = document.getElementById('amz-wiz-display-size'); if (dEl) dEl.value = '';
@@ -1389,6 +1398,13 @@ window._amzWizGenerateContent = async function() {
     if (d.product_type) {
       document.getElementById('amz-wiz-product-type').value = d.product_type;
       window._amzWizUpdateFieldVisibility(d.product_type);
+      // Apply schema if returned with response
+      if (d._schema && d._schema.required) {
+        window._amzWizApplySchema(d._schema);
+      } else {
+        // Fetch schema async if not included
+        window._amzWizFetchSchema(d.product_type, _wiz.seller_id);
+      }
     }
     if (d.color) { var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = d.color; }
     if (d.weight_kg) { var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && !wEl2.value) wEl2.value = d.weight_kg; }
@@ -1449,6 +1465,81 @@ function _amzWizCollectPhotos() {
   });
   return urls;
 }
+
+// ─── Schema-aware field management ────────────────────────────────────────────
+// Mapping: Amazon attribute name → wizard field ID
+var _ATTR_TO_FIELD = {
+  item_name: 'amz-wiz-title', brand: 'amz-wiz-brand', model_number: 'amz-wiz-model-num',
+  color: 'amz-wiz-color', item_weight: 'amz-wiz-weight',
+  externally_assigned_product_identifier: 'amz-wiz-upc-attr',
+  country_of_origin: 'amz-wiz-country-origin',
+  display: 'amz-wiz-display-type',          // proxy for display group
+  resolution: 'amz-wiz-resolution',
+  refresh_rate: 'amz-wiz-refresh-rate',
+  total_hdmi_ports: 'amz-wiz-hdmi-count',
+  mounting_type: 'amz-wiz-mounting-type',
+  image_aspect_ratio: 'amz-wiz-aspect-ratio',
+  special_feature: 'amz-wiz-special-feature',
+  included_components: 'amz-wiz-included-components',
+  connectivity_technology: 'amz-wiz-connectivity',
+  list_price: 'amz-wiz-msrp',
+  model_year: 'amz-wiz-model-year',
+  warranty_description: 'amz-wiz-warranty',
+  item_package_weight: 'amz-wiz-pkg-weight',
+  item_dimensions: 'amz-wiz-length',        // proxy for dims group
+  bullet_point: null,                        // handled by bullets section
+  product_description: 'amz-wiz-description',
+  generic_keyword: 'amz-wiz-keywords',
+};
+
+window._amzWizApplySchema = function(schema) {
+  if (!schema || !schema.required) return;
+  _wiz._schema = schema;
+  var required = schema.required || [];
+  var all      = schema.all      || [];
+
+  // Mark required fields with red left-border + '*' badge
+  Object.keys(_ATTR_TO_FIELD).forEach(function(attr) {
+    var fieldId = _ATTR_TO_FIELD[attr];
+    if (!fieldId) return;
+    var el = document.getElementById(fieldId);
+    if (!el) return;
+    var wrap = el.closest ? el.closest('div') : null;
+    if (!wrap) return;
+    var isReq = required.indexOf(attr) >= 0;
+    var isAll = all.length === 0 || all.indexOf(attr) >= 0;
+    if (isReq) {
+      wrap.style.borderLeft = '2px solid #f97316'; // orange = required
+      wrap.style.paddingLeft = '6px';
+      wrap.style.borderRadius = '4px';
+    } else if (!isAll && all.length > 0) {
+      // Attribute not in schema at all — dim it
+      wrap.style.opacity = '0.4';
+      wrap.title = 'Not used for ' + (schema.product_type || 'this product type');
+    }
+  });
+
+  // Show schema badge near product type field
+  var ptDesc = document.getElementById('amz-wiz-l-pt-desc');
+  if (ptDesc && required.length > 0) {
+    ptDesc.innerHTML = '<span class="text-orange-500">' + required.length + ' required</span>' +
+      (all.length > 0 ? ' · ' + all.length + ' total attributes' : '') +
+      ' for ' + (schema.product_type || '');
+    ptDesc.className = 'text-[9px] mt-1 text-gray-500';
+  }
+};
+
+window._amzWizFetchSchema = async function(productType, sellerId) {
+  if (!productType || productType === 'PRODUCT') return;
+  try {
+    var r = await fetch('/api/amazon/lanzar/product-schema/' + encodeURIComponent(productType) +
+                        '?seller_id=' + encodeURIComponent(sellerId || _wiz.seller_id || ''));
+    var schema = await r.json();
+    if (schema && (schema.required || []).length > 0) {
+      window._amzWizApplySchema(schema);
+    }
+  } catch(e) {}
+};
 
 // ─── Dynamic field visibility by product type ─────────────────────────────────
 // Category groups: which attribute panels to show per product type
@@ -2076,6 +2167,41 @@ function _amzWizBuildReview() {
       { label: _t('ck_weight')||'Peso del producto', ok: _hasWeight, warn: false },
       { label: _t('ck_dims')||'Dimensiones (L×A×H)', ok: _hasDims, warn: false },
     ];
+
+    // ── Schema-based required attribute checks ────────────────────────────────
+    if (_wiz._schema && (_wiz._schema.required || []).length > 0) {
+      var _schemaReq = _wiz._schema.required;
+      var _fieldVals = {
+        list_price: (document.getElementById('amz-wiz-msrp') || {}).value,
+        externally_assigned_product_identifier: (document.getElementById('amz-wiz-upc-attr') || {}).value,
+        country_of_origin: (document.getElementById('amz-wiz-country-origin') || {}).value,
+        connectivity_technology: (document.getElementById('amz-wiz-connectivity') || {}).value,
+        special_feature: (document.getElementById('amz-wiz-special-feature') || {}).value,
+        included_components: (document.getElementById('amz-wiz-included-components') || {}).value,
+        warranty_description: (document.getElementById('amz-wiz-warranty') || {}).value,
+        model_year: (document.getElementById('amz-wiz-model-year') || {}).value,
+      };
+      var _schemaLabels = {
+        list_price: 'MSRP / List price (required by Amazon)',
+        externally_assigned_product_identifier: 'UPC / EAN (required)',
+        country_of_origin: 'Country of origin (required)',
+        connectivity_technology: 'Connectivity (required)',
+        special_feature: 'Special features (required)',
+        included_components: 'Included components (required)',
+        warranty_description: 'Warranty description (required)',
+        model_year: 'Model year (required)',
+      };
+      Object.keys(_fieldVals).forEach(function(attr) {
+        if (_schemaReq.indexOf(attr) >= 0) {
+          var val = (_fieldVals[attr] || '').trim();
+          checks.push({
+            label: _schemaLabels[attr] || attr.replace(/_/g, ' '),
+            ok: val.length > 0,
+            warn: false,
+          });
+        }
+      });
+    }
 
     document.getElementById('amz-wiz-checklist-wrap').classList.remove('hidden');
     document.getElementById('amz-wiz-checklist').innerHTML = checks.map(function(c) {
