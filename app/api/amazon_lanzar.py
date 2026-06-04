@@ -1253,8 +1253,31 @@ async def create_listing(request: Request):
                 "fulfillment_channel_code": "AMAZON_NA",
             }]
 
+    def _is_product_type_error(issues_list):
+        """Returns True if the error is specifically about an invalid/incompatible product type."""
+        for i in issues_list:
+            if i.get("severity") != "ERROR":
+                continue
+            attrs = [str(a).lower() for a in (i.get("attributeNames") or [])]
+            msg   = (i.get("message") or "").lower()
+            if ("producttype" in attrs or "product_type" in attrs or
+                    "product type" in msg or "producttype" in msg or
+                    "not valid or compatible" in msg or "no es válido o no es compatible" in msg):
+                return True
+        return False
+
     try:
         result = await client.create_listing_full(sku, product_type, attributes, requirements)
+        issues = result.get("issues") or []
+        # Auto-retry with PRODUCT type if Amazon rejects the specific product type
+        if _is_product_type_error(issues) and product_type not in ("PRODUCT", "TELEVISION", "COMPUTER_MONITOR"):
+            logger.info(f"[AMZ Lanzar] Product type '{product_type}' rejected by Amazon, retrying with PRODUCT")
+            product_type = "PRODUCT"
+            # Remove TV/display-specific attributes that don't apply to PRODUCT type
+            _DISPLAY_ATTRS = {"display","resolution","image_aspect_ratio","refresh_rate","total_hdmi_ports","mounting_type"}
+            attributes = {k: v for k, v in attributes.items() if k not in _DISPLAY_ATTRS}
+            result = await client.create_listing_full(sku, product_type, attributes, requirements)
+            issues = result.get("issues") or []
     except Exception as e:
         logger.exception("[AMZ Lanzar] create_listing_full error")
         return JSONResponse({"error": str(e)[:300]}, status_code=500)
