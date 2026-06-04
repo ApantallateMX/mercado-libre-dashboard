@@ -666,6 +666,162 @@ async def refresh_product_types(request: Request):
     return JSONResponse({"error": "SP-API returned empty list"}, status_code=500)
 
 
+# ── 1b. Research product specs ───────────────────────────────────────────────
+
+async def _research_product_specs(brand: str, model: str, upc: str, title: str, api_key: str) -> dict:
+    """
+    Uses Claude haiku + UPC ItemDB to research accurate product specs.
+    Returns structured dict: weight_kg, dims_cm, connectivity, components, msrp, country, features.
+    """
+    import time as _time, re as _re
+    import httpx as _hx
+    import asyncio as _aio
+    from app.services.token_store import get_product_specs_cache, save_product_specs_cache
+
+    cache_key = f"{brand.lower()}|{model.lower()}".strip("|")
+    specs, cached_at = await get_product_specs_cache(cache_key)
+    if specs and (_time.time() - cached_at) < 30 * 86400:
+        return specs
+
+    found: dict = {}
+
+    # ── Source 1: UPC ItemDB ───────────────────────────────────────────────────
+    async def _upc_lookup() -> dict:
+        q = upc or f"{brand} {model}"
+        url = (f"https://api.upcitemdb.com/prod/trial/lookup?upc={upc}" if upc
+               else f"https://api.upcitemdb.com/prod/trial/search?s={q.replace(' ','+')}&type=product")
+        try:
+            async with _hx.AsyncClient(timeout=6) as cl:
+                r = await cl.get(url, headers={"User-Agent": "Mozilla/5.0"})
+                if r.status_code == 200:
+                    items = (r.json().get("items") or [])
+                    if items:
+                        it = items[0]
+                        res = {}
+                        # Parse weight → kg
+                        wraw = (it.get("weight") or "").strip().lower()
+                        if wraw:
+                            wm = _re.search(r"([\d.]+)\s*(lb|oz|kg|g)\b", wraw)
+                            if wm:
+                                v, u = float(wm.group(1)), wm.group(2)
+                                res["weight_kg"] = round(v*0.453592 if u=="lb" else v*0.0283495 if u=="oz" else v/1000 if u=="g" else v, 2)
+                        # Parse dimension → cm
+                        draw = (it.get("dimension") or "").strip().lower()
+                        if draw:
+                            parts = _re.findall(r"([\d.]+)\s*(in|cm|mm)\b", draw)
+                            if len(parts) >= 3:
+                                def _cm(v, u): return round(float(v)*(2.54 if u=="in" else 0.1 if u=="mm" else 1), 1)
+                                res["length_cm"] = _cm(*parts[0])
+                                res["width_cm"]  = _cm(*parts[1])
+                                res["height_cm"] = _cm(*parts[2])
+                        if it.get("lowest_recorded_price"):
+                            res["msrp_usd"] = float(it["lowest_recorded_price"])
+                        if it.get("images"):
+                            res["images"] = (it["images"] or [])[:3]
+                        return res
+        except Exception:
+            pass
+        return {}
+
+    # ── Source 2: Claude haiku as research agent ───────────────────────────────
+    async def _claude_research() -> dict:
+        if not api_key or not (brand and model):
+            return {}
+        research_prompt = f"""You are a product data specialist. Research EXACT specs for: {brand} {model}
+
+Use your training knowledge to provide precise specifications.
+
+Return ONLY valid JSON (no markdown, no text):
+{{
+  "weight_kg": <decimal or null>,
+  "length_cm": <decimal or null>,
+  "width_cm": <decimal or null>,
+  "height_cm": <decimal or null>,
+  "connectivity": <["Wi-Fi","Bluetooth","HDMI","USB"] or []>,
+  "included_components": <["Remote Control","Power Cable"] or []>,
+  "special_features": <["Smart TV","HDR"] or []>,
+  "msrp_usd": <decimal or null>,
+  "country_of_origin": <"China" or null>,
+  "display_size_in": <decimal or null>,
+  "display_type": <"LED"/"QLED"/"OLED" or null>,
+  "resolution": <"720p"/"1080p"/"4K"/"8K" or null>,
+  "refresh_rate_hz": <integer or null>,
+  "smart_device": <true/false/null>,
+  "hdmi_ports": <integer or null>,
+  "usb_ports": <integer or null>,
+  "watts": <decimal or null>,
+  "model_year": <integer or null>,
+  "color": <"Black" or null>
+}}"""
+        try:
+            async with _hx.AsyncClient(timeout=20) as hc:
+                resp = await hc.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 600,
+                          "messages": [{"role": "user", "content": research_prompt}]},
+                )
+                text = (resp.json().get("content") or [{}])[0].get("text", "").strip()
+                m = _re.search(r'\{.*\}', text, _re.DOTALL)
+                if m:
+                    return json.loads(m.group())
+        except Exception:
+            pass
+        return {}
+
+    # Run both in parallel
+    upc_data, claude_data = await _aio.gather(_upc_lookup(), _claude_research())
+
+    # Merge: UPC ItemDB takes priority for dimensions/weight (real data), Claude fills gaps
+    for k, v in claude_data.items():
+        if v is not None and k not in found:
+            found[k] = v
+    for k, v in upc_data.items():
+        if v is not None:  # UPC data overwrites (more reliable)
+            found[k] = v
+
+    if found:
+        await save_product_specs_cache(cache_key, found)
+    return found
+
+
+@router.post("/research-product")
+async def research_product(request: Request):
+    """Research product specs from UPC ItemDB + Claude knowledge base. Cached 30 days."""
+    import os, base64 as _b64
+    body = await request.json()
+    brand = (body.get("brand") or "").strip()
+    model = (body.get("model") or "").strip()
+    upc   = (body.get("upc") or "").strip()
+    title = (body.get("title") or "").strip()
+
+    _p1 = os.getenv("AI_KEY_P1", "")
+    _p2 = os.getenv("AI_KEY_P2", "")
+    api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
+
+    specs = await _research_product_specs(brand, model, upc, title, api_key)
+    return {"specs": specs, "brand": brand, "model": model}
+
+
+@router.get("/listing-status/{sku}")
+async def get_listing_status_endpoint(sku: str, seller_id: str = ""):
+    """Check the current status of a listing on Amazon SP-API."""
+    from app.services.token_store import save_listing_status, get_listing_status
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+
+    result = await client.get_listing_status(sku)
+    # Cache the status
+    await save_listing_status(
+        seller_id=client.seller_id, sku=sku,
+        status=result.get("status", "pending"),
+        asin=result.get("asin"),
+        issues=result.get("issues", []),
+    )
+    return result
+
+
 # ── 2. Generar contenido IA — claude-sonnet-4-6, prompt completo ─────────────
 
 @router.post("/generate-content")
@@ -681,11 +837,43 @@ async def generate_content(request: Request):
     seller_id = (body.get("seller_id") or "").strip()
     is_us     = currency == "USD"
 
+    # ── Pre-research: get accurate specs BEFORE calling Claude for content ──────
+    import asyncio as _aio
+    _p1r = os.getenv("AI_KEY_P1", "")
+    _p2r = os.getenv("AI_KEY_P2", "")
+    _api_key_r = (_b64.b64decode(_p1r + _p2r).decode() if (_p1r and _p2r) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
+    researched: dict = {}
+    try:
+        researched = await _aio.wait_for(
+            _research_product_specs(brand, model_num, upc, title, _api_key_r),
+            timeout=15,
+        )
+    except Exception as _re:
+        logger.warning(f"[generate-content] research failed: {_re}")
+
+    # Build research context string for the prompt
+    _res_lines = []
+    if researched.get("weight_kg"):      _res_lines.append(f"Weight: {researched['weight_kg']} kg")
+    if researched.get("length_cm"):      _res_lines.append(f"Dimensions: {researched['length_cm']} × {researched.get('width_cm',0)} × {researched.get('height_cm',0)} cm")
+    if researched.get("display_size_in"):_res_lines.append(f"Screen: {researched['display_size_in']} inches")
+    if researched.get("display_type"):   _res_lines.append(f"Display: {researched['display_type']}")
+    if researched.get("resolution"):     _res_lines.append(f"Resolution: {researched['resolution']}")
+    if researched.get("refresh_rate_hz"):_res_lines.append(f"Refresh rate: {researched['refresh_rate_hz']} Hz")
+    if researched.get("connectivity"):   _res_lines.append(f"Connectivity: {', '.join(researched['connectivity'])}")
+    if researched.get("hdmi_ports"):     _res_lines.append(f"HDMI ports: {researched['hdmi_ports']}")
+    if researched.get("usb_ports"):      _res_lines.append(f"USB ports: {researched['usb_ports']}")
+    if researched.get("included_components"): _res_lines.append(f"Includes: {', '.join(researched['included_components'])}")
+    if researched.get("special_features"):    _res_lines.append(f"Features: {', '.join(researched['special_features'])}")
+    if researched.get("msrp_usd"):       _res_lines.append(f"MSRP USD: {researched['msrp_usd']}")
+    if researched.get("country_of_origin"): _res_lines.append(f"Country: {researched['country_of_origin']}")
+    if researched.get("model_year"):     _res_lines.append(f"Model year: {researched['model_year']}")
+    if researched.get("color"):          _res_lines.append(f"Color: {researched['color']}")
+    _research_ctx = ("\n\nRESEARCHED SPECS (use these exact values — do not deviate):\n" + "\n".join(_res_lines)) if _res_lines else ""
+
     # Fetch valid product types from Amazon API (cached 7 days)
     valid_types: list = []
     if seller_id:
         try:
-            import asyncio as _aio
             valid_types = await _aio.wait_for(_get_valid_product_types(seller_id), timeout=8)
         except Exception as _te:
             logger.warning(f"[generate-content] product types fetch failed: {_te}")
@@ -758,7 +946,7 @@ Create complete, high-converting listing content for this product. ALL content (
 Product title: {title}
 Brand: {brand}
 Category: {category}
-{extra_ctx}
+{extra_ctx}{_research_ctx}
 Marketplace: Amazon US (amazon.com) — English-speaking US buyers
 
 ━━━ CRITICAL RULES ━━━
@@ -866,7 +1054,7 @@ Crea contenido completo y de alta conversión para este producto:
 Título catálogo: {title}
 Marca: {brand}
 Categoría: {category}
-{extra_ctx}
+{extra_ctx}{_research_ctx}
 Marketplace: Amazon México (amazon.com.mx) — compradores en español mexicano
 
 ━━━ REGLAS CRÍTICAS (cumplirlas al pie de la letra) ━━━
@@ -990,6 +1178,12 @@ ATRIBUTOS TÉCNICOS (para product_type TELEVISION y COMPUTER_MONITOR):
         # Asegurar que keywords_backend no supere 249 chars
         if len(data.get("keywords_backend", "")) > 249:
             data["keywords_backend"] = data["keywords_backend"][:249].rsplit(" ", 1)[0]
+        # Merge researched specs: fill gaps the AI may have left null
+        for _rk, _rv in researched.items():
+            if _rv is not None and data.get(_rk) in (None, "", 0, []):
+                data[_rk] = _rv
+        # Expose researched data so wizard can pre-fill fields immediately
+        data["_researched"] = researched
         return data
     except Exception as e:
         logger.warning(f"[AMZ Lanzar] generate-content error: {e}")

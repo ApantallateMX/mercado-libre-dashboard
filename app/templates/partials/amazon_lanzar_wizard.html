@@ -253,6 +253,7 @@
             <div>
               <label id="amz-wiz-l-pt-lbl" class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
               <input id="amz-wiz-product-type" type="text" placeholder="ej: TELEVISION, LIGHT_BULB…"
+                     oninput="window._amzWizUpdateFieldVisibility(this.value.trim().toUpperCase())"
                      class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition">
               <p id="amz-wiz-l-pt-desc" class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
             </div>
@@ -1385,7 +1386,10 @@ window._amzWizGenerateContent = async function() {
       _kwEl.value = d.keywords_backend;
       _kwEl.dispatchEvent(new Event('input'));
     }
-    if (d.product_type) document.getElementById('amz-wiz-product-type').value = d.product_type;
+    if (d.product_type) {
+      document.getElementById('amz-wiz-product-type').value = d.product_type;
+      window._amzWizUpdateFieldVisibility(d.product_type);
+    }
     if (d.color) { var cEl = document.getElementById('amz-wiz-color'); if (cEl) cEl.value = d.color; }
     if (d.weight_kg) { var wEl2 = document.getElementById('amz-wiz-weight'); if (wEl2 && !wEl2.value) wEl2.value = d.weight_kg; }
     if (d.display_size_in) { var dsEl = document.getElementById('amz-wiz-display-size'); if (dsEl && !dsEl.value) dsEl.value = d.display_size_in; }
@@ -1445,6 +1449,98 @@ function _amzWizCollectPhotos() {
   });
   return urls;
 }
+
+// ─── Dynamic field visibility by product type ─────────────────────────────────
+// Category groups: which attribute panels to show per product type
+var _PT_GROUPS = {
+  // Display devices → show all TV/monitor fields
+  TELEVISION:'display', COMPUTER_MONITOR:'display', MONITOR:'display',
+  // Audio
+  SPEAKER:'audio', HEADPHONES:'audio', SMART_SPEAKER:'audio',
+  // Computing
+  LAPTOP:'computing', PERSONAL_COMPUTER:'computing', TABLET:'computing',
+  KEYBOARD:'computing', MOUSE:'computing', PRINTER:'computing',
+  // Lighting
+  LIGHT_BULB:'lighting', LIGHT_FIXTURE:'lighting',
+  // Appliances (no display fields)
+  VACUUM:'appliance', FAN:'appliance', AIR_CONDITIONER:'appliance',
+  COFFEE_MAKER:'appliance', BLENDER:'appliance', MICROWAVE_OVEN:'appliance',
+  // Beauty/Personal care
+  HAIR_DRYER:'beauty', ELECTRIC_SHAVER:'beauty',
+  // Camera/Photo
+  CAMERA:'camera', SECURITY_CAMERA:'camera',
+  // Wearables
+  SMARTWATCH:'wearable',
+  // Generic
+  PRODUCT:'general',
+};
+
+// Which field IDs to show per group
+var _GROUP_SHOW = {
+  display:   ['amz-wiz-display-type','amz-wiz-resolution','amz-wiz-refresh-rate','amz-wiz-smart-tv',
+              'amz-wiz-hdmi-count','amz-wiz-usb-count','amz-wiz-mounting-type','amz-wiz-display-size',
+              'amz-wiz-aspect-ratio'],
+  audio:     ['amz-wiz-connectivity','amz-wiz-special-feature'],
+  computing: ['amz-wiz-display-size','amz-wiz-connectivity','amz-wiz-special-feature'],
+  lighting:  [],
+  appliance: [],
+  beauty:    [],
+  camera:    ['amz-wiz-resolution','amz-wiz-connectivity'],
+  wearable:  ['amz-wiz-display-size','amz-wiz-connectivity'],
+  general:   [],
+};
+
+window._amzWizUpdateFieldVisibility = function(productType) {
+  var group = _PT_GROUPS[productType] || 'general';
+  var showIds = (_GROUP_SHOW[group] || []).concat([
+    // Always visible for all types
+    'amz-wiz-brand','amz-wiz-model-num','amz-wiz-color','amz-wiz-weight',
+    'amz-wiz-length','amz-wiz-width','amz-wiz-height',
+    'amz-wiz-country-origin','amz-wiz-msrp','amz-wiz-model-year',
+    'amz-wiz-warranty','amz-wiz-special-feature','amz-wiz-included-components',
+    'amz-wiz-connectivity','amz-wiz-upc-attr',
+  ]);
+  var showSet = new Set(showIds);
+
+  // Find all attribute input containers (parent div of the label+input)
+  var displayOnlyIds = ['amz-wiz-display-type','amz-wiz-resolution','amz-wiz-refresh-rate',
+    'amz-wiz-smart-tv','amz-wiz-mounting-type','amz-wiz-hdmi-count','amz-wiz-usb-count',
+    'amz-wiz-aspect-ratio','amz-wiz-pkg-length','amz-wiz-pkg-height'];
+
+  displayOnlyIds.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var wrap = el.closest('div');
+    if (!wrap) return;
+    if (showSet.has(id)) {
+      wrap.style.display = '';
+      wrap.style.opacity = '1';
+    } else {
+      // Hide display-only fields for non-display types
+      if (_GROUP_SHOW.display.indexOf(id) >= 0 && group !== 'display') {
+        wrap.style.display = 'none';
+      }
+    }
+  });
+
+  // Update the product type hint
+  var ptDesc = document.getElementById('amz-wiz-l-pt-desc');
+  if (ptDesc) {
+    var groupLabels = {
+      display:'TV/Monitor — mostrando atributos de pantalla',
+      audio:'Audio — mostrando atributos de audio',
+      computing:'Cómputo — mostrando atributos de dispositivos',
+      appliance:'Electrodoméstico — atributos básicos',
+      lighting:'Iluminación — atributos básicos',
+      beauty:'Cuidado personal — atributos básicos',
+      camera:'Cámara — mostrando atributos de imagen',
+      wearable:'Wearable — atributos básicos',
+      general:'Producto general — atributos básicos',
+    };
+    ptDesc.textContent = groupLabels[group] || 'Determines available attributes. AI suggests it.';
+    ptDesc.className = 'text-[9px] mt-1 ' + (group === 'display' ? 'text-blue-500' : 'text-gray-400');
+  }
+};
 
 // ─── Unit system toggle ───────────────────────────────────────────────────────
 function _amzWizGetUnits() {
@@ -2091,11 +2187,43 @@ async function _amzWizSubmit() {
     document.getElementById('amz-wiz-success').classList.remove('hidden');
     document.getElementById('amz-wiz-review').classList.add('hidden');
     document.getElementById('amz-wiz-checklist-wrap').classList.add('hidden');
-    document.getElementById('amz-wiz-success-asin').textContent =
-      d.asin ? 'ASIN: ' + d.asin : 'Amazon procesará el listing en breve.';
+    var _asinText = d.asin ? 'ASIN: ' + d.asin : (_t('published_asin') || 'Amazon procesará el listing en breve.');
+    document.getElementById('amz-wiz-success-asin').textContent = _asinText;
     document.getElementById('amz-wiz-footer').classList.add('hidden');
     if (typeof window._loadAmzSinLanzar === 'function')
       setTimeout(function() { window._loadAmzSinLanzar(1, true); }, 2500);
+    // ── Post-publication status polling ──────────────────────────────────────
+    if (_wiz.sku) {
+      var _statusEl = document.getElementById('amz-wiz-success-asin');
+      var _pollCount = 0;
+      var _pollMax   = 8; // max 8 × 15s = 2 min
+      function _pollStatus() {
+        if (_pollCount++ >= _pollMax) return;
+        fetch('/api/amazon/lanzar/listing-status/' + encodeURIComponent(_wiz.sku) +
+              '?seller_id=' + encodeURIComponent(_wiz.seller_id))
+          .then(function(r) { return r.json(); })
+          .then(function(s) {
+            var st = (s.status || '').toUpperCase();
+            if (st === 'BUYABLE' || st === 'ACTIVE') {
+              _statusEl.innerHTML = (d.asin ? '<strong>ASIN: ' + d.asin + '</strong><br>' : '') +
+                '<span class="text-green-600 font-semibold">✓ Listing activo en Amazon</span>';
+            } else if (st === 'DISCOVERABLE') {
+              _statusEl.innerHTML = (d.asin ? '<strong>ASIN: ' + d.asin + '</strong><br>' : '') +
+                '<span class="text-blue-500">⏳ Indexando en Amazon... (~15 min)</span>';
+              setTimeout(_pollStatus, 20000);
+            } else if (st === 'SUPPRESSED' || st === 'INCOMPLETE') {
+              var issues = (s.issues || []).filter(function(i){ return i.severity === 'ERROR'; });
+              var issueMsg = issues.length ? issues.map(function(i){ return i.message; }).join('; ') : 'Revisar Seller Central';
+              _statusEl.innerHTML = '<span class="text-amber-600">⚠ Listing requiere atención: ' + issueMsg + '</span>';
+            } else {
+              // Still pending, keep polling
+              setTimeout(_pollStatus, 15000);
+            }
+          })
+          .catch(function() {});
+      }
+      setTimeout(_pollStatus, 12000); // first check after 12s
+    }
   } catch(e) {
     errEl.textContent = '⚠ Error de red: ' + e.message;
     errEl.classList.remove('hidden');

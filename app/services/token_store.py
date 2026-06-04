@@ -788,6 +788,26 @@ async def init_db():
                 PRIMARY KEY (seller_id, sku_upper)
             )
         """)
+        # TABLA: amz_product_specs_cache — specs investigadas por brand+model (TTL 30 dias)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_product_specs_cache (
+                cache_key  TEXT PRIMARY KEY,
+                specs_json TEXT NOT NULL DEFAULT '{}',
+                cached_at  REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # TABLA: amz_listing_status_cache — estado post-publicacion por sku+seller
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_listing_status_cache (
+                seller_id   TEXT NOT NULL,
+                sku         TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                asin        TEXT DEFAULT NULL,
+                issues_json TEXT DEFAULT '[]',
+                checked_at  REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (seller_id, sku)
+            )
+        """)
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         # TABLA: amz_product_types_cache — tipos de producto Amazon por marketplace (TTL 7 días)
         await db.execute("""
@@ -2721,3 +2741,54 @@ async def save_product_types_cache(marketplace_id: str, types: list) -> None:
             (marketplace_id, _j.dumps(sorted(types)), _t.time()),
         )
         await db.commit()
+
+
+async def get_product_specs_cache(cache_key: str) -> tuple:
+    """Returns (specs_dict, cached_at). Empty dict + 0.0 if not cached."""
+    import json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            'SELECT specs_json, cached_at FROM amz_product_specs_cache WHERE cache_key = ?',
+            (cache_key,),
+        )).fetchone()
+    if not row:
+        return {}, 0.0
+    try:
+        return _j.loads(row[0]), float(row[1])
+    except Exception:
+        return {}, 0.0
+
+
+async def save_product_specs_cache(cache_key: str, specs: dict) -> None:
+    import time as _t, json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO amz_product_specs_cache (cache_key, specs_json, cached_at) VALUES (?, ?, ?)',
+            (cache_key, _j.dumps(specs), _t.time()),
+        )
+        await db.commit()
+
+
+async def save_listing_status(seller_id: str, sku: str, status: str, asin: str = None, issues: list = None) -> None:
+    import time as _t, json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO amz_listing_status_cache (seller_id, sku, status, asin, issues_json, checked_at) VALUES (?, ?, ?, ?, ?, ?)',
+            (seller_id, sku, status, asin, _j.dumps(issues or []), _t.time()),
+        )
+        await db.commit()
+
+
+async def get_listing_status(seller_id: str, sku: str) -> dict:
+    import json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            'SELECT status, asin, issues_json, checked_at FROM amz_listing_status_cache WHERE seller_id = ? AND sku = ?',
+            (seller_id, sku),
+        )).fetchone()
+    if not row:
+        return {}
+    return {
+        'status': row[0], 'asin': row[1],
+        'issues': _j.loads(row[2] or '[]'), 'checked_at': row[3],
+    }

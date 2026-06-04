@@ -1276,6 +1276,34 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def get_listing_status(self, sku: str) -> dict:
+        """
+        Gets current status of a listing from Amazon SP-API.
+        Returns dict with: status (BUYABLE/DISCOVERABLE/DELETED/INCOMPLETE), asin, issues list.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+                params={
+                    "marketplaceIds": self.marketplace_id,
+                    "includedData": "summaries,issues",
+                    "issueLocale": "en_US",
+                },
+            )
+            summaries = result.get("summaries") or []
+            issues    = result.get("issues") or []
+            status = "pending"
+            asin   = None
+            if summaries:
+                s = summaries[0]
+                status = s.get("status", "pending")
+                asin   = s.get("asin")
+            return {"status": status, "asin": asin, "issues": issues, "raw": result}
+        except Exception as e:
+            logger.warning(f"[Amazon] get_listing_status error for {sku}: {e}")
+            return {"status": "error", "asin": None, "issues": [], "error": str(e)}
+
     async def fetch_product_types(self) -> list:
         """
         Fetches all valid product type names for this marketplace from SP-API Definitions.
