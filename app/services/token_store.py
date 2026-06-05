@@ -833,6 +833,19 @@ async def init_db():
                 PRIMARY KEY (product_type, marketplace_id)
             )
         """)
+        # TABLA: amz_listing_actions — historial de acciones cierre/eliminacion
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_listing_actions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id    TEXT NOT NULL,
+                sku          TEXT NOT NULL,
+                asin         TEXT DEFAULT '',
+                action       TEXT NOT NULL,  -- close | delete | archive
+                reason       TEXT DEFAULT '',
+                performed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_amz_actions_seller ON amz_listing_actions(seller_id,performed_at)')
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         # TABLA: amz_product_types_cache — tipos de producto Amazon por marketplace (TTL 7 días)
         await db.execute("""
@@ -2976,3 +2989,45 @@ async def seed_product_type_templates() -> None:
         existing = await get_product_type_template(pt, mk)
         if not existing:
             await save_product_type_template(pt, mk, data)
+
+
+# == Amazon Listing Actions (close/delete history) ============================
+
+async def save_listing_action(seller_id: str, sku: str, asin: str,
+                               action: str, reason: str = '') -> None:
+    import time as _t
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT INTO amz_listing_actions (seller_id,sku,asin,action,reason,performed_at) VALUES (?,?,?,?,?,datetime("now"))',
+            (seller_id, sku, asin or '', action, reason or ''))
+        await db.commit()
+
+
+async def get_listing_actions(seller_id: str, limit: int = 100) -> list:
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        db.row_factory = __import__('aiosqlite').Row
+        rows = await (await db.execute(
+            'SELECT sku,asin,action,reason,performed_at FROM amz_listing_actions WHERE seller_id=? ORDER BY performed_at DESC LIMIT ?',
+            (seller_id, limit))).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def get_deletion_candidates(seller_id: str, days_no_sale: int = 365) -> list:
+    import json as _j
+    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
+        db.row_factory = __import__('aiosqlite').Row
+        rows = await (await db.execute(
+            """SELECT al.sku, al.asin, al.title, al.status, al.price, al.available_qty,
+                      MAX(oh.order_date) as last_sale,
+                      CAST((julianday('now') - julianday(COALESCE(MAX(oh.order_date),'2020-01-01'))) AS INTEGER) as days_no_sale
+               FROM amazon_listings al
+               LEFT JOIN order_history oh
+                   ON oh.account_id = al.seller_id AND oh.platform = 'amazon'
+                   AND (oh.sku = al.sku OR oh.sku = al.base_sku)
+               WHERE al.seller_id = ?
+               GROUP BY al.sku
+               HAVING days_no_sale > ? OR last_sale IS NULL
+               ORDER BY days_no_sale DESC
+               LIMIT 200""",
+            (seller_id, days_no_sale))).fetchall()
+    return [dict(r) for r in rows]

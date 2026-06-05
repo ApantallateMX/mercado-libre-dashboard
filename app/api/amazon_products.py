@@ -2935,20 +2935,104 @@ async def amazon_products_sin_publicar(request: Request):
                     else:
                         inactivos.append(_item)
 
+        # Candidatos a eliminar (sin ventas en 365 días)
+        from app.services.token_store import get_deletion_candidates, get_listing_actions
+        candidatos = await get_deletion_candidates(client.seller_id, days_no_sale=365)
+        historial  = await get_listing_actions(client.seller_id, limit=50)
+
         ctx = {
             "suprimidos":  suprimidos,
             "inactivos":   inactivos,
             "con_issues":  [],
+            "candidatos":  candidatos,
+            "historial":   historial,
             "db_total":    db_total,
             "synced_at":   synced_at,
             "nickname":    client.nickname,
             "marketplace": client.marketplace_name,
+            "seller_id":   client.seller_id,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
 
     except Exception as e:
         logger.exception("[Amazon Products] Error en sin-publicar")
         return _render_error(request, "amazon_products_sin_publicar.html", str(e))
+
+
+# ── Candidatos a Eliminar ────────────────────────────────────────────────────
+
+@router.get("/products/candidatos-eliminar")
+async def get_candidatos_eliminar(request: Request, seller_id: str = "", days: int = 365):
+    """Returns deletion candidates: listings with no sales in X days."""
+    from app.services.token_store import get_deletion_candidates
+    client = await get_amazon_client(seller_id=seller_id or None)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    candidates = await get_deletion_candidates(client.seller_id, days)
+    return {"candidates": candidates, "days": days, "count": len(candidates)}
+
+
+@router.post("/products/close-listing")
+async def close_listing_endpoint(request: Request):
+    """Set listing qty=0 (close without deleting)."""
+    from app.services.token_store import save_listing_action
+    body = await request.json()
+    sku       = (body.get("sku") or "").strip()
+    seller_id = (body.get("seller_id") or "").strip()
+    reason    = (body.get("reason") or "Cerrado manualmente").strip()
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    client = await get_amazon_client(seller_id=seller_id or None)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    result = await client.close_listing(sku)
+    if result.get("error"):
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    # Save to DB and update local listings table
+    asin = (body.get("asin") or "")
+    await save_listing_action(client.seller_id, sku, asin, "close", reason)
+    async with __import__("aiosqlite").connect(__import__("app.services.token_store", fromlist=["DATABASE_PATH"]).DATABASE_PATH) as db:
+        await db.execute("UPDATE amazon_listings SET available_qty=0 WHERE seller_id=? AND sku=?", (client.seller_id, sku))
+        await db.commit()
+    logger.info(f"[Amazon] Listing closed: {sku} ({client.seller_id})")
+    return {"ok": True, "sku": sku, "action": "close"}
+
+
+@router.post("/products/delete-listing")
+async def delete_listing_endpoint(request: Request):
+    """Permanently delete a listing from Amazon."""
+    from app.services.token_store import save_listing_action
+    body = await request.json()
+    sku       = (body.get("sku") or "").strip()
+    seller_id = (body.get("seller_id") or "").strip()
+    reason    = (body.get("reason") or "Eliminado manualmente").strip()
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    client = await get_amazon_client(seller_id=seller_id or None)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    asin = (body.get("asin") or "")
+    result = await client.delete_listing(sku)
+    # Amazon DELETE returns 200 with no body on success
+    if result.get("error"):
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    await save_listing_action(client.seller_id, sku, asin, "delete", reason)
+    async with __import__("aiosqlite").connect(__import__("app.services.token_store", fromlist=["DATABASE_PATH"]).DATABASE_PATH) as db:
+        await db.execute("DELETE FROM amazon_listings WHERE seller_id=? AND sku=?", (client.seller_id, sku))
+        await db.commit()
+    logger.info(f"[Amazon] Listing deleted: {sku} ({client.seller_id})")
+    return {"ok": True, "sku": sku, "action": "delete"}
+
+
+@router.get("/products/historial-acciones")
+async def get_historial_acciones(request: Request, seller_id: str = ""):
+    """Returns history of close/delete actions for a seller."""
+    from app.services.token_store import get_listing_actions
+    client = await get_amazon_client(seller_id=seller_id or None)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    actions = await get_listing_actions(client.seller_id)
+    return {"actions": actions}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

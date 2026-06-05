@@ -75,10 +75,14 @@
                     </div>
                     {% endif %}
                 </div>
-                <div class="shrink-0">
+                <div class="shrink-0 flex flex-col gap-1.5">
+                    <button onclick="window._amzFixWithAI('{{ item.sku }}', '{{ item.asin }}', '{{ item.title|replace("'","&#39;") }}')"
+                            class="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs font-semibold rounded-lg transition whitespace-nowrap">
+                        🤖 Fix IA
+                    </button>
                     <a href="{{ item.sc_url }}" target="_blank"
-                       class="inline-block px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
-                        Corregir →
+                       class="text-center px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium rounded-lg transition whitespace-nowrap">
+                        SC →
                     </a>
                 </div>
             </div>
@@ -196,5 +200,141 @@
 {% endif %}
 
 {% endif %}  {# total == 0 / db_total == 0 #}
+
+<!-- ─── CANDIDATOS A ELIMINAR ─────────────────────────────────────────────── -->
+{% if candidatos %}
+<div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-300 mt-4" id="amz-candidatos-section">
+  <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100 cursor-pointer"
+       onclick="document.getElementById('amz-candidatos-body').classList.toggle('hidden')">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🗑️</span>
+      <div>
+        <h3 class="text-sm font-bold text-red-800">Candidatos a Eliminar</h3>
+        <p class="text-xs text-red-500">Sin ventas en 365+ días — ordenados por tiempo sin actividad</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="px-3 py-1 bg-red-400 text-white text-xs font-bold rounded-full">{{ candidatos|length }}</span>
+      <button id="amz-cand-select-all" onclick="event.stopPropagation(); window._amzCandSelectAll()"
+              class="px-3 py-1 bg-white border border-red-300 text-red-600 text-xs font-medium rounded-lg hover:bg-red-50">
+        ☑ Seleccionar todos
+      </button>
+      <button id="amz-cand-bulk-close" onclick="event.stopPropagation(); window._amzBulkAction('close')"
+              class="hidden px-3 py-1 bg-gray-500 hover:bg-gray-600 text-white text-xs font-medium rounded-lg transition">
+        ⬜ Cerrar seleccionados
+      </button>
+      <button id="amz-cand-bulk-delete" onclick="event.stopPropagation(); window._amzBulkAction('delete')"
+              class="hidden px-3 py-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium rounded-lg transition">
+        🗑️ Eliminar seleccionados
+      </button>
+    </div>
+  </div>
+  <div id="amz-candidatos-body" class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-red-50/50">
+        <tr class="text-xs text-gray-500 text-left border-b border-red-100">
+          <th class="py-2 px-3 w-8"><input type="checkbox" id="amz-cand-check-all" onchange="window._amzCandCheckAll(this)" class="accent-red-500"></th>
+          <th class="py-2 px-3 font-medium">Producto / SKU</th>
+          <th class="py-2 px-3 font-medium hidden md:table-cell">ASIN</th>
+          <th class="py-2 px-3 font-medium hidden md:table-cell text-right">Precio</th>
+          <th class="py-2 px-3 font-medium hidden md:table-cell text-right">Última venta</th>
+          <th class="py-2 px-3 font-medium text-right">Días sin venta</th>
+          <th class="py-2 px-3 font-medium text-center">Acción</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-red-50" id="amz-candidatos-tbody">
+        {% for item in candidatos %}
+        <tr class="hover:bg-red-50/30 transition" data-sku="{{ item.sku }}" data-asin="{{ item.asin or '' }}">
+          <td class="py-2 px-3">
+            <input type="checkbox" class="amz-cand-check accent-red-500" value="{{ item.sku }}"
+                   data-asin="{{ item.asin or '' }}" onchange="window._amzCandUpdateBulk()">
+          </td>
+          <td class="py-2 px-3">
+            <p class="text-xs font-medium text-gray-700 truncate max-w-[180px] md:max-w-[280px]">{{ (item.title or item.sku)[:55] }}</p>
+            <p class="text-[10px] text-gray-400">{{ item.sku }}{% if item.status and item.status != 'ACTIVE' %} · <span class="text-red-400">{{ item.status }}</span>{% endif %}</p>
+          </td>
+          <td class="py-2 px-3 hidden md:table-cell">
+            {% if item.asin %}<span class="text-[10px] text-orange-400 font-mono">{{ item.asin }}</span>
+            {% else %}<span class="text-[10px] text-gray-300">—</span>{% endif %}
+          </td>
+          <td class="py-2 px-3 hidden md:table-cell text-right">
+            <span class="text-xs text-gray-600">{% if item.price %}${{ '%.2f'|format(item.price) }}{% else %}—{% endif %}</span>
+          </td>
+          <td class="py-2 px-3 hidden md:table-cell text-right">
+            <span class="text-xs text-gray-500">{{ item.last_sale or 'Nunca' }}</span>
+          </td>
+          <td class="py-2 px-3 text-right">
+            <span class="text-xs font-bold {% if item.days_no_sale > 730 %}text-red-600{% elif item.days_no_sale > 365 %}text-orange-500{% else %}text-gray-500{% endif %}">
+              {{ item.days_no_sale or '?' }}d
+            </span>
+          </td>
+          <td class="py-2 px-3">
+            <div class="flex items-center justify-center gap-1">
+              <button onclick="window._amzCloseOne('{{ item.sku }}','{{ item.asin or '' }}','{{ seller_id }}')"
+                      title="Cerrar (qty=0)"
+                      class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-[10px] rounded transition">
+                ⬜
+              </button>
+              <button onclick="window._amzDeleteOne('{{ item.sku }}','{{ item.asin or '' }}','{{ seller_id }}','{{ (item.title or item.sku)[:40]|replace(\"'\",\"&#39;\") }}')"
+                      title="Eliminar permanentemente"
+                      class="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 text-[10px] rounded transition">
+                🗑️
+              </button>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="text-[10px] text-gray-400 px-4 py-2">⬜ Cerrar = qty 0, SKU se preserva &nbsp;|&nbsp; 🗑️ Eliminar = borra permanentemente de Amazon</p>
+  </div>
+</div>
+{% endif %}
+
+<!-- ─── HISTORIAL DE ACCIONES ─────────────────────────────────────────────── -->
+{% if historial %}
+<div class="bg-white rounded-xl shadow overflow-hidden border-l-4 border-gray-200 mt-4">
+  <div class="px-4 py-3 bg-gray-50 flex items-center justify-between border-b border-gray-100 cursor-pointer"
+       onclick="document.getElementById('amz-historial-body').classList.toggle('hidden')">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">📋</span>
+      <div>
+        <h3 class="text-sm font-bold text-gray-700">Historial de Acciones</h3>
+        <p class="text-xs text-gray-500">Listings cerrados y eliminados</p>
+      </div>
+    </div>
+    <span class="px-3 py-1 bg-gray-300 text-white text-xs font-bold rounded-full">{{ historial|length }}</span>
+  </div>
+  <div id="amz-historial-body" class="hidden overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50/50">
+        <tr class="text-xs text-gray-400 text-left border-b border-gray-100">
+          <th class="py-2 px-4 font-medium">Fecha</th>
+          <th class="py-2 px-3 font-medium">SKU</th>
+          <th class="py-2 px-3 font-medium">Acción</th>
+          <th class="py-2 px-3 font-medium">Razón</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for a in historial %}
+        <tr class="hover:bg-gray-50 transition">
+          <td class="py-2 px-4 text-xs text-gray-400">{{ a.performed_at[:16] }}</td>
+          <td class="py-2 px-3 text-xs font-mono text-gray-600">{{ a.sku }}</td>
+          <td class="py-2 px-3">
+            <span class="text-[10px] px-2 py-0.5 rounded font-semibold
+                {% if a.action == 'delete' %}bg-red-100 text-red-600
+                {% elif a.action == 'close' %}bg-gray-100 text-gray-600
+                {% else %}bg-blue-100 text-blue-600{% endif %}">
+              {{ {'delete':'Eliminado','close':'Cerrado','archive':'Archivado'}.get(a.action, a.action) }}
+            </span>
+          </td>
+          <td class="py-2 px-3 text-xs text-gray-500">{{ a.reason or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 {% endif %}  {# no_account / error #}

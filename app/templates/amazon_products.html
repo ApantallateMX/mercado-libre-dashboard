@@ -934,6 +934,116 @@ window._amzIgnoreGap = function(sku, sellerId) {
     }).then(function(){ window._loadAmzSinLanzar(1); });
 };
 
+// ── Inactivos — Fix con AI, Cerrar, Eliminar ──────────────────────────────────
+
+window._amzFixWithAI = function(sku, asin, title) {
+    // Open the wizard pre-filled with the SKU data for AI to fix
+    if (typeof window.openAmzLanzar === 'function') {
+        var sid = (document.getElementById('amz-sl-meta') || {}).getAttribute ?
+                  document.getElementById('amz-sl-meta').getAttribute('data-seller-id') : '';
+        var currency = (document.getElementById('amz-sl-meta') || {}).getAttribute ?
+                       document.getElementById('amz-sl-meta').getAttribute('data-currency') || 'USD' : 'USD';
+        window.openAmzLanzar(sku, title, 0, '', sid, 0, '', '', '', '', 0, currency);
+    } else {
+        alert('El wizard de lanzamiento no está disponible en esta página.');
+    }
+};
+
+window._amzCloseOne = function(sku, asin, sellerId) {
+    if (!confirm('¿Cerrar listing ' + sku + ' (qty=0)? El SKU se preserva en Amazon.')) return;
+    fetch('/api/amazon/products/close-listing', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({sku: sku, asin: asin, seller_id: sellerId, reason: 'Cerrado desde dashboard'}),
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+        if (d.ok) {
+            var row = document.querySelector('[data-sku="' + sku + '"]');
+            if (row) { row.style.opacity = '0.4'; row.style.textDecoration = 'line-through'; }
+            alert('✓ ' + sku + ' cerrado (qty=0)');
+        } else {
+            alert('⚠ Error: ' + (d.error || 'No se pudo cerrar'));
+        }
+    })
+    .catch(function(e){ alert('Error: ' + e.message); });
+};
+
+window._amzDeleteOne = function(sku, asin, sellerId, title) {
+    if (!confirm('⚠ ELIMINAR PERMANENTEMENTE:\n' + sku + ' — ' + title + '\n\nEsta acción NO se puede deshacer.')) return;
+    if (!confirm('Confirma eliminación de: ' + sku)) return;
+    fetch('/api/amazon/products/delete-listing', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({sku: sku, asin: asin, seller_id: sellerId, reason: 'Eliminado desde dashboard'}),
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+        if (d.ok) {
+            var row = document.querySelector('[data-sku="' + sku + '"]');
+            if (row) row.remove();
+            alert('✓ ' + sku + ' eliminado de Amazon');
+        } else {
+            alert('⚠ Error: ' + (d.error || 'No se pudo eliminar'));
+        }
+    })
+    .catch(function(e){ alert('Error: ' + e.message); });
+};
+
+window._amzCandCheckAll = function(chk) {
+    document.querySelectorAll('.amz-cand-check').forEach(function(el){ el.checked = chk.checked; });
+    window._amzCandUpdateBulk();
+};
+
+window._amzCandSelectAll = function() {
+    var allChecked = document.querySelectorAll('.amz-cand-check:checked').length === document.querySelectorAll('.amz-cand-check').length;
+    document.querySelectorAll('.amz-cand-check').forEach(function(el){ el.checked = !allChecked; });
+    window._amzCandUpdateBulk();
+};
+
+window._amzCandUpdateBulk = function() {
+    var selected = document.querySelectorAll('.amz-cand-check:checked').length;
+    var closeBtn  = document.getElementById('amz-cand-bulk-close');
+    var deleteBtn = document.getElementById('amz-cand-bulk-delete');
+    if (closeBtn)  closeBtn.classList.toggle('hidden', selected === 0);
+    if (deleteBtn) deleteBtn.classList.toggle('hidden', selected === 0);
+    if (closeBtn && selected > 0)  closeBtn.textContent = '⬜ Cerrar ' + selected;
+    if (deleteBtn && selected > 0) deleteBtn.textContent = '🗑️ Eliminar ' + selected;
+};
+
+window._amzBulkAction = function(action) {
+    var checks = document.querySelectorAll('.amz-cand-check:checked');
+    if (!checks.length) return;
+    var label = action === 'delete' ? 'ELIMINAR PERMANENTEMENTE' : 'CERRAR (qty=0)';
+    if (!confirm(label + ' ' + checks.length + ' listings?\n\n' +
+                 Array.from(checks).map(function(c){return c.value;}).join(', '))) return;
+    if (action === 'delete' && !confirm('Segunda confirmación: eliminar ' + checks.length + ' listings de Amazon')) return;
+    var sid = (document.getElementById('amz-sl-meta') || {}).getAttribute ?
+              document.getElementById('amz-sl-meta').getAttribute('data-seller-id') : '';
+    var promises = Array.from(checks).map(function(c) {
+        var fn = action === 'delete' ? window._amzDeleteOne : window._amzCloseOne;
+        return new Promise(function(resolve) {
+            fetch('/api/amazon/products/' + action + '-listing', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({sku: c.value, asin: c.getAttribute('data-asin'), seller_id: sid,
+                                      reason: 'Bulk ' + action + ' desde dashboard'}),
+            }).then(function(r){ return r.json(); }).then(function(d){
+                if (d.ok) {
+                    var row = document.querySelector('[data-sku="' + c.value + '"]');
+                    if (row) { action === 'delete' ? row.remove() : (row.style.opacity='0.4'); }
+                }
+                resolve(d);
+            }).catch(resolve);
+        });
+    });
+    Promise.all(promises).then(function(results) {
+        var ok = results.filter(function(r){ return r && r.ok; }).length;
+        alert('✓ ' + ok + '/' + checks.length + ' listings procesados');
+        window._amzCandUpdateBulk();
+    });
+};
+
 window._amzRestoreGap = function(sku, sellerId) {
     fetch('/api/amazon/lanzar/restore/' + encodeURIComponent(sku), {
         method: 'POST',

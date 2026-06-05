@@ -1333,6 +1333,40 @@ class AmazonClient:
         logger.info(f"[Amazon] Schema for {product_type}: {len(req_props)} required, {len(optional_props)} optional")
         return result
 
+    async def close_listing(self, sku: str) -> dict:
+        """Set listing quantity to 0 (closes without deleting the SKU)."""
+        try:
+            return await self._request(
+                "PATCH",
+                f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+                params={"marketplaceIds": self.marketplace_id},
+                json_body={
+                    "productType": "PRODUCT",
+                    "requirements": "LISTING_OFFER_ONLY",
+                    "attributes": {
+                        "fulfillment_availability": [{
+                            "fulfillment_channel_code": "DEFAULT",
+                            "quantity": 0,
+                        }]
+                    },
+                },
+            )
+        except Exception as e:
+            logger.warning(f"[Amazon] close_listing error for {sku}: {e}")
+            return {"error": str(e)}
+
+    async def delete_listing(self, sku: str) -> dict:
+        """Permanently delete a listing (SKU) from Amazon Seller Central."""
+        try:
+            return await self._request(
+                "DELETE",
+                f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+                params={"marketplaceIds": self.marketplace_id},
+            )
+        except Exception as e:
+            logger.warning(f"[Amazon] delete_listing error for {sku}: {e}")
+            return {"error": str(e)}
+
     async def get_listing_status(self, sku: str) -> dict:
         """
         Gets current status of a listing from Amazon SP-API.
