@@ -57,7 +57,9 @@
 {%- set sup_total  = sup_total  if sup_total  is defined else 0 -%}
 {%- set sup_page   = sup_page   if sup_page   is defined else 1 -%}
 {%- set sup_pages  = sup_pages  if sup_pages  is defined else 1 -%}
-{%- set inac_total = inac_total if inac_total is defined else 0 -%}
+{%- set inac_total      = inac_total      if inac_total      is defined else 0 -%}
+{%- set inac_with_stock = inac_with_stock if inac_with_stock is defined else 0 -%}
+{%- set bm_filter       = bm_filter       if bm_filter       is defined else 'all' -%}
 {%- set inac_page  = inac_page  if inac_page  is defined else 1 -%}
 {%- set inac_pages = inac_pages if inac_pages is defined else 1 -%}
 <!-- ─── SUPRIMIDOS ─────────────────────────────────────────────────────────── -->
@@ -174,7 +176,12 @@
         <p class="text-xs text-gray-500">{{ inac_total }} listings pausados o sin stock — no generan ventas</p>
       </div>
     </div>
-    <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inac_total }}</span>
+    <div class="flex items-center gap-1">
+      <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inac_total }}</span>
+      <a href="?seller_id={{ seller_id }}&bm_filter=all" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if not bm_filter or bm_filter == 'all' %}bg-gray-600 text-white{% else %}bg-white text-gray-500 border-gray-200 hover:bg-gray-50{% endif %}">Todos</a>
+      <a href="?seller_id={{ seller_id }}&bm_filter=with_stock" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'with_stock' %}bg-purple-600 text-white{% else %}bg-white text-purple-600 border-purple-200 hover:bg-purple-50{% endif %}">&#x26A1; Con Stock ({{ inac_with_stock }})</a>
+      <a href="?seller_id={{ seller_id }}&bm_filter=no_stock" class="px-2 py-1 text-[10px] font-semibold rounded-lg border transition {% if bm_filter == 'no_stock' %}bg-gray-400 text-white{% else %}bg-white text-gray-400 border-gray-200 hover:bg-gray-50{% endif %}">Sin Stock</a>
+    </div>
   </div>
     <div class="overflow-x-auto">
       <table class="w-full text-xs">
@@ -304,11 +311,15 @@
       <thead class="bg-red-50/50 border-b border-red-100">
         <tr class="text-[10px] text-gray-500 text-left">
           <th class="py-2 px-3 w-7"><input type="checkbox" id="amz-cand-check-all" onchange="window._amzCandCheckAll(this)" class="accent-red-500"></th>
-          <th class="py-2 px-3 font-medium">Producto / SKU</th>
+          <th class="py-2 px-3 font-medium">T&iacute;tulo</th>
+          <th class="py-2 px-2 font-medium hidden lg:table-cell">SKU</th>
+          <th class="py-2 px-2 font-medium hidden md:table-cell">ASIN</th>
+          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY Amazon</th>
+          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Stock BM</th>
           <th class="py-2 px-2 font-medium text-center hidden md:table-cell">Estado</th>
-          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">P. Amazon</th>
-          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">P. BM</th>
-          <th class="py-2 px-2 font-medium text-right">Ultima venta</th>
+          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Sale Price</th>
+          <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Retail BM</th>
+          <th class="py-2 px-2 font-medium text-right">Sin venta</th>
           <th class="py-2 px-2 font-medium text-right">Sin venta</th>
           <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Ordenes</th>
           <th class="py-2 px-3 font-medium text-center">Accion</th>
@@ -322,27 +333,29 @@
                    data-asin="{{ item.asin or '' }}" onchange="window._amzCandUpdateBulk()">
           </td>
           <td class="py-2 px-3">
-            <p class="font-medium text-gray-700 truncate max-w-[160px] md:max-w-[260px]">{{ (item.title or item.sku)[:55] }}</p>
-            <p class="text-[10px] text-gray-400 font-mono">{{ item.sku }}</p>
-            {% if item.asin %}<p class="text-[10px] text-orange-400">{{ item.asin }}</p>{% endif %}
+            <p class="font-medium text-gray-700 truncate max-w-[160px] md:max-w-[240px]">{{ (item.title or item.sku)[:55] }}</p>
+            <p class="text-[10px] text-gray-400 font-mono md:hidden">{{ item.sku }}</p>
+          </td>
+          <td class="py-2 px-2 hidden lg:table-cell">
+            <span class="text-[10px] font-mono text-gray-500">{{ item.sku }}</span>
+          </td>
+          <td class="py-2 px-2 hidden md:table-cell">
+            {% if item.asin %}<a href="https://www.amazon.com/dp/{{ item.asin }}" target="_blank" class="text-[10px] font-mono text-orange-400 hover:text-orange-600">{{ item.asin }}</a>{% else %}<span class="text-[10px] text-gray-300">---</span>{% endif %}
+          </td>
+          <td class="py-2 px-2 hidden md:table-cell text-right">
+            <span class="{% if item.available_qty and item.available_qty > 0 %}text-green-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.available_qty or 0 }}</span>
+          </td>
+          <td class="py-2 px-2 hidden md:table-cell text-right">
+            <span class="{% if item.bm_stock and item.bm_stock > 0 %}text-purple-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.bm_stock if item.bm_stock else '---' }}</span>
           </td>
           <td class="py-2 px-2 hidden md:table-cell text-center">
-            <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold
-                {% if item.status in ('SUPPRESSED','INCOMPLETE') %}bg-red-100 text-red-600
-                {% elif item.status == 'INACTIVE' %}bg-gray-100 text-gray-500
-                {% else %}bg-yellow-100 text-yellow-600{% endif %}">
-              {{ item.status or '?' }}
-            </span>
+            <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold {% if item.status in ('SUPPRESSED','INCOMPLETE') %}bg-red-100 text-red-600{% elif item.status == 'INACTIVE' %}bg-gray-100 text-gray-500{% else %}bg-yellow-100 text-yellow-600{% endif %}">{{ item.status or '?' }}</span>
           </td>
           <td class="py-2 px-2 hidden md:table-cell text-right">
-            <span class="text-gray-600">
-              {% if item.price and item.price > 0 %}${{ '{:.0f}'.format(item.price) }}{% else %}---{% endif %}
-            </span>
+            <span class="text-gray-600">{% if item.price and item.price > 0 %}${{ '{:.0f}'.format(item.price) }}{% else %}---{% endif %}</span>
           </td>
           <td class="py-2 px-2 hidden md:table-cell text-right">
-            <span class="{% if item.bm_price and item.bm_price > 0 %}text-green-600 font-medium{% else %}text-gray-300{% endif %}">
-              {% if item.bm_price and item.bm_price > 0 %}${{ '{:.0f}'.format(item.bm_price) }}{% else %}---{% endif %}
-            </span>
+            <span class="{% if item.bm_price and item.bm_price > 0 %}text-blue-600 font-medium{% else %}text-gray-300{% endif %}">{% if item.bm_price and item.bm_price > 0 %}${{ '{:.0f}'.format(item.bm_price) }}{% else %}---{% endif %}</span>
           </td>
           <td class="py-2 px-2 text-right">
             <span class="text-gray-500">{{ item.last_sale[:10] if item.last_sale else 'Nunca' }}</span>

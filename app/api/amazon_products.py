@@ -2868,6 +2868,7 @@ async def amazon_products_sin_publicar(
     request: Request,
     seller_id: Optional[str] = Query(None),
     show_parents: bool = Query(False),
+    bm_filter: str = Query("all"),   # all | with_stock | no_stock
 ):
     """
     Listings no activos: Inactivos y Suprimidos.
@@ -2963,29 +2964,42 @@ async def amazon_products_sin_publicar(
                         })
                     return items
 
+                # bm_filter: all | with_stock | no_stock
+                _bm_having = {
+                    'with_stock': 'AND COALESCE(bm_stk2.bm_stock,0) > 0',
+                    'no_stock':   'AND COALESCE(bm_stk2.bm_stock,0) = 0',
+                }.get(bm_filter, '')
+
                 for _status_filter in ("SUPPRESSED", "INCOMPLETE"):
                     _rows = await (await _db.execute(
                         _base_q, (client.seller_id, _status_filter, _PER_PAGE, (sup_page-1)*_PER_PAGE)
                     )).fetchall()
                     suprimidos.extend(_build_items(_rows))
 
-                _inac_rows = await (await _db.execute(
-                    f"""SELECT al.sku, al.asin, al.title, al.status,
-                              al.price, al.available_qty, al.synced_at,
-                              COALESCE(bc.retail_ph, 0) as bm_price,
-                              COALESCE(al.is_parent, 0) as is_parent,
+                _inac_q = f"""
+                    SELECT al.sku, al.asin, al.title, al.status,
+                           al.price, al.available_qty, al.synced_at,
+                           COALESCE(bc.retail_ph, 0) as bm_price,
+                           COALESCE(al.is_parent, 0) as is_parent,
                            COALESCE(bm_stk2.bm_stock, 0) as bm_stock
-                       FROM amazon_listings al
-                       LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
-                       LEFT JOIN (
-                           SELECT base_sku, SUM(available_qty) as bm_stock
-                           FROM ml_listings WHERE status = 'active'
-                           GROUP BY base_sku
-                       ) bm_stk2 ON bm_stk2.base_sku = al.base_sku
-                       WHERE al.seller_id=?
-                         AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
-                         {_parent_filter}
-                       ORDER BY al.title LIMIT ? OFFSET ?""",
+                    FROM amazon_listings al
+                    LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
+                    LEFT JOIN (SELECT base_sku, SUM(available_qty) as bm_stock FROM ml_listings WHERE status='active' GROUP BY base_sku) bm_stk2 ON bm_stk2.base_sku=al.base_sku
+                    WHERE al.seller_id=?
+                      AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
+                      {_parent_filter} {_bm_having}"""
+
+                # Count with/without BM stock for filter pills
+                _cws = await (await _db.execute(
+                    f"""SELECT COUNT(*) FROM amazon_listings al
+                        LEFT JOIN (SELECT base_sku, SUM(available_qty) as s FROM ml_listings WHERE status='active' GROUP BY base_sku) bm ON bm.base_sku=al.base_sku
+                        WHERE al.seller_id=? AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE') {_parent_filter}
+                        AND COALESCE(bm.s,0) > 0""", (client.seller_id,)
+                )).fetchone()
+                inac_with_stock = _cws[0] if _cws else 0
+
+                _inac_rows = await (await _db.execute(
+                    _inac_q + " ORDER BY bm_stock DESC, al.title LIMIT ? OFFSET ?",
                     (client.seller_id, _PER_PAGE, (inac_page-1)*_PER_PAGE)
                 )).fetchall()
                 inactivos = _build_items(_inac_rows)
@@ -3020,10 +3034,12 @@ async def amazon_products_sin_publicar(
             "sup_total":   sup_total,
             "sup_page":    sup_page,
             "sup_pages":   max(1, (sup_total + _PER_PAGE - 1) // _PER_PAGE),
-            "inactivos":   inactivos,
-            "inac_total":  inac_total,
-            "inac_page":   inac_page,
-            "inac_pages":  max(1, (inac_total + _PER_PAGE - 1) // _PER_PAGE),
+            "inactivos":        inactivos,
+            "inac_total":       inac_total,
+            "inac_page":        inac_page,
+            "inac_pages":       max(1, (inac_total + _PER_PAGE - 1) // _PER_PAGE),
+            "inac_with_stock":  inac_with_stock if "inac_with_stock" in dir() else 0,
+            "bm_filter":        bm_filter,
             "con_issues":  [],
             "candidatos":  candidatos_data.get("items", []),
             "cand_total":  candidatos_data.get("total", 0),

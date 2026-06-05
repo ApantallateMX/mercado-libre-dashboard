@@ -3044,7 +3044,8 @@ async def get_deletion_candidates(
                 AS INTEGER
             ) AS days_no_sale,
             COALESCE(bc.retail_ph, 0) AS bm_price,
-            bc.brand AS bm_brand
+            bc.brand AS bm_brand,
+            COALESCE(bm_stk.bm_stock, 0) AS bm_stock
         FROM amazon_listings al
         LEFT JOIN order_history oh
             ON oh.account_id = al.seller_id
@@ -3052,6 +3053,10 @@ async def get_deletion_candidates(
             AND (oh.sku = al.sku OR oh.sku = al.base_sku)
         LEFT JOIN bm_product_catalog bc
             ON bc.sku = al.base_sku OR bc.sku = al.sku
+        LEFT JOIN (
+            SELECT base_sku, SUM(available_qty) as bm_stock
+            FROM ml_listings WHERE status = 'active' GROUP BY base_sku
+        ) bm_stk ON bm_stk.base_sku = al.base_sku
         WHERE al.seller_id = ?
         GROUP BY al.sku
         HAVING days_no_sale > ? OR last_sale IS NULL
