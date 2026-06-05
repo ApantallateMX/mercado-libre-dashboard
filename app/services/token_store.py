@@ -833,6 +833,18 @@ async def init_db():
                 PRIMARY KEY (product_type, marketplace_id)
             )
         """)
+        # Migrate: add is_parent column to amazon_listings if missing
+        try:
+            await db.execute('ALTER TABLE amazon_listings ADD COLUMN is_parent INTEGER DEFAULT 0')
+            await db.commit()
+        except Exception:
+            pass  # already exists
+        # Migrate: add parent_asin column
+        try:
+            await db.execute('ALTER TABLE amazon_listings ADD COLUMN parent_asin TEXT DEFAULT ""')
+            await db.commit()
+        except Exception:
+            pass  # already exists
         # TABLA: amz_listing_actions — historial de acciones cierre/eliminacion
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_listing_actions (
@@ -3071,3 +3083,99 @@ async def get_deletion_candidates(
     }
 
 
+
+
+# == Amazon Listing Parents Detection =========================================
+
+async def detect_and_mark_parents(seller_id: str, use_catalog_api: bool = False) -> dict:
+    """
+    Marks amazon_listings rows as is_parent=1 using heuristic + optional Catalog API.
+    Heuristic: price=0 AND qty=0 AND status in (INACTIVE,SUPPRESSED,INCOMPLETE)
+    Returns: {marked: N, verified_via_api: M, seller_id: ...}
+    """
+    result = {"seller_id": seller_id, "marked": 0, "verified_via_api": 0}
+
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            """UPDATE amazon_listings
+               SET is_parent = 1
+               WHERE seller_id = ?
+                 AND (price IS NULL OR price = 0)
+                 AND (available_qty IS NULL OR available_qty = 0)
+                 AND UPPER(status) IN ('INACTIVE', 'SUPPRESSED', 'INCOMPLETE')
+                 AND is_parent = 0""",
+            (seller_id,),
+        )
+        result["marked"] = cur.rowcount
+        await db.commit()
+
+        if not use_catalog_api or result["marked"] == 0:
+            return result
+
+        rows = await (await db.execute(
+            "SELECT sku, asin FROM amazon_listings WHERE seller_id=? AND is_parent=1 AND asin!='' LIMIT 100",
+            (seller_id,),
+        )).fetchall()
+
+    if not rows:
+        return result
+
+    try:
+        from app.services.amazon_client import get_amazon_client
+        client = await get_amazon_client(seller_id=seller_id)
+        if not client:
+            return result
+
+        not_parents = []
+        for row in rows:
+            asin = row[1]; sku = row[0]
+            if not asin:
+                continue
+            try:
+                catalog = await client._request(
+                    "GET", f"/catalog/2022-04-01/items/{asin}",
+                    params={"marketplaceIds": client.marketplace_id, "includedData": "relationships"},
+                )
+                rels = catalog.get("relationships") or []
+                has_children = any(
+                    rel.get("type") in ("VARIATION", "variation") and rel.get("childAsins")
+                    for rel in rels
+                )
+                if has_children:
+                    result["verified_via_api"] += 1
+                else:
+                    not_parents.append(sku)
+            except Exception:
+                pass
+
+        if not_parents:
+            async with __import__("aiosqlite").connect(DATABASE_PATH) as db2:
+                for sku in not_parents:
+                    await db2.execute(
+                        "UPDATE amazon_listings SET is_parent=0 WHERE seller_id=? AND sku=?",
+                        (seller_id, sku))
+                await db2.commit()
+    except Exception:
+        pass
+
+    return result
+
+
+async def get_parent_listings(seller_id: str, page: int = 1, per_page: int = 20) -> dict:
+    """Returns listings marked as parents (variation containers)."""
+    offset = (page - 1) * per_page
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        db.row_factory = __import__("aiosqlite").Row
+        cnt   = await (await db.execute(
+            "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=? AND is_parent=1", (seller_id,)
+        )).fetchone()
+        total = cnt[0] if cnt else 0
+        rows  = await (await db.execute(
+            "SELECT sku, asin, title, status FROM amazon_listings WHERE seller_id=? AND is_parent=1 ORDER BY title LIMIT ? OFFSET ?",
+            (seller_id, per_page, offset),
+        )).fetchall()
+    return {
+        "items": [dict(r) for r in rows], "total": total,
+        "page": page, "per_page": per_page,
+        "pages": max(1, (total + per_page - 1) // per_page),
+    }

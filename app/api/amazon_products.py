@@ -2867,6 +2867,7 @@ async def amazon_products_stock_alerts(request: Request):
 async def amazon_products_sin_publicar(
     request: Request,
     seller_id: Optional[str] = Query(None),
+    show_parents: bool = Query(False),
 ):
     """
     Listings no activos: Inactivos y Suprimidos.
@@ -2918,15 +2919,19 @@ async def amazon_products_sin_publicar(
                     else:
                         inac_total += _cr["cnt"]
 
+                # Filter parents by default (show_parents=True to include them)
+                _parent_filter = "" if show_parents else "AND (al.is_parent IS NULL OR al.is_parent = 0)"
+
                 # Enhanced query: includes price, qty, bm_price
-                _base_q = """
+                _base_q = f"""
                     SELECT al.sku, al.asin, al.title, al.status,
                            al.price, al.available_qty, al.synced_at,
-                           COALESCE(bc.retail_ph, 0) as bm_price
+                           COALESCE(bc.retail_ph, 0) as bm_price,
+                           COALESCE(al.is_parent, 0) as is_parent
                     FROM amazon_listings al
                     LEFT JOIN bm_product_catalog bc
                         ON bc.sku = al.base_sku OR bc.sku = al.sku
-                    WHERE al.seller_id=? AND UPPER(al.status) = ?
+                    WHERE al.seller_id=? AND UPPER(al.status) = ? {_parent_filter}
                     ORDER BY al.title LIMIT ? OFFSET ?"""
 
                 def _build_items(rows):
@@ -2957,17 +2962,30 @@ async def amazon_products_sin_publicar(
                     suprimidos.extend(_build_items(_rows))
 
                 _inac_rows = await (await _db.execute(
-                    """SELECT al.sku, al.asin, al.title, al.status,
+                    f"""SELECT al.sku, al.asin, al.title, al.status,
                               al.price, al.available_qty, al.synced_at,
-                              COALESCE(bc.retail_ph, 0) as bm_price
+                              COALESCE(bc.retail_ph, 0) as bm_price,
+                              COALESCE(al.is_parent, 0) as is_parent
                        FROM amazon_listings al
                        LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
                        WHERE al.seller_id=?
                          AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
+                         {_parent_filter}
                        ORDER BY al.title LIMIT ? OFFSET ?""",
                     (client.seller_id, _PER_PAGE, (inac_page-1)*_PER_PAGE)
                 )).fetchall()
                 inactivos = _build_items(_inac_rows)
+
+        # Count parents for display
+        parents_count = 0
+        try:
+            _pc = await (await _db.execute(
+                "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=? AND is_parent=1",
+                (client.seller_id,)
+            )).fetchone()
+            parents_count = _pc[0] if _pc else 0
+        except Exception:
+            pass
 
         # Candidatos a eliminar + historial — wrapped to not break on error
         cand_days = int(request.query_params.get("days", 365))
@@ -3003,7 +3021,9 @@ async def amazon_products_sin_publicar(
             "synced_at":   synced_at,
             "nickname":    client.nickname,
             "marketplace": client.marketplace_name,
-            "seller_id":   client.seller_id,
+            "seller_id":     client.seller_id,
+            "show_parents":  show_parents,
+            "parents_count": parents_count,
         }
         return _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
 
@@ -3013,6 +3033,25 @@ async def amazon_products_sin_publicar(
 
 
 # ── Candidatos a Eliminar ────────────────────────────────────────────────────
+
+@router.post("/products/detect-parents")
+async def detect_parents_endpoint(
+    request: Request,
+    seller_id: Optional[str] = Query(None),
+    use_catalog: bool = Query(False),
+):
+    """
+    Runs parent ASIN detection for a seller's listings.
+    Heuristic: price=0 AND qty=0 AND status INACTIVE/SUPPRESSED.
+    use_catalog=true: also verifies via Amazon Catalog Items API (slower).
+    """
+    from app.services.token_store import detect_and_mark_parents
+    client = await get_amazon_client(seller_id=seller_id or None)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    result = await detect_and_mark_parents(client.seller_id, use_catalog_api=use_catalog)
+    return result
+
 
 @router.get("/products/sin-publicar-debug")
 async def debug_sin_publicar(request: Request):
@@ -3508,7 +3547,7 @@ def _render_error(request: Request, template: str, msg: str, extra: dict = None)
     """Template de error genérico."""
     ctx = {"error": msg, "no_account": False,
            "candidatos": [], "cand_total": 0, "cand_page": 1, "cand_pages": 1, "cand_days": 365,
-           "historial": [], "seller_id": "",
+           "historial": [], "seller_id": "", "show_parents": False, "parents_count": 0,
            "suprimidos": [], "sup_total": 0, "sup_page": 1, "sup_pages": 1,
            "inactivos": [],  "inac_total": 0, "inac_page": 1, "inac_pages": 1,
            "con_issues": [], "db_total": 0, "synced_at": None, "nickname": "", "marketplace": ""}

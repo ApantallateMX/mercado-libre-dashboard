@@ -11,6 +11,8 @@
 {% else %}
 
 {% set total = suprimidos|length + inactivos|length + con_issues|length %}
+{%- set show_parents  = show_parents  if show_parents  is defined else false -%}
+{%- set parents_count = parents_count if parents_count is defined else 0 -%}
 
 <!-- Info de fuente de datos -->
 <div class="mb-3 text-xs text-gray-400 flex items-center gap-2">
@@ -23,6 +25,19 @@
     {% endif %}
 </div>
 
+{% if parents_count > 0 %}
+<div class="mb-3 flex items-center gap-3 text-xs">
+  <span class="text-gray-500">{% if show_parents %}Mostrando parents de variaciones{% else %}{{ parents_count }} parents de variaciones ocultos{% endif %}</span>
+  <a href="?seller_id={{ seller_id }}&show_parents={{ 'false' if show_parents else 'true' }}"
+     class="px-2.5 py-1 border rounded-lg transition {% if show_parents %}bg-orange-100 border-orange-300 text-orange-700 hover:bg-orange-50{% else %}bg-white border-gray-200 text-gray-500 hover:bg-gray-50{% endif %}">
+    {% if show_parents %}Ocultar parents{% else %}Mostrar parents ({{ parents_count }}){% endif %}
+  </a>
+  <a href="/api/amazon/products/detect-parents?seller_id={{ seller_id }}" target="_blank"
+     class="px-2.5 py-1 bg-white border border-gray-200 text-gray-500 text-[10px] rounded-lg hover:bg-gray-50 transition">
+    🔍 Re-detectar
+  </a>
+</div>
+{% endif %}
 {% if db_total == 0 %}
 <div class="bg-white rounded-xl shadow p-10 text-center">
     <div class="w-10 h-10 border-4 border-orange-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>

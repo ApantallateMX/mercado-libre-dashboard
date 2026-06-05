@@ -164,6 +164,15 @@ async def _sync_account_full(seller_id: str, client) -> tuple[int, str]:
                 await token_store.upsert_amazon_listings(rows)
         logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {len(rows)} listings guardados en DB")
 
+        # ── Detección automática de parents de variaciones ─────────────────
+        if rows:
+            try:
+                parent_result = await token_store.detect_and_mark_parents(seller_id)
+                if parent_result["marked"] > 0:
+                    logger.info(f"[AMZ-LISTING-SYNC] seller={seller_id}: {parent_result['marked']} parents de variaciones detectados")
+            except Exception as _pe:
+                logger.warning(f"[AMZ-LISTING-SYNC] parent detection error: {_pe}")
+
         # ── Detección de huérfanos ──────────────────────────────────────────
         try:
             fresh_skus = {r["sku"] for r in rows}
