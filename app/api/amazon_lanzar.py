@@ -1507,9 +1507,11 @@ async def create_listing(request: Request):
                 "height": {"value": height_cm, "unit": "centimeters"},
                 "marketplace_id": client.marketplace_id,
             }]
-            # item_depth_width_height — requerido por Amazon USA (TELEVISION)
-            attributes["item_depth_width_height"] = [{
-                "depth":  {"value": width_cm,  "unit": "centimeters"},
+            # item_depth_width_height (TV) vs item_length_width_height (appliances/vacuums)
+            _dim_attr_name = "item_length_width_height" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "item_depth_width_height"
+            attributes[_dim_attr_name] = [{
+                "length" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "depth":
+                    {"value": width_cm,  "unit": "centimeters"},
                 "width":  {"value": length_cm, "unit": "centimeters"},
                 "height": {"value": height_cm, "unit": "centimeters"},
                 "marketplace_id": client.marketplace_id,
@@ -1715,19 +1717,11 @@ async def create_listing(request: Request):
             _cap_v2 = float(capacity_val or 0) or 0.5  # 0.5L default for stick vac
             _cap_u2 = (capacity_unit_attr or "liters").lower()
             attributes["capacity"] = [{"value": _cap_v2, "unit_of_measure": _cap_u2, "marketplace_id": client.marketplace_id}]
-            # Compliance declaration — supplier declaration for regulatory compliance
+            # Compliance declarations — required for VACUUM_CLEANER
             attributes["supplier_declared_material_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
-            # compliance_media (Certificado de conformidad del producto) — required for VACUUM_CLEANER
-            # Send the manufacturer's product page as the compliance reference document
-            _brand_lower = (brand or "shark").lower().replace(" ", "")
-            _comp_url = f"https://www.{_brand_lower}clean.com" if _brand_lower == "shark" else f"https://www.{_brand_lower}.com"
-            attributes["compliance_media"] = [{
-                "document_type": "product_certificate_of_conformity",
-                "url": _comp_url,
-                "language_tag": "en_US",
-                "marketplace_id": client.marketplace_id,
-            }]
-            # Also add capacity with correct unit key
+            # required_product_compliance_certificate — the field Amazon actually checks (not compliance_media)
+            attributes["required_product_compliance_certificate"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
+            # capacity with correct unit key (confirmed by successful HV200 launch)
             _cap_v2 = float(capacity_val or 0) or 0.5
             _cap_u2 = (capacity_unit_attr or "liters").lower()
             attributes["capacity"] = [{"value": _cap_v2, "unit": _cap_u2, "marketplace_id": client.marketplace_id}]
@@ -1874,7 +1868,7 @@ async def create_listing(request: Request):
                 "other_product_image_locator_5","other_product_image_locator_6",
                 "other_product_image_locator_7","brand","manufacturer","model_number",
                 "model_name","part_number","color","item_weight","item_dimensions",
-                "item_depth_width_height","is_refurbished","country_of_origin",
+                "item_depth_width_height","item_length_width_height","is_refurbished","country_of_origin",
                 "supplier_declared_has_product_identifier_exemption",
                 "supplier_declared_dg_hz_regulation","number_of_items",
                 "batteries_required","batteries_included","item_type_keyword",
