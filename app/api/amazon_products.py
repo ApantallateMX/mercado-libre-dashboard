@@ -2960,7 +2960,7 @@ async def amazon_products_sin_publicar(request: Request):
         return _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
 
     except Exception as e:
-        logger.exception("[Amazon Products] Error en sin-publicar")
+        logger.exception(f"[Amazon Products] Error en sin-publicar: {type(e).__name__}: {e}")
         return _render_error(request, "amazon_products_sin_publicar.html", str(e))
 
 
@@ -3425,12 +3425,15 @@ def _render_no_account(request: Request, template: str) -> HTMLResponse:
     )
 
 
-def _render_error(request: Request, template: str, msg: str) -> HTMLResponse:
+def _render_error(request: Request, template: str, msg: str, extra: dict = None) -> HTMLResponse:
     """Template de error genérico."""
-    return _templates.TemplateResponse(
-        request, f"partials/{template}",
-        {"error": msg, "no_account": False},
-    )
+    ctx = {"error": msg, "no_account": False,
+           "candidatos": [], "historial": [], "seller_id": "",
+           "suprimidos": [], "inactivos": [], "con_issues": [],
+           "db_total": 0, "synced_at": None, "nickname": "", "marketplace": ""}
+    if extra:
+        ctx.update(extra)
+    return _templates.TemplateResponse(request, f"partials/{template}", ctx)
 
 
 # ─── Alertas críticas consolidadas ──────────────────────────────────────────
