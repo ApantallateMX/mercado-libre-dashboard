@@ -934,7 +934,24 @@ window._amzIgnoreGap = function(sku, sellerId) {
     }).then(function(){ window._loadAmzSinLanzar(1); });
 };
 
-// ── Inactivos — Fix con AI, Cerrar, Eliminar ──────────────────────────────────
+// ── Inactivos — event delegation for data-attribute buttons ──────────────────
+document.addEventListener('click', function(e) {
+    var fixBtn = e.target.closest('.amz-fix-ai-btn');
+    if (fixBtn) {
+        window._amzFixWithAI(fixBtn.dataset.sku, fixBtn.dataset.asin, fixBtn.dataset.title);
+        return;
+    }
+    var closeBtn = e.target.closest('.amz-close-btn');
+    if (closeBtn) {
+        window._amzCloseOne(closeBtn.dataset.sku, closeBtn.dataset.asin, closeBtn.dataset.seller);
+        return;
+    }
+    var delBtn = e.target.closest('.amz-delete-btn');
+    if (delBtn) {
+        window._amzDeleteOne(delBtn.dataset.sku, delBtn.dataset.asin, delBtn.dataset.seller, delBtn.dataset.title);
+        return;
+    }
+});
 
 window._amzFixWithAI = function(sku, asin, title) {
     // Open the wizard pre-filled with the SKU data for AI to fix
