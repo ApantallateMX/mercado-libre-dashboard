@@ -2968,41 +2968,27 @@ async def amazon_products_sin_publicar(request: Request):
 
 @router.get("/products/sin-publicar-debug")
 async def debug_sin_publicar(request: Request):
-    """Debug endpoint — returns JSON with error details for diagnosing 500."""
+    """Debug — render template with real data and return error if it fails."""
     import traceback as _tb
     client = await get_amazon_client()
     if not client:
         return JSONResponse({"error": "no_account"})
     try:
-        from app.services.token_store import get_deletion_candidates, get_listing_actions, DATABASE_PATH as _DB2
-        import aiosqlite as _aio2
-        result = {"seller_id": client.seller_id, "steps": []}
-        # Step 1: DB query
+        from app.services.token_store import get_deletion_candidates, get_listing_actions
+        candidatos = await get_deletion_candidates(client.seller_id, days_no_sale=365)
+        historial  = await get_listing_actions(client.seller_id, limit=50)
+        ctx = {
+            "suprimidos": [], "inactivos": [], "con_issues": [],
+            "candidatos": candidatos, "historial": historial,
+            "db_total": 100, "synced_at": "2026-06-05 10:00",
+            "nickname": client.nickname, "marketplace": client.marketplace_name,
+            "seller_id": client.seller_id, "error": None, "no_account": False,
+        }
         try:
-            async with _aio2.connect(_DB2) as db:
-                db.row_factory = _aio2.Row
-                tot = await (await db.execute("SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?", (client.seller_id,))).fetchone()
-                result["db_total"] = tot[0] if tot else 0
-            result["steps"].append("db_ok")
-        except Exception as e1:
-            result["step1_error"] = str(e1)
-        # Step 2: candidatos
-        try:
-            c = await get_deletion_candidates(client.seller_id, days_no_sale=365)
-            result["candidatos_count"] = len(c)
-            result["steps"].append("candidatos_ok")
-        except Exception as e2:
-            result["candidatos_error"] = str(e2)
-            result["candidatos_tb"] = _tb.format_exc()
-        # Step 3: historial
-        try:
-            h = await get_listing_actions(client.seller_id, limit=5)
-            result["historial_count"] = len(h)
-            result["steps"].append("historial_ok")
-        except Exception as e3:
-            result["historial_error"] = str(e3)
-            result["historial_tb"] = _tb.format_exc()
-        return JSONResponse(result)
+            resp = _templates.TemplateResponse(request, "partials/amazon_products_sin_publicar.html", ctx)
+            return JSONResponse({"template_ok": True, "candidatos": len(candidatos), "historial": len(historial)})
+        except Exception as te:
+            return JSONResponse({"template_error": str(te), "tb": _tb.format_exc()})
     except Exception as e:
         return JSONResponse({"fatal_error": str(e), "tb": _tb.format_exc()})
 
