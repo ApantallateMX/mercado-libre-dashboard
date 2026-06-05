@@ -2864,13 +2864,16 @@ async def amazon_products_stock_alerts(request: Request):
 
 
 @router.get("/products/sin-publicar", response_class=HTMLResponse)
-async def amazon_products_sin_publicar(request: Request):
+async def amazon_products_sin_publicar(
+    request: Request,
+    seller_id: Optional[str] = Query(None),
+):
     """
     Listings no activos: Inactivos y Suprimidos.
-    Lee directamente de amazon_listings DB (poblada por background sync).
-    Nunca llama la API en tiempo real → respuesta <100ms.
+    SIEMPRE filtrado por la cuenta activa (seller_id).
+    Lee de amazon_listings DB — respuesta <100ms.
     """
-    client = await get_amazon_client()
+    client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         return _render_no_account(request, "amazon_products_sin_publicar.html")
 
@@ -2994,8 +2997,12 @@ async def debug_sin_publicar(request: Request):
 
 
 @router.get("/products/candidatos-eliminar")
-async def get_candidatos_eliminar(request: Request, seller_id: str = "", days: int = 365):
-    """Returns deletion candidates: listings with no sales in X days."""
+async def get_candidatos_eliminar(
+    request: Request,
+    seller_id: Optional[str] = Query(None),
+    days: int = 365,
+):
+    """Returns deletion candidates for the ACTIVE account only."""
     from app.services.token_store import get_deletion_candidates
     client = await get_amazon_client(seller_id=seller_id or None)
     if not client:

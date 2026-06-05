@@ -565,8 +565,10 @@ document.querySelectorAll('.amz-prod-tab').forEach(function(btn) {
     btn.addEventListener('click', function() {
         var tabName = this.getAttribute('data-tab');
         var url = this.getAttribute('data-url');
-        if (tabName === 'sin-lanzar' && window.amzActiveSellerId) {
-            url += '?seller_id=' + encodeURIComponent(window.amzActiveSellerId);
+        // Todos los tabs son account-specific — pasar seller_id siempre que esté disponible
+        if (window.amzActiveSellerId) {
+            var sep = url.includes('?') ? '&' : '?';
+            url += sep + 'seller_id=' + encodeURIComponent(window.amzActiveSellerId);
         }
         loadAmzProdTab(tabName, url, this);
     });
