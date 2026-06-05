@@ -1636,8 +1636,8 @@ async def create_listing(request: Request):
         if model_number:
             attributes["model_name"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
 
-        # item_length standalone — Amazon expects unit key (confirmed by error messages)
-        if length_cm > 0:
+        # item_length standalone — only for product types that accept it (not VACUUM_CLEANER)
+        if length_cm > 0 and product_type not in ("VACUUM_CLEANER", "VACUUM"):
             attributes["item_length"] = [{"value": length_cm, "unit": "centimeters", "marketplace_id": client.marketplace_id}]
 
         # ── Product-type-specific extended attributes ─────────────────────────
@@ -1719,8 +1719,8 @@ async def create_listing(request: Request):
             attributes["capacity"] = [{"value": _cap_v2, "unit_of_measure": _cap_u2, "marketplace_id": client.marketplace_id}]
             # Compliance declarations — required for VACUUM_CLEANER
             attributes["supplier_declared_material_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
-            # required_product_compliance_certificate — the field Amazon actually checks (not compliance_media)
-            attributes["required_product_compliance_certificate"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
+            # required_product_compliance_certificate — Title Case required by Amazon schema
+            attributes["required_product_compliance_certificate"] = [{"value": "Not Applicable", "marketplace_id": client.marketplace_id}]
             # capacity with correct unit key (confirmed by successful HV200 launch)
             _cap_v2 = float(capacity_val or 0) or 0.5
             _cap_u2 = (capacity_unit_attr or "liters").lower()
