@@ -822,6 +822,33 @@ async def get_product_schema_endpoint(product_type: str, seller_id: str = ""):
     return schema
 
 
+@router.get("/templates")
+async def get_templates(marketplace_id: str = "ATVPDKIKX0DER"):
+    """Returns all saved product type templates for a marketplace."""
+    from app.services.token_store import list_product_type_templates
+    return {"templates": await list_product_type_templates(marketplace_id)}
+
+
+@router.get("/templates/{product_type}")
+async def get_template(product_type: str, marketplace_id: str = "ATVPDKIKX0DER"):
+    """Returns the template for a specific product type."""
+    from app.services.token_store import get_product_type_template
+    tmpl = await get_product_type_template(product_type.upper(), marketplace_id)
+    if not tmpl:
+        return JSONResponse({"error": "Template not found"}, status_code=404)
+    return tmpl
+
+
+@router.put("/templates/{product_type}")
+async def upsert_template(product_type: str, request: Request):
+    """Save or update a product type template manually."""
+    from app.services.token_store import save_product_type_template
+    body = await request.json()
+    marketplace_id = body.get("marketplace_id", "ATVPDKIKX0DER")
+    await save_product_type_template(product_type.upper(), marketplace_id, body)
+    return {"ok": True, "product_type": product_type.upper()}
+
+
 @router.post("/research-product")
 async def research_product(request: Request):
     """Research product specs from UPC ItemDB + Claude knowledge base. Cached 30 days."""
@@ -907,6 +934,21 @@ async def generate_content(request: Request):
     if researched.get("color"):          _res_lines.append(f"Color: {researched['color']}")
     _research_ctx = ("\n\nRESEARCHED SPECS (use these exact values — do not deviate):\n" + "\n".join(_res_lines)) if _res_lines else ""
 
+    # Load product type template if product type already known (e.g. re-generation)
+    _known_pt = (body.get("product_type") or "").strip().upper()
+    _tmpl_hints = ""
+    if _known_pt and _known_pt != "PRODUCT" and seller_id:
+        try:
+            from app.services.token_store import get_product_type_template as _get_tmpl
+            from app.services.amazon_client import get_amazon_client as _gc
+            _gc_tmp = await _gc(seller_id=seller_id)
+            _mk = _gc_tmp.marketplace_id if _gc_tmp else "ATVPDKIKX0DER"
+            _tmpl = await _aio.wait_for(_get_tmpl(_known_pt, _mk), timeout=4)
+            if _tmpl and _tmpl.get("ai_hints"):
+                _tmpl_hints = f"\n\nPRODUCT TYPE TEMPLATE HINTS ({_known_pt}):\n{_tmpl['ai_hints']}"
+        except Exception:
+            pass
+
     # Fetch valid product types from Amazon API (cached 7 days)
     valid_types: list = []
     if seller_id:
@@ -983,7 +1025,7 @@ Create complete, high-converting listing content for this product. ALL content (
 Product title: {title}
 Brand: {brand}
 Category: {category}
-{extra_ctx}{_research_ctx}
+{extra_ctx}{_research_ctx}{_tmpl_hints}
 Marketplace: Amazon US (amazon.com) — English-speaking US buyers
 
 ━━━ CRITICAL RULES ━━━
@@ -1127,7 +1169,7 @@ Crea contenido completo y de alta conversión para este producto:
 Título catálogo: {title}
 Marca: {brand}
 Categoría: {category}
-{extra_ctx}{_research_ctx}
+{extra_ctx}{_research_ctx}{_tmpl_hints}
 Marketplace: Amazon México (amazon.com.mx) — compradores en español mexicano
 
 ━━━ REGLAS CRÍTICAS (cumplirlas al pie de la letra) ━━━
@@ -1928,7 +1970,15 @@ async def create_listing(request: Request):
         )
         await db.commit()
 
-    return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku}
+    # Auto-increment template launch count + mark as validated on success
+    if product_type not in ("PRODUCT",):
+        try:
+            from app.services.token_store import increment_template_launch as _itl
+            await _itl(product_type, client.marketplace_id)
+        except Exception:
+            pass
+
+    return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku, "product_type": product_type}
 
 
 # ── 3b. Búsqueda de imágenes reales del producto (DuckDuckGo) ────────────────

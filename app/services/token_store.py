@@ -816,6 +816,23 @@ async def init_db():
                 cached_at   REAL NOT NULL DEFAULT 0
             )
         """)
+        # TABLA: amz_product_type_templates — templates validados por tipo Amazon
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_product_type_templates (
+                product_type   TEXT NOT NULL,
+                marketplace_id TEXT NOT NULL DEFAULT 'ATVPDKIKX0DER',
+                required_attrs TEXT NOT NULL DEFAULT '[]',
+                quality_attrs  TEXT NOT NULL DEFAULT '[]',
+                bonus_attrs    TEXT NOT NULL DEFAULT '[]',
+                defaults_json  TEXT NOT NULL DEFAULT '{}',
+                ai_hints       TEXT NOT NULL DEFAULT '',
+                validated      INTEGER NOT NULL DEFAULT 0,
+                validated_at   TEXT DEFAULT NULL,
+                launch_count   INTEGER NOT NULL DEFAULT 0,
+                updated_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (product_type, marketplace_id)
+            )
+        """)
         # TABLA: amz_repricing_rules — reglas de repricing por seller/sku
         # TABLA: amz_product_types_cache — tipos de producto Amazon por marketplace (TTL 7 días)
         await db.execute("""
@@ -2827,3 +2844,135 @@ async def save_schema_cache(cache_key: str, schema: dict) -> None:
             (cache_key, _j.dumps(schema), _t.time()),
         )
         await db.commit()
+
+
+# == Amazon Product Type Templates ============================================
+
+_SEED_TEMPLATES = {
+    ("TELEVISION", "ATVPDKIKX0DER"): {
+        "validated": 1, "validated_at": "2026-05-28", "launch_count": 10,
+        "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
+            "bullet_point","product_description","generic_keyword","country_of_origin",
+            "supplier_declared_dg_hz_regulation","item_type_keyword"],
+        "quality_attrs": ["display","resolution","refresh_rate","image_aspect_ratio",
+            "total_hdmi_ports","mounting_type","item_weight","item_dimensions",
+            "item_length_width_height","special_feature","included_components",
+            "connectivity_technology","warranty_description","model_year","list_price",
+            "model_number","model_name","color"],
+        "bonus_attrs": ["item_package_weight","item_package_dimensions","voltage","wattage"],
+        "defaults": {
+            "item_type_keyword": "televisions", "display_type": "LED",
+            "supplier_declared_dg_hz_regulation": "not_applicable",
+            "supplier_declared_has_product_identifier_exemption": True,
+            "batteries_required": False, "batteries_included": False,
+            "number_of_items": 1, "warranty_description": "90 days seller warranty",
+            "total_hdmi_ports": 2, "image_aspect_ratio": "16:9"
+        },
+        "ai_hints": "TELEVISION: item_type_keyword=televisions. special_feature enum: Smart TV, Built-In WiFi, HDR, Dolby Vision, 4K, QLED, OLED. display.type: LED/QLED/OLED/Mini LED/LCD/QNED. resolution: 720p/1080p/4K/8K.",
+    },
+    ("VACUUM_CLEANER", "ATVPDKIKX0DER"): {
+        "validated": 1, "validated_at": "2026-06-05", "launch_count": 2,
+        "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
+            "bullet_point","product_description","generic_keyword","country_of_origin",
+            "supplier_declared_dg_hz_regulation","item_type_keyword","item_dimensions"],
+        "quality_attrs": ["surface_recommendation","is_cordless","form_factor",
+            "filter_type","power_source_type","capacity","special_feature",
+            "included_components","warranty_description","model_year","list_price",
+            "voltage","item_weight","required_product_compliance_certificate",
+            "model_number","model_name","color","item_length_width_height"],
+        "bonus_attrs": ["cleaning_path_width","noise_level","recommended_uses_for_product",
+            "bag_type","specific_uses_for_product"],
+        "defaults": {
+            "required_product_compliance_certificate": "Not Applicable",
+            "surface_recommendation": "Bare Floor", "is_cordless": False,
+            "form_factor": "Stick", "filter_type": "Foam",
+            "power_source_type": "Corded Electric", "capacity_value": 0.5,
+            "capacity_unit": "liters", "item_type_keyword": "household-stick-vacuums",
+            "supplier_declared_dg_hz_regulation": "not_applicable",
+            "supplier_declared_material_regulation": "not_applicable",
+            "supplier_declared_has_product_identifier_exemption": True,
+            "voltage_v": "120V", "batteries_required": False, "batteries_included": False,
+            "number_of_items": 1, "warranty_description": "90 days seller warranty"
+        },
+        "ai_hints": "VACUUM_CLEANER: surface_recommendation max 1 value: Bare Floor/Carpet/Hard Floor/Hardwoods/Laminate. form_factor: Cannister/Handheld/Robotic/Stick/Upright. filter_type: Foam/HEPA Filter/Cartridge/Cloth/Cyclonic. special_feature from enum only: Anti-Allergen, Bagless, Compact, Cordless, HEPA, Lightweight, Washable Filter. connectivity_technology: NEVER Corded Electric.",
+    },
+}
+
+
+async def get_product_type_template(product_type: str, marketplace_id: str = "ATVPDKIKX0DER") -> dict:
+    import json as _j
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,launch_count,validated_at FROM amz_product_type_templates WHERE product_type=? AND marketplace_id=?",
+            (product_type.upper(), marketplace_id),
+        )).fetchone()
+    if not row:
+        return {}
+    try:
+        return {
+            "product_type": product_type.upper(), "marketplace_id": marketplace_id,
+            "required_attrs": _j.loads(row[0] or "[]"), "quality_attrs": _j.loads(row[1] or "[]"),
+            "bonus_attrs": _j.loads(row[2] or "[]"), "defaults": _j.loads(row[3] or "{}"),
+            "ai_hints": row[4] or "", "validated": bool(row[5]),
+            "launch_count": row[6] or 0, "validated_at": row[7],
+        }
+    except Exception:
+        return {}
+
+
+async def save_product_type_template(product_type: str, marketplace_id: str, data: dict) -> None:
+    import json as _j
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO amz_product_type_templates '
+            '(product_type,marketplace_id,required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,validated_at,launch_count,updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,datetime("now"))',
+            (
+                product_type.upper(), marketplace_id,
+                _j.dumps(data.get("required_attrs", [])),
+                _j.dumps(data.get("quality_attrs", [])),
+                _j.dumps(data.get("bonus_attrs", [])),
+                _j.dumps(data.get("defaults", {})),
+                data.get("ai_hints", ""),
+                1 if data.get("validated") else 0,
+                data.get("validated_at"),
+                data.get("launch_count", 0),
+            ),
+        )
+        await db.commit()
+
+
+async def list_product_type_templates(marketplace_id: str = None) -> list:
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        if marketplace_id:
+            rows = await (await db.execute(
+                "SELECT product_type,marketplace_id,validated,launch_count,validated_at,updated_at FROM amz_product_type_templates WHERE marketplace_id=? ORDER BY launch_count DESC",
+                (marketplace_id,),
+            )).fetchall()
+        else:
+            rows = await (await db.execute(
+                "SELECT product_type,marketplace_id,validated,launch_count,validated_at,updated_at FROM amz_product_type_templates ORDER BY launch_count DESC"
+            )).fetchall()
+    return [
+        {"product_type": r[0], "marketplace_id": r[1], "validated": bool(r[2]),
+         "launch_count": r[3], "validated_at": r[4], "updated_at": r[5]}
+        for r in rows
+    ]
+
+
+async def increment_template_launch(product_type: str, marketplace_id: str) -> None:
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        await db.execute(
+            'UPDATE amz_product_type_templates SET launch_count=launch_count+1, validated=1, '
+            'validated_at=COALESCE(validated_at,date("now")), updated_at=datetime("now") '
+            "WHERE product_type=? AND marketplace_id=?",
+            (product_type.upper(), marketplace_id),
+        )
+        await db.commit()
+
+
+async def seed_product_type_templates() -> None:
+    for (pt, mk), data in _SEED_TEMPLATES.items():
+        existing = await get_product_type_template(pt, mk)
+        if not existing:
+            await save_product_type_template(pt, mk, data)

@@ -470,6 +470,9 @@ async def lifespan(app: FastAPI):
     # Para que VS REF% en planeación funcione desde el primer request.
     await _load_catalog_from_db()
 
+    # Seed product type templates (TELEVISION, VACUUM_CLEANER validated)
+    await token_store.seed_product_type_templates()
+
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
     # no recibe SIGKILL por timeout (exit 137).
