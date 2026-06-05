@@ -2935,10 +2935,15 @@ async def amazon_products_sin_publicar(request: Request):
                     else:
                         inactivos.append(_item)
 
-        # Candidatos a eliminar (sin ventas en 365 días)
-        from app.services.token_store import get_deletion_candidates, get_listing_actions
-        candidatos = await get_deletion_candidates(client.seller_id, days_no_sale=365)
-        historial  = await get_listing_actions(client.seller_id, limit=50)
+        # Candidatos a eliminar (sin ventas en 365 días) — wrapped to not break on error
+        candidatos = []
+        historial  = []
+        try:
+            from app.services.token_store import get_deletion_candidates, get_listing_actions
+            candidatos = await get_deletion_candidates(client.seller_id, days_no_sale=365)
+            historial  = await get_listing_actions(client.seller_id, limit=50)
+        except Exception as _e2:
+            logger.warning(f"[Inactivos] candidatos/historial error: {_e2}")
 
         ctx = {
             "suprimidos":  suprimidos,

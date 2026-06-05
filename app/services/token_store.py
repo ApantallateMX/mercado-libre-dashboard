@@ -3022,7 +3022,8 @@ async def get_deletion_candidates(seller_id: str, days_no_sale: int = 365) -> li
                       CAST((julianday('now') - julianday(COALESCE(MAX(oh.order_date),'2020-01-01'))) AS INTEGER) as days_no_sale
                FROM amazon_listings al
                LEFT JOIN order_history oh
-                   ON oh.account_id = al.seller_id AND oh.platform = 'amazon'
+                   ON oh.account_id = al.seller_id
+                   AND oh.platform IN ('amazon','amz','Amazon')
                    AND (oh.sku = al.sku OR oh.sku = al.base_sku)
                WHERE al.seller_id = ?
                GROUP BY al.sku
