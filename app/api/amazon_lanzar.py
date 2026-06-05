@@ -1538,24 +1538,34 @@ async def create_listing(request: Request):
             }]
         if color:
             attributes["color"] = [{"value": color, "marketplace_id": client.marketplace_id}]
+        # Unit selection: VACUUM_CLEANER US marketplace requires inches/pounds
+        # TELEVISION/MONITOR: centimeters/kilograms work fine
+        _IS_US_APPLIANCE = product_type in ("VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER",
+            "COFFEE_MAKER","BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER") \
+            and client.marketplace_id == "ATVPDKIKX0DER"
+        _weight_unit = "pounds" if _IS_US_APPLIANCE else "kilograms"
+        _weight_val  = round(weight_kg * 2.20462, 2) if _IS_US_APPLIANCE else weight_kg
+        _dim_unit    = "inches" if _IS_US_APPLIANCE else "centimeters"
+        _l_val = round(length_cm / 2.54, 2) if _IS_US_APPLIANCE else length_cm
+        _w_val = round(width_cm  / 2.54, 2) if _IS_US_APPLIANCE else width_cm
+        _h_val = round(height_cm / 2.54, 2) if _IS_US_APPLIANCE else height_cm
+
         if weight_kg > 0:
-            attributes["item_weight"] = [{"value": weight_kg, "unit": "kilograms", "marketplace_id": client.marketplace_id}]
+            attributes["item_weight"] = [{"value": _weight_val, "unit": _weight_unit, "marketplace_id": client.marketplace_id}]
         # ── Dimensiones del producto ──────────────────────────────────────────
         if length_cm > 0 and width_cm > 0 and height_cm > 0:
-            # item_dimensions — estándar
             attributes["item_dimensions"] = [{
-                "length": {"value": length_cm, "unit": "centimeters"},
-                "width":  {"value": width_cm,  "unit": "centimeters"},
-                "height": {"value": height_cm, "unit": "centimeters"},
+                "length": {"value": _l_val, "unit": _dim_unit},
+                "width":  {"value": _w_val, "unit": _dim_unit},
+                "height": {"value": _h_val, "unit": _dim_unit},
                 "marketplace_id": client.marketplace_id,
             }]
-            # item_depth_width_height (TV) vs item_length_width_height (appliances/vacuums)
             _dim_attr_name = "item_length_width_height" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "item_depth_width_height"
             attributes[_dim_attr_name] = [{
                 "length" if product_type not in ("TELEVISION","COMPUTER_MONITOR") else "depth":
-                    {"value": width_cm,  "unit": "centimeters"},
-                "width":  {"value": length_cm, "unit": "centimeters"},
-                "height": {"value": height_cm, "unit": "centimeters"},
+                    {"value": _w_val, "unit": _dim_unit},
+                "width":  {"value": _l_val, "unit": _dim_unit},
+                "height": {"value": _h_val, "unit": _dim_unit},
                 "marketplace_id": client.marketplace_id,
             }]
 
