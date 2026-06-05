@@ -80,7 +80,8 @@
             <th class="py-2 px-3 font-medium">T&iacute;tulo</th>
             <th class="py-2 px-2 font-medium hidden lg:table-cell">SKU</th>
             <th class="py-2 px-2 font-medium hidden md:table-cell">ASIN</th>
-            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY Amazon</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Stock BM</th>
             <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Sale Price</th>
             <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Retail BM</th>
             <th class="py-2 px-2 font-medium text-center hidden md:table-cell">Estado</th>
@@ -105,6 +106,11 @@
             </td>
             <td class="py-2.5 px-2 hidden md:table-cell text-right">
               <span class="{% if item.qty > 0 %}text-green-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.qty }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.bm_stock and item.bm_stock > 0 %}text-purple-600 font-semibold{% else %}text-gray-300{% endif %}">
+                {{ item.bm_stock if item.bm_stock else '—' }}
+              </span>
             </td>
             <td class="py-2.5 px-2 hidden md:table-cell text-right">
               <span class="text-gray-600">{% if item.price and item.price > 0 %}${{ '{:.2f}'.format(item.price) }}{% else %}—{% endif %}</span>
@@ -177,7 +183,8 @@
             <th class="py-2 px-3 font-medium">T&iacute;tulo</th>
             <th class="py-2 px-2 font-medium hidden lg:table-cell">SKU</th>
             <th class="py-2 px-2 font-medium hidden md:table-cell">ASIN</th>
-            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY Amazon</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Stock BM</th>
             <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Sale Price</th>
             <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Retail BM</th>
             <th class="py-2 px-2 font-medium text-center hidden md:table-cell">Estado</th>
@@ -202,6 +209,11 @@
             </td>
             <td class="py-2.5 px-2 hidden md:table-cell text-right">
               <span class="{% if item.qty > 0 %}text-green-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.qty }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.bm_stock and item.bm_stock > 0 %}text-purple-600 font-semibold{% else %}text-gray-300{% endif %}">
+                {{ item.bm_stock if item.bm_stock else '—' }}
+              </span>
             </td>
             <td class="py-2.5 px-2 hidden md:table-cell text-right">
               <span class="text-gray-600">{% if item.price and item.price > 0 %}${{ '{:.2f}'.format(item.price) }}{% else %}—{% endif %}</span>

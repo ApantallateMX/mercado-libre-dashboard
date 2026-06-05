@@ -2923,14 +2923,21 @@ async def amazon_products_sin_publicar(
                 _parent_filter = "" if show_parents else "AND (al.is_parent IS NULL OR al.is_parent = 0)"
 
                 # Enhanced query: includes price, qty, bm_price
+                # BM stock via ML listings (no new BM API calls — uses cached ML data)
                 _base_q = f"""
                     SELECT al.sku, al.asin, al.title, al.status,
                            al.price, al.available_qty, al.synced_at,
                            COALESCE(bc.retail_ph, 0) as bm_price,
-                           COALESCE(al.is_parent, 0) as is_parent
+                           COALESCE(al.is_parent, 0) as is_parent,
+                           COALESCE(bm_stk.bm_stock, 0) as bm_stock
                     FROM amazon_listings al
                     LEFT JOIN bm_product_catalog bc
                         ON bc.sku = al.base_sku OR bc.sku = al.sku
+                    LEFT JOIN (
+                        SELECT base_sku, SUM(available_qty) as bm_stock
+                        FROM ml_listings WHERE status = 'active'
+                        GROUP BY base_sku
+                    ) bm_stk ON bm_stk.base_sku = al.base_sku
                     WHERE al.seller_id=? AND UPPER(al.status) = ? {_parent_filter}
                     ORDER BY al.title LIMIT ? OFFSET ?"""
 
@@ -2945,7 +2952,8 @@ async def amazon_products_sin_publicar(
                             "title": (_r["title"] or _r["sku"])[:70],
                             "status": _status,
                             "price": _r["price"] or 0,
-                            "qty":   _r["available_qty"] or 0,
+                            "qty":      _r["available_qty"] or 0,   # Amazon QTY
+                            "bm_stock": _r["bm_stock"] or 0,       # BM stock via ML
                             "bm_price": _r["bm_price"] or 0,
                             "issues": [],
                             "sc_url": (
@@ -2965,9 +2973,15 @@ async def amazon_products_sin_publicar(
                     f"""SELECT al.sku, al.asin, al.title, al.status,
                               al.price, al.available_qty, al.synced_at,
                               COALESCE(bc.retail_ph, 0) as bm_price,
-                              COALESCE(al.is_parent, 0) as is_parent
+                              COALESCE(al.is_parent, 0) as is_parent,
+                           COALESCE(bm_stk2.bm_stock, 0) as bm_stock
                        FROM amazon_listings al
                        LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
+                       LEFT JOIN (
+                           SELECT base_sku, SUM(available_qty) as bm_stock
+                           FROM ml_listings WHERE status = 'active'
+                           GROUP BY base_sku
+                       ) bm_stk2 ON bm_stk2.base_sku = al.base_sku
                        WHERE al.seller_id=?
                          AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
                          {_parent_filter}
