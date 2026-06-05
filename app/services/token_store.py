@@ -3012,23 +3012,62 @@ async def get_listing_actions(seller_id: str, limit: int = 100) -> list:
     return [dict(r) for r in rows]
 
 
-async def get_deletion_candidates(seller_id: str, days_no_sale: int = 365) -> list:
-    import json as _j
-    async with __import__('aiosqlite').connect(DATABASE_PATH) as db:
-        db.row_factory = __import__('aiosqlite').Row
+async def get_deletion_candidates(
+        seller_id: str,
+        days_no_sale: int = 365,
+        page: int = 1,
+        per_page: int = 10,
+) -> dict:
+    """Returns deletion candidates with full decision data + pagination."""
+    import aiosqlite as _aio
+    offset = (page - 1) * per_page
+
+    _base = """
+        SELECT
+            al.sku, al.asin, al.title, al.status, al.price, al.available_qty,
+            MAX(oh.order_date)  AS last_sale,
+            COUNT(DISTINCT oh.order_id) AS total_orders,
+            CAST(
+                (julianday('now') - julianday(COALESCE(MAX(oh.order_date),'2020-01-01')))
+                AS INTEGER
+            ) AS days_no_sale,
+            COALESCE(bc.retail_ph, 0) AS bm_price,
+            bc.brand AS bm_brand
+        FROM amazon_listings al
+        LEFT JOIN order_history oh
+            ON oh.account_id = al.seller_id
+            AND oh.platform IN ('amazon','amz','Amazon')
+            AND (oh.sku = al.sku OR oh.sku = al.base_sku)
+        LEFT JOIN bm_product_catalog bc
+            ON bc.sku = al.base_sku OR bc.sku = al.sku
+        WHERE al.seller_id = ?
+        GROUP BY al.sku
+        HAVING days_no_sale > ? OR last_sale IS NULL
+    """
+
+    async with _aio.connect(DATABASE_PATH) as db:
+        db.row_factory = _aio.Row
+
+        # Total count for pagination
+        _cnt = await (await db.execute(
+            f"SELECT COUNT(*) FROM ({_base}) sub",
+            (seller_id, days_no_sale)
+        )).fetchone()
+        total = _cnt[0] if _cnt else 0
+
+        # Paginated data
         rows = await (await db.execute(
-            """SELECT al.sku, al.asin, al.title, al.status, al.price, al.available_qty,
-                      MAX(oh.order_date) as last_sale,
-                      CAST((julianday('now') - julianday(COALESCE(MAX(oh.order_date),'2020-01-01'))) AS INTEGER) as days_no_sale
-               FROM amazon_listings al
-               LEFT JOIN order_history oh
-                   ON oh.account_id = al.seller_id
-                   AND oh.platform IN ('amazon','amz','Amazon')
-                   AND (oh.sku = al.sku OR oh.sku = al.base_sku)
-               WHERE al.seller_id = ?
-               GROUP BY al.sku
-               HAVING days_no_sale > ? OR last_sale IS NULL
-               ORDER BY days_no_sale DESC
-               LIMIT 200""",
-            (seller_id, days_no_sale))).fetchall()
-    return [dict(r) for r in rows]
+            _base + " ORDER BY days_no_sale DESC LIMIT ? OFFSET ?",
+            (seller_id, days_no_sale, per_page, offset)
+        )).fetchall()
+
+    return {
+        "items":    [dict(r) for r in rows],
+        "total":    total,
+        "page":     page,
+        "per_page": per_page,
+        "pages":    max(1, (total + per_page - 1) // per_page),
+        "days":     days_no_sale,
+    }
+
+

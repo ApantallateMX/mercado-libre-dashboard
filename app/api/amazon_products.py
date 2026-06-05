@@ -2938,13 +2938,17 @@ async def amazon_products_sin_publicar(
                     else:
                         inactivos.append(_item)
 
-        # Candidatos a eliminar (sin ventas en 365 días) — wrapped to not break on error
-        candidatos = []
-        historial  = []
+        # Candidatos a eliminar + historial — wrapped to not break on error
+        cand_days = int(request.query_params.get("days", 365))
+        cand_page = int(request.query_params.get("page", 1))
+        candidatos_data = {"items": [], "total": 0, "page": 1, "pages": 1, "per_page": 10, "days": cand_days}
+        historial       = []
         try:
             from app.services.token_store import get_deletion_candidates, get_listing_actions
-            candidatos = await get_deletion_candidates(client.seller_id, days_no_sale=365)
-            historial  = await get_listing_actions(client.seller_id, limit=50)
+            candidatos_data = await get_deletion_candidates(
+                client.seller_id, days_no_sale=cand_days, page=cand_page, per_page=10
+            )
+            historial = await get_listing_actions(client.seller_id, limit=50)
         except Exception as _e2:
             logger.warning(f"[Inactivos] candidatos/historial error: {_e2}")
 
@@ -2952,7 +2956,11 @@ async def amazon_products_sin_publicar(
             "suprimidos":  suprimidos,
             "inactivos":   inactivos,
             "con_issues":  [],
-            "candidatos":  candidatos,
+            "candidatos":  candidatos_data.get("items", []),
+            "cand_total":  candidatos_data.get("total", 0),
+            "cand_page":   candidatos_data.get("page", 1),
+            "cand_pages":  candidatos_data.get("pages", 1),
+            "cand_days":   candidatos_data.get("days", 365),
             "historial":   historial,
             "db_total":    db_total,
             "synced_at":   synced_at,
@@ -3462,8 +3470,8 @@ def _render_no_account(request: Request, template: str) -> HTMLResponse:
 def _render_error(request: Request, template: str, msg: str, extra: dict = None) -> HTMLResponse:
     """Template de error genérico."""
     ctx = {"error": msg, "no_account": False,
-           "candidatos": [], "historial": [], "seller_id": "",
-           "suprimidos": [], "inactivos": [], "con_issues": [],
+           "candidatos": [], "cand_total": 0, "cand_page": 1, "cand_pages": 1, "cand_days": 365,
+           "historial": [], "seller_id": "", "suprimidos": [], "inactivos": [], "con_issues": [],
            "db_total": 0, "synced_at": None, "nickname": "", "marketplace": ""}
     if extra:
         ctx.update(extra)
