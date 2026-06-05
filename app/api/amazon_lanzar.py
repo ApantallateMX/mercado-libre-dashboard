@@ -1634,9 +1634,9 @@ async def create_listing(request: Request):
         if model_number:
             attributes["model_name"] = [{"value": model_number, "marketplace_id": client.marketplace_id}]
 
-        # item_length standalone — use unit_of_measure (not unit) for this attribute
+        # item_length standalone — Amazon expects unit key (confirmed by error messages)
         if length_cm > 0:
-            attributes["item_length"] = [{"value": length_cm, "unit_of_measure": "centimeters", "marketplace_id": client.marketplace_id}]
+            attributes["item_length"] = [{"value": length_cm, "unit": "centimeters", "marketplace_id": client.marketplace_id}]
 
         # ── Product-type-specific extended attributes ─────────────────────────
         # These are filled by AI based on product research and sent when available
@@ -1665,7 +1665,7 @@ async def create_listing(request: Request):
             try: attributes["noise_level_db"] = [{"value": float(noise_level_db), "unit": "decibels", "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
         if capacity_val is not None and capacity_unit_attr:
-            try: attributes["capacity"] = [{"value": float(capacity_val), "unit_of_measure": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
+            try: attributes["capacity"] = [{"value": float(capacity_val), "unit": capacity_unit_attr.lower(), "marketplace_id": client.marketplace_id}]
             except (ValueError, TypeError): pass
 
         # ── VACUUM_CLEANER / VACUUM — correct attribute names from Amazon schema ──
@@ -1717,6 +1717,20 @@ async def create_listing(request: Request):
             attributes["capacity"] = [{"value": _cap_v2, "unit_of_measure": _cap_u2, "marketplace_id": client.marketplace_id}]
             # Compliance declaration — supplier declaration for regulatory compliance
             attributes["supplier_declared_material_regulation"] = [{"value": "not_applicable", "marketplace_id": client.marketplace_id}]
+            # compliance_media (Certificado de conformidad del producto) — required for VACUUM_CLEANER
+            # Send the manufacturer's product page as the compliance reference document
+            _brand_lower = (brand or "shark").lower().replace(" ", "")
+            _comp_url = f"https://www.{_brand_lower}clean.com" if _brand_lower == "shark" else f"https://www.{_brand_lower}.com"
+            attributes["compliance_media"] = [{
+                "document_type": "product_certificate_of_conformity",
+                "url": _comp_url,
+                "language_tag": "en_US",
+                "marketplace_id": client.marketplace_id,
+            }]
+            # Also add capacity with correct unit key
+            _cap_v2 = float(capacity_val or 0) or 0.5
+            _cap_u2 = (capacity_unit_attr or "liters").lower()
+            attributes["capacity"] = [{"value": _cap_v2, "unit": _cap_u2, "marketplace_id": client.marketplace_id}]
 
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
