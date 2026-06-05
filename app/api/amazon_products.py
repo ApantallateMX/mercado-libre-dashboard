@@ -2881,62 +2881,93 @@ async def amazon_products_sin_publicar(
         import aiosqlite as _aio
         from app.services.token_store import DATABASE_PATH as _DB
 
-        suprimidos = []
-        inactivos  = []
-        db_total   = 0
-        synced_at  = None
+        suprimidos     = []
+        inactivos      = []
+        db_total       = 0
+        synced_at      = None
+        sup_total      = 0
+        inac_total     = 0
+        _PER_PAGE      = 20
+        sup_page       = int(request.query_params.get("sup_page", 1))
+        inac_page      = int(request.query_params.get("inac_page", 1))
 
         async with _aio.connect(_DB) as _db:
             _db.row_factory = _aio.Row
 
-            # Total en DB para saber si el sync ha corrido
             _tot = await (await _db.execute(
-                "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?",
-                (client.seller_id,)
+                "SELECT COUNT(*) FROM amazon_listings WHERE seller_id=?", (client.seller_id,)
             )).fetchone()
             db_total = _tot[0] if _tot else 0
 
             if db_total > 0:
-                # Timestamp del sync más reciente
                 _ts_row = await (await _db.execute(
-                    "SELECT MAX(synced_at) FROM amazon_listings WHERE seller_id=?",
-                    (client.seller_id,)
+                    "SELECT MAX(synced_at) FROM amazon_listings WHERE seller_id=?", (client.seller_id,)
                 )).fetchone()
                 if _ts_row and _ts_row[0]:
                     synced_at = datetime.fromtimestamp(_ts_row[0]).strftime("%Y-%m-%d %H:%M")
 
-                # Solo listings no-ACTIVE (fracción pequeña del catálogo)
-                _rows = await (await _db.execute(
-                    "SELECT sku, asin, title, status, synced_at FROM amazon_listings "
-                    "WHERE seller_id=? AND UPPER(status) != 'ACTIVE' "
-                    "ORDER BY title",
-                    (client.seller_id,)
+                # Counts for pagination
+                _cnt_rows = await (await _db.execute(
+                    """SELECT status, COUNT(*) as cnt FROM amazon_listings
+                       WHERE seller_id=? AND UPPER(status) != 'ACTIVE'
+                       GROUP BY UPPER(status)""", (client.seller_id,)
                 )).fetchall()
-
-                for _r in _rows:
-                    _ts = _r["synced_at"] or 0
-                    _lu = (datetime.fromtimestamp(_ts).strftime("%Y-%m-%d")
-                           if _ts else "")
-                    _asin = _r["asin"] or ""
-                    _status = (_r["status"] or "INACTIVE").upper()
-                    _sc_url = (
-                        f"https://sellercentral.amazon.com.mx/inventory?searchField=ASIN&searchValue={_asin}"
-                        if _asin else "https://sellercentral.amazon.com.mx/inventory"
-                    )
-                    _item = {
-                        "sku": _r["sku"],
-                        "asin": _asin,
-                        "title": (_r["title"] or _r["sku"])[:65],
-                        "status": _status,
-                        "last_updated": _lu,
-                        "issues": [],
-                        "sc_url": _sc_url,
-                    }
-                    # INCOMPLETE / SUPPRESSED → suprimidos; resto → inactivos
-                    if _status in ("INCOMPLETE", "SUPPRESSED"):
-                        suprimidos.append(_item)
+                for _cr in _cnt_rows:
+                    if (_cr["status"] or "").upper() in ("INCOMPLETE", "SUPPRESSED"):
+                        sup_total += _cr["cnt"]
                     else:
-                        inactivos.append(_item)
+                        inac_total += _cr["cnt"]
+
+                # Enhanced query: includes price, qty, bm_price
+                _base_q = """
+                    SELECT al.sku, al.asin, al.title, al.status,
+                           al.price, al.available_qty, al.synced_at,
+                           COALESCE(bc.retail_ph, 0) as bm_price
+                    FROM amazon_listings al
+                    LEFT JOIN bm_product_catalog bc
+                        ON bc.sku = al.base_sku OR bc.sku = al.sku
+                    WHERE al.seller_id=? AND UPPER(al.status) = ?
+                    ORDER BY al.title LIMIT ? OFFSET ?"""
+
+                def _build_items(rows):
+                    items = []
+                    for _r in rows:
+                        _asin = _r["asin"] or ""
+                        _status = (_r["status"] or "INACTIVE").upper()
+                        items.append({
+                            "sku":   _r["sku"],
+                            "asin":  _asin,
+                            "title": (_r["title"] or _r["sku"])[:70],
+                            "status": _status,
+                            "price": _r["price"] or 0,
+                            "qty":   _r["available_qty"] or 0,
+                            "bm_price": _r["bm_price"] or 0,
+                            "issues": [],
+                            "sc_url": (
+                                f"https://sellercentral.amazon.com/inventory?searchField=ASIN&searchValue={_asin}"
+                                if _asin else "https://sellercentral.amazon.com/inventory"
+                            ),
+                        })
+                    return items
+
+                for _status_filter in ("SUPPRESSED", "INCOMPLETE"):
+                    _rows = await (await _db.execute(
+                        _base_q, (client.seller_id, _status_filter, _PER_PAGE, (sup_page-1)*_PER_PAGE)
+                    )).fetchall()
+                    suprimidos.extend(_build_items(_rows))
+
+                _inac_rows = await (await _db.execute(
+                    """SELECT al.sku, al.asin, al.title, al.status,
+                              al.price, al.available_qty, al.synced_at,
+                              COALESCE(bc.retail_ph, 0) as bm_price
+                       FROM amazon_listings al
+                       LEFT JOIN bm_product_catalog bc ON bc.sku = al.base_sku OR bc.sku = al.sku
+                       WHERE al.seller_id=?
+                         AND UPPER(al.status) NOT IN ('ACTIVE','SUPPRESSED','INCOMPLETE')
+                       ORDER BY al.title LIMIT ? OFFSET ?""",
+                    (client.seller_id, _PER_PAGE, (inac_page-1)*_PER_PAGE)
+                )).fetchall()
+                inactivos = _build_items(_inac_rows)
 
         # Candidatos a eliminar + historial — wrapped to not break on error
         cand_days = int(request.query_params.get("days", 365))
@@ -2954,7 +2985,13 @@ async def amazon_products_sin_publicar(
 
         ctx = {
             "suprimidos":  suprimidos,
+            "sup_total":   sup_total,
+            "sup_page":    sup_page,
+            "sup_pages":   max(1, (sup_total + _PER_PAGE - 1) // _PER_PAGE),
             "inactivos":   inactivos,
+            "inac_total":  inac_total,
+            "inac_page":   inac_page,
+            "inac_pages":  max(1, (inac_total + _PER_PAGE - 1) // _PER_PAGE),
             "con_issues":  [],
             "candidatos":  candidatos_data.get("items", []),
             "cand_total":  candidatos_data.get("total", 0),
@@ -3471,8 +3508,10 @@ def _render_error(request: Request, template: str, msg: str, extra: dict = None)
     """Template de error genérico."""
     ctx = {"error": msg, "no_account": False,
            "candidatos": [], "cand_total": 0, "cand_page": 1, "cand_pages": 1, "cand_days": 365,
-           "historial": [], "seller_id": "", "suprimidos": [], "inactivos": [], "con_issues": [],
-           "db_total": 0, "synced_at": None, "nickname": "", "marketplace": ""}
+           "historial": [], "seller_id": "",
+           "suprimidos": [], "sup_total": 0, "sup_page": 1, "sup_pages": 1,
+           "inactivos": [],  "inac_total": 0, "inac_page": 1, "inac_pages": 1,
+           "con_issues": [], "db_total": 0, "synced_at": None, "nickname": "", "marketplace": ""}
     if extra:
         ctx.update(extra)
     return _templates.TemplateResponse(request, f"partials/{template}", ctx)

@@ -39,175 +39,208 @@
 
 {% else %}
 
+{%- set sup_total  = sup_total  if sup_total  is defined else 0 -%}
+{%- set sup_page   = sup_page   if sup_page   is defined else 1 -%}
+{%- set sup_pages  = sup_pages  if sup_pages  is defined else 1 -%}
+{%- set inac_total = inac_total if inac_total is defined else 0 -%}
+{%- set inac_page  = inac_page  if inac_page  is defined else 1 -%}
+{%- set inac_pages = inac_pages if inac_pages is defined else 1 -%}
 <!-- ─── SUPRIMIDOS ─────────────────────────────────────────────────────────── -->
 {% if suprimidos %}
 <div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-500">
-    <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
-        <div class="flex items-center gap-2">
-            <span class="text-lg">🚫</span>
-            <div>
-                <h3 class="text-sm font-bold text-red-800">Suprimidos por Amazon</h3>
-                <p class="text-xs text-red-600">Listados con issues — no se muestran a compradores</p>
-            </div>
-        </div>
-        <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ suprimidos|length }}</span>
+  <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">🚫</span>
+      <div>
+        <h3 class="text-sm font-bold text-red-800">Suprimidos por Amazon</h3>
+        <p class="text-xs text-red-600">{{ sup_total }} listings con issues — no se muestran a compradores</p>
+      </div>
     </div>
-    <div class="divide-y divide-red-50">
-        {% for item in suprimidos %}
-        <div class="px-4 py-3 hover:bg-red-50/30 transition">
-            <div class="flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-800 truncate">{{ item.title }}</p>
-                    <div class="flex items-center gap-2 mt-0.5">
-                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
-                        {% if item.asin %}<p class="text-xs text-orange-400">ASIN: {{ item.asin }}</p>{% endif %}
-                    </div>
-                    {% if item.issues %}
-                    <div class="mt-2 space-y-1">
-                        {% for issue in item.issues %}
-                        <div class="flex items-start gap-1.5">
-                            <span class="text-xs px-1.5 py-0.5 rounded font-medium shrink-0
-                                {% if issue.severity == 'ERROR' %}bg-red-100 text-red-700
-                                {% elif issue.severity == 'WARNING' %}bg-yellow-100 text-yellow-700
-                                {% else %}bg-gray-100 text-gray-600{% endif %}">
-                                {{ issue.severity }}
-                            </span>
-                            <p class="text-xs text-gray-600">{{ issue.message }}</p>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
-                <div class="shrink-0 flex flex-col gap-1.5">
-                    <button class="amz-fix-ai-btn px-3 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs font-semibold rounded-lg transition whitespace-nowrap"
-                            data-sku="{{ item.sku }}" data-asin="{{ item.asin }}" data-title="{{ item.title }}">
-                        🤖 Fix IA
-                    </button>
-                    <a href="{{ item.sc_url }}" target="_blank"
-                       class="text-center px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium rounded-lg transition whitespace-nowrap">
-                        SC →
-                    </a>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
+    <span class="px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">{{ sup_total }}</span>
+  </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-red-50/50 border-b">
+          <tr class="text-[10px] text-gray-500 text-left">
+            <th class="py-2 px-3 font-medium">T&iacute;tulo</th>
+            <th class="py-2 px-2 font-medium hidden lg:table-cell">SKU</th>
+            <th class="py-2 px-2 font-medium hidden md:table-cell">ASIN</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Sale Price</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Retail BM</th>
+            <th class="py-2 px-2 font-medium text-center hidden md:table-cell">Estado</th>
+            <th class="py-2 px-3 font-medium text-center">Acci&oacute;n</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          {% for item in suprimidos %}
+          <tr class="hover:bg-gray-50/50 transition">
+            <td class="py-2.5 px-3">
+              <p class="font-medium text-gray-700 truncate max-w-[180px] md:max-w-[280px]">{{ item.title }}</p>
+              <p class="text-[10px] text-gray-400 font-mono md:hidden">{{ item.sku }}</p>
+            </td>
+            <td class="py-2.5 px-2 hidden lg:table-cell">
+              <span class="text-[10px] font-mono text-gray-500">{{ item.sku }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell">
+              {% if item.asin %}
+              <a href="https://www.amazon.com/dp/{{ item.asin }}" target="_blank"
+                 class="text-[10px] font-mono text-orange-400 hover:text-orange-600">{{ item.asin }}</a>
+              {% else %}<span class="text-[10px] text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.qty > 0 %}text-green-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.qty }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="text-gray-600">{% if item.price and item.price > 0 %}${{ '{:.2f}'.format(item.price) }}{% else %}—{% endif %}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.bm_price and item.bm_price > 0 %}text-blue-600 font-medium{% else %}text-gray-300{% endif %}">
+                {% if item.bm_price and item.bm_price > 0 %}${{ '{:.2f}'.format(item.bm_price) }}{% else %}—{% endif %}
+              </span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-center">
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold
+                  {% if item.status == 'SUPPRESSED' %}bg-red-100 text-red-600
+                  {% elif item.status == 'INCOMPLETE' %}bg-orange-100 text-orange-600
+                  {% elif item.status == 'INACTIVE' %}bg-gray-100 text-gray-500
+                  {% else %}bg-yellow-100 text-yellow-600{% endif %}">
+                {{ item.status }}
+              </span>
+            </td>
+            <td class="py-2.5 px-3">
+              <div class="flex items-center justify-center gap-1">
+                <button class="amz-fix-ai-btn px-2 py-1 bg-purple-500 hover:bg-purple-600 text-white text-[10px] font-semibold rounded transition whitespace-nowrap"
+                        data-sku="{{ item.sku }}" data-asin="{{ item.asin }}" data-title="{{ item.title }}">
+                  🤖 Fix
+                </button>
+                <a href="{{ item.sc_url }}" target="_blank"
+                   class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-[10px] rounded transition">SC</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
+
+  {% if sup_pages > 1 %}
+  <div class="px-4 py-2.5 border-t border-gray-100 flex items-center justify-between bg-gray-50/40">
+    <p class="text-[10px] text-gray-400">{{ sup_total }} listings &middot; P&aacute;gina {{ sup_page }} de {{ sup_pages }}</p>
+    <div class="flex items-center gap-1">
+      {% if sup_page > 1 %}<a href="?seller_id={{ seller_id }}&sup_page={{ sup_page - 1 }}"
+         class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&larr;</a>{% endif %}
+      {% for p in range([1, sup_page - 2]|max, [sup_pages + 1, sup_page + 3]|min) %}
+      <a href="?seller_id={{ seller_id }}&sup_page={{ p }}"
+         class="px-3 py-1 text-[10px] rounded {{ 'bg-gray-600 text-white' if p == sup_page else 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50' }}">{{ p }}</a>
+      {% endfor %}
+      {% if sup_page < sup_pages %}<a href="?seller_id={{ seller_id }}&sup_page={{ sup_page + 1 }}"
+         class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&rarr;</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 
 <!-- ─── INACTIVOS ──────────────────────────────────────────────────────────── -->
 {% if inactivos %}
 <div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-gray-300">
-    <div class="px-4 py-3 bg-gray-50 flex items-center justify-between border-b border-gray-100">
-        <div class="flex items-center gap-2">
-            <span class="text-lg">⬜</span>
-            <div>
-                <h3 class="text-sm font-bold text-gray-700">Inactivos</h3>
-                <p class="text-xs text-gray-500">Pausados manualmente o sin stock — no generan ventas</p>
-            </div>
-        </div>
-        <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inactivos|length }}</span>
+  <div class="px-4 py-3 bg-gray-50 flex items-center justify-between border-b border-gray-100">
+    <div class="flex items-center gap-2">
+      <span class="text-lg">⬜</span>
+      <div>
+        <h3 class="text-sm font-bold text-gray-700">Inactivos</h3>
+        <p class="text-xs text-gray-500">{{ inac_total }} listings pausados o sin stock — no generan ventas</p>
+      </div>
     </div>
+    <span class="px-3 py-1 bg-gray-400 text-white text-xs font-bold rounded-full">{{ inac_total }}</span>
+  </div>
     <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-            <thead class="bg-gray-50/50">
-                <tr class="text-xs text-gray-500 text-left border-b border-gray-100">
-                    <th class="py-2 px-4 font-medium">Producto / SKU</th>
-                    <th class="py-2 px-3 font-medium hidden md:table-cell">ASIN</th>
-                    <th class="py-2 px-3 font-medium hidden md:table-cell">Última actualización</th>
-                    <th class="py-2 px-3 font-medium text-center">Acción</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-50">
-                {% for item in inactivos %}
-                <tr class="hover:bg-gray-50/50 transition">
-                    <td class="py-3 px-4">
-                        <p class="text-sm font-medium text-gray-700 truncate max-w-[200px] md:max-w-[320px]">{{ item.title }}</p>
-                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
-                    </td>
-                    <td class="py-3 px-3 hidden md:table-cell">
-                        {% if item.asin %}
-                        <a href="https://www.amazon.com.mx/dp/{{ item.asin }}" target="_blank"
-                           class="text-xs text-orange-400 hover:text-orange-600">{{ item.asin }}</a>
-                        {% else %}
-                        <span class="text-xs text-gray-300">—</span>
-                        {% endif %}
-                    </td>
-                    <td class="py-3 px-3 hidden md:table-cell">
-                        <span class="text-xs text-gray-400">{{ item.last_updated or '—' }}</span>
-                    </td>
-                    <td class="py-3 px-3 text-center">
-                        <a href="{{ item.sc_url }}" target="_blank"
-                           class="inline-block px-3 py-1 bg-gray-400 hover:bg-gray-500 text-white text-xs font-medium rounded-lg transition">
-                            Ver →
-                        </a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+      <table class="w-full text-xs">
+        <thead class="bg-gray-50/50 border-b">
+          <tr class="text-[10px] text-gray-500 text-left">
+            <th class="py-2 px-3 font-medium">T&iacute;tulo</th>
+            <th class="py-2 px-2 font-medium hidden lg:table-cell">SKU</th>
+            <th class="py-2 px-2 font-medium hidden md:table-cell">ASIN</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">QTY</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Sale Price</th>
+            <th class="py-2 px-2 font-medium text-right hidden md:table-cell">Retail BM</th>
+            <th class="py-2 px-2 font-medium text-center hidden md:table-cell">Estado</th>
+            <th class="py-2 px-3 font-medium text-center">Acci&oacute;n</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          {% for item in inactivos %}
+          <tr class="hover:bg-gray-50/50 transition">
+            <td class="py-2.5 px-3">
+              <p class="font-medium text-gray-700 truncate max-w-[180px] md:max-w-[280px]">{{ item.title }}</p>
+              <p class="text-[10px] text-gray-400 font-mono md:hidden">{{ item.sku }}</p>
+            </td>
+            <td class="py-2.5 px-2 hidden lg:table-cell">
+              <span class="text-[10px] font-mono text-gray-500">{{ item.sku }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell">
+              {% if item.asin %}
+              <a href="https://www.amazon.com/dp/{{ item.asin }}" target="_blank"
+                 class="text-[10px] font-mono text-orange-400 hover:text-orange-600">{{ item.asin }}</a>
+              {% else %}<span class="text-[10px] text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.qty > 0 %}text-green-600 font-semibold{% else %}text-gray-300{% endif %}">{{ item.qty }}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="text-gray-600">{% if item.price and item.price > 0 %}${{ '{:.2f}'.format(item.price) }}{% else %}—{% endif %}</span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-right">
+              <span class="{% if item.bm_price and item.bm_price > 0 %}text-blue-600 font-medium{% else %}text-gray-300{% endif %}">
+                {% if item.bm_price and item.bm_price > 0 %}${{ '{:.2f}'.format(item.bm_price) }}{% else %}—{% endif %}
+              </span>
+            </td>
+            <td class="py-2.5 px-2 hidden md:table-cell text-center">
+              <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold
+                  {% if item.status == 'SUPPRESSED' %}bg-red-100 text-red-600
+                  {% elif item.status == 'INCOMPLETE' %}bg-orange-100 text-orange-600
+                  {% elif item.status == 'INACTIVE' %}bg-gray-100 text-gray-500
+                  {% else %}bg-yellow-100 text-yellow-600{% endif %}">
+                {{ item.status }}
+              </span>
+            </td>
+            <td class="py-2.5 px-3">
+              <div class="flex items-center justify-center gap-1">
+                <button class="amz-fix-ai-btn px-2 py-1 bg-purple-500 hover:bg-purple-600 text-white text-[10px] font-semibold rounded transition whitespace-nowrap"
+                        data-sku="{{ item.sku }}" data-asin="{{ item.asin }}" data-title="{{ item.title }}">
+                  🤖 Fix
+                </button>
+                <a href="{{ item.sc_url }}" target="_blank"
+                   class="px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 text-[10px] rounded transition">SC</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
+
+  {% if inac_pages > 1 %}
+  <div class="px-4 py-2.5 border-t border-gray-100 flex items-center justify-between bg-gray-50/40">
+    <p class="text-[10px] text-gray-400">{{ inac_total }} listings &middot; P&aacute;gina {{ inac_page }} de {{ inac_pages }}</p>
+    <div class="flex items-center gap-1">
+      {% if inac_page > 1 %}<a href="?seller_id={{ seller_id }}&inac_page={{ inac_page - 1 }}"
+         class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&larr;</a>{% endif %}
+      {% for p in range([1, inac_page - 2]|max, [inac_pages + 1, inac_page + 3]|min) %}
+      <a href="?seller_id={{ seller_id }}&inac_page={{ p }}"
+         class="px-3 py-1 text-[10px] rounded {{ 'bg-gray-600 text-white' if p == inac_page else 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50' }}">{{ p }}</a>
+      {% endfor %}
+      {% if inac_page < inac_pages %}<a href="?seller_id={{ seller_id }}&inac_page={{ inac_page + 1 }}"
+         class="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-[10px] rounded hover:bg-gray-50">&rarr;</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endif %}
 
-<!-- ─── ACTIVOS CON ISSUES ─────────────────────────────────────────────────── -->
-{% if con_issues %}
-<div class="bg-white rounded-xl shadow overflow-hidden border-l-4 border-orange-400">
-    <div class="px-4 py-3 bg-orange-50 flex items-center justify-between border-b border-orange-100">
-        <div class="flex items-center gap-2">
-            <span class="text-lg">⚠️</span>
-            <div>
-                <h3 class="text-sm font-bold text-orange-800">Activos con Issues</h3>
-                <p class="text-xs text-orange-600">Se están vendiendo pero Amazon reporta advertencias</p>
-            </div>
-        </div>
-        <span class="px-3 py-1 bg-orange-400 text-white text-xs font-bold rounded-full">{{ con_issues|length }}</span>
-    </div>
-    <div class="divide-y divide-orange-50">
-        {% for item in con_issues %}
-        <div class="px-4 py-3 hover:bg-orange-50/30 transition">
-            <div class="flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-800 truncate">{{ item.title }}</p>
-                    <div class="flex items-center gap-2 mt-0.5">
-                        <p class="text-xs text-gray-400">{{ item.sku }}</p>
-                        {% if item.asin %}<p class="text-xs text-orange-400">ASIN: {{ item.asin }}</p>{% endif %}
-                    </div>
-                    {% if item.issues %}
-                    <div class="mt-2 space-y-1">
-                        {% for issue in item.issues %}
-                        <div class="flex items-start gap-1.5">
-                            <span class="text-xs px-1.5 py-0.5 rounded font-medium shrink-0
-                                {% if issue.severity == 'ERROR' %}bg-red-100 text-red-700
-                                {% elif issue.severity == 'WARNING' %}bg-yellow-100 text-yellow-700
-                                {% else %}bg-gray-100 text-gray-600{% endif %}">
-                                {{ issue.severity or 'INFO' }}
-                            </span>
-                            <p class="text-xs text-gray-600">{{ issue.message }}</p>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
-                <div class="shrink-0">
-                    <a href="{{ item.sc_url }}" target="_blank"
-                       class="inline-block px-3 py-1.5 bg-orange-400 hover:bg-orange-500 text-white text-xs font-medium rounded-lg transition whitespace-nowrap">
-                        Revisar →
-                    </a>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
+{%- endif %}  {# total == 0 / db_total == 0 #}
 
-{% endif %}  {# total == 0 / db_total == 0 #}
-
-{%- set cand_total = cand_total if cand_total is defined else 0 -%}
-{%- set cand_page  = cand_page  if cand_page  is defined else 1 -%}
-{%- set cand_pages = cand_pages if cand_pages is defined else 1 -%}
-{%- set cand_days  = cand_days  if cand_days  is defined else 365 -%}
 <!-- ─── CANDIDATOS A ELIMINAR ──────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow overflow-hidden mb-4 border-l-4 border-red-300 mt-4" id="amz-candidatos-section">
   <div class="px-4 py-3 bg-red-50 flex items-center justify-between border-b border-red-100 flex-wrap gap-2">
