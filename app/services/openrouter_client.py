@@ -4,9 +4,14 @@ OpenRouter Client
 Wrapper para OpenRouter API con retry automático y cascade de modelos.
 
 Cascade en caso de 429/error:
-  1. meta-llama/llama-3.3-70b-instruct:free  (gratis, proveedor Venice)
-  2. mistralai/mistral-small-3.1-24b-instruct:free  (gratis, proveedor distinto)
-  3. Claude Haiku vía Anthropic directo  (~$0.0003/call, fallback final)
+  1. google/gemma-3-27b-it:free               (gratis, Google)
+  2. meta-llama/llama-3.3-70b-instruct:free   (gratis, Meta — distinto proveedor)
+  3. mistralai/mistral-small-3.1-24b-instruct:free  (gratis, Mistral)
+  4. Claude Haiku vía Anthropic directo  (~$0.001/call, fallback final)
+
+NOTA: Los modelos :free de OpenRouter cambian frecuentemente.
+Si todos devuelven 404, actualizar _FREE_MODELS con modelos vigentes en:
+  https://openrouter.ai/models?q=:free
 """
 import asyncio
 import json
@@ -22,11 +27,11 @@ _OR_BASE  = "https://openrouter.ai/api/v1"
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OR_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
-# Cascade de modelos gratuitos — verificados en OpenRouter (nombres exactos que existen)
+# Cascade de modelos gratuitos — verificar disponibilidad en https://openrouter.ai/models?q=:free
 _FREE_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",   # primario
-    "mistralai/mistral-7b-instruct:free",         # backup — distinto proveedor
-    "google/gemma-2-9b-it:free",                  # backup 2
+    "google/gemma-3-27b-it:free",                      # primario — Google
+    "meta-llama/llama-3.3-70b-instruct:free",          # backup — Meta, distinto proveedor
+    "mistralai/mistral-small-3.1-24b-instruct:free",   # backup 2 — Mistral
 ]
 
 _HEADERS = {
@@ -67,7 +72,7 @@ async def _call_anthropic_haiku_fallback(prompt: str, system: str, max_tokens: i
 
     messages = [{"role": "user", "content": prompt or "Hola"}]
     body: dict = {
-        "model": "claude-haiku-4-5-20251001",
+        "model": "claude-haiku-4-5",
         "max_tokens": max(max_tokens, 50),
         "messages": messages,
     }
@@ -85,7 +90,9 @@ async def _call_anthropic_haiku_fallback(prompt: str, system: str, max_tokens: i
             json=body,
         )
         if not resp.is_success:
-            raise RuntimeError(f"Anthropic {resp.status_code}: {resp.text[:300]}")
+            body_text = resp.text[:500]
+            logger.error(f"[Anthropic fallback] {resp.status_code} error: {body_text}")
+            raise RuntimeError(f"Anthropic {resp.status_code}: {body_text}")
         data = resp.json()
         return data["content"][0]["text"]
 

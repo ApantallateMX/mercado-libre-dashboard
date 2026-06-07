@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-07 — FIX: "Sugerir con IA" roto — modelos OpenRouter obsoletos + Haiku 400
+
+### Síntoma
+Feature "Sugerir con IA" en preguntas ML fallaba con:
+`[ERROR] Todos los modelos fallaron. Último error: Error 404. Haiku: Client error '400 Bad Request'`
+
+### Root cause
+1. Los 3 modelos en `_FREE_MODELS` ya no existían en OpenRouter (`mistral-7b-instruct:free`,
+   `gemma-2-9b-it:free`, `llama-3.3-70b-instruct:free`) → todos devuelven 404.
+2. El fallback Anthropic Haiku usaba `"claude-haiku-4-5-20251001"` (ID con sufijo de fecha)
+   → API devuelve 400. El ID correcto es `"claude-haiku-4-5"` (alias sin fecha).
+
+### Solución (`app/services/openrouter_client.py`)
+- `_FREE_MODELS` actualizado a modelos vigentes: `google/gemma-3-27b-it:free`,
+  `meta-llama/llama-3.3-70b-instruct:free`, `mistralai/mistral-small-3.1-24b-instruct:free`
+- Haiku model ID corregido: `"claude-haiku-4-5-20251001"` → `"claude-haiku-4-5"`
+- Error logging mejorado en fallback Haiku: ahora loguea el body completo (500 chars) antes de raise
+- Docstring actualizado con nota sobre volatilidad de modelos :free y URL para verificar
+
+### Prevención
+El docstring del módulo ahora incluye instrucción explícita:
+`Si todos devuelven 404, actualizar _FREE_MODELS en https://openrouter.ai/models?q=:free`
+
+---
+
 ## 2026-05-28 — FIX: Inventario skeleton infinito — listings stale-while-revalidate
 
 ### Problema
