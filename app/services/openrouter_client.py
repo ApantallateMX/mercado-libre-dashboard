@@ -1,15 +1,14 @@
 """
 OpenRouter Client
 =================
-Wrapper para OpenRouter API (compatible con OpenAI).
-Proveedor PRIMARIO de IA para Salud → Preguntas, Reclamos y Mensajes.
-Fallback: claude_client.py cuando OpenRouter no responde.
+Wrapper para OpenRouter API con retry automático y cascade de modelos.
 
-Modelos recomendados (en orden de preferencia):
-  - meta-llama/llama-3.3-70b-instruct:free  (gratis, excelente calidad)
-  - mistralai/mistral-small-3.1-24b-instruct:free  (gratis, rápido)
-  - anthropic/claude-3-haiku  (de pago, vía OR routing)
+Cascade en caso de 429/error:
+  1. meta-llama/llama-3.3-70b-instruct:free  (gratis, proveedor Venice)
+  2. mistralai/mistral-small-3.1-24b-instruct:free  (gratis, proveedor distinto)
+  3. Claude Haiku vía Anthropic directo  (~$0.0003/call, fallback final)
 """
+import asyncio
 import json
 import logging
 import os
@@ -22,6 +21,13 @@ logger = logging.getLogger(__name__)
 _OR_BASE  = "https://openrouter.ai/api/v1"
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OR_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+
+# Cascade de modelos gratuitos — distintos proveedores para evitar que el mismo 429 los afecte
+_FREE_MODELS = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "mistralai/mistral-small-3.1-24b-instruct:free",
+    "google/gemma-3-12b-it:free",
+]
 
 _HEADERS = {
     "Authorization":  f"Bearer {_OR_KEY}",
@@ -43,28 +49,83 @@ def _build_messages(prompt: str, system: str) -> list[dict]:
     return msgs
 
 
+async def _call_anthropic_haiku_fallback(prompt: str, system: str, max_tokens: int) -> str:
+    """Last-resort fallback: Claude Haiku via Anthropic direct API."""
+    import os as _os, base64 as _b64
+    _p1 = _os.getenv("AI_KEY_P1", "")
+    _p2 = _os.getenv("AI_KEY_P2", "")
+    api_key = _b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else _os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("No fallback API key available")
+    messages = [{"role": "user", "content": prompt}]
+    body: dict = {"model": "claude-haiku-4-5-20251001", "max_tokens": max_tokens, "messages": messages}
+    if system:
+        body["system"] = system
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+
+
 async def generate(
     prompt: str,
     system: str = "",
     max_tokens: int = 512,
     model: str = "",
 ) -> str:
-    """Genera respuesta completa (no streaming) vía OpenRouter."""
-    payload = {
-        "model":      model or _OR_MODEL,
-        "messages":   _build_messages(prompt, system),
-        "max_tokens": max_tokens,
-    }
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            f"{_OR_BASE}/chat/completions",
-            json=payload,
-            headers=_HEADERS,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"OpenRouter error {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    """
+    Genera respuesta completa con retry automático y cascade de modelos.
+    429 → siguiente modelo gratuito → Claude Haiku como último recurso.
+    """
+    primary = model or _OR_MODEL
+    # Build model cascade: primary + other free models (deduplicated)
+    cascade = [primary] + [m for m in _FREE_MODELS if m != primary]
+
+    last_error = None
+    for attempt_model in cascade:
+        payload = {
+            "model":      attempt_model,
+            "messages":   _build_messages(prompt, system),
+            "max_tokens": max_tokens,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    f"{_OR_BASE}/chat/completions",
+                    json=payload,
+                    headers=_HEADERS,
+                )
+                if resp.status_code == 429:
+                    logger.warning(f"[OpenRouter] 429 rate-limit on {attempt_model}, trying next model")
+                    last_error = f"Rate limit on {attempt_model}"
+                    await asyncio.sleep(0.5)
+                    continue
+                if resp.status_code != 200:
+                    logger.warning(f"[OpenRouter] {resp.status_code} on {attempt_model}: {resp.text[:200]}")
+                    last_error = f"Error {resp.status_code} on {attempt_model}"
+                    continue
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                if attempt_model != primary:
+                    logger.info(f"[OpenRouter] Succeeded with fallback model: {attempt_model}")
+                return content
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[OpenRouter] Exception on {attempt_model}: {e}")
+            continue
+
+    # All free models failed → try Anthropic Haiku
+    logger.warning(f"[OpenRouter] All free models failed, falling back to Claude Haiku. Last error: {last_error}")
+    try:
+        result = await _call_anthropic_haiku_fallback(prompt, system, max_tokens)
+        logger.info("[OpenRouter] Claude Haiku fallback succeeded")
+        return result
+    except Exception as e:
+        raise RuntimeError(f"[OpenRouter] All models failed. Last free error: {last_error}. Haiku error: {e}")
 
 
 async def generate_stream(
@@ -73,35 +134,68 @@ async def generate_stream(
     max_tokens: int = 512,
     model: str = "",
 ) -> AsyncGenerator[str, None]:
-    """Genera respuesta en streaming (SSE) vía OpenRouter."""
-    payload = {
-        "model":      model or _OR_MODEL,
-        "messages":   _build_messages(prompt, system),
-        "max_tokens": max_tokens,
-        "stream":     True,
-    }
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream(
-            "POST",
-            f"{_OR_BASE}/chat/completions",
-            json=payload,
-            headers=_HEADERS,
-        ) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                raise RuntimeError(f"OpenRouter error {resp.status_code}: {body.decode()[:300]}")
+    """
+    Genera respuesta en streaming con retry en cascade de modelos.
+    Si todos los modelos gratuitos fallan → Claude Haiku (non-streaming → yield único).
+    """
+    primary = model or _OR_MODEL
+    cascade = [primary] + [m for m in _FREE_MODELS if m != primary]
 
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data_str = line[6:].strip()
-                if data_str == "[DONE]":
-                    break
-                try:
-                    event = json.loads(data_str)
-                    delta = event.get("choices", [{}])[0].get("delta", {})
-                    text  = delta.get("content", "")
-                    if text:
-                        yield text
-                except Exception:
-                    continue
+    last_error = None
+    for attempt_model in cascade:
+        payload = {
+            "model":      attempt_model,
+            "messages":   _build_messages(prompt, system),
+            "max_tokens": max_tokens,
+            "stream":     True,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{_OR_BASE}/chat/completions",
+                    json=payload,
+                    headers=_HEADERS,
+                ) as resp:
+                    if resp.status_code == 429:
+                        await resp.aread()
+                        logger.warning(f"[OpenRouter stream] 429 on {attempt_model}, trying next")
+                        last_error = f"Rate limit on {attempt_model}"
+                        await asyncio.sleep(0.5)
+                        continue
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        logger.warning(f"[OpenRouter stream] {resp.status_code} on {attempt_model}")
+                        last_error = f"Error {resp.status_code}"
+                        continue
+
+                    if attempt_model != primary:
+                        logger.info(f"[OpenRouter stream] Using fallback: {attempt_model}")
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:].strip()
+                        if data_str == "[DONE]":
+                            return
+                        try:
+                            event = json.loads(data_str)
+                            delta = event.get("choices", [{}])[0].get("delta", {})
+                            text  = delta.get("content", "")
+                            if text:
+                                yield text
+                        except Exception:
+                            continue
+                    return  # stream completed successfully
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[OpenRouter stream] Exception on {attempt_model}: {e}")
+            continue
+
+    # All free models failed for streaming → Haiku non-streaming, yield as single chunk
+    logger.warning(f"[OpenRouter stream] All free models failed, using Claude Haiku. Last error: {last_error}")
+    try:
+        text = await _call_anthropic_haiku_fallback(prompt, system, max_tokens)
+        yield text
+    except Exception as e:
+        yield f"[ERROR] Todos los modelos fallaron. Último error: {last_error}. Haiku: {e}"
