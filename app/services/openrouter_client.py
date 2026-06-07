@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import AsyncGenerator
 
 import httpx
@@ -40,6 +41,62 @@ _HEADERS = {
     "HTTP-Referer":   "https://mercado-libre-dashboard.railway.app",
     "X-Title":        "MeLi Dashboard",
 }
+
+# Circuit breaker: modelos marcados como muertos (404) se saltan por _DEAD_TTL segundos
+_dead_models: dict[str, float] = {}
+_DEAD_TTL = 3600  # 1 hora
+
+# Cache del listado dinámico de modelos gratuitos desde la API de OpenRouter
+_dyn_free_models: list[str] = []
+_dyn_cache_ts: float = 0.0
+_DYN_TTL = 3600  # refrescar cada hora
+
+
+def _mark_dead(model: str) -> None:
+    _dead_models[model] = time.time()
+    logger.warning(f"[OpenRouter] 404 — modelo no disponible, saltando por 1h: {model}")
+
+
+def _is_dead(model: str) -> bool:
+    ts = _dead_models.get(model)
+    if ts is None:
+        return False
+    if time.time() - ts > _DEAD_TTL:
+        _dead_models.pop(model, None)
+        return False
+    return True
+
+
+async def _get_free_models() -> list[str]:
+    """
+    Obtiene la lista actual de modelos gratuitos desde la API de OpenRouter (cache 1h).
+    Si falla, usa _FREE_MODELS como fallback estático.
+    """
+    global _dyn_free_models, _dyn_cache_ts
+    if time.time() - _dyn_cache_ts < _DYN_TTL and _dyn_free_models:
+        return _dyn_free_models
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{_OR_BASE}/models",
+                headers={"Authorization": f"Bearer {_OR_KEY}"},
+            )
+            if resp.is_success:
+                data = resp.json().get("data", [])
+                free = [
+                    m["id"] for m in data
+                    if isinstance(m.get("id"), str)
+                    and m["id"].endswith(":free")
+                    and (m.get("context_length") or 0) >= 8000
+                ]
+                if free:
+                    _dyn_free_models = free[:10]
+                    _dyn_cache_ts = time.time()
+                    logger.info(f"[OpenRouter] {len(_dyn_free_models)} modelos gratuitos disponibles: {_dyn_free_models[:3]}...")
+                    return _dyn_free_models
+    except Exception as e:
+        logger.warning(f"[OpenRouter] No se pudo obtener lista de modelos, usando fallback estático: {e}")
+    return _FREE_MODELS
 
 
 def is_available() -> bool:
@@ -105,11 +162,13 @@ async def generate(
 ) -> str:
     """
     Genera respuesta completa con retry automático y cascade de modelos.
-    429 → siguiente modelo gratuito → Claude Haiku como último recurso.
+    429/404 → siguiente modelo → Claude Haiku como último recurso.
+    Los modelos con 404 se marcan como muertos por 1h (circuit breaker).
     """
     primary = model or _OR_MODEL
-    # Build model cascade: primary + other free models (deduplicated)
-    cascade = [primary] + [m for m in _FREE_MODELS if m != primary]
+    all_free = await _get_free_models()
+    cascade_all = [primary] + [m for m in all_free if m != primary]
+    cascade = [m for m in cascade_all if not _is_dead(m)] or cascade_all
 
     last_error = None
     for attempt_model in cascade:
@@ -131,8 +190,8 @@ async def generate(
                     await asyncio.sleep(0.5)
                     continue
                 if resp.status_code == 404:
-                    logger.warning(f"[OpenRouter] 404 model not found: {attempt_model}")
-                    last_error = f"Error 404 — model not found: {attempt_model}"
+                    _mark_dead(attempt_model)
+                    last_error = f"Error 404 — modelo no disponible: {attempt_model}"
                     continue
                 if resp.status_code != 200:
                     logger.warning(f"[OpenRouter] {resp.status_code} on {attempt_model}: {resp.text[:200]}")
@@ -169,7 +228,9 @@ async def generate_stream(
     Si todos los modelos gratuitos fallan → Claude Haiku (non-streaming → yield único).
     """
     primary = model or _OR_MODEL
-    cascade = [primary] + [m for m in _FREE_MODELS if m != primary]
+    all_free = await _get_free_models()
+    cascade_all = [primary] + [m for m in all_free if m != primary]
+    cascade = [m for m in cascade_all if not _is_dead(m)] or cascade_all
 
     last_error = None
     for attempt_model in cascade:
@@ -192,6 +253,11 @@ async def generate_stream(
                         logger.warning(f"[OpenRouter stream] 429 on {attempt_model}, trying next")
                         last_error = f"Rate limit on {attempt_model}"
                         await asyncio.sleep(0.5)
+                        continue
+                    if resp.status_code == 404:
+                        await resp.aread()
+                        _mark_dead(attempt_model)
+                        last_error = f"Error 404 — modelo no disponible: {attempt_model}"
                         continue
                     if resp.status_code != 200:
                         body = await resp.aread()

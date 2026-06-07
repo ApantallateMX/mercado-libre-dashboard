@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-07 — FEAT: Circuit breaker + descubrimiento dinámico de modelos OpenRouter
+
+### Problema
+Los modelos hardcoded en `_FREE_MODELS` se vuelven obsoletos sin aviso (OpenRouter elimina modelos :free frecuentemente).
+Cada request intentaba los 3 modelos muertos antes de llegar a Haiku → latencia innecesaria + UX mala.
+
+### Solución (`app/services/openrouter_client.py`)
+- **Circuit breaker**: `_dead_models` dict — cuando un modelo devuelve 404, se marca como muerto por 1h.
+  El cascade los salta automáticamente en requests subsecuentes. TTL de 1h para reintento automático.
+- **Descubrimiento dinámico**: `_get_free_models()` consulta `GET /api/v1/models` de OpenRouter,
+  filtra modelos `:free` con context ≥ 8K, cachea la lista por 1h. Fallback a `_FREE_MODELS` si falla.
+- `generate()` y `generate_stream()` usan `_get_free_models()` + skip de dead models en cada llamada.
+
+### Efecto
+Si un modelo nuevo se vuelve 404: se marca muerto en el primer intento, los siguientes requests lo saltan.
+OpenRouter publica modelos nuevos: se descubren automáticamente en la siguiente hora.
+No se necesita intervención manual para actualizar `_FREE_MODELS`.
+
+---
+
 ## 2026-06-07 — FIX: "Sugerir con IA" roto — modelos OpenRouter obsoletos + Haiku 400
 
 ### Síntoma
