@@ -22,11 +22,11 @@ _OR_BASE  = "https://openrouter.ai/api/v1"
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OR_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
-# Cascade de modelos gratuitos — distintos proveedores para evitar que el mismo 429 los afecte
+# Cascade de modelos gratuitos — verificados en OpenRouter (nombres exactos que existen)
 _FREE_MODELS = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "google/gemma-3-12b-it:free",
+    "meta-llama/llama-3.3-70b-instruct:free",   # primario
+    "mistralai/mistral-7b-instruct:free",         # backup — distinto proveedor
+    "google/gemma-2-9b-it:free",                  # backup 2
 ]
 
 _HEADERS = {
@@ -54,21 +54,40 @@ async def _call_anthropic_haiku_fallback(prompt: str, system: str, max_tokens: i
     import os as _os, base64 as _b64
     _p1 = _os.getenv("AI_KEY_P1", "")
     _p2 = _os.getenv("AI_KEY_P2", "")
-    api_key = _b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else _os.getenv("ANTHROPIC_API_KEY", "")
+    api_key = ""
+    if _p1 and _p2:
+        try:
+            api_key = _b64.b64decode(_p1 + _p2).decode().strip()
+        except Exception:
+            pass
     if not api_key:
-        raise RuntimeError("No fallback API key available")
-    messages = [{"role": "user", "content": prompt}]
-    body: dict = {"model": "claude-haiku-4-5-20251001", "max_tokens": max_tokens, "messages": messages}
-    if system:
-        body["system"] = system
+        api_key = _os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("No Anthropic API key available for fallback")
+
+    messages = [{"role": "user", "content": prompt or "Hola"}]
+    body: dict = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": max(max_tokens, 50),
+        "messages": messages,
+    }
+    if system and system.strip():
+        body["system"] = system.strip()
+
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
             json=body,
         )
-        resp.raise_for_status()
-        return resp.json()["content"][0]["text"]
+        if not resp.is_success:
+            raise RuntimeError(f"Anthropic {resp.status_code}: {resp.text[:300]}")
+        data = resp.json()
+        return data["content"][0]["text"]
 
 
 async def generate(
@@ -100,9 +119,13 @@ async def generate(
                     headers=_HEADERS,
                 )
                 if resp.status_code == 429:
-                    logger.warning(f"[OpenRouter] 429 rate-limit on {attempt_model}, trying next model")
+                    logger.warning(f"[OpenRouter] 429 rate-limit on {attempt_model}, trying next")
                     last_error = f"Rate limit on {attempt_model}"
                     await asyncio.sleep(0.5)
+                    continue
+                if resp.status_code == 404:
+                    logger.warning(f"[OpenRouter] 404 model not found: {attempt_model}")
+                    last_error = f"Error 404 — model not found: {attempt_model}"
                     continue
                 if resp.status_code != 200:
                     logger.warning(f"[OpenRouter] {resp.status_code} on {attempt_model}: {resp.text[:200]}")
