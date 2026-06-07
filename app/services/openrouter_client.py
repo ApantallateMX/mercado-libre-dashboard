@@ -26,13 +26,15 @@ logger = logging.getLogger(__name__)
 
 _OR_BASE  = "https://openrouter.ai/api/v1"
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
-_OR_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+_OR_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 
-# Cascade de modelos gratuitos — verificar disponibilidad en https://openrouter.ai/models?q=:free
+# Cascade de modelos gratuitos — fallback estático si _get_free_models() falla.
+# La lista dinámica (OpenRouter /api/v1/models) tiene prioridad sobre esta.
 _FREE_MODELS = [
-    "google/gemma-3-27b-it:free",                      # primario — Google
-    "meta-llama/llama-3.3-70b-instruct:free",          # backup — Meta, distinto proveedor
-    "mistralai/mistral-small-3.1-24b-instruct:free",   # backup 2 — Mistral
+    "google/gemma-4-31b-it:free",              # Google Gemma 4 — confirmado activo
+    "openai/gpt-oss-20b:free",                 # OpenAI OSS — confirmado activo
+    "nvidia/nemotron-3-super-120b-a12b:free",  # NVIDIA — confirmado activo
+    "meta-llama/llama-3.3-70b-instruct:free",  # Meta — activo (puede tener 429)
 ]
 
 _HEADERS = {
