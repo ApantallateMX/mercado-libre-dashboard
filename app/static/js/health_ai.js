@@ -154,6 +154,7 @@ window.suggestQuestionAnswer = function (btn) {
 
     var payload = {
         question_text: btn.getAttribute('data-text'),
+        item_id: btn.getAttribute('data-item-id') || '',
         product_title: btn.getAttribute('data-product-title') || '',
         product_price: parseFloat(btn.getAttribute('data-price')) || 0,
         product_stock: parseInt(btn.getAttribute('data-stock')) || 0,

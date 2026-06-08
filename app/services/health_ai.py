@@ -28,7 +28,8 @@ def _bm_product_block(bm_product: dict) -> str:
 def build_question_answer_prompt(question_text, product_title, product_price, product_stock, elapsed,
                                   buyer_history=None, user_context=None, bm_product=None,
                                   product_permalink=None, product_attributes=None,
-                                  same_item_history=None, related_listings=None, seller_name=None):
+                                  same_item_history=None, related_listings=None, seller_name=None,
+                                  ml_description=None, web_specs=None):
     firma = f", {seller_name}" if seller_name else ""
     system = (
         "Eres un asistente de ventas profesional en Mercado Libre Mexico con alta tasa de conversion.\n\n"
@@ -39,13 +40,13 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
         f"4. DESPEDIDA — cordial, 1 linea, firmada con el nombre del vendedor (ej: 'Saludos{firma}!')\n\n"
         "TIPOS DE PREGUNTA y como manejarlas:\n"
         "- OPERATIVA (envio, garantia, factura): responde con certeza, menciona beneficios de MeLi (envio gratis, Compra Protegida)\n"
-        "- TECNICA (especificaciones, compatibilidad): usa SOLO las especificaciones listadas en los datos del producto; NUNCA inventes ni asumas specs por el nombre del producto\n"
+        "- TECNICA (especificaciones, compatibilidad): usa las especificaciones del producto (ML, BM, descripcion e investigacion web). Si una spec NO aparece en ninguna fuente proporcionada, dilo honestamente\n"
         "- PROPOSICION (ofertas, descuentos, combos): redirige a compra directa, no ofrezcas descuentos fuera de MeLi\n"
         "- COMPUESTA (multiples preguntas): responde cada punto numerado\n"
         "- STOCK (disponibilidad): confirma stock y agrega urgencia sutil si hay poco\n\n"
         "REGLAS ESTRICTAS — CUMPLIMIENTO ABSOLUTO:\n"
         "- INSTRUCCIONES DEL VENDEDOR son MANDATO SUPREMO: si el vendedor indica algo (ej: 'No cuenta con X'), esa es la respuesta definitiva sin importar lo que sepas del producto\n"
-        "- NUNCA inventes especificaciones tecnicas. Si una caracteristica no esta en las especificaciones proporcionadas, di: 'te recomendamos verificar este detalle en la descripcion del producto'\n"
+        "- Para especificaciones tecnicas: usa PRIMERO los datos proporcionados (ML, BM, descripcion, investigacion web). Si la spec no aparece en ninguna fuente, indica que no esta especificada en la ficha tecnica\n"
         "- NUNCA compartas datos de contacto externos (telefono, email, WhatsApp, redes sociales)\n"
         "- NUNCA digas solo 'no' — siempre da contexto util o alternativa\n"
         "- NO prometas tiempos de entrega exactos (depende de la paqueteria)\n"
@@ -116,13 +117,21 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     # ML listing attributes/specs
     if product_attributes:
         attrs_lines = []
-        for attr in product_attributes[:20]:
+        for attr in product_attributes[:40]:
             name = attr.get("name") or attr.get("id") or ""
             value = attr.get("value") or attr.get("value_name") or ""
             if name and value:
                 attrs_lines.append(f"  - {name}: {value}")
         if attrs_lines:
             user += "\nEspecificaciones tecnicas del producto (MercadoLibre):\n" + "\n".join(attrs_lines) + "\n"
+
+    # Full ML description (often contains specs not in the attribute list)
+    if ml_description and ml_description.strip():
+        user += f"\nDescripcion completa del listing ML:\n{ml_description[:1500]}\n"
+
+    # Web research — specs from manufacturer/retailers
+    if web_specs and web_specs.strip():
+        user += f"\nInvestigacion web (specs del fabricante/retailers):\n{web_specs}\n"
 
     user += f"- Tiempo desde la pregunta: {elapsed}\n"
     if elapsed:
