@@ -79,61 +79,105 @@ async def _get_ml_token(request: Request) -> str:
 
 async def _fetch_ml_item_details(item_id: str, ml_token: str) -> dict:
     """
-    Fetch full ML item attributes + plain-text description.
-    Returns {"attributes": [...], "description": "..."} or {}.
+    Fetch full ML item: attributes + description + catalog product specs.
+    Returns {"attributes": [...], "description": "...", "catalog_attrs": [...]} or {}.
     """
     if not item_id or not ml_token:
         return {}
     headers = {"Authorization": f"Bearer {ml_token}"}
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             item_r, desc_r = await asyncio.gather(
                 client.get(f"https://api.mercadolibre.com/items/{item_id}", headers=headers),
                 client.get(f"https://api.mercadolibre.com/items/{item_id}/descriptions", headers=headers),
                 return_exceptions=True,
             )
+
         attrs = []
+        catalog_product_id = None
         if not isinstance(item_r, Exception) and item_r.is_success:
-            attrs = item_r.json().get("attributes", [])
+            item_data = item_r.json()
+            attrs = item_data.get("attributes", [])
+            catalog_product_id = item_data.get("catalog_product_id")
+
         desc_text = ""
         if not isinstance(desc_r, Exception) and desc_r.is_success:
             descs = desc_r.json()
             if isinstance(descs, list) and descs:
                 desc_text = (descs[0].get("plain_text") or "")[:2000]
-        return {"attributes": attrs, "description": desc_text}
+
+        # Fetch ML catalog product for comprehensive manufacturer specs
+        catalog_attrs = []
+        if catalog_product_id:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    cat_r = await client.get(
+                        f"https://api.mercadolibre.com/products/{catalog_product_id}",
+                        headers=headers,
+                    )
+                if cat_r.is_success:
+                    cat_data = cat_r.json()
+                    catalog_attrs = cat_data.get("attributes", [])
+                    # Also add catalog description if item description is empty
+                    if not desc_text:
+                        for d in cat_data.get("descriptions", []):
+                            if d.get("content"):
+                                desc_text = d["content"][:2000]
+                                break
+                    logger.info(f"[ML catalog] {catalog_product_id}: {len(catalog_attrs)} attrs")
+            except Exception as e:
+                logger.warning(f"[ML catalog] {catalog_product_id}: {e}")
+
+        # Merge: catalog attrs first (more complete), then item attrs for any extras
+        merged_ids = {a.get("id") for a in catalog_attrs}
+        for a in attrs:
+            if a.get("id") not in merged_ids:
+                catalog_attrs.append(a)
+
+        return {
+            "attributes": catalog_attrs or attrs,
+            "description": desc_text,
+            "catalog_product_id": catalog_product_id,
+        }
     except Exception as e:
         logger.warning(f"[ML item fetch] {item_id}: {e}")
         return {}
 
 
-async def _search_product_specs(brand: str, model: str) -> str:
+async def _research_product_specs(brand: str, model: str, question: str) -> str:
     """
-    Search DuckDuckGo for product specs using brand + exact model.
-    Returns text snippets (max ~800 chars) or '' on failure.
+    Ask the LLM to recall specs for a specific product brand+model.
+    Returns a specs summary string or '' if unavailable.
+    Used when web scraping is not viable.
     """
     if not brand or not model:
         return ""
-    query = f"{brand} {model} specifications"
-    url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query)}"
-    try:
-        async with httpx.AsyncClient(timeout=7.0, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }) as client:
-            resp = await client.get(url)
-        if not resp.is_success:
-            return ""
-        html = resp.text
-        snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html, re.DOTALL)
-        clean = []
-        for s in snippets[:6]:
-            text = re.sub(r'<[^>]+>', '', s).strip()
-            text = re.sub(r'\s+', ' ', text)
-            if len(text) > 30:
-                clean.append(text)
-        return "\n".join(clean[:4])[:800]
-    except Exception as e:
-        logger.warning(f"[WebSearch] {brand} {model}: {e}")
+    from app.services import openrouter_client as _or
+    if not _or.is_available():
         return ""
+    research_prompt = (
+        f"Eres un experto en especificaciones técnicas de productos electrónicos y del hogar.\n"
+        f"Proporciona las especificaciones técnicas REALES y CONCRETAS del siguiente producto:\n"
+        f"Marca: {brand}\nModelo: {model}\n\n"
+        f"La pregunta del cliente es: \"{question}\"\n\n"
+        f"Responde SOLO con las especificaciones técnicas relevantes en formato de lista:\n"
+        f"- Dato específico: valor exacto\n"
+        f"- Incluye: specs relacionadas con la pregunta + specs principales del producto\n"
+        f"- Si no tienes datos exactos del modelo, indica cuáles modelos similares conoces y sus specs\n"
+        f"- NO inventes — solo incluye datos que conozcas con seguridad\n"
+        f"- Sé conciso (máximo 200 palabras)"
+    )
+    try:
+        result = await asyncio.wait_for(
+            _or.generate(research_prompt, max_tokens=300),
+            timeout=8.0,
+        )
+        if result and len(result) > 20:
+            logger.info(f"[LLM Research] {brand} {model}: got {len(result)} chars")
+            return result
+    except Exception as e:
+        logger.warning(f"[LLM Research] {brand} {model}: {e}")
+    return ""
 
 
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
@@ -268,10 +312,12 @@ async def suggest_answer(request: Request):
     brand = (bm_product or {}).get("brand", "")
     model = (bm_product or {}).get("model", "")
 
-    # Fetch ML full attrs+description and web specs in parallel (external I/O)
+    question_text = body.get("question_text", "")
+
+    # Fetch ML full attrs+description and LLM product research in parallel
     ml_details, web_specs = await asyncio.gather(
         _fetch_ml_item_details(item_id, ml_token),
-        _search_product_specs(brand, model),
+        _research_product_specs(brand, model, question_text),
     )
 
     # Merge ML attributes: prefer full set from API over what came from the frontend
@@ -279,7 +325,7 @@ async def suggest_answer(request: Request):
     ml_description = ml_details.get("description", "")
 
     system, prompt, max_tokens = build_question_answer_prompt(
-        body.get("question_text", ""),
+        question_text,
         body.get("product_title", ""),
         body.get("product_price", 0),
         body.get("product_stock", 0),

@@ -40,13 +40,13 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
         f"4. DESPEDIDA — cordial, 1 linea, firmada con el nombre del vendedor (ej: 'Saludos{firma}!')\n\n"
         "TIPOS DE PREGUNTA y como manejarlas:\n"
         "- OPERATIVA (envio, garantia, factura): responde con certeza, menciona beneficios de MeLi (envio gratis, Compra Protegida)\n"
-        "- TECNICA (especificaciones, compatibilidad): usa las especificaciones del producto (ML, BM, descripcion e investigacion web). Si una spec NO aparece en ninguna fuente proporcionada, dilo honestamente\n"
+        "- TECNICA (especificaciones, compatibilidad): usa TODAS las fuentes disponibles — especificaciones ML, datos BM, descripcion, e investigacion del modelo. Cuando tienes marca+modelo confirmado, DEBES usar tu conocimiento propio para responder con datos concretos\n"
         "- PROPOSICION (ofertas, descuentos, combos): redirige a compra directa, no ofrezcas descuentos fuera de MeLi\n"
         "- COMPUESTA (multiples preguntas): responde cada punto numerado\n"
         "- STOCK (disponibilidad): confirma stock y agrega urgencia sutil si hay poco\n\n"
         "REGLAS ESTRICTAS — CUMPLIMIENTO ABSOLUTO:\n"
         "- INSTRUCCIONES DEL VENDEDOR son MANDATO SUPREMO: si el vendedor indica algo (ej: 'No cuenta con X'), esa es la respuesta definitiva sin importar lo que sepas del producto\n"
-        "- Para especificaciones tecnicas: usa PRIMERO los datos proporcionados (ML, BM, descripcion, investigacion web). Si la spec no aparece en ninguna fuente, indica que no esta especificada en la ficha tecnica\n"
+        "- Para especificaciones tecnicas: usa PRIMERO los datos proporcionados. Cuando el modelo exacto esta confirmado (BinManager da marca+modelo), INVESTIGA en tu memoria de entrenamiento y da una respuesta concreta. NUNCA respondas 'no esta en la ficha tecnica' si tienes el modelo exacto — busca en tu conocimiento\n"
         "- NUNCA compartas datos de contacto externos (telefono, email, WhatsApp, redes sociales)\n"
         "- NUNCA digas solo 'no' — siempre da contexto util o alternativa\n"
         "- NO prometas tiempos de entrega exactos (depende de la paqueteria)\n"
@@ -113,6 +113,17 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     bm_block = _bm_product_block(bm_product or {})
     if bm_block:
         user += bm_block
+        # When brand+model confirmed, instruct LLM to use its product knowledge
+        b = (bm_product or {}).get("brand", "")
+        m = (bm_product or {}).get("model", "")
+        if b and m:
+            user += (
+                f"\n⚡ MODELO CONFIRMADO POR INVENTARIO: {b} {m}\n"
+                f"INSTRUCCION CRITICA: Usa tu conocimiento de entrenamiento sobre el {b} {m} "
+                f"para responder la pregunta con datos concretos y especificos. "
+                f"Complementa con los datos de ML/BM/investigacion proporcionados. "
+                f"Responde con confianza — no digas 'no está en la ficha técnica' si sabes la respuesta.\n"
+            )
 
     # ML listing attributes/specs
     if product_attributes:
@@ -129,9 +140,9 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     if ml_description and ml_description.strip():
         user += f"\nDescripcion completa del listing ML:\n{ml_description[:1500]}\n"
 
-    # Web research — specs from manufacturer/retailers
+    # LLM product research — specs recalled from training data
     if web_specs and web_specs.strip():
-        user += f"\nInvestigacion web (specs del fabricante/retailers):\n{web_specs}\n"
+        user += f"\nInvestigacion de especificaciones del modelo (fuente: conocimiento de entrenamiento):\n{web_specs}\n"
 
     user += f"- Tiempo desde la pregunta: {elapsed}\n"
     if elapsed:
