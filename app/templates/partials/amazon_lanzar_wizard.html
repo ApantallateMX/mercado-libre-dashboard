@@ -285,12 +285,24 @@
                   <input id="amz-wiz-upc-attr" type="text" maxlength="14" placeholder="012345678901"
                          class="flex-1 text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono">
                   <button id="amz-wiz-upc-search-btn" onclick="window._amzWizSearchUPC()"
-                          title="Search UPC by brand + model"
+                          title="Buscar UPC por marca + modelo"
                           class="text-xs px-2 py-1.5 bg-gray-100 hover:bg-orange-400 hover:text-white border border-gray-200 rounded-lg transition shrink-0">
                     🔍
                   </button>
+                  <button id="amz-wiz-upc-gen-btn" onclick="window._amzWizGenerateUPC()"
+                          title="Generar UPC interno único para este SKU (solo para tracking — usa junto a exención GTIN)"
+                          class="text-xs px-2 py-1.5 bg-indigo-50 hover:bg-indigo-500 hover:text-white border border-indigo-200 rounded-lg transition shrink-0">
+                    🏷️
+                  </button>
                 </div>
                 <span id="amz-wiz-upc-status" class="text-[10px] text-gray-400 hidden mt-0.5 block"></span>
+                <div id="amz-wiz-gtin-exempt-wrap" class="hidden mt-1 flex items-center gap-1.5">
+                  <span class="text-[10px] text-gray-400">¿Sin UPC oficial?</span>
+                  <button onclick="window._amzWizGtinExemption()"
+                          class="text-[10px] text-indigo-600 hover:text-indigo-800 underline">
+                    Solicitar exención GTIN en Seller Central →
+                  </button>
+                </div>
               </div>
               <!-- País de origen -->
               <div>
@@ -1742,6 +1754,45 @@ window._amzWizSearchUPC = function(forceSearch) {
   });
 };
 
+// ─── UPC generation (internal code) ─────────────────────────────────────────
+window._amzWizGenerateUPC = async function() {
+  var btn    = document.getElementById('amz-wiz-upc-gen-btn');
+  var input  = document.getElementById('amz-wiz-upc-attr');
+  var status = document.getElementById('amz-wiz-upc-status');
+  if (!_wiz.sku) {
+    if (status) { status.textContent = 'SKU no disponible'; status.className = 'text-[10px] text-red-400 block mt-0.5'; status.classList.remove('hidden'); }
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    var resp = await fetch('/api/amzlanzar/generate-upc', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({sku: _wiz.sku}),
+    });
+    var data = await resp.json();
+    if (data.upc) {
+      if (input) input.value = data.upc;
+      _wiz.upc = data.upc;
+      var msg = data.source === 'existing'
+        ? '✓ UPC interno (ya existía para este SKU): ' + data.upc
+        : '✓ UPC interno generado y guardado: ' + data.upc;
+      if (status) { status.textContent = msg; status.className = 'text-[10px] text-indigo-600 block mt-0.5'; status.classList.remove('hidden'); }
+      // Show GTIN exemption hint after generating
+      var _gtinWrap = document.getElementById('amz-wiz-gtin-exempt-wrap');
+      if (_gtinWrap) _gtinWrap.classList.remove('hidden');
+    }
+  } catch(e) {
+    if (status) { status.textContent = 'Error generando UPC: ' + e.message; status.className = 'text-[10px] text-red-400 block mt-0.5'; status.classList.remove('hidden'); }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🏷️'; }
+  }
+};
+
+window._amzWizGtinExemption = function() {
+  // Open Amazon Seller Central GTIN exemption page
+  window.open('https://sellercentral.amazon.com.mx/help/hub/reference/200426310', '_blank');
+};
+
 // ─── Open external image search in new tab ───────────────────────────────────
 window._amzWizOpenSearch = function(engine) {
   var brand = (document.getElementById('amz-wiz-brand') || {}).value || (_wiz.brand || '');
@@ -2194,15 +2245,17 @@ function _amzWizBuildReview() {
     // ── Schema-based required attribute checks ────────────────────────────────
     if (_wiz._schema && (_wiz._schema.required || []).length > 0) {
       var _schemaReq = _wiz._schema.required;
+      var _upcVal = ((document.getElementById('amz-wiz-upc-attr') || {}).value || '').trim();
       var _fieldVals = {
         list_price: (document.getElementById('amz-wiz-msrp') || {}).value,
-        externally_assigned_product_identifier: (document.getElementById('amz-wiz-upc-attr') || {}).value,
+        externally_assigned_product_identifier: _upcVal,
         country_of_origin: (document.getElementById('amz-wiz-country-origin') || {}).value,
         connectivity_technology: (document.getElementById('amz-wiz-connectivity') || {}).value,
         special_feature: (document.getElementById('amz-wiz-special-feature') || {}).value,
         included_components: (document.getElementById('amz-wiz-included-components') || {}).value,
         warranty_description: (document.getElementById('amz-wiz-warranty') || {}).value,
         model_year: (document.getElementById('amz-wiz-model-year') || {}).value,
+        material: (_wiz._material || ''),
       };
       var _schemaLabels = {
         list_price: 'MSRP / List price (required by Amazon)',
@@ -2213,6 +2266,7 @@ function _amzWizBuildReview() {
         included_components: 'Included components (required)',
         warranty_description: 'Warranty description (required)',
         model_year: 'Model year (required)',
+        material: 'Material (required)',
       };
       Object.keys(_fieldVals).forEach(function(attr) {
         if (_schemaReq.indexOf(attr) >= 0) {
@@ -2224,6 +2278,9 @@ function _amzWizBuildReview() {
           });
         }
       });
+      // Show GTIN exemption helper when UPC is missing
+      var _gtinWrap = document.getElementById('amz-wiz-gtin-exempt-wrap');
+      if (_gtinWrap) _gtinWrap.classList.toggle('hidden', _upcVal.length > 0);
     }
 
     document.getElementById('amz-wiz-checklist-wrap').classList.remove('hidden');

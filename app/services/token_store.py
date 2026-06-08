@@ -833,6 +833,15 @@ async def init_db():
                 PRIMARY KEY (product_type, marketplace_id)
             )
         """)
+        # TABLA: sku_upc_map — UPC internos generados por SKU
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sku_upc_map (
+                sku        TEXT PRIMARY KEY,
+                upc        TEXT NOT NULL,
+                source     TEXT NOT NULL DEFAULT 'generated',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         # Migrate: add is_parent column to amazon_listings if missing
         try:
             await db.execute('ALTER TABLE amazon_listings ADD COLUMN is_parent INTEGER DEFAULT 0')
@@ -2895,6 +2904,62 @@ _SEED_TEMPLATES = {
         },
         "ai_hints": "TELEVISION: item_type_keyword=televisions. special_feature enum: Smart TV, Built-In WiFi, HDR, Dolby Vision, 4K, QLED, OLED. display.type: LED/QLED/OLED/Mini LED/LCD/QNED. resolution: 720p/1080p/4K/8K.",
     },
+    ("PEST_CONTROL_DEVICE", "A1AM78C64UM0Y8"): {
+        "validated": 1, "validated_at": "2026-06-08", "launch_count": 0,
+        "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
+            "bullet_point","product_description","generic_keyword","country_of_origin",
+            "supplier_declared_dg_hz_regulation","material","power_source_type",
+            "item_type_keyword","warranty_description"],
+        "quality_attrs": ["specific_uses_for_product","color","item_weight",
+            "item_length_width_height","special_feature","included_components",
+            "model_year","list_price","model_number","model_name","recommended_browse_nodes"],
+        "bonus_attrs": ["item_package_weight","item_package_dimensions","wattage","voltage"],
+        "defaults": {
+            "material_type": "Plástico",
+            "power_source_type": "Energía solar",
+            "item_type_keyword": "electronic-pest-control",
+            "supplier_declared_dg_hz_regulation": "not_applicable",
+            "supplier_declared_has_product_identifier_exemption": True,
+            "batteries_required": False, "batteries_included": False,
+            "number_of_items": 1, "country_of_origin": "CN",
+            "warranty_description": "90 días garantía del vendedor",
+            "recommended_browse_nodes": [{"marketplace_id": "A1AM78C64UM0Y8", "value": "23536384011"}],
+        },
+        "ai_hints": (
+            "PEST_CONTROL_DEVICE (Amazon MX): material_type MUST be in Spanish: 'Plástico'/'Metal'/'Aluminio'/"
+            "'Acero inoxidable'. power_source_type en español: 'Energía solar'/'Batería'/'Cable eléctrico'. "
+            "item_type_keyword: 'electronic-pest-control'. Browse node MX: 23536384011 "
+            "(Repelente Eléctrico de Insectos). specific_uses: ['Mosquitos','Mosca','Exterior']. "
+            "GTIN exemption supported: supplier_declared_has_product_identifier_exemption=true."
+        ),
+    },
+    ("ELECTRIC_LANTERN", "A1AM78C64UM0Y8"): {
+        "validated": 1, "validated_at": "2026-06-08", "launch_count": 0,
+        "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
+            "bullet_point","product_description","generic_keyword","country_of_origin",
+            "supplier_declared_dg_hz_regulation","material","power_source_type",
+            "item_type_keyword","warranty_description"],
+        "quality_attrs": ["color","item_weight","item_length_width_height","special_feature",
+            "included_components","model_year","list_price","model_number","model_name",
+            "wattage","light_source","recommended_browse_nodes"],
+        "bonus_attrs": ["item_package_weight","item_package_dimensions","voltage","mounting_type"],
+        "defaults": {
+            "material_type": "Plástico",
+            "power_source_type": "Energía solar",
+            "item_type_keyword": "lanterns",
+            "supplier_declared_dg_hz_regulation": "not_applicable",
+            "supplier_declared_has_product_identifier_exemption": True,
+            "batteries_required": False, "batteries_included": False,
+            "number_of_items": 1, "country_of_origin": "CN",
+            "warranty_description": "90 días garantía del vendedor",
+            "recommended_browse_nodes": [{"marketplace_id": "A1AM78C64UM0Y8", "value": "23536384011"}],
+        },
+        "ai_hints": (
+            "ELECTRIC_LANTERN (Amazon MX): material_type MUST be in Spanish: 'Plástico'/'Metal'/'Aluminio'. "
+            "power_source_type: 'Energía solar'/'Batería'/'Cable eléctrico'. "
+            "item_type_keyword: 'lanterns'. GTIN exemption supported."
+        ),
+    },
     ("VACUUM_CLEANER", "ATVPDKIKX0DER"): {
         "validated": 1, "validated_at": "2026-06-05", "launch_count": 2,
         "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
@@ -3001,6 +3066,25 @@ async def seed_product_type_templates() -> None:
         existing = await get_product_type_template(pt, mk)
         if not existing:
             await save_product_type_template(pt, mk, data)
+
+
+# == SKU ↔ UPC internal mapping ===============================================
+
+async def get_sku_upc(sku: str) -> str:
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        row = await (await db.execute(
+            "SELECT upc FROM sku_upc_map WHERE sku=?", (sku,)
+        )).fetchone()
+    return row[0] if row else ""
+
+
+async def save_sku_upc(sku: str, upc: str, source: str = "generated") -> None:
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO sku_upc_map (sku,upc,source,created_at) VALUES (?,?,?,datetime('now'))",
+            (sku, upc, source),
+        )
+        await db.commit()
 
 
 # == Amazon Listing Actions (close/delete history) ============================

@@ -667,6 +667,39 @@ async def refresh_product_types(request: Request):
     return JSONResponse({"error": "SP-API returned empty list"}, status_code=500)
 
 
+# ── UPC generation ────────────────────────────────────────────────────────────
+
+def _generate_internal_upc(sku: str) -> str:
+    """Generate deterministic UPC-A (12 digits) from SKU.
+    Prefix 888 + 8 digits (SHA-256 hash of SKU) + 1 check digit (UPC-A Luhn).
+    These are internal tracking codes — use with supplier_declared_has_product_identifier_exemption=true.
+    """
+    import hashlib as _hl
+    h = int(_hl.sha256(sku.encode()).hexdigest(), 16)
+    middle = str(h % 100_000_000).zfill(8)
+    body = "888" + middle  # 11 digits
+    total = sum(int(d) * (3 if i % 2 == 0 else 1) for i, d in enumerate(body))
+    check = (10 - (total % 10)) % 10
+    return body + str(check)
+
+
+@router.post("/generate-upc")
+async def generate_upc_endpoint(request: Request):
+    """Generate (or retrieve) a deterministic internal UPC-A for a SKU."""
+    body = await request.json()
+    sku = (body.get("sku") or "").strip()
+    if not sku:
+        return JSONResponse({"error": "SKU requerido"}, status_code=400)
+    from app.services.token_store import get_sku_upc, save_sku_upc
+    existing = await get_sku_upc(sku)
+    if existing:
+        return {"upc": existing, "source": "existing", "sku": sku}
+    upc = _generate_internal_upc(sku)
+    await save_sku_upc(sku, upc, source="generated")
+    logger.info(f"[UPC] Generated internal UPC {upc} for SKU {sku}")
+    return {"upc": upc, "source": "generated", "sku": sku}
+
+
 # ── 1b. Research product specs ───────────────────────────────────────────────
 
 async def _research_product_specs(brand: str, model: str, upc: str, title: str, api_key: str) -> dict:
@@ -1085,7 +1118,7 @@ PRODUCT-SPECIFIC REQUIRED ATTRIBUTES — Fill ALL that apply to THIS product:
 • bag_type: "Bagless"/"Bagged". Vacuums only. null otherwise.
 • filter_type: "HEPA"/"Foam"/"Washable"/"Replaceable Filter". Vacuums/purifiers only. null otherwise.
 • specific_uses_for_product: List of use cases (e.g., ["Pet Hair", "Hard Floor", "Carpet", "Home Use"]). [] if N/A.
-• material_type: Main construction material (e.g., "Plastic", "Stainless Steel", "Aluminum"). null if N/A.
+• material_type: Main construction material. For Amazon MX use SPANISH values: "Plástico"/"Metal"/"Aluminio"/"Acero inoxidable"/"Madera"/"Vidrio"/"Caucho"/"Silicona". Never use English for MX. Required for appliances, home goods, pest control, lighting.
 • number_of_settings: Number of speed/power settings as integer (fans, mixers, etc.). null if N/A.
 • noise_level_db: Noise level in decibels as decimal. null if unknown.
 • item_form: Physical form of consumable product (e.g., "Liquid", "Powder", "Capsule"). null if N/A.
@@ -1228,7 +1261,7 @@ ATRIBUTOS REQUERIDOS POR CATEGORÍA — Llena TODOS los que apliquen al producto
 • bag_type: "Bagless"/"Bagged". Solo aspiradoras. null si no aplica.
 • filter_type: "HEPA"/"Foam"/"Washable"/"Replaceable Filter". Aspiradoras/purificadores. null si N/A.
 • specific_uses_for_product: Lista de usos (ej: ["Pet Hair", "Hard Floor", "Home Use"]). [] si N/A.
-• material_type: Material principal (ej: "Plastic", "Stainless Steel"). null si N/A.
+• material_type: Material principal en ESPAÑOL para Amazon MX: "Plástico"/"Metal"/"Aluminio"/"Acero inoxidable"/"Madera"/"Vidrio"/"Caucho"/"Silicona". Requerido para electrodomésticos, hogar, control de plagas, iluminación.
 • number_of_settings: Número de velocidades/niveles (ventiladores, batidoras). null si N/A.
 • noise_level_db: Nivel de ruido en decibeles. null si desconocido.
 • item_form: Forma del consumible ("Liquid", "Powder", "Capsule"). null si N/A.
@@ -1558,6 +1591,8 @@ async def create_listing(request: Request):
             "HAIR_DRYER": "hair-dryers", "ELECTRIC_SHAVER": "electric-shavers",
             "SECURITY_CAMERA": "security-cameras", "SMART_SPEAKER": "smart-speakers",
             "POWER_BANK": "portable-power-banks", "BACKPACK": "backpacks",
+            "PEST_CONTROL_DEVICE": "electronic-pest-control",
+            "ELECTRIC_LANTERN": "lanterns",
         }
         _itk = item_type_keyword or _ITK_DEFAULTS.get(product_type, "")
         if _itk:
@@ -1667,12 +1702,23 @@ async def create_listing(request: Request):
             attributes["surface_type"]      = _attr("Multi-Surface")  # sensible default
         if form_factor:           attributes["form_factor"]           = _attr(form_factor)
         # power_source_type — default "Corded Electric" for appliances if not provided
-        _pst = power_source_type or (_CORDED_TYPES and product_type in _CORDED_TYPES and "Corded Electric" or "")
+        _pst = power_source_type
+        if not _pst:
+            if product_type in _CORDED_TYPES:
+                _pst = "Corded Electric"
+            elif product_type in ("PEST_CONTROL_DEVICE", "ELECTRIC_LANTERN"):
+                _pst = "Energía solar"  # default for Amazon MX solar zappers/lanterns
         if _pst:                  attributes["power_source_type"]     = _attr(_pst)
         if bag_type:              attributes["bag_type"]              = _attr(bag_type)
         if filter_type_attr:      attributes["filter_type"]           = _attr(filter_type_attr)
         if specific_uses:         attributes["specific_uses_for_product"] = _attr_list(specific_uses)
-        if material_type:         attributes["material_type"]         = _attr(material_type)
+        # material_type — Amazon MX requires Spanish values for MX marketplace
+        _mat = material_type
+        if not _mat and product_type in ("PEST_CONTROL_DEVICE", "ELECTRIC_LANTERN"):
+            _mat = "Plástico"  # default from schema; most of these are plastic
+        if not _mat and power_source_type and "solar" in power_source_type.lower():
+            _mat = "Plástico"  # solar products are typically plastic
+        if _mat:              attributes["material_type"]         = _attr(_mat)
         if pattern_attr:          attributes["pattern"]               = _attr(pattern_attr)
         if finish_type_attr:      attributes["finish_type"]           = _attr(finish_type_attr)
         if compatible_devs:       attributes["compatible_devices"]    = _attr_list(compatible_devs)
