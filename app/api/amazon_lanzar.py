@@ -20,8 +20,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from app.config import DATABASE_PATH, ANTHROPIC_API_KEY
+from app.config import DATABASE_PATH
 from app.services.amazon_client import get_amazon_client
+from app.services import openrouter_client as _or_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/amazon/lanzar", tags=["amazon-lanzar"])
@@ -755,17 +756,10 @@ Return ONLY valid JSON (no markdown, no text):
   "color": <"Black" or null>
 }}"""
         try:
-            async with _hx.AsyncClient(timeout=20) as hc:
-                resp = await hc.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 600,
-                          "messages": [{"role": "user", "content": research_prompt}]},
-                )
-                text = (resp.json().get("content") or [{}])[0].get("text", "").strip()
-                m = _re.search(r'\{.*\}', text, _re.DOTALL)
-                if m:
-                    return json.loads(m.group())
+            text = await _or_client.generate(research_prompt, max_tokens=600, model=_or_client.get_premium_model())
+            m = _re.search(r'\{.*\}', text, _re.DOTALL)
+            if m:
+                return json.loads(m.group())
         except Exception:
             pass
         return {}
@@ -859,11 +853,7 @@ async def research_product(request: Request):
     upc   = (body.get("upc") or "").strip()
     title = (body.get("title") or "").strip()
 
-    _p1 = os.getenv("AI_KEY_P1", "")
-    _p2 = os.getenv("AI_KEY_P2", "")
-    api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
-
-    specs = await _research_product_specs(brand, model, upc, title, api_key)
+    specs = await _research_product_specs(brand, model, upc, title, "")
     return {"specs": specs, "brand": brand, "model": model}
 
 
@@ -901,15 +891,12 @@ async def generate_content(request: Request):
     seller_id = (body.get("seller_id") or "").strip()
     is_us     = currency == "USD"
 
-    # ── Pre-research: get accurate specs BEFORE calling Claude for content ──────
-    import asyncio as _aio, os as _os2, base64 as _b64
-    _p1r = _os2.getenv("AI_KEY_P1", "")
-    _p2r = _os2.getenv("AI_KEY_P2", "")
-    _api_key_r = (_b64.b64decode(_p1r + _p2r).decode() if (_p1r and _p2r) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
+    # ── Pre-research: get accurate specs BEFORE calling LLM for content ──────
+    import asyncio as _aio
     researched: dict = {}
     try:
         researched = await _aio.wait_for(
-            _research_product_specs(brand, model_num, upc, title, _api_key_r),
+            _research_product_specs(brand, model_num, upc, title, ""),
             timeout=15,
         )
     except Exception as _re:
@@ -1010,13 +997,6 @@ Elige el tipo más específico. NUNCA inventes ni modifiques estas cadenas."""
     extra_ctx = "\n".join(ctx_parts)
 
     try:
-        import os, base64 as _b64
-        _p1 = os.getenv("AI_KEY_P1", "")
-        _p2 = os.getenv("AI_KEY_P2", "")
-        api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY no configurada")
-
         if is_us:
             prompt = f"""You are an Amazon US listing optimization expert with deep knowledge of SEO, CRO, and Amazon US policies 2024.
 
@@ -1305,23 +1285,7 @@ ATRIBUTOS REQUERIDOS POR CATEGORÍA — Llena TODOS los que apliquen al producto
   "finish_type": null
 }}"""
 
-        import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=45) as _http:
-            _resp = await _http.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 2048,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            _resp.raise_for_status()
-            text = _resp.json()["content"][0]["text"].strip()
+        text = await _or_client.generate(prompt, max_tokens=2048, model=_or_client.get_premium_model())
 
         start = text.index("{")
         end   = text.rindex("}") + 1
@@ -2349,10 +2313,6 @@ async def photo_prompts(request: Request):
 
     product_desc = " ".join(filter(None, [brand, model, title])) or title
 
-    _p1 = os.getenv("AI_KEY_P1", "")
-    _p2 = os.getenv("AI_KEY_P2", "")
-    api_key = (_b64.b64decode(_p1 + _p2).decode() if (_p1 and _p2) else (ANTHROPIC_API_KEY or os.getenv("ANTHROPIC_API_KEY", "")))
-
     fallback = [
         f"Professional Amazon listing photo, {product_desc}, pure white background #FFFFFF, product fills 85% of frame, studio lighting, no text overlay",
         f"{product_desc}, 3/4 angle showing all sides, white background, professional product photography",
@@ -2362,7 +2322,7 @@ async def photo_prompts(request: Request):
         f"{product_desc} size scale reference, shown in real home environment, clean modern interior, product in foreground",
     ]
 
-    if not api_key:
+    if not _or_client.is_available():
         return JSONResponse({"prompts": fallback})
 
     try:
@@ -2381,22 +2341,7 @@ async def photo_prompts(request: Request):
             "Rules: photorealistic, professional photography, no watermarks, no text, no logos.\n"
             "Output ONLY a valid JSON array of exactly 6 strings, nothing else."
         )
-        async with _httpx.AsyncClient(timeout=20) as hc:
-            resp = await hc.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-haiku-4-5-20251001",
-                    "max_tokens": 800,
-                    "messages": [{"role": "user", "content": prompt_text}],
-                },
-            )
-        data = resp.json()
-        raw = (data.get("content") or [{}])[0].get("text", "")
+        raw = await _or_client.generate(prompt_text, max_tokens=800, model=_or_client.get_premium_model())
         # Extract JSON array
         import re as _re
         m = _re.search(r'\[.*\]', raw, _re.DOTALL)

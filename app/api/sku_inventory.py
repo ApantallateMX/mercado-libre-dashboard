@@ -908,9 +908,9 @@ async def update_meli_stock(item_id: str, body: dict):
 
 @router.get("/ai-status")
 async def ai_status():
-    """Check if the Claude AI API is available."""
-    from app.services import claude_client
-    return {"available": claude_client.is_available()}
+    """Check if the AI API is available."""
+    from app.services import openrouter_client as _or_client
+    return {"available": _or_client.is_available()}
 
 
 @router.post("/ai-improve")
@@ -919,10 +919,10 @@ async def ai_improve(body: dict):
     AI-powered improvement for title, description, or attributes.
     Supports streaming for title and description.
     """
-    from app.services import claude_client
+    from app.services import openrouter_client as _or_client
 
-    if not claude_client.is_available():
-        return JSONResponse({"error": "AI not available - ANTHROPIC_API_KEY not configured"}, status_code=503)
+    if not _or_client.is_available():
+        return JSONResponse({"error": "AI not available - OPENROUTER_API_KEY not configured"}, status_code=503)
 
     field = body.get("field", "")
     current_value = body.get("current_value", "")
@@ -960,7 +960,7 @@ REGLAS CRITICAS (MeLi 2026):
 Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
 
         try:
-            raw = await claude_client.generate(prompt, system=system_prompt, max_tokens=300)
+            raw = await _or_client.generate(prompt, system=system_prompt, max_tokens=300, model=_or_client.get_premium_model())
             titles = [t.strip() for t in raw.strip().split("\n") if t.strip()]
             return {"titles": titles}
         except Exception as e:
@@ -989,13 +989,12 @@ Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
 
         async def desc_stream():
             try:
-                gen = (
-                    claude_client.generate_stream_with_images(prompt, image_urls, system_prompt, max_tokens=1500)
-                    if image_urls else
-                    claude_client.generate_stream(prompt, system_prompt, max_tokens=1500)
-                )
-                async for chunk in gen:
-                    yield f"data: {chunk}\n\n"
+                if image_urls:
+                    text = await _or_client.generate_with_images(prompt, image_urls, system_prompt, max_tokens=1500)
+                    yield f"data: {text}\n\n"
+                else:
+                    async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=1500, model=_or_client.get_premium_model()):
+                        yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 yield f"data: [ERROR] {str(e)}\n\n"
@@ -1026,7 +1025,7 @@ Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
         )
 
         try:
-            result = await claude_client.generate(prompt, system_prompt, max_tokens=2500)
+            result = await _or_client.generate(prompt, system_prompt, max_tokens=2500, model=_or_client.get_premium_model())
             return {"result": result}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -1043,7 +1042,7 @@ Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
         )
 
         try:
-            result = await claude_client.generate(prompt, system_prompt, max_tokens=800)
+            result = await _or_client.generate(prompt, system_prompt, max_tokens=800, model=_or_client.get_premium_model())
             return {"result": result}
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
@@ -1070,7 +1069,7 @@ Responde SOLO los 3 titulos, uno por linea, sin numeros ni viñetas."""
 
         async def script_stream():
             try:
-                async for chunk in claude_client.generate_stream(prompt, system_prompt, max_tokens=600):
+                async for chunk in _or_client.generate_stream(prompt, system_prompt, max_tokens=600, model=_or_client.get_premium_model()):
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:

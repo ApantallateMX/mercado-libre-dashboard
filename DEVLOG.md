@@ -7,6 +7,51 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-08 — FEAT: Migración completa de Anthropic API a OpenRouter
+
+### Decisión
+Eliminar toda dependencia de `platform.claude.com` (Anthropic API) del dashboard.
+Cuenta individual con balance negativo y el Team plan de MI Technologies es solo para chat, no API.
+100% de las llamadas de IA ahora corren por OpenRouter — sin gasto en Anthropic.
+
+### Cambios
+
+**`app/services/openrouter_client.py`**
+- Nueva función `generate_with_images(prompt, image_urls, system, max_tokens)` — usa Gemini 2.5 Flash
+  (`google/gemini-2.5-flash-preview-05-20`) para tareas con imágenes (vision).
+  Fallback a `generate()` con premium model si la llamada vision falla.
+- Nueva constante `_VISION_MODEL` para el modelo de visión.
+
+**`app/api/amazon_products.py`**
+- Bloque SSE `generate()` interno reemplazado: httpx Anthropic SSE → `_or_client.generate_stream()`
+- Import `ANTHROPIC_API_KEY` y check de api_key eliminados.
+
+**`app/api/amazon_lanzar.py`**
+- 6 bloques de llamadas httpx Anthropic reemplazados con `_or_client.generate()` + `get_premium_model()`.
+
+**`app/api/lanzar.py`**
+- Import `claude_client` → `openrouter_client as _or_client`
+- 6 llamadas `claude_client.*` reemplazadas: `generate`, `generate_with_images`, `generate_stream`
+- `generate_with_images` ahora usa `_or_client.generate_with_images()` (Gemini 2.5 Flash)
+
+**`app/api/sku_inventory.py`**
+- Import `claude_client` → `_or_client` (lazy import en endpoint)
+- 6 llamadas `claude_client.*` reemplazadas: `generate`, `generate_stream`, `generate_stream_with_images`
+- `generate_stream_with_images`: reemplazado por `generate_with_images()` (completo, yield único)
+
+**`app/api/health_ai.py`**
+- Import `claude_client` eliminado — solo `openrouter_client`
+- `_ai_available()`: ya no consulta claude_client
+- `_sse_stream()`: eliminado fallback a claude_client; openrouter ya tiene cascade + circuit breaker interno
+- `debug-key`: endpoint refactorizado para testear OpenRouter key (antes testeaba Anthropic)
+- Claim analysis: eliminado fallback a claude_client
+
+### Modelo premium
+`deepseek/deepseek-chat` via OpenRouter para todas las tareas de alto valor (Wizard, listings, claims).
+Costo ~15x menor que Sonnet 4.6 ($0.20/$0.80 vs $3/$15 por 1M tokens).
+
+---
+
 ## 2026-06-07 — FEAT: Circuit breaker + descubrimiento dinámico de modelos OpenRouter
 
 ### Problema

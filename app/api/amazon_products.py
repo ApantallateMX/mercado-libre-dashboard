@@ -38,6 +38,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.services.amazon_client import get_amazon_client
+from app.services import openrouter_client as _or_client
 from app.api.metrics import _get_cached_order_metrics
 from app.services import user_store as _user_store
 
@@ -4104,14 +4105,8 @@ async def amazon_ai_advisor(
     Consulta al AI Advisor usando Claude con streaming SSE.
     Body: {"question": "...", "mode": "general|restock|listings|pricing|strategy"}
     """
-    import os
-    import base64
-
-    p1 = os.getenv("AI_KEY_P1", "")
-    p2 = os.getenv("AI_KEY_P2", "")
-    api_key = (base64.b64decode(p1 + p2).decode() if (p1 and p2) else os.getenv("ANTHROPIC_API_KEY", ""))
-    if not api_key:
-        return JSONResponse({"error": "API key no configurada"}, status_code=500)
+    if not _or_client.is_available():
+        return JSONResponse({"error": "OpenRouter no configurado"}, status_code=500)
 
     client = await get_amazon_client(seller_id=seller_id)
     context_lines = []
@@ -4156,36 +4151,11 @@ async def amazon_ai_advisor(
 
     async def generate():
         try:
-            async with httpx.AsyncClient(timeout=60) as http:
-                async with http.stream(
-                    "POST",
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": "claude-haiku-4-5-20251001",
-                        "max_tokens": 1024,
-                        "system": system_prompt,
-                        "messages": [{"role": "user", "content": user_message}],
-                        "stream": True,
-                    },
-                ) as resp:
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data: "):
-                            chunk = line[6:]
-                            if chunk == "[DONE]":
-                                break
-                            try:
-                                obj = json.loads(chunk)
-                                if obj.get("type") == "content_block_delta":
-                                    text = obj.get("delta", {}).get("text", "")
-                                    if text:
-                                        yield f"data: {json.dumps({'text': text})}\n\n"
-                            except json.JSONDecodeError:
-                                pass
+            async for chunk in _or_client.generate_stream(
+                user_message, system=system_prompt, max_tokens=1024,
+                model=_or_client.get_premium_model(),
+            ):
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)[:200]})}\n\n"

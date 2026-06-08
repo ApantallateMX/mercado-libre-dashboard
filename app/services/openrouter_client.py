@@ -28,6 +28,10 @@ _OR_BASE  = "https://openrouter.ai/api/v1"
 _OR_KEY   = os.getenv("OPENROUTER_API_KEY", "")
 _OR_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 
+# Modelo premium para tareas de alto valor (Wizard de Amazon/ML, generación de listings)
+# DeepSeek Chat: calidad comparable a Sonnet 4.6, costo ~15x menor ($0.20/$0.80 vs $3/$15)
+_PREMIUM_MODEL = os.getenv("OPENROUTER_PREMIUM_MODEL", "deepseek/deepseek-chat")
+
 # Cascade de modelos gratuitos — fallback estático si _get_free_models() falla.
 # La lista dinámica (OpenRouter /api/v1/models) tiene prioridad sobre esta.
 _FREE_MODELS = [
@@ -105,6 +109,11 @@ def is_available() -> bool:
     return bool(_OR_KEY and _OR_KEY.startswith("sk-or-"))
 
 
+def get_premium_model() -> str:
+    """Return the premium model ID for high-value tasks (Wizard, listing generation)."""
+    return _PREMIUM_MODEL
+
+
 def _build_messages(prompt: str, system: str) -> list[dict]:
     msgs = []
     if system:
@@ -154,6 +163,50 @@ async def _call_anthropic_haiku_fallback(prompt: str, system: str, max_tokens: i
             raise RuntimeError(f"Anthropic {resp.status_code}: {body_text}")
         data = resp.json()
         return data["content"][0]["text"]
+
+
+_VISION_MODEL = "google/gemini-2.5-flash-preview-05-20"
+
+
+async def generate_with_images(
+    prompt: str,
+    image_urls: list[str],
+    system: str = "",
+    max_tokens: int = 512,
+) -> str:
+    """
+    Genera respuesta con análisis visual de imágenes.
+    Usa Gemini 2.5 Flash (vision) vía OpenRouter.
+    """
+    content: list[dict] = []
+    for url in image_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+    content.append({"type": "text", "text": prompt})
+
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": content})
+
+    payload = {
+        "model": _VISION_MODEL,
+        "messages": messages,
+        "max_tokens": max_tokens,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{_OR_BASE}/chat/completions",
+                json=payload,
+                headers=_HEADERS,
+            )
+            if resp.is_success:
+                return resp.json()["choices"][0]["message"]["content"]
+            logger.error(f"[OpenRouter vision] {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Vision model {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"[OpenRouter vision] Failed, falling back to text-only generate: {e}")
+        return await generate(prompt, system=system, max_tokens=max_tokens, model=get_premium_model())
 
 
 async def generate(

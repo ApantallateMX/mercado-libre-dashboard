@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
 
-from app.services import claude_client, openrouter_client
+from app.services import openrouter_client
 from app.services.health_ai import (
     build_question_answer_prompt,
     build_claim_response_prompt,
@@ -203,59 +203,39 @@ async def _web_search_product_specs(
 
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
 
-_UNAVAILABLE_MSG = "API de IA no disponible. Configura OPENROUTER_API_KEY o ANTHROPIC_API_KEY."
+_UNAVAILABLE_MSG = "API de IA no disponible. Configura OPENROUTER_API_KEY."
 
 
 def _ai_available() -> bool:
-    """True si OpenRouter O Claude están disponibles."""
-    return openrouter_client.is_available() or claude_client.is_available()
+    return openrouter_client.is_available()
 
 
 @router.get("/debug-key")
 async def debug_key():
-    """Diagnose Anthropic API key configuration (masked for security)."""
-    from app.config import ANTHROPIC_API_KEY
-    key = ANTHROPIC_API_KEY or ""
-    raw_env = os.getenv("ANTHROPIC_API_KEY", "")
-    p1 = os.getenv("AI_KEY_P1", "")
-    p2 = os.getenv("AI_KEY_P2", "")
-    masked = (key[:8] + "..." + key[-4:]) if len(key) > 12 else ("(vacía)" if not key else "(muy corta: " + str(len(key)) + " chars)")
-    source = "ANTHROPIC_API_KEY env" if raw_env else ("AI_KEY_P1+P2 reconstruida" if (p1 and p2) else "no configurada")
+    """Diagnose OpenRouter API key configuration."""
+    or_key = os.getenv("OPENROUTER_API_KEY", "")
+    masked = (or_key[:8] + "..." + or_key[-4:]) if len(or_key) > 12 else ("(vacía)" if not or_key else f"(corta: {len(or_key)})")
 
-    # Key from claude_client._get_key() — what generate_stream actually uses
-    client_key = claude_client._get_key()
-    client_masked = (client_key[:8] + "..." + client_key[-4:]) if len(client_key) > 12 else ("(vacía)" if not client_key else f"(corta: {len(client_key)})")
-    keys_match = (key == client_key)
-
-    # Quick test call using config key
     test_result = None
-    if key and len(key) > 10:
-        import httpx
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
-                r = await c.post(
-                    "https://api.anthropic.com/v1/messages",
-                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]},
-                    headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                )
-                if r.status_code == 200:
-                    test_result = "✅ Key válida — API responde OK"
-                else:
-                    try:
-                        err = r.json().get("error", {}).get("message", r.text[:200])
-                    except Exception:
-                        err = r.text[:200]
-                    test_result = f"❌ Error {r.status_code}: {err}"
-        except Exception as e:
-            test_result = f"❌ Error de conexión: {e}"
-    else:
-        test_result = "❌ Key no configurada o muy corta"
-
-    # Test generate_stream directly (what the AI buttons use)
     stream_test = None
     try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(
+                "https://openrouter.ai/api/v1/auth/key",
+                headers={"Authorization": f"Bearer {or_key}"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                credits = data.get("data", {}).get("limit_remaining", "?")
+                test_result = f"✅ Key válida — créditos restantes: {credits}"
+            else:
+                test_result = f"❌ Error {r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        test_result = f"❌ Error de conexión: {e}"
+
+    try:
         chunks = []
-        async for chunk in claude_client.generate_stream("di hola", max_tokens=10):
+        async for chunk in openrouter_client.generate_stream("di hola", max_tokens=10):
             chunks.append(chunk)
             if len(chunks) >= 5:
                 break
@@ -264,37 +244,20 @@ async def debug_key():
         stream_test = f"❌ Stream error: {e}"
 
     return {
-        "config_key_masked": masked,
-        "client_key_masked": client_masked,
-        "keys_match": keys_match,
-        "source": source,
-        "length": len(key),
-        "available": claude_client.is_available(),
+        "openrouter_key_masked": masked,
+        "available": openrouter_client.is_available(),
         "test": test_result,
         "stream_test": stream_test,
     }
 
 
 async def _sse_stream(system: str, prompt: str, max_tokens: int):
-    """Yield SSE events — OpenRouter primario, Claude fallback."""
+    """Yield SSE events via OpenRouter (cascade + circuit breaker built-in)."""
     try:
-        if openrouter_client.is_available():
-            async for chunk in openrouter_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
-                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-        else:
-            async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
-                yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+        async for chunk in openrouter_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
+            yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        # Si OpenRouter falla, intentar Claude como fallback
-        if openrouter_client.is_available() and claude_client.is_available():
-            try:
-                async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=max_tokens):
-                    yield f"data: {json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-            except Exception:
-                pass
         yield f"data: [ERROR] {e}\n\n"
 
 
@@ -417,19 +380,11 @@ async def claim_analysis(request: Request):
         bm_product=bm_product,
     )
     try:
-        if openrouter_client.is_available():
-            raw = await openrouter_client.generate(prompt, system=system, max_tokens=max_tokens)
-        else:
-            raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)
+        raw = await openrouter_client.generate(prompt, system=system, max_tokens=max_tokens)
         analysis = parse_claim_analysis(raw)
         return JSONResponse(analysis)
     except Exception as e:
-        # Fallback
-        try:
-            raw = await claude_client.generate(prompt, system=system, max_tokens=max_tokens)
-            return JSONResponse(parse_claim_analysis(raw))
-        except Exception:
-            return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/suggest-message")

@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.config import DATABASE_PATH
 from app.services import token_store
 from app.services.meli_client import get_meli_client
-from app.services import claude_client
+from app.services import openrouter_client as _or_client
 
 logger = logging.getLogger(__name__)
 
@@ -1913,7 +1913,7 @@ async def generate_product_prompts_endpoint(request: Request):
     )
 
     try:
-        raw = await claude_client.generate(prompt=user, system=system, max_tokens=3000)
+        raw = await _or_client.generate(prompt=user, system=system, max_tokens=3000, model=_or_client.get_premium_model())
         raw = raw.strip()
         # Strip markdown code fences if present
         if "```" in raw:
@@ -2186,12 +2186,12 @@ async def _run_video_pipeline(job_id: str, body: dict):
                     "Las escenas deben reflejar EXACTAMENTE este producto: su apariencia, color, tamaño y uso real."
                 )
                 logger.info(f"Claude Vision: analizando {len(ai_image_urls)} imágenes del producto...")
-                raw = (await claude_client.generate_with_images(
+                raw = (await _or_client.generate_with_images(
                     prompt=vision_prompt, image_urls=ai_image_urls[:3],
                     system=claude_system, max_tokens=800
                 )).strip()
             else:
-                raw = (await claude_client.generate(prompt=claude_user, system=claude_system, max_tokens=800)).strip()
+                raw = (await _or_client.generate(prompt=claude_user, system=claude_system, max_tokens=800, model=_or_client.get_premium_model())).strip()
             if "```" in raw:
                 raw = raw[raw.index("```") + 3:]
                 if raw.startswith("json"): raw = raw[4:]
@@ -2917,7 +2917,7 @@ EJEMPLO MALO: "Samsung QN65Q60CDFXZA 65 QLED 4K Smart TV"
 
     async def stream():
         try:
-            async for chunk in claude_client.generate_stream(prompt, system=system, max_tokens=1200):
+            async for chunk in _or_client.generate_stream(prompt, system=system, max_tokens=1200, model=_or_client.get_premium_model()):
                 yield chunk
         except Exception as e:
             yield f"\n\n[Error al generar: {e}]"
@@ -2990,7 +2990,7 @@ Retorna SOLO este JSON (sin markdown, sin texto extra):
 }}"""
 
     try:
-        raw = await claude_client.generate(prompt, system=system, max_tokens=1400)
+        raw = await _or_client.generate(prompt, system=system, max_tokens=1400, model=_or_client.get_premium_model())
         raw = _re.sub(r'^```[a-z]*\n?', '', raw.strip(), flags=_re.MULTILINE)
         raw = _re.sub(r'\n?```$', '', raw.strip(), flags=_re.MULTILINE)
         data = _json.loads(raw.strip())
@@ -3081,7 +3081,7 @@ async def estimate_dimensions_endpoint(request: Request):
             "Responde SOLO con JSON válido sin markdown:\n"
             '{"height_cm": X, "width_cm": X, "length_cm": X, "weight_kg": X, "note": "breve explicación"}'
         )
-        raw = await claude_client.generate(prompt, max_tokens=150)
+        raw = await _or_client.generate(prompt, max_tokens=150, model=_or_client.get_premium_model())
         import json as _json2, re as _re2
         raw = _re2.sub(r'```[a-z]*\n?', '', raw.strip()).strip('`').strip()
         data = _json2.loads(raw)
