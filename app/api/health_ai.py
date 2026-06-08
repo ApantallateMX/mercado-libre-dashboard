@@ -144,40 +144,61 @@ async def _fetch_ml_item_details(item_id: str, ml_token: str) -> dict:
         return {}
 
 
-async def _research_product_specs(brand: str, model: str, question: str) -> str:
+async def _web_search_product_specs(
+    brand: str, model: str, category: str = "", product_title: str = ""
+) -> str:
     """
-    Ask the LLM to recall specs for a specific product brand+model.
-    Returns a specs summary string or '' if unavailable.
-    Used when web scraping is not viable.
+    Fetch product specs from the web via Jina Reader (r.jina.ai).
+    Sources:
+      1. rtings.com — specs técnicas completas para TVs/monitores
+      2. Amazon MX search — funciona para cualquier tipo de producto
+    Returns raw text (max 5000 chars) or '' on failure.
     """
-    if not brand or not model:
-        return ""
-    from app.services import openrouter_client as _or
-    if not _or.is_available():
-        return ""
-    research_prompt = (
-        f"Eres un experto en especificaciones técnicas de productos electrónicos y del hogar.\n"
-        f"Proporciona las especificaciones técnicas REALES y CONCRETAS del siguiente producto:\n"
-        f"Marca: {brand}\nModelo: {model}\n\n"
-        f"La pregunta del cliente es: \"{question}\"\n\n"
-        f"Responde SOLO con las especificaciones técnicas relevantes en formato de lista:\n"
-        f"- Dato específico: valor exacto\n"
-        f"- Incluye: specs relacionadas con la pregunta + specs principales del producto\n"
-        f"- Si no tienes datos exactos del modelo, indica cuáles modelos similares conoces y sus specs\n"
-        f"- NO inventes — solo incluye datos que conozcas con seguridad\n"
-        f"- Sé conciso (máximo 200 palabras)"
-    )
-    try:
-        result = await asyncio.wait_for(
-            _or.generate(research_prompt, max_tokens=300),
-            timeout=8.0,
-        )
-        if result and len(result) > 20:
-            logger.info(f"[LLM Research] {brand} {model}: got {len(result)} chars")
-            return result
-    except Exception as e:
-        logger.warning(f"[LLM Research] {brand} {model}: {e}")
-    return ""
+    JINA_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/plain",
+        "X-Return-Format": "text",
+    }
+    results = []
+
+    async with httpx.AsyncClient(timeout=12.0, headers=JINA_HEADERS) as client:
+        tasks = []
+
+        # Source 1: rtings.com — solo para TVs/pantallas
+        is_tv = any(kw in (category + " " + product_title).lower()
+                    for kw in ["tv", "television", "pantalla", "qled", "oled",
+                               "uhd", "smart tv", "monitor", "display"])
+        if is_tv and brand and model:
+            model_slug = re.sub(r"^\d+", "", model).lower()  # 55Q550G → q550g
+            rtings_url = (
+                f"https://r.jina.ai/https://www.rtings.com/tv/reviews"
+                f"/{brand.lower()}/{model_slug}"
+            )
+            tasks.append(("rtings", client.get(rtings_url)))
+
+        # Source 2: Amazon MX search — funciona para cualquier producto
+        search_q = f"{brand} {model}".strip() if (brand or model) else product_title[:80]
+        if search_q:
+            amz_url = (
+                f"https://r.jina.ai/https://www.amazon.com.mx/s"
+                f"?k={urllib.parse.quote(search_q)}"
+            )
+            tasks.append(("amazon_mx", client.get(amz_url)))
+
+        # Fire all requests concurrently
+        for name, coro in tasks:
+            try:
+                resp = await asyncio.wait_for(coro, timeout=10.0)
+                if resp.is_success and len(resp.text) > 300:
+                    results.append(f"[{name}]\n{resp.text[:2500]}")
+                    logger.info(f"[WebSearch] {name}: OK {len(resp.text)} chars for {brand} {model}")
+                else:
+                    logger.warning(f"[WebSearch] {name}: short/empty ({len(resp.text)} chars)")
+            except Exception as e:
+                logger.warning(f"[WebSearch] {name}: {e}")
+
+    combined = "\n\n".join(results)
+    return combined[:5000] if combined else ""
 
 
 router = APIRouter(prefix="/api/health-ai", tags=["health-ai"])
@@ -314,10 +335,13 @@ async def suggest_answer(request: Request):
 
     question_text = body.get("question_text", "")
 
-    # Fetch ML full attrs+description and LLM product research in parallel
+    category = (bm_product or {}).get("category", "")
+    product_title = body.get("product_title", "")
+
+    # Fetch ML full attrs+description AND web search in parallel
     ml_details, web_specs = await asyncio.gather(
         _fetch_ml_item_details(item_id, ml_token),
-        _research_product_specs(brand, model, question_text),
+        _web_search_product_specs(brand, model, category, product_title),
     )
 
     # Merge ML attributes: prefer full set from API over what came from the frontend

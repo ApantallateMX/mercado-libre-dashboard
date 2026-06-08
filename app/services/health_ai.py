@@ -140,9 +140,9 @@ def build_question_answer_prompt(question_text, product_title, product_price, pr
     if ml_description and ml_description.strip():
         user += f"\nDescripcion completa del listing ML:\n{ml_description[:1500]}\n"
 
-    # LLM product research — specs recalled from training data
+    # Web research — specs from rtings.com / Amazon MX / other sources
     if web_specs and web_specs.strip():
-        user += f"\nInvestigacion de especificaciones del modelo (fuente: conocimiento de entrenamiento):\n{web_specs}\n"
+        user += f"\nInvestigacion web de especificaciones del producto:\n{web_specs[:3000]}\n"
 
     user += f"- Tiempo desde la pregunta: {elapsed}\n"
     if elapsed:
