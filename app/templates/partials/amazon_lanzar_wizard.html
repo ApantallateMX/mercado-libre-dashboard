@@ -560,8 +560,26 @@
                         class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
                   🛒 Walmart
                 </button>
+                <button onclick="window._amzWizOpenSearch('wayfair')"
+                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
+                  🛖 Wayfair
+                </button>
+                <button onclick="window._amzWizOpenSearch('homedepot')"
+                        class="text-[10px] bg-white border border-orange-300 text-orange-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-50 transition">
+                  🏠 Home Depot
+                </button>
               </div>
-              <p class="text-[9px] text-gray-400 mb-2">Los botones de Google/Bing/Best Buy/Walmart abren una búsqueda en pestaña nueva — copia la URL de la imagen que encuentres y pégala abajo.</p>
+              <p class="text-[9px] text-gray-400 mb-2">Los botones abren búsqueda en pestaña nueva — copia la URL de la imagen y pégala abajo. Auto-buscar usa el título completo del producto.</p>
+              <!-- Home Depot ID scraper -->
+              <div class="flex items-center gap-2 mb-2">
+                <input id="amz-wiz-hd-id" type="text" placeholder="ID Home Depot (ej: 1006324380)"
+                       class="flex-1 text-xs border border-orange-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono"
+                       oninput="this.value=this.value.replace(/\D/g,'')">
+                <button id="amz-wiz-hd-btn" onclick="window._amzWizScrapeHomeDepot()"
+                        class="shrink-0 text-[10px] bg-orange-500 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-600 transition disabled:opacity-50">
+                  🏠 Extraer fotos HD
+                </button>
+              </div>
               <!-- Real images grid -->
               <div id="amz-wiz-real-img-grid" class="hidden">
                 <p class="text-[10px] text-gray-500 mb-1.5 font-semibold">Selecciona las imágenes a usar (clic para agregar URL):</p>
@@ -1068,7 +1086,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var _hfBtn = document.getElementById('amz-wiz-hf-btn'); if (_hfBtn) { _hfBtn.disabled = false; _hfBtn.textContent = '🌟 Generar con Higgsfield IA'; }
   var _riGrid = document.getElementById('amz-wiz-real-img-grid'); if (_riGrid) _riGrid.classList.add('hidden');
   var _riStatus = document.getElementById('amz-wiz-real-img-status'); if (_riStatus) _riStatus.classList.add('hidden');
-  var _sBtn = document.getElementById('amz-wiz-search-img-btn'); if (_sBtn) { _sBtn.disabled = false; _sBtn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
+  var _sBtn = document.getElementById('amz-wiz-search-img-btn'); if (_sBtn) { _sBtn.disabled = false; _sBtn.textContent = '🔍 Auto-buscar imágenes'; }
   // Atributos: pre-llenar marca/modelo desde BM
   var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
   var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
@@ -1163,6 +1181,14 @@ window._amzWizShowTab = function(tab) {
   document.getElementById('amz-wiz-tab-photos').className =
     'flex-1 py-3 text-xs font-semibold transition ' +
     (!isContent ? 'text-orange-600 border-b-2 border-orange-500' : 'text-gray-400 border-b-2 border-transparent hover:text-gray-600');
+  // Auto-populate BM image into first empty URL slot when entering photos tab
+  if (!isContent && _wiz.image_url) {
+    var inputs = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
+    if (inputs.length && !inputs[0].value.trim()) {
+      inputs[0].value = _wiz.image_url;
+      inputs[0].dispatchEvent(new Event('input'));
+    }
+  }
 };
 
 // ─── Navegación ──────────────────────────────────────────────────────────────
@@ -1799,11 +1825,14 @@ window._amzWizOpenSearch = function(engine) {
   var model = (document.getElementById('amz-wiz-model-num') || {}).value || (_wiz.model || '');
   var q = [brand, model].filter(Boolean).join(' ');
   if (!q) { alert('Completa Marca y Modelo primero.'); return; }
+  var titleQ = (_wiz.title || q).substring(0, 100);
   var urls = {
-    google:  'https://www.google.com/search?q=' + encodeURIComponent(q + ' product image') + '&tbm=isch&tbs=isz:l',
-    bing:    'https://www.bing.com/images/search?q=' + encodeURIComponent(q + ' product') + '&qft=+filterui:imagesize-large',
+    google:  'https://www.google.com/search?q=' + encodeURIComponent(titleQ + ' product image') + '&tbm=isch&tbs=isz:l',
+    bing:    'https://www.bing.com/images/search?q=' + encodeURIComponent(titleQ) + '&qft=+filterui:imagesize-large',
     bestbuy: 'https://www.bestbuy.com/site/searchpage.jsp?st=' + encodeURIComponent(q),
     walmart: 'https://www.walmart.com/search?q=' + encodeURIComponent(q),
+    wayfair: 'https://www.wayfair.com/keyword.php?keyword=' + encodeURIComponent(q),
+    homedepot: 'https://www.homedepot.com/s/' + encodeURIComponent(q),
   };
   window.open(urls[engine] || urls.google, '_blank');
 };
@@ -1823,12 +1852,17 @@ window._amzWizSearchImages = function() {
 
   var brand = (document.getElementById('amz-wiz-brand') || {}).value || (_wiz.brand || '');
   var model = (document.getElementById('amz-wiz-model-num') || {}).value || (_wiz.model || '');
-  var params = new URLSearchParams({ brand: brand, model: model, q: [brand, model].filter(Boolean).join(' ') });
+  var title = _wiz.title || '';
+  var params = new URLSearchParams({
+    brand: brand, model: model,
+    q: [brand, model].filter(Boolean).join(' '),
+    title: title,
+  });
 
   fetch('/api/amazon/lanzar/search-product-images?' + params)
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-buscar imágenes'; }
       var imgs = d.images || [];
       if (!imgs.length) {
         if (status) status.textContent = 'Sin resultados. Prueba buscar manualmente en Google Images: ' + [brand, model].join(' ');
@@ -1874,7 +1908,7 @@ window._amzWizSearchImages = function() {
       });
     })
     .catch(function(e) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔍 Buscar imágenes reales del fabricante'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-buscar imágenes'; }
       if (status) status.textContent = 'Error al buscar. Intenta de nuevo.';
     });
 };
@@ -2039,6 +2073,41 @@ window._amzWizScrapeUrl = async function() {
 
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = '🔗 Extraer'; }
+    if (status) { status.textContent = '⚠ Error: ' + e.message; status.classList.remove('hidden'); }
+  }
+};
+
+// ─── Home Depot image scraper ─────────────────────────────────────────────────
+window._amzWizScrapeHomeDepot = async function() {
+  var btn    = document.getElementById('amz-wiz-hd-btn');
+  var idEl   = document.getElementById('amz-wiz-hd-id');
+  var status = document.getElementById('amz-wiz-scrape-status');
+  var wrap   = document.getElementById('amz-wiz-scrape-grid');
+  var grid   = document.getElementById('amz-wiz-scrape-results');
+
+  var hdId = idEl ? idEl.value.trim() : '';
+  if (!hdId) {
+    if (status) { status.textContent = 'Ingresa el ID del producto Home Depot.'; status.classList.remove('hidden'); }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Extrayendo…'; }
+  if (status) { status.textContent = 'Extrayendo imágenes de Home Depot…'; status.classList.remove('hidden'); }
+  if (wrap) wrap.classList.add('hidden');
+  if (grid) grid.innerHTML = '';
+
+  try {
+    var resp = await fetch('/api/amazon/lanzar/scrape-homedepot?product_id=' + encodeURIComponent(hdId));
+    var d = await resp.json();
+    if (btn) { btn.disabled = false; btn.textContent = '🏠 Extraer fotos HD'; }
+    if (d.images && d.images.length) {
+      _amzWizRenderScrapeImages(d.images, status, wrap, grid);
+    } else {
+      var errMsg = d.error || 'No se encontraron imágenes. Verifica el ID.';
+      if (status) { status.textContent = '⚠ ' + errMsg; status.classList.remove('hidden'); }
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🏠 Extraer fotos HD'; }
     if (status) { status.textContent = '⚠ Error: ' + e.message; status.classList.remove('hidden'); }
   }
 };
