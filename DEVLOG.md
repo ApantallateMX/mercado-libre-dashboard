@@ -7,6 +7,30 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-09 — FEAT: Búsqueda de imágenes multi-fuente (DDG + Bing en paralelo)
+
+### Problema
+Búsqueda anterior usaba solo DuckDuckGo — fuente única, resultados mixtos.
+Se habían agregado 6 botones manuales (Google, Bing, BestBuy, Walmart, Wayfair, HD) como workaround → UX compleja, trabajo doble.
+
+### Solución
+
+**`app/api/amazon_lanzar.py`** — `search_product_images` reescrito:
+- `asyncio.gather` lanza DDG + Bing en paralelo (~3-4s total, antes 2-3s solo DDG)
+- Pooling: misma URL en ambas fuentes → +3 score (confianza cruzada)
+- CDNs de retailers en top del ranking: `thdstatic.com`, `bbystatic.com` > homedepot/bestbuy > genéricos
+- Response incluye `sources[]` y `total_candidates` para transparencia
+
+**`app/templates/partials/amazon_lanzar_wizard.html`**:
+- 6 botones de búsqueda manual → 1 solo botón "🔍 Buscar imágenes"
+- Badge de fuentes: "Fuentes: DuckDuckGo + Bing · 38 candidatos → 9 mejores"
+- Sección HD ID colapsada en `<details>` como opción avanzada
+
+### Lección
+Proponer la solución inteligente desde el inicio — no construir pasos intermedios que después se deshacen.
+
+---
+
 ## 2026-06-09 — FEAT: Wizard fotos — Wayfair/HD buttons, HD ID scraper, BM auto-populate
 
 ### Cambios (`app/templates/partials/amazon_lanzar_wizard.html`)
