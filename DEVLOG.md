@@ -7,6 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-09 — FEAT: PEST_CONTROL_DEVICE fix + sistema auto-fix de errores Amazon
+
+### Contexto
+SNHG000004 (Skeeter Hawk SKE-ZAP-1008) fallaba con 5 errores al lanzar en Amazon MX.
+Investigación via SP-API Product Type Definitions API reveló los atributos exactos.
+
+### 5 errores y sus fixes
+
+| Error Seller Central MX | Atributo SP-API | Valor |
+|---|---|---|
+| Se requiere 'Requiere montaje' | `is_assembly_required` | `false` |
+| Se requiere 'Núm. certificación pesticida' | `regulatory_compliance_certification` | `{regulation_type: cofepris_registration_num, value: N/A}` |
+| Se requiere '¿Es eléctrico?' | `power_source_type` | `"Alimentado por energía solar"` + `language_tag: es_MX` |
+| Se requiere 'Número de Piezas' | `number_of_pieces` | `1` |
+| Se requiere 'Certificado conformidad producto' | mismo campo que error 2 | misma solución |
+
+**Nota clave:** Errores 2 y 5 son el MISMO atributo (`regulatory_compliance_certification`). Amazon los reporta con dos nombres de display distintos. `power_source_type` requiere `language_tag: "es_MX"` en Amazon MX — sin este tag el campo se rechaza.
+
+### Cambios
+
+**`app/services/amazon_client.py`**
+- Nuevo `patch_listing_attributes(sku, product_type, attr_patches)` — PATCH JSON (RFC 6902) para actualizar atributos individuales sin re-crear todo el listing.
+
+**`app/api/amazon_lanzar.py`**
+- Bloque PEST_CONTROL_DEVICE/ELECTRIC_LANTERN en `create_listing`: aplica los 4 atributos automáticamente.
+- `_MX_ERROR_ATTR_MAP`: 23 entradas — fragmento de mensaje Seller Central MX → atributo SP-API + valor.
+- `POST /auto-fix-errors`: recibe issues de Amazon, mapea → PATCH listing → guarda defaults al template. Fallback a IA para errores desconocidos.
+
+**`app/services/token_store.py`**
+- PEST_CONTROL_DEVICE template actualizado: 3 nuevos required_attrs, defaults corregidos.
+- `seed_product_type_templates`: ahora siempre actualiza templates con `validated=1` (antes solo si no existía).
+
+**`app/templates/partials/amazon_lanzar_wizard.html`**
+- Botón "🤖 Auto-corregir con IA" en step 4 — aparece cuando Amazon retorna errores estructurados.
+- Guarda `_wiz._lastPayload` y `_wiz._lastIssues` al recibir error para el retry.
+- Si fix completo: muestra atributos corregidos + botón "Publicar ahora".
+
+### Sistema de aprendizaje
+Cada fix exitoso guarda los nuevos atributos como defaults del template en DB.
+Próximos productos del mismo tipo ya no necesitan el fix — se lanzan directo.
+
+---
+
 ## 2026-06-09 — FEAT: Búsqueda de imágenes multi-fuente (DDG + Bing en paralelo)
 
 ### Problema
