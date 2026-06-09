@@ -757,9 +757,9 @@ async def _research_product_specs(brand: str, model: str, upc: str, title: str, 
             pass
         return {}
 
-    # ── Source 2: Claude haiku as research agent ───────────────────────────────
+    # ── Source 2: AI knowledge base research ─────────────────────────────────
     async def _claude_research() -> dict:
-        if not api_key or not (brand and model):
+        if not (brand and model):
             return {}
         research_prompt = f"""You are a product data specialist. Research EXACT specs for: {brand} {model}
 
@@ -797,15 +797,62 @@ Return ONLY valid JSON (no markdown, no text):
             pass
         return {}
 
-    # Run both in parallel
-    upc_data, claude_data = await _aio.gather(_upc_lookup(), _claude_research())
+    # ── Source 3: Web search via DuckDuckGo + Jina Reader ─────────────────────
+    async def _web_search() -> dict:
+        if not (brand and model):
+            return {}
+        query = f"{brand} {model} specifications"
+        try:
+            async with _hx.AsyncClient(timeout=10, follow_redirects=True) as cl:
+                ddg = await cl.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"},
+                )
+                links = _re.findall(r'<a class="result__a" href="(https?://[^"]+)"', ddg.text)
+                if not links:
+                    return {}
+                # Skip low-quality sources
+                _skip = ("duckduckgo.com", "amazon.com", "ebay.com", "walmart.com")
+                target = next((l for l in links[:5] if not any(s in l for s in _skip)), links[0])
+                jina_r = await cl.get(
+                    f"https://r.jina.ai/{target}",
+                    headers={"Accept": "text/plain", "X-Return-Format": "text"},
+                    timeout=12,
+                )
+                text = jina_r.text[:4000]
+                if len(text) < 100:
+                    return {}
+                extract_prompt = f"""Extract product specifications from this web page text for {brand} {model}.
+Return ONLY valid JSON with these fields (null if not found):
+{{"weight_kg":null,"length_cm":null,"width_cm":null,"height_cm":null,
+"connectivity":[],"special_features":[],"msrp_usd":null,"country_of_origin":null,
+"display_size_in":null,"display_type":null,"resolution":null,"refresh_rate_hz":null,
+"hdmi_ports":null,"usb_ports":null,"watts":null,"voltage_v":null,"model_year":null,"color":null}}
 
-    # Merge: UPC ItemDB takes priority for dimensions/weight (real data), Claude fills gaps
-    for k, v in claude_data.items():
+PAGE TEXT:
+{text}"""
+                result_text = await _or_client.generate(extract_prompt, max_tokens=400)
+                m = _re.search(r'\{.*\}', result_text, _re.DOTALL)
+                if m:
+                    return json.loads(m.group())
+        except Exception:
+            pass
+        return {}
+
+    # Run all 3 sources in parallel
+    upc_data, claude_data, web_data = await _aio.gather(_upc_lookup(), _claude_research(), _web_search())
+
+    # Merge: UPC ItemDB > web search > AI knowledge base
+    # AI fills base (lowest priority), web refines, UPC ItemDB has final say on dims/weight
+    for k, v in (claude_data or {}).items():
         if v is not None and k not in found:
             found[k] = v
-    for k, v in upc_data.items():
-        if v is not None:  # UPC data overwrites (more reliable)
+    for k, v in (web_data or {}).items():
+        if v is not None and v != [] and k not in found:
+            found[k] = v
+    for k, v in (upc_data or {}).items():
+        if v is not None:  # UPC data overwrites (real measured data)
             found[k] = v
 
     if found:
@@ -847,6 +894,120 @@ async def get_product_schema_endpoint(product_type: str, seller_id: str = ""):
     if not schema:
         return {"product_type": product_type, "required": [], "optional": [], "groups": {}}
     return schema
+
+
+# ── BM category → Amazon product type mapping ────────────────────────────────
+_BM_CATEGORY_TO_PT: dict[str, str] = {
+    "sntv": "TELEVISION", "television": "TELEVISION", "televisiones": "TELEVISION", "tv": "TELEVISION",
+    "monitor": "COMPUTER_MONITOR", "monitors": "COMPUTER_MONITOR",
+    "fan": "FAN", "fans": "FAN", "ventiladores": "FAN",
+    "air conditioner": "AIR_CONDITIONER", "aire acondicionado": "AIR_CONDITIONER",
+    "vacuum": "VACUUM_CLEANER", "aspiradora": "VACUUM_CLEANER", "aspiradoras": "VACUUM_CLEANER",
+    "pest control": "PEST_CONTROL_DEVICE", "repelente": "PEST_CONTROL_DEVICE",
+    "bug zapper": "PEST_CONTROL_DEVICE", "insect": "PEST_CONTROL_DEVICE",
+    "zapper": "PEST_CONTROL_DEVICE", "mosquito": "PEST_CONTROL_DEVICE",
+    "speaker": "SPEAKER", "bocinas": "SPEAKER", "speakers": "SPEAKER",
+    "headphones": "HEADPHONES", "auriculares": "HEADPHONES",
+    "laptop": "LAPTOP", "laptops": "LAPTOP",
+    "tablet": "TABLET", "tablets": "TABLET",
+    "camera": "CAMERA", "cameras": "CAMERA",
+    "coffee": "COFFEE_MAKER", "cafetera": "COFFEE_MAKER",
+    "blender": "BLENDER", "licuadora": "BLENDER",
+    "microwave": "MICROWAVE_OVEN", "microondas": "MICROWAVE_OVEN",
+    "hair dryer": "HAIR_DRYER", "secadora": "HAIR_DRYER",
+    "lantern": "ELECTRIC_LANTERN", "linterna": "ELECTRIC_LANTERN", "lanterns": "ELECTRIC_LANTERN",
+    "light fixture": "LIGHT_FIXTURE", "lighting": "LIGHT_FIXTURE", "iluminación": "LIGHT_FIXTURE",
+    "light bulb": "LIGHT_BULB", "foco": "LIGHT_BULB", "focos": "LIGHT_BULB",
+    "security camera": "SECURITY_CAMERA",
+    "smartwatch": "SMARTWATCH", "smart watch": "SMARTWATCH",
+    "power bank": "POWER_BANK",
+    "keyboard": "KEYBOARD", "teclado": "KEYBOARD",
+    "mouse": "MOUSE",
+}
+
+# SKU prefix → product type (highest confidence)
+_SKU_PREFIX_TO_PT: dict[str, str] = {
+    "SNTV": "TELEVISION",
+}
+
+
+@router.get("/template-fields")
+async def get_template_fields(
+    product_type: str = Query(""),
+    seller_id: str = Query(""),
+):
+    """Returns field definitions for a specific product type template."""
+    from app.services.token_store import get_product_type_template as _get_tmpl
+    from app.services.amazon_client import get_amazon_client as _gc
+    if not product_type or product_type.upper() == "PRODUCT":
+        return {"field_defs": [], "defaults": {}, "product_type": product_type}
+    pt = product_type.upper()
+    client = None
+    if seller_id:
+        try:
+            client = await _gc(seller_id=seller_id)
+        except Exception:
+            pass
+    mk = client.marketplace_id if client else "ATVPDKIKX0DER"
+    tmpl = await _get_tmpl(pt, mk)
+    if not tmpl:
+        other_mk = "A1AM78C64UM0Y8" if mk == "ATVPDKIKX0DER" else "ATVPDKIKX0DER"
+        tmpl = await _get_tmpl(pt, other_mk)
+    if not tmpl:
+        return {"field_defs": [], "defaults": {}, "product_type": pt}
+    return {
+        "field_defs": tmpl.get("field_defs", []),
+        "defaults": tmpl.get("defaults", {}),
+        "ai_hints": tmpl.get("ai_hints", ""),
+        "product_type": pt,
+        "marketplace_id": tmpl.get("marketplace_id", mk),
+    }
+
+
+@router.get("/detect-product-type")
+async def detect_product_type_endpoint(
+    category: str = Query(""),
+    subcategory: str = Query(""),
+    sku: str = Query(""),
+    title: str = Query(""),
+):
+    """Auto-detect Amazon product type from BM category / SKU prefix / product title."""
+    # 1. SKU prefix — highest confidence
+    sku_upper = sku.upper()
+    for prefix, pt in _SKU_PREFIX_TO_PT.items():
+        if sku_upper.startswith(prefix):
+            return {"product_type": pt, "confidence": "high", "source": "sku_prefix", "prefix": prefix}
+
+    # 2. Category / subcategory exact or partial match
+    for text in [category, subcategory]:
+        if not text:
+            continue
+        text_lower = text.lower().strip()
+        # Exact match first
+        if text_lower in _BM_CATEGORY_TO_PT:
+            return {"product_type": _BM_CATEGORY_TO_PT[text_lower], "confidence": "high", "source": "category_exact"}
+        # Partial match
+        for kw, pt in _BM_CATEGORY_TO_PT.items():
+            if kw in text_lower or text_lower in kw:
+                return {"product_type": pt, "confidence": "medium", "source": "category_partial", "matched": kw}
+
+    # 3. Title keyword match — lowest confidence
+    if title:
+        title_lower = title.lower()
+        for kw, pt in _BM_CATEGORY_TO_PT.items():
+            if kw in title_lower:
+                return {"product_type": pt, "confidence": "low", "source": "title_keyword", "matched": kw}
+
+    return {"product_type": None, "confidence": "none", "source": "no_match"}
+
+
+@router.get("/launched-listings")
+async def get_launched_listings_endpoint(seller_id: str = Query("")):
+    """Returns recently launched listings for a seller."""
+    from app.services.token_store import get_launched_listings
+    if not seller_id:
+        return {"listings": []}
+    return {"listings": await get_launched_listings(seller_id)}
 
 
 @router.get("/templates")
@@ -1454,6 +1615,7 @@ async def create_listing(request: Request):
     pattern_attr         = (body.get("pattern") or "").strip()
     finish_type_attr     = (body.get("finish_type") or "").strip()
     voltage_v            = (body.get("voltage_v") or "").strip()
+    category_attrs       = body.get("category_attrs") or {}  # dynamic fields from wizard category panel
 
     if not sku:
         return JSONResponse({"error": "SKU requerido"}, status_code=400)
@@ -1788,6 +1950,88 @@ async def create_listing(request: Request):
             _cap_u2 = (capacity_unit_attr or "liters").lower()
             attributes["capacity"] = [{"value": _cap_v2, "unit": _cap_u2, "marketplace_id": client.marketplace_id}]
 
+        # ── Atributos dinámicos de categoría (de los campos del wizard) ──────────
+        # Aplica los valores que el usuario llenó explícitamente en el panel de categoría.
+        # Se aplica ANTES de los bloques tipo-específicos para que éstos puedan sobreescribir
+        # cuando hay reglas fijas de marketplace (ej: power_source_type MX requiere language_tag).
+        _COUNTRY_ISO_CAT = {
+            "china": "CN", "cn": "CN", "mexico": "MX", "mx": "MX",
+            "south korea": "KR", "korea": "KR", "kr": "KR",
+            "vietnam": "VN", "vn": "VN", "taiwan": "TW", "tw": "TW",
+            "united states": "US", "usa": "US", "us": "US",
+        }
+        _INT_ATTRS = {"number_of_pieces", "total_hdmi_ports", "usb_port_count",
+                      "model_year", "refresh_rate_hz", "wattage"}
+        _MULTI_ATTRS = {"special_feature", "specific_uses_for_product", "connectivity_technology"}
+        for _ca_k, _ca_v in category_attrs.items():
+            if _ca_v is None or _ca_v == "":
+                continue
+            # power_source_type → overwritten by MX block below if needed; skip here
+            if _ca_k == "power_source_type":
+                power_source_type = str(_ca_v)  # inject into existing variable for MX block
+                continue
+            # material_type → inject into variable for existing handling
+            if _ca_k == "material_type":
+                material_type = str(_ca_v)
+                continue
+            # surface_recommendation → inject
+            if _ca_k in ("surface_recommendation", "surface_type"):
+                surface_type = str(_ca_v)
+                continue
+            # filter_type → inject
+            if _ca_k == "filter_type":
+                filter_type_attr = str(_ca_v)
+                continue
+            # form_factor → inject
+            if _ca_k == "form_factor":
+                form_factor = str(_ca_v)
+                continue
+            # warranty_description → inject
+            if _ca_k == "warranty_description":
+                warranty_desc = str(_ca_v)
+                continue
+            # country_of_origin → inject
+            if _ca_k == "country_of_origin":
+                country_of_origin = _COUNTRY_ISO_CAT.get(str(_ca_v).lower(), str(_ca_v))
+                attributes["country_of_origin"] = [{"value": country_of_origin, "marketplace_id": client.marketplace_id}]
+                continue
+            # list_price_msrp → inject
+            if _ca_k == "list_price_msrp":
+                try:
+                    list_price_msrp = float(_ca_v)
+                except (ValueError, TypeError):
+                    pass
+                continue
+            # is_assembly_required
+            if _ca_k == "is_assembly_required":
+                attributes[_ca_k] = [{"value": bool(_ca_v), "marketplace_id": client.marketplace_id}]
+                continue
+            # number_of_pieces and other int attrs
+            if _ca_k in _INT_ATTRS:
+                try:
+                    attributes[_ca_k] = [{"value": int(_ca_v), "marketplace_id": client.marketplace_id}]
+                except (ValueError, TypeError):
+                    pass
+                continue
+            # multi-select lists
+            if _ca_k in _MULTI_ATTRS:
+                if isinstance(_ca_v, list) and _ca_v:
+                    attributes[_ca_k] = [{"value": v, "marketplace_id": client.marketplace_id} for v in _ca_v if v]
+                elif isinstance(_ca_v, str) and _ca_v:
+                    attributes[_ca_k] = [{"value": _ca_v, "marketplace_id": client.marketplace_id}]
+                continue
+            # voltage_v (string)
+            if _ca_k == "voltage_v":
+                voltage_v = str(_ca_v)
+                continue
+            # Generic: string/bool/number
+            if isinstance(_ca_v, bool):
+                attributes[_ca_k] = [{"value": _ca_v, "marketplace_id": client.marketplace_id}]
+            elif isinstance(_ca_v, (int, float)):
+                attributes[_ca_k] = [{"value": _ca_v, "marketplace_id": client.marketplace_id}]
+            else:
+                attributes[_ca_k] = [{"value": str(_ca_v), "marketplace_id": client.marketplace_id}]
+
         # ── PEST_CONTROL_DEVICE / ELECTRIC_LANTERN — required by Amazon MX ─────
         # Research: amazon-specialist 2026-06-09 via Product Type Definitions API
         if product_type in ("PEST_CONTROL_DEVICE", "ELECTRIC_LANTERN"):
@@ -2019,6 +2263,16 @@ async def create_listing(request: Request):
             await _itl(product_type, client.marketplace_id)
         except Exception:
             pass
+
+    # Save to amz_launched_listings for post-publish monitoring
+    try:
+        from app.services.token_store import save_launched_listing as _sll
+        await _sll(
+            seller_id=client.seller_id, sku=sku, product_type=product_type,
+            title=title, price=price, currency=currency, asin=new_asin,
+        )
+    except Exception:
+        pass
 
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku, "product_type": product_type}
 

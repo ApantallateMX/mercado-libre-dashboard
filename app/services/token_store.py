@@ -854,6 +854,30 @@ async def init_db():
             await db.commit()
         except Exception:
             pass  # already exists
+        # Migrate: add field_defs_json to amz_product_type_templates
+        try:
+            await db.execute('ALTER TABLE amz_product_type_templates ADD COLUMN field_defs_json TEXT NOT NULL DEFAULT "[]"')
+            await db.commit()
+        except Exception:
+            pass  # already exists
+        # TABLA: amz_launched_listings — productos lanzados via wizard para monitoreo post-publicación
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS amz_launched_listings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id   TEXT NOT NULL,
+                sku         TEXT NOT NULL,
+                asin        TEXT DEFAULT NULL,
+                product_type TEXT DEFAULT NULL,
+                title       TEXT DEFAULT NULL,
+                price       REAL DEFAULT 0,
+                currency    TEXT DEFAULT 'MXN',
+                launched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                check_status TEXT DEFAULT 'pending',
+                check_result TEXT DEFAULT NULL,
+                checked_at  TEXT DEFAULT NULL,
+                UNIQUE(seller_id, sku)
+            )
+        """)
         # TABLA: amz_listing_actions — historial de acciones cierre/eliminacion
         await db.execute("""
             CREATE TABLE IF NOT EXISTS amz_listing_actions (
@@ -2903,6 +2927,30 @@ _SEED_TEMPLATES = {
             "total_hdmi_ports": 2, "image_aspect_ratio": "16:9"
         },
         "ai_hints": "TELEVISION: item_type_keyword=televisions. special_feature enum: Smart TV, Built-In WiFi, HDR, Dolby Vision, 4K, QLED, OLED. display.type: LED/QLED/OLED/Mini LED/LCD/QNED. resolution: 720p/1080p/4K/8K.",
+        "field_defs": [
+            {"key": "display_type", "label": "Tipo de pantalla", "type": "select", "required": True,
+             "options": ["LED", "QLED", "OLED", "Mini LED", "QNED", "LCD"], "default": "LED"},
+            {"key": "resolution", "label": "Resolución", "type": "select", "required": True,
+             "options": ["4K", "1080p", "8K", "720p"], "default": "4K"},
+            {"key": "display_size_in", "label": "Tamaño pantalla (pulg)", "type": "number", "required": True, "default": 0},
+            {"key": "refresh_rate_hz", "label": "Refresco (Hz)", "type": "number", "required": False, "default": 60},
+            {"key": "total_hdmi_ports", "label": "Puertos HDMI", "type": "number", "required": True, "default": 2},
+            {"key": "usb_port_count", "label": "Puertos USB", "type": "number", "required": False, "default": 1},
+            {"key": "model_year", "label": "Año del modelo", "type": "number", "required": True, "default": 2024},
+            {"key": "mounting_type", "label": "Tipo de montaje", "type": "select", "required": False,
+             "options": ["Wall Mount", "Tabletop", "Tabletop, Wall Mount"], "default": "Wall Mount"},
+            {"key": "color", "label": "Color", "type": "text", "required": False, "default": "Negro"},
+            {"key": "special_feature", "label": "Características", "type": "multi_select",
+             "options": ["Smart TV", "Built-In WiFi", "HDR", "Dolby Vision", "4K", "QLED", "OLED", "Voice Control"],
+             "default": ["Smart TV", "4K"]},
+            {"key": "connectivity_technology", "label": "Conectividad", "type": "multi_select",
+             "options": ["Wi-Fi", "Bluetooth", "HDMI", "USB", "Ethernet"], "default": ["Wi-Fi", "Bluetooth"]},
+            {"key": "voltage_v", "label": "Voltaje", "type": "text", "required": False, "default": "120V"},
+            {"key": "warranty_description", "label": "Garantía", "type": "text", "required": True, "default": "90 days seller warranty"},
+            {"key": "country_of_origin", "label": "País de origen", "type": "select", "required": True,
+             "options": ["CN", "MX", "KR", "VN", "TW", "US"], "default": "CN"},
+            {"key": "list_price_msrp", "label": "MSRP (USD)", "type": "number", "required": True, "default": 0},
+        ],
     },
     ("PEST_CONTROL_DEVICE", "A1AM78C64UM0Y8"): {
         "validated": 1, "validated_at": "2026-06-09", "launch_count": 0,
@@ -2940,6 +2988,25 @@ _SEED_TEMPLATES = {
             "(Repelente Eléctrico de Insectos). specific_uses: ['Mosquitos','Mosca','Exterior']. "
             "GTIN exemption: supplier_declared_has_product_identifier_exemption=true."
         ),
+        "field_defs": [
+            {"key": "material_type", "label": "Material", "type": "select", "required": True,
+             "options": ["Plástico", "Metal", "Aluminio", "Acero inoxidable"], "default": "Plástico"},
+            {"key": "power_source_type", "label": "Fuente de energía", "type": "select", "required": True,
+             "options": ["Alimentado por energía solar", "Con Alimentación de Batería", "Cable eléctrico"],
+             "default": "Alimentado por energía solar"},
+            {"key": "is_assembly_required", "label": "¿Requiere montaje?", "type": "boolean", "required": True, "default": False},
+            {"key": "number_of_pieces", "label": "Número de piezas", "type": "number", "required": True, "default": 1},
+            {"key": "color", "label": "Color", "type": "text", "required": False, "default": ""},
+            {"key": "specific_uses_for_product", "label": "Usos específicos", "type": "multi_select",
+             "options": ["Mosquitos", "Mosca", "Mariposas de noche", "Exterior", "Interior", "Jardín"],
+             "default": ["Mosquitos", "Exterior"]},
+            {"key": "special_feature", "label": "Características especiales", "type": "multi_select",
+             "options": ["Solar", "Impermeable", "Portátil", "Sin químicos", "Silencioso"], "default": []},
+            {"key": "warranty_description", "label": "Garantía", "type": "text", "required": True,
+             "default": "90 días garantía del vendedor"},
+            {"key": "country_of_origin", "label": "País de origen", "type": "select", "required": True,
+             "options": ["CN", "MX", "US", "VN", "TW"], "default": "CN"},
+        ],
     },
     ("ELECTRIC_LANTERN", "A1AM78C64UM0Y8"): {
         "validated": 1, "validated_at": "2026-06-08", "launch_count": 0,
@@ -2967,6 +3034,20 @@ _SEED_TEMPLATES = {
             "power_source_type: 'Energía solar'/'Batería'/'Cable eléctrico'. "
             "item_type_keyword: 'lanterns'. GTIN exemption supported."
         ),
+        "field_defs": [
+            {"key": "material_type", "label": "Material", "type": "select", "required": True,
+             "options": ["Plástico", "Metal", "Aluminio", "Acero inoxidable"], "default": "Plástico"},
+            {"key": "power_source_type", "label": "Fuente de energía", "type": "select", "required": True,
+             "options": ["Energía solar", "Batería", "Cable eléctrico"], "default": "Energía solar"},
+            {"key": "color", "label": "Color", "type": "text", "required": False, "default": ""},
+            {"key": "wattage", "label": "Vatios (W)", "type": "number", "required": False, "default": 0},
+            {"key": "special_feature", "label": "Características", "type": "multi_select",
+             "options": ["Solar", "Impermeable", "Portátil", "Recargable", "LED"], "default": []},
+            {"key": "warranty_description", "label": "Garantía", "type": "text", "required": True,
+             "default": "90 días garantía del vendedor"},
+            {"key": "country_of_origin", "label": "País de origen", "type": "select", "required": True,
+             "options": ["CN", "MX", "US", "VN", "TW"], "default": "CN"},
+        ],
     },
     ("VACUUM_CLEANER", "ATVPDKIKX0DER"): {
         "validated": 1, "validated_at": "2026-06-05", "launch_count": 2,
@@ -2993,6 +3074,26 @@ _SEED_TEMPLATES = {
             "number_of_items": 1, "warranty_description": "90 days seller warranty"
         },
         "ai_hints": "VACUUM_CLEANER: surface_recommendation max 1 value: Bare Floor/Carpet/Hard Floor/Hardwoods/Laminate. form_factor: Cannister/Handheld/Robotic/Stick/Upright. filter_type: Foam/HEPA Filter/Cartridge/Cloth/Cyclonic. special_feature from enum only: Anti-Allergen, Bagless, Compact, Cordless, HEPA, Lightweight, Washable Filter. connectivity_technology: NEVER Corded Electric.",
+        "field_defs": [
+            {"key": "form_factor", "label": "Tipo de aspiradora", "type": "select", "required": True,
+             "options": ["Stick", "Upright", "Robotic", "Handheld", "Cannister"], "default": "Stick"},
+            {"key": "power_source_type", "label": "Fuente de energía", "type": "select", "required": True,
+             "options": ["Corded Electric", "Battery Powered", "Hybrid (Corded And Cordless)"],
+             "default": "Corded Electric"},
+            {"key": "filter_type", "label": "Tipo de filtro", "type": "select", "required": True,
+             "options": ["Foam", "HEPA Filter", "Cartridge", "Cloth", "Cyclonic"], "default": "Foam"},
+            {"key": "surface_recommendation", "label": "Superficie recomendada", "type": "select", "required": True,
+             "options": ["Bare Floor", "Carpet", "Hard Floor", "Hardwoods", "Laminate"], "default": "Bare Floor"},
+            {"key": "color", "label": "Color", "type": "text", "required": False, "default": ""},
+            {"key": "special_feature", "label": "Características", "type": "multi_select",
+             "options": ["Anti-Allergen", "Bagless", "Compact", "Cordless", "HEPA", "Lightweight", "Washable Filter"],
+             "default": []},
+            {"key": "voltage_v", "label": "Voltaje", "type": "text", "required": True, "default": "120V"},
+            {"key": "warranty_description", "label": "Garantía", "type": "text", "required": True,
+             "default": "90 days seller warranty"},
+            {"key": "country_of_origin", "label": "País de origen", "type": "select", "required": True,
+             "options": ["CN", "MX", "US", "VN", "TW"], "default": "CN"},
+        ],
     },
 }
 
@@ -3001,7 +3102,7 @@ async def get_product_type_template(product_type: str, marketplace_id: str = "AT
     import json as _j
     async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
         row = await (await db.execute(
-            "SELECT required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,launch_count,validated_at FROM amz_product_type_templates WHERE product_type=? AND marketplace_id=?",
+            "SELECT required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,launch_count,validated_at,field_defs_json FROM amz_product_type_templates WHERE product_type=? AND marketplace_id=?",
             (product_type.upper(), marketplace_id),
         )).fetchone()
     if not row:
@@ -3013,6 +3114,7 @@ async def get_product_type_template(product_type: str, marketplace_id: str = "AT
             "bonus_attrs": _j.loads(row[2] or "[]"), "defaults": _j.loads(row[3] or "{}"),
             "ai_hints": row[4] or "", "validated": bool(row[5]),
             "launch_count": row[6] or 0, "validated_at": row[7],
+            "field_defs": _j.loads(row[8] or "[]"),
         }
     except Exception:
         return {}
@@ -3023,8 +3125,8 @@ async def save_product_type_template(product_type: str, marketplace_id: str, dat
     async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
         await db.execute(
             'INSERT OR REPLACE INTO amz_product_type_templates '
-            '(product_type,marketplace_id,required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,validated_at,launch_count,updated_at) '
-            'VALUES (?,?,?,?,?,?,?,?,?,?,datetime("now"))',
+            '(product_type,marketplace_id,required_attrs,quality_attrs,bonus_attrs,defaults_json,ai_hints,validated,validated_at,launch_count,field_defs_json,updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime("now"))',
             (
                 product_type.upper(), marketplace_id,
                 _j.dumps(data.get("required_attrs", [])),
@@ -3035,6 +3137,7 @@ async def save_product_type_template(product_type: str, marketplace_id: str, dat
                 1 if data.get("validated") else 0,
                 data.get("validated_at"),
                 data.get("launch_count", 0),
+                _j.dumps(data.get("field_defs", [])),
             ),
         )
         await db.commit()
@@ -3075,6 +3178,34 @@ async def seed_product_type_templates() -> None:
         # Always update templates that have validated=1 in seed (reflects new required attrs discovered)
         if not existing or data.get("validated"):
             await save_product_type_template(pt, mk, data)
+
+
+async def save_launched_listing(seller_id: str, sku: str, product_type: str,
+                                title: str, price: float, currency: str, asin: str = None) -> None:
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO amz_launched_listings '
+            '(seller_id,sku,asin,product_type,title,price,currency,launched_at,check_status) '
+            'VALUES (?,?,?,?,?,?,?,datetime("now"),"pending")',
+            (seller_id, sku, asin, product_type, title[:200] if title else "", price, currency),
+        )
+        await db.commit()
+
+
+async def get_launched_listings(seller_id: str, limit: int = 50) -> list:
+    import json as _j
+    async with __import__("aiosqlite").connect(DATABASE_PATH) as db:
+        rows = await (await db.execute(
+            'SELECT sku,asin,product_type,title,price,currency,launched_at,check_status,check_result,checked_at '
+            'FROM amz_launched_listings WHERE seller_id=? ORDER BY launched_at DESC LIMIT ?',
+            (seller_id, limit),
+        )).fetchall()
+    return [
+        {"sku": r[0], "asin": r[1], "product_type": r[2], "title": r[3],
+         "price": r[4], "currency": r[5], "launched_at": r[6],
+         "check_status": r[7], "check_result": r[8], "checked_at": r[9]}
+        for r in rows
+    ]
 
 
 # == SKU ↔ UPC internal mapping ===============================================

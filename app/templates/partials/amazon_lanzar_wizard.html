@@ -252,7 +252,7 @@
             <div>
               <label id="amz-wiz-l-pt-lbl" class="block text-xs font-semibold text-gray-600 mb-1">Tipo de producto (Amazon)</label>
               <input id="amz-wiz-product-type" type="text" placeholder="ej: TELEVISION, LIGHT_BULB…"
-                     oninput="window._amzWizUpdateFieldVisibility(this.value.trim().toUpperCase())"
+                     oninput="(function(v){window._amzWizUpdateFieldVisibility(v);window._amzWizLoadCategoryFields(v);})(this.value.trim().toUpperCase())"
                      class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition">
               <p id="amz-wiz-l-pt-desc" class="text-[9px] text-gray-400 mt-1">Determina los atributos disponibles. La IA lo sugiere.</p>
             </div>
@@ -503,6 +503,16 @@
 
             <p id="amz-wiz-l-attrs-note" class="text-[9px] text-gray-400 mt-1.5">* La IA completa automáticamente todos los atributos. MSRP y Conectividad son requeridos por Amazon USA para TELEVISION.</p>
           </div>
+
+          <!-- Atributos específicos de categoría (dinámicos) -->
+          <div id="amz-wiz-cat-fields-section" class="border-t border-blue-100 pt-3 mt-3 hidden">
+            <div class="flex items-center justify-between mb-2">
+              <p class="text-xs font-semibold text-blue-700">🏷️ Atributos requeridos por categoría</p>
+              <span id="amz-wiz-cat-fields-badge" class="text-[10px] bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full font-mono tracking-tight"></span>
+            </div>
+            <p class="text-[9px] text-blue-500 mb-2">Estos campos son específicos de la categoría Amazon seleccionada. Pre-llenados con los valores correctos del template validado.</p>
+            <div id="amz-wiz-cat-fields-container" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+          </div>
         </div>
 
         <!-- Sub-panel: Photos -->
@@ -586,11 +596,13 @@
               </div>
             </div>
 
-            <!-- Manual URL inputs -->
+            <!-- Manual URL inputs (hasta 5 fotos reales = Amazon main + 4 adicionales) -->
             <div class="space-y-2" id="amz-wiz-extra-photos">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real principal (fondo blanco)" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real — ángulo lateral" oninput="window._amzWizPhotoSync()">
-              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto real — parte trasera/puertos" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto principal — fondo blanco 1000×1000px mín." oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto 2 — ángulo lateral" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto 3 — parte trasera/puertos" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto 4 — detalle/zoom" oninput="window._amzWizPhotoSync()">
+              <input type="url" class="amz-wiz-photo-url w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-orange-400 transition" placeholder="https://… URL foto 5 — en uso / escena" oninput="window._amzWizPhotoSync()">
             </div>
           </div>
 
@@ -1214,11 +1226,20 @@ function _amzWizGoStep(n) {
 
   if (isLast) _amzWizBuildReview();
 
-  // Auto-generate AI content when entering step 3 with empty title (no draft loaded)
+  // Auto-detect product type + load category fields when entering step 3
   if (n === 3) {
+    // Auto-detect PT from BM category (async, non-blocking)
+    setTimeout(function() { window._amzWizAutoDetectPT(); }, 100);
+    // Auto-generate AI content if title is empty
     var _titleEl = document.getElementById('amz-wiz-title');
     if (_titleEl && !_titleEl.value.trim()) {
-      setTimeout(function() { window._amzWizGenerateContent(); }, 350);
+      setTimeout(function() { window._amzWizGenerateContent(); }, 400);
+    } else {
+      // Title already set (draft loaded) — still load category fields if PT is known
+      var _ptVal = document.getElementById('amz-wiz-product-type');
+      if (_ptVal && _ptVal.value.trim()) {
+        setTimeout(function() { window._amzWizLoadCategoryFields(_ptVal.value.trim().toUpperCase()); }, 200);
+      }
     }
   }
 }
@@ -1445,6 +1466,7 @@ window._amzWizGenerateContent = async function() {
     if (d.product_type) {
       document.getElementById('amz-wiz-product-type').value = d.product_type;
       window._amzWizUpdateFieldVisibility(d.product_type);
+      window._amzWizLoadCategoryFields(d.product_type);
       // Apply schema if returned with response
       if (d._schema && d._schema.required) {
         window._amzWizApplySchema(d._schema);
@@ -1587,6 +1609,97 @@ window._amzWizFetchSchema = async function(productType, sellerId) {
     }
   } catch(e) {}
 };
+
+// ─── Auto-detect product type from BM category ───────────────────────────────
+window._amzWizAutoDetectPT = async function() {
+  var ptEl = document.getElementById('amz-wiz-product-type');
+  if (!ptEl || ptEl.value.trim()) return;
+  var cat  = _wiz.category || '';
+  var sku  = _wiz.sku || '';
+  var ttl  = (_wiz.title || '').substring(0, 80);
+  if (!cat && !sku) return;
+  try {
+    var r = await fetch(
+      '/api/amazon/lanzar/detect-product-type?' +
+      'category=' + encodeURIComponent(cat) +
+      '&sku=' + encodeURIComponent(sku) +
+      '&title=' + encodeURIComponent(ttl)
+    );
+    var d = await r.json();
+    if (d.product_type && ptEl && !ptEl.value.trim()) {
+      ptEl.value = d.product_type;
+      window._amzWizUpdateFieldVisibility(d.product_type);
+      window._amzWizLoadCategoryFields(d.product_type);
+      var descEl = document.getElementById('amz-wiz-l-pt-desc');
+      if (descEl) {
+        var src = d.source === 'sku_prefix' ? 'SKU' : d.source === 'category_exact' ? 'categoría BM' : 'palabras clave';
+        descEl.innerHTML = '&#x2705; Auto-detectado desde ' + src + ': <span class="font-mono text-blue-600">' + cat + '</span>';
+        descEl.className = 'text-[9px] mt-1 text-green-600';
+      }
+    }
+  } catch(e) {}
+};
+
+// ─── Dynamic category fields ──────────────────────────────────────────────────
+window._amzWizLoadCategoryFields = async function(productType) {
+  var section   = document.getElementById('amz-wiz-cat-fields-section');
+  var container = document.getElementById('amz-wiz-cat-fields-container');
+  var badge     = document.getElementById('amz-wiz-cat-fields-badge');
+  if (!section || !container) return;
+  if (!productType || productType === 'PRODUCT' || productType.length < 3) {
+    section.classList.add('hidden');
+    return;
+  }
+  try {
+    var sellerId = _wiz.seller_id || '';
+    var r = await fetch('/api/amazon/lanzar/template-fields?product_type=' + encodeURIComponent(productType) + '&seller_id=' + encodeURIComponent(sellerId));
+    var data = await r.json();
+    var fieldDefs = data.field_defs || [];
+    if (!fieldDefs.length) { section.classList.add('hidden'); return; }
+    if (badge) badge.textContent = productType;
+    container.innerHTML = '';
+    fieldDefs.forEach(function(field) {
+      var wrapper = document.createElement('div');
+      wrapper.innerHTML = _amzWizRenderCatField(field, data.defaults || {});
+      if (wrapper.firstElementChild) container.appendChild(wrapper.firstElementChild);
+    });
+    section.classList.remove('hidden');
+  } catch(e) { section.classList.add('hidden'); }
+};
+
+function _amzWizRenderCatField(field, defaults) {
+  var defVal = (defaults[field.key] !== undefined) ? defaults[field.key] : (field.default !== undefined ? field.default : '');
+  var reqBadge = field.required ? ' <span class="text-red-400">*</span>' : '';
+  var lbl = '<label class="block text-[10px] text-gray-500 mb-0.5">' + _escH(field.label || field.key) + reqBadge + '</label>';
+  var cls = 'w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-400 transition bg-white';
+  var dataAttr = 'data-cat-field="' + field.key + '"';
+  var inp = '';
+  if (field.type === 'select') {
+    var opts = (field.options || []).map(function(o) {
+      return '<option value="' + _escH(o) + '"' + (String(o) === String(defVal) ? ' selected' : '') + '>' + _escH(o) + '</option>';
+    }).join('');
+    inp = '<select ' + dataAttr + ' class="' + cls + '">' + opts + '</select>';
+  } else if (field.type === 'boolean') {
+    var chk = (defVal === true || defVal === 'true' || defVal === 1) ? ' checked' : '';
+    inp = '<div class="flex items-center gap-2 py-1.5"><input type="checkbox" ' + dataAttr + ' class="w-4 h-4 accent-blue-500"' + chk + '><span class="text-xs text-gray-600">Sí / activo</span></div>';
+  } else if (field.type === 'number') {
+    inp = '<input type="number" ' + dataAttr + ' value="' + _escH(String(defVal || '')) + '" placeholder="' + (field.hint || '0') + '" class="' + cls + '">';
+  } else if (field.type === 'multi_select') {
+    var defArr = Array.isArray(defVal) ? defVal : (defVal ? [defVal] : []);
+    var boxes = (field.options || []).map(function(o) {
+      var isChk = defArr.indexOf(o) !== -1 ? ' checked' : '';
+      return '<label class="flex items-center gap-1 text-[10px] cursor-pointer"><input type="checkbox" data-cat-field="' + field.key + '" data-multi data-val="' + _escH(o) + '" class="accent-blue-500"' + isChk + '> <span>' + _escH(o) + '</span></label>';
+    }).join('');
+    inp = '<div class="flex flex-wrap gap-x-3 gap-y-1 py-1">' + boxes + '</div>';
+  } else {
+    inp = '<input type="text" ' + dataAttr + ' value="' + _escH(String(defVal || '')) + '" placeholder="' + _escH(field.hint || '') + '" class="' + cls + '">';
+  }
+  return '<div>' + lbl + inp + '</div>';
+}
+
+function _escH(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 // ─── Dynamic field visibility by product type ─────────────────────────────────
 // Category groups: which attribute panels to show per product type
@@ -2528,6 +2641,23 @@ async function _amzWizSubmit() {
     if (_wiz._compat_devs && _wiz._compat_devs.length) payload.compatible_devices = _wiz._compat_devs;
     if (_wiz._pattern)      payload.pattern                  = _wiz._pattern;
     if (_wiz._finish)       payload.finish_type              = _wiz._finish;
+
+    // Collect dynamic category fields
+    var _catAttrs = {};
+    document.querySelectorAll('[data-cat-field]:not([data-multi])').forEach(function(el) {
+      var k = el.dataset.catField;
+      if (!k) return;
+      if (el.type === 'checkbox') { _catAttrs[k] = el.checked; }
+      else if (el.type === 'number') { if (el.value !== '') _catAttrs[k] = Number(el.value); }
+      else if (el.value !== '') { _catAttrs[k] = el.value; }
+    });
+    document.querySelectorAll('[data-cat-field][data-multi]:checked').forEach(function(el) {
+      var k = el.dataset.catField;
+      if (!k) return;
+      if (!_catAttrs[k]) _catAttrs[k] = [];
+      if (Array.isArray(_catAttrs[k])) _catAttrs[k].push(el.dataset.val);
+    });
+    if (Object.keys(_catAttrs).length > 0) payload.category_attrs = _catAttrs;
   }
 
   try {
