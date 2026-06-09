@@ -7,6 +7,57 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-09 — FEAT: Wizard fotos — Wayfair/HD buttons, HD ID scraper, BM auto-populate
+
+### Cambios (`app/templates/partials/amazon_lanzar_wizard.html`)
+
+- **Botones de búsqueda nuevos**: Wayfair y Home Depot agregados al toolbar de búsqueda de imágenes.
+  Abren `wayfair.com/keyword.php?keyword=` y `homedepot.com/s/` en pestaña nueva con query del título.
+- **Home Depot ID scraper**: input numérico + botón "🏠 Extraer fotos HD" — llama `GET /api/amazon/lanzar/scrape-homedepot?product_id={id}`,
+  renderiza resultado en el mismo grid compartido de `_amzWizRenderScrapeImages`.
+- **Auto-populate BM image**: al entrar al tab "Fotos", si `_wiz.image_url` existe y el primer
+  input de URL está vacío, se auto-llena con la imagen de BinManager. Evita empezar con campo vacío.
+- Fix: texto del botón "Auto-buscar imágenes" se restaura correctamente después de buscar
+  (antes quedaba "Buscar imágenes reales del fabricante" — texto antiguo).
+
+### Contexto
+Producto SHIL000082 (Hampton Bay HB3678-34) tenía imagen en BM pero el wizard no la pre-cargaba.
+El scraper HD usa endpoint `/scrape-homedepot` existente (Jina Reader → thdstatic CDN URLs).
+
+---
+
+## 2026-06-09 — FEAT: Amazon Wizard — PEST_CONTROL_DEVICE + UPC generation
+
+### Cambios
+
+**`app/services/token_store.py`**
+- Nueva tabla `sku_upc_map (sku, upc, source, created_at)` — registro interno de UPCs generados.
+- `get_sku_upc(sku)` y `save_sku_upc(sku, upc, source)` para CRUD.
+- Template PEST_CONTROL_DEVICE (A1AM78C64UM0Y8) sembrado: material_type="Plástico",
+  power_source_type="Energía solar", browse node 23536384011, item_type_keyword="electronic-pest-control".
+
+**`app/api/amazon_lanzar.py`**
+- `_generate_internal_upc(sku)`: genera UPC-A determinístico (prefix 888 + SHA-256 % 10^8 + check digit Luhn).
+  Mismo SKU → mismo UPC siempre. Sin colisiones entre SKUs distintos.
+- `POST /generate-upc`: verifica DB primero, genera si falta, guarda. Returns `{upc, source, is_new}`.
+- Material defaulting para PEST_CONTROL_DEVICE/ELECTRIC_LANTERN: `material_type="Plástico"`,
+  `power_source_type="Energía solar"` cuando no se proveen.
+- AI prompt actualizado: valores de material en español para Amazon MX ("Plástico"/"Metal"/"Aluminio").
+- `search_product_images`: acepta `title` param; resultados ordenados por calidad de dominio (trusted retailers primero).
+
+**`app/templates/partials/amazon_lanzar_wizard.html`**
+- Paso 4 checklist: campo `material` incluido en validación (`_fieldVals`/`_schemaLabels`).
+- UPC field: botón 🏷️ `_amzWizGenerateUPC()` — llama `/generate-upc`, llena campo, muestra confirmación.
+- UPC field: enlace GTIN exemption visible cuando UPC está vacío.
+- `_amzWizSearchImages()`: pasa `title: _wiz.title` al endpoint (búsqueda con título completo).
+- `_amzWizOpenSearch()`: usa `_wiz.title`; agrega opciones wayfair + homedepot.
+
+### Fix: "Se requiere 'Material', pero falta"
+Causa: Amazon MX exige `material_type` para PEST_CONTROL_DEVICE. BM no lo tiene.
+Fix: backend defaultea "Plástico" cuando el campo falta + AI prompt fuerza valores en español.
+
+---
+
 ## 2026-06-08 — FEAT: Migración completa de Anthropic API a OpenRouter
 
 ### Decisión
