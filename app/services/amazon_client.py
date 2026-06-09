@@ -1276,6 +1276,34 @@ class AmazonClient:
             json_body=body,
         )
 
+    async def patch_listing_attributes(
+        self,
+        sku: str,
+        product_type: str,
+        attr_patches: dict,
+    ) -> dict:
+        """PATCH only specific attributes on an existing listing.
+        attr_patches: {attr_name: [SP-API formatted value list]}
+        Uses JSON Patch (RFC 6902) via Amazon Listings Items PATCH.
+        """
+        patches = [
+            {"op": "replace", "path": f"/attributes/{attr_name}", "value": value}
+            for attr_name, value in attr_patches.items()
+        ]
+        body = {
+            "productType": product_type,
+            "patches": patches,
+        }
+        return await self._request(
+            "PATCH",
+            f"/listings/2021-08-01/items/{self.seller_id}/{sku}",
+            params={
+                "marketplaceIds": self.marketplace_id,
+                "issueLocale": "es_MX",
+            },
+            json_body=body,
+        )
+
     async def fetch_product_type_schema(self, product_type: str) -> dict:
         """
         Fetches the attribute schema for a product type from Amazon Definitions API.

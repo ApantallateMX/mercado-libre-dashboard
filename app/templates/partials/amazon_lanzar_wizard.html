@@ -650,8 +650,15 @@
           <div id="amz-wiz-checklist" class="space-y-1.5"></div>
         </div>
 
-        <!-- Submit error -->
+        <!-- Submit error + auto-fix -->
         <div id="amz-wiz-submit-error" class="hidden mb-3 text-xs text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5"></div>
+        <div id="amz-wiz-autofix-wrap" class="hidden mb-3">
+          <button id="amz-wiz-autofix-btn" onclick="window._amzWizAutoFix()"
+                  class="w-full text-xs bg-amber-500 hover:bg-amber-600 text-white font-semibold px-3 py-2 rounded-xl transition disabled:opacity-50 disabled:cursor-not-allowed">
+            🤖 Auto-corregir con IA — identificar y aplicar atributos faltantes
+          </button>
+          <div id="amz-wiz-autofix-status" class="hidden mt-2 text-[10px] text-gray-500 text-center"></div>
+        </div>
 
         <!-- Success state -->
         <div id="amz-wiz-success" class="hidden text-center py-8">
@@ -2355,6 +2362,82 @@ function _amzWizBuildReview() {
   }).join('');
 }
 
+// ─── Auto-fix Amazon errors ───────────────────────────────────────────────────
+window._amzWizAutoFix = async function() {
+  var btn    = document.getElementById('amz-wiz-autofix-btn');
+  var status = document.getElementById('amz-wiz-autofix-status');
+  var errEl  = document.getElementById('amz-wiz-submit-error');
+
+  if (!_wiz._lastIssues || !_wiz._lastIssues.length) {
+    if (status) { status.textContent = 'Sin errores almacenados. Intenta publicar primero.'; status.classList.remove('hidden'); }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Analizando y corrigiendo errores…'; }
+  if (status) { status.textContent = 'Identificando atributos faltantes…'; status.classList.remove('hidden'); }
+
+  var payload = _wiz._lastPayload || {};
+
+  try {
+    var r = await fetch('/api/amazon/lanzar/auto-fix-errors', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        seller_id:    payload.seller_id,
+        sku:          payload.sku,
+        product_type: payload.product_type || _wiz.product_type || '',
+        issues:       _wiz._lastIssues,
+        payload:      payload,
+      }),
+    });
+    var d = await r.json();
+
+    if (d.ok) {
+      // Full fix — show success and re-enable publish
+      if (errEl) errEl.classList.add('hidden');
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Auto-corregir con IA — identificar y aplicar atributos faltantes'; }
+      if (status) {
+        var _fixed = (d.fixed_attrs || []).join(', ');
+        var _tmpl  = d.template_updated ? ' · Template actualizado ✓' : '';
+        var _ai    = d.ai_used ? ' · Usó IA' : '';
+        status.innerHTML = '✅ <strong>' + (d.fixed_attrs || []).length + ' atributos corregidos</strong>' + _ai + _tmpl +
+          '<br><span class="text-gray-400">' + _fixed + '</span>' +
+          '<br><button onclick="window._amzWizSubmitWrap()" class="mt-1.5 text-xs bg-green-600 text-white px-3 py-1 rounded-lg font-semibold hover:bg-green-700 transition">🚀 Publicar ahora</button>';
+        status.classList.remove('hidden');
+      }
+      _wiz._lastIssues = [];
+    } else if (d.partial) {
+      if (status) {
+        var _pFixed = (d.fixed_attrs || []).join(', ');
+        status.innerHTML = '⚠ Corregidos: ' + _pFixed + '<br>Errores restantes (' + d.error_count + '): ' +
+          (d.remaining_errors || []).map(function(m){ return '• ' + m; }).join('<br>');
+        status.classList.remove('hidden');
+      }
+      if (errEl) {
+        errEl.innerHTML = '<strong>Errores restantes (' + d.error_count + '):</strong><br>' +
+          (d.remaining_errors || []).map(function(m){ return '• ' + m; }).join('<br>');
+        errEl.classList.remove('hidden');
+      }
+      _wiz._lastIssues = d.issues || [];
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Reintentar auto-corrección'; }
+    } else {
+      if (status) {
+        status.textContent = '⚠ ' + (d.error || 'No se pudo corregir automáticamente.');
+        status.classList.remove('hidden');
+      }
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Auto-corregir con IA — identificar y aplicar atributos faltantes'; }
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 Auto-corregir con IA — identificar y aplicar atributos faltantes'; }
+    if (status) { status.textContent = 'Error de red: ' + e.message; status.classList.remove('hidden'); }
+  }
+};
+
+window._amzWizSubmitWrap = function() {
+  document.getElementById('amz-wiz-autofix-wrap').classList.add('hidden');
+  _amzWizSubmit();
+};
+
 // ─── Submit ───────────────────────────────────────────────────────────────────
 async function _amzWizSubmit() {
   if (_wiz.submitting) return;
@@ -2458,10 +2541,22 @@ async function _amzWizSubmit() {
       var _errMsgs  = (d.error || 'Error al publicar').split(' | ');
       var _errHtml  = _errCount > 1
         ? '<strong>Amazon encontró ' + _errCount + ' errores:</strong><br>' +
-          _errMsgs.map(function(m, i){ return '• ' + m; }).join('<br>')
+          _errMsgs.map(function(m){ return '• ' + m; }).join('<br>')
         : '⚠ ' + _errMsgs[0];
       errEl.innerHTML = _errHtml;
       errEl.classList.remove('hidden');
+      // Store payload + issues for auto-fix
+      _wiz._lastPayload = payload;
+      _wiz._lastIssues  = d.issues || [];
+      // Show auto-fix button if Amazon returned structured issues
+      var _afWrap = document.getElementById('amz-wiz-autofix-wrap');
+      var _afSt   = document.getElementById('amz-wiz-autofix-status');
+      if (_afWrap) {
+        _afWrap.classList.toggle('hidden', !(_wiz._lastIssues.length > 0));
+        if (_afSt) _afSt.classList.add('hidden');
+        var _afBtn = document.getElementById('amz-wiz-autofix-btn');
+        if (_afBtn) { _afBtn.disabled = false; _afBtn.textContent = '🤖 Auto-corregir con IA — identificar y aplicar atributos faltantes'; }
+      }
       _wiz.submitting = false;
       btnNext.disabled = false; btnNext.textContent = _t('btn_publish') || '🚀 Publicar en Amazon';
       return;

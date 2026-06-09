@@ -2905,32 +2905,40 @@ _SEED_TEMPLATES = {
         "ai_hints": "TELEVISION: item_type_keyword=televisions. special_feature enum: Smart TV, Built-In WiFi, HDR, Dolby Vision, 4K, QLED, OLED. display.type: LED/QLED/OLED/Mini LED/LCD/QNED. resolution: 720p/1080p/4K/8K.",
     },
     ("PEST_CONTROL_DEVICE", "A1AM78C64UM0Y8"): {
-        "validated": 1, "validated_at": "2026-06-08", "launch_count": 0,
+        "validated": 1, "validated_at": "2026-06-09", "launch_count": 0,
         "required_attrs": ["item_name","brand","condition_type","purchasable_offer",
             "bullet_point","product_description","generic_keyword","country_of_origin",
-            "supplier_declared_dg_hz_regulation","material","power_source_type",
-            "item_type_keyword","warranty_description"],
+            "supplier_declared_dg_hz_regulation","material_type","power_source_type",
+            "item_type_keyword","warranty_description","is_assembly_required",
+            "regulatory_compliance_certification","number_of_pieces"],
         "quality_attrs": ["specific_uses_for_product","color","item_weight",
             "item_length_width_height","special_feature","included_components",
             "model_year","list_price","model_number","model_name","recommended_browse_nodes"],
         "bonus_attrs": ["item_package_weight","item_package_dimensions","wattage","voltage"],
         "defaults": {
             "material_type": "Plástico",
-            "power_source_type": "Energía solar",
+            "power_source_type": "Alimentado por energía solar",
             "item_type_keyword": "electronic-pest-control",
             "supplier_declared_dg_hz_regulation": "not_applicable",
             "supplier_declared_has_product_identifier_exemption": True,
             "batteries_required": False, "batteries_included": False,
-            "number_of_items": 1, "country_of_origin": "CN",
+            "number_of_items": 1, "number_of_pieces": 1,
+            "is_assembly_required": False,
+            "regulatory_compliance_type": "cofepris_registration_num",
+            "regulatory_compliance_value": "N/A",
+            "country_of_origin": "CN",
             "warranty_description": "90 días garantía del vendedor",
             "recommended_browse_nodes": [{"marketplace_id": "A1AM78C64UM0Y8", "value": "23536384011"}],
         },
         "ai_hints": (
             "PEST_CONTROL_DEVICE (Amazon MX): material_type MUST be in Spanish: 'Plástico'/'Metal'/'Aluminio'/"
-            "'Acero inoxidable'. power_source_type en español: 'Energía solar'/'Batería'/'Cable eléctrico'. "
+            "'Acero inoxidable'. power_source_type en español con language_tag es_MX: 'Alimentado por energía solar'/"
+            "'Con Alimentación de Batería'/'Cable eléctrico'. "
+            "is_assembly_required=false, number_of_pieces=1 SIEMPRE requeridos. "
+            "regulatory_compliance_certification: regulation_type='cofepris_registration_num', value='N/A'. "
             "item_type_keyword: 'electronic-pest-control'. Browse node MX: 23536384011 "
             "(Repelente Eléctrico de Insectos). specific_uses: ['Mosquitos','Mosca','Exterior']. "
-            "GTIN exemption supported: supplier_declared_has_product_identifier_exemption=true."
+            "GTIN exemption: supplier_declared_has_product_identifier_exemption=true."
         ),
     },
     ("ELECTRIC_LANTERN", "A1AM78C64UM0Y8"): {
@@ -3064,7 +3072,8 @@ async def increment_template_launch(product_type: str, marketplace_id: str) -> N
 async def seed_product_type_templates() -> None:
     for (pt, mk), data in _SEED_TEMPLATES.items():
         existing = await get_product_type_template(pt, mk)
-        if not existing:
+        # Always update templates that have validated=1 in seed (reflects new required attrs discovered)
+        if not existing or data.get("validated"):
             await save_product_type_template(pt, mk, data)
 
 

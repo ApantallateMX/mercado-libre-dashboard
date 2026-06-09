@@ -1788,6 +1788,28 @@ async def create_listing(request: Request):
             _cap_u2 = (capacity_unit_attr or "liters").lower()
             attributes["capacity"] = [{"value": _cap_v2, "unit": _cap_u2, "marketplace_id": client.marketplace_id}]
 
+        # ── PEST_CONTROL_DEVICE / ELECTRIC_LANTERN — required by Amazon MX ─────
+        # Research: amazon-specialist 2026-06-09 via Product Type Definitions API
+        if product_type in ("PEST_CONTROL_DEVICE", "ELECTRIC_LANTERN"):
+            attributes["is_assembly_required"] = [{"value": False, "marketplace_id": client.marketplace_id}]
+            attributes["number_of_pieces"]     = [{"value": 1,     "marketplace_id": client.marketplace_id}]
+            # regulatory_compliance_certification — Amazon MX error: "Número de certificación de pesticida"
+            # AND "Certificado de conformidad del producto" both map to this same field.
+            # cofepris_registration_num is the applicable regulation_type for MX pest control devices.
+            # Electric zappers are physical, not chemical — "N/A" is accepted as value.
+            attributes["regulatory_compliance_certification"] = [{
+                "regulation_type": "cofepris_registration_num",
+                "value": "N/A",
+                "marketplace_id": client.marketplace_id,
+            }]
+            # power_source_type requires language_tag in MX — override the generic one set above
+            _pst_mx = power_source_type or "Alimentado por energía solar"
+            attributes["power_source_type"] = [{
+                "value": _pst_mx,
+                "language_tag": "es_MX",
+                "marketplace_id": client.marketplace_id,
+            }]
+
         # ── Voltage — required for appliances by Amazon ───────────────────────
         _NEEDS_VOLTAGE = {"VACUUM_CLEANER","VACUUM","FAN","AIR_CONDITIONER","COFFEE_MAKER",
                           "BLENDER","MICROWAVE_OVEN","HAIR_DRYER","ELECTRIC_SHAVER","TOASTER",
@@ -1999,6 +2021,195 @@ async def create_listing(request: Request):
             pass
 
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku, "product_type": product_type}
+
+
+# ── 3c. Auto-fix de errores Amazon ───────────────────────────────────────────
+# Mapeo: fragmento del mensaje de error en español (Seller Central MX) → atributo SP-API + valor default
+# Construido con datos del schema real de Amazon: Product Type Definitions API (2026-06-09)
+_MX_ERROR_ATTR_MAP: list[tuple[str, dict]] = [
+    # (fragmento lowercase del mensaje, {attr, value, ?language_tag, ?unit, ?complex})
+    ("requiere montaje",                    {"attr": "is_assembly_required",  "value": False}),
+    ("número de certificación de pesticida",{"attr": "regulatory_compliance_certification",
+                                             "value": [{"regulation_type": "cofepris_registration_num", "value": "N/A"}],
+                                             "complex": True}),
+    ("certificado de conformidad del producto", {"attr": "regulatory_compliance_certification",
+                                             "value": [{"regulation_type": "cofepris_registration_num", "value": "N/A"}],
+                                             "complex": True}),
+    ("es eléctrico",                        {"attr": "power_source_type",     "value": "Alimentado por energía solar", "language_tag": "es_MX"}),
+    ("número de piezas",                    {"attr": "number_of_pieces",      "value": 1}),
+    ("material",                            {"attr": "material_type",         "value": "Plástico"}),
+    ("fuente de alimentación",              {"attr": "power_source_type",     "value": "Corded Electric"}),
+    ("fuente de energía",                   {"attr": "power_source_type",     "value": "Corded Electric"}),
+    ("baterías requeridas",                 {"attr": "batteries_required",    "value": False}),
+    ("baterías incluidas",                  {"attr": "batteries_included",    "value": False}),
+    ("número de artículos",                 {"attr": "number_of_items",       "value": 1}),
+    ("tipo de forma",                       {"attr": "form_factor",           "value": "Stick"}),
+    ("tipo de filtro",                      {"attr": "filter_type",           "value": "Foam"}),
+    ("tipo de superficie",                  {"attr": "surface_type",          "value": "Multi-Surface"}),
+    ("tensión",                             {"attr": "voltage",               "value": 127, "unit": "volts"}),
+    ("certificado de cumplimiento",         {"attr": "required_product_compliance_certificate", "value": "Not Applicable"}),
+    ("descripción de garantía",             {"attr": "warranty_description",  "value": "90 días garantía del vendedor"}),
+    ("palabras clave del tipo de artículo", {"attr": "item_type_keyword",     "value": "electronic-pest-control"}),
+    ("país de origen",                      {"attr": "country_of_origin",     "value": "CN"}),
+    ("es recondicionado",                   {"attr": "is_refurbished",        "value": False}),
+    ("tipo de montaje",                     {"attr": "mounting_type",         "value": "Wall Mount"}),
+    ("resistente al agua",                  {"attr": "is_waterproof",         "value": False}),
+    ("número de configuraciones",           {"attr": "number_of_settings",    "value": 1}),
+    ("tipo de artículo",                    {"attr": "item_type_keyword",     "value": "electronic-pest-control"}),
+]
+
+
+@router.post("/auto-fix-errors")
+async def auto_fix_errors(request: Request):
+    """
+    Recibe errors de Amazon + payload original, aplica fixes automáticos vía PATCH,
+    y guarda los atributos corregidos como defaults del template de la categoría.
+    Flow: map errors → SP-API attributes → PATCH listing → save to template.
+    """
+    body         = await request.json()
+    seller_id    = body.get("seller_id")
+    sku          = (body.get("sku") or "").strip()
+    product_type = (body.get("product_type") or "PRODUCT").strip().upper()
+    issues       = body.get("issues") or []
+
+    client = await get_amazon_client(seller_id=seller_id)
+    if not client:
+        return JSONResponse({"error": "no_account"}, status_code=401)
+    if not sku:
+        return JSONResponse({"error": "SKU requerido"}, status_code=400)
+
+    errors = [i for i in issues if i.get("severity") == "ERROR"]
+    if not errors:
+        return JSONResponse({"error": "Sin errores que corregir"})
+
+    # ── Step 1: map known error messages → attribute patches ──────────────────
+    attr_patches: dict = {}   # {attr_name: [SP-API value list]}
+    fixed_labels: list = []
+    unknown_msgs: list = []
+    seen_attrs:   set  = set()
+
+    for err in errors:
+        msg = (err.get("message") or "").lower()
+        matched = False
+        for fragment, fix in _MX_ERROR_ATTR_MAP:
+            if fragment in msg:
+                attr_name = fix["attr"]
+                if attr_name in seen_attrs:
+                    matched = True
+                    break
+                seen_attrs.add(attr_name)
+                if fix.get("complex"):
+                    attr_patches[attr_name] = [
+                        dict(v, marketplace_id=client.marketplace_id)
+                        for v in fix["value"]
+                    ]
+                elif "language_tag" in fix:
+                    attr_patches[attr_name] = [{"value": fix["value"], "language_tag": fix["language_tag"],
+                                                "marketplace_id": client.marketplace_id}]
+                elif "unit" in fix:
+                    attr_patches[attr_name] = [{"value": fix["value"], "unit": fix["unit"],
+                                                "marketplace_id": client.marketplace_id}]
+                else:
+                    attr_patches[attr_name] = [{"value": fix["value"], "marketplace_id": client.marketplace_id}]
+                fixed_labels.append(f"{attr_name}={fix['value']!r}")
+                matched = True
+                break
+        if not matched:
+            unknown_msgs.append(err.get("message", ""))
+
+    # ── Step 2: AI for unmapped errors ────────────────────────────────────────
+    ai_used = False
+    if unknown_msgs and _or_client.is_available():
+        ai_prompt = (
+            f"Amazon SP-API listing for product type {product_type} on marketplace "
+            f"A1AM78C64UM0Y8 (Mexico MX) returned these validation errors:\n"
+            + "\n".join(f"- {m}" for m in unknown_msgs)
+            + "\n\nFor EACH error, return a JSON array of objects: "
+            '{"attr":"sp_api_attribute_name","value":...,"language_tag":"es_MX"(only if string in MX)}. '
+            "Use real SP-API attribute names (snake_case English). Booleans as true/false. Integers as numbers. "
+            "Return ONLY the JSON array, no explanation."
+        )
+        try:
+            import re as _re, json as _json
+            ai_text = await _or_client.generate(
+                ai_prompt,
+                system="You are an Amazon SP-API expert. Return valid JSON only, no prose.",
+                max_tokens=400,
+                model=_or_client.get_premium_model(),
+            )
+            arr_m = _re.search(r"\[.*\]", ai_text, _re.DOTALL)
+            if arr_m:
+                ai_fixes = _json.loads(arr_m.group(0))
+                for fix in (ai_fixes if isinstance(ai_fixes, list) else []):
+                    attr_name = fix.get("attr")
+                    if attr_name and attr_name not in seen_attrs:
+                        seen_attrs.add(attr_name)
+                        _v = fix.get("value")
+                        _lt = fix.get("language_tag")
+                        entry: dict = {"value": _v, "marketplace_id": client.marketplace_id}
+                        if _lt:
+                            entry["language_tag"] = _lt
+                        attr_patches[attr_name] = [entry]
+                        fixed_labels.append(f"{attr_name}={_v!r} (AI)")
+                        ai_used = True
+        except Exception as _ae:
+            logger.warning(f"[auto-fix] AI resolution failed: {_ae}")
+
+    if not attr_patches:
+        return JSONResponse({
+            "error": "No se pudo identificar cómo corregir los errores automáticamente",
+            "unknown": unknown_msgs,
+        })
+
+    # ── Step 3: PATCH the listing ─────────────────────────────────────────────
+    try:
+        result         = await client.patch_listing_attributes(sku, product_type, attr_patches)
+        result_issues  = result.get("issues") or []
+        remaining_errs = [i for i in result_issues if i.get("severity") == "ERROR"]
+
+        # ── Step 4: save successful fixes to template ─────────────────────────
+        template_updated = False
+        if not remaining_errs:
+            try:
+                from app.services.token_store import (
+                    get_product_type_template as _gpt,
+                    save_product_type_template as _spt,
+                )
+                existing = await _gpt(product_type, client.marketplace_id)
+                if existing:
+                    new_defaults = dict(existing.get("defaults") or {})
+                    for attr_name, val_list in attr_patches.items():
+                        if val_list and isinstance(val_list, list):
+                            v = val_list[0].get("value")
+                            if v is not None and not isinstance(v, list):
+                                new_defaults[attr_name] = v
+                    existing["defaults"] = new_defaults
+                    await _spt(product_type, client.marketplace_id, existing)
+                    template_updated = True
+            except Exception as _te:
+                logger.warning(f"[auto-fix] Template update failed: {_te}")
+
+            logger.info(f"[auto-fix] SKU={sku} pt={product_type} fixed={fixed_labels}")
+            return JSONResponse({
+                "ok": True,
+                "fixed_attrs": fixed_labels,
+                "ai_used": ai_used,
+                "template_updated": template_updated,
+                "status": result.get("status"),
+            })
+
+        # Partial fix — some errors remain
+        return JSONResponse({
+            "partial": True,
+            "fixed_attrs": fixed_labels,
+            "remaining_errors": [i.get("message") for i in remaining_errs],
+            "error_count": len(remaining_errs),
+            "issues": remaining_errs,
+        })
+
+    except Exception as e:
+        logger.exception(f"[auto-fix] PATCH failed for SKU={sku}")
+        return JSONResponse({"error": str(e)[:300]}, status_code=500)
 
 
 # ── 3b. Búsqueda de imágenes reales del producto (multi-fuente: DDG + Bing) ───
