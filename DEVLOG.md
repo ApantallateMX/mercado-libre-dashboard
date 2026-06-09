@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-09 — FEAT: Wizard inteligente — campos dinámicos por categoría, auto-detect PT, web search
+
+### Commit: 75f3513
+
+### Cambios implementados
+1. **Campos dinámicos por categoría**: Panel "Atributos requeridos por categoría" en paso 3 del wizard. Cuando se selecciona un product type, el wizard carga los `field_defs` del template validado (GET /template-fields) y renderiza los campos específicos de esa categoría con sus defaults correctos. Soporta select, boolean, number, multi_select, text.
+
+2. **Auto-detect product type**: GET /detect-product-type mapea BM category → Amazon product type usando `_BM_CATEGORY_TO_PT` (30+ categorías) y `_SKU_PREFIX_TO_PT` (SNTV→TELEVISION). Se dispara automáticamente al entrar al paso 3 del wizard. Badge verde "✅ Auto-detectado desde categoría BM" cuando funciona.
+
+3. **Web search 3 fuentes paralelas**: `_research_product_specs` ahora usa 3 fuentes en `asyncio.gather`: UPC ItemDB (real data) + AI knowledge base (antes deshabilitado por api_key guard) + DuckDuckGo+Jina Reader (web scraping). Merge: UPC > web > AI.
+
+4. **category_attrs en create_listing**: El payload del wizard puede incluir `category_attrs` (dict) con los valores del panel dinámico. El backend los aplica correctamente incluyendo: `language_tag: es_MX` para power_source_type en MX, booleans, multi-select lists, country ISO mapping.
+
+5. **9 fotos**: Wizard expandido de 3→5 URL inputs en sección fotos reales (total hasta 9 fotos = 5 reales + 3 lifestyle + BM checkbox).
+
+6. **DB migrations**: `field_defs_json TEXT` en `amz_product_type_templates` + nueva tabla `amz_launched_listings` para tracking post-publicación.
+
+7. **Templates actualizados**: TELEVISION, PEST_CONTROL_DEVICE, ELECTRIC_LANTERN, VACUUM_CLEANER con `field_defs` completos (15 campos TV, 9 PEST_CONTROL, 7 ELECTRIC_LANTERN, 9 VACUUM_CLEANER).
+
+### Nuevos endpoints
+- `GET /api/amazon/lanzar/template-fields?product_type=X&seller_id=Y`
+- `GET /api/amazon/lanzar/detect-product-type?category=X&sku=Y&title=Z`
+- `GET /api/amazon/lanzar/launched-listings?seller_id=X`
+
+---
+
 ## 2026-06-09 — FEAT: PEST_CONTROL_DEVICE fix + sistema auto-fix de errores Amazon
 
 ### Contexto
