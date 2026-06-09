@@ -536,53 +536,32 @@
               </div>
             </div>
 
-            <!-- Search real product images -->
+            <!-- Search real product images — multi-source auto -->
             <div class="mb-3">
-              <div class="flex flex-wrap items-center gap-2 mb-2">
+              <div class="flex items-center gap-2 mb-1.5">
                 <button id="amz-wiz-search-img-btn" onclick="window._amzWizSearchImages()"
-                        class="text-[10px] bg-blue-600 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                  🔍 Auto-buscar imágenes
+                        class="text-xs bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5">
+                  🔍 Buscar imágenes
                 </button>
-                <button onclick="window._amzWizOpenSearch('google')"
-                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition flex items-center gap-1">
-                  <svg class="w-3 h-3" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                  Google Imágenes
-                </button>
-                <button onclick="window._amzWizOpenSearch('bing')"
-                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
-                  🔵 Bing Imágenes
-                </button>
-                <button onclick="window._amzWizOpenSearch('bestbuy')"
-                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
-                  🏪 Best Buy
-                </button>
-                <button onclick="window._amzWizOpenSearch('walmart')"
-                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
-                  🛒 Walmart
-                </button>
-                <button onclick="window._amzWizOpenSearch('wayfair')"
-                        class="text-[10px] bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-gray-50 transition">
-                  🛖 Wayfair
-                </button>
-                <button onclick="window._amzWizOpenSearch('homedepot')"
-                        class="text-[10px] bg-white border border-orange-300 text-orange-700 px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-50 transition">
-                  🏠 Home Depot
-                </button>
+                <span id="amz-wiz-real-img-sources" class="text-[9px] text-gray-400 hidden"></span>
               </div>
-              <p class="text-[9px] text-gray-400 mb-2">Los botones abren búsqueda en pestaña nueva — copia la URL de la imagen y pégala abajo. Auto-buscar usa el título completo del producto.</p>
-              <!-- Home Depot ID scraper -->
-              <div class="flex items-center gap-2 mb-2">
-                <input id="amz-wiz-hd-id" type="text" placeholder="ID Home Depot (ej: 1006324380)"
-                       class="flex-1 text-xs border border-orange-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono"
-                       oninput="this.value=this.value.replace(/\D/g,'')">
-                <button id="amz-wiz-hd-btn" onclick="window._amzWizScrapeHomeDepot()"
-                        class="shrink-0 text-[10px] bg-orange-500 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-600 transition disabled:opacity-50">
-                  🏠 Extraer fotos HD
-                </button>
-              </div>
+              <p class="text-[9px] text-gray-400 mb-2">Busca automáticamente en DuckDuckGo y Bing en paralelo — prioriza imágenes de retailers confiables (HD, Best Buy, Wayfair…).</p>
+              <!-- Advanced: Home Depot ID scraper (colapsado) -->
+              <details class="mb-2">
+                <summary class="text-[9px] text-gray-400 cursor-pointer hover:text-gray-600 select-none">🔧 Opciones avanzadas (ID Home Depot)</summary>
+                <div class="flex items-center gap-2 mt-1.5">
+                  <input id="amz-wiz-hd-id" type="text" placeholder="ID Home Depot (ej: 1006324380)"
+                         class="flex-1 text-xs border border-orange-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-orange-400 transition font-mono"
+                         oninput="this.value=this.value.replace(/\D/g,'')">
+                  <button id="amz-wiz-hd-btn" onclick="window._amzWizScrapeHomeDepot()"
+                          class="shrink-0 text-[10px] bg-orange-500 text-white px-3 py-1.5 rounded-lg font-semibold hover:bg-orange-600 transition disabled:opacity-50">
+                    🏠 Extraer fotos HD
+                  </button>
+                </div>
+              </details>
               <!-- Real images grid -->
               <div id="amz-wiz-real-img-grid" class="hidden">
-                <p class="text-[10px] text-gray-500 mb-1.5 font-semibold">Selecciona las imágenes a usar (clic para agregar URL):</p>
+                <p class="text-[10px] text-gray-500 mb-1.5 font-semibold">Selecciona las imágenes (clic para agregar):</p>
                 <div class="grid grid-cols-3 gap-2" id="amz-wiz-real-img-results"></div>
               </div>
               <div id="amz-wiz-real-img-status" class="hidden text-[10px] text-gray-400 py-2"></div>
@@ -1086,7 +1065,7 @@ window.openAmzLanzar = function(sku, title, priceSug, upc, sellerId, costMxn, br
   var _hfBtn = document.getElementById('amz-wiz-hf-btn'); if (_hfBtn) { _hfBtn.disabled = false; _hfBtn.textContent = '🌟 Generar con Higgsfield IA'; }
   var _riGrid = document.getElementById('amz-wiz-real-img-grid'); if (_riGrid) _riGrid.classList.add('hidden');
   var _riStatus = document.getElementById('amz-wiz-real-img-status'); if (_riStatus) _riStatus.classList.add('hidden');
-  var _sBtn = document.getElementById('amz-wiz-search-img-btn'); if (_sBtn) { _sBtn.disabled = false; _sBtn.textContent = '🔍 Auto-buscar imágenes'; }
+  var _sBtn = document.getElementById('amz-wiz-search-img-btn'); if (_sBtn) { _sBtn.disabled = false; _sBtn.innerHTML = '🔍 Buscar imágenes'; }
   // Atributos: pre-llenar marca/modelo desde BM
   var bEl = document.getElementById('amz-wiz-brand'); if (bEl) bEl.value = _wiz.brand || '';
   var mEl = document.getElementById('amz-wiz-model-num'); if (mEl) mEl.value = _wiz.model || '';
@@ -1837,17 +1816,19 @@ window._amzWizOpenSearch = function(engine) {
   window.open(urls[engine] || urls.google, '_blank');
 };
 
-// ─── Real product image search ───────────────────────────────────────────────
+// ─── Real product image search (multi-source: DDG + Bing) ────────────────────
 window._amzWizSearchImages = function() {
-  var btn    = document.getElementById('amz-wiz-search-img-btn');
-  var grid   = document.getElementById('amz-wiz-real-img-results');
-  var wrap   = document.getElementById('amz-wiz-real-img-grid');
-  var status = document.getElementById('amz-wiz-real-img-status');
-  var inputs = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
+  var btn     = document.getElementById('amz-wiz-search-img-btn');
+  var grid    = document.getElementById('amz-wiz-real-img-results');
+  var wrap    = document.getElementById('amz-wiz-real-img-grid');
+  var status  = document.getElementById('amz-wiz-real-img-status');
+  var srcBadge = document.getElementById('amz-wiz-real-img-sources');
+  var inputs  = Array.from(document.querySelectorAll('.amz-wiz-photo-url'));
 
   if (btn && btn.disabled) return;
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Buscando…'; }
-  if (status) { status.textContent = 'Buscando imágenes reales del producto…'; status.classList.remove('hidden'); }
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Buscando en DuckDuckGo + Bing…'; }
+  if (status) { status.textContent = 'Buscando en múltiples fuentes…'; status.classList.remove('hidden'); }
+  if (srcBadge) srcBadge.classList.add('hidden');
   if (wrap) wrap.classList.add('hidden');
 
   var brand = (document.getElementById('amz-wiz-brand') || {}).value || (_wiz.brand || '');
@@ -1862,18 +1843,22 @@ window._amzWizSearchImages = function() {
   fetch('/api/amazon/lanzar/search-product-images?' + params)
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-buscar imágenes'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Buscar imágenes'; }
       var imgs = d.images || [];
+      // Show sources used
+      if (srcBadge) {
+        var srcs = (d.sources || []).join(' + ');
+        var total = d.total_candidates || imgs.length;
+        srcBadge.textContent = srcs ? ('Fuentes: ' + srcs + ' · ' + total + ' candidatos → ' + imgs.length + ' mejores') : '';
+        srcBadge.classList.toggle('hidden', !srcs);
+      }
       if (!imgs.length) {
-        if (status) status.textContent = 'Sin resultados. Prueba buscar manualmente en Google Images: ' + [brand, model].join(' ');
+        if (status) { status.textContent = 'Sin resultados — intenta con la URL del fabricante abajo.'; status.classList.remove('hidden'); }
         return;
       }
       if (status) status.classList.add('hidden');
       if (wrap)  wrap.classList.remove('hidden');
       grid.innerHTML = '';
-
-      // Track which URL inputs are available
-      var usedInputs = [];
 
       imgs.forEach(function(img, idx) {
         var div = document.createElement('div');
@@ -1890,12 +1875,11 @@ window._amzWizSearchImages = function() {
           '</div>'
         );
         div.addEventListener('click', function() {
-          // Find next empty input
           var target = null;
           for (var i = 0; i < Math.min(3, inputs.length); i++) {
             if (!inputs[i].value.trim()) { target = inputs[i]; break; }
           }
-          if (!target) target = inputs[0]; // overwrite first if all full
+          if (!target) target = inputs[0];
           target.value = img.url;
           target.dispatchEvent(new Event('input'));
           target.style.borderColor = '#3b82f6';
@@ -1908,8 +1892,8 @@ window._amzWizSearchImages = function() {
       });
     })
     .catch(function(e) {
-      if (btn) { btn.disabled = false; btn.textContent = '🔍 Auto-buscar imágenes'; }
-      if (status) status.textContent = 'Error al buscar. Intenta de nuevo.';
+      if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Buscar imágenes'; }
+      if (status) { status.textContent = 'Error al buscar. Intenta de nuevo.'; status.classList.remove('hidden'); }
     });
 };
 

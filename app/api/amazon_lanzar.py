@@ -2001,78 +2001,216 @@ async def create_listing(request: Request):
     return {"ok": True, "asin": new_asin, "status": status_resp, "sku": sku, "product_type": product_type}
 
 
-# ── 3b. Búsqueda de imágenes reales del producto (DuckDuckGo) ────────────────
+# ── 3b. Búsqueda de imágenes reales del producto (multi-fuente: DDG + Bing) ───
 
 @router.get("/search-product-images")
 async def search_product_images(
     q: str = Query("", description="Búsqueda: marca + modelo"),
     brand: str = Query("", description="Marca del producto"),
     model: str = Query("", description="Modelo del producto"),
+    title: str = Query("", description="Título completo del producto para query más preciso"),
 ):
-    """Busca imágenes reales del producto usando DuckDuckGo y filtra por fuentes confiables."""
+    """Busca imágenes del producto en paralelo: DuckDuckGo + Bing.
+    Imágenes que aparecen en ambas fuentes reciben bonus de confianza.
+    Prioriza CDNs de retailers (thdstatic, bbystatic, etc.) sobre fuentes genéricas."""
     import urllib.parse as _up
     import httpx as _hx
     import re as _re
+    import asyncio as _asyncio
 
-    query = q.strip() or f"{brand} {model}".strip()
+    if title and title.strip():
+        query = title.strip()[:120]
+    elif q.strip():
+        query = q.strip()
+    else:
+        query = f"{brand} {model}".strip()
     if not query:
         return JSONResponse({"images": []})
 
-    # DDG image search: first get vqd token, then fetch images
-    try:
-        async with _hx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            # Step 1: get vqd token
+    # CDN-first domain list — thdstatic/bbystatic rank highest as pure product CDNs
+    _TRUSTED_DOMAINS = [
+        "thdstatic.com", "bbystatic.com",                             # retailer CDNs (highest trust)
+        "homedepot.com", "bestbuy.com", "lowes.com", "wayfair.com",
+        "walmart.com", "target.com", "costco.com", "amazon.com",
+        "hamptonbay.com", "westinghouse.com", "lg.com", "samsung.com",
+        "sony.com", "whirlpool.com", "ge.com", "broan.com", "hunter.com",
+        "skeeter", "progress", "kichler", "hubbell", "lutron",
+    ]
+    _SKIP_DOMAINS = [
+        "pinterest", "facebook", "instagram", "twitter", "reddit",
+        "youtube", "tumblr", "flickr", "imageshack", "imgur",
+        "aliexpress", "alibaba", "wish.com", "temu", "google.com/url",
+    ]
+
+    def _score(url: str, w: int = 0, h: int = 0) -> int:
+        low = url.lower()
+        if any(s in low for s in _SKIP_DOMAINS):
+            return -1
+        base = 1
+        for i, d in enumerate(_TRUSTED_DOMAINS):
+            if d in low:
+                base = len(_TRUSTED_DOMAINS) - i + 3
+                break
+        res_bonus = 2 if (w >= 800 or h >= 800) else (1 if (w >= 400 or h >= 400) else 0)
+        return base + res_bonus
+
+    async def _ddg(q_str: str, client) -> list:
+        try:
             r1 = await client.post(
                 "https://duckduckgo.com/",
-                data={"q": query},
+                data={"q": q_str},
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             )
-            vqd_match = _re.search(r'vqd=(["\'])([^"\']+)\1', r1.text) or _re.search(r'vqd=([\d-]+)', r1.text)
-            if not vqd_match:
-                return JSONResponse({"images": [], "error": "no_token"})
-            vqd = vqd_match.group(2) if vqd_match.lastindex >= 2 else vqd_match.group(1)
-
-            # Step 2: fetch images JSON
-            params = {
-                "q": query, "vqd": vqd, "p": "1",
-                "f": ",,,,,", "l": "us-en", "o": "json", "s": "0",
-            }
+            vm = _re.search(r'vqd=(["\'])([^"\']+)\1', r1.text) or _re.search(r'vqd=([\d-]+)', r1.text)
+            if not vm:
+                return []
+            vqd = vm.group(2) if vm.lastindex >= 2 else vm.group(1)
             r2 = await client.get(
                 "https://duckduckgo.com/i.js",
-                params=params,
+                params={"q": q_str, "vqd": vqd, "p": "1", "f": ",,,,,", "l": "us-en", "o": "json", "s": "0"},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://duckduckgo.com/"},
+            )
+            imgs = []
+            for item in (r2.json().get("results") or [])[:35]:
+                url = item.get("image") or ""
+                if not url or not url.startswith("http"):
+                    continue
+                w, h = item.get("width") or 0, item.get("height") or 0
+                s = _score(url, w, h)
+                if s < 0:
+                    continue
+                imgs.append({"url": url, "thumb": item.get("thumbnail") or url,
+                              "width": w, "height": h, "source": item.get("source") or "",
+                              "_score": s, "_src": "ddg"})
+            return imgs
+        except Exception:
+            return []
+
+    async def _bing(q_str: str, client) -> list:
+        try:
+            r = await client.get(
+                "https://www.bing.com/images/async",
+                params={"q": q_str, "count": "35", "first": "0", "adlt": "off",
+                        "qft": "+filterui:imagesize-large"},
                 headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://duckduckgo.com/",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": "https://www.bing.com/images/search?q=" + _up.quote(q_str),
                 },
             )
-            data = r2.json()
+            imgs, seen = [], set()
+            for m in _re.finditer(
+                r'"murl"\s*:\s*"(https://[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"', r.text, _re.I
+            ):
+                url = m.group(1).replace("\\u0026", "&").replace("\\/", "/")
+                if url in seen:
+                    continue
+                seen.add(url)
+                s = _score(url)
+                if s < 0:
+                    continue
+                imgs.append({"url": url, "thumb": url, "source": "bing", "_score": s, "_src": "bing"})
+            return imgs[:30]
+        except Exception:
+            return []
 
-        results = data.get("results") or []
-        # Trusted sources: manufacturer sites, major retailers, press images
-        trusted_domains = (
-            brand.lower().replace(" ", "") if brand else "",
-        )
-        images = []
-        for item in results[:30]:
-            url = item.get("image") or ""
-            if not url or not url.startswith("http"):
-                continue
-            # Skip sketchy/low-res sources; prefer manufacturer / retailer domains
-            images.append({
-                "url": url,
-                "thumb": item.get("thumbnail") or url,
-                "width": item.get("width") or 0,
-                "height": item.get("height") or 0,
-                "source": item.get("source") or "",
-            })
-            if len(images) >= 9:
-                break
+    try:
+        async with _hx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            ddg_list, bing_list = await _asyncio.gather(
+                _ddg(query, client),
+                _bing(query, client),
+                return_exceptions=True,
+            )
 
-        return JSONResponse({"images": images, "query": query})
+        ddg_list  = ddg_list  if isinstance(ddg_list,  list) else []
+        bing_list = bing_list if isinstance(bing_list, list) else []
+
+        # Pool: same URL in both sources → +3 confidence bonus
+        pool: dict[str, dict] = {}
+        for img in ddg_list + bing_list:
+            url = img["url"]
+            if url in pool:
+                pool[url]["_score"] += 3
+            else:
+                pool[url] = dict(img)
+
+        candidates = sorted(pool.values(), key=lambda x: x["_score"], reverse=True)
+        images = [{k: v for k, v in c.items() if k not in ("_score", "_src")} for c in candidates[:9]]
+        sources = ([("DuckDuckGo", len(ddg_list))] if ddg_list else []) + \
+                  ([("Bing", len(bing_list))] if bing_list else [])
+        logger.info(f"[img-search] query={query!r} ddg={len(ddg_list)} bing={len(bing_list)} pool={len(pool)} → {len(images)}")
+        return JSONResponse({"images": images, "query": query,
+                             "sources": [s for s, _ in sources],
+                             "total_candidates": len(pool)})
 
     except Exception as _e:
         logger.warning(f"[search-product-images] Error: {_e}")
         return JSONResponse({"images": [], "error": str(_e)[:100]})
+
+
+# ── 3b1b. Home Depot product scraper ─────────────────────────────────────────
+
+@router.get("/scrape-homedepot")
+async def scrape_homedepot(product_id: str = Query("", description="ID numérico del producto en Home Depot")):
+    """Extrae imágenes oficiales de un producto de Home Depot via Jina Reader."""
+    import httpx as _hx
+    import re as _re
+    import json as _json
+
+    pid = product_id.strip().lstrip("#").strip()
+    if not pid or not pid.isdigit():
+        return JSONResponse({"images": [], "error": "ID numérico requerido (ej: 1006324380)"})
+
+    hd_url = f"https://www.homedepot.com/p/{pid}"
+    jina_url = f"https://r.jina.ai/{hd_url}"
+
+    try:
+        async with _hx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(jina_url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "text/html",
+            })
+        text = resp.text
+
+        images = []
+        seen = set()
+
+        def _add_img(url: str, source: str = "homedepot.com"):
+            url = url.strip()
+            if not url.startswith("http") or url in seen:
+                return
+            low = url.lower()
+            if any(x in low for x in ("placeholder", "spinner", "logo", "icon", ".svg", ".gif")):
+                return
+            seen.add(url)
+            # Prefer HD CDN full-size: remove size suffixes
+            url = _re.sub(r'_(\d+)x(\d+)?\.', lambda m: f'_{max(int(m.group(1)), 1000)}x.', url)
+            images.append({"url": url, "thumb": url, "source": source})
+
+        # Pattern 1: HD product images follow the pattern /catalog/productImages/...
+        for m in _re.finditer(r'https://images\.thdstatic\.com/productImages/[^\s\'"<>]+\.(?:jpg|jpeg|png|webp)', text, _re.I):
+            _add_img(m.group(0))
+
+        # Pattern 2: JSON-LD image arrays
+        for m in _re.finditer(r'"image"\s*:\s*\[([^\]]+)\]', text):
+            for url_m in _re.finditer(r'"(https://[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"', m.group(1)):
+                _add_img(url_m.group(1))
+
+        # Pattern 3: og:image
+        for m in _re.finditer(r'og:image["\s]+content="(https://[^"]+)"', text, _re.I):
+            _add_img(m.group(1))
+
+        # Pattern 4: any thdstatic CDN URL in text
+        if not images:
+            for m in _re.finditer(r'https://[^\s\'"<>]*thdstatic[^\s\'"<>]*\.(?:jpg|jpeg|png)', text, _re.I):
+                _add_img(m.group(0))
+
+        logger.info(f"[HD scraper] product_id={pid} → {len(images)} images found")
+        return JSONResponse({"images": images[:9], "product_id": pid, "url": hd_url})
+
+    except Exception as e:
+        logger.warning(f"[HD scraper] Error: {e}")
+        return JSONResponse({"images": [], "error": str(e)[:200]})
 
 
 # ── 3b2. Scraper de URL de producto — extrae imágenes y specs ────────────────
