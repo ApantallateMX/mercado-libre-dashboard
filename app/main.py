@@ -13066,6 +13066,8 @@ async def returns_unified_top(
     retail_map = _get_retail_ph_map()
     counts: dict = {}
     total_all = 0
+    ml_total_count = 0
+    amz_total_count = 0
 
     # ── ML claims ────────────────────────────────────────────────────────────
     if platform in ("all", "ml"):
@@ -13082,10 +13084,8 @@ async def returns_unified_top(
                         return []
                     try:
                         claims = await _fetch_all_claims_cached(cli, df, dt)
-                        for c in claims:
-                            c["_account_id"] = uid
-                            c["_account_nickname"] = nick
-                        return claims
+                        # copy dicts to avoid mutating the shared cache
+                        return [dict(c, _account_id=uid, _account_nickname=nick) for c in claims]
                     finally:
                         await cli.close()
                 except Exception:
@@ -13099,62 +13099,74 @@ async def returns_unified_top(
             if isinstance(r, list):
                 ml_claims.extend(r)
 
-        # Fetch order info for ML claims
-        oids_acc_u: dict = {}
+        # Group order IDs by account so we reuse ONE client per account
+        oids_by_acc: dict = {}
         for c in ml_claims:
-            if c.get("resource") != "order" or not c.get("resource_id"):
+            if not c.get("resource_id"):
                 continue
             oid = str(c["resource_id"])
-            if oid not in oids_acc_u:
-                oids_acc_u[oid] = c.get("_account_id", "")
+            acc_id = c.get("_account_id", "")
+            if acc_id not in oids_by_acc:
+                oids_by_acc[acc_id] = []
+            if oid not in oids_by_acc[acc_id]:
+                oids_by_acc[acc_id].append(oid)
 
-        max_ords_u = max(limit * 6, 120)
-        oids_list_u = list(oids_acc_u.items())[:max_ords_u]
-        sem_ord_u = asyncio.Semaphore(3)
+        max_per_acc = max(limit * 3, 30)
         order_map_u: dict = {}
+        sem_acc_ord = asyncio.Semaphore(2)
 
-        async def _fetch_ord_u(oid: str, acc_id: str):
-            async with sem_ord_u:
+        async def _fetch_acc_orders(acc_id: str, oids: list):
+            async with sem_acc_ord:
+                cli = await get_meli_client(user_id=acc_id)
+                if not cli:
+                    return
                 try:
-                    cli = await get_meli_client(user_id=acc_id)
-                    if not cli:
-                        return oid, {}
-                    try:
-                        order = await asyncio.wait_for(cli.get(f"/orders/{oid}"), timeout=8.0)
-                        oi = order.get("order_items", [])
-                        if oi:
-                            item = oi[0].get("item", {})
-                            iid = str(item.get("id", ""))
-                            sku = item.get("seller_custom_field") or ""
-                            if not sku and iid:
-                                try:
-                                    det = await asyncio.wait_for(
-                                        cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
-                                        timeout=5.0
-                                    )
-                                    sku = det.get("seller_custom_field") or ""
-                                except Exception:
-                                    pass
-                            return oid, {
-                                "title": item.get("title", "") or "",
-                                "item_id": iid,
-                                "sku": sku,
-                                "sale_amount": float(order.get("total_amount") or 0),
-                            }
-                    finally:
-                        await cli.close()
-                except Exception:
-                    pass
-                return oid, {}
+                    sem3 = asyncio.Semaphore(3)
 
-        ord_results_u = await asyncio.gather(
-            *[_fetch_ord_u(oid, acc) for oid, acc in oids_list_u], return_exceptions=True
+                    async def _one_order(oid):
+                        async with sem3:
+                            try:
+                                order = await asyncio.wait_for(cli.get(f"/orders/{oid}"), timeout=8.0)
+                                oi = order.get("order_items") or []
+                                if oi:
+                                    item = oi[0].get("item", {})
+                                    iid = str(item.get("id", ""))
+                                    sku = item.get("seller_custom_field") or ""
+                                    if not sku and iid:
+                                        try:
+                                            det = await asyncio.wait_for(
+                                                cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
+                                                timeout=5.0
+                                            )
+                                            sku = det.get("seller_custom_field") or ""
+                                        except Exception:
+                                            pass
+                                    return oid, {
+                                        "title": item.get("title", "") or "",
+                                        "item_id": iid,
+                                        "sku": sku,
+                                        "sale_amount": float(order.get("total_amount") or 0),
+                                    }
+                            except Exception:
+                                pass
+                            return oid, {}
+
+                    results = await asyncio.gather(
+                        *[_one_order(o) for o in oids[:max_per_acc]], return_exceptions=True
+                    )
+                    for r in results:
+                        if isinstance(r, tuple) and r[1]:
+                            order_map_u[r[0]] = r[1]
+                finally:
+                    await cli.close()
+
+        await asyncio.gather(
+            *[_fetch_acc_orders(aid, oids) for aid, oids in oids_by_acc.items()],
+            return_exceptions=True
         )
-        for r in ord_results_u:
-            if isinstance(r, tuple):
-                order_map_u[r[0]] = r[1]
 
         total_all += len(ml_claims)
+        ml_total_count = len(ml_claims)
 
         for c in ml_claims:
             oid = str(c.get("resource_id", ""))
@@ -13162,20 +13174,21 @@ async def returns_unified_top(
             raw_sku = info.get("sku", "")
             sku = normalize_to_bm_sku(raw_sku) if raw_sku else ""
             title = info.get("title") or ""
-            key = sku if sku else (title or f"reclamo_{c.get('id', '')}")
+            # sku > title > orden_X (same order groups) > reclamo_X (last resort)
+            key = sku if sku else (title if title else (f"orden_{oid}" if oid else f"reclamo_{c.get('id', '')}"))
             acc_nick = c.get("_account_nickname", "")
             reason_lbl = _claim_reason_label(c.get("reason_id", ""))
 
             if key not in counts:
                 counts[key] = {
-                    "title": title or key, "sku": sku,
+                    "title": title or sku or key, "sku": sku,
                     "item_id": info.get("item_id", ""),
                     "count": 0, "opened": 0, "closed": 0,
                     "reasons": {}, "accounts": {},
                     "platforms": {"ml": 0, "amazon": 0},
                     "sale_amount_mxn": 0.0, "refund_usd": 0.0,
                 }
-            elif title and not counts[key]["title"]:
+            if title and not counts[key]["title"]:
                 counts[key]["title"] = title
             if sku and not counts[key]["sku"]:
                 counts[key]["sku"] = sku
@@ -13222,6 +13235,7 @@ async def returns_unified_top(
                 amz_refunds.extend(r)
 
         total_all += len(amz_refunds)
+        amz_total_count = len(amz_refunds)
 
         for ref in amz_refunds:
             sku_raw = (ref.get("sku") or "").strip()
@@ -13235,13 +13249,15 @@ async def returns_unified_top(
 
             if key not in counts:
                 counts[key] = {
-                    "title": sku_raw or key, "sku": sku,
+                    "title": sku or sku_raw or key, "sku": sku,
                     "item_id": "",
                     "count": 0, "opened": 0, "closed": 0,
                     "reasons": {}, "accounts": {},
                     "platforms": {"ml": 0, "amazon": 0},
                     "sale_amount_mxn": 0.0, "refund_usd": 0.0,
                 }
+            elif sku and not counts[key]["sku"]:
+                counts[key]["sku"] = sku
             counts[key]["count"] += 1
             counts[key]["platforms"]["amazon"] += 1
             counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)
@@ -13266,6 +13282,8 @@ async def returns_unified_top(
 
     return {
         "total": total_all,
+        "ml_total": ml_total_count,
+        "amz_total": amz_total_count,
         "days": days,
         "ml_accounts": ml_accs,
         "amazon_accounts": amz_accs,

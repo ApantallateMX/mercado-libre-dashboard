@@ -1130,9 +1130,10 @@ window.loadGlobalTop = function() {
             if (data.amazon_accounts > 0) acctInfo.push(data.amazon_accounts + ' cuentas Amazon');
             badge.textContent = 'Últimos ' + data.days + ' días · ' + acctInfo.join(' · ');
 
+            // Use server-side totals (not computed from top-N only)
+            var mlTotal   = data.ml_total  || 0;
+            var amzTotal  = data.amz_total || 0;
             var openTotal = (data.products || []).reduce(function(s,p){ return s + (p.opened||0); }, 0);
-            var amzTotal  = (data.products || []).reduce(function(s,p){ return s + ((p.platforms||{}).amazon||0); }, 0);
-            var mlTotal   = (data.products || []).reduce(function(s,p){ return s + ((p.platforms||{}).ml||0); }, 0);
             var refundUsd = (data.products || []).reduce(function(s,p){ return s + (p.refund_usd||0); }, 0);
 
             var kpiHtml = _gKpi('Total', data.total, data.total > 0 ? 'text-red-600' : 'text-green-600') +
@@ -1169,17 +1170,37 @@ function _renderGlobalProducts(products, total) {
     var body = document.getElementById('ret-global-body');
     var maxCount = products[0].count;
 
-    var html = '<div class="space-y-3">';
+    var html = '<div class="space-y-2">';
     products.forEach(function(p, i) {
         var barW = maxCount > 0 ? Math.round(p.count / maxCount * 100) : 0;
-        var barColor = i < 3 ? 'bg-red-400' : (i < 6 ? 'bg-orange-400' : 'bg-yellow-400');
-        var rankColor = i === 0 ? 'text-red-600' : (i < 3 ? 'text-red-500' : (i < 6 ? 'text-orange-500' : 'text-gray-400'));
+        var isTop3 = i < 3;
+        var borderColor = i === 0 ? 'border-red-300' : (i < 3 ? 'border-orange-200' : 'border-gray-200');
+        var rankBg     = i === 0 ? 'bg-red-600'    : (i < 3 ? 'bg-orange-500'  : (i < 6 ? 'bg-yellow-500' : 'bg-gray-400'));
+        var barColor   = i === 0 ? 'bg-red-500'    : (i < 3 ? 'bg-orange-400'  : (i < 6 ? 'bg-yellow-400' : 'bg-gray-300'));
 
-        // Reasons pills
+        // --- display label & subtitle ---
+        // If we have a BM SKU (10 chars), show it as the primary identifier.
+        // Show title as subtitle only when it differs from the SKU.
+        var displaySku   = p.sku || '';
+        var displayTitle = (p.title && p.title !== displaySku) ? p.title : '';
+
+        // Valor en riesgo (MXN) = count × retail_ph_unit × 18
+        var riskMxn = (p.retail_ph_unit > 0) ? Math.round(p.count * p.retail_ph_unit * 18) : 0;
+
+        // Platform badges
+        var platHtml = '';
+        if (p.platforms) {
+            if (p.platforms.ml > 0)
+                platHtml += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-bold border border-yellow-300">ML ' + p.platforms.ml + '</span>';
+            if (p.platforms.amazon > 0)
+                platHtml += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-800 font-bold border border-orange-300">AMZ ' + p.platforms.amazon + '</span>';
+        }
+
+        // Reasons pills (top 3 only to keep compact)
         var reasonPills = '';
         if (p.reasons && Object.keys(p.reasons).length) {
             var rt = Object.values(p.reasons).reduce(function(s,v){return s+v;},0);
-            Object.entries(p.reasons).sort(function(a,b){return b[1]-a[1];}).forEach(function(kv) {
+            Object.entries(p.reasons).sort(function(a,b){return b[1]-a[1];}).slice(0,3).forEach(function(kv) {
                 var pct = rt > 0 ? Math.round(kv[1]/rt*100) : 0;
                 reasonPills += '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-600 border border-gray-200">' +
                     kv[0] + ' <strong>' + kv[1] + ' (' + pct + '%)</strong></span>';
@@ -1191,84 +1212,79 @@ function _renderGlobalProducts(products, total) {
         if (p.accounts && Object.keys(p.accounts).length) {
             Object.entries(p.accounts).sort(function(a,b){return b[1]-a[1];}).forEach(function(kv, ai) {
                 var cls = _ACCT_COLORS[ai % _ACCT_COLORS.length];
-                accountPills += '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ' + cls + '">' +
-                    kv[0] + ' · ' + kv[1] + '</span>';
+                accountPills += '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ' + cls + '">' +
+                    kv[0] + ' <span class="font-black">' + kv[1] + '</span></span>';
             });
         }
 
-        html += '<div class="border border-gray-200 rounded-xl overflow-hidden">';
+        html += '<div class="border ' + borderColor + ' rounded-xl overflow-hidden bg-white">';
 
-        // Header
-        html += '<div class="flex items-start gap-3 px-4 py-3 bg-white">';
-        html += '<div class="flex-shrink-0 w-7 text-center"><span class="text-lg font-black ' + rankColor + '">' + (i+1) + '</span></div>';
-        html += '<div class="flex-1 min-w-0">';
+        // ── Left accent bar + rank
+        html += '<div class="flex">';
+        html += '<div class="w-10 flex-shrink-0 flex flex-col items-center justify-center ' + rankBg + ' py-3">';
+        html += '<span class="text-base font-black text-white leading-none">' + (i+1) + '</span>';
+        html += '</div>';
 
-        // Platform badges
-        var platHtml = '';
-        if (p.platforms) {
-            if (p.platforms.ml > 0) {
-                platHtml += '<span class="text-[10px] px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 font-semibold border border-yellow-200">ML ' + p.platforms.ml + '</span>';
-            }
-            if (p.platforms.amazon > 0) {
-                platHtml += '<span class="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-800 font-semibold border border-orange-200">AMZ ' + p.platforms.amazon + '</span>';
-            }
-        }
+        // ── Main content
+        html += '<div class="flex-1 min-w-0 px-4 py-3">';
 
-        // Title + badges
+        // Row 1: SKU chip + title + platform badges + opened badge
         html += '<div class="flex flex-wrap items-center gap-2 mb-1">';
-        html += '<p class="text-sm font-semibold text-gray-800 truncate" title="' + p.title + '">' + p.title + '</p>';
+        if (displaySku)
+            html += '<span class="font-mono text-xs font-bold text-blue-800 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">' + displaySku + '</span>';
+        if (displayTitle)
+            html += '<span class="text-sm font-semibold text-gray-800 truncate max-w-xs" title="' + displayTitle + '">' + displayTitle + '</span>';
+        else if (!displaySku)
+            html += '<span class="text-sm font-semibold text-gray-700">' + (p.title || '—') + '</span>';
         if (platHtml) html += platHtml;
-        if (p.opened > 0) {
-            html += '<span class="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-red-100 text-red-700 rounded font-semibold">' +
+        if (p.opened > 0)
+            html += '<span class="flex items-center gap-1 px-2 py-0.5 text-[10px] bg-red-100 text-red-700 rounded-full font-bold">' +
                 '<span class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse inline-block"></span>' + p.opened + ' abierto' + (p.opened!==1?'s':'') + '</span>';
-        }
-        if (p.sku) {
-            html += '<span class="text-[10px] font-mono bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200">' + p.sku + '</span>';
-        }
         html += '</div>';
 
-        // Count row
-        html += '<div class="flex flex-wrap items-center gap-3 mb-2">';
-        html += '<span class="text-2xl font-black text-gray-800">' + p.count + '</span>';
+        // Row 2: big count + metrics inline
+        html += '<div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 mb-2">';
+        html += '<span class="text-2xl font-black text-gray-900">' + p.count + '</span>';
         html += '<span class="text-xs text-gray-400">retorno' + (p.count!==1?'s':'') + '</span>';
-        html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-3">' + p.pct_of_total + '% del total</span>';
-        html += '<span class="text-xs text-gray-400 border-l border-gray-200 pl-3"><span class="text-red-500 font-semibold">' + p.opened + '</span> ab · <span class="text-green-600 font-semibold">' + p.closed + '</span> res</span>';
-        if (p.sale_amount_mxn > 0) {
-            html += '<span class="text-xs text-orange-600 font-semibold border-l border-gray-200 pl-3">$' + Math.round(p.sale_amount_mxn).toLocaleString('es-MX') + ' MXN</span>';
-        }
-        if (p.refund_usd > 0) {
-            html += '<span class="text-xs text-purple-600 font-semibold border-l border-gray-200 pl-3" title="Reembolso Amazon">$' + p.refund_usd.toFixed(2) + ' USD reem.</span>';
-        }
-        if (p.retail_ph_unit > 0) {
-            html += '<span class="text-xs text-blue-600 font-semibold border-l border-gray-200 pl-3" title="Ref BM por unidad">Ref: $' + p.retail_ph_unit.toFixed(2) + ' USD/u</span>';
-        }
+        html += '<span class="text-xs text-gray-400">' + p.pct_of_total + '% del total</span>';
+        html += '<span class="text-xs"><span class="text-red-500 font-bold">' + p.opened + '</span><span class="text-gray-400"> ab</span> · <span class="text-green-600 font-bold">' + p.closed + '</span><span class="text-gray-400"> res</span></span>';
+        if (riskMxn > 0)
+            html += '<span class="text-xs font-bold text-red-600" title="Valor en riesgo (unidades × precio ref)">⚠ $' + riskMxn.toLocaleString('es-MX') + ' MXN en riesgo</span>';
+        if (p.refund_usd > 0)
+            html += '<span class="text-xs text-purple-600 font-semibold" title="Reembolsado Amazon">$' + p.refund_usd.toFixed(0) + ' USD reem.</span>';
         html += '</div>';
 
-        // Bar
-        html += '<div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-2"><div class="h-1.5 rounded-full ' + barColor + '" style="width:' + barW + '%"></div></div>';
+        // Row 3: bar
+        html += '<div class="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-2">' +
+            '<div class="h-1.5 rounded-full transition-all ' + barColor + '" style="width:' + barW + '%"></div></div>';
 
-        // Reasons
-        if (reasonPills) html += '<div class="flex flex-wrap gap-1 mb-1.5">' + reasonPills + '</div>';
+        // Row 4: reasons
+        if (reasonPills)
+            html += '<div class="flex flex-wrap gap-1 mb-1.5">' + reasonPills + '</div>';
 
-        // Accounts breakdown
-        if (accountPills) {
-            html += '<div class="flex flex-wrap gap-1 items-center">' +
-                '<span class="text-[10px] text-gray-400 mr-0.5">Cuentas:</span>' + accountPills + '</div>';
-        }
+        // Row 5: accounts
+        if (accountPills)
+            html += '<div class="flex flex-wrap gap-1 items-center"><span class="text-[10px] text-gray-400">Cuentas:</span>' + accountPills + '</div>';
 
-        html += '</div></div>'; // end content + header
+        html += '</div>'; // end main content
 
-        // Actions
-        if (p.item_id) {
-            html += '<div class="px-4 py-2 bg-gray-50 border-t flex flex-wrap gap-2 items-center">';
-            html += '<a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search=' + p.item_id + '" target="_blank" ' +
-                'class="text-xs px-3 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">🔗 Ver en ML</a>';
+        html += '</div>'; // end flex row
+
+        // Actions footer
+        var hasActions = p.item_id || p.sku;
+        if (hasActions) {
+            html += '<div class="px-4 py-2 bg-gray-50 border-t border-gray-100 flex flex-wrap gap-2 items-center">';
+            if (p.item_id)
+                html += '<a href="https://www.mercadolibre.com.mx/publicaciones/listado/space_management?search=' + p.item_id + '" target="_blank" ' +
+                    'class="text-xs px-3 py-1 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Ver en ML</a>';
             html += '<a href="/returns" onclick="setTimeout(function(){setRetMode(\'account\');},100)" ' +
-                'class="text-xs px-3 py-1 bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-lg hover:bg-yellow-100 transition font-medium">📋 Ver reclamos</a>';
+                'class="text-xs px-3 py-1 bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-lg hover:bg-yellow-100 transition font-medium">Ver reclamos</a>';
+            if (p.retail_ph_unit > 0)
+                html += '<span class="text-[10px] text-gray-400 ml-auto">Ref BM: $' + p.retail_ph_unit.toFixed(2) + ' USD/u</span>';
             html += '</div>';
         }
 
-        html += '</div>';
+        html += '</div>'; // end card
     });
     html += '</div>';
     document.getElementById('ret-global-body').innerHTML = html;
