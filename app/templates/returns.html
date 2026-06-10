@@ -336,11 +336,11 @@
 function _fmtDate(d) { return d.toISOString().slice(0, 10); }
 var _today = new Date();
 
-// Default: este mes
-var _monthStart = new Date(_today.getFullYear(), _today.getMonth(), 1);
+// Default: últimos 30 días
+var _d30 = new Date(_today); _d30.setDate(_d30.getDate() - 29);
 
 var retFilters = {
-    date_from:  _fmtDate(_monthStart),
+    date_from:  _fmtDate(_d30),
     date_to:    _fmtDate(_today),
     status:     '',
     claim_type: '',
@@ -1245,8 +1245,8 @@ var _elTopB = document.getElementById('ret-top-to-a');
 if (_elTopA) _elTopA.value = retFilters.date_from;
 if (_elTopB) _elTopB.value = retFilters.date_to;
 
-// Highlight "Este mes" preset by default
-_highlightPreset('month');
+// Highlight "30 días" preset by default
+_highlightPreset('30d');
 _updateFilterIndicator();
 loadSummary();
 loadTable();
