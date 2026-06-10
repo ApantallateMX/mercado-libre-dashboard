@@ -3640,3 +3640,38 @@ Tres root causes identificadas y corregidas:
 - Dashboard mostraba BM=0 por bug → corregido 7da669d; luego reservas no restadas → corregido 70a9bb9
 
 ---
+
+## 2026-06-10 — Returns Board: Unified Cross-Platform View + Fixes
+
+### FIX — Order lookup cap too small → "Sin título" aggregation failure
+- **Root cause:** `max_orders = max(limit * 2, 30)` = 30 cap; accounts with many claims had orders not fetched → each claim got title `"Sin título (Reclamo #...)"` → N unique entries instead of grouped SKUs
+- **Fix:** `max_orders = max(limit * 6, 120)` in both `returns_top_products` (line ~12609) and `returns_global_top` (line ~12915)
+- **Result:** Top SKUs now aggregate correctly by SKU key
+
+### FEATURE — `/api/returns/unified-top` endpoint
+- Combines ML claims + Amazon refunds across ALL accounts in a single response
+- ML: fans out to all accounts (Semaphore 2), fetches claims + order info (Semaphore 3, cap 120), groups by SKU
+- Amazon: fans out to all seller accounts (Semaphore 2), calls `get_refunds_detail()` via 3h cache
+- Response per SKU: `{title, sku, count, opened, closed, reasons, accounts, platforms: {ml, amazon}, sale_amount_mxn, refund_usd, retail_ph_unit, pct_of_total}`
+- Parameters: `days`, `limit`, `platform` (all/ml/amazon)
+- Amazon cache: `_amz_refunds_cache` with `_AMZ_REFUNDS_TTL = 3600 * 3`
+- Amazon reason map: `_AMZ_REASON_MAP` + `_amz_reason_label()` — ready for future Reports API integration
+
+### FEATURE — Returns board redesign (returns.html)
+- **Layout reorder:** KPI → Top SKUs (auto-load, no "click Analizar") → Global view → Timeline → Table
+- **Platform toggle in global view:** Todas / ML / Amazon buttons → `_globalPlatform` state → `setGlobalPlatform(plat)` → re-fetches unified-top
+- **Platform badges per SKU:** ML yellow `bg-yellow-100`, Amazon orange `bg-orange-100`
+- **`setRetMode()`:** now uses element IDs (`ret-top-card`, `ret-timeline-card`) instead of class selectors
+- **`loadGlobalTop()`:** calls `/api/returns/unified-top` instead of legacy `/api/returns/global-top`
+- **`_renderGlobalProducts()`:** shows ML count + Amazon count badges + refund_usd when > 0
+
+### FEATURE — Dashboard widget (multi_dashboard.html)
+- `loadReturnsWidget()` now calls `/api/returns/unified-top?days=30&limit=5&platform=all`
+- Badge shows `N ML · N AMZ` account counts
+- Product cards show ML/Amazon platform badges
+
+### ARCHITECTURE NOTE — Amazon reasons
+- Financial Events API (`get_refunds_detail`) does NOT include return reason codes
+- `_AMZ_REASON_MAP` is in place for when Reports API `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE` is used
+- Current Amazon entries show generic "Devolución Amazon" reason label
+

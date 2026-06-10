@@ -1316,14 +1316,17 @@ function toggleReturnsWidget() {
 function loadReturnsWidget() {
     const body  = document.getElementById('ret-widget-body');
     const badge = document.getElementById('ret-widget-badge');
-    fetch('/api/returns/global-top?days=30&limit=5')
+    fetch('/api/returns/unified-top?days=30&limit=5&platform=all')
         .then(r => r.json())
         .then(data => {
             if (data.error || !data.products) {
                 body.innerHTML = '<p class="text-xs text-gray-400 text-center py-4">Sin datos de retornos</p>';
                 return;
             }
-            badge.textContent = data.total + ' retornos · 30 días · ' + data.accounts_count + ' cuentas';
+            const acctParts = [];
+            if (data.ml_accounts > 0) acctParts.push(data.ml_accounts + ' ML');
+            if (data.amazon_accounts > 0) acctParts.push(data.amazon_accounts + ' AMZ');
+            badge.textContent = data.total + ' retornos · 30 días · ' + acctParts.join(' · ');
             if (!data.products.length) {
                 body.innerHTML = '<div class="flex items-center gap-2 py-4 text-sm text-green-600"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Sin retornos en los últimos 30 días</div>';
                 return;
@@ -1340,6 +1343,11 @@ function loadReturnsWidget() {
                 const accPills = p.accounts ? Object.entries(p.accounts).sort((a,b)=>b[1]-a[1]).map((kv,ai) =>
                     `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${ACCT_CLR[ai%ACCT_CLR.length]}">${kv[0].replace('MEXICO','MX')} ${kv[1]}</span>`
                 ).join('') : '';
+                const platBadges = (p.platforms || {});
+                const platHtml = [
+                    platBadges.ml > 0 ? `<span class="text-[10px] px-1 rounded bg-yellow-100 text-yellow-700 font-semibold">ML</span>` : '',
+                    platBadges.amazon > 0 ? `<span class="text-[10px] px-1 rounded bg-orange-100 text-orange-700 font-semibold">AMZ</span>` : '',
+                ].filter(Boolean).join('');
 
                 html += `<div class="flex items-center gap-3 group">
                     <span class="text-xs font-black w-4 text-center ${i===0?'text-red-500':i<3?'text-orange-500':'text-gray-400'}">${i+1}</span>
@@ -1352,6 +1360,7 @@ function loadReturnsWidget() {
                             <div class="h-1 rounded-full ${barClr}" style="width:${barW}%"></div>
                         </div>
                         <div class="flex flex-wrap items-center gap-1">
+                            ${platHtml}
                             ${p.sku ? `<span class="text-[10px] font-mono text-blue-600">${p.sku}</span>` : ''}
                             ${topReason ? `<span class="text-[10px] text-gray-500">${topReason}</span>` : ''}
                             ${p.opened > 0 ? `<span class="text-[10px] text-red-600 font-semibold">${p.opened} ab.</span>` : ''}

@@ -12601,12 +12601,11 @@ async def returns_top_products(
             pdd_a = await _fetch_all(df_a, dt_a)
             pdd_b = []
 
-        # Cap order lookups to avoid rate limiting — semaphore(3) + max 30 orders
         oids_a = {str(c.get("resource_id", "")) for c in pdd_a
                   if c.get("resource") == "order" and c.get("resource_id")}
         oids_b = {str(c.get("resource_id", "")) for c in pdd_b
                   if c.get("resource") == "order" and c.get("resource_id")}
-        max_orders = max(limit * 2, 30)
+        max_orders = max(limit * 6, 120)
         all_oids = list(oids_a | oids_b)[:max_orders]
 
         sem = asyncio.Semaphore(3)
@@ -12912,7 +12911,7 @@ async def returns_global_top(
         if oid not in oids_acc:
             oids_acc[oid] = c.get("_account_id", "")
 
-    max_ords = max(limit * 3, 40)
+    max_ords = max(limit * 6, 120)
     oids_to_fetch = list(oids_acc.items())[:max_ords]
 
     sem_ord = asyncio.Semaphore(3)
@@ -13000,6 +12999,277 @@ async def returns_global_top(
         "total": total_claims,
         "days": days,
         "accounts_count": len(accounts),
+        "products": top,
+    }
+
+
+# ── Amazon refunds cache ──────────────────────────────────────────────────────
+_amz_refunds_cache: dict = {}   # {(seller_id, days): (ts, [refunds])}
+_AMZ_REFUNDS_TTL = 3600 * 3    # 3 horas — refund data no cambia en tiempo real
+
+async def _fetch_amazon_refunds_cached(seller_id: str, days: int) -> list:
+    """get_refunds_detail() con cache de 3h para no martillar la Financial Events API."""
+    import time as _ta
+    key = (seller_id, days)
+    entry = _amz_refunds_cache.get(key)
+    if entry and (_ta.time() - entry[0]) < _AMZ_REFUNDS_TTL:
+        return entry[1]
+    try:
+        from app.services.amazon_client import get_amazon_client as _get_amz
+        client = await _get_amz(seller_id)
+        if not client:
+            return []
+        try:
+            refunds = await client.get_refunds_detail(days=days)
+            _amz_refunds_cache[key] = (_ta.time(), refunds)
+            return refunds
+        finally:
+            await client.close()
+    except Exception as _exc:
+        logger.warning(f"[AMZ-REFUNDS] Error {seller_id}: {_exc}")
+        return []
+
+
+# Amazon return reason codes → etiquetas en español
+_AMZ_REASON_MAP: dict = {
+    "CUSTOMER_RETURN":      "Arrepentimiento de compra",
+    "DEFECTIVE":            "Producto defectuoso",
+    "NOT_AS_DESCRIBED":     "No coincide con descripción",
+    "DAMAGED_BY_CARRIER":   "Dañado en tránsito",
+    "QUALITY_UNACCEPTABLE": "Calidad inaceptable",
+    "WRONG_ITEM_SENT":      "Producto incorrecto enviado",
+    "MISSING_PARTS":        "Piezas/accesorios faltantes",
+    "NOT_COMPATIBLE":       "Incompatible con dispositivo",
+    "EXPIRED":              "Producto vencido",
+    "SWITCHEROO":           "Fraude (switcheroo)",
+    "UNDELIVERABLE":        "No entregado",
+    "REFUSED":              "Rechazado por comprador",
+}
+
+def _amz_reason_label(reason: str) -> str:
+    return _AMZ_REASON_MAP.get((reason or "").upper().strip(), reason or "Devolución Amazon")
+
+
+@app.get("/api/returns/unified-top")
+async def returns_unified_top(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=20),
+    platform: str = Query("all", description="all | ml | amazon"),
+):
+    """Top N SKUs más retornados/reembolsados sumando ML + Amazon."""
+    from datetime import datetime as _dt3, timedelta as _td3
+
+    _now = _dt3.utcnow()
+    df = (_now - _td3(days=days)).strftime("%Y-%m-%d")
+    dt = _now.strftime("%Y-%m-%d")
+
+    retail_map = _get_retail_ph_map()
+    counts: dict = {}
+    total_all = 0
+
+    # ── ML claims ────────────────────────────────────────────────────────────
+    if platform in ("all", "ml"):
+        ml_accounts = await token_store.get_all_tokens()
+        sem_ml = asyncio.Semaphore(2)
+
+        async def _ml_for_account(acc):
+            async with sem_ml:
+                uid = acc.get("user_id", "")
+                nick = acc.get("nickname") or uid
+                try:
+                    cli = await get_meli_client(user_id=uid)
+                    if not cli:
+                        return []
+                    try:
+                        claims = await _fetch_all_claims_cached(cli, df, dt)
+                        for c in claims:
+                            c["_account_id"] = uid
+                            c["_account_nickname"] = nick
+                        return claims
+                    finally:
+                        await cli.close()
+                except Exception:
+                    return []
+
+        ml_nested = await asyncio.gather(
+            *[_ml_for_account(a) for a in ml_accounts], return_exceptions=True
+        )
+        ml_claims: list = []
+        for r in ml_nested:
+            if isinstance(r, list):
+                ml_claims.extend(r)
+
+        # Fetch order info for ML claims
+        oids_acc_u: dict = {}
+        for c in ml_claims:
+            if c.get("resource") != "order" or not c.get("resource_id"):
+                continue
+            oid = str(c["resource_id"])
+            if oid not in oids_acc_u:
+                oids_acc_u[oid] = c.get("_account_id", "")
+
+        max_ords_u = max(limit * 6, 120)
+        oids_list_u = list(oids_acc_u.items())[:max_ords_u]
+        sem_ord_u = asyncio.Semaphore(3)
+        order_map_u: dict = {}
+
+        async def _fetch_ord_u(oid: str, acc_id: str):
+            async with sem_ord_u:
+                try:
+                    cli = await get_meli_client(user_id=acc_id)
+                    if not cli:
+                        return oid, {}
+                    try:
+                        order = await asyncio.wait_for(cli.get(f"/orders/{oid}"), timeout=8.0)
+                        oi = order.get("order_items", [])
+                        if oi:
+                            item = oi[0].get("item", {})
+                            iid = str(item.get("id", ""))
+                            sku = item.get("seller_custom_field") or ""
+                            if not sku and iid:
+                                try:
+                                    det = await asyncio.wait_for(
+                                        cli.get(f"/items/{iid}", params={"attributes": "seller_custom_field,title"}),
+                                        timeout=5.0
+                                    )
+                                    sku = det.get("seller_custom_field") or ""
+                                except Exception:
+                                    pass
+                            return oid, {
+                                "title": item.get("title", "") or "",
+                                "item_id": iid,
+                                "sku": sku,
+                                "sale_amount": float(order.get("total_amount") or 0),
+                            }
+                    finally:
+                        await cli.close()
+                except Exception:
+                    pass
+                return oid, {}
+
+        ord_results_u = await asyncio.gather(
+            *[_fetch_ord_u(oid, acc) for oid, acc in oids_list_u], return_exceptions=True
+        )
+        for r in ord_results_u:
+            if isinstance(r, tuple):
+                order_map_u[r[0]] = r[1]
+
+        total_all += len(ml_claims)
+
+        for c in ml_claims:
+            oid = str(c.get("resource_id", ""))
+            info = order_map_u.get(oid, {})
+            raw_sku = info.get("sku", "")
+            sku = normalize_to_bm_sku(raw_sku) if raw_sku else ""
+            title = info.get("title") or ""
+            key = sku if sku else (title or f"reclamo_{c.get('id', '')}")
+            acc_nick = c.get("_account_nickname", "")
+            reason_lbl = _claim_reason_label(c.get("reason_id", ""))
+
+            if key not in counts:
+                counts[key] = {
+                    "title": title or key, "sku": sku,
+                    "item_id": info.get("item_id", ""),
+                    "count": 0, "opened": 0, "closed": 0,
+                    "reasons": {}, "accounts": {},
+                    "platforms": {"ml": 0, "amazon": 0},
+                    "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+                }
+            elif title and not counts[key]["title"]:
+                counts[key]["title"] = title
+            if sku and not counts[key]["sku"]:
+                counts[key]["sku"] = sku
+            if info.get("item_id") and not counts[key]["item_id"]:
+                counts[key]["item_id"] = info["item_id"]
+
+            counts[key]["count"] += 1
+            counts[key]["platforms"]["ml"] += 1
+            counts[key]["sale_amount_mxn"] += info.get("sale_amount", 0.0)
+            if c.get("status") == "opened":
+                counts[key]["opened"] += 1
+            else:
+                counts[key]["closed"] += 1
+            counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
+            if acc_nick:
+                counts[key]["accounts"][acc_nick] = counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    # ── Amazon refunds ────────────────────────────────────────────────────────
+    if platform in ("all", "amazon"):
+        try:
+            amz_accounts = await token_store.get_all_amazon_accounts()
+        except Exception:
+            amz_accounts = []
+        sem_amz = asyncio.Semaphore(2)
+
+        async def _amz_for_account(acc):
+            async with sem_amz:
+                seller_id = acc.get("seller_id", "")
+                nick = acc.get("nickname") or seller_id
+                try:
+                    refunds = await _fetch_amazon_refunds_cached(seller_id, days)
+                    for r in refunds:
+                        r["_account_nickname"] = nick
+                    return refunds
+                except Exception:
+                    return []
+
+        amz_nested = await asyncio.gather(
+            *[_amz_for_account(a) for a in amz_accounts], return_exceptions=True
+        )
+        amz_refunds: list = []
+        for r in amz_nested:
+            if isinstance(r, list):
+                amz_refunds.extend(r)
+
+        total_all += len(amz_refunds)
+
+        for ref in amz_refunds:
+            sku_raw = (ref.get("sku") or "").strip()
+            sku = normalize_to_bm_sku(sku_raw) if sku_raw else sku_raw
+            key = sku if sku else f"amz_{ref.get('order_id', '')}"
+            acc_nick = ref.get("_account_nickname", "Amazon")
+            reason_lbl = _amz_reason_label(ref.get("reason", ""))
+            refund_amt = float(ref.get("amount", 0) or 0)
+            currency = ref.get("currency", "USD")
+            refund_usd = refund_amt if currency == "USD" else refund_amt / 18.0
+
+            if key not in counts:
+                counts[key] = {
+                    "title": sku_raw or key, "sku": sku,
+                    "item_id": "",
+                    "count": 0, "opened": 0, "closed": 0,
+                    "reasons": {}, "accounts": {},
+                    "platforms": {"ml": 0, "amazon": 0},
+                    "sale_amount_mxn": 0.0, "refund_usd": 0.0,
+                }
+            counts[key]["count"] += 1
+            counts[key]["platforms"]["amazon"] += 1
+            counts[key]["refund_usd"] = round(counts[key]["refund_usd"] + refund_usd, 2)
+            counts[key]["closed"] += 1  # refunds son operaciones cerradas
+            counts[key]["reasons"][reason_lbl] = counts[key]["reasons"].get(reason_lbl, 0) + 1
+            if acc_nick:
+                counts[key]["accounts"][acc_nick] = counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    # ── Aggregate & return ────────────────────────────────────────────────────
+    top = sorted(counts.values(), key=lambda x: x["count"], reverse=True)[:limit]
+    for p in top:
+        sku = p.get("sku", "")
+        p["retail_ph_unit"] = retail_map.get(sku, 0.0) if sku else 0.0
+        p["pct_of_total"] = round(p["count"] / total_all * 100, 1) if total_all > 0 else 0
+
+    ml_accs = len(await token_store.get_all_tokens()) if platform in ("all", "ml") else 0
+    try:
+        amz_accs_list = await token_store.get_all_amazon_accounts() if platform in ("all", "amazon") else []
+        amz_accs = len(amz_accs_list)
+    except Exception:
+        amz_accs = 0
+
+    return {
+        "total": total_all,
+        "days": days,
+        "ml_accounts": ml_accs,
+        "amazon_accounts": amz_accs,
+        "platform": platform,
         "products": top,
     }
 
