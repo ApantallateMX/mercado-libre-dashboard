@@ -12618,10 +12618,22 @@ async def returns_top_products(
                     oi = order.get("order_items", [])
                     if oi:
                         item = oi[0].get("item", {})
+                        item_id_str = str(item.get("id", ""))
+                        sku = item.get("seller_custom_field") or ""
+                        # Fallback: ML no siempre devuelve seller_custom_field en /orders
+                        if not sku and item_id_str:
+                            try:
+                                det = await asyncio.wait_for(
+                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,title"}),
+                                    timeout=5.0
+                                )
+                                sku = det.get("seller_custom_field") or ""
+                            except Exception:
+                                pass
                         return oid, {
                             "title": item.get("title", "") or "Producto desconocido",
-                            "item_id": str(item.get("id", "")),
-                            "sku": item.get("seller_custom_field") or "",
+                            "item_id": item_id_str,
+                            "sku": sku,
                             "sale_amount": float(order.get("total_amount") or 0),
                         }
                 except Exception:
@@ -12917,10 +12929,22 @@ async def returns_global_top(
                     oi = order.get("order_items", [])
                     if oi:
                         item = oi[0].get("item", {})
+                        item_id_str = str(item.get("id", ""))
+                        sku = item.get("seller_custom_field") or ""
+                        # Fallback: ML no siempre devuelve seller_custom_field en /orders
+                        if not sku and item_id_str:
+                            try:
+                                det = await asyncio.wait_for(
+                                    client.get(f"/items/{item_id_str}", params={"attributes": "seller_custom_field,title"}),
+                                    timeout=5.0
+                                )
+                                sku = det.get("seller_custom_field") or ""
+                            except Exception:
+                                pass
                         return oid, {
                             "title": item.get("title", "") or "Producto desconocido",
-                            "item_id": str(item.get("id", "")),
-                            "sku": item.get("seller_custom_field") or "",
+                            "item_id": item_id_str,
+                            "sku": sku,
                             "sale_amount": float(order.get("total_amount") or 0),
                         }
                 finally:

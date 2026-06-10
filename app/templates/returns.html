@@ -385,9 +385,15 @@ window.setPreset = function(preset) {
     var elTo   = document.getElementById('ret-date-to');
     if (elFrom) elFrom.value = from;
     if (elTo)   elTo.value   = to;
+    // Sync top-products period A inputs
+    var _elTopA2 = document.getElementById('ret-top-from-a');
+    var _elTopB2 = document.getElementById('ret-top-to-a');
+    if (_elTopA2) _elTopA2.value = from;
+    if (_elTopB2) _elTopB2.value = to;
     _highlightPreset(preset);
     _updateFilterIndicator();
     loadSummary(); loadTable(); loadAnalysis(); loadTimeline(); _updateTimestamp();
+    window.loadTopProducts();
 };
 
 function _highlightPreset(active) {
