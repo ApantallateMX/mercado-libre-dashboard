@@ -12845,6 +12845,141 @@ async def returns_timeline(
         await client.close()
 
 
+@app.get("/api/returns/global-top")
+async def returns_global_top(
+    days: int = Query(30, ge=1, le=365, description="Ventana de días hacia atrás"),
+    limit: int = Query(10, ge=1, le=20),
+):
+    """Top N SKUs más retornados sumando TODAS las cuentas ML."""
+    from datetime import datetime as _dt2, timedelta as _td2
+    accounts = await token_store.get_all_tokens()
+    if not accounts:
+        return {"error": "No hay cuentas ML configuradas", "total": 0, "products": []}
+
+    _now = _dt2.utcnow()
+    df = (_now - _td2(days=days)).strftime("%Y-%m-%d")
+    dt = _now.strftime("%Y-%m-%d")
+
+    sem_acc = asyncio.Semaphore(2)
+
+    async def _fetch_for_account(account):
+        async with sem_acc:
+            uid = account.get("user_id", "")
+            nickname = account.get("nickname") or uid
+            try:
+                client = await get_meli_client(user_id=uid)
+                if not client:
+                    return []
+                try:
+                    claims = await _fetch_all_claims_cached(client, df, dt)
+                    for c in claims:
+                        c["_account_id"] = uid
+                        c["_account_nickname"] = nickname
+                    return claims
+                finally:
+                    await client.close()
+            except Exception as _exc:
+                logger.warning(f"[GLOBAL-TOP] cuenta {uid}: {_exc}")
+                return []
+
+    nested = await asyncio.gather(*[_fetch_for_account(a) for a in accounts], return_exceptions=True)
+    all_claims: list = []
+    for r in nested:
+        if isinstance(r, list):
+            all_claims.extend(r)
+
+    if not all_claims:
+        return {"total": 0, "days": days, "accounts_count": len(accounts), "products": []}
+
+    # oid → acc_id (primer claim visto para esa orden)
+    oids_acc: dict[str, str] = {}
+    for c in all_claims:
+        if c.get("resource") != "order" or not c.get("resource_id"):
+            continue
+        oid = str(c["resource_id"])
+        if oid not in oids_acc:
+            oids_acc[oid] = c.get("_account_id", "")
+
+    max_ords = max(limit * 3, 40)
+    oids_to_fetch = list(oids_acc.items())[:max_ords]
+
+    sem_ord = asyncio.Semaphore(3)
+    order_map: dict = {}
+
+    async def _fetch_ord_global(oid: str, acc_id: str):
+        async with sem_ord:
+            try:
+                client = await get_meli_client(user_id=acc_id)
+                if not client:
+                    return oid, {}
+                try:
+                    order = await asyncio.wait_for(client.get(f"/orders/{oid}"), timeout=8.0)
+                    oi = order.get("order_items", [])
+                    if oi:
+                        item = oi[0].get("item", {})
+                        return oid, {
+                            "title": item.get("title", "") or "Producto desconocido",
+                            "item_id": str(item.get("id", "")),
+                            "sku": item.get("seller_custom_field") or "",
+                            "sale_amount": float(order.get("total_amount") or 0),
+                        }
+                finally:
+                    await client.close()
+            except Exception:
+                pass
+            return oid, {"title": "Producto desconocido", "item_id": "", "sku": "", "sale_amount": 0.0}
+
+    ord_results = await asyncio.gather(*[_fetch_ord_global(oid, acc) for oid, acc in oids_to_fetch], return_exceptions=True)
+    for r in ord_results:
+        if isinstance(r, tuple):
+            order_map[r[0]] = r[1]
+
+    retail_map = _get_retail_ph_map()
+
+    counts: dict = {}
+    total_claims = len(all_claims)
+    for c in all_claims:
+        oid = str(c.get("resource_id", ""))
+        info = order_map.get(oid, {"title": "", "item_id": "", "sku": "", "sale_amount": 0.0})
+        raw_sku = info.get("sku", "")
+        sku = normalize_to_bm_sku(raw_sku) if raw_sku else ""
+        title = info.get("title") or f"Sin título (Reclamo #{c.get('id', '')})"
+        key = sku if sku else title
+        acc_nick = c.get("_account_nickname", "")
+
+        if key not in counts:
+            counts[key] = {
+                "title": title, "sku": sku,
+                "item_id": info.get("item_id", ""),
+                "count": 0, "opened": 0, "closed": 0,
+                "reasons": {}, "accounts": {},
+                "sale_amount_mxn": 0.0,
+            }
+        counts[key]["count"] += 1
+        counts[key]["sale_amount_mxn"] += info.get("sale_amount", 0.0)
+        if c.get("status") == "opened":
+            counts[key]["opened"] += 1
+        else:
+            counts[key]["closed"] += 1
+        label = _claim_reason_label(c.get("reason_id", ""))
+        counts[key]["reasons"][label] = counts[key]["reasons"].get(label, 0) + 1
+        if acc_nick:
+            counts[key]["accounts"][acc_nick] = counts[key]["accounts"].get(acc_nick, 0) + 1
+
+    top = sorted(counts.values(), key=lambda x: x["count"], reverse=True)[:limit]
+    for p in top:
+        sku = p.get("sku", "")
+        p["retail_ph_unit"] = retail_map.get(sku, 0.0) if sku else 0.0
+        p["pct_of_total"] = round(p["count"] / total_claims * 100, 1) if total_claims > 0 else 0
+
+    return {
+        "total": total_claims,
+        "days": days,
+        "accounts_count": len(accounts),
+        "products": top,
+    }
+
+
 @app.post("/api/returns/flag-item")
 async def returns_flag_item(request: Request):
     """Marca un listing desde análisis de retornos. flag_type: 'review' | 'qty_zero'."""
