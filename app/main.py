@@ -10075,8 +10075,6 @@ async def amazon_asin_search(
     except Exception as _exc:
         logger.warning(f"[ASIN-SEARCH] {asin}: {_exc}")
         return {"error": str(_exc), "asin": asin}
-    finally:
-        await client.close()
 
 
 @app.get("/amazon/products", response_class=HTMLResponse)
@@ -13242,12 +13240,9 @@ async def _fetch_amazon_refunds_cached(seller_id: str, days: int) -> list:
         client = await _get_amz(seller_id)
         if not client:
             return []
-        try:
-            refunds = await client.get_refunds_detail(days=days)
-            _amz_refunds_cache[key] = (_ta.time(), refunds)
-            return refunds
-        finally:
-            await client.close()
+        refunds = await client.get_refunds_detail(days=days)
+        _amz_refunds_cache[key] = (_ta.time(), refunds)
+        return refunds
     except Exception as _exc:
         logger.warning(f"[AMZ-REFUNDS] Error {seller_id}: {_exc}")
         return []

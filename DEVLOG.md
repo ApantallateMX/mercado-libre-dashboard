@@ -7,6 +7,22 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-12 — FIX: ASIN search 500 Internal Server Error — `AmazonClient.close()` no existe
+
+### Causa raíz
+El endpoint `/api/amazon/asin-search` tenía un bloque `finally: await client.close()` pero `AmazonClient` NO tiene método `close()` (usa httpx por solicitud, no conexión persistente). En Python, una excepción en `finally` descarta el `return` y propaga la excepción hacia arriba → FastAPI devolvía "Internal Server Error" en texto plano → el JS fallaba al parsear JSON.
+
+La misma falla silenciosa existía en el helper de refunds (`_get_amazon_refunds_cached`): el `finally: await client.close()` en un inner-try era atrapado por el outer-except y siempre retornaba `[]`.
+
+### Fixes aplicados
+1. **ASIN search** (`main.py` ~9875): eliminado `finally: await client.close()` — el endpoint ahora retorna JSON correctamente.
+2. **Refunds helper** (`main.py` ~13238): colapsado inner-try + finally en un único try/except — refunds ahora puede retornar datos reales.
+
+### Probado localmente
+`GET /api/amazon/asin-search?asin=B0GWRX14QJ&days=30` → HTTP 200, JSON válido.
+
+---
+
 ## 2026-06-09 — FEAT: Wizard inteligente — campos dinámicos por categoría, auto-detect PT, web search
 
 ### Commit: 75f3513
