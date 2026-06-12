@@ -3675,3 +3675,37 @@ Tres root causes identificadas y corregidas:
 - `_AMZ_REASON_MAP` is in place for when Reports API `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE` is used
 - Current Amazon entries show generic "Devolución Amazon" reason label
 
+---
+
+## 2026-06-10 — FEAT: ASIN Search en Amazon Ventas
+
+### Commits: c0fdedc, 7c4540b
+
+### Feature: Búsqueda por ASIN en la sección Ventas de Amazon
+
+Nueva tarjeta de búsqueda en `amazon_dashboard.html` tab Ventas (antes de "Últimas Órdenes"):
+- Input ASIN (10 chars) + selector días (7/15/30/90) + botón Buscar / Enter
+- Routing automático al marketplace de la cuenta activa (MX → A1AM78C64UM0Y8, US → ATVPDKIKX0DER)
+- Funciona para TODAS las cuentas (México y USA)
+
+### Endpoint `GET /api/amazon/asin-search`
+- `asin` (required), `seller_id` (optional, usa cuenta activa si vacío), `days` (7–365)
+- Llama en paralelo via `asyncio.gather`:
+  1. `client.get_catalog_item(asin)` → Catalog Items API v2022-04-01 (`summaries,images,attributes,dimensions,identifiers`)
+  2. `client.get_order_metrics(..., granularity="Day", asin=asin)` → Sales API v1, desglose diario
+  3. `client.get_order_metrics(..., granularity="Total", asin=asin)` → Sales API v1, totales del período
+- DB lookup: `amazon_listings` para precio/estado actuales del ASIN (si está en catálogo)
+- Respuesta: `{asin, days, seller_id, marketplace, product, listing, totals, daily}`
+
+### Cambios en `amazon_client.py`
+- `get_order_metrics()`: nuevos params opcionales `asin: str = None` y `sku: str = None` (pasan como query params al Sales API)
+- `get_catalog_item()` (nueva versión): `includedData=summaries,images,attributes,dimensions,identifiers`; retorna `{}` en error (vs la versión anterior que retornaba `None`)
+
+### Frontend `amazon_dashboard.js`
+- `window.searchAsin()`: valida ASIN 10 chars, llama endpoint, muestra `_renderAsinResult(d)`
+- `_renderAsinResult(d)`: tarjeta con imagen, título, marca, badge marketplace, badge "en catálogo", 4 chips KPI (Unidades/Órdenes/Revenue/Precio Prom.), tabla diaria con mini barras de progreso, links SC y Amazon.com
+
+### BUG FIX — aiosqlite NameError → 500 en endpoint
+- **Bug:** `aiosqlite.connect()` usado sin import local → `NameError` → 500 Internal Server Error → frontend recibía HTML → `r.json()` lanzaba "Unexpected token I, Internal S..."
+- **Fix (commit 7c4540b):** `import aiosqlite as _aio_as` dentro del try block del endpoint
+
