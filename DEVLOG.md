@@ -7,6 +7,18 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-12 — FEAT: Filtros de período y fulfillment en Últimas Órdenes Amazon
+
+### Cambios
+- Nueva barra de filtros en el header de la sección: selector de días (Hoy/7d/15d/30d) + botones Todos/FBA/FBM
+- Backend: parámetros `days` (1–30) y `fulfillment` (all/FBA/FBM); SP-API recibe `FulfillmentChannels=AFN/MFN`
+- Número de órdenes mostradas escala con el período: 5/10/15/20 para 1/7/15/30 días
+- Enriquecimiento de items limitado a 8 órdenes sin importar el período (evita timeouts)
+- Cache key incluye seller+days+fulfillment para aislar resultados por combinación de filtros
+- Commit: `9116fd8`
+
+---
+
 ## 2026-06-12 — FEAT: Calculadora de Precio de Compra + Veredicto en ASIN search (v2)
 
 ### Cambios (reemplazo del simulador v1)
