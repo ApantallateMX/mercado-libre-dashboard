@@ -9985,8 +9985,9 @@ async def amazon_asin_search(
         # ── 5. Current price from listings DB ────────────────────────────
         listing_info: dict = {}
         try:
-            async with aiosqlite.connect(DATABASE_PATH) as _db:
-                _db.row_factory = aiosqlite.Row
+            import aiosqlite as _aio_as
+            async with _aio_as.connect(DATABASE_PATH) as _db:
+                _db.row_factory = _aio_as.Row
                 row = await (await _db.execute(
                     "SELECT sku, price, status, title FROM amazon_listings WHERE seller_id=? AND asin=? LIMIT 1",
                     (_sid or client.seller_id, asin)
