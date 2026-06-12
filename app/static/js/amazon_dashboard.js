@@ -2046,90 +2046,255 @@ window.searchAsin = async function() {
     }
 };
 
+function _bsrTier(rank) {
+    if (!rank) return { label: 'Sin rank', color: 'gray', est: '' };
+    if (rank <= 100)   return { label: 'Muy alta',  color: 'green',  est: 'est. 500+ uds/mes' };
+    if (rank <= 500)   return { label: 'Alta',       color: 'green',  est: 'est. 100–500 uds/mes' };
+    if (rank <= 2000)  return { label: 'Media',      color: 'yellow', est: 'est. 20–100 uds/mes' };
+    if (rank <= 10000) return { label: 'Moderada',   color: 'yellow', est: 'est. 5–20 uds/mes' };
+    return                    { label: 'Baja',       color: 'red',    est: 'est. <5 uds/mes' };
+}
+
+function _tierCls(color) {
+    if (color === 'green')  return 'bg-green-100 text-green-700 border-green-200';
+    if (color === 'yellow') return 'bg-yellow-100 text-yellow-700 border-yellow-200';
+    if (color === 'red')    return 'bg-red-100 text-red-700 border-red-200';
+    return 'bg-gray-100 text-gray-500 border-gray-200';
+}
+
 function _renderAsinResult(d) {
-    var p = d.product || {};
-    var t = d.totals || {};
-    var daily = d.daily || [];
+    var p       = d.product || {};
+    var t       = d.totals  || {};
+    var daily   = d.daily   || [];
     var listing = d.listing || {};
-    var mkt = d.marketplace || '';
-    var hasSales = t.units > 0 || t.orders > 0;
-    var currency = t.currency || 'USD';
-    var isMX = mkt === 'MX';
+    var offers  = d.offers  || {};
+    var mkt     = d.marketplace || '';
+    var hasSales    = t.units > 0 || t.orders > 0;
+    var currency    = t.currency || 'USD';
+    var isMX        = mkt === 'MX';
+    var scBase      = mkt === 'US' ? 'https://sellercentral.amazon.com' : 'https://sellercentral.amazon.com.mx';
+    var amzDomain   = mkt === 'US' ? 'amazon.com' : 'amazon.com.mx';
 
-    var html = '<div class="border border-gray-200 rounded-xl overflow-hidden">';
+    // BSR — tomar el mejor rank de classificationRanks (no display group)
+    var bsrList   = (p.bsr || []).filter(function(b) { return !b.is_display; });
+    var bestBsr   = bsrList.length ? bsrList.reduce(function(a, b) { return a.rank < b.rank ? a : b; }) : null;
+    var tier      = _bsrTier(bestBsr ? bestBsr.rank : null);
 
-    // ── Product header ──────────────────────────────────────────────────
+    // Offers
+    var bbPrice     = offers.buy_box_price || null;
+    var bbCur       = offers.buy_box_currency || currency;
+    var numSellers  = offers.total_offers || 0;
+    var sellers     = offers.sellers || [];
+    var bbSeller    = sellers.find(function(s) { return s.is_buy_box; }) || null;
+    var listPriceO  = offers.list_price || p.list_price || null;
+    var listPriceCur = offers.list_price_currency || p.list_price_currency || 'USD';
+    var discount    = (bbPrice && listPriceO && listPriceO > bbPrice)
+        ? Math.round((1 - bbPrice / listPriceO) * 100) : 0;
+
+    // Tu posición
+    var inCatalog   = !!listing.sku;
+    var myPrice     = listing.price ? Number(listing.price) : null;
+    var myStatus    = listing.status || '';
+    var myVsBb      = (myPrice && bbPrice) ? (myPrice <= bbPrice ? 'competitivo' : 'alto') : null;
+
+    var html = '<div class="border border-gray-200 rounded-xl overflow-hidden text-sm">';
+
+    // ── 1. Header ────────────────────────────────────────────────────────
     html += '<div class="flex gap-4 p-4 bg-orange-50 border-b border-orange-100">';
     if (p.image_url)
         html += '<img src="' + p.image_url + '" alt="" class="w-20 h-20 object-contain rounded-lg bg-white border border-gray-200 flex-shrink-0">';
     else
-        html += '<div class="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center text-gray-300 flex-shrink-0 text-2xl">📦</div>';
+        html += '<div class="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center text-gray-300 flex-shrink-0 text-3xl">📦</div>';
 
     html += '<div class="flex-1 min-w-0">';
-    html += '<div class="flex flex-wrap gap-2 items-center mb-1">';
+    html += '<div class="flex flex-wrap gap-1.5 items-center mb-1">';
     html += '<span class="font-mono text-xs font-bold bg-orange-600 text-white px-2 py-0.5 rounded">' + d.asin + '</span>';
-    html += '<span class="text-[10px] px-2 py-0.5 rounded-full border ' + (mkt === 'US' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-green-50 border-green-200 text-green-700') + ' font-semibold">' + (mkt || 'N/A') + '</span>';
-    if (listing.status) html += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 font-semibold">En tu catálogo · ' + listing.status + '</span>';
+    html += '<span class="text-[10px] px-2 py-0.5 rounded-full border font-bold ' + (mkt === 'US' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-green-50 border-green-200 text-green-700') + '">' + (mkt || '?') + '</span>';
+    if (inCatalog) html += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 font-semibold">✓ En tu catálogo</span>';
     html += '</div>';
-
     if (p.found) {
-        html += '<p class="text-sm font-bold text-gray-800 leading-tight mb-1">' + (p.title || '—') + '</p>';
-        html += '<div class="flex flex-wrap gap-3 text-xs text-gray-500">';
-        if (p.brand) html += '<span><strong>Marca:</strong> ' + p.brand + '</span>';
-        if (p.model_number) html += '<span><strong>Modelo:</strong> ' + p.model_number + '</span>';
-        if (p.list_price) html += '<span><strong>P. Lista:</strong> $' + Number(p.list_price).toFixed(2) + ' ' + (p.list_price_currency || '') + '</span>';
-        if (listing.price > 0) html += '<span class="text-orange-600 font-semibold"><strong>Tu precio:</strong> $' + Number(listing.price).toFixed(2) + ' ' + (isMX ? 'MXN' : 'USD') + '</span>';
+        html += '<p class="font-bold text-gray-800 leading-snug mb-1 text-xs">' + (p.title || '—') + '</p>';
+        html += '<div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">';
+        if (p.brand)        html += '<span><span class="text-gray-400">Marca</span> ' + p.brand + '</span>';
+        if (p.model_number) html += '<span><span class="text-gray-400">Modelo</span> ' + p.model_number + '</span>';
+        if (listPriceO)     html += '<span><span class="text-gray-400">P. lista</span> $' + Number(listPriceO).toFixed(2) + ' ' + listPriceCur + '</span>';
         html += '</div>';
     } else {
-        html += '<p class="text-sm text-gray-500">Producto no encontrado en el catálogo de este marketplace.</p>';
+        html += '<p class="text-xs text-gray-400">ASIN no encontrado en el catálogo de este marketplace.</p>';
     }
-    html += '</div></div>'; // end product header
+    html += '</div></div>';
 
-    // ── Sales KPIs ──────────────────────────────────────────────────────
-    html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-0 border-b border-gray-100">';
-    var kpiClass = 'px-4 py-3 text-center border-r border-gray-100 last:border-r-0';
-    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Unidades</p><p class="text-xl font-black ' + (t.units > 0 ? 'text-green-600' : 'text-gray-400') + '">' + (t.units || 0) + '</p><p class="text-[10px] text-gray-400">últimos ' + d.days + ' días</p></div>';
-    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Órdenes</p><p class="text-xl font-black text-blue-600">' + (t.orders || 0) + '</p><p class="text-[10px] text-gray-400">órdenes</p></div>';
-    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Revenue</p><p class="text-xl font-black text-orange-600">$' + Number(t.revenue || 0).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0}) + '</p><p class="text-[10px] text-gray-400">' + currency + '</p></div>';
-    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Precio Prom.</p><p class="text-xl font-black text-gray-700">$' + Number(t.avg_price || 0).toFixed(2) + '</p><p class="text-[10px] text-gray-400">' + currency + '/u</p></div>';
+    // ── 2. BSR strip ─────────────────────────────────────────────────────
+    if (bsrList.length) {
+        html += '<div class="flex flex-wrap items-center gap-2 px-4 py-2.5 bg-white border-b border-gray-100 text-xs">';
+        html += '<span class="text-gray-400 font-semibold uppercase tracking-wide text-[10px]">BSR</span>';
+        bsrList.slice(0, 3).forEach(function(b) {
+            html += '<span class="px-2 py-0.5 rounded-full border ' + _tierCls(tier.color) + '">#' + b.rank.toLocaleString() + ' ' + b.category + '</span>';
+        });
+        html += '<span class="ml-auto px-2 py-0.5 rounded-full border font-semibold ' + _tierCls(tier.color) + '">' + tier.label + '</span>';
+        if (tier.est) html += '<span class="text-gray-400 text-[10px]">' + tier.est + '</span>';
+        html += '</div>';
+    }
+
+    // ── 3. KPI strip ─────────────────────────────────────────────────────
+    html += '<div class="grid grid-cols-2 sm:grid-cols-4 border-b border-gray-100">';
+    var kc = 'px-4 py-3 text-center border-r border-gray-100 last:border-r-0';
+
+    // Buy Box
+    html += '<div class="' + kc + '">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Buy Box</p>';
+    if (bbPrice) {
+        html += '<p class="text-lg font-black text-orange-600">$' + bbPrice.toFixed(2) + '</p>';
+        html += '<p class="text-[10px] text-gray-400">' + bbCur + (discount ? ' · −' + discount + '%' : '') + '</p>';
+    } else {
+        html += '<p class="text-lg font-black text-gray-300">—</p>';
+        html += '<p class="text-[10px] text-gray-400">sin buy box</p>';
+    }
     html += '</div>';
 
+    // Vendedores
+    html += '<div class="' + kc + '">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Vendedores</p>';
+    var compColor = numSellers === 0 ? 'text-gray-300' : numSellers <= 2 ? 'text-green-600' : numSellers <= 5 ? 'text-yellow-600' : 'text-red-500';
+    html += '<p class="text-lg font-black ' + compColor + '">' + numSellers + '</p>';
+    var compLabel = numSellers === 0 ? 'sin oferta' : numSellers === 1 ? 'poco disputado' : numSellers <= 3 ? 'comp. baja' : numSellers <= 7 ? 'comp. media' : 'muy competido';
+    html += '<p class="text-[10px] text-gray-400">' + compLabel + '</p>';
+    html += '</div>';
+
+    // Tus unidades (propias)
+    html += '<div class="' + kc + '">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Tus uds.</p>';
+    html += '<p class="text-lg font-black ' + (t.units > 0 ? 'text-green-600' : 'text-gray-300') + '">' + (t.units || 0) + '</p>';
+    html += '<p class="text-[10px] text-gray-400">últimos ' + d.days + ' días</p>';
+    html += '</div>';
+
+    // Tu revenue
+    html += '<div class="' + kc + '">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide mb-0.5">Tu revenue</p>';
+    html += '<p class="text-lg font-black ' + (t.revenue > 0 ? 'text-orange-600' : 'text-gray-300') + '">$' + Number(t.revenue || 0).toLocaleString('en-US', {maximumFractionDigits: 0}) + '</p>';
+    html += '<p class="text-[10px] text-gray-400">' + currency + '</p>';
+    html += '</div>';
+
+    html += '</div>'; // end KPI grid
+
+    // ── 4. Decision cards ─────────────────────────────────────────────────
+    html += '<div class="grid grid-cols-1 sm:grid-cols-3 gap-0 border-b border-gray-100">';
+
+    // Demanda
+    var demandBorderCls = tier.color === 'green' ? 'border-green-300' : tier.color === 'yellow' ? 'border-yellow-300' : 'border-gray-200';
+    html += '<div class="p-4 border-r border-gray-100">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">📊 Demanda del mercado</p>';
+    if (bestBsr) {
+        html += '<p class="text-base font-bold ' + (tier.color === 'green' ? 'text-green-700' : tier.color === 'yellow' ? 'text-yellow-700' : 'text-red-600') + '">' + tier.label + '</p>';
+        html += '<p class="text-xs text-gray-500 mt-0.5">BSR #' + bestBsr.rank.toLocaleString() + ' en ' + bestBsr.category + '</p>';
+        if (tier.est) html += '<p class="text-[11px] text-gray-400 mt-1">' + tier.est + ' <span class="text-gray-300">(aprox.)</span></p>';
+    } else {
+        html += '<p class="text-sm text-gray-400">Sin datos BSR</p>';
+    }
+    html += '</div>';
+
+    // Competencia
+    html += '<div class="p-4 border-r border-gray-100">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">🏆 Competencia activa</p>';
+    if (numSellers > 0 && bbSeller) {
+        var compSignalCls = numSellers <= 2 ? 'text-green-700' : numSellers <= 5 ? 'text-yellow-700' : 'text-red-600';
+        html += '<p class="text-base font-bold ' + compSignalCls + '">' + numSellers + ' ' + (numSellers === 1 ? 'vendedor' : 'vendedores') + '</p>';
+        html += '<p class="text-xs text-gray-600 mt-0.5 font-semibold">Buy Box: $' + (bbPrice ? bbPrice.toFixed(2) : '—') + ' ' + bbCur + '</p>';
+        html += '<div class="flex gap-1.5 flex-wrap mt-1">';
+        if (bbSeller.is_fba)   html += '<span class="text-[10px] px-1.5 py-0.5 bg-blue-50 border border-blue-200 text-blue-600 rounded">FBA</span>';
+        if (bbSeller.is_prime) html += '<span class="text-[10px] px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-600 rounded">Prime</span>';
+        if (bbSeller.feedback_count) html += '<span class="text-[10px] text-gray-400">' + bbSeller.feedback_count.toLocaleString() + ' reviews · ' + bbSeller.feedback_pct.toFixed(0) + '%</span>';
+        html += '</div>';
+    } else if (numSellers === 0) {
+        html += '<p class="text-base font-bold text-gray-400">Sin oferta activa</p>';
+        html += '<p class="text-xs text-gray-400 mt-0.5">Oportunidad de entrada sin competencia</p>';
+    } else {
+        html += '<p class="text-base font-bold text-gray-600">' + numSellers + ' vendedores</p>';
+    }
+    html += '</div>';
+
+    // Tu posición
+    html += '<div class="p-4">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">🏬 Tu posición</p>';
+    if (inCatalog) {
+        var posCls = myVsBb === 'competitivo' ? 'text-green-700' : myVsBb === 'alto' ? 'text-yellow-700' : 'text-blue-700';
+        html += '<p class="text-base font-bold ' + posCls + '">Publicado' + (myStatus ? ' · ' + myStatus : '') + '</p>';
+        if (myPrice) {
+            html += '<p class="text-xs text-gray-600 mt-0.5">Tu precio: $' + myPrice.toFixed(2) + ' ' + (isMX ? 'MXN' : 'USD') + '</p>';
+            if (bbPrice && myVsBb) {
+                var diffAmt = Math.abs(myPrice - bbPrice).toFixed(2);
+                html += '<p class="text-[11px] mt-1 ' + (myVsBb === 'competitivo' ? 'text-green-600' : 'text-yellow-600') + '">';
+                html += myVsBb === 'competitivo' ? '✓ Competitivo vs buy box' : '↑ $' + diffAmt + ' sobre buy box';
+                html += '</p>';
+            }
+        }
+        if (listing.sku) html += '<p class="text-[10px] text-gray-400 mt-1">SKU: ' + listing.sku + '</p>';
+    } else {
+        html += '<p class="text-base font-bold text-gray-400">Sin listing activo</p>';
+        html += '<p class="text-xs text-gray-400 mt-0.5">No está en tu catálogo</p>';
+        if (bbPrice) {
+            html += '<p class="text-[11px] text-blue-600 mt-1">Buy box disponible a $' + bbPrice.toFixed(2) + ' ' + bbCur + '</p>';
+        }
+    }
+    html += '</div>';
+
+    html += '</div>'; // end decision cards
+
+    // ── 5. Sellers table ─────────────────────────────────────────────────
+    if (sellers.length) {
+        html += '<div class="border-b border-gray-100">';
+        html += '<p class="px-4 pt-3 pb-1 text-[10px] text-gray-400 uppercase tracking-wide font-semibold">Vendedores activos</p>';
+        html += '<div class="overflow-x-auto"><table class="w-full text-xs">';
+        html += '<thead><tr class="bg-gray-50 text-gray-400 text-[10px] uppercase">';
+        html += '<th class="px-4 py-2 text-left">Precio</th><th class="px-4 py-2 text-left">Envío</th><th class="px-4 py-2 text-left">Tipo</th><th class="px-4 py-2 text-left">Buy Box</th><th class="px-4 py-2 text-left">Prime</th><th class="px-4 py-2 text-left">Reviews</th>';
+        html += '</tr></thead><tbody>';
+        sellers.forEach(function(s, i) {
+            var bg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+            html += '<tr class="' + bg + '">';
+            html += '<td class="px-4 py-2 font-bold text-gray-800">$' + s.price.toFixed(2) + ' <span class="font-normal text-gray-400">' + s.currency + '</span></td>';
+            html += '<td class="px-4 py-2 text-gray-500">' + (s.shipping > 0 ? '$' + s.shipping.toFixed(2) : 'Gratis') + '</td>';
+            html += '<td class="px-4 py-2"><span class="px-1.5 py-0.5 rounded text-[10px] ' + (s.is_fba ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500') + '">' + (s.is_fba ? 'FBA' : 'FBM') + '</span></td>';
+            html += '<td class="px-4 py-2">' + (s.is_buy_box ? '<span class="text-orange-600 font-bold">✓</span>' : '<span class="text-gray-300">—</span>') + '</td>';
+            html += '<td class="px-4 py-2">' + (s.is_prime ? '<span class="text-indigo-600">✓</span>' : '<span class="text-gray-300">—</span>') + '</td>';
+            html += '<td class="px-4 py-2 text-gray-500">' + (s.feedback_count ? s.feedback_count.toLocaleString() + ' (' + s.feedback_pct.toFixed(0) + '%)' : '—') + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div></div>';
+    }
+
+    // ── 6. Tus ventas (propias) ───────────────────────────────────────────
+    html += '<div class="border-b border-gray-100">';
+    html += '<p class="px-4 pt-3 pb-1 text-[10px] text-gray-400 uppercase tracking-wide font-semibold">Tus ventas — últimos ' + d.days + ' días</p>';
     if (!hasSales) {
-        html += '<div class="px-4 py-5 text-center text-sm text-gray-400">Sin ventas registradas para este ASIN en los últimos ' + d.days + ' días en este marketplace.</div>';
-        html += '</div>'; return html;
+        html += '<p class="px-4 pb-4 text-xs text-gray-400">Sin ventas propias registradas en este período.</p>';
+    } else {
+        html += '<div class="overflow-x-auto"><table class="w-full text-xs">';
+        html += '<thead><tr class="bg-gray-50 text-gray-400 text-[10px] uppercase">';
+        html += '<th class="px-4 py-2 text-left">Fecha</th><th class="px-4 py-2 text-right">Uds.</th><th class="px-4 py-2 text-right">Órdenes</th><th class="px-4 py-2 text-right">Revenue (' + currency + ')</th><th class="px-4 py-2 text-right">Prom.</th>';
+        html += '</tr></thead><tbody>';
+        var maxU = Math.max.apply(null, daily.map(function(r) { return r.units; }));
+        daily.slice().reverse().forEach(function(row, i) {
+            var bw = maxU > 0 ? Math.round(row.units / maxU * 60) : 0;
+            var bg2 = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+            html += '<tr class="' + bg2 + ' hover:bg-orange-50/40 transition">';
+            html += '<td class="px-4 py-1.5 font-mono text-gray-500">' + row.date + '</td>';
+            html += '<td class="px-4 py-1.5 text-right"><div class="flex items-center justify-end gap-1.5"><div class="h-1.5 bg-orange-200 rounded-full" style="width:' + bw + 'px"></div><span class="font-bold text-gray-800">' + row.units + '</span></div></td>';
+            html += '<td class="px-4 py-1.5 text-right text-gray-500">' + row.orders + '</td>';
+            html += '<td class="px-4 py-1.5 text-right font-semibold text-orange-700">$' + Number(row.revenue).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>';
+            html += '<td class="px-4 py-1.5 text-right text-gray-400">$' + Number(row.avg_price).toFixed(2) + '</td>';
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
     }
-
-    // ── Daily table ─────────────────────────────────────────────────────
-    html += '<div class="overflow-x-auto">';
-    html += '<table class="w-full text-xs">';
-    html += '<thead><tr class="bg-gray-50 text-gray-500 uppercase text-[10px]">';
-    html += '<th class="px-4 py-2 text-left font-semibold">Fecha</th>';
-    html += '<th class="px-4 py-2 text-right font-semibold">Unidades</th>';
-    html += '<th class="px-4 py-2 text-right font-semibold">Órdenes</th>';
-    html += '<th class="px-4 py-2 text-right font-semibold">Revenue (' + currency + ')</th>';
-    html += '<th class="px-4 py-2 text-right font-semibold">Precio Prom.</th>';
-    html += '</tr></thead><tbody>';
-    var maxUnits = Math.max.apply(null, daily.map(function(r){return r.units;}));
-    daily.slice().reverse().forEach(function(row, i) {
-        var barW = maxUnits > 0 ? Math.round(row.units / maxUnits * 100) : 0;
-        var rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-        html += '<tr class="' + rowBg + ' hover:bg-orange-50/50 transition">';
-        html += '<td class="px-4 py-2 font-mono text-gray-600">' + row.date + '</td>';
-        html += '<td class="px-4 py-2 text-right"><div class="flex items-center justify-end gap-2"><div class="h-1.5 bg-orange-200 rounded-full" style="width:' + barW + 'px;max-width:60px"></div><span class="font-bold text-gray-800">' + row.units + '</span></div></td>';
-        html += '<td class="px-4 py-2 text-right text-gray-600">' + row.orders + '</td>';
-        html += '<td class="px-4 py-2 text-right font-semibold text-orange-700">$' + Number(row.revenue).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>';
-        html += '<td class="px-4 py-2 text-right text-gray-500">$' + Number(row.avg_price).toFixed(2) + '</td>';
-        html += '</tr>';
-    });
-    html += '</tbody></table></div>';
-
-    // ── SC link ─────────────────────────────────────────────────────────
-    var scBase = mkt === 'US' ? 'https://sellercentral.amazon.com' : 'https://sellercentral.amazon.com.mx';
-    html += '<div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex gap-3">';
-    html += '<a href="' + scBase + '/skucentral?mSku=' + (listing.sku || d.asin) + '" target="_blank" class="text-xs px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg hover:bg-orange-100 transition font-medium">Ver en Seller Central →</a>';
-    html += '<a href="https://www.amazon.' + (mkt === 'US' ? 'com' : 'com.mx') + '/dp/' + d.asin + '" target="_blank" class="text-xs px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Ver en Amazon →</a>';
     html += '</div>';
 
-    html += '</div>'; // end card
+    // ── 7. Links ─────────────────────────────────────────────────────────
+    html += '<div class="px-4 py-3 bg-gray-50 flex gap-2 flex-wrap">';
+    html += '<a href="https://www.' + amzDomain + '/dp/' + d.asin + '" target="_blank" class="text-xs px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg hover:bg-orange-100 transition font-medium">Ver en Amazon →</a>';
+    if (inCatalog && listing.sku)
+        html += '<a href="' + scBase + '/skucentral?mSku=' + listing.sku + '" target="_blank" class="text-xs px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Ver en Seller Central →</a>';
+    html += '</div>';
+
+    html += '</div>';
     return html;
 }

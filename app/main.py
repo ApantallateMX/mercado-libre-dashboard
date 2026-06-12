@@ -9888,8 +9888,9 @@ async def amazon_asin_search(
         date_to_excl = (_now + _tda(days=1)).strftime("%Y-%m-%d")
         date_from = (_now - _tda(days=days)).strftime("%Y-%m-%d")
 
-        # ── 1. Catalog info + Sales metrics en paralelo ───────────────────
+        # ── 1. Catalog + Offers + Sales metrics en paralelo ──────────────
         catalog_task = client.get_catalog_item(asin)
+        offers_task = client.get_item_offers(asin)
         metrics_task = client.get_order_metrics(
             date_from=date_from,
             date_to_exclusive=date_to_excl,
@@ -9903,8 +9904,9 @@ async def amazon_asin_search(
             asin=asin,
         )
 
-        catalog_raw, metrics_daily, metrics_total = await asyncio.gather(
-            catalog_task, metrics_task, metrics_total_task, return_exceptions=True
+        catalog_raw, offers_raw, metrics_daily, metrics_total = await asyncio.gather(
+            catalog_task, offers_task, metrics_task, metrics_total_task,
+            return_exceptions=True,
         )
 
         # ── 2. Parse catalog ──────────────────────────────────────────────
@@ -9936,13 +9938,29 @@ async def amazon_asin_search(
                         break
             product_info["image_url"] = main_img
 
-            # Attributes: list_price, product_description
+            # Attributes: list_price
             attrs = catalog_raw.get("attributes", {})
             list_price_attr = attrs.get("list_price", [{}])
             if list_price_attr and isinstance(list_price_attr, list):
                 lp = list_price_attr[0]
                 product_info["list_price"] = lp.get("value", {}).get("amount", 0)
                 product_info["list_price_currency"] = lp.get("value", {}).get("currency", "USD")
+
+            # BSR — salesRanks
+            bsr_ranks: list = []
+            for rb in catalog_raw.get("salesRanks", []):
+                for cr in rb.get("classificationRanks", []):
+                    bsr_ranks.append({
+                        "category": cr.get("title", ""),
+                        "rank": int(cr.get("rank", 0) or 0),
+                    })
+                for dr in rb.get("displayGroupRanks", []):
+                    bsr_ranks.append({
+                        "category": dr.get("title", ""),
+                        "rank": int(dr.get("rank", 0) or 0),
+                        "is_display": True,
+                    })
+            product_info["bsr"] = bsr_ranks
 
         # ── 3. Parse sales metrics ────────────────────────────────────────
         daily_rows = []
@@ -9982,7 +10000,53 @@ async def amazon_asin_search(
                 "currency": ts.get("currencyCode", "USD"),
             }
 
-        # ── 5. Current price from listings DB ────────────────────────────
+        # ── 5. Parse competitive offers ───────────────────────────────────
+        offers_info: dict = {
+            "total_offers": 0,
+            "buy_box_price": None,
+            "buy_box_currency": "USD",
+            "list_price": None,
+            "list_price_currency": "USD",
+            "sellers": [],
+        }
+        if isinstance(offers_raw, dict) and offers_raw:
+            _op = offers_raw.get("payload", offers_raw)
+            if isinstance(_op, dict):
+                _sum = _op.get("Summary", {})
+                offers_info["total_offers"] = int(_sum.get("TotalOfferCount", 0) or 0)
+                _bb = _sum.get("BuyBoxPrices", [])
+                if _bb:
+                    _lp_bb = _bb[0].get("LandedPrice", {})
+                    _bb_amt = float(_lp_bb.get("Amount", 0) or 0)
+                    if _bb_amt:
+                        offers_info["buy_box_price"] = round(_bb_amt, 2)
+                        offers_info["buy_box_currency"] = _lp_bb.get("CurrencyCode", "USD")
+                _lp_s = _sum.get("ListPrice", {})
+                if _lp_s:
+                    _lp_amt = float(_lp_s.get("Amount", 0) or 0)
+                    if _lp_amt:
+                        offers_info["list_price"] = round(_lp_amt, 2)
+                        offers_info["list_price_currency"] = _lp_s.get("CurrencyCode", "USD")
+                for _o in (_op.get("Offers", []) or [])[:20]:
+                    _lp_o = _o.get("ListingPrice", {})
+                    _sh_o = _o.get("Shipping", {})
+                    _fb_o = _o.get("SellerFeedbackRating", {})
+                    _price = float(_lp_o.get("Amount", 0) or 0)
+                    _ship = float(_sh_o.get("Amount", 0) or 0)
+                    offers_info["sellers"].append({
+                        "seller_id": _o.get("SellerId", ""),
+                        "price": round(_price, 2),
+                        "shipping": round(_ship, 2),
+                        "landed": round(_price + _ship, 2),
+                        "currency": _lp_o.get("CurrencyCode", "USD"),
+                        "is_fba": bool(_o.get("IsFulfilledByAmazon", False)),
+                        "is_buy_box": bool(_o.get("IsBuyBoxWinner", False)),
+                        "is_prime": bool((_o.get("PrimeInformation") or {}).get("IsPrime", False)),
+                        "feedback_count": int(_fb_o.get("FeedbackCount", 0) or 0),
+                        "feedback_pct": float(_fb_o.get("SellerPositiveFeedbackRating", 0) or 0),
+                    })
+
+        # ── 6. Current price from listings DB ────────────────────────────
         listing_info: dict = {}
         try:
             import aiosqlite as _aio_as
@@ -10004,6 +10068,7 @@ async def amazon_asin_search(
             "marketplace": getattr(client, "marketplace_name", ""),
             "product": product_info,
             "listing": listing_info,
+            "offers": offers_info,
             "totals": totals,
             "daily": daily_rows,
         }

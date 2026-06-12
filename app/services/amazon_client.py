@@ -1544,7 +1544,7 @@ class AmazonClient:
     async def get_catalog_item(self, asin: str) -> dict:
         """
         Obtiene info del producto desde Catalog Items API v2022-04-01.
-        Retorna title, brand, images, category, dimensions, attributes.
+        Retorna title, brand, images, category, dimensions, attributes, salesRanks (BSR).
         """
         try:
             result = await self._request(
@@ -1552,12 +1552,32 @@ class AmazonClient:
                 f"/catalog/2022-04-01/items/{asin.strip().upper()}",
                 params=[
                     ("marketplaceIds", self.marketplace_id),
-                    ("includedData", "summaries,images,attributes,dimensions,identifiers"),
+                    ("includedData", "summaries,images,attributes,dimensions,identifiers,salesRanks"),
                 ],
             )
             return result
         except Exception as e:
             logger.warning(f"[AMZ-CATALOG] {asin}: {e}")
+            return {}
+
+    async def get_item_offers(self, asin: str, item_condition: str = "New") -> dict:
+        """
+        Obtiene ofertas competitivas para un ASIN via Product Pricing API.
+        Retorna buy box price, lista de vendedores, FBA/FBM, Prime, feedback.
+        Rate limit: 0.5 req/s, burst 1.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/products/pricing/v0/items/{asin.strip().upper()}/offers",
+                params={
+                    "MarketplaceId": self.marketplace_id,
+                    "ItemCondition": item_condition,
+                },
+            )
+            return result if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.warning(f"[AMZ-OFFERS] {asin}: {e}")
             return {}
 
     # ─────────────────────────────────────────────────────────────────────
