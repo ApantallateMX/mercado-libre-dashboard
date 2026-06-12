@@ -1480,6 +1480,8 @@ class AmazonClient:
         date_to_exclusive: str,
         granularity: str = "Total",
         tz: str = "US/Pacific",
+        asin: str = None,
+        sku: str = None,
     ) -> list:
         """
         Obtiene métricas de ventas usando el Sales API v1 (/sales/v1/orderMetrics).
@@ -1496,6 +1498,8 @@ class AmazonClient:
             granularity:       "Total" | "Day" | "Week" | "Month"
             tz:                Zona horaria para granularity != Total.
                                Usar "US/Pacific" para coincidir con Amazon SC.
+            asin:              Opcional — filtrar por ASIN específico.
+            sku:               Opcional — filtrar por SKU específico.
 
         Returns:
             Lista de dicts con campos:
@@ -1527,11 +1531,34 @@ class AmazonClient:
         ]
         if granularity != "Total":
             params.append(("granularityTimeZone", tz))
+        if asin:
+            params.append(("asin", asin.strip().upper()))
+        if sku:
+            params.append(("sku", sku.strip()))
 
         async with _SALES_SEMAPHORE:
             result = await self._request("GET", "/sales/v1/orderMetrics", params=params)
 
         return result.get("payload", [])
+
+    async def get_catalog_item(self, asin: str) -> dict:
+        """
+        Obtiene info del producto desde Catalog Items API v2022-04-01.
+        Retorna title, brand, images, category, dimensions, attributes.
+        """
+        try:
+            result = await self._request(
+                "GET",
+                f"/catalog/2022-04-01/items/{asin.strip().upper()}",
+                params=[
+                    ("marketplaceIds", self.marketplace_id),
+                    ("includedData", "summaries,images,attributes,dimensions,identifiers"),
+                ],
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[AMZ-CATALOG] {asin}: {e}")
+            return {}
 
     # ─────────────────────────────────────────────────────────────────────
     # FINANZAS — BALANCE DE CUENTA

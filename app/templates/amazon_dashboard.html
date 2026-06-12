@@ -262,6 +262,37 @@
   </div>
 </div>
 
+<!-- ─── ASIN Search ─────────────────────────────────────────────────────── -->
+<div class="bg-white rounded-xl shadow mb-5" id="amz-asin-search-card">
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+            <h2 class="text-base font-bold text-gray-800">Buscar ASIN</h2>
+            <p class="text-xs text-gray-400 mt-0.5">Ventas, precio y detalles del producto en el marketplace activo</p>
+        </div>
+    </div>
+    <div class="px-4 md:px-6 py-4">
+        <!-- Search bar -->
+        <div class="flex flex-wrap gap-2 mb-4">
+            <input id="amz-asin-input" type="text" placeholder="Ej. B0GWRX14QJ"
+                class="flex-1 min-w-[180px] border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-300"
+                onkeydown="if(event.key==='Enter')searchAsin()"
+                maxlength="10">
+            <select id="amz-asin-days" class="border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white">
+                <option value="7">Últimos 7 días</option>
+                <option value="15">Últimos 15 días</option>
+                <option value="30" selected>Últimos 30 días</option>
+                <option value="90">Últimos 90 días</option>
+            </select>
+            <button onclick="searchAsin()"
+                class="px-4 py-2 bg-orange-500 text-white text-sm font-semibold rounded-lg hover:bg-orange-600 transition">
+                Buscar
+            </button>
+        </div>
+        <!-- Results -->
+        <div id="amz-asin-result"></div>
+    </div>
+</div>
+
 <!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
     <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">

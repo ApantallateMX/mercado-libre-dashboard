@@ -2019,3 +2019,117 @@ function _renderAmzPanelContent(tab) {
       '</div>';
   }
 }
+
+// ─── ASIN Search ──────────────────────────────────────────────────────────────
+window.searchAsin = async function() {
+    var asin = (document.getElementById('amz-asin-input').value || '').trim().toUpperCase();
+    var days = document.getElementById('amz-asin-days').value || 30;
+    var resultEl = document.getElementById('amz-asin-result');
+    if (!asin) { resultEl.innerHTML = '<p class="text-xs text-red-500">Ingresa un ASIN.</p>'; return; }
+    if (asin.length !== 10) { resultEl.innerHTML = '<p class="text-xs text-red-500">El ASIN debe tener exactamente 10 caracteres (tienes ' + asin.length + ').</p>'; return; }
+
+    resultEl.innerHTML = '<div class="flex items-center gap-2 py-4 text-sm text-gray-400">' +
+        '<svg class="animate-spin h-4 w-4 text-orange-400" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>' +
+        'Consultando ASIN ' + asin + '...</div>';
+
+    var sellerParam = window.amzActiveSellerId ? '&seller_id=' + encodeURIComponent(window.amzActiveSellerId) : '';
+    try {
+        var r = await fetch('/api/amazon/asin-search?asin=' + asin + '&days=' + days + sellerParam);
+        var data = await r.json();
+        if (data.error) {
+            resultEl.innerHTML = '<div class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">' + data.error + '</div>';
+            return;
+        }
+        resultEl.innerHTML = _renderAsinResult(data);
+    } catch(e) {
+        resultEl.innerHTML = '<p class="text-xs text-red-500">Error: ' + e.message + '</p>';
+    }
+};
+
+function _renderAsinResult(d) {
+    var p = d.product || {};
+    var t = d.totals || {};
+    var daily = d.daily || [];
+    var listing = d.listing || {};
+    var mkt = d.marketplace || '';
+    var hasSales = t.units > 0 || t.orders > 0;
+    var currency = t.currency || 'USD';
+    var isMX = mkt === 'MX';
+
+    var html = '<div class="border border-gray-200 rounded-xl overflow-hidden">';
+
+    // ── Product header ──────────────────────────────────────────────────
+    html += '<div class="flex gap-4 p-4 bg-orange-50 border-b border-orange-100">';
+    if (p.image_url)
+        html += '<img src="' + p.image_url + '" alt="" class="w-20 h-20 object-contain rounded-lg bg-white border border-gray-200 flex-shrink-0">';
+    else
+        html += '<div class="w-20 h-20 bg-gray-100 rounded-lg flex items-center justify-center text-gray-300 flex-shrink-0 text-2xl">📦</div>';
+
+    html += '<div class="flex-1 min-w-0">';
+    html += '<div class="flex flex-wrap gap-2 items-center mb-1">';
+    html += '<span class="font-mono text-xs font-bold bg-orange-600 text-white px-2 py-0.5 rounded">' + d.asin + '</span>';
+    html += '<span class="text-[10px] px-2 py-0.5 rounded-full border ' + (mkt === 'US' ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-green-50 border-green-200 text-green-700') + ' font-semibold">' + (mkt || 'N/A') + '</span>';
+    if (listing.status) html += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 border border-green-200 font-semibold">En tu catálogo · ' + listing.status + '</span>';
+    html += '</div>';
+
+    if (p.found) {
+        html += '<p class="text-sm font-bold text-gray-800 leading-tight mb-1">' + (p.title || '—') + '</p>';
+        html += '<div class="flex flex-wrap gap-3 text-xs text-gray-500">';
+        if (p.brand) html += '<span><strong>Marca:</strong> ' + p.brand + '</span>';
+        if (p.model_number) html += '<span><strong>Modelo:</strong> ' + p.model_number + '</span>';
+        if (p.list_price) html += '<span><strong>P. Lista:</strong> $' + Number(p.list_price).toFixed(2) + ' ' + (p.list_price_currency || '') + '</span>';
+        if (listing.price > 0) html += '<span class="text-orange-600 font-semibold"><strong>Tu precio:</strong> $' + Number(listing.price).toFixed(2) + ' ' + (isMX ? 'MXN' : 'USD') + '</span>';
+        html += '</div>';
+    } else {
+        html += '<p class="text-sm text-gray-500">Producto no encontrado en el catálogo de este marketplace.</p>';
+    }
+    html += '</div></div>'; // end product header
+
+    // ── Sales KPIs ──────────────────────────────────────────────────────
+    html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-0 border-b border-gray-100">';
+    var kpiClass = 'px-4 py-3 text-center border-r border-gray-100 last:border-r-0';
+    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Unidades</p><p class="text-xl font-black ' + (t.units > 0 ? 'text-green-600' : 'text-gray-400') + '">' + (t.units || 0) + '</p><p class="text-[10px] text-gray-400">últimos ' + d.days + ' días</p></div>';
+    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Órdenes</p><p class="text-xl font-black text-blue-600">' + (t.orders || 0) + '</p><p class="text-[10px] text-gray-400">órdenes</p></div>';
+    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Revenue</p><p class="text-xl font-black text-orange-600">$' + Number(t.revenue || 0).toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0}) + '</p><p class="text-[10px] text-gray-400">' + currency + '</p></div>';
+    html += '<div class="' + kpiClass + '"><p class="text-[10px] text-gray-400 uppercase tracking-wide">Precio Prom.</p><p class="text-xl font-black text-gray-700">$' + Number(t.avg_price || 0).toFixed(2) + '</p><p class="text-[10px] text-gray-400">' + currency + '/u</p></div>';
+    html += '</div>';
+
+    if (!hasSales) {
+        html += '<div class="px-4 py-5 text-center text-sm text-gray-400">Sin ventas registradas para este ASIN en los últimos ' + d.days + ' días en este marketplace.</div>';
+        html += '</div>'; return html;
+    }
+
+    // ── Daily table ─────────────────────────────────────────────────────
+    html += '<div class="overflow-x-auto">';
+    html += '<table class="w-full text-xs">';
+    html += '<thead><tr class="bg-gray-50 text-gray-500 uppercase text-[10px]">';
+    html += '<th class="px-4 py-2 text-left font-semibold">Fecha</th>';
+    html += '<th class="px-4 py-2 text-right font-semibold">Unidades</th>';
+    html += '<th class="px-4 py-2 text-right font-semibold">Órdenes</th>';
+    html += '<th class="px-4 py-2 text-right font-semibold">Revenue (' + currency + ')</th>';
+    html += '<th class="px-4 py-2 text-right font-semibold">Precio Prom.</th>';
+    html += '</tr></thead><tbody>';
+    var maxUnits = Math.max.apply(null, daily.map(function(r){return r.units;}));
+    daily.slice().reverse().forEach(function(row, i) {
+        var barW = maxUnits > 0 ? Math.round(row.units / maxUnits * 100) : 0;
+        var rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+        html += '<tr class="' + rowBg + ' hover:bg-orange-50/50 transition">';
+        html += '<td class="px-4 py-2 font-mono text-gray-600">' + row.date + '</td>';
+        html += '<td class="px-4 py-2 text-right"><div class="flex items-center justify-end gap-2"><div class="h-1.5 bg-orange-200 rounded-full" style="width:' + barW + 'px;max-width:60px"></div><span class="font-bold text-gray-800">' + row.units + '</span></div></td>';
+        html += '<td class="px-4 py-2 text-right text-gray-600">' + row.orders + '</td>';
+        html += '<td class="px-4 py-2 text-right font-semibold text-orange-700">$' + Number(row.revenue).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>';
+        html += '<td class="px-4 py-2 text-right text-gray-500">$' + Number(row.avg_price).toFixed(2) + '</td>';
+        html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // ── SC link ─────────────────────────────────────────────────────────
+    var scBase = mkt === 'US' ? 'https://sellercentral.amazon.com' : 'https://sellercentral.amazon.com.mx';
+    html += '<div class="px-4 py-3 bg-gray-50 border-t border-gray-100 flex gap-3">';
+    html += '<a href="' + scBase + '/skucentral?mSku=' + (listing.sku || d.asin) + '" target="_blank" class="text-xs px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg hover:bg-orange-100 transition font-medium">Ver en Seller Central →</a>';
+    html += '<a href="https://www.amazon.' + (mkt === 'US' ? 'com' : 'com.mx') + '/dp/' + d.asin + '" target="_blank" class="text-xs px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">Ver en Amazon →</a>';
+    html += '</div>';
+
+    html += '</div>'; // end card
+    return html;
+}

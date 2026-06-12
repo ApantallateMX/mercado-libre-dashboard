@@ -9856,6 +9856,163 @@ async def amazon_dashboard(request: Request, tab: str = Query(default="dashboard
     return templates.TemplateResponse(request, "amazon_dashboard.html", {"user": user, **ctx})
 
 
+@app.get("/api/amazon/asin-search")
+async def amazon_asin_search(
+    asin: str = Query(..., description="ASIN Amazon de 10 caracteres"),
+    seller_id: str = Query("", description="seller_id de la cuenta; vacío = cuenta activa"),
+    days: int = Query(30, ge=7, le=365),
+):
+    """
+    Busca un ASIN específico: info de catálogo (título, imagen, marca) + métricas de
+    ventas del período usando Sales API v1 con filtro por ASIN.
+    El marketplace (MX/US/CA) se determina automáticamente desde las credenciales
+    de la cuenta seleccionada.
+    """
+    from datetime import datetime as _dta, timedelta as _tda
+    asin = asin.strip().upper()
+    if not asin or len(asin) != 10:
+        return {"error": "ASIN debe tener exactamente 10 caracteres", "asin": asin}
+
+    # Resolver cuenta
+    _sid = seller_id.strip() or ""
+    try:
+        from app.services.amazon_client import get_amazon_client as _get_amz
+        client = await _get_amz(_sid or None)
+    except Exception as _e:
+        return {"error": f"No se pudo inicializar el cliente Amazon: {_e}"}
+    if not client:
+        return {"error": "No hay cuenta Amazon activa. Selecciona una cuenta."}
+
+    try:
+        _now = _dta.utcnow()
+        date_to_excl = (_now + _tda(days=1)).strftime("%Y-%m-%d")
+        date_from = (_now - _tda(days=days)).strftime("%Y-%m-%d")
+
+        # ── 1. Catalog info + Sales metrics en paralelo ───────────────────
+        catalog_task = client.get_catalog_item(asin)
+        metrics_task = client.get_order_metrics(
+            date_from=date_from,
+            date_to_exclusive=date_to_excl,
+            granularity="Day",
+            asin=asin,
+        )
+        metrics_total_task = client.get_order_metrics(
+            date_from=date_from,
+            date_to_exclusive=date_to_excl,
+            granularity="Total",
+            asin=asin,
+        )
+
+        catalog_raw, metrics_daily, metrics_total = await asyncio.gather(
+            catalog_task, metrics_task, metrics_total_task, return_exceptions=True
+        )
+
+        # ── 2. Parse catalog ──────────────────────────────────────────────
+        product_info: dict = {"asin": asin, "found": False}
+        if isinstance(catalog_raw, dict) and catalog_raw:
+            summaries = catalog_raw.get("summaries", [])
+            if summaries:
+                s = summaries[0]
+                product_info.update({
+                    "found": True,
+                    "title": s.get("itemName", ""),
+                    "brand": s.get("brand", ""),
+                    "manufacturer": s.get("manufacturer", ""),
+                    "model_number": s.get("modelNumber", ""),
+                    "item_class": s.get("itemClassificationSalesRank", ""),
+                    "marketplace": client.marketplace_name if hasattr(client, "marketplace_name") else "",
+                })
+            # Images
+            images_raw = catalog_raw.get("images", [])
+            main_img = ""
+            if images_raw:
+                for img_block in images_raw:
+                    imgs = img_block.get("images", [])
+                    for img in imgs:
+                        if img.get("variant") == "MAIN":
+                            main_img = img.get("link", "")
+                            break
+                    if main_img:
+                        break
+            product_info["image_url"] = main_img
+
+            # Attributes: list_price, product_description
+            attrs = catalog_raw.get("attributes", {})
+            list_price_attr = attrs.get("list_price", [{}])
+            if list_price_attr and isinstance(list_price_attr, list):
+                lp = list_price_attr[0]
+                product_info["list_price"] = lp.get("value", {}).get("amount", 0)
+                product_info["list_price_currency"] = lp.get("value", {}).get("currency", "USD")
+
+        # ── 3. Parse sales metrics ────────────────────────────────────────
+        daily_rows = []
+        if isinstance(metrics_daily, list):
+            for row in metrics_daily:
+                ts_sales = row.get("totalSales", {})
+                avg_price = row.get("averageUnitPrice", {})
+                # interval format: "2026-05-13T00:00:00-07:00--2026-05-14T00:00:00-07:00"
+                itvl = row.get("interval", "")
+                date_label = itvl[:10] if itvl else ""
+                units = int(row.get("unitCount", 0) or 0)
+                orders = int(row.get("orderCount", 0) or 0)
+                rev = float((ts_sales.get("amount") or 0))
+                currency = ts_sales.get("currencyCode", "USD")
+                avg = float((avg_price.get("amount") or 0))
+                if units > 0 or orders > 0:
+                    daily_rows.append({
+                        "date": date_label,
+                        "units": units,
+                        "orders": orders,
+                        "revenue": round(rev, 2),
+                        "avg_price": round(avg, 2),
+                        "currency": currency,
+                    })
+
+        # ── 4. Total summary ──────────────────────────────────────────────
+        totals = {"units": 0, "orders": 0, "revenue": 0.0, "avg_price": 0.0, "currency": "USD"}
+        if isinstance(metrics_total, list) and metrics_total:
+            t = metrics_total[0]
+            ts = t.get("totalSales", {})
+            ap = t.get("averageUnitPrice", {})
+            totals = {
+                "units": int(t.get("unitCount", 0) or 0),
+                "orders": int(t.get("orderCount", 0) or 0),
+                "revenue": round(float(ts.get("amount") or 0), 2),
+                "avg_price": round(float(ap.get("amount") or 0), 2),
+                "currency": ts.get("currencyCode", "USD"),
+            }
+
+        # ── 5. Current price from listings DB ────────────────────────────
+        listing_info: dict = {}
+        try:
+            async with aiosqlite.connect(DATABASE_PATH) as _db:
+                _db.row_factory = aiosqlite.Row
+                row = await (await _db.execute(
+                    "SELECT sku, price, status, title FROM amazon_listings WHERE seller_id=? AND asin=? LIMIT 1",
+                    (_sid or client.seller_id, asin)
+                )).fetchone()
+                if row:
+                    listing_info = dict(row)
+        except Exception:
+            pass
+
+        return {
+            "asin": asin,
+            "days": days,
+            "seller_id": client.seller_id,
+            "marketplace": getattr(client, "marketplace_name", ""),
+            "product": product_info,
+            "listing": listing_info,
+            "totals": totals,
+            "daily": daily_rows,
+        }
+    except Exception as _exc:
+        logger.warning(f"[ASIN-SEARCH] {asin}: {_exc}")
+        return {"error": str(_exc), "asin": asin}
+    finally:
+        await client.close()
+
+
 @app.get("/amazon/products", response_class=HTMLResponse)
 async def amazon_products_page(request: Request):
     """Centro de Productos Amazon — Resumen, Inventario, Stock, Sin Publicar, Sin Lanzar."""
