@@ -7,6 +7,18 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-12 — FEAT: Calculadora de Precio de Compra + Veredicto en ASIN search (v2)
+
+### Cambios (reemplazo del simulador v1)
+- Lógica invertida: dado precio de venta + margen objetivo → calcula **COGS máximo ex-fábrica** permitido
+- Veredicto con 3 dimensiones: Buy Box (señal de brand owner), Demanda (BSR tier), Espacio de margen (ratio de fees)
+- Resultado principal: precio tope destacado en grande (verde/rojo según viabilidad)
+- Tabla de 4 escenarios: 15% / 20% / 25% / 30% margen → COGS máx en cada caso
+- Auto-cálculo al abrir el simulador si hay precio de Buy Box disponible
+- Todos los campos editables en tiempo real (precio venta, referral %, FBA fee, storage, aranceles %, flete/ud)
+
+---
+
 ## 2026-06-12 — FEAT: Simulador de Rentabilidad FBA en ASIN search
 
 ### Cambios
