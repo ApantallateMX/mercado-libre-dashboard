@@ -2062,6 +2062,19 @@ function _tierCls(color) {
     return 'bg-gray-100 text-gray-500 border-gray-200';
 }
 
+function _fbaReferralFee(category, itemClass) {
+    var s = ((category || '') + ' ' + (itemClass || '')).toLowerCase();
+    if (/personal.?computer|laptop|desktop/.test(s) && !/accessor/.test(s)) return 8;
+    if (/camera|photo/.test(s)) return 8;
+    if (/cell.?phone/.test(s) && !/accessor/.test(s)) return 8;
+    if (/consumer.?electronics/.test(s)) return 8;
+    if (/automotive/.test(s)) return 12;
+    if (/jewelry|jewellery/.test(s)) return 20;
+    if (/watch/.test(s)) return 16;
+    if (/amazon.?device/.test(s)) return 45;
+    return 15;
+}
+
 function _renderAsinResult(d) {
     var p       = d.product || {};
     var t       = d.totals  || {};
@@ -2288,6 +2301,101 @@ function _renderAsinResult(d) {
     }
     html += '</div>';
 
+    // ── 6.5. FBA Profitability Simulator ─────────────────────────────────────
+    var simId = 'fba_' + d.asin;
+    var refRate = _fbaReferralFee(bestBsr ? bestBsr.category : '', p.item_class || '');
+    var bbPriceForSim = bbPrice || 0;
+    var bbReviews = bbSeller ? (bbSeller.feedback_count || 0) : 0;
+    var brandOwnerLikely = !!(bbSeller && bbReviews > 5000);
+    var viable = numSellers === 0 || (!brandOwnerLikely && numSellers <= 3);
+    var shareEst = numSellers === 0 ? 1.0 : brandOwnerLikely ? 0.05 : numSellers <= 2 ? 0.5 : numSellers <= 5 ? 0.2 : 0.1;
+    var rawMonthly = tier.color === 'green' ? (tier.label === 'Muy alta' ? 500 : 250) : tier.color === 'yellow' ? 60 : 3;
+    var userMonthly = Math.round(rawMonthly * shareEst);
+    var ord1 = Math.max(Math.round(userMonthly * 1.5), 30);
+    var ord2 = Math.round(userMonthly * 3);
+
+    html += '<div class="border-b border-gray-100">';
+    html += '<button onclick="window.toggleFbaSim(\'' + simId + '\')" class="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition text-left">';
+    html += '<div class="flex items-center gap-2">';
+    html += '<span class="text-[10px] text-gray-400 uppercase tracking-wide font-semibold">Simulador de Rentabilidad FBA</span>';
+    html += '<span class="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-200 rounded-full font-medium">nuevo</span>';
+    html += '</div>';
+    html += '<svg id="' + simId + '_chev" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+    html += '</button>';
+    html += '<div id="' + simId + '" class="hidden px-4 pb-4 space-y-3">';
+
+    // Fees section (orange)
+    html += '<div class="bg-orange-50 border border-orange-100 rounded-lg p-3">';
+    html += '<p class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Fees Amazon (editables)</p>';
+    html += '<div class="grid grid-cols-3 gap-2">';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">Referral fee</label>';
+    html += '<div class="flex"><input type="number" id="' + simId + '_ref" value="' + refRate + '" min="0" max="50" step="0.5" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-l-md px-2 py-1.5 text-xs text-right bg-white focus:outline-none focus:ring-1 focus:ring-orange-300">';
+    html += '<span class="bg-gray-100 border border-l-0 border-gray-200 rounded-r-md px-1.5 text-[10px] text-gray-400 flex items-center">%</span></div></div>';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">FBA fulfillment</label>';
+    html += '<div class="flex"><span class="bg-gray-100 border border-r-0 border-gray-200 rounded-l-md px-1.5 text-[10px] text-gray-400 flex items-center">$</span>';
+    html += '<input type="number" id="' + simId + '_fba" value="5.68" min="0" step="0.01" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-r-md px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-orange-300"></div></div>';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">Storage / ud / mes</label>';
+    html += '<div class="flex"><span class="bg-gray-100 border border-r-0 border-gray-200 rounded-l-md px-1.5 text-[10px] text-gray-400 flex items-center">$</span>';
+    html += '<input type="number" id="' + simId + '_stor" value="0.02" min="0" step="0.01" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-r-md px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-orange-300"></div></div>';
+    html += '</div></div>';
+
+    // Costo section (blue)
+    html += '<div class="bg-blue-50 border border-blue-100 rounded-lg p-3">';
+    html += '<p class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Tu costo de producto</p>';
+    html += '<div class="grid grid-cols-3 gap-2">';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">Costo ex-fábrica</label>';
+    html += '<div class="flex"><span class="bg-gray-100 border border-r-0 border-gray-200 rounded-l-md px-1.5 text-[10px] text-gray-400 flex items-center">$</span>';
+    html += '<input type="number" id="' + simId + '_cogs" placeholder="0.00" min="0" step="0.01" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-r-md px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"></div></div>';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">Aranceles</label>';
+    html += '<div class="flex"><input type="number" id="' + simId + '_tar" value="0" min="0" max="200" step="1" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-l-md px-2 py-1.5 text-xs text-right bg-white focus:outline-none focus:ring-1 focus:ring-blue-300">';
+    html += '<span class="bg-gray-100 border border-l-0 border-gray-200 rounded-r-md px-1.5 text-[10px] text-gray-400 flex items-center">%</span></div></div>';
+    html += '<div><label class="text-[10px] text-gray-400 block mb-1">Flete / ud</label>';
+    html += '<div class="flex"><span class="bg-gray-100 border border-r-0 border-gray-200 rounded-l-md px-1.5 text-[10px] text-gray-400 flex items-center">$</span>';
+    html += '<input type="number" id="' + simId + '_frt" value="0" min="0" step="0.01" oninput="window.calcFbaSim(\'' + simId + '\')" class="w-full border border-gray-200 rounded-r-md px-2 py-1.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-300"></div></div>';
+    html += '</div></div>';
+
+    // Results placeholder — data-bb-price lets calcFbaSim read the buy box price
+    html += '<div id="' + simId + '_res" data-bb-price="' + bbPriceForSim + '">';
+    html += '<p class="text-[10px] text-gray-400 text-center py-1">Ingresa el costo ex-fábrica para ver el margen.</p>';
+    html += '</div>';
+
+    // Buy Box viability + purchase recommendation
+    html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">';
+    html += '<div class="rounded-lg border p-3 ';
+    if (numSellers === 0) {
+        html += 'bg-green-50 border-green-200"><p class="text-xs font-bold text-green-700 mb-1">Entrada directa — sin competencia</p>';
+        html += '<p class="text-[11px] text-green-600">Sin otras ofertas activas. Ganarás el Buy Box al primer listing.</p>';
+    } else if (!brandOwnerLikely && numSellers <= 3) {
+        html += 'bg-green-50 border-green-200"><p class="text-xs font-bold text-green-700 mb-1">Buena viabilidad</p>';
+        html += '<p class="text-[11px] text-green-600">' + numSellers + ' vendedores sin señal de brand owner. Rotación de Buy Box probable.</p>';
+    } else if (brandOwnerLikely && numSellers <= 5) {
+        html += 'bg-yellow-50 border-yellow-200"><p class="text-xs font-bold text-yellow-700 mb-1">Viabilidad limitada</p>';
+        html += '<p class="text-[11px] text-yellow-600">Brand owner posible (' + bbReviews.toLocaleString() + ' reviews). Buy Box difícil de ganar con regularidad.</p>';
+    } else if (brandOwnerLikely) {
+        html += 'bg-red-50 border-red-200"><p class="text-xs font-bold text-red-700 mb-1">Buy Box muy difícil</p>';
+        html += '<p class="text-[11px] text-red-600">Brand owner + ' + numSellers + ' competidores. Precio rentable incompatible con Buy Box.</p>';
+    } else {
+        html += 'bg-yellow-50 border-yellow-200"><p class="text-xs font-bold text-yellow-700 mb-1">Competencia media</p>';
+        html += '<p class="text-[11px] text-yellow-600">' + numSellers + ' vendedores. Revisa historial antes de entrar.</p>';
+    }
+    html += '</div>';
+    html += '<div class="rounded-lg border border-gray-200 bg-gray-50 p-3">';
+    html += '<p class="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-2">Compra inicial recomendada</p>';
+    if (viable && userMonthly >= 10) {
+        html += '<p class="text-xs text-gray-700"><span class="font-semibold">1ª orden:</span> ~' + ord1 + ' uds</p>';
+        html += '<p class="text-[11px] text-gray-400 mt-0.5">6 sem. cobertura · share est. ~' + userMonthly + ' uds/mes</p>';
+        html += '<p class="text-xs text-gray-700 mt-2"><span class="font-semibold">Si valida:</span> ~' + ord2 + ' uds</p>';
+        html += '<p class="text-[11px] text-gray-400 mt-0.5">3 meses · reordena cuando resten 30d de stock</p>';
+    } else if (userMonthly > 0 && userMonthly < 10) {
+        html += '<p class="text-xs text-yellow-700">~' + userMonthly + ' uds/mes proyectadas. Volumen bajo para el costo logístico.</p>';
+    } else {
+        html += '<p class="text-xs text-red-600">No recomendado como reseller en este ASIN.</p>';
+        html += '<p class="text-[11px] text-gray-400 mt-1">Evalúa marca propia o un ASIN sin brand owner directo.</p>';
+    }
+    html += '</div>';
+    html += '</div>'; // end viability grid
+    html += '</div></div>'; // end sim body + wrapper
+
     // ── 7. Links ─────────────────────────────────────────────────────────
     html += '<div class="px-4 py-3 bg-gray-50 flex gap-2 flex-wrap">';
     html += '<a href="https://www.' + amzDomain + '/dp/' + d.asin + '" target="_blank" class="text-xs px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-700 rounded-lg hover:bg-orange-100 transition font-medium">Ver en Amazon →</a>';
@@ -2298,3 +2406,78 @@ function _renderAsinResult(d) {
     html += '</div>';
     return html;
 }
+
+window.toggleFbaSim = function(simId) {
+    var el   = document.getElementById(simId);
+    var chev = document.getElementById(simId + '_chev');
+    if (!el) return;
+    var opening = el.classList.contains('hidden');
+    el.classList.toggle('hidden', !opening);
+    if (chev) chev.style.transform = opening ? 'rotate(180deg)' : '';
+};
+
+window.calcFbaSim = function(simId) {
+    var g = function(id) { var el = document.getElementById(id); return el ? (parseFloat(el.value) || 0) : 0; };
+    var refPct  = g(simId + '_ref');
+    var fbaFee  = g(simId + '_fba');
+    var storage = g(simId + '_stor');
+    var cogs    = g(simId + '_cogs');
+    var tarPct  = g(simId + '_tar');
+    var freight = g(simId + '_frt');
+    var resEl   = document.getElementById(simId + '_res');
+    if (!resEl) return;
+
+    if (!cogs) {
+        resEl.innerHTML = '<p class="text-[10px] text-gray-400 text-center py-1">Ingresa el costo ex-fábrica para ver el margen.</p>';
+        return;
+    }
+
+    var tarAmt    = cogs * (tarPct / 100);
+    var landed    = cogs + tarAmt + freight;
+    var fixedFees = fbaFee + storage;
+    var bbP       = parseFloat(resEl.getAttribute('data-bb-price') || 0) || 0;
+    var baseP     = bbP || (cogs * 3);
+
+    var scenarios = [
+        { label: 'Agresivo (−10%)',  price: parseFloat((baseP * 0.90).toFixed(2)) },
+        { label: 'Buy Box actual',   price: parseFloat(baseP.toFixed(2)) },
+        { label: 'Conservador (+5%)', price: parseFloat((baseP * 1.05).toFixed(2)) },
+    ];
+
+    var h = '<div class="rounded-lg border border-gray-200 overflow-hidden">';
+    h += '<table class="w-full text-xs">';
+    h += '<thead><tr class="bg-gray-50 text-[10px] text-gray-400 uppercase tracking-wide">';
+    h += '<th class="px-3 py-2 text-left">Escenario</th><th class="px-3 py-2 text-right">Precio</th>';
+    h += '<th class="px-3 py-2 text-right">Fees AMZ</th><th class="px-3 py-2 text-right">Landed</th>';
+    h += '<th class="px-3 py-2 text-right">Margen $</th><th class="px-3 py-2 text-right">Margen %</th>';
+    h += '</tr></thead><tbody>';
+
+    scenarios.forEach(function(s, i) {
+        var refAmt    = s.price * (refPct / 100);
+        var fees      = refAmt + fixedFees;
+        var net       = s.price - fees;
+        var margin    = net - landed;
+        var marginPct = s.price > 0 ? (margin / s.price * 100) : 0;
+        var isBB      = i === 1;
+        var rowBg     = isBB ? 'bg-orange-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+        var mCls      = margin < 0 ? 'text-red-600 font-bold' : marginPct >= 20 ? 'text-green-700 font-bold' : marginPct >= 10 ? 'text-yellow-700' : 'text-orange-600';
+        h += '<tr class="' + rowBg + '">';
+        h += '<td class="px-3 py-2 text-gray-600' + (isBB ? ' font-semibold' : '') + '">' + s.label + '</td>';
+        h += '<td class="px-3 py-2 text-right font-bold text-gray-800">$' + s.price.toFixed(2) + '</td>';
+        h += '<td class="px-3 py-2 text-right text-red-500">−$' + fees.toFixed(2) + '</td>';
+        h += '<td class="px-3 py-2 text-right text-blue-600">−$' + landed.toFixed(2) + '</td>';
+        h += '<td class="px-3 py-2 text-right ' + mCls + '">' + (margin >= 0 ? '+' : '') + '$' + margin.toFixed(2) + '</td>';
+        h += '<td class="px-3 py-2 text-right ' + mCls + '">' + marginPct.toFixed(1) + '%</td>';
+        h += '</tr>';
+    });
+
+    h += '</tbody></table>';
+    h += '<div class="px-3 py-2 bg-gray-50 border-t border-gray-100 flex gap-3 flex-wrap text-[10px] text-gray-400">';
+    h += '<span>COGS $' + cogs.toFixed(2) + '</span>';
+    if (tarAmt) h += '<span>Aranceles $' + tarAmt.toFixed(2) + ' (' + tarPct + '%)</span>';
+    if (freight) h += '<span>Flete $' + freight.toFixed(2) + '/ud</span>';
+    h += '<span class="font-semibold text-gray-600">Landed $' + landed.toFixed(2) + '</span>';
+    if (bbP) h += '<span>Ref. fee $' + (bbP * refPct / 100).toFixed(2) + ' · FBA $' + fbaFee.toFixed(2) + '</span>';
+    h += '</div></div>';
+    resEl.innerHTML = h;
+};

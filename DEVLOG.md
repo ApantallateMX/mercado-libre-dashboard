@@ -7,6 +7,18 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-12 — FEAT: Simulador de Rentabilidad FBA en ASIN search
+
+### Cambios
+- `app/static/js/amazon_dashboard.js`: nueva sección colapsable "Simulador de Rentabilidad FBA" dentro del card de resultado ASIN.
+- **Inputs editables**: referral fee % (auto-detectado por categoría), FBA fulfillment fee, storage/mes, costo ex-fábrica, aranceles %, flete/ud.
+- **Tabla de margen en tiempo real**: 3 escenarios (−10%, buy box actual, +5%) con Fees AMZ, Landed cost, Margen $ y Margen %.
+- **Señal de viabilidad Buy Box**: detecta automáticamente si hay brand owner directo por review count > 5000 (verde/amarillo/rojo).
+- **Recomendación de compra inicial**: 1ª orden (~6 semanas) y orden de validación (~3 meses) basada en BSR tier + competencia + share estimado.
+- Sin cambios en backend — 100% JS frontend.
+
+---
+
 ## 2026-06-12 — FIX: ASIN search 500 Internal Server Error — `AmazonClient.close()` no existe
 
 ### Causa raíz
