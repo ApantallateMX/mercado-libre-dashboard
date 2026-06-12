@@ -251,6 +251,7 @@ class AmazonClient:
         created_before: str = None,
         marketplace_ids: list = None,
         order_statuses: list = None,
+        fulfillment_channels: list = None,
         max_pages: int = 0,
     ) -> list:
         """
@@ -283,6 +284,7 @@ class AmazonClient:
             [("MarketplaceIds", mid) for mid in marketplace_ids]
             + [("CreatedAfter", created_after)]
             + [("OrderStatuses", s) for s in order_statuses]
+            + ([("FulfillmentChannels", ch) for ch in fulfillment_channels] if fulfillment_channels else [])
         )
         if created_before:
             params.append(("CreatedBefore", created_before))

@@ -363,13 +363,35 @@ function loadAmazonDashboard() {
         .finally(function(){ btn.disabled = false; btn.classList.remove('opacity-50'); });
 }
 
+window.amzOrdFilter = window.amzOrdFilter || 'all';
+
+window.setAmzOrdFilter = function(f) {
+    window.amzOrdFilter = f;
+    ['all', 'FBA', 'FBM'].forEach(function(k) {
+        var btn = document.getElementById('amz-ord-f-' + k);
+        if (!btn) return;
+        if (k === f) {
+            btn.className = btn.className.replace('text-gray-600 hover:bg-orange-50', '').trim();
+            btn.classList.add('bg-orange-500', 'text-white');
+        } else {
+            btn.classList.remove('bg-orange-500', 'text-white');
+            btn.classList.add('text-gray-600', 'hover:bg-orange-50');
+        }
+    });
+    loadAmzRecentOrders(0);
+};
+
 function loadAmzRecentOrders(_retryCount) {
     var el = document.getElementById('amz-recent-orders');
     if (!el) return;
     var retryCount = _retryCount || 0;
     el.innerHTML = '<div class="animate-pulse space-y-3">'+Array(5).fill('<div class="h-12 bg-orange-50 rounded-lg"></div>').join('')+'</div>';
-    var sellerParam = window.amzActiveSellerId ? '?seller_id=' + window.amzActiveSellerId : '';
-    fetch('/api/metrics/amazon-recent-orders' + sellerParam)
+    var params = new URLSearchParams();
+    if (window.amzActiveSellerId) params.set('seller_id', window.amzActiveSellerId);
+    var daysEl = document.getElementById('amz-orders-days');
+    params.set('days', daysEl ? daysEl.value : '1');
+    params.set('fulfillment', window.amzOrdFilter || 'all');
+    fetch('/api/metrics/amazon-recent-orders?' + params.toString())
         .then(function(r){
             if (r.status === 429) { _amzOrdersRateLimit(el, retryCount); return null; }
             return r.text();

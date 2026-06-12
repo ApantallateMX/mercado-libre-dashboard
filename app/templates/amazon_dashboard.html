@@ -295,9 +295,30 @@
 
 <!-- ─── Últimas órdenes ────────────────────────────────────────────────── -->
 <div class="bg-white rounded-xl shadow mb-5">
-    <div class="px-4 md:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h2 class="text-base font-bold text-gray-800">Últimas Órdenes Amazon</h2>
-        <a href="/amazon/products" class="text-xs font-medium text-orange-500 hover:text-orange-700 transition">Ver productos →</a>
+    <div class="px-4 md:px-6 py-4 border-b border-gray-100">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+            <h2 class="text-base font-bold text-gray-800">Últimas Órdenes Amazon</h2>
+            <div class="flex items-center gap-2 flex-wrap">
+                <select id="amz-orders-days"
+                        onchange="loadAmzRecentOrders(0)"
+                        class="text-xs border border-gray-200 rounded-lg px-2 py-1.5 text-gray-700 focus:outline-none focus:border-orange-400 bg-white">
+                    <option value="1">Hoy</option>
+                    <option value="7">7 días</option>
+                    <option value="15">15 días</option>
+                    <option value="30">30 días</option>
+                </select>
+                <div class="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+                    <button id="amz-ord-f-all" onclick="window.setAmzOrdFilter('all')"
+                            class="px-2.5 py-1.5 bg-orange-500 text-white">Todos</button>
+                    <button id="amz-ord-f-FBA" onclick="window.setAmzOrdFilter('FBA')"
+                            class="px-2.5 py-1.5 text-gray-600 hover:bg-orange-50 border-l border-gray-200">FBA</button>
+                    <button id="amz-ord-f-FBM" onclick="window.setAmzOrdFilter('FBM')"
+                            class="px-2.5 py-1.5 text-gray-600 hover:bg-orange-50 border-l border-gray-200">FBM</button>
+                </div>
+                <button onclick="loadAmzRecentOrders(0)"
+                        class="text-xs text-orange-500 hover:text-orange-700 transition" title="Actualizar">↺</button>
+            </div>
+        </div>
     </div>
     <div id="amz-recent-orders" class="p-4 md:p-6">
         <div class="animate-pulse space-y-3">

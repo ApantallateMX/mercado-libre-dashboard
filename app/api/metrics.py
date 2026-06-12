@@ -1555,33 +1555,45 @@ async def get_amazon_debug_today():
 async def get_amazon_recent_orders(
     request: Request,
     seller_id: str = Query("", description="Seller ID (vacío = primera cuenta)"),
+    days: int = Query(1, ge=1, le=30, description="Días hacia atrás"),
+    fulfillment: str = Query("all", description="all | FBA | FBM"),
 ):
-    """Últimas 5 órdenes de Amazon — HTML partial para el dashboard."""
+    """Últimas órdenes de Amazon — HTML partial para el dashboard."""
     client = await get_amazon_client(seller_id=seller_id or None)
     if not client:
         return HTMLResponse(
             '<p class="text-center text-gray-400 py-6 text-sm">Sin cuenta Amazon conectada</p>'
         )
 
-    # Caché dedicado: ventana de 1 día, max 2 páginas (200 órdenes max).
-    # Amazon devuelve órdenes en orden ASCENDENTE (más antiguas primero).
-    # Con ventana de 3 días y ~60 ord/día, página 1 solo cubre día 1 — nunca llega a hoy.
-    # Ventana de 1 día: ~60 órdenes = caben en 1 página; garantiza mostrar órdenes de hoy.
-    _rkey = f"recent:{client.seller_id}"
+    # Channel filter: AFN=FBA, MFN=FBM (Merchant)
+    _ch_map = {"FBA": ["AFN"], "FBM": ["MFN"]}
+    fulfillment_channels = _ch_map.get(fulfillment)  # None = sin filtro
+
+    # Orders to show and pages to fetch grow with the time window
+    if days <= 1:
+        _max_orders, _max_pages = 5, 2
+    elif days <= 7:
+        _max_orders, _max_pages = 10, 3
+    elif days <= 15:
+        _max_orders, _max_pages = 15, 5
+    else:
+        _max_orders, _max_pages = 20, 8
+
+    _rkey = f"recent:{client.seller_id}:{days}:{fulfillment}"
     _cached_recent = _amazon_recent_orders_cache.get(_rkey)
     if _cached_recent and (_time.time() - _cached_recent[0]) < _AMAZON_RECENT_ORDERS_TTL:
         orders = _cached_recent[1]
     else:
         now = datetime.utcnow()
-        # Hoy completo: desde las 00:00 UTC de hace 1 día hasta hace 5 minutos
-        created_after = (now - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        created_after = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
         created_before = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
-            # Active (Shipped/Unshipped/PartiallyShipped) — max 2 páginas (200 órdenes)
+            # Active (Shipped/Unshipped/PartiallyShipped)
             active = await client.get_orders(
                 created_after=created_after,
                 created_before=created_before,
-                max_pages=2,
+                fulfillment_channels=fulfillment_channels,
+                max_pages=_max_pages,
             )
             # Pending — SP-API quirk: no se puede mezclar con otros estados
             try:
@@ -1589,6 +1601,7 @@ async def get_amazon_recent_orders(
                     created_after=created_after,
                     created_before=created_before,
                     order_statuses=["Pending"],
+                    fulfillment_channels=fulfillment_channels,
                     max_pages=1,
                 )
                 active_ids = {o.get("AmazonOrderId") for o in active}
@@ -1606,12 +1619,24 @@ async def get_amazon_recent_orders(
 
     valid = [o for o in orders if o.get("OrderStatus") in ("Shipped", "Delivered", "Unshipped", "Pending", "PartiallyShipped")]
     valid.sort(key=lambda o: o.get("PurchaseDate", ""), reverse=True)
-    recent = valid[:5]
+    recent = valid[:_max_orders]
 
-    # Enriquecer con items — secuencial con delay para respetar rate limit SP-API
-    # (asyncio.gather paralelo provoca 429 en apps Draft con cuotas reducidas)
+    # Enriquecer con items — secuencial con delay para respetar rate limit SP-API.
+    # Cap at 8 orders regardless of period to keep response time reasonable.
+    _enrich_limit = min(8, len(recent))
+    _mkt_currency = {"US": "USD", "MX": "MXN", "CA": "CAD"}.get(client.marketplace_name, "USD")
     enriched = []
     for i, order in enumerate(recent):
+        if i >= _enrich_limit:
+            # No enrichment for tail orders; show OrderTotal if available
+            order = dict(order)
+            order["_items"] = []
+            order["_items_subtotal"] = 0.0
+            order["_items_currency"] = (order.get("OrderTotal") or {}).get("CurrencyCode", "") or _mkt_currency
+            order["_price_source"] = "none"
+            order["_est_fees"] = None
+            enriched.append(order)
+            continue
         if i > 0:
             await asyncio.sleep(0.4)   # 0.4s gap → ~2.5 rps, bajo límite de orderItems
         try:
@@ -1681,7 +1706,6 @@ async def get_amazon_recent_orders(
                     order["_price_source"] = "listing"
 
         # Moneda: preferir lo que vino de ItemPrice; fallback = moneda del marketplace
-        _mkt_currency = {"US": "USD", "MX": "MXN", "CA": "CAD"}.get(client.marketplace_name, "USD")
         order["_items_subtotal"] = round(subtotal, 2)
         order["_items_currency"] = (
             items_currency
