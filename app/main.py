@@ -9939,12 +9939,19 @@ async def amazon_asin_search(
             product_info["image_url"] = main_img
 
             # Attributes: list_price
+            # Amazon Catalog API v2022-04-01 devuelve value como dict {amount,currency}
+            # O como float directo según el ASIN — manejar ambos formatos.
             attrs = catalog_raw.get("attributes", {})
             list_price_attr = attrs.get("list_price", [{}])
             if list_price_attr and isinstance(list_price_attr, list):
                 lp = list_price_attr[0]
-                product_info["list_price"] = lp.get("value", {}).get("amount", 0)
-                product_info["list_price_currency"] = lp.get("value", {}).get("currency", "USD")
+                _lp_val = lp.get("value", {}) if isinstance(lp, dict) else {}
+                if isinstance(_lp_val, dict):
+                    product_info["list_price"] = _lp_val.get("amount", _lp_val.get("Amount", 0))
+                    product_info["list_price_currency"] = _lp_val.get("currency", _lp_val.get("currencyCode", "USD"))
+                elif isinstance(_lp_val, (int, float)) and _lp_val:
+                    product_info["list_price"] = float(_lp_val)
+                    product_info["list_price_currency"] = "USD"
 
             # BSR — salesRanks
             bsr_ranks: list = []
@@ -9966,16 +9973,16 @@ async def amazon_asin_search(
         daily_rows = []
         if isinstance(metrics_daily, list):
             for row in metrics_daily:
-                ts_sales = row.get("totalSales", {})
-                avg_price = row.get("averageUnitPrice", {})
+                ts_sales = row.get("totalSales") or {}
+                avg_price = row.get("averageUnitPrice") or {}
                 # interval format: "2026-05-13T00:00:00-07:00--2026-05-14T00:00:00-07:00"
                 itvl = row.get("interval", "")
                 date_label = itvl[:10] if itvl else ""
                 units = int(row.get("unitCount", 0) or 0)
                 orders = int(row.get("orderCount", 0) or 0)
-                rev = float((ts_sales.get("amount") or 0))
-                currency = ts_sales.get("currencyCode", "USD")
-                avg = float((avg_price.get("amount") or 0))
+                rev = float((ts_sales.get("amount") if isinstance(ts_sales, dict) else ts_sales) or 0)
+                currency = ts_sales.get("currencyCode", "USD") if isinstance(ts_sales, dict) else "USD"
+                avg = float((avg_price.get("amount") if isinstance(avg_price, dict) else avg_price) or 0)
                 if units > 0 or orders > 0:
                     daily_rows.append({
                         "date": date_label,
@@ -9990,14 +9997,14 @@ async def amazon_asin_search(
         totals = {"units": 0, "orders": 0, "revenue": 0.0, "avg_price": 0.0, "currency": "USD"}
         if isinstance(metrics_total, list) and metrics_total:
             t = metrics_total[0]
-            ts = t.get("totalSales", {})
-            ap = t.get("averageUnitPrice", {})
+            ts = t.get("totalSales") or {}
+            ap = t.get("averageUnitPrice") or {}
             totals = {
                 "units": int(t.get("unitCount", 0) or 0),
                 "orders": int(t.get("orderCount", 0) or 0),
-                "revenue": round(float(ts.get("amount") or 0), 2),
-                "avg_price": round(float(ap.get("amount") or 0), 2),
-                "currency": ts.get("currencyCode", "USD"),
+                "revenue": round(float((ts.get("amount") if isinstance(ts, dict) else ts) or 0), 2),
+                "avg_price": round(float((ap.get("amount") if isinstance(ap, dict) else ap) or 0), 2),
+                "currency": ts.get("currencyCode", "USD") if isinstance(ts, dict) else "USD",
             }
 
         # ── 5. Parse competitive offers ───────────────────────────────────
