@@ -3709,3 +3709,37 @@ Nueva tarjeta de búsqueda en `amazon_dashboard.html` tab Ventas (antes de "Últ
 - **Bug:** `aiosqlite.connect()` usado sin import local → `NameError` → 500 Internal Server Error → frontend recibía HTML → `r.json()` lanzaba "Unexpected token I, Internal S..."
 - **Fix (commit 7c4540b):** `import aiosqlite as _aio_as` dentro del try block del endpoint
 
+---
+
+## 2026-06-12 — FEAT: ASIN Search v2 — Ofertas competitivas + BSR + tarjetas de decisión
+
+### Commit: f3f70ad
+
+### Contexto
+Antes el ASIN search solo mostraba info del catálogo + ventas propias. El usuario quería ver el comportamiento del ASIN en todo Amazon (otros vendedores, demanda, precio). SP-API no provee ventas totales del marketplace, pero sí: ofertas competitivas (Pricing API) y BSR (Catalog API) como proxies de demanda.
+
+### Nuevos datos en `/api/amazon/asin-search`
+- **Pricing API** `get_item_offers(asin)`: buy box price, lista de todos los vendedores activos (precio, FBA/FBM, Prime, feedback, buy box winner)
+- **BSR (salesRanks)** añadido a `includedData` de Catalog Items API: rank por categoría (classificationRanks) y display group (displayGroupRanks)
+- Respuesta ahora incluye: `offers` (buy_box_price, total_offers, list_price, sellers[]) y `product.bsr[]`
+
+### Nuevo método `get_item_offers()` en amazon_client.py
+- `GET /products/pricing/v0/items/{asin}/offers` con `MarketplaceId` e `ItemCondition=New`
+- Retorna `{}` en error (graceful)
+
+### Rediseño frontend `_renderAsinResult()` en amazon_dashboard.js
+1. **Header**: imagen, ASIN badge, badge MX/US, "En tu catálogo" si aplica, título, marca, modelo, P. lista
+2. **BSR strip**: top ranks con badge color-coded por tier (verde/amarillo/rojo), estimado uds/mes
+3. **4 KPI chips**: Buy Box price + descuento%, # vendedores + señal competencia, Tus uds, Tu revenue
+4. **3 tarjetas de decisión**:
+   - 📊 Demanda: tier (Muy alta/Alta/Media/Moderada/Baja) con BSR y estimado mensual
+   - 🏆 Competencia: # vendedores, buy box price, badges FBA/Prime, reviews del winner
+   - 🏬 Tu posición: publicado/no publicado, tu precio vs buy box, SKU
+5. **Tabla vendedores**: precio, envío, FBA/FBM, buy box winner, Prime, feedback
+6. **Tus ventas**: tabla diaria con mini barras (solo si hay ventas propias)
+7. **Links**: Ver en Amazon + Ver en SC (si en catálogo)
+
+### Helper functions añadidas
+- `_bsrTier(rank)`: mapea BSR → { label, color, est } con estimados por rango
+- `_tierCls(color)`: devuelve clases Tailwind para badge verde/amarillo/rojo/gris
+
