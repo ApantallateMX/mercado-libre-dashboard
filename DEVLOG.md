@@ -7,6 +7,19 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-14 — FEAT: Analizador ML + Filtro período en página Ventas (orders.html)
+
+### Corrección de ubicación + mejoras
+- **Análisis de Producto ML** movido a la página `/orders` (Ventas) donde corresponde — antes estaba solo en Dashboard
+  - Input MLM/link completo, demanda, fees, neto estimado, calculadora COGS inversa — idéntico al del Dashboard
+- **Filtro de período** (Hoy / 7d / 15d / 30d / Todo) + date pickers personalizados en barra de filtros de Ventas
+  - Actualiza hidden inputs `date_from`/`date_to` y dispara `htmx ordersFilter`
+  - `hx-include` de la tabla incluye ambos inputs → el backend filtra por fecha correctamente
+- **Paginación preserva fechas**: `_date_params` inyectado en `_base` y `base_url` del template `orders_table.html`
+- Commit: `a5310a1`
+
+---
+
 ## 2026-06-14 — FEAT: Analizador de Producto ML + Rentabilidad por venta en Dashboard
 
 ### Nuevas funciones
