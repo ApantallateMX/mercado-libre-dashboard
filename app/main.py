@@ -2271,52 +2271,241 @@ async def metrics_partial(
 async def recent_orders_partial(
     request: Request,
     date_from: str = Query("", description="YYYY-MM-DD"),
-    date_to: str = Query("", description="YYYY-MM-DD")
+    date_to: str = Query("", description="YYYY-MM-DD"),
+    limit: int = Query(5, ge=1, le=20),
 ):
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
         orders_data = await client.get_orders(
-            limit=5,
+            limit=limit,
             date_from=date_from or None,
             date_to=date_to or None
         )
         orders = orders_data.get("results", [])
 
-        # Enrich with net_received_amount
+        # Enrich with net_received_amount (concurrent, Semaphore 10)
         await client.enrich_orders_with_net_amount(orders)
 
-        html = "<div class='divide-y divide-gray-200'>"
+        html = "<div class='divide-y divide-gray-100'>"
         for order in orders:
-            title = order["order_items"][0]["item"]["title"][:35] + "..." if order.get("order_items") else "-"
-            sku = ""
-            if order.get("order_items"):
-                item = order["order_items"][0]["item"]
-                sku = item.get("seller_sku") or item.get("seller_custom_field") or "-"
-            amount = order_net_revenue(order)
-            order_id = order.get("id", "-")
-            status_class = "bg-green-100 text-green-800" if order.get("status") == "paid" else "bg-gray-100 text-gray-800"
-            html += f"""
-            <div class='py-3 flex justify-between items-center'>
-                <div>
-                    <p class='text-sm font-medium text-gray-800'>{title}</p>
-                    <p class='text-xs text-gray-500'>Orden: {order_id} | SKU: {sku} | {order['date_created'][:10]}</p>
-                </div>
-                <div class='text-right'>
-                    <p class='font-semibold'>${amount:.2f}</p>
-                    <span class='px-2 py-0.5 text-xs rounded-full {status_class}'>{order.get('status', '-')}</span>
-                </div>
-            </div>
-            """
+            _items = order.get("order_items") or []
+            title = (_items[0]["item"]["title"][:44] + "…") if _items else "—"
+            sku = "—"
+            if _items:
+                _i = _items[0]["item"]
+                sku = _i.get("seller_sku") or _i.get("seller_custom_field") or "—"
+            order_id = order.get("id", "—")
+            date_str = (order.get("date_created") or "")[:10]
+            gross = float(order.get("total_amount") or 0)
+            net = order_net_revenue(order)
+            margin_pct = round(net / gross * 100, 1) if gross > 0 and net > 0 else 0.0
+            net_color = "text-green-600" if net > 0 else "text-red-500"
+            if margin_pct >= 20:
+                margin_cls = "bg-green-50 text-green-700"
+            elif margin_pct >= 10:
+                margin_cls = "bg-yellow-50 text-yellow-700"
+            else:
+                margin_cls = "bg-red-50 text-red-600"
+            status_cls = "bg-green-100 text-green-800" if order.get("status") == "paid" else "bg-gray-100 text-gray-600"
+            html += (
+                f"<div class='py-3 flex justify-between items-start gap-2'>"
+                f"<div class='flex-1 min-w-0'>"
+                f"<p class='text-sm font-medium text-gray-800 truncate'>{title}</p>"
+                f"<p class='text-xs text-gray-500'>{order_id} · {sku} · {date_str}</p>"
+                f"</div>"
+                f"<div class='text-right shrink-0'>"
+                f"<p class='text-sm font-bold {net_color}'>${net:,.0f}</p>"
+                f"<div class='flex items-center gap-1 mt-0.5 justify-end'>"
+                f"<span class='text-[10px] text-gray-400'>${gross:,.0f}</span>"
+                f"<span class='text-[10px] px-1 py-0.5 rounded {margin_cls}'>{margin_pct}%</span>"
+                f"<span class='text-[10px] px-1.5 py-0.5 rounded-full {status_cls}'>{order.get('status', '—')}</span>"
+                f"</div></div></div>"
+            )
         html += "</div>"
 
         if not orders:
-            html = "<p class='text-center py-4 text-gray-500'>No hay ventas recientes</p>"
+            html = "<p class='text-center py-4 text-gray-500 text-sm'>No hay ventas en este período</p>"
 
         return HTMLResponse(html)
     finally:
         await client.close()
+
+
+@app.get("/api/ml/item-analysis")
+async def ml_item_analysis(
+    request: Request,
+    item_id: str = Query(..., description="MLM ID o URL completa"),
+):
+    """Análisis de producto ML: demanda real, fees exactos, calculadora inversa de COGS."""
+    import re as _re
+    from datetime import datetime as _dt
+
+    # Accept full URL — extract MLM... ID from it
+    clean = item_id.strip()
+    m = _re.search(r'(MLM[A-Z0-9]+)', clean.upper())
+    clean_id = m.group(1) if m else clean.upper()
+
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado en ML"}, status_code=401)
+
+    try:
+        item = await client.get_item(clean_id)
+    except Exception as exc:
+        return JSONResponse({"error": f"Item no encontrado: {str(exc)[:100]}"}, status_code=404)
+
+    if item.get("error") or item.get("status") == 404:
+        return JSONResponse({"error": item.get("message", "Item no encontrado")}, status_code=404)
+
+    price = float(item.get("price") or 0)
+    category_id = item.get("category_id", "")
+    listing_type_id = item.get("listing_type_id", "gold_special")
+    sold_qty = int(item.get("sold_quantity") or 0)
+    date_created_raw = item.get("date_created", "")
+
+    # Days on market → daily velocity
+    days_on_market = 365
+    if date_created_raw:
+        try:
+            created = _dt.fromisoformat(date_created_raw[:19])
+            days_on_market = max(1, (_dt.utcnow() - created).days)
+        except Exception:
+            pass
+    velocity = round(sold_qty / days_on_market, 2)
+
+    if velocity >= 10:
+        demand_tier, demand_color = "Muy Alta", "green"
+    elif velocity >= 3:
+        demand_tier, demand_color = "Alta", "green"
+    elif velocity >= 1:
+        demand_tier, demand_color = "Media", "yellow"
+    elif velocity >= 0.2:
+        demand_tier, demand_color = "Moderada", "yellow"
+    else:
+        demand_tier, demand_color = "Baja", "red"
+
+    # Fees exactos desde ML API
+    sale_fee_amount = 0.0
+    sale_fee_pct = 0.0
+    fees_is_estimate = False
+    try:
+        fee_data = await client.get_listing_fees(category_id, price, listing_type_id)
+        sale_fee_amount = float(fee_data.get("sale_fee_amount") or 0)
+        sale_fee_pct = round(sale_fee_amount / price * 100, 2) if price > 0 else 0.0
+    except Exception:
+        _rates = {"gold_special": 16.5, "gold_pro": 12.0, "gold_premium": 13.0}
+        sale_fee_pct = _rates.get(listing_type_id, 16.5)
+        sale_fee_amount = round(price * sale_fee_pct / 100, 2)
+        fees_is_estimate = True
+
+    iva_on_fee = round(sale_fee_amount * 0.16, 2)
+    total_fee_with_iva = round(sale_fee_amount + iva_on_fee, 2)
+
+    fee_ratio = (total_fee_with_iva / price) if price > 0 else 0
+    if fee_ratio < 0.22:
+        margin_signal = "green"
+    elif fee_ratio < 0.32:
+        margin_signal = "yellow"
+    else:
+        margin_signal = "red"
+
+    # Shipping
+    shipping = item.get("shipping") or {}
+    free_shipping = bool(shipping.get("free_shipping"))
+    logistic_type = shipping.get("logistic_type", "")
+    is_full = logistic_type == "fulfillment"
+
+    # Category name
+    category_name = category_id
+    try:
+        cat_data = await client.get_category(category_id)
+        category_name = cat_data.get("name", category_id)
+    except Exception:
+        pass
+
+    # SKU from attributes
+    seller_sku = item.get("seller_custom_field") or ""
+    if not seller_sku:
+        for attr in (item.get("attributes") or []):
+            if attr.get("id") == "SELLER_SKU":
+                seller_sku = str(attr.get("value_name") or "").strip()
+                break
+
+    # Catalog lookup in local DB
+    in_our_catalog = False
+    our_item_ids = []
+    try:
+        import aiosqlite as _aio
+        from app.config import DATABASE_PATH as _DBP
+        async with _aio.connect(_DBP) as _db:
+            row = await (await _db.execute(
+                "SELECT item_id, sku FROM ml_listings WHERE item_id=? LIMIT 1", (clean_id,)
+            )).fetchone()
+            if row:
+                in_our_catalog = True
+                our_item_ids = [row[0]]
+                if not seller_sku:
+                    seller_sku = row[1] or ""
+            elif seller_sku:
+                rows = await (await _db.execute(
+                    "SELECT item_id FROM ml_listings WHERE LOWER(sku)=LOWER(?) LIMIT 5", (seller_sku,)
+                )).fetchall()
+                if rows:
+                    in_our_catalog = True
+                    our_item_ids = [r[0] for r in rows]
+    except Exception:
+        pass
+
+    # Thumbnail (prefer pictures array over thumbnail field)
+    thumbnail = ""
+    pics = item.get("pictures") or []
+    if pics:
+        thumbnail = pics[0].get("url") or pics[0].get("secure_url") or ""
+    if not thumbnail:
+        thumbnail = item.get("thumbnail") or ""
+
+    _lt_labels = {
+        "gold_special": "Premium", "gold_pro": "Pro", "gold_premium": "Clásico",
+        "bronze": "Bronze", "free": "Gratuita", "silver": "Silver",
+    }
+
+    return JSONResponse({
+        "item_id": clean_id,
+        "title": item.get("title", ""),
+        "price": price,
+        "currency_id": item.get("currency_id", "MXN"),
+        "sold_quantity": sold_qty,
+        "days_on_market": days_on_market,
+        "velocity_per_day": velocity,
+        "demand_tier": demand_tier,
+        "demand_color": demand_color,
+        "available_quantity": int(item.get("available_quantity") or 0),
+        "listing_type_id": listing_type_id,
+        "listing_type_label": _lt_labels.get(listing_type_id, listing_type_id),
+        "category_id": category_id,
+        "category_name": category_name,
+        "free_shipping": free_shipping,
+        "is_full": is_full,
+        "logistic_type": logistic_type,
+        "permalink": item.get("permalink", ""),
+        "thumbnail": thumbnail,
+        "seller_sku": seller_sku,
+        "in_our_catalog": in_our_catalog,
+        "our_item_ids": our_item_ids,
+        "fees": {
+            "sale_fee_amount": sale_fee_amount,
+            "sale_fee_pct": sale_fee_pct,
+            "iva_on_fee": iva_on_fee,
+            "total_fee_amount": total_fee_with_iva,
+            "is_estimate": fees_is_estimate,
+        },
+        "margin_signal": margin_signal,
+        "condition": item.get("condition", ""),
+        "catalog_listing": bool(item.get("catalog_listing")),
+        "status": item.get("status", ""),
+    })
 
 
 @app.get("/partials/orders-table", response_class=HTMLResponse)
