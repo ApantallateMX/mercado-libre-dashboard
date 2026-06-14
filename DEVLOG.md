@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-14 — FEAT: Analizador de Producto ML + Rentabilidad por venta en Dashboard
+
+### Nuevas funciones
+- **Análisis de Producto ML** (nueva sección en dashboard):
+  - Input acepta ID MLM (`MLM...`, `MLMU...`) o link completo — extrae el ID automáticamente
+  - Demanda real: `sold_quantity / days_on_market` → velocidad exacta en ud/día + tier (Muy Alta/Alta/Media/Moderada/Baja)
+  - Fees exactos desde ML API `/sites/MLM/listing_prices` + IVA 16% sobre comisión
+  - Lookup en catálogo local (`ml_listings` DB): badge "En catálogo" o "No en catálogo"
+  - Neto estimado = precio − comisión − IVA − envío estimado
+  - **Calculadora COGS inversa**: igual que Amazon pero con fees reales de ML (sin estimaciones)
+    - Inputs: precio venta, comisión %, costo envío, otros costos, margen objetivo %, aranceles %, flete/ud
+    - Resultado: COGS máximo ex-fábrica + tabla 15/20/25/30% + desglose completo
+- **Últimas Ventas** — filtros de período (Hoy/7d/15d/30d) en header de sección
+- **Columna de rentabilidad** en cada fila de Últimas Ventas:
+  - Monto neto destacado (verde si > 0)
+  - Badge de margen % con semáforo (verde ≥20%, amarillo ≥10%, rojo <10%)
+  - Monto bruto secundario
+- Commit: `6311b2a`
+
+---
+
 ## 2026-06-12 — FEAT: Filtros de período y fulfillment en Últimas Órdenes Amazon
 
 ### Cambios
