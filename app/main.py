@@ -2515,13 +2515,19 @@ async def orders_table_partial(
     limit: int = Query(20, ge=1, le=50),
     sort: str = Query("date_desc"),
     margin_band: str = Query("", description="Filtro: alto / medio / bajo"),
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
 ):
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
         user = await client.get_user_info()
-        orders_data = await client.get_orders(offset=offset, limit=limit, sort=sort)
+        orders_data = await client.get_orders(
+            offset=offset, limit=limit, sort=sort,
+            date_from=date_from or None,
+            date_to=date_to or None,
+        )
         raw_orders = orders_data.get("results", [])
 
         # Fetch net_received_amount desde /collections por pago
@@ -2751,6 +2757,8 @@ async def orders_table_partial(
             "limit": limit,
             "sort": sort,
             "margin_band": margin_band,
+            "date_from": date_from,
+            "date_to": date_to,
             "usd_to_mxn": _fx,
             "seller_name": user.get("nickname", "-"),
             "pl_revenue": pl_revenue,

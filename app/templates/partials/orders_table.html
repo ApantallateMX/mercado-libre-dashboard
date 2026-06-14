@@ -46,7 +46,8 @@
 {% endif %}
 
 <!-- KPI Filtros de margen — server-side, persiste en paginación -->
-{% set _base = '/partials/orders-table?sort=' ~ sort ~ '&limit=' ~ limit ~ '&offset=0' %}
+{% set _date_params = ('&date_from=' ~ date_from if date_from else '') ~ ('&date_to=' ~ date_to if date_to else '') %}
+{% set _base = '/partials/orders-table?sort=' ~ sort ~ '&limit=' ~ limit ~ '&offset=0' ~ _date_params %}
 <div class="flex flex-wrap gap-3 mb-4">
     {% set _band_all_active = margin_band == "" %}
     <button hx-get="{{ _base }}" hx-target="#orders-table" hx-swap="innerHTML"
@@ -389,7 +390,7 @@
 {% if paging and paging.total > 0 %}
 {% set total_pages = ((paging.total - 1) // limit + 1) %}
 {% set current_page = (offset // limit) + 1 %}
-{% set base_url = "/partials/orders-table?sort=" ~ sort ~ "&limit=" ~ limit ~ ("&margin_band=" ~ margin_band if margin_band else "") %}
+{% set base_url = "/partials/orders-table?sort=" ~ sort ~ "&limit=" ~ limit ~ ("&margin_band=" ~ margin_band if margin_band else "") ~ _date_params %}
 
 <div class="px-4 md:px-6 py-3 bg-white border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
 
