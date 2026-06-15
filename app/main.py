@@ -11626,6 +11626,22 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
         pitems = await client.get(f"/products/{item_id}/items", params={"limit": 3})
         out["products_items_keys"] = list(pitems.keys()) if isinstance(pitems, dict) else str(type(pitems))
         out["products_items_preview"] = str(pitems)[:400]
+        # Verificar get_item del primer resultado
+        _entries = pitems.get("results") or []
+        if _entries:
+            _first_id = _entries[0].get("item_id") or ""
+            _first_price = _entries[0].get("price")
+            out["first_item_id"] = _first_id
+            out["first_item_price_from_list"] = _first_price
+            if _first_id:
+                try:
+                    _full = await client.get_item(_first_id)
+                    out["get_item_price"] = _full.get("price")
+                    out["get_item_sold_qty"] = _full.get("sold_quantity")
+                    out["get_item_shipping"] = str(_full.get("shipping", {}))[:150]
+                    out["get_item_error"] = _full.get("error")
+                except Exception as ei:
+                    out["get_item_error"] = str(ei)
     except Exception as e:
         out["products_items_error"] = str(e)
     await client.close()
