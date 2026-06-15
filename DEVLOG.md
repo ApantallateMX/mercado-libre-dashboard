@@ -7,6 +7,21 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-15 — FIX: Analizador ML soporta productos de catálogo (/p/MLM... URLs)
+
+### Problema
+`MLM59200042` (URL `/p/MLM...`) es un **catalog product**, no un listing individual.
+`GET /items/{id}` devuelve 404. `GET /products/{id}` devuelve el catálogo pero sin precio.
+
+### Solución verificada via diag endpoint
+- Flujo: `GET /products/{id}` → nombre/categoría/imágenes, luego `GET /products/{id}/items` → `[{item_id, price, listing_type_id, ...}]`
+- `GET /items/{item_id_del_listing}` da "access_denied" (item de otra empresa) → fallback a `price` del entry de `/products/{id}/items`
+- Resultado confirmado con diag: precio `$17,999.01`, categoría `MLM120568`, tipo `gold_pro`
+- Badge "Catálogo ML" (teal) distingue estos productos de listings directos
+- Commits: `72a5a2b` (fix), `61ce262` (diag)
+
+---
+
 ## 2026-06-14 — FEAT: Analizador ML + Filtro período en página Ventas (orders.html)
 
 ### Corrección de ubicación + mejoras
