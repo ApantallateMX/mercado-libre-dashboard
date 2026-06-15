@@ -2399,13 +2399,13 @@ async def ml_item_analysis(
         except Exception:
             pass
 
-    # Intento 4: producto de catálogo ML (URL /p/MLM...) — endpoint /catalog/items/{id}
+    # Intento 4: producto de catálogo ML (URL /p/MLM...) — endpoint /products/{id}
     _is_catalog_product = False
     if item is None:
         try:
-            _cat = await client.get(f"/catalog/items/{clean_id}")
-            if _cat and not _cat.get("error"):
-                # Buscar listings activos para obtener precio de mercado y sold_quantity
+            _prod = await client.get(f"/products/{clean_id}")
+            if _prod and not _prod.get("error") and not _prod.get("code"):
+                # Buscar listings activos de este catálogo para precio y sold_quantity
                 _search = {}
                 try:
                     _search = await client.get(
@@ -2416,25 +2416,23 @@ async def ml_item_analysis(
                     pass
                 _results = _search.get("results", [])
                 _ref_listing = _results[0] if _results else {}
-                # Precio: tomar el más barato disponible o 0
-                _cat_price = float(_ref_listing.get("price") or 0)
-                _cat_sold = sum(int(r.get("sold_quantity") or 0) for r in _results)
-                _cat_ship = _ref_listing.get("shipping") or {}
-                _cat_pics = _cat.get("pictures") or []
-                # Build synthetic item dict compatible con el resto del endpoint
+                _prod_price = float(_ref_listing.get("price") or 0)
+                _prod_sold = sum(int(r.get("sold_quantity") or 0) for r in _results)
+                _prod_ship = _ref_listing.get("shipping") or {}
+                _prod_pics = _prod.get("pictures") or []
                 item = {
                     "id": clean_id,
-                    "title": _cat.get("name") or _cat.get("title") or clean_id,
-                    "price": _cat_price,
-                    "category_id": _cat.get("category_id") or _ref_listing.get("category_id") or "",
+                    "title": _prod.get("name") or _prod.get("title") or clean_id,
+                    "price": _prod_price,
+                    "category_id": _prod.get("category_id") or _ref_listing.get("category_id") or "",
                     "listing_type_id": _ref_listing.get("listing_type_id") or "gold_special",
-                    "sold_quantity": _cat_sold,
-                    "date_created": _ref_listing.get("date_created") or _cat.get("date_created") or "",
-                    "shipping": _cat_ship,
-                    "pictures": _cat_pics,
-                    "thumbnail": (_cat_pics[0].get("url") or "") if _cat_pics else "",
+                    "sold_quantity": _prod_sold,
+                    "date_created": _ref_listing.get("date_created") or "",
+                    "shipping": _prod_ship,
+                    "pictures": _prod_pics,
+                    "thumbnail": (_prod_pics[0].get("url") or "") if _prod_pics else "",
                     "seller_custom_field": "",
-                    "attributes": _cat.get("attributes") or [],
+                    "attributes": _prod.get("attributes") or [],
                     "condition": _ref_listing.get("condition") or "new",
                     "permalink": f"https://www.mercadolibre.com.mx/p/{clean_id}",
                 }
