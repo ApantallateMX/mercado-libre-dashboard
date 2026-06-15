@@ -2405,34 +2405,54 @@ async def ml_item_analysis(
         try:
             _prod = await client.get(f"/products/{clean_id}")
             if _prod and not _prod.get("error") and not _prod.get("code"):
-                # Buscar listings activos de este catálogo para precio y sold_quantity
-                _search = {}
-                try:
-                    _search = await client.get(
-                        "/sites/MLM/search",
-                        params={"catalog_product_id": clean_id, "sort": "relevance", "limit": 5}
-                    )
-                except Exception:
-                    pass
-                _results = _search.get("results", [])
-                _ref_listing = _results[0] if _results else {}
-                _prod_price = float(_ref_listing.get("price") or 0)
-                _prod_sold = sum(int(r.get("sold_quantity") or 0) for r in _results)
-                _prod_ship = _ref_listing.get("shipping") or {}
                 _prod_pics = _prod.get("pictures") or []
+                _prod_name = _prod.get("name") or _prod.get("title") or clean_id
+                _prod_cat = _prod.get("category_id") or ""
+                _prod_attrs = _prod.get("attributes") or []
+
+                # Intentar obtener el buy_box_winner para precio y datos reales del listing
+                _bb = _prod.get("buy_box_winner") or {}
+                _bb_item_id = _bb.get("item_id") or ""
+                _ref_listing = {}
+                if _bb_item_id:
+                    try:
+                        _ref_listing = await client.get_item(_bb_item_id)
+                        if _ref_listing.get("error"):
+                            _ref_listing = {}
+                    except Exception:
+                        _ref_listing = {}
+
+                # Fallback: buscar en /products/{id}/items (top listing)
+                if not _ref_listing:
+                    try:
+                        _items_resp = await client.get(
+                            f"/products/{clean_id}/items",
+                            params={"limit": 1}
+                        )
+                        _item_ids = _items_resp.get("results") or []
+                        if _item_ids:
+                            _ref_listing = await client.get_item(_item_ids[0])
+                            if _ref_listing.get("error"):
+                                _ref_listing = {}
+                    except Exception:
+                        pass
+
+                _prod_price = float(_ref_listing.get("price") or _bb.get("price") or 0)
+                _prod_sold = int(_ref_listing.get("sold_quantity") or 0)
+                _prod_ship = _ref_listing.get("shipping") or {}
                 item = {
                     "id": clean_id,
-                    "title": _prod.get("name") or _prod.get("title") or clean_id,
+                    "title": _prod_name,
                     "price": _prod_price,
-                    "category_id": _prod.get("category_id") or _ref_listing.get("category_id") or "",
+                    "category_id": _prod_cat or _ref_listing.get("category_id") or "",
                     "listing_type_id": _ref_listing.get("listing_type_id") or "gold_special",
                     "sold_quantity": _prod_sold,
                     "date_created": _ref_listing.get("date_created") or "",
                     "shipping": _prod_ship,
-                    "pictures": _prod_pics,
-                    "thumbnail": (_prod_pics[0].get("url") or "") if _prod_pics else "",
-                    "seller_custom_field": "",
-                    "attributes": _prod.get("attributes") or [],
+                    "pictures": _ref_listing.get("pictures") or _prod_pics,
+                    "thumbnail": "",
+                    "seller_custom_field": _ref_listing.get("seller_custom_field") or "",
+                    "attributes": _ref_listing.get("attributes") or _prod_attrs,
                     "condition": _ref_listing.get("condition") or "new",
                     "permalink": f"https://www.mercadolibre.com.mx/p/{clean_id}",
                 }
