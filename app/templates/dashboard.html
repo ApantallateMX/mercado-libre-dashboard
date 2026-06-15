@@ -1279,8 +1279,11 @@ window._renderMlItem = function(d) {
     var mrgClr = _clr[d.margin_signal] || 'bg-gray-100 text-gray-600';
     var simId = 'mlsim_' + d.item_id;
     var catBadge = d.in_our_catalog
-        ? '<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-semibold">En catálogo</span>'
+        ? '<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-semibold">En nuestro catálogo</span>'
         : '<span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 text-[10px]">No en catálogo</span>';
+    var mlCatBadge = d.is_catalog_product
+        ? '<span class="px-2 py-0.5 rounded-full bg-teal-100 text-teal-700 text-[10px] font-semibold">Catálogo ML</span>'
+        : '';
     var condBadge = d.condition === 'new'
         ? '<span class="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">Nuevo</span>'
         : '<span class="text-[10px] px-1.5 py-0.5 bg-gray-50 text-gray-500 rounded">Usado</span>';
@@ -1299,7 +1302,7 @@ window._renderMlItem = function(d) {
     html += '<div class="flex items-start justify-between gap-2">';
     html += '<a href="' + d.permalink + '" target="_blank" rel="noopener" class="text-sm font-semibold text-gray-800 hover:text-yellow-600 leading-snug">' + d.title + '</a>';
     html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p></div>';
-    html += '</div><div class="flex flex-wrap gap-1 mt-1.5">' + condBadge + ltBadge + fullBadge + catBadge + skuBadge + '</div>';
+    html += '</div><div class="flex flex-wrap gap-1 mt-1.5">' + condBadge + ltBadge + fullBadge + mlCatBadge + catBadge + skuBadge + '</div>';
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
     html += '</div></div>';
     // Stats grid
@@ -1307,7 +1310,8 @@ window._renderMlItem = function(d) {
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Demanda</p>';
     html += '<span class="px-2 py-0.5 rounded-full text-xs font-bold ' + demClr + '">' + d.demand_tier + '</span>';
     html += '<p class="text-xs text-gray-700 mt-1.5 font-semibold">' + d.velocity_per_day + ' ud/día</p>';
-    html += '<p class="text-[10px] text-gray-400">' + d.sold_quantity.toLocaleString('es-MX') + ' vendidas · ' + d.days_on_market + 'd</p></div>';
+    var demNote = d.is_catalog_product ? ' (top listings)' : (' · ' + d.days_on_market + 'd');
+    html += '<p class="text-[10px] text-gray-400">' + d.sold_quantity.toLocaleString('es-MX') + ' vendidas' + demNote + '</p></div>';
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Fees ML</p>';
     html += '<span class="px-2 py-0.5 rounded-full text-xs font-bold ' + mrgClr + '">' + _pct(d.fees.sale_fee_pct) + ' comisión</span>';
     html += '<p class="text-xs text-gray-700 mt-1.5">' + _mxn(d.fees.sale_fee_amount) + feeNote + '</p>';

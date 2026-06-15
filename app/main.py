@@ -2399,6 +2399,49 @@ async def ml_item_analysis(
         except Exception:
             pass
 
+    # Intento 4: producto de catálogo ML (URL /p/MLM...) — endpoint /catalog/items/{id}
+    _is_catalog_product = False
+    if item is None:
+        try:
+            _cat = await client.get(f"/catalog/items/{clean_id}")
+            if _cat and not _cat.get("error"):
+                # Buscar listings activos para obtener precio de mercado y sold_quantity
+                _search = {}
+                try:
+                    _search = await client.get(
+                        "/sites/MLM/search",
+                        params={"catalog_product_id": clean_id, "sort": "relevance", "limit": 5}
+                    )
+                except Exception:
+                    pass
+                _results = _search.get("results", [])
+                _ref_listing = _results[0] if _results else {}
+                # Precio: tomar el más barato disponible o 0
+                _cat_price = float(_ref_listing.get("price") or 0)
+                _cat_sold = sum(int(r.get("sold_quantity") or 0) for r in _results)
+                _cat_ship = _ref_listing.get("shipping") or {}
+                _cat_pics = _cat.get("pictures") or []
+                # Build synthetic item dict compatible con el resto del endpoint
+                item = {
+                    "id": clean_id,
+                    "title": _cat.get("name") or _cat.get("title") or clean_id,
+                    "price": _cat_price,
+                    "category_id": _cat.get("category_id") or _ref_listing.get("category_id") or "",
+                    "listing_type_id": _ref_listing.get("listing_type_id") or "gold_special",
+                    "sold_quantity": _cat_sold,
+                    "date_created": _ref_listing.get("date_created") or _cat.get("date_created") or "",
+                    "shipping": _cat_ship,
+                    "pictures": _cat_pics,
+                    "thumbnail": (_cat_pics[0].get("url") or "") if _cat_pics else "",
+                    "seller_custom_field": "",
+                    "attributes": _cat.get("attributes") or [],
+                    "condition": _ref_listing.get("condition") or "new",
+                    "permalink": f"https://www.mercadolibre.com.mx/p/{clean_id}",
+                }
+                _is_catalog_product = True
+        except Exception:
+            pass
+
     if item is None or item.get("error"):
         return JSONResponse({
             "error": (
@@ -2554,6 +2597,7 @@ async def ml_item_analysis(
         "margin_signal": margin_signal,
         "condition": item.get("condition", ""),
         "catalog_listing": bool(item.get("catalog_listing")),
+        "is_catalog_product": _is_catalog_product,
         "status": item.get("status", ""),
     })
 
