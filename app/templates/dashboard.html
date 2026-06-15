@@ -1252,7 +1252,16 @@ window.searchMlItem = function() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             btn.disabled = false; btn.classList.remove('opacity-50');
-            if (d.error) { resultDiv.innerHTML = '<p class="text-red-500 text-sm py-3">' + d.error + '</p>'; return; }
+            if (d.error) {
+                var errHtml = '<div class="py-3 space-y-1">';
+                errHtml += '<p class="text-red-500 text-sm">' + d.error + '</p>';
+                if (d.error_link) {
+                    errHtml += '<a href="' + d.error_link + '" target="_blank" rel="noopener" class="text-xs text-yellow-600 hover:underline">Verificar en Mercado Libre →</a>';
+                }
+                errHtml += '</div>';
+                resultDiv.innerHTML = errHtml;
+                return;
+            }
             window._mlItemData = d;
             resultDiv.innerHTML = window._renderMlItem(d);
         })

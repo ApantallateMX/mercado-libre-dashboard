@@ -2351,13 +2351,63 @@ async def ml_item_analysis(
     if not client:
         return JSONResponse({"error": "No autenticado en ML"}, status_code=401)
 
-    try:
-        item = await client.get_item(clean_id)
-    except Exception as exc:
-        return JSONResponse({"error": f"Item no encontrado: {str(exc)[:100]}"}, status_code=404)
+    item = None
+    _fetch_err = ""
 
-    if item.get("error") or item.get("status") == 404:
-        return JSONResponse({"error": item.get("message", "Item no encontrado")}, status_code=404)
+    # Intento 1: acceso autenticado (nuestro token)
+    try:
+        _r = await client.get_item(clean_id)
+        if not _r.get("error"):
+            item = _r
+    except Exception as _e:
+        _fetch_err = str(_e)[:120]
+
+    # Intento 2: acceso público sin token (items de otros vendedores)
+    if item is None:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as _pub:
+                _r2 = await _pub.get(
+                    f"https://api.mercadolibre.com/items/{clean_id}",
+                    headers={"Accept": "application/json",
+                             "User-Agent": "Mozilla/5.0 (compatible; dashboard/1.0)"},
+                )
+                if _r2.status_code == 200:
+                    _body2 = _r2.json()
+                    if not _body2.get("error"):
+                        item = _body2
+        except Exception:
+            pass
+
+    # Intento 3: multiget endpoint (a veces más permisivo que /items/{id})
+    if item is None:
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=10.0) as _pub:
+                _r3 = await _pub.get(
+                    "https://api.mercadolibre.com/items",
+                    params={"ids": clean_id},
+                    headers={"Accept": "application/json",
+                             "User-Agent": "Mozilla/5.0 (compatible; dashboard/1.0)"},
+                )
+                if _r3.status_code == 200:
+                    _mg = _r3.json()
+                    if isinstance(_mg, list) and _mg:
+                        _entry = _mg[0]
+                        if _entry.get("code") == 200:
+                            item = _entry.get("body") or {}
+        except Exception:
+            pass
+
+    if item is None or item.get("error"):
+        return JSONResponse({
+            "error": (
+                f"No se pudo obtener información de {clean_id}. "
+                f"El producto puede estar eliminado, archivado o sin acceso en ML."
+            ),
+            "error_link": f"https://www.mercadolibre.com.mx/p/{clean_id}",
+            "item_id": clean_id,
+        }, status_code=404)
 
     price = float(item.get("price") or 0)
     category_id = item.get("category_id", "")
