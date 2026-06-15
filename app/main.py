@@ -11589,6 +11589,39 @@ async def sku_price_history(
     return HTMLResponse(html)
 
 
+@app.get("/api/diag/ml-product")
+async def diag_ml_product(item_id: str = "", token: str = ""):
+    """Diagnóstico: raw response de /products/{id} y search para un catalog product ID."""
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not item_id:
+        return JSONResponse({"error": "item_id requerido"}, status_code=400)
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no autenticado"})
+    out = {}
+    try:
+        prod = await client.get(f"/products/{item_id}")
+        out["products_keys"] = list(prod.keys()) if isinstance(prod, dict) else str(type(prod))
+        out["products_preview"] = {k: str(v)[:200] for k, v in prod.items()} if isinstance(prod, dict) else str(prod)[:400]
+    except Exception as e:
+        out["products_error"] = str(e)
+    try:
+        srch = await client.get("/sites/MLM/search", params={"catalog_product_id": item_id, "limit": 3})
+        out["search_total"] = srch.get("paging", {}).get("total", 0)
+        out["search_first_price"] = srch.get("results", [{}])[0].get("price") if srch.get("results") else None
+    except Exception as e:
+        out["search_error"] = str(e)
+    try:
+        pitems = await client.get(f"/products/{item_id}/items", params={"limit": 3})
+        out["products_items_keys"] = list(pitems.keys()) if isinstance(pitems, dict) else str(type(pitems))
+        out["products_items_preview"] = str(pitems)[:400]
+    except Exception as e:
+        out["products_items_error"] = str(e)
+    await client.close()
+    return JSONResponse(out)
+
+
 @app.get("/api/diag/sku")
 async def diag_sku(sku: str = "", token: str = ""):
     """Diagnóstico externo: caché BM + consulta BM en vivo para un SKU.
