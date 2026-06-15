@@ -193,15 +193,19 @@ window.searchMlItem = function() {
             // Para catálogos ML: buscar precio mínimo real via browser (ML permite requests de browser)
             if (d.is_catalog_product && d.title) {
                 var q = encodeURIComponent(d.title.slice(0, 50));
+                console.log('[ML Catalog] Buscando precio para:', d.item_id, '| q:', d.title.slice(0,50));
                 fetch('https://api.mercadolibre.com/sites/MLM/search?q=' + q + '&limit=10&sort=price_asc')
                     .then(function(sr) { return sr.json(); })
                     .then(function(sd) {
                         var results = sd.results || [];
+                        console.log('[ML Catalog] Search resultados:', results.length, '| precios:', results.map(function(r){return {id:r.id,price:r.price,cat:r.catalog_product_id};}));
                         // Preferir resultados del mismo catalog_product_id
                         var same = results.filter(function(r) { return r.catalog_product_id === d.item_id; });
                         var pool = same.length ? same : results;
+                        console.log('[ML Catalog] mismo cat:', same.length, '| pool usado:', pool.length);
                         var minPrice = 0;
                         pool.forEach(function(r) { if (r.price && (minPrice === 0 || r.price < minPrice)) minPrice = r.price; });
+                        console.log('[ML Catalog] minPrice encontrado:', minPrice, '| precio API:', d.price);
                         if (minPrice > 0 && minPrice < d.price) {
                             d.price = minPrice;
                             d._price_source = 'ml_search';
@@ -216,7 +220,8 @@ window.searchMlItem = function() {
                         window._mlItemData = d;
                         resultDiv.innerHTML = window._renderMlItem(d);
                     })
-                    .catch(function() {
+                    .catch(function(err) {
+                        console.log('[ML Catalog] Search FALLÓ:', err);
                         // Si falla el search del browser, mostrar con precio de API
                         window._mlItemData = d;
                         resultDiv.innerHTML = window._renderMlItem(d);
