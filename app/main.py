@@ -2399,7 +2399,7 @@ async def ml_item_analysis(
         except Exception:
             pass
 
-    # Intento 4: producto de catálogo ML (URL /p/MLM...) — endpoint /products/{id}
+    # Intento 4: producto de catálogo ML (URL /p/MLM...) — /products/{id} + /products/{id}/items
     _is_catalog_product = False
     if item is None:
         try:
@@ -2410,42 +2410,52 @@ async def ml_item_analysis(
                 _prod_cat = _prod.get("category_id") or ""
                 _prod_attrs = _prod.get("attributes") or []
 
-                # Intentar obtener el buy_box_winner para precio y datos reales del listing
-                _bb = _prod.get("buy_box_winner") or {}
-                _bb_item_id = _bb.get("item_id") or ""
+                # /products/{id}/items devuelve listings activos con precio directo
+                # results es lista de dicts {item_id, price, listing_type_id, condition, ...}
                 _ref_listing = {}
-                if _bb_item_id:
-                    try:
-                        _ref_listing = await client.get_item(_bb_item_id)
-                        if _ref_listing.get("error"):
-                            _ref_listing = {}
-                    except Exception:
-                        _ref_listing = {}
+                _item_entry = {}
+                try:
+                    _pitems = await client.get(
+                        f"/products/{clean_id}/items",
+                        params={"limit": 1}
+                    )
+                    _pitems_results = _pitems.get("results") or []
+                    if _pitems_results:
+                        _item_entry = _pitems_results[0]  # dict con price, item_id, etc.
+                        # Intentar fetch completo del item para sold_quantity y shipping
+                        _bb_id = _item_entry.get("item_id") or ""
+                        if _bb_id:
+                            try:
+                                _full = await client.get_item(_bb_id)
+                                if not _full.get("error"):
+                                    _ref_listing = _full
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
-                # Fallback: buscar en /products/{id}/items (top listing)
-                if not _ref_listing:
-                    try:
-                        _items_resp = await client.get(
-                            f"/products/{clean_id}/items",
-                            params={"limit": 1}
-                        )
-                        _item_ids = _items_resp.get("results") or []
-                        if _item_ids:
-                            _ref_listing = await client.get_item(_item_ids[0])
-                            if _ref_listing.get("error"):
-                                _ref_listing = {}
-                    except Exception:
-                        pass
-
-                _prod_price = float(_ref_listing.get("price") or _bb.get("price") or 0)
+                # Precio: preferir item completo, fallback a /products/items entry
+                _prod_price = float(
+                    _ref_listing.get("price") or
+                    _item_entry.get("price") or 0
+                )
                 _prod_sold = int(_ref_listing.get("sold_quantity") or 0)
                 _prod_ship = _ref_listing.get("shipping") or {}
+                _prod_lt = (
+                    _ref_listing.get("listing_type_id") or
+                    _item_entry.get("listing_type_id") or
+                    "gold_special"
+                )
+                _prod_condition = (
+                    _ref_listing.get("condition") or
+                    _item_entry.get("condition") or "new"
+                )
                 item = {
                     "id": clean_id,
                     "title": _prod_name,
                     "price": _prod_price,
-                    "category_id": _prod_cat or _ref_listing.get("category_id") or "",
-                    "listing_type_id": _ref_listing.get("listing_type_id") or "gold_special",
+                    "category_id": _prod_cat or _ref_listing.get("category_id") or _item_entry.get("category_id") or "",
+                    "listing_type_id": _prod_lt,
                     "sold_quantity": _prod_sold,
                     "date_created": _ref_listing.get("date_created") or "",
                     "shipping": _prod_ship,
@@ -2453,7 +2463,7 @@ async def ml_item_analysis(
                     "thumbnail": "",
                     "seller_custom_field": _ref_listing.get("seller_custom_field") or "",
                     "attributes": _ref_listing.get("attributes") or _prod_attrs,
-                    "condition": _ref_listing.get("condition") or "new",
+                    "condition": _prod_condition,
                     "permalink": f"https://www.mercadolibre.com.mx/p/{clean_id}",
                 }
                 _is_catalog_product = True
