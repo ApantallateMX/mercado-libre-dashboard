@@ -11642,6 +11642,11 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
                     out["get_item_error"] = _full.get("error")
                 except Exception as ei:
                     out["get_item_error"] = str(ei)
+            # Simular la lógica de item-analysis: precio final que se usaría
+            _ref = {} if out.get("get_item_error") else {}
+            out["simulated_final_price"] = float(_ref.get("price") or _first_price or 0)
+            out["simulated_category"] = str(_entries[0].get("category_id", ""))
+            out["simulated_listing_type"] = str(_entries[0].get("listing_type_id", ""))
     except Exception as e:
         out["products_items_error"] = str(e)
     await client.close()
