@@ -2412,16 +2412,28 @@ async def ml_item_analysis(
 
                 # /products/{id}/items devuelve listings activos con precio directo
                 # results es lista de dicts {item_id, price, listing_type_id, condition, ...}
+                # Tomamos el precio mínimo (= buy box / precio que ve el comprador en ML)
                 _ref_listing = {}
                 _item_entry = {}
                 try:
                     _pitems = await client.get(
                         f"/products/{clean_id}/items",
-                        params={"limit": 1}
+                        params={"limit": 20}
                     )
                     _pitems_results = _pitems.get("results") or []
                     if _pitems_results:
-                        _item_entry = _pitems_results[0]  # dict con price, item_id, etc.
+                        # Precio mínimo entre todos los sellers activos
+                        _pitems_with_price = [
+                            e for e in _pitems_results
+                            if e.get("price") and float(e.get("price", 0)) > 0
+                        ]
+                        if _pitems_with_price:
+                            _item_entry = min(
+                                _pitems_with_price,
+                                key=lambda e: float(e.get("price", 0))
+                            )
+                        else:
+                            _item_entry = _pitems_results[0]
                         # Intentar fetch completo del item para sold_quantity y shipping
                         _bb_id = _item_entry.get("item_id") or ""
                         if _bb_id:
@@ -11614,6 +11626,10 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
         prod = await client.get(f"/products/{item_id}")
         out["products_keys"] = list(prod.keys()) if isinstance(prod, dict) else str(type(prod))
         out["products_preview"] = {k: str(v)[:200] for k, v in prod.items()} if isinstance(prod, dict) else str(prod)[:400]
+        # buy_box_winner raw (sin str()) para ver el dict real
+        _bbw = prod.get("buy_box_winner")
+        out["buy_box_winner_raw"] = _bbw
+        out["buy_box_winner_type"] = type(_bbw).__name__
     except Exception as e:
         out["products_error"] = str(e)
     try:
@@ -11623,7 +11639,7 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
     except Exception as e:
         out["search_error"] = str(e)
     try:
-        pitems = await client.get(f"/products/{item_id}/items", params={"limit": 3})
+        pitems = await client.get(f"/products/{item_id}/items", params={"limit": 20})
         out["products_items_keys"] = list(pitems.keys()) if isinstance(pitems, dict) else str(type(pitems))
         out["products_items_preview"] = str(pitems)[:400]
         # Verificar get_item del primer resultado
@@ -11633,6 +11649,12 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
             _first_price = _entries[0].get("price")
             out["first_item_id"] = _first_id
             out["first_item_price_from_list"] = _first_price
+            # Precio mínimo entre todos los entries (lógica del fix)
+            _with_price = [e for e in _entries if e.get("price") and float(e.get("price", 0)) > 0]
+            _min_entry = min(_with_price, key=lambda e: float(e.get("price", 0))) if _with_price else (_entries[0] if _entries else {})
+            out["min_price_item_id"] = _min_entry.get("item_id")
+            out["min_price_from_list"] = _min_entry.get("price")
+            out["total_items_returned"] = len(_entries)
             if _first_id:
                 try:
                     _full = await client.get_item(_first_id)
@@ -11642,11 +11664,10 @@ async def diag_ml_product(item_id: str = "", token: str = ""):
                     out["get_item_error"] = _full.get("error")
                 except Exception as ei:
                     out["get_item_error"] = str(ei)
-            # Simular la lógica de item-analysis: precio final que se usaría
-            _ref = {} if out.get("get_item_error") else {}
-            out["simulated_final_price"] = float(_ref.get("price") or _first_price or 0)
-            out["simulated_category"] = str(_entries[0].get("category_id", ""))
-            out["simulated_listing_type"] = str(_entries[0].get("listing_type_id", ""))
+            # Simular lógica nueva: precio mínimo de la lista
+            out["simulated_final_price"] = float(_min_entry.get("price") or 0)
+            out["simulated_category"] = str(_min_entry.get("category_id", ""))
+            out["simulated_listing_type"] = str(_min_entry.get("listing_type_id", ""))
     except Exception as e:
         out["products_items_error"] = str(e)
     await client.close()

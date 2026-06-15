@@ -190,8 +190,41 @@ window.searchMlItem = function() {
                 resultDiv.innerHTML = errHtml;
                 return;
             }
-            window._mlItemData = d;
-            resultDiv.innerHTML = window._renderMlItem(d);
+            // Para catálogos ML: buscar precio mínimo real via browser (ML permite requests de browser)
+            if (d.is_catalog_product && d.title) {
+                var q = encodeURIComponent(d.title.slice(0, 50));
+                fetch('https://api.mercadolibre.com/sites/MLM/search?q=' + q + '&limit=10&sort=price_asc')
+                    .then(function(sr) { return sr.json(); })
+                    .then(function(sd) {
+                        var results = sd.results || [];
+                        // Preferir resultados del mismo catalog_product_id
+                        var same = results.filter(function(r) { return r.catalog_product_id === d.item_id; });
+                        var pool = same.length ? same : results;
+                        var minPrice = 0;
+                        pool.forEach(function(r) { if (r.price && (minPrice === 0 || r.price < minPrice)) minPrice = r.price; });
+                        if (minPrice > 0 && minPrice < d.price) {
+                            d.price = minPrice;
+                            d._price_source = 'ml_search';
+                            // Recalcular fees para el nuevo precio
+                            var fp = d.fees.sale_fee_pct;
+                            var fa = minPrice * fp / 100;
+                            var fi = fa * 0.16;
+                            d.fees.sale_fee_amount = fa;
+                            d.fees.iva_on_fee = fi;
+                            d.fees.total_fee_amount = fa + fi;
+                        }
+                        window._mlItemData = d;
+                        resultDiv.innerHTML = window._renderMlItem(d);
+                    })
+                    .catch(function() {
+                        // Si falla el search del browser, mostrar con precio de API
+                        window._mlItemData = d;
+                        resultDiv.innerHTML = window._renderMlItem(d);
+                    });
+            } else {
+                window._mlItemData = d;
+                resultDiv.innerHTML = window._renderMlItem(d);
+            }
         })
         .catch(function(e) {
             btn.disabled = false; btn.classList.remove('opacity-50');
