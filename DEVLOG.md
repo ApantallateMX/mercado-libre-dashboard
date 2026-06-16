@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-16 — FEAT: Analizador ML — card Vendidas prominente + Neto recibido completo
+
+### Contexto
+Al analizar productos en el analizador ML, faltaba visibilidad inmediata de cuántas unidades se venden y cuánto neto se recibe realmente después de TODOS los descuentos.
+
+### Cambios (orders.html — `_renderMlItem`)
+- **Card "Vendidas"**: `sold_quantity` como número grande (text-xl font-black) + subtexto "en X días" o "en catálogo" + badge demanda + ud/día abajo
+- **Card "Neto recibido"**: número verde grande + `X% del precio` + desglose completo:
+  - `-Comisión+IVA` (fee real de ML)
+  - `-Imp. ML (~9%)` estimado sobre precio
+  - `-Socio (7%)` sobre neto post-impuestos
+  - `-Envío absorbido` solo si `free_shipping=true`
+- Eliminado el warning "imp. ML ~9% no incluidos" — ahora ya están incluidos
+- Fórmula: `netML = precio - fees`, `impAmt = precio×9%`, `socioAmt = (netML-imp)×7%`, `netEst = netML - imp - socio`
+
+### Ejemplo MLM59200042 (Robot Eufy E25, $14,999)
+- Vendidas: **0 uds** en catálogo · Demanda Baja · 0.0 ud/día
+- Neto recibido: **$9,538** (63.6%) — fees $3,393 + imp $1,350 + socio $718
+
+Commit: `ca417e4`
+
+---
+
 ## 2026-06-16 — FEAT: Neto ML con desglose completo — socio 7% + impuestos ML ~9%
 
 ### Contexto
