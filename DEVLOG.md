@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-16 — FEAT: Neto ML con desglose completo — socio 7% + impuestos ML ~9%
+
+### Contexto
+El neto estimado solo restaba la comisión ML + IVA sobre comisión. Faltaban dos deducciones reales que sí aparecen en los extractos de ML:
+- **Impuestos ML**: ~9% del precio de venta (ej. orden Samsung: $906.10 / $10,010 = 9.05%)
+- **Comisión socio**: 7% del neto después de todos los descuentos ML
+
+### Cambios (dashboard.html + orders.html)
+- **Neto card** muestra desglose: Neto ML → -Socio 7% → Total neto (con nota "imp. ML ~9% no incluidos")
+- **COGS Calculator** agrega dos campos nuevos: `Impuestos ML (%)` default 9, `Comisión socio (%)` default 7
+- **`calcFor`** actualizado: `impAmt = price * impPct / 100`, `socioAmt = netML * socioPct / 100`
+- **Desglose** al pie de la tabla muestra cadena completa: comisión + IVA + imp → neto ML → socio → neto proc
+- **Precio editable** para catalog products (amber input) ya implementado en sesión anterior
+
+### Fórmula
+```
+netML   = precio - (comisión + IVA_comisión + impuestos) - envío_absorbido
+socio   = netML × 7%
+netProc = netML - socio
+```
+
+Commit: `6f79b69`
+
+---
+
 ## 2026-06-15 — FIX: Analizador ML soporta productos de catálogo (/p/MLM... URLs)
 
 ### Problema
