@@ -1262,35 +1262,7 @@ window.searchMlItem = function() {
                 resultDiv.innerHTML = errHtml;
                 return;
             }
-            // Para catálogos ML: buscar precio mínimo real via browser (ML permite requests de browser)
-            if (d.is_catalog_product && d.title) {
-                var q = encodeURIComponent(d.title.slice(0, 50));
-                fetch('https://api.mercadolibre.com/sites/MLM/search?q=' + q + '&limit=10&sort=price_asc')
-                    .then(function(sr) { return sr.json(); })
-                    .then(function(sd) {
-                        var results = sd.results || [];
-                        var same = results.filter(function(r) { return r.catalog_product_id === d.item_id; });
-                        var pool = same.length ? same : results;
-                        var minPrice = 0;
-                        pool.forEach(function(r) { if (r.price && (minPrice === 0 || r.price < minPrice)) minPrice = r.price; });
-                        if (minPrice > 0 && minPrice < d.price) {
-                            d.price = minPrice;
-                            d._price_source = 'ml_search';
-                            var fp = d.fees.sale_fee_pct;
-                            var fa = minPrice * fp / 100;
-                            var fi = fa * 0.16;
-                            d.fees.sale_fee_amount = fa;
-                            d.fees.iva_on_fee = fi;
-                            d.fees.total_fee_amount = fa + fi;
-                        }
-                        window._mlItemData = d;
-                        resultDiv.innerHTML = window._renderMlItem(d);
-                    })
-                    .catch(function() {
-                        window._mlItemData = d;
-                        resultDiv.innerHTML = window._renderMlItem(d);
-                    });
-            } else {
+            {
                 window._mlItemData = d;
                 resultDiv.innerHTML = window._renderMlItem(d);
             }
@@ -1331,7 +1303,18 @@ window._renderMlItem = function(d) {
     html += '<div class="flex items-start gap-3">' + thumbHtml + '<div class="flex-1 min-w-0">';
     html += '<div class="flex items-start justify-between gap-2">';
     html += '<a href="' + d.permalink + '" target="_blank" rel="noopener" class="text-sm font-semibold text-gray-800 hover:text-yellow-600 leading-snug">' + d.title + '</a>';
-    html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p></div>';
+    if (d.is_catalog_product) {
+        html += '<div class="text-right shrink-0 min-w-[130px]">';
+        html += '<div class="flex items-center justify-end gap-1">';
+        html += '<span class="text-[10px] text-amber-500">✏</span>';
+        html += '<input type="number" id="mlcat_price_' + d.item_id + '" value="' + d.price.toFixed(2) + '" ';
+        html += 'class="text-xl font-black text-gray-900 text-right w-32 bg-transparent border-b-2 border-dashed border-amber-300 outline-none focus:border-yellow-500 [appearance:textfield]" ';
+        html += 'onchange="window._updateMlCatalogPrice(\'' + d.item_id + '\', this.value)" ';
+        html += 'onkeydown="if(event.key===\'Enter\'){window._updateMlCatalogPrice(\'' + d.item_id + '\', this.value);this.blur();}">';
+        html += '</div><p class="text-[10px] text-amber-500 text-right">precio catálogo API · editable</p></div>';
+    } else {
+        html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p></div>';
+    }
     html += '</div><div class="flex flex-wrap gap-1 mt-1.5">' + condBadge + ltBadge + fullBadge + mlCatBadge + catBadge + skuBadge + '</div>';
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
     html += '</div></div>';
@@ -1356,6 +1339,22 @@ window._renderMlItem = function(d) {
     html += '<span>Calculadora: Precio tope de compra (COGS máximo)</span><span id="' + simId + '_arr">▼</span></button>';
     html += '<div id="' + simId + '" class="hidden">' + window._renderMlSim(simId, d) + '</div></div>';
     return html;
+};
+
+window._updateMlCatalogPrice = function(itemId, rawVal) {
+    var newPrice = parseFloat(String(rawVal).replace(/,/g, ''));
+    if (!newPrice || newPrice <= 0) return;
+    var d = window._mlItemData;
+    if (!d || d.item_id !== itemId) return;
+    d.price = newPrice;
+    var fp = d.fees.sale_fee_pct;
+    var fa = newPrice * fp / 100;
+    var fi = fa * 0.16;
+    d.fees.sale_fee_amount = fa;
+    d.fees.iva_on_fee = fi;
+    d.fees.total_fee_amount = fa + fi;
+    var resultDiv = document.getElementById('ml-item-result');
+    if (resultDiv) resultDiv.innerHTML = window._renderMlItem(d);
 };
 
 window._renderMlSim = function(simId, d) {
