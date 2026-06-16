@@ -1297,7 +1297,9 @@ window._renderMlItem = function(d) {
         ? '<img src="' + d.thumbnail + '" class="w-16 h-16 object-contain rounded border border-gray-100 shrink-0" onerror="this.style.display=\'none\'">'
         : '<div class="w-16 h-16 bg-gray-100 rounded shrink-0 flex items-center justify-center text-gray-300 text-2xl">📦</div>';
     var feeNote = d.fees.is_estimate ? ' <span class="text-[10px] text-gray-400">(estimado)</span>' : '';
-    var netEst = d.price - d.fees.total_fee_amount - (d.free_shipping ? 80 : 0);
+    var netML = d.price - d.fees.total_fee_amount - (d.free_shipping ? 80 : 0);
+    var socioAmt = netML * 0.07;
+    var netEst = netML - socioAmt;
     var html = '<div class="space-y-4">';
     // Product header
     html += '<div class="flex items-start gap-3">' + thumbHtml + '<div class="flex-1 min-w-0">';
@@ -1330,9 +1332,13 @@ window._renderMlItem = function(d) {
     html += '<p class="text-xs text-gray-700 mt-1.5">' + _mxn(d.fees.sale_fee_amount) + feeNote + '</p>';
     html += '<p class="text-[10px] text-gray-400">+ ' + _mxn(d.fees.iva_on_fee) + ' IVA → ' + _mxn(d.fees.total_fee_amount) + ' total</p></div>';
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Neto estimado</p>';
-    html += '<p class="text-sm font-bold text-gray-800">' + _mxn(Math.max(0, netEst)) + '</p>';
-    html += '<p class="text-[10px] text-gray-400">sin COGS ni flete de compra</p>';
-    html += '<p class="text-[10px] text-gray-400">' + (d.free_shipping ? '~$80 envío absorbido' : 'Env. paga comprador') + '</p></div>';
+    html += '<div class="space-y-0.5">';
+    html += '<div class="flex justify-between text-[10px] text-gray-500"><span>Neto ML</span><span>' + _mxn(Math.max(0, netML)) + '</span></div>';
+    html += '<div class="flex justify-between text-[10px] text-red-500"><span>- Socio (7%)</span><span>-' + _mxn(socioAmt) + '</span></div>';
+    html += '<div class="border-t border-gray-200 mt-1 pt-1 flex justify-between"><span class="text-xs font-bold text-gray-800">Total neto</span><span class="text-sm font-black text-gray-900">' + _mxn(Math.max(0, netEst)) + '</span></div>';
+    html += '</div>';
+    html += '<p class="text-[9px] text-amber-600 mt-1.5">+ imp. ML ~9% no incluidos</p>';
+    html += '<p class="text-[9px] text-gray-400">' + (d.free_shipping ? '~$80 envío absorbido' : 'Env. paga comprador') + '</p></div>';
     html += '</div>';
     // Simulator toggle
     html += '<button onclick="window.toggleMlSim(\'' + simId + '\')" class="w-full flex items-center justify-between px-4 py-2.5 bg-yellow-50 border border-yellow-200 rounded-lg text-sm font-semibold text-yellow-800 hover:bg-yellow-100 transition">';
@@ -1373,6 +1379,8 @@ window._renderMlSim = function(simId, d) {
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2"><p class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide mb-1">Ingresos / Fees ML</p>';
     html += row('sell',  'Precio venta ($)', d.price.toFixed(2));
     html += row('fee',   'Comisión ML (%)', feeDefaultPct);
+    html += row('imp',   'Impuestos ML (%)', '9');
+    html += row('socio', 'Comisión socio (%)', '7');
     html += row('ship',  'Costo envío ($)', shipDefault);
     html += row('other', 'Otros costos ($)', '0');
     html += '</div>';
@@ -1397,19 +1405,22 @@ window.toggleMlSim = function(simId) {
 
 window.calcMlSim = function(simId) {
     var _v = function(s) { var el = document.getElementById(simId + '_' + s); return el ? (parseFloat(el.value) || 0) : 0; };
-    var sellP = _v('sell'), feePct = _v('fee'), ship = _v('ship'), other = _v('other');
+    var sellP = _v('sell'), feePct = _v('fee'), impPct = _v('imp'), socioPct = _v('socio'), ship = _v('ship'), other = _v('other');
     var marginPct = _v('margin'), tar = _v('tar'), frt = _v('frt');
     var res = document.getElementById(simId + '_res');
     if (!res) return;
     if (sellP <= 0) { res.innerHTML = '<p class="text-xs text-red-500 text-center py-2">Precio de venta requerido</p>'; return; }
     function calcFor(p, m) {
-        var feeAmt = p * feePct / 100;
-        var ivaFee = feeAmt * 0.16;
-        var totalFees = feeAmt + ivaFee + ship + other;
-        var netProc = p - totalFees;
+        var feeAmt  = p * feePct / 100;
+        var ivaFee  = feeAmt * 0.16;
+        var impAmt  = p * impPct / 100;
+        var mlTotal = feeAmt + ivaFee + impAmt + ship + other;
+        var netML   = p - mlTotal;
+        var socioAmt = netML * socioPct / 100;
+        var netProc = netML - socioAmt;
         var landedMax = netProc - (p * m / 100);
         var cogsMax = tar > 0 ? (landedMax - frt) / (1 + tar / 100) : (landedMax - frt);
-        return {feeAmt:feeAmt, ivaFee:ivaFee, totalFees:totalFees, netProc:netProc, landedMax:landedMax, cogsMax:cogsMax};
+        return {feeAmt:feeAmt, ivaFee:ivaFee, impAmt:impAmt, mlTotal:mlTotal, netML:netML, socioAmt:socioAmt, netProc:netProc, landedMax:landedMax, cogsMax:cogsMax};
     }
     var main = calcFor(sellP, marginPct);
     var ok = main.cogsMax > 0;
@@ -1427,7 +1438,7 @@ window.calcMlSim = function(simId) {
         html += '<tr class="border-t border-gray-100' + bold + '"><td class="py-1 px-2 ' + clr + '">' + m + '%</td><td class="py-1 px-2 text-right ' + clr + '">' + _m(r.cogsMax) + '</td><td class="py-1 px-2 text-right text-gray-500">' + _m(r.landedMax) + '</td><td class="py-1 px-2 text-right text-gray-500">' + _m(r.netProc) + '</td></tr>';
     });
     html += '</tbody></table>';
-    html += '<p class="text-[10px] text-gray-400 mt-2">Desglose: ' + _m(sellP) + ' → comisión ' + _m(main.feeAmt) + ' + IVA ' + _m(main.ivaFee) + ' + envío ' + _m(ship) + (other>0?' + otros '+_m(other):'') + ' = fees ' + _m(main.totalFees) + ' → neto ' + _m(main.netProc) + '</p>';
+    html += '<p class="text-[10px] text-gray-400 mt-2">Desglose: ' + _m(sellP) + ' → comisión ' + _m(main.feeAmt) + ' + IVA ' + _m(main.ivaFee) + ' + imp ' + _m(main.impAmt) + ' + envío ' + _m(ship) + (other>0?' + otros '+_m(other):'') + ' = ML total ' + _m(main.mlTotal) + ' → neto ML ' + _m(main.netML) + ' → socio ' + _m(main.socioAmt) + ' → neto ' + _m(main.netProc) + '</p>';
     res.innerHTML = html;
 };
 
