@@ -33,8 +33,9 @@
     <div class="flex flex-wrap gap-1.5 mb-3">
         <span class="text-xs text-gray-400 self-center mr-1">Período:</span>
         <button onclick="setPreset('today')"    data-preset="today"    class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Hoy</button>
+        <button onclick="setPreset('7d')"       data-preset="7d"       class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">7 días</button>
         <button onclick="setPreset('week')"     data-preset="week"     class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Esta semana</button>
-        <button onclick="setPreset('month')"    data-preset="month"    class="preset-btn px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold transition">Este mes</button>
+        <button onclick="setPreset('month')"    data-preset="month"    class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Este mes</button>
         <button onclick="setPreset('year')"     data-preset="year"     class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">Este año</button>
         <button onclick="setPreset('30d')"      data-preset="30d"      class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">30 días</button>
         <button onclick="setPreset('90d')"      data-preset="90d"      class="preset-btn px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-yellow-100 hover:text-yellow-800 transition font-medium">90 días</button>
@@ -421,11 +422,11 @@
 function _fmtDate(d) { return d.toISOString().slice(0, 10); }
 var _today = new Date();
 
-// Default: últimos 30 días
-var _d30 = new Date(_today); _d30.setDate(_d30.getDate() - 29);
+// Default: últimos 7 días
+var _d7 = new Date(_today); _d7.setDate(_d7.getDate() - 6);
 
 var retFilters = {
-    date_from:  _fmtDate(_d30),
+    date_from:  _fmtDate(_d7),
     date_to:    _fmtDate(_today),
     status:     '',
     claim_type: '',
@@ -450,6 +451,9 @@ window.setPreset = function(preset) {
         from = _fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
     } else if (preset === 'year') {
         from = now.getFullYear() + '-01-01';
+    } else if (preset === '7d') {
+        var d7 = new Date(now); d7.setDate(d7.getDate() - 6);
+        from = _fmtDate(d7);
     } else if (preset === '30d') {
         var d30 = new Date(now); d30.setDate(d30.getDate() - 29);
         from = _fmtDate(d30);
@@ -1736,7 +1740,7 @@ if (_elTopA) _elTopA.value = retFilters.date_from;
 if (_elTopB) _elTopB.value = retFilters.date_to;
 
 // Highlight "30 días" preset by default
-_highlightPreset('30d');
+_highlightPreset('7d');
 _updateFilterIndicator();
 loadSummary();
 loadTable();
