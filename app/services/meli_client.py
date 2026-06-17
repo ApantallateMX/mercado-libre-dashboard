@@ -462,73 +462,74 @@ class MeliClient:
 
     async def get_claims(self, offset: int = 0, limit: int = 50, status: str = None,
                          date_from: str = None, date_to: str = None) -> dict:
-        """Obtiene reclamos del vendedor via /post-purchase/v1/claims/search."""
+        """Obtiene reclamos via /marketplace/v2/claims/search (v1 deprecado mayo 2025).
+
+        Reglas del endpoint v2:
+        - El token ya restringe al account — NO usar players.user_id (rompe el endpoint)
+        - Requiere al menos un filtro primario: status o date_created
+        - El filtro status es más estable que date_created para esta versión
+        - date_from/date_to son opcionales; el filtrado de fecha se hace client-side
+          en fetch_all_claims para evitar bugs del API con rangos largos
+        """
+        if not status:
+            raise ValueError("get_claims requiere status='opened' o 'closed'")
         params: dict = {
             "offset": offset,
             "limit": limit,
+            "status": status,
+            "sort": "date_created:desc",
         }
-        if status:
-            params["status"] = status
-        # v1 date filter uses single "date_created" param with ISO range (UTC-6 = CST/CDT Mexico)
-        if date_from and date_to:
-            params["date_created"] = f"{date_from}T00:00:00.000-06:00,{date_to}T23:59:59.000-06:00"
-        elif date_from:
-            params["date_created"] = f"{date_from}T00:00:00.000-06:00,2099-12-31T23:59:59.000-06:00"
-        elif date_to:
-            params["date_created"] = f"2000-01-01T00:00:00.000-06:00,{date_to}T23:59:59.000-06:00"
-        params["sort"] = "date_created:desc"
-        raw = await self.get("/post-purchase/v1/claims/search", params=params)
-        # Normalize: v1 returns "data" key, map to "results" for compatibility
+        raw = await self.get("/marketplace/v2/claims/search", params=params)
+        # v2 devuelve "data" key, normalizar a "results" para compatibilidad interna
         if "data" in raw and "results" not in raw:
             raw["results"] = raw.pop("data")
         return raw
 
     async def fetch_all_claims(self, status: str = None,
                                date_from: str = None, date_to: str = None) -> list:
-        """Pagina TODOS los reclamos con paginacion concurrente."""
-        first_page = await self.get_claims(
-            offset=0, limit=50, status=status,
-            date_from=date_from, date_to=date_to
+        """Obtiene todos los reclamos en el rango de fecha dado.
+
+        Estrategia: usa status como filtro primario (más estable que date_created en v2),
+        pagina sorted desc y para cuando llegamos a claims más viejos que date_from.
+        Si no se pide status específico, corre opened + closed en paralelo.
+        """
+        df = date_from or ""
+        dt = date_to or "9999-12-31"
+
+        async def _fetch_status(st: str) -> list:
+            acc: list = []
+            off = 0
+            limit_p = 50
+            while True:
+                page = await self.get_claims(offset=off, limit=limit_p, status=st)
+                items = page.get("results", [])
+                total = page.get("paging", {}).get("total", 0)
+                if not items:
+                    break
+                for c in items:
+                    # date_created viene como "2026-06-17T14:24:48.000-04:00" — tomar primeros 10
+                    d = (c.get("date_created") or "")[:10]
+                    if df and d < df:
+                        # Claims vienen sorted desc: pasamos el rango, paramos
+                        return acc
+                    if d <= dt:
+                        acc.append(c)
+                off += limit_p
+                if off >= total:
+                    break
+            return acc
+
+        if status:
+            return await _fetch_status(status)
+
+        # Sin status: obtener opened y closed en paralelo
+        opened, closed = await asyncio.gather(
+            _fetch_status("opened"),
+            _fetch_status("closed"),
         )
-        results = first_page.get("results", [])
-        total = first_page.get("paging", {}).get("total", 0)
-
-        # If total > 0 but results is empty, try without date filter and filter client-side
-        # (safety net against API quirks with date_created filter)
-        if total > 0 and not results and (date_from or date_to):
-            fallback = await self.get_claims(offset=0, limit=50, status=status)
-            results = fallback.get("results", [])
-            total = fallback.get("paging", {}).get("total", 0)
-            # Filter client-side by date
-            if date_from:
-                results = [c for c in results if (c.get("date_created") or "") >= date_from]
-            if date_to:
-                results = [c for c in results
-                           if (c.get("date_created") or "9999")[:10] <= date_to]
-            return results
-
-        if not results or total <= 50:
-            return results
-
-        all_claims = list(results)
-        remaining_offsets = list(range(50, total, 50))
-        sem = asyncio.Semaphore(5)
-
-        async def fetch_page(off):
-            async with sem:
-                data = await self.get_claims(
-                    offset=off, limit=50, status=status,
-                    date_from=date_from, date_to=date_to
-                )
-                return data.get("results", [])
-
-        tasks = [fetch_page(off) for off in remaining_offsets]
-        pages = await asyncio.gather(*tasks, return_exceptions=True)
-        for page in pages:
-            if isinstance(page, list):
-                all_claims.extend(page)
-
-        return all_claims
+        combined = opened + closed
+        combined.sort(key=lambda c: (c.get("date_created") or ""), reverse=True)
+        return combined
 
     # === Shipping ===
 
@@ -1136,16 +1137,20 @@ class MeliClient:
     # === Claims (gestionar) ===
 
     async def get_claim_detail(self, claim_id: str) -> dict:
-        """Obtiene el detalle de un reclamo."""
-        return await self.get(f"/post-purchase/v1/claims/{claim_id}")
+        """Obtiene el detalle de un reclamo (marketplace/v2)."""
+        return await self.get(f"/marketplace/v2/claims/{claim_id}")
 
     async def get_claim_messages(self, claim_id: str) -> list:
-        """Obtiene mensajes de un reclamo."""
-        return await self.get(f"/post-purchase/v1/claims/{claim_id}/messages")
+        """Obtiene mensajes de un reclamo (marketplace/v2)."""
+        raw = await self.get(f"/marketplace/v2/claims/{claim_id}/messages")
+        # v2 puede devolver dict con "messages" o lista directa
+        if isinstance(raw, dict):
+            return raw.get("messages", raw.get("data", []))
+        return raw if isinstance(raw, list) else []
 
     async def respond_claim(self, claim_id: str, action: str, text: str) -> dict:
-        """Envia mensaje al comprador en un reclamo."""
-        return await self.post(f"/post-purchase/v1/claims/{claim_id}/messages", json={
+        """Envia mensaje al comprador en un reclamo (marketplace/v2)."""
+        return await self.post(f"/marketplace/v2/claims/{claim_id}/actions/send-message", json={
             "receiver_role": "complainant",
             "message": text,
         })

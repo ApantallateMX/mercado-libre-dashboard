@@ -16082,6 +16082,60 @@ async def diag_ml_search(q: str = "", token: str = "", limit: int = 20):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/diag/claims-raw")
+async def diag_claims_raw(
+    token: str = "",
+    account_id: str = Query(""),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+    limit: int = Query(5),
+    no_players: bool = Query(False),
+    raw_status: str = Query(""),
+):
+    """Diagnóstico: llama marketplace/v2/claims/search y devuelve respuesta raw.
+    Útil para verificar que el endpoint funciona y devuelve claims para la cuenta.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    client = await get_meli_client(user_id=account_id or None)
+    if not client:
+        return JSONResponse({"error": "No autenticado / cuenta no encontrada"}, status_code=401)
+    try:
+        # Prueba fetch_all_claims completo con date filter client-side
+        status_req = raw_status if raw_status and raw_status not in ("fmt2","fmt3","fmt4") else None
+        claims_all = await client.fetch_all_claims(
+            status=status_req,
+            date_from=date_from or None,
+            date_to=date_to or None,
+        )
+        return JSONResponse({
+            "ok": True,
+            "user_id": client.user_id,
+            "endpoint": "/marketplace/v2/claims/search",
+            "params": {
+                "status": status_req,
+                "date_from": date_from or None,
+                "date_to": date_to or None,
+                "limit": limit,
+            },
+            "total_found": len(claims_all),
+            "sample": claims_all[:limit],
+        })
+    except Exception as e:
+        from app.services.meli_client import MeliApiError as _MAE
+        err_body = getattr(e, "body", None)
+        err_status = getattr(e, "status_code", None)
+        return JSONResponse({
+            "ok": False,
+            "error": str(e),
+            "error_body": err_body,
+            "error_status": err_status,
+            "user_id": client.user_id,
+        }, status_code=500)
+    finally:
+        await client.close()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
