@@ -90,6 +90,20 @@
                         🔻 qty=0
                     </button>
                     {% endif %}
+                    <button onclick="window.loadClaimPhotos('{{ ret.id }}')"
+                            id="btn-photos-{{ ret.id }}"
+                            class="text-[10px] px-2 py-0.5 bg-purple-50 border border-purple-300 text-purple-700 rounded hover:bg-purple-100 transition">
+                        📷 Fotos
+                    </button>
+                </div>
+            </div>
+        </div>
+        <!-- Inline photo gallery for this claim -->
+        <div id="photos-gallery-{{ ret.id }}" class="hidden mb-3 p-3 bg-purple-50 border border-purple-100 rounded-lg">
+            <div id="photos-content-{{ ret.id }}">
+                <div class="flex items-center gap-2 py-2 text-xs text-purple-600">
+                    <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+                    Cargando fotos del cliente...
                 </div>
             </div>
         </div>
@@ -230,6 +244,62 @@
 {% endif %}
 
 <script>
+window.loadClaimPhotos = function(claimId) {
+    var gallery = document.getElementById('photos-gallery-' + claimId);
+    var content = document.getElementById('photos-content-' + claimId);
+    var btn     = document.getElementById('btn-photos-' + claimId);
+    if (!gallery) return;
+    // Toggle if already loaded
+    if (gallery.dataset.loaded === '1') {
+        gallery.classList.toggle('hidden');
+        if (btn) btn.textContent = gallery.classList.contains('hidden') ? '📷 Fotos' : '📷 Ocultar';
+        return;
+    }
+    gallery.classList.remove('hidden');
+    if (btn) btn.textContent = '📷 Cargando...';
+
+    var accountId = (typeof retFilters !== 'undefined' && retFilters.account_id) ? retFilters.account_id : '';
+    fetch('/api/returns/claim-photos/' + claimId + (accountId ? '?account_id=' + encodeURIComponent(accountId) : ''))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            gallery.dataset.loaded = '1';
+            if (btn) btn.textContent = '📷 Ocultar';
+            if (!d.ok) {
+                content.innerHTML = '<p class="text-xs text-red-500 py-1">Error: ' + (d.error || 'No se pudo cargar') + '</p>';
+                return;
+            }
+            var photos = d.photos || [];
+            if (!photos.length) {
+                content.innerHTML = '<p class="text-xs text-gray-400 py-1 flex items-center gap-1">' +
+                    '<svg class="w-4 h-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>' +
+                    'El cliente no adjuntó fotos en este reclamo.</p>';
+                return;
+            }
+            var html = '<p class="text-[10px] text-purple-600 font-semibold mb-2">📷 ' + photos.length + ' foto' + (photos.length!==1?'s':'') + ' del cliente:</p>';
+            html += '<div class="flex flex-wrap gap-2">';
+            photos.forEach(function(ph) {
+                var roleLabel = ph.from_role === 'complainant' ? 'Comprador' : (ph.from_role || '');
+                html += '<div class="group relative">';
+                html += '<a href="' + ph.url + '" target="_blank" rel="noopener">';
+                html += '<img src="' + ph.url + '" alt="' + (ph.filename || 'foto') + '" ' +
+                        'class="w-24 h-24 object-cover rounded-lg border-2 border-purple-200 hover:border-purple-500 cursor-zoom-in transition shadow-sm" ' +
+                        'onerror="this.parentElement.parentElement.innerHTML=\'<span class=\\\"text-[10px] text-gray-400 p-2\\\">No disponible</span>\'">';
+                html += '</a>';
+                if (roleLabel) {
+                    html += '<span class="absolute bottom-1 left-1 text-[8px] bg-black bg-opacity-60 text-white px-1 rounded">' + roleLabel + '</span>';
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+            content.innerHTML = html;
+        })
+        .catch(function(e) {
+            gallery.dataset.loaded = '1';
+            if (btn) btn.textContent = '📷 Fotos';
+            content.innerHTML = '<p class="text-xs text-red-500 py-1">Error de conexión: ' + e.message + '</p>';
+        });
+};
+
 window.respondReturn = function(claimId) {
     var action = document.getElementById('ret-action-' + claimId).value;
     var text = document.getElementById('ret-text-' + claimId).value.trim();

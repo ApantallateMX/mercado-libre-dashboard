@@ -70,6 +70,9 @@
     </div>
 </div>
 
+<!-- Alerts Panel (quality alerts) -->
+<div id="ret-alerts-panel" class="hidden mb-5"></div>
+
 <!-- KPI Summary -->
 <div id="ret-summary">
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
@@ -307,7 +310,7 @@
             <canvas id="ret-status-chart" height="160"></canvas>
         </div>
 
-        <div class="bg-white rounded-lg shadow p-4">
+        <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 Acciones Rápidas
@@ -329,6 +332,79 @@
                         class="w-full text-left text-xs py-2 px-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-lg font-medium transition">
                     Refrescar datos
                 </button>
+            </div>
+        </div>
+
+        <!-- Quality Score Widget -->
+        <div class="bg-white rounded-lg shadow p-4">
+            <h3 class="text-sm font-bold text-gray-800 mb-1 flex items-center gap-1">
+                <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                Quality Score
+            </h3>
+            <p class="text-[10px] text-gray-400 mb-3">Calidad por producto (últimos 30 días)</p>
+            <div id="ret-quality-scores">
+                <div class="animate-pulse space-y-1.5">
+                    {% for i in range(4) %}
+                    <div class="h-7 bg-gray-100 rounded"></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================================
+     MODALES — AI Analysis + Share Report
+     ============================================================ -->
+
+<!-- Modal: Análisis IA -->
+<div id="ret-ai-modal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black bg-opacity-50" onclick="window.closeAiModal()"></div>
+    <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white rounded-t-2xl">
+                <div class="flex items-center gap-2">
+                    <span class="text-lg">🤖</span>
+                    <h2 class="text-base font-bold text-gray-800">Análisis IA de Retornos</h2>
+                </div>
+                <button onclick="window.closeAiModal()" class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="ret-ai-modal-body" class="p-6">
+                <div class="flex flex-col items-center gap-3 py-10">
+                    <svg class="animate-spin h-8 w-8 text-purple-500" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                    </svg>
+                    <p class="text-sm text-gray-500">Analizando patrones con IA...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Compartir Reporte -->
+<div id="ret-share-modal" class="fixed inset-0 z-50 hidden">
+    <div class="absolute inset-0 bg-black bg-opacity-50" onclick="window.closeShareModal()"></div>
+    <div class="relative z-10 flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+            <div class="flex items-center justify-between px-6 py-4 border-b sticky top-0 bg-white rounded-t-2xl">
+                <div class="flex items-center gap-2">
+                    <span class="text-lg">📤</span>
+                    <h2 class="text-base font-bold text-gray-800">Compartir Reporte</h2>
+                </div>
+                <button onclick="window.closeShareModal()" class="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="ret-share-modal-body" class="p-6">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="animate-spin h-6 w-6 text-yellow-500" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+                    </svg>
+                </div>
             </div>
         </div>
     </div>
@@ -689,6 +765,10 @@ function _renderTopProducts(data) {
         return;
     }
 
+    // Capture period dates for AI/share buttons
+    var fromA = document.getElementById('ret-top-from-a') ? document.getElementById('ret-top-from-a').value : '';
+    var toA   = document.getElementById('ret-top-to-a')   ? document.getElementById('ret-top-to-a').value   : '';
+
     var totalA  = (data.period_a || {}).total || 0;
     var totalB  = (data.period_b || {}).total || 0;
     var labelA  = (data.period_a || {}).label || 'Período A';
@@ -871,6 +951,14 @@ function _renderTopProducts(data) {
 
         // Action buttons
         if (p.item_id) {
+            var _encItem = p.item_id.replace(/'/g, "\\'");
+            var _encSku  = (p.sku || '').replace(/'/g, "\\'");
+            var _encTitle = (p.title || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            var _encFrom = (fromA || '').replace(/'/g, "\\'");
+            var _encTo   = (toA   || '').replace(/'/g, "\\'");
+            var _encReasons = JSON.stringify(p.reasons || {}).replace(/'/g, "\\'");
+            var _encSaleAmt = (p.sale_amount_mxn || 0);
+
             html += '<div class="px-5 py-3 bg-gray-50 border-t flex flex-wrap items-center gap-2">';
             html += '<span class="text-xs text-gray-500 font-medium mr-1">Acciones:</span>';
             // Open in ML Seller Center
@@ -878,14 +966,24 @@ function _renderTopProducts(data) {
                     'target="_blank" ' +
                     'class="flex items-center gap-1 px-3 py-1 text-xs bg-blue-50 border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-100 transition font-medium">' +
                     '🔗 Ver en ML</a>';
+            // AI Analysis
+            html += '<button onclick="window.analyzeWithAI(\'' + _encItem + '\',\'' + _encSku + '\',\'' + _encTitle + '\',' +
+                    p.count_a + ',\'' + _encFrom + '\',\'' + _encTo + '\',' + _encSaleAmt + ',\'' + _encReasons + '\')" ' +
+                    'class="flex items-center gap-1 px-3 py-1 text-xs bg-purple-50 border border-purple-300 text-purple-800 rounded-lg hover:bg-purple-100 transition font-medium">' +
+                    '🤖 Analizar IA</button>';
+            // Share Report
+            html += '<button onclick="window.shareReport(\'' + _encItem + '\',\'' + _encSku + '\',\'' + _encTitle + '\',' +
+                    p.count_a + ',\'' + _encFrom + '\',\'' + _encTo + '\',' + _encSaleAmt + ',\'' + _encReasons + '\')" ' +
+                    'class="flex items-center gap-1 px-3 py-1 text-xs bg-green-50 border border-green-300 text-green-800 rounded-lg hover:bg-green-100 transition font-medium">' +
+                    '📤 Compartir</button>';
             // Mark for review
-            html += '<button onclick="window.flagItem(\'' + p.item_id + '\',\'review\')" ' +
+            html += '<button onclick="window.flagItem(\'' + _encItem + '\',\'review\')" ' +
                     'class="flex items-center gap-1 px-3 py-1 text-xs bg-yellow-50 border border-yellow-300 text-yellow-800 rounded-lg hover:bg-yellow-100 transition font-medium">' +
-                    '⚠️ Marcar revisión</button>';
+                    '⚠️ Revisión</button>';
             // Set qty=0
-            html += '<button onclick="window.flagItem(\'' + p.item_id + '\',\'qty_zero\')" ' +
+            html += '<button onclick="window.flagItem(\'' + _encItem + '\',\'qty_zero\')" ' +
                     'class="flex items-center gap-1 px-3 py-1 text-xs bg-red-50 border border-red-300 text-red-700 rounded-lg hover:bg-red-100 transition font-medium">' +
-                    '🔻 Bajar a qty=0</button>';
+                    '🔻 qty=0</button>';
             html += '</div>';
         }
 
@@ -1291,6 +1389,339 @@ function _renderGlobalProducts(products, total) {
 }
 
 // ============================================================
+// Fase 1 — AI Analysis modal
+// ============================================================
+var _lastAiAnalysis = null;
+var _lastAiProductData = null;
+
+window.analyzeWithAI = function(itemId, sku, title, count, dateFrom, dateTo, saleAmt, reasonsJson) {
+    var modal = document.getElementById('ret-ai-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    var body = document.getElementById('ret-ai-modal-body');
+    body.innerHTML = '<div class="flex flex-col items-center gap-3 py-10">' +
+        '<svg class="animate-spin h-8 w-8 text-purple-500" viewBox="0 0 24 24" fill="none">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>' +
+        '<p class="text-sm text-gray-500">Analizando patrones con IA — esto puede tomar ~10 segundos...</p></div>';
+
+    var reasons = {};
+    try { reasons = JSON.parse(reasonsJson || '{}'); } catch(e) {}
+
+    var payload = {
+        account_id: retFilters.account_id,
+        item_id: itemId, sku: sku, title: title,
+        count: count, reasons: reasons,
+        date_from: dateFrom, date_to: dateTo,
+        sale_amount_mxn: saleAmt,
+    };
+    _lastAiProductData = payload;
+
+    fetch('/api/returns/ai-analysis', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (!d.ok) { body.innerHTML = '<p class="text-center text-red-500 py-8 text-sm">Error: ' + (d.error || 'Error al analizar') + '</p>'; return; }
+        _lastAiAnalysis = d;
+        _renderAiAnalysis(d, payload);
+    })
+    .catch(function(e) {
+        body.innerHTML = '<p class="text-center text-red-500 py-8 text-sm">Error de conexión: ' + e.message + '</p>';
+    });
+};
+
+function _renderAiAnalysis(d, p) {
+    var body = document.getElementById('ret-ai-modal-body');
+    var score = d.quality_score || 0;
+    var sev   = d.severity || 'medium';
+    var scoreColor = score >= 80 ? 'text-green-600' : (score >= 60 ? 'text-yellow-600' : (score >= 40 ? 'text-orange-600' : 'text-red-600'));
+    var scoreBg    = score >= 80 ? 'bg-green-50'   : (score >= 60 ? 'bg-yellow-50'   : (score >= 40 ? 'bg-orange-50'   : 'bg-red-50'));
+    var sevBadge   = sev === 'critical' ? 'bg-red-100 text-red-700' :
+                     sev === 'high'     ? 'bg-orange-100 text-orange-700' :
+                     sev === 'medium'   ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700';
+    var html = '';
+
+    // Header product info
+    html += '<div class="mb-5 flex items-center gap-3">';
+    html += '<div class="' + scoreBg + ' rounded-xl px-4 py-3 text-center flex-shrink-0">';
+    html += '<p class="text-[10px] text-gray-500 uppercase tracking-wide mb-0.5">Quality Score</p>';
+    html += '<p class="text-3xl font-black ' + scoreColor + '">' + score + '</p>';
+    html += '<p class="text-[10px] text-gray-400">/ 100</p></div>';
+    html += '<div><p class="text-sm font-bold text-gray-800 mb-1">' + (p.title || p.sku || p.item_id) + '</p>';
+    html += '<p class="text-xs text-gray-400">' + (p.date_from ? p.date_from + ' → ' + p.date_to : '') + ' · ' + p.count + ' retornos</p>';
+    html += '<span class="mt-1 inline-block px-2 py-0.5 text-[10px] rounded-full font-semibold ' + sevBadge + '">' + sev.toUpperCase() + '</span>';
+    html += '</div></div>';
+
+    // Root cause
+    html += '<div class="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">';
+    html += '<p class="text-xs font-bold text-red-700 mb-1 flex items-center gap-1">🎯 Causa Raíz Principal</p>';
+    html += '<p class="text-sm text-red-800">' + (d.root_cause || '—') + '</p>';
+    html += '</div>';
+
+    // Pattern
+    if (d.pattern) {
+        html += '<div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4">';
+        html += '<p class="text-xs font-bold text-blue-700 mb-1">📊 Patrón Detectado</p>';
+        html += '<p class="text-sm text-blue-800">' + d.pattern + '</p>';
+        html += '</div>';
+    }
+
+    // Priority action
+    if (d.priority_action) {
+        html += '<div class="bg-yellow-50 border border-yellow-300 rounded-xl p-4 mb-4">';
+        html += '<p class="text-xs font-bold text-yellow-700 mb-1">⚡ Acción Urgente</p>';
+        html += '<p class="text-sm font-semibold text-yellow-800">' + d.priority_action + '</p>';
+        html += '</div>';
+    }
+
+    // Recommendations
+    var recs = d.recommendations || [];
+    if (recs.length) {
+        html += '<div class="mb-4"><p class="text-xs font-bold text-gray-700 mb-2">✅ Recomendaciones</p>';
+        html += '<div class="space-y-2">';
+        recs.forEach(function(r, i) {
+            html += '<div class="flex items-start gap-2 p-2.5 bg-gray-50 rounded-lg">' +
+                '<span class="flex-shrink-0 w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex items-center justify-center mt-0.5">' + (i+1) + '</span>' +
+                '<p class="text-xs text-gray-700">' + r + '</p></div>';
+        });
+        html += '</div></div>';
+    }
+
+    // Listing improvements
+    var imp = d.listing_improvements || [];
+    if (imp.length) {
+        html += '<div class="mb-4"><p class="text-xs font-bold text-gray-700 mb-2">📝 Mejoras al Listing</p>';
+        html += '<ul class="space-y-1">';
+        imp.forEach(function(m) {
+            html += '<li class="text-xs text-gray-600 flex items-start gap-1.5"><span class="text-blue-400 flex-shrink-0 mt-0.5">›</span>' + m + '</li>';
+        });
+        html += '</ul></div>';
+    }
+
+    // Prevention checklist
+    var prev = d.prevention_checklist || [];
+    if (prev.length) {
+        html += '<div class="mb-5"><p class="text-xs font-bold text-gray-700 mb-2">🔍 Checklist de Prevención</p>';
+        html += '<ul class="space-y-1">';
+        prev.forEach(function(c) {
+            html += '<li class="text-xs text-gray-600 flex items-start gap-1.5"><span class="text-green-500 flex-shrink-0 mt-0.5">✓</span>' + c + '</li>';
+        });
+        html += '</ul></div>';
+    }
+
+    // Share button from AI modal
+    html += '<div class="border-t pt-4 flex gap-2">';
+    html += '<button onclick="window.closeAiModal(); window.shareReport(\'' +
+            (p.item_id||'').replace(/'/g,"\\'") + '\',\'' +
+            (p.sku||'').replace(/'/g,"\\'") + '\',\'' +
+            (p.title||'').replace(/'/g,"\\'").replace(/"/g,'&quot;') + '\',' +
+            p.count + ',\'' + (p.date_from||'') + '\',\'' + (p.date_to||'') + '\',' +
+            (p.sale_amount_mxn||0) + ',\'' + JSON.stringify(p.reasons||{}).replace(/'/g,"\\'") + '\')" ' +
+            'class="flex-1 bg-green-500 hover:bg-green-600 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">📤 Compartir este análisis</button>';
+    html += '<button onclick="window.closeAiModal()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition">Cerrar</button>';
+    html += '</div>';
+
+    body.innerHTML = html;
+}
+
+window.closeAiModal = function() {
+    document.getElementById('ret-ai-modal').classList.add('hidden');
+};
+
+// ============================================================
+// Fase 2 — Share Report modal
+// ============================================================
+window.shareReport = function(itemId, sku, title, count, dateFrom, dateTo, saleAmt, reasonsJson) {
+    var modal = document.getElementById('ret-share-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    var body = document.getElementById('ret-share-modal-body');
+    body.innerHTML = '<div class="flex items-center justify-center py-8">' +
+        '<svg class="animate-spin h-6 w-6 text-yellow-500" viewBox="0 0 24 24" fill="none">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg></div>';
+
+    var reasons = {};
+    try { reasons = JSON.parse(reasonsJson || '{}'); } catch(e) {}
+
+    var payload = {
+        item_id: itemId, sku: sku, title: title,
+        count: count, reasons: reasons,
+        date_from: dateFrom, date_to: dateTo,
+        sale_amount_mxn: saleAmt,
+        analysis: _lastAiAnalysis || {},
+    };
+
+    fetch('/api/returns/share-report', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        if (!d.ok) { body.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + (d.error || 'Error') + '</p>'; return; }
+        _renderShareModal(d);
+    })
+    .catch(function(e) {
+        body.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+    });
+};
+
+function _renderShareModal(d) {
+    var body = document.getElementById('ret-share-modal-body');
+    var score = d.quality_score || 0;
+    var grade = d.grade || '?';
+    var scoreColor = score >= 80 ? 'text-green-600' : (score >= 60 ? 'text-yellow-600' : (score >= 40 ? 'text-orange-600' : 'text-red-600'));
+
+    var html = '';
+
+    // Score summary card
+    html += '<div class="flex items-center gap-4 mb-5 p-4 bg-gray-50 rounded-xl border">';
+    html += '<div class="text-center"><p class="text-[10px] text-gray-400">Quality Score</p>' +
+            '<p class="text-2xl font-black ' + scoreColor + '">' + score + '</p>' +
+            '<p class="text-[10px] font-bold text-gray-500">Grado ' + grade + '</p></div>';
+    html += '<div><p class="text-sm font-bold text-gray-800">' + (d.title || d.sku || '—') + '</p>';
+    html += '<p class="text-xs text-gray-400">' + d.count + ' retornos</p></div>';
+    html += '</div>';
+
+    // WhatsApp
+    html += '<div class="mb-4">';
+    html += '<div class="flex items-center justify-between mb-2">';
+    html += '<p class="text-xs font-bold text-green-700 flex items-center gap-1">📱 WhatsApp / Texto</p>';
+    html += '<button onclick="window.copyToClipboard(\'ret-wa-text\')" class="text-xs px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded-lg font-semibold transition">Copiar</button>';
+    html += '</div>';
+    html += '<textarea id="ret-wa-text" rows="9" readonly ' +
+            'class="w-full text-xs border border-green-200 rounded-lg px-3 py-2 bg-green-50 font-mono resize-none focus:outline-none focus:ring-2 focus:ring-green-300">' +
+            _escHtml(d.whatsapp || '') + '</textarea>';
+    html += '</div>';
+
+    // Slack
+    html += '<div class="mb-5">';
+    html += '<div class="flex items-center justify-between mb-2">';
+    html += '<p class="text-xs font-bold text-purple-700 flex items-center gap-1"># Slack / Teams</p>';
+    html += '<button onclick="window.copyToClipboard(\'ret-slack-text\')" class="text-xs px-3 py-1 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-semibold transition">Copiar</button>';
+    html += '</div>';
+    html += '<textarea id="ret-slack-text" rows="9" readonly ' +
+            'class="w-full text-xs border border-purple-200 rounded-lg px-3 py-2 bg-purple-50 font-mono resize-none focus:outline-none focus:ring-2 focus:ring-purple-300">' +
+            _escHtml(d.slack || '') + '</textarea>';
+    html += '</div>';
+
+    html += '<button onclick="window.closeShareModal()" class="w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition">Cerrar</button>';
+    body.innerHTML = html;
+}
+
+function _escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+window.copyToClipboard = function(elId) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    el.select();
+    try {
+        navigator.clipboard.writeText(el.value).then(function() {
+            var btn = el.previousElementSibling ? el.previousElementSibling.querySelector('button') : null;
+            if (!btn) { btn = el.parentElement ? el.parentElement.querySelector('button') : null; }
+            if (btn) { var orig = btn.textContent; btn.textContent = '✅ Copiado'; setTimeout(function(){ btn.textContent = orig; }, 1500); }
+        }).catch(function() {
+            document.execCommand('copy');
+        });
+    } catch(e) {
+        document.execCommand('copy');
+    }
+};
+
+window.closeShareModal = function() {
+    document.getElementById('ret-share-modal').classList.add('hidden');
+};
+
+// ============================================================
+// Fase 3 — Quality Scores sidebar
+// ============================================================
+function loadQualityScores() {
+    var url = '/api/returns/quality-scores?days=30' +
+              (retFilters.account_id ? '&account_id=' + encodeURIComponent(retFilters.account_id) : '');
+    fetch(url)
+        .then(function(r) { return r.json(); })
+        .then(function(d) { _renderQualityScores(d); _renderAlerts(d); })
+        .catch(function() {});
+}
+
+function _gradeColor(g) {
+    return g === 'A' ? {bg:'bg-green-100',text:'text-green-700',bar:'bg-green-400'} :
+           g === 'B' ? {bg:'bg-yellow-100',text:'text-yellow-700',bar:'bg-yellow-400'} :
+           g === 'C' ? {bg:'bg-orange-100',text:'text-orange-700',bar:'bg-orange-400'} :
+           g === 'D' ? {bg:'bg-red-100',text:'text-red-700',bar:'bg-red-400'} :
+                       {bg:'bg-red-200',text:'text-red-800',bar:'bg-red-600'};
+}
+
+function _renderQualityScores(d) {
+    var el = document.getElementById('ret-quality-scores');
+    if (!el) return;
+    var scores = (d.scores || []).slice(0, 5);
+    if (!scores.length) {
+        el.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">Sin datos en este período</p>';
+        return;
+    }
+    var html = '<div class="space-y-2">';
+    scores.forEach(function(s) {
+        var c = _gradeColor(s.grade);
+        var barW = s.score;
+        var name = s.title ? s.title.slice(0, 22) + (s.title.length > 22 ? '…' : '') : (s.sku || s.item_id.slice(-6));
+        html += '<div class="p-2 rounded-lg border ' + c.bg + '">';
+        html += '<div class="flex items-center justify-between mb-1">';
+        html += '<span class="text-[10px] text-gray-700 font-medium flex-1 truncate" title="' + (s.title||s.sku||s.item_id) + '">' + name + '</span>';
+        html += '<span class="text-[10px] font-black ml-2 ' + c.text + '">' + s.grade + ' · ' + s.score + '</span>';
+        html += '</div>';
+        html += '<div class="h-1 bg-white bg-opacity-60 rounded-full overflow-hidden">';
+        html += '<div class="h-1 rounded-full ' + c.bar + '" style="width:' + barW + '%"></div>';
+        html += '</div>';
+        html += '<p class="text-[9px] text-gray-500 mt-0.5">' + s.return_count + ' retornos · ' + (s.main_reason || '—') + '</p>';
+        html += '</div>';
+    });
+    html += '</div>';
+    if (d.total > 5) {
+        html += '<p class="text-[10px] text-gray-400 text-right mt-1">+ ' + (d.total - 5) + ' más con retornos</p>';
+    }
+    el.innerHTML = html;
+}
+
+function _renderAlerts(d) {
+    var panel = document.getElementById('ret-alerts-panel');
+    if (!panel) return;
+    var scores = d.scores || [];
+    var critical = scores.filter(function(s) { return s.grade === 'F' || s.opened > 2; });
+    var warnings  = scores.filter(function(s) { return s.grade === 'D' && !critical.find(function(c){ return c.item_id === s.item_id; }); });
+    if (!critical.length && !warnings.length) {
+        panel.classList.add('hidden');
+        return;
+    }
+    panel.classList.remove('hidden');
+    var html = '<div class="space-y-2">';
+    critical.slice(0, 3).forEach(function(s) {
+        html += '<div class="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">';
+        html += '<span class="flex-shrink-0 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>';
+        html += '<div class="flex-1 min-w-0">';
+        html += '<p class="text-xs font-bold text-red-700 truncate">⚠ Crítico: ' + (s.title || s.sku || s.item_id) + '</p>';
+        html += '<p class="text-[10px] text-red-500">' + s.return_count + ' retornos · ' + s.opened + ' abiertos · Score ' + s.score + '/100</p>';
+        html += '</div></div>';
+    });
+    warnings.slice(0, 2).forEach(function(s) {
+        html += '<div class="flex items-center gap-3 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">';
+        html += '<span class="flex-shrink-0 w-2 h-2 rounded-full bg-yellow-500"></span>';
+        html += '<div class="flex-1 min-w-0">';
+        html += '<p class="text-xs font-semibold text-yellow-700 truncate">Atención: ' + (s.title || s.sku || s.item_id) + '</p>';
+        html += '<p class="text-[10px] text-yellow-600">' + s.return_count + ' retornos · Score ' + s.score + '/100</p>';
+        html += '</div></div>';
+    });
+    html += '</div>';
+    panel.innerHTML = html;
+}
+
+// ============================================================
 // Init — NO auto-refresh. Manual control only.
 // ============================================================
 var _elFrom = document.getElementById('ret-date-from');
@@ -1311,6 +1742,7 @@ loadSummary();
 loadTable();
 loadAnalysis();
 loadTimeline();
+loadQualityScores();
 // Auto-cargar Top Productos con el período por defecto
 window.loadTopProducts();
 _updateTimestamp();

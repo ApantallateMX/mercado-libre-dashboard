@@ -14098,6 +14098,345 @@ async def returns_resolve_flag(request: Request):
 
 
 # ============================================================
+# RETURNS — Fase 1: Fotos de clientes
+# ============================================================
+
+@app.get("/api/returns/claim-photos/{claim_id}")
+async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
+    """Extrae fotos adjuntas de los mensajes de un reclamo ML."""
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = account_id or str(_ctx.get() or "")
+    client = await get_meli_client(user_id=_uid or None)
+    if not client:
+        return {"ok": False, "error": "No autenticado", "photos": []}
+    try:
+        msgs = await client.get_claim_messages(claim_id)
+        photos = []
+        if isinstance(msgs, list):
+            for msg in msgs:
+                sender = (msg.get("from") or {}).get("role", "")
+                for att in (msg.get("attachments") or []):
+                    fname = att.get("filename") or att.get("name") or ""
+                    mime  = att.get("type") or att.get("mime_type") or ""
+                    url   = att.get("url") or att.get("path") or ""
+                    is_img = (
+                        mime.startswith("image/") or
+                        any(fname.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
+                    )
+                    if is_img and url:
+                        photos.append({
+                            "url": url,
+                            "filename": fname,
+                            "mime": mime,
+                            "from_role": sender,
+                        })
+        return {"ok": True, "claim_id": claim_id, "photos": photos, "total": len(photos)}
+    except Exception as _e:
+        return {"ok": False, "error": str(_e), "photos": []}
+    finally:
+        await client.close()
+
+
+# ============================================================
+# RETURNS — Fase 1: Análisis IA por SKU
+# ============================================================
+
+@app.post("/api/returns/ai-analysis")
+async def returns_ai_analysis(request: Request):
+    """Analiza patrones de retorno para un SKU usando IA (Claude).
+    Body: {account_id, item_id, sku, title, count, reasons, date_from, date_to}
+    """
+    import json as _json
+    body = await request.json()
+    account_id  = str(body.get("account_id", "")).strip()
+    item_id     = str(body.get("item_id", "")).strip()
+    sku         = str(body.get("sku", "")).strip()
+    title       = str(body.get("title", "")).strip()
+    count       = int(body.get("count", 0))
+    reasons     = body.get("reasons") or {}
+    date_from   = str(body.get("date_from", "")).strip()
+    date_to     = str(body.get("date_to", "")).strip()
+    sale_amount = float(body.get("sale_amount_mxn", 0) or 0)
+
+    if not (item_id or sku):
+        return {"ok": False, "error": "item_id o sku requerido"}
+
+    from app.services import claude_client as _cc
+
+    # Formatear razones como texto
+    reasons_text = ""
+    if reasons:
+        sorted_r = sorted(reasons.items(), key=lambda x: -x[1])
+        reasons_text = "\n".join(f"  • {r}: {n} vez{'es' if n!=1 else ''}" for r, n in sorted_r)
+    else:
+        reasons_text = "  • Sin detalle de razones disponible"
+
+    periodo = f"{date_from} al {date_to}" if date_from and date_to else "período analizado"
+
+    prompt = f"""Eres un analista experto en calidad de producto y ecommerce para Apantallate MX, vendedor en Mercado Libre.
+
+Analiza este reporte de retornos y devuelve un JSON estructurado con tu análisis.
+
+## Datos del producto
+- Producto: {title or sku or item_id}
+- SKU/ID: {sku or item_id}
+- Período: {periodo}
+- Total retornos: {count}
+- Monto en riesgo: ${sale_amount:,.0f} MXN
+
+## Razones de retorno reportadas
+{reasons_text}
+
+Devuelve ÚNICAMENTE un objeto JSON con exactamente este formato (sin markdown, sin explicación, solo JSON):
+{{
+  "root_cause": "Causa raíz principal en 1-2 oraciones",
+  "pattern": "Descripción del patrón observado en 1-2 oraciones",
+  "severity": "critical|high|medium|low",
+  "quality_score": 75,
+  "recommendations": [
+    "Acción concreta 1",
+    "Acción concreta 2",
+    "Acción concreta 3"
+  ],
+  "listing_improvements": [
+    "Mejora al listing 1",
+    "Mejora al listing 2"
+  ],
+  "prevention_checklist": [
+    "Verificar 1 antes de envío",
+    "Verificar 2 antes de envío"
+  ],
+  "summary_whatsapp": "Resumen para compartir por WhatsApp (2-3 líneas, sin emojis excesivos)",
+  "priority_action": "La UNA acción más importante a tomar ahora mismo"
+}}
+
+El quality_score es 0-100 donde:
+- 100 = sin retornos, producto perfecto
+- 80-99 = muy bueno, problemas menores
+- 60-79 = aceptable, mejorable
+- 40-59 = problemático, acción requerida
+- 0-39 = crítico, acción inmediata
+
+Calcula el score basándote en: severidad de las razones, cantidad de retornos ({count}), y si las razones sugieren defectos de producto vs problemas de envío/expectativa."""
+
+    try:
+        raw = await _cc.generate(prompt, max_tokens=1200)
+        # Extraer JSON de la respuesta
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+        analysis = _json.loads(raw)
+        analysis["ok"] = True
+        analysis["item_id"] = item_id
+        analysis["sku"] = sku
+        return analysis
+    except _json.JSONDecodeError:
+        # Fallback si el JSON viene malformado — devolver texto crudo
+        return {
+            "ok": True,
+            "raw_text": raw,
+            "root_cause": "Ver análisis completo abajo",
+            "pattern": raw[:300] if raw else "Sin respuesta",
+            "severity": "medium",
+            "quality_score": 50,
+            "recommendations": ["Revisar análisis completo"],
+            "listing_improvements": [],
+            "prevention_checklist": [],
+            "summary_whatsapp": raw[:200] if raw else "",
+            "priority_action": "Revisar manualmente",
+        }
+    except Exception as _e:
+        return {"ok": False, "error": str(_e)}
+
+
+# ============================================================
+# RETURNS — Fase 2: Compartir reporte con equipo
+# ============================================================
+
+@app.post("/api/returns/share-report")
+async def returns_share_report(request: Request):
+    """Genera texto formateado para WhatsApp/Slack con el análisis de retornos."""
+    body = await request.json()
+    sku         = str(body.get("sku", "")).strip()
+    title       = str(body.get("title", "")).strip()
+    count       = int(body.get("count", 0))
+    reasons     = body.get("reasons") or {}
+    date_from   = str(body.get("date_from", "")).strip()
+    date_to     = str(body.get("date_to", "")).strip()
+    analysis    = body.get("analysis") or {}
+    sale_amount = float(body.get("sale_amount_mxn", 0) or 0)
+
+    name = title[:40] if title else (sku or "SKU sin título")
+    periodo = f"{date_from} al {date_to}" if date_from and date_to else "período reciente"
+
+    # Top 3 razones
+    top_reasons = sorted(reasons.items(), key=lambda x: -x[1])[:3] if reasons else []
+    reasons_lines_wa = "\n".join(f"  • {r}: {n}" for r, n in top_reasons) or "  • Sin detalle"
+    reasons_lines_sl = "\n".join(f"• *{r}*: {n}" for r, n in top_reasons) or "• Sin detalle"
+
+    # Score badge
+    score = analysis.get("quality_score", 0)
+    if score >= 80:
+        grade, emoji = "A", "🟢"
+    elif score >= 60:
+        grade, emoji = "B", "🟡"
+    elif score >= 40:
+        grade, emoji = "C", "🟠"
+    else:
+        grade, emoji = "F", "🔴"
+
+    root_cause   = analysis.get("root_cause", "Sin análisis IA disponible")
+    priority_act = analysis.get("priority_action", "")
+    recs = analysis.get("recommendations") or []
+
+    # WhatsApp text
+    wa = f"""*REPORTE DE RETORNOS — Apantallate MX*
+📦 Producto: {name}
+🗓 Período: {periodo}
+🔄 Retornos: {count}
+{f'💰 En riesgo: ${sale_amount:,.0f} MXN' if sale_amount > 0 else ''}
+
+*Razones principales:*
+{reasons_lines_wa}
+
+*Análisis IA:*
+{emoji} Score calidad: {score}/100 (Grado {grade})
+📌 Causa raíz: {root_cause}
+"""
+    if priority_act:
+        wa += f"\n⚡ Acción urgente: {priority_act}"
+    if recs:
+        wa += "\n\n*Recomendaciones:*\n" + "\n".join(f"  {i+1}. {r}" for i, r in enumerate(recs[:3]))
+    wa += "\n\n_Dashboard Apantallate MX — Retornos_"
+
+    # Slack text
+    slack = f"""*REPORTE DE RETORNOS — Apantallate MX*
+> *Producto:* {name}
+> *Período:* {periodo}   *Retornos:* {count}   {f'*En riesgo:* ${sale_amount:,.0f} MXN' if sale_amount > 0 else ''}
+
+*Razones principales:*
+{reasons_lines_sl}
+
+*Análisis IA* {emoji} Score {score}/100 (Grado {grade})
+*Causa raíz:* {root_cause}
+"""
+    if priority_act:
+        slack += f"*Acción urgente:* {priority_act}\n"
+    if recs:
+        slack += "\n*Recomendaciones:*\n" + "\n".join(f"{i+1}. {r}" for i, r in enumerate(recs[:3]))
+
+    return {
+        "ok": True,
+        "whatsapp": wa.strip(),
+        "slack": slack.strip(),
+        "sku": sku,
+        "title": title,
+        "count": count,
+        "quality_score": score,
+        "grade": grade,
+    }
+
+
+# ============================================================
+# RETURNS — Fase 3: Quality Scores por cuenta
+# ============================================================
+
+@app.get("/api/returns/quality-scores")
+async def returns_quality_scores(
+    account_id: str = Query(""),
+    days: int = Query(30),
+):
+    """Calcula Quality Score por item para la cuenta activa.
+    Score 0-100: 100=sin retornos, decrece con cantidad y severidad de razones.
+    """
+    from app.services.meli_client import _active_user_id as _ctx
+    _uid = account_id or str(_ctx.get() or "")
+
+    _REASON_SEVERITY = {
+        "PDD1": 25, "PDD2": 20, "PDD3": 20, "PDD4": 15, "PDD5": 10, "PDD6": 10,
+        "PNTR": 8, "PNR": 8, "CANCEL": 5,
+    }
+
+    try:
+        all_claims = await _fetch_all_claims_cached(_uid)
+    except Exception:
+        return {"ok": False, "error": "Error al obtener reclamos", "scores": []}
+
+    # Group by item_id
+    from collections import defaultdict
+    item_data: dict = defaultdict(lambda: {
+        "count": 0, "opened": 0, "closed": 0,
+        "severity_sum": 0, "title": "", "item_id": "",
+        "sku": "", "reasons": {},
+    })
+
+    cutoff = ""
+    if days > 0:
+        import datetime
+        cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+
+    for c in all_claims:
+        d_created = (c.get("date_created") or "")[:10]
+        if cutoff and d_created < cutoff:
+            continue
+        iid   = str(c.get("resource_id") or "")
+        title = str(c.get("resource_title") or c.get("product_title") or "")
+        sku   = str(c.get("bm_sku") or "")
+        rcode = str(c.get("reason_id") or "")
+        status = str(c.get("status") or "")
+
+        entry = item_data[iid]
+        entry["count"] += 1
+        entry["item_id"] = entry["item_id"] or iid
+        entry["title"]   = entry["title"]   or title
+        entry["sku"]     = entry["sku"]     or sku
+        if status == "opened":
+            entry["opened"] += 1
+        else:
+            entry["closed"] += 1
+        entry["severity_sum"] += _REASON_SEVERITY.get(rcode, 8)
+        entry["reasons"][rcode] = entry["reasons"].get(rcode, 0) + 1
+
+    scores = []
+    for iid, d in item_data.items():
+        if not iid or d["count"] == 0:
+            continue
+        n = d["count"]
+        # Score formula: start 100, deduct by count (capped at 60pts) + severity
+        count_deduct   = min(n * 8, 60)
+        sev_deduct     = min(d["severity_sum"] / max(n, 1), 30)
+        open_penalty   = d["opened"] * 5
+        score = max(0, round(100 - count_deduct - sev_deduct - open_penalty))
+        if score >= 80:
+            grade = "A"
+        elif score >= 60:
+            grade = "B"
+        elif score >= 40:
+            grade = "C"
+        elif score >= 20:
+            grade = "D"
+        else:
+            grade = "F"
+        main_reason = max(d["reasons"], key=d["reasons"].get) if d["reasons"] else ""
+        scores.append({
+            "item_id": iid,
+            "sku": d["sku"],
+            "title": d["title"],
+            "score": score,
+            "grade": grade,
+            "return_count": n,
+            "opened": d["opened"],
+            "main_reason": main_reason,
+        })
+
+    scores.sort(key=lambda x: x["score"])
+    return {"ok": True, "scores": scores, "total": len(scores), "days": days}
+
+
+# ============================================================
 # PLANNING — Planeación & Requerimientos de Producción
 # ============================================================
 
