@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-17 — FEAT: Returns — Fotos cliente, Análisis IA, Quality Score, Compartir equipo
+
+### Cambios
+**Backend (4 nuevos endpoints):**
+- `GET /api/returns/claim-photos/{claim_id}`: extrae fotos adjuntas de mensajes ML (`get_claim_messages`)
+- `POST /api/returns/ai-analysis`: análisis Claude — causa raíz, patrón, recomendaciones, score 0-100, checklist prevención, texto compartir
+- `POST /api/returns/share-report`: genera texto WhatsApp + Slack formateado con datos + análisis IA
+- `GET /api/returns/quality-scores`: score 0-100 por item (count×8 + severidad razón + open penalty), grados A/B/C/D/F
+
+**Frontend (`returns.html` + `partials/returns_table.html`):**
+- Botón "🤖 Analizar IA" en cada card Top SKUs → modal con análisis estructurado (causa raíz, patrón, recomendaciones, checklist)
+- Botón "📤 Compartir" en Top SKUs → modal con WhatsApp/Slack copy-to-clipboard
+- Botón "📷 Fotos" en cada reclamo de la tabla → galería inline bajo demanda
+- Widget Quality Score en sidebar: top 5 SKUs peores + barra proporcional + grado A/B/C/D/F
+- Panel de alertas en top página: crítico (grado F u opened>2) y advertencia (grado D)
+
+**Commit:** 36444af
+
+---
+
 ## 2026-06-16 — FEAT: Competencia + Veredicto + Última venta en Analizador ML
 
 ### Cambios
