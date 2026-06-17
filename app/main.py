@@ -6233,10 +6233,12 @@ async def health_claims_partial(
         dt = date_to or None
 
         if filter_order_id:
-            # Fetch all claims WITHOUT date filter — the claim may predate the active range
+            # Buscar por orden: limitar a 90 días para no paginar miles de claims
             try:
+                import datetime as _dth
+                _cutoff_h = (_dth.date.today() - _dth.timedelta(days=90)).isoformat()
                 all_claims = await client.fetch_all_claims(status=params_status,
-                                                            date_from=None, date_to=None)
+                                                           date_from=_cutoff_h, date_to=None)
                 raw_claims = [c for c in all_claims
                               if str(c.get("resource_id", "")) == filter_order_id]
             except Exception:
@@ -6245,13 +6247,22 @@ async def health_claims_partial(
             # Apply offset/limit manually
             raw_claims = raw_claims[offset:offset + limit]
         else:
+            # v2 claims API requiere status como filtro primario.
+            # Si no hay status, usamos fetch_all_claims con fecha y paginamos client-side.
             try:
-                data = await client.get_claims(offset=offset, limit=limit, status=params_status,
-                                               date_from=df, date_to=dt)
+                if params_status:
+                    data = await client.get_claims(offset=offset, limit=limit, status=params_status,
+                                                   date_from=df, date_to=dt)
+                    raw_claims = data.get("results", [])
+                    paging = data.get("paging", {"total": len(raw_claims), "offset": offset, "limit": limit})
+                else:
+                    # Sin status: fetch todos con fecha, paginar client-side
+                    _all = await _fetch_all_claims_cached(client, df, dt)
+                    paging = {"total": len(_all), "offset": offset, "limit": limit}
+                    raw_claims = _all[offset:offset + limit]
             except Exception:
-                data = {"results": [], "paging": {"total": 0, "offset": 0, "limit": limit}}
-            raw_claims = data.get("results", [])
-            paging = data.get("paging", {"total": len(raw_claims), "offset": offset, "limit": limit})
+                raw_claims = []
+                paging = {"total": 0, "offset": offset, "limit": limit}
 
         # --- Refresh status of "opened" claims via individual endpoint ---
         # The search API can return stale status; the detail endpoint is authoritative
@@ -6833,16 +6844,18 @@ async def health_search_partial(
 
             async def _try_claim():
                 try:
-                    claim = await client.get(f"/post-purchase/v1/claims/{query}")
+                    claim = await client.get(f"/marketplace/v2/claims/{query}")
                     if claim and claim.get("id"):
                         return claim
                 except Exception:
                     return None
 
-            # Search claims that match this order (resource_id) — fetch ALL claims, no date filter
+            # Search claims that match this order (resource_id) — limitar a 90 días para no paginar todo
             async def _find_claims_for_order(order_id):
                 try:
-                    all_cl = await client.fetch_all_claims(status=None, date_from=None, date_to=None)
+                    import datetime as _dtc
+                    _cutoff = (_dtc.date.today() - _dtc.timedelta(days=90)).isoformat()
+                    all_cl = await client.fetch_all_claims(status=None, date_from=_cutoff, date_to=None)
                     return [cl for cl in all_cl
                             if str(cl.get("resource_id", "")) == str(order_id)]
                 except Exception:
