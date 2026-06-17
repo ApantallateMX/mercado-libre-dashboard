@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-16 — FIX: Eliminar IVA sobre comisión del cálculo neto ML
+
+### Problema
+El analizador descontaba IVA sobre la comisión como cargo separado (fee × 16% ~2%).
+El breakdown real de ML NO incluye ese IVA como deducción:
+`Cargos (12.5%) + Impuestos (9.05%) + Envío` — sin IVA extra.
+Esto causaba ~$112 de diferencia en neto para precio ~$5,600.
+
+### Cambios
+**Backend (`app/main.py` — `real_sales` block):**
+- Eliminado `_avg_iva = fee × 16%` del cálculo
+- `_avg_net_ml = price - fee - imp(9.05%) - shipping` (correcto)
+
+**Frontend (`orders.html`):**
+- Eliminado `displayIva` y referencia a `rs.avg_iva`
+- Label "Comisión+IVA" → "Comisión ML"
+- Calculadora `_calcMlProfit`: eliminado `ivaFee = feeAmt × 0.16` del `mlTotal`
+- Texto desglose calculadora: eliminado "IVA fee" de la cadena
+
+**Commits:** da25e29
+
+---
+
 ## 2026-06-16 — FIX: Analizador ML usa datos reales de ventas (order_history)
 
 ### Problema
