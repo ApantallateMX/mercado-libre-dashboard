@@ -7,6 +7,25 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-16 — FEAT: Competencia + Veredicto + Última venta en Analizador ML
+
+### Cambios
+**Backend (`/api/ml/item-analysis`):**
+- Captura `_comp_items_raw` de `/products/{id}/items` en el path de catálogo
+- Para items regulares intenta via `catalog_product_id`
+- Retorna `competition{}`: total_sellers, min/max price, winner_is_full, has_official_store, new/used sellers
+- `real_sales` ahora incluye: last_price, last_fee_pct, last_net_ml, last_socio, last_neto_final
+
+**Frontend (`orders.html`):**
+- Línea "Última venta" bajo las 3 cards (precio real más reciente → neto → % → fecha)
+- Bloque **Competencia**: N vendedores con color semáforo, rango de precios, badges FULL/tienda oficial/usados
+- Bloque **Veredicto**: 4 semáforos (🟢🟡🔴) → Demanda, Competencia, Margen neto, Logística
+- Resolución overall: ✅ Viable / ⚠️ Riesgo / 🚫 No recomendado
+
+**Commits:** 5abcd58
+
+---
+
 ## 2026-06-16 — FIX: Eliminar IVA sobre comisión del cálculo neto ML
 
 ### Problema
