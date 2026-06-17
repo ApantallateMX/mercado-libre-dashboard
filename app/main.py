@@ -2591,6 +2591,56 @@ async def ml_item_analysis(
     except Exception:
         pass
 
+    # Real sales data from order_history (when product is in our catalog)
+    real_sales = None
+    if in_our_catalog and (clean_id or seller_sku):
+        try:
+            import aiosqlite as _aio2
+            from app.config import DATABASE_PATH as _DBP2
+            async with _aio2.connect(_DBP2) as _ohdb:
+                _oh_rows = await (await _ohdb.execute(
+                    """SELECT unit_price, sale_fee, neto_plat, order_date
+                       FROM order_history
+                       WHERE (item_id=? OR (sku!='' AND LOWER(sku)=LOWER(?)))
+                         AND platform='ml' AND status IN ('paid','delivered')
+                         AND unit_price > 0
+                       ORDER BY order_date DESC LIMIT 20""",
+                    (clean_id, seller_sku or "")
+                )).fetchall()
+            if _oh_rows:
+                _prices  = [r[0] for r in _oh_rows]
+                _fees    = [r[1] for r in _oh_rows if r[1] > 0]
+                _avg_p   = round(sum(_prices) / len(_prices), 2)
+                _min_p   = round(min(_prices), 2)
+                _max_p   = round(max(_prices), 2)
+                _avg_fee_pct = round((sum(_fees) / len(_fees)) / _avg_p * 100, 2) if _fees else 0.0
+                # Shipping estimate using avg real price (better tiers)
+                _sp = _avg_p
+                _sh_est = 400 if _sp >= 8000 else (300 if _sp >= 5000 else (200 if _sp >= 2500 else (130 if _sp >= 1000 else 80)))
+                _avg_fee_amt  = round(_avg_p * _avg_fee_pct / 100, 2)
+                _avg_iva      = round(_avg_fee_amt * 0.16, 2)
+                _avg_imp      = round(_avg_p * 0.0905, 2)
+                _avg_net_ml   = round(_avg_p - _avg_fee_amt - _avg_iva - _avg_imp - _sh_est, 2)
+                _avg_socio    = round(_avg_net_ml * _PARTNER_COMMISSION_PCT, 2)
+                _avg_neto_fin = round(_avg_net_ml - _avg_socio, 2)
+                real_sales = {
+                    "count":          len(_oh_rows),
+                    "avg_price":      _avg_p,
+                    "min_price":      _min_p,
+                    "max_price":      _max_p,
+                    "avg_fee_pct":    _avg_fee_pct,
+                    "avg_fee_amt":    _avg_fee_amt,
+                    "avg_iva":        _avg_iva,
+                    "avg_imp":        _avg_imp,
+                    "avg_ship_est":   _sh_est,
+                    "avg_net_ml":     _avg_net_ml,
+                    "avg_socio":      _avg_socio,
+                    "avg_neto_final": _avg_neto_fin,
+                    "last_sale_date": _oh_rows[0][3] if _oh_rows else "",
+                }
+        except Exception:
+            pass
+
     # Thumbnail (prefer pictures array over thumbnail field)
     thumbnail = ""
     pics = item.get("pictures") or []
@@ -2639,6 +2689,7 @@ async def ml_item_analysis(
         "catalog_listing": bool(item.get("catalog_listing")),
         "is_catalog_product": _is_catalog_product,
         "status": item.get("status", ""),
+        "real_sales": real_sales,
     })
 
 
