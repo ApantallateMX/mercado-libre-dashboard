@@ -463,22 +463,19 @@ class MeliClient:
     async def get_claims(self, offset: int = 0, limit: int = 50, status: str = None,
                          date_from: str = None, date_to: str = None) -> dict:
         """Obtiene reclamos del vendedor via /post-purchase/v1/claims/search."""
-        has_dates = bool(date_from or date_to)
-        params = {
-            # v1 API requires offset >= 1 when date_created filter is present
-            "offset": max(offset, 1) if has_dates else offset,
+        params: dict = {
+            "offset": offset,
             "limit": limit,
-            "site_id": "MLM",
         }
         if status:
             params["status"] = status
-        # v1 date filter uses single "date_created" param with range: "from,to"
+        # v1 date filter uses single "date_created" param with ISO range (UTC-6 = CST/CDT Mexico)
         if date_from and date_to:
-            params["date_created"] = f"{date_from}T00:00:00.000-04:00,{date_to}T23:59:59.000-04:00"
+            params["date_created"] = f"{date_from}T00:00:00.000-06:00,{date_to}T23:59:59.000-06:00"
         elif date_from:
-            params["date_created"] = f"{date_from}T00:00:00.000-04:00,2099-12-31T23:59:59.000-04:00"
+            params["date_created"] = f"{date_from}T00:00:00.000-06:00,2099-12-31T23:59:59.000-06:00"
         elif date_to:
-            params["date_created"] = f"2000-01-01T00:00:00.000-04:00,{date_to}T23:59:59.000-04:00"
+            params["date_created"] = f"2000-01-01T00:00:00.000-06:00,{date_to}T23:59:59.000-06:00"
         params["sort"] = "date_created:desc"
         raw = await self.get("/post-purchase/v1/claims/search", params=params)
         # Normalize: v1 returns "data" key, map to "results" for compatibility
@@ -496,6 +493,20 @@ class MeliClient:
         results = first_page.get("results", [])
         total = first_page.get("paging", {}).get("total", 0)
 
+        # If total > 0 but results is empty, try without date filter and filter client-side
+        # (safety net against API quirks with date_created filter)
+        if total > 0 and not results and (date_from or date_to):
+            fallback = await self.get_claims(offset=0, limit=50, status=status)
+            results = fallback.get("results", [])
+            total = fallback.get("paging", {}).get("total", 0)
+            # Filter client-side by date
+            if date_from:
+                results = [c for c in results if (c.get("date_created") or "") >= date_from]
+            if date_to:
+                results = [c for c in results
+                           if (c.get("date_created") or "9999")[:10] <= date_to]
+            return results
+
         if not results or total <= 50:
             return results
 
@@ -503,10 +514,10 @@ class MeliClient:
         remaining_offsets = list(range(50, total, 50))
         sem = asyncio.Semaphore(5)
 
-        async def fetch_page(offset):
+        async def fetch_page(off):
             async with sem:
                 data = await self.get_claims(
-                    offset=offset, limit=50, status=status,
+                    offset=off, limit=50, status=status,
                     date_from=date_from, date_to=date_to
                 )
                 return data.get("results", [])

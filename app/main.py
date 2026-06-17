@@ -14360,10 +14360,19 @@ async def returns_quality_scores(
         "PNTR": 8, "PNR": 8, "CANCEL": 5,
     }
 
+    import datetime as _dt2
+    _qd_from = (_dt2.date.today() - _dt2.timedelta(days=days)).isoformat() if days > 0 else None
+    _qd_to   = _dt2.date.today().isoformat()
+
+    client_qs = await get_meli_client(user_id=_uid or None)
+    if not client_qs:
+        return {"ok": False, "error": "No autenticado", "scores": []}
     try:
-        all_claims = await _fetch_all_claims_cached(_uid)
+        all_claims = await _fetch_all_claims_cached(client_qs, _qd_from, _qd_to)
     except Exception:
         return {"ok": False, "error": "Error al obtener reclamos", "scores": []}
+    finally:
+        await client_qs.close()
 
     # Group by item_id
     from collections import defaultdict
