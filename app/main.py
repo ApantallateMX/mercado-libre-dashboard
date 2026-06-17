@@ -2595,7 +2595,7 @@ async def ml_item_analysis(
     except Exception:
         pass
 
-    # Real sales data from order_history (when product is in our catalog)
+    # Real sales data from order_history + live ML query (when product is in our catalog)
     real_sales = None
     if in_our_catalog and (clean_id or seller_sku):
         try:
@@ -2611,6 +2611,37 @@ async def ml_item_analysis(
                        ORDER BY order_date DESC LIMIT 20""",
                     (clean_id, seller_sku or "")
                 )).fetchall()
+            # Live ML orders query — captura ventas frescas no en DB todavía
+            _live_row = None
+            try:
+                _uid = getattr(client, 'user_id', None) or getattr(client, 'seller_id', None)
+                if _uid and clean_id:
+                    _lo_resp = await client.get(
+                        "/orders/search",
+                        params={"seller": str(_uid), "q": clean_id, "sort": "date_desc", "limit": 5}
+                    )
+                    for _lo in (_lo_resp.get("results") or []):
+                        if (_lo.get("status") or "") not in ("paid", "delivered"):
+                            continue
+                        for _loi in (_lo.get("order_items") or []):
+                            if (_loi.get("item") or {}).get("id") != clean_id:
+                                continue
+                            _lp2 = float(_loi.get("unit_price") or 0)
+                            _lf2 = float(_loi.get("sale_fee") or 0)
+                            _ld2 = (_lo.get("date_closed") or _lo.get("date_created") or "")[:19]
+                            if _lp2 > 0:
+                                _live_row = (_lp2, _lf2, 0, _ld2)
+                                break
+                        if _live_row:
+                            break
+            except Exception:
+                pass
+            # Si live tiene orden más reciente que DB, anteponer
+            if _live_row:
+                _db_date  = _oh_rows[0][3] if _oh_rows else ""
+                _lv_date  = _live_row[3] or ""
+                if _lv_date > _db_date:
+                    _oh_rows = [_live_row] + list(_oh_rows)
             if _oh_rows:
                 _prices  = [r[0] for r in _oh_rows]
                 _fees    = [r[1] for r in _oh_rows if r[1] > 0]

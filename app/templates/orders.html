@@ -226,14 +226,15 @@ window._renderMlItem = function(d) {
     // Usar datos reales de ventas cuando existen, si no estimar
     var rs = d.real_sales;
     var useReal = rs && rs.count >= 1;
-    var displayPrice  = useReal ? rs.avg_price      : d.price;
-    var displayFeePct = useReal ? rs.avg_fee_pct     : d.fees.sale_fee_pct;
-    var displayFeeAmt = useReal ? rs.avg_fee_amt     : d.fees.sale_fee_amount;
-    var displayImp    = useReal ? rs.avg_imp          : (d.price * 0.09);
-    var displayShip   = useReal ? rs.avg_ship_est     : (d.free_shipping ? 80 : 0);
-    var netML  = useReal ? rs.avg_net_ml               : (d.price - d.fees.total_fee_amount - (d.free_shipping ? 80 : 0) - (d.price * 0.09));
-    var socioAmt = useReal ? rs.avg_socio              : (netML * 0.07);
-    var netEst   = useReal ? rs.avg_neto_final         : (netML - socioAmt);
+    // Primario: última venta real. Secundario: promedio N ventas.
+    var displayPrice  = useReal ? rs.last_price                          : d.price;
+    var displayFeePct = useReal ? rs.last_fee_pct                        : d.fees.sale_fee_pct;
+    var displayFeeAmt = useReal ? (rs.last_price * rs.last_fee_pct / 100): d.fees.sale_fee_amount;
+    var displayImp    = useReal ? (rs.last_price * 0.0905)               : (d.price * 0.09);
+    var displayShip   = useReal ? rs.avg_ship_est                        : (d.free_shipping ? 80 : 0);
+    var netML    = useReal ? rs.last_net_ml    : (d.price - d.fees.total_fee_amount - (d.free_shipping ? 80 : 0) - (d.price * 0.09));
+    var socioAmt = useReal ? rs.last_socio     : (netML * 0.07);
+    var netEst   = useReal ? rs.last_neto_final: (netML - socioAmt);
     var netPct   = displayPrice > 0 ? (netEst / displayPrice * 100).toFixed(1) : 0;
     var html = '<div class="space-y-4">';
     html += '<div class="flex items-start gap-3">' + thumbHtml + '<div class="flex-1 min-w-0">';
@@ -248,17 +249,19 @@ window._renderMlItem = function(d) {
         html += 'onchange="window._updateMlCatalogPrice(\'' + d.item_id + '\', this.value)" ';
         html += 'onkeydown="if(event.key===\'Enter\'){window._updateMlCatalogPrice(\'' + d.item_id + '\', this.value);this.blur();}">';
         html += '</div><p class="text-[10px] text-amber-500 text-right">precio catálogo API · editable</p></div>';
-    } else if (useReal && Math.abs(rs.avg_price - d.price) > 50) {
+    } else if (useReal) {
         html += '<div class="text-right shrink-0">';
-        html += '<p class="text-xl font-black text-gray-900">' + _mxn(rs.avg_price) + '</p>';
-        html += '<p class="text-[10px] text-green-600 font-semibold">prom. real (' + rs.count + ' ventas)</p>';
-        html += '<p class="text-[10px] text-gray-400 line-through">' + _mxn(d.price) + ' catálogo</p>';
+        html += '<p class="text-xl font-black text-gray-900">' + _mxn(rs.last_price) + '</p>';
+        html += '<p class="text-[10px] text-green-600 font-semibold">última venta real</p>';
+        if (Math.abs(rs.last_price - d.price) > 50) {
+            html += '<p class="text-[10px] text-gray-400 line-through">' + _mxn(d.price) + ' catálogo</p>';
+        }
         html += '</div>';
     } else {
         html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p></div>';
     }
     html += '</div><div class="flex flex-wrap gap-1 mt-1.5">' + condBadge + ltBadge + fullBadge + mlCatBadge + catBadge + skuBadge;
-    if (useReal) html += '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-semibold">✓ ' + rs.count + ' ventas reales</span>';
+    if (useReal) html += '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-semibold">✓ última venta real · ' + rs.count + ' órdenes</span>';
     html += '</div>';
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
     html += '</div></div>';
@@ -272,7 +275,7 @@ window._renderMlItem = function(d) {
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Fees ML</p>';
     html += '<span class="px-2 py-0.5 rounded-full text-xs font-bold ' + mrgClr + '">' + _pct(displayFeePct) + ' comisión</span>';
     html += '<p class="text-xs text-gray-700 mt-1.5">' + _mxn(displayFeeAmt) + (useReal ? '' : feeNote) + '</p>';
-    if (useReal) html += '<p class="text-[10px] text-green-600 mt-1">sobre precio real promedio</p>';
+    if (useReal) html += '<p class="text-[10px] text-green-600 mt-1">sobre última venta real</p>';
     else html += '<p class="text-[10px] text-gray-400 mt-0.5">comisión ML directa</p>';
     html += '</div>';
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1">Neto recibido</p>';
@@ -285,16 +288,15 @@ window._renderMlItem = function(d) {
     if (displayShip > 0) html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Envío (est.)</span><span>-' + _mxn(displayShip) + '</span></div>';
     html += '</div></div>';
     html += '</div>';
-    // Última venta individual (si hay múltiples ventas y precio difiere del promedio)
-    if (useReal && rs.count > 1 && rs.last_price && Math.abs(rs.last_price - rs.avg_price) > 30) {
-        var lastNP = rs.last_price > 0 ? (rs.last_neto_final / rs.last_price * 100).toFixed(1) : 0;
+    // Referencia secundaria: promedio de N ventas (cuando hay múltiples)
+    if (useReal && rs.count > 1) {
+        var avgNP = rs.avg_price > 0 ? (rs.avg_neto_final / rs.avg_price * 100).toFixed(1) : 0;
         html += '<div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-[10px]">';
-        html += '<span class="text-gray-400 font-semibold">Última venta</span>';
-        html += '<span class="font-semibold text-gray-700">' + _mxn(rs.last_price) + '</span>';
+        html += '<span class="text-gray-400 font-semibold">Prom. ' + rs.count + ' ventas</span>';
+        html += '<span class="text-gray-500">' + _mxn(rs.avg_price) + '</span>';
         html += '<span class="text-gray-400">→ neto</span>';
-        html += '<span class="font-bold text-green-700">' + _mxn(rs.last_neto_final) + '</span>';
-        html += '<span class="text-gray-400">(' + lastNP + '%)</span>';
-        html += '<span class="text-gray-300">· ' + (rs.last_sale_date || '').slice(0, 10) + '</span>';
+        html += '<span class="text-gray-600">' + _mxn(rs.avg_neto_final) + '</span>';
+        html += '<span class="text-gray-400">(' + avgNP + '%)</span>';
         html += '</div>';
     }
     // Bloque Competencia
@@ -373,10 +375,10 @@ window._updateMlCatalogPrice = function(itemId, rawVal) {
 window._renderMlSim = function(simId, d) {
     var rs = d.real_sales;
     var useReal = rs && rs.count >= 1;
-    var feeDefaultPct = useReal ? Number(rs.avg_fee_pct).toFixed(1) : Number(d.fees.sale_fee_pct || 16.5).toFixed(1);
-    var sellDefault   = useReal ? rs.avg_price.toFixed(2) : d.price.toFixed(2);
+    var feeDefaultPct = useReal ? Number(rs.last_fee_pct).toFixed(1) : Number(d.fees.sale_fee_pct || 16.5).toFixed(1);
+    var sellDefault   = useReal ? rs.last_price.toFixed(2) : d.price.toFixed(2);
     var shipDefault   = useReal ? rs.avg_ship_est : (d.free_shipping ? 80 : 0);
-    var impDefault    = useReal ? (rs.avg_imp / rs.avg_price * 100).toFixed(2) : '9';
+    var impDefault    = useReal ? '9.05' : '9';
     function row(suffix, label, val, highlight) {
         var cls = 'w-20 text-xs text-right border rounded px-1.5 py-1 focus:outline-none bg-white ' +
             (highlight ? 'border-green-400 focus:border-green-500' : 'border-gray-200 focus:border-yellow-400');
@@ -387,7 +389,7 @@ window._renderMlSim = function(simId, d) {
             '</div>';
     }
     var html = '<div class="space-y-3 pt-2">';
-    if (useReal) html += '<div class="flex items-center gap-2 px-1"><span class="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">✓ Pre-llenado con datos reales de ' + rs.count + ' ventas</span><span class="text-[10px] text-gray-400">· último: ' + (rs.last_sale_date || '') + '</span></div>';
+    if (useReal) html += '<div class="flex items-center gap-2 px-1"><span class="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">✓ Pre-llenado con última venta real · ' + (rs.last_sale_date || '').slice(0,10) + '</span></div>';
     html += '<div class="grid grid-cols-2 gap-3">';
     html += '<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 space-y-2"><p class="text-[10px] font-bold text-yellow-700 uppercase tracking-wide mb-1">Ingresos / Fees ML</p>';
     html += row('sell',  'Precio venta ($)',    sellDefault,  useReal);
