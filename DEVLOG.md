@@ -7,6 +7,31 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-16 — FIX: Analizador ML usa datos reales de ventas (order_history)
+
+### Problema
+El analizador mostraba precio catálogo ($7,699) + envío plano $80. En una venta real de TCL 55":
+precio real=$5,851 · envío real=$281 · **neto real=$4,007 vs $5,403 estimado (-$1,396 error)**
+
+### Cambios
+**Backend (`/api/ml/item-analysis`):**
+- Cuando `in_our_catalog=True`, consulta `order_history` por `item_id` + `sku`
+- Calcula promedios reales de las últimas 20 ventas: `avg_price`, `avg_fee_pct`, `avg_fee_amt`, `avg_imp`, `avg_ship_est`, `avg_net_ml`, `avg_socio`, `avg_neto_final`
+- Tiers de envío mejorados: $80/<$1k, $130/<$2.5k, $200/<$5k, $300/<$8k, $400/≥$8k
+- Retorna `real_sales: {...}` en la respuesta JSON
+
+**Frontend (`orders.html`):**
+- Cuando `real_sales.count >= 1`: usa precio real promedio en lugar de precio catálogo
+- Precio real prominente + precio catálogo tachado cuando difieren >$50
+- Badge verde "✓ X ventas reales" en header del producto
+- Cards Fees ML y Neto recibido con valores reales
+- Calculadora pre-llenada en verde con datos reales + banner de confirmación
+- Cuando no hay datos reales: mantiene estimados con label "est."
+
+Commit: `d436dde`
+
+---
+
 ## 2026-06-16 — FEAT: Analizador ML — card Vendidas prominente + Neto recibido completo
 
 ### Contexto
