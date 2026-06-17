@@ -229,7 +229,6 @@ window._renderMlItem = function(d) {
     var displayPrice  = useReal ? rs.avg_price      : d.price;
     var displayFeePct = useReal ? rs.avg_fee_pct     : d.fees.sale_fee_pct;
     var displayFeeAmt = useReal ? rs.avg_fee_amt     : d.fees.sale_fee_amount;
-    var displayIva    = useReal ? rs.avg_iva          : d.fees.iva_on_fee;
     var displayImp    = useReal ? rs.avg_imp          : (d.price * 0.09);
     var displayShip   = useReal ? rs.avg_ship_est     : (d.free_shipping ? 80 : 0);
     var netML  = useReal ? rs.avg_net_ml               : (d.price - d.fees.total_fee_amount - (d.free_shipping ? 80 : 0) - (d.price * 0.09));
@@ -273,14 +272,14 @@ window._renderMlItem = function(d) {
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1.5">Fees ML</p>';
     html += '<span class="px-2 py-0.5 rounded-full text-xs font-bold ' + mrgClr + '">' + _pct(displayFeePct) + ' comisión</span>';
     html += '<p class="text-xs text-gray-700 mt-1.5">' + _mxn(displayFeeAmt) + (useReal ? '' : feeNote) + '</p>';
-    html += '<p class="text-[10px] text-gray-400">+ ' + _mxn(displayIva) + ' IVA → ' + _mxn(displayFeeAmt + displayIva) + ' total</p>';
     if (useReal) html += '<p class="text-[10px] text-green-600 mt-1">sobre precio real promedio</p>';
+    else html += '<p class="text-[10px] text-gray-400 mt-0.5">comisión ML directa</p>';
     html += '</div>';
     html += '<div class="bg-gray-50 rounded-lg p-3"><p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-1">Neto recibido</p>';
     html += '<p class="text-xl font-black text-green-700 leading-none">' + _mxn(Math.max(0, netEst)) + '</p>';
     html += '<p class="text-[10px] ' + (useReal ? 'text-green-600 font-semibold' : 'text-gray-400') + ' mt-0.5">' + netPct + '% del precio' + (useReal ? ' · real' : ' · est.') + '</p>';
     html += '<div class="space-y-0.5 mt-2 border-t border-gray-200 pt-1.5">';
-    html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Comisión+IVA</span><span>-' + _mxn(displayFeeAmt + displayIva) + '</span></div>';
+    html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Comisión ML</span><span>-' + _mxn(displayFeeAmt) + '</span></div>';
     html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Imp. ML (~9%)</span><span>-' + _mxn(displayImp) + '</span></div>';
     html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Socio (7%)</span><span>-' + _mxn(socioAmt) + '</span></div>';
     if (displayShip > 0) html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Envío (est.)</span><span>-' + _mxn(displayShip) + '</span></div>';
@@ -363,15 +362,14 @@ window.calcMlSim = function(simId) {
     if (sellP <= 0) { res.innerHTML = '<p class="text-xs text-red-500 text-center py-2">Precio de venta requerido</p>'; return; }
     function calcFor(p, m) {
         var feeAmt  = p * feePct / 100;
-        var ivaFee  = feeAmt * 0.16;
         var impAmt  = p * impPct / 100;
-        var mlTotal = feeAmt + ivaFee + impAmt + ship + other;
+        var mlTotal = feeAmt + impAmt + ship + other;
         var netML   = p - mlTotal;
         var socioAmt = netML * socioPct / 100;
         var netProc = netML - socioAmt;
         var landedMax = netProc - (p * m / 100);
         var cogsMax = tar > 0 ? (landedMax - frt) / (1 + tar / 100) : (landedMax - frt);
-        return {feeAmt:feeAmt, ivaFee:ivaFee, impAmt:impAmt, mlTotal:mlTotal, netML:netML, socioAmt:socioAmt, netProc:netProc, landedMax:landedMax, cogsMax:cogsMax};
+        return {feeAmt:feeAmt, impAmt:impAmt, mlTotal:mlTotal, netML:netML, socioAmt:socioAmt, netProc:netProc, landedMax:landedMax, cogsMax:cogsMax};
     }
     var main = calcFor(sellP, marginPct);
     var ok = main.cogsMax > 0;
@@ -389,7 +387,7 @@ window.calcMlSim = function(simId) {
         html += '<tr class="border-t border-gray-100' + bold + '"><td class="py-1 px-2 ' + clr + '">' + m + '%</td><td class="py-1 px-2 text-right ' + clr + '">' + _m(r.cogsMax) + '</td><td class="py-1 px-2 text-right text-gray-500">' + _m(r.landedMax) + '</td><td class="py-1 px-2 text-right text-gray-500">' + _m(r.netProc) + '</td></tr>';
     });
     html += '</tbody></table>';
-    html += '<p class="text-[10px] text-gray-400 mt-2">Desglose: ' + _m(sellP) + ' → comisión ' + _m(main.feeAmt) + ' + IVA fee ' + _m(main.ivaFee) + ' + imp. ' + _m(main.impAmt) + ' + envío ' + _m(ship) + (other>0?' + otros '+_m(other):'') + ' = ML retiene ' + _m(main.mlTotal) + ' → neto ML ' + _m(main.netML) + ' → socio ' + _m(main.socioAmt) + ' → neto final ' + _m(main.netProc) + '</p>';
+    html += '<p class="text-[10px] text-gray-400 mt-2">Desglose: ' + _m(sellP) + ' → comisión ' + _m(main.feeAmt) + ' + imp. ' + _m(main.impAmt) + ' + envío ' + _m(ship) + (other>0?' + otros '+_m(other):'') + ' = ML retiene ' + _m(main.mlTotal) + ' → neto ML ' + _m(main.netML) + ' → socio ' + _m(main.socioAmt) + ' → neto final ' + _m(main.netProc) + '</p>';
     res.innerHTML = html;
 };
 </script>

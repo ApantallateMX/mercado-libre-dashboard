@@ -2618,9 +2618,10 @@ async def ml_item_analysis(
                 _sp = _avg_p
                 _sh_est = 400 if _sp >= 8000 else (300 if _sp >= 5000 else (200 if _sp >= 2500 else (130 if _sp >= 1000 else 80)))
                 _avg_fee_amt  = round(_avg_p * _avg_fee_pct / 100, 2)
-                _avg_iva      = round(_avg_fee_amt * 0.16, 2)
                 _avg_imp      = round(_avg_p * 0.0905, 2)
-                _avg_net_ml   = round(_avg_p - _avg_fee_amt - _avg_iva - _avg_imp - _sh_est, 2)
+                # IVA sobre comisión NO se deduce del pago ML — el breakdown real es:
+                # Cargos (fee) + Impuestos (9.05%) + Envío. Sin IVA extra.
+                _avg_net_ml   = round(_avg_p - _avg_fee_amt - _avg_imp - _sh_est, 2)
                 _avg_socio    = round(_avg_net_ml * _PARTNER_COMMISSION_PCT, 2)
                 _avg_neto_fin = round(_avg_net_ml - _avg_socio, 2)
                 real_sales = {
@@ -2630,7 +2631,6 @@ async def ml_item_analysis(
                     "max_price":      _max_p,
                     "avg_fee_pct":    _avg_fee_pct,
                     "avg_fee_amt":    _avg_fee_amt,
-                    "avg_iva":        _avg_iva,
                     "avg_imp":        _avg_imp,
                     "avg_ship_est":   _sh_est,
                     "avg_net_ml":     _avg_net_ml,
