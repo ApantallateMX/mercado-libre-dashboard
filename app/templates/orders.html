@@ -285,6 +285,69 @@ window._renderMlItem = function(d) {
     if (displayShip > 0) html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Envío (est.)</span><span>-' + _mxn(displayShip) + '</span></div>';
     html += '</div></div>';
     html += '</div>';
+    // Última venta individual (si hay múltiples ventas y precio difiere del promedio)
+    if (useReal && rs.count > 1 && rs.last_price && Math.abs(rs.last_price - rs.avg_price) > 30) {
+        var lastNP = rs.last_price > 0 ? (rs.last_neto_final / rs.last_price * 100).toFixed(1) : 0;
+        html += '<div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1 text-[10px]">';
+        html += '<span class="text-gray-400 font-semibold">Última venta</span>';
+        html += '<span class="font-semibold text-gray-700">' + _mxn(rs.last_price) + '</span>';
+        html += '<span class="text-gray-400">→ neto</span>';
+        html += '<span class="font-bold text-green-700">' + _mxn(rs.last_neto_final) + '</span>';
+        html += '<span class="text-gray-400">(' + lastNP + '%)</span>';
+        html += '<span class="text-gray-300">· ' + (rs.last_sale_date || '').slice(0, 10) + '</span>';
+        html += '</div>';
+    }
+    // Bloque Competencia
+    if (d.competition) {
+        var comp = d.competition;
+        var cSellers = comp.total_sellers;
+        var compClr = cSellers <= 2 ? 'text-green-700' : (cSellers <= 6 ? 'text-yellow-700' : 'text-red-700');
+        var compBdr = cSellers <= 2 ? 'border-green-200 bg-green-50' : (cSellers <= 6 ? 'border-yellow-200 bg-yellow-50' : 'border-red-200 bg-red-50');
+        html += '<div class="border rounded-lg p-3 ' + compBdr + '">';
+        html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-2">Competencia en catálogo</p>';
+        html += '<div class="flex flex-wrap items-center gap-x-5 gap-y-1.5">';
+        html += '<div class="text-center"><p class="text-2xl font-black leading-none ' + compClr + '">' + cSellers + '</p><p class="text-[10px] text-gray-400">vendedores</p></div>';
+        if (comp.min_price > 0) {
+            html += '<div><p class="text-xs font-semibold text-gray-800">' + _mxn(comp.min_price) + ' — ' + _mxn(comp.max_price) + '</p>';
+            html += '<p class="text-[10px] text-gray-400">rango precios activos</p></div>';
+        }
+        var compBadges = '';
+        if (comp.winner_is_full) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">FULL requerido</span>';
+        if (comp.has_official_store) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold">🏪 Tienda oficial</span>';
+        if (comp.used_sellers > 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">' + comp.used_sellers + ' usados</span>';
+        if (comp.new_sellers > 0 && comp.used_sellers === 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">solo nuevos</span>';
+        if (compBadges) html += '<div class="flex flex-wrap gap-1">' + compBadges + '</div>';
+        html += '</div></div>';
+    }
+    // Veredicto semáforo
+    var _vd = d.velocity_per_day;
+    var _dV = _vd >= 1 ? 'g' : (_vd >= 0.2 ? 'y' : 'r');
+    var _cV = !d.competition ? 'n' : (d.competition.has_official_store || d.competition.total_sellers > 6 ? 'r' : (d.competition.total_sellers > 2 ? 'y' : 'g'));
+    var _nV = Number(netPct) >= 30 ? 'g' : (Number(netPct) >= 20 ? 'y' : 'r');
+    var _lV = (d.competition && d.competition.winner_is_full) ? 'r' : (d.is_full ? 'y' : 'g');
+    var _clr = {g:'bg-green-500',y:'bg-yellow-400',r:'bg-red-500',n:'bg-gray-300'};
+    var _txt = {g:'text-green-700',y:'text-yellow-700',r:'text-red-600',n:'text-gray-400'};
+    var _vRows = [
+        {v:_dV, label:'Demanda: ' + d.demand_tier + ' (' + d.velocity_per_day + ' ud/día)'},
+        {v:_cV, label: _cV==='n' ? 'Competencia: sin datos catálogo' : ('Competencia: ' + (d.competition.has_official_store ? 'tienda oficial presente' : d.competition.total_sellers + ' vendedores'))},
+        {v:_nV, label:'Margen neto: ' + netPct + '% del precio'},
+        {v:_lV, label: _lV==='r' ? 'Logística: FULL obligatorio (competidor)' : (_lV==='y' ? 'Logística: nuestro listing es FULL' : 'Logística: flexible (sin FULL)')},
+    ];
+    var _greens = _vRows.filter(function(x){return x.v==='g';}).length;
+    var _reds   = _vRows.filter(function(x){return x.v==='r';}).length;
+    var _ov = _reds >= 2 ? {bg:'bg-red-50 border-red-200',ico:'🚫',tc:'text-red-700',msg:'No recomendado — múltiples factores de riesgo'} :
+              (_reds === 1 && _greens < 2) ? {bg:'bg-yellow-50 border-yellow-200',ico:'⚠️',tc:'text-yellow-700',msg:'Riesgo moderado — evaluar con cuidado'} :
+              {bg:'bg-green-50 border-green-200',ico:'✅',tc:'text-green-700',msg:'Viable — demanda y márgenes aceptables'};
+    html += '<div class="border rounded-lg p-3 bg-gray-50">';
+    html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-2">Veredicto</p>';
+    html += '<div class="grid grid-cols-2 gap-1.5 mb-2">';
+    _vRows.forEach(function(it) {
+        html += '<div class="flex items-start gap-1.5"><span class="w-2.5 h-2.5 rounded-full shrink-0 mt-0.5 ' + _clr[it.v] + '"></span><span class="text-[10px] ' + _txt[it.v] + ' leading-tight">' + it.label + '</span></div>';
+    });
+    html += '</div>';
+    html += '<div class="flex items-center gap-2 px-2.5 py-1.5 rounded border ' + _ov.bg + '">';
+    html += '<span class="text-sm">' + _ov.ico + '</span><span class="text-xs font-semibold ' + _ov.tc + '">' + _ov.msg + '</span>';
+    html += '</div></div>';
     html += '<button onclick="window.toggleMlSim(\'' + simId + '\')" class="w-full flex items-center justify-between px-4 py-2.5 bg-yellow-50 border border-yellow-200 rounded-lg text-sm font-semibold text-yellow-800 hover:bg-yellow-100 transition">';
     html += '<span>Calculadora: Precio tope de compra (COGS máximo)</span><span id="' + simId + '_arr">▼</span></button>';
     html += '<div id="' + simId + '" class="hidden">' + window._renderMlSim(simId, d) + '</div></div>';

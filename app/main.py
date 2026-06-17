@@ -2401,6 +2401,8 @@ async def ml_item_analysis(
 
     # Intento 4: producto de catálogo ML (URL /p/MLM...) — /products/{id} + /products/{id}/items
     _is_catalog_product = False
+    _comp_items_raw: list = []
+    _comp_bb_listing: dict = {}
     if item is None:
         try:
             _prod = await client.get(f"/products/{clean_id}")
@@ -2443,6 +2445,8 @@ async def ml_item_analysis(
                                     _ref_listing = _full
                             except Exception:
                                 pass
+                    _comp_items_raw = _pitems_results
+                    _comp_bb_listing = _ref_listing
                 except Exception:
                     pass
 
@@ -2624,22 +2628,65 @@ async def ml_item_analysis(
                 _avg_net_ml   = round(_avg_p - _avg_fee_amt - _avg_imp - _sh_est, 2)
                 _avg_socio    = round(_avg_net_ml * _PARTNER_COMMISSION_PCT, 2)
                 _avg_neto_fin = round(_avg_net_ml - _avg_socio, 2)
+                # Última venta individual (más reciente)
+                _lp  = _oh_rows[0][0]
+                _lf  = _oh_rows[0][1]
+                _lfp = round(_lf / _lp * 100, 2) if (_lp > 0 and _lf > 0) else _avg_fee_pct
+                _lfa = round(_lp * _lfp / 100, 2)
+                _li  = round(_lp * 0.0905, 2)
+                _lsh = 400 if _lp >= 8000 else (300 if _lp >= 5000 else (200 if _lp >= 2500 else (130 if _lp >= 1000 else 80)))
+                _lnm = round(_lp - _lfa - _li - _lsh, 2)
+                _lsc = round(_lnm * _PARTNER_COMMISSION_PCT, 2)
+                _lnf = round(_lnm - _lsc, 2)
                 real_sales = {
-                    "count":          len(_oh_rows),
-                    "avg_price":      _avg_p,
-                    "min_price":      _min_p,
-                    "max_price":      _max_p,
-                    "avg_fee_pct":    _avg_fee_pct,
-                    "avg_fee_amt":    _avg_fee_amt,
-                    "avg_imp":        _avg_imp,
-                    "avg_ship_est":   _sh_est,
-                    "avg_net_ml":     _avg_net_ml,
-                    "avg_socio":      _avg_socio,
-                    "avg_neto_final": _avg_neto_fin,
-                    "last_sale_date": _oh_rows[0][3] if _oh_rows else "",
+                    "count":            len(_oh_rows),
+                    "avg_price":        _avg_p,
+                    "min_price":        _min_p,
+                    "max_price":        _max_p,
+                    "avg_fee_pct":      _avg_fee_pct,
+                    "avg_fee_amt":      _avg_fee_amt,
+                    "avg_imp":          _avg_imp,
+                    "avg_ship_est":     _sh_est,
+                    "avg_net_ml":       _avg_net_ml,
+                    "avg_socio":        _avg_socio,
+                    "avg_neto_final":   _avg_neto_fin,
+                    "last_sale_date":   _oh_rows[0][3] if _oh_rows else "",
+                    "last_price":       _lp,
+                    "last_fee_pct":     _lfp,
+                    "last_net_ml":      _lnm,
+                    "last_socio":       _lsc,
+                    "last_neto_final":  _lnf,
                 }
         except Exception:
             pass
+
+    # Competition data — usar _comp_items_raw del path catálogo o intentar via catalog_product_id
+    competition = None
+    if not _comp_items_raw:
+        _cpid2 = item.get("catalog_product_id") or ""
+        if _cpid2:
+            try:
+                _cp2 = await client.get(f"/products/{_cpid2}/items", params={"limit": 20})
+                _comp_items_raw = _cp2.get("results") or []
+            except Exception:
+                pass
+    if _comp_items_raw:
+        _cp_prices = sorted([float(e.get("price", 0)) for e in _comp_items_raw if float(e.get("price", 0)) > 0])
+        _cp_new  = sum(1 for e in _comp_items_raw if (e.get("condition") or "new") == "new")
+        _cp_used = len(_comp_items_raw) - _cp_new
+        _cp_w_ship = (_comp_bb_listing.get("shipping") or {})
+        _cp_winner_full     = _cp_w_ship.get("logistic_type") == "fulfillment"
+        _cp_winner_official = bool(_comp_bb_listing.get("official_store_id"))
+        competition = {
+            "total_sellers":    len(_comp_items_raw),
+            "min_price":        round(_cp_prices[0], 2) if _cp_prices else 0,
+            "max_price":        round(_cp_prices[-1], 2) if _cp_prices else 0,
+            "new_sellers":      _cp_new,
+            "used_sellers":     _cp_used,
+            "winner_is_full":   _cp_winner_full,
+            "winner_price":     round(_cp_prices[0], 2) if _cp_prices else 0,
+            "has_official_store": _cp_winner_official,
+        }
 
     # Thumbnail (prefer pictures array over thumbnail field)
     thumbnail = ""
@@ -2690,6 +2737,7 @@ async def ml_item_analysis(
         "is_catalog_product": _is_catalog_product,
         "status": item.get("status", ""),
         "real_sales": real_sales,
+        "competition": competition,
     })
 
 
