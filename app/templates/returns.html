@@ -1728,6 +1728,17 @@ function _renderAlerts(d) {
 // ============================================================
 // Init — NO auto-refresh. Manual control only.
 // ============================================================
+// Override from URL params if arriving from a bridge link (e.g., Salud tab)
+var _initPreset = '7d';
+(function() {
+    var _up = new URLSearchParams(window.location.search);
+    var _uf = _up.get('date_from'), _ut = _up.get('date_to');
+    if (_uf && _ut) {
+        retFilters.date_from = _uf;
+        retFilters.date_to   = _ut;
+        _initPreset = 'custom';
+    }
+})();
 var _elFrom = document.getElementById('ret-date-from');
 var _elTo   = document.getElementById('ret-date-to');
 if (_elFrom) _elFrom.value = retFilters.date_from;
@@ -1739,8 +1750,7 @@ var _elTopB = document.getElementById('ret-top-to-a');
 if (_elTopA) _elTopA.value = retFilters.date_from;
 if (_elTopB) _elTopB.value = retFilters.date_to;
 
-// Highlight "30 días" preset by default
-_highlightPreset('7d');
+_highlightPreset(_initPreset);
 _updateFilterIndicator();
 loadSummary();
 loadTable();

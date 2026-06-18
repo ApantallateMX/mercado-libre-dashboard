@@ -12941,8 +12941,13 @@ async def returns_summary_partial(
         df = date_from or None
         dt = date_to or None
 
-        # Todos los reclamos del período (sin filtrar solo PDD)
-        all_claims = await _fetch_all_claims_cached(client, df, dt)
+        # Fetch en paralelo: todos los reclamos + user info para tasa oficial ML
+        all_claims, _user_info = await asyncio.gather(
+            _fetch_all_claims_cached(client, df, dt),
+            client.get_user_info()
+        )
+        ml_claims_rate = (_user_info.get("seller_reputation", {})
+                          .get("metrics", {}).get("claims", {}).get("rate", None))
 
         total = len(all_claims)
         opened = sum(1 for c in all_claims if c.get("status") == "opened")
@@ -12973,7 +12978,7 @@ async def returns_summary_partial(
         try:
             orders_data = await client.get(
                 "/orders/search",
-                params={"seller": (await client.get_user_info()).get("id", ""),
+                params={"seller": _user_info.get("id", ""),
                         "sort": "date_asc", "offset": 0, "limit": 1,
                         **({"date_from": df} if df else {}),
                         **({"date_to": dt} if dt else {})}
@@ -13027,6 +13032,7 @@ async def returns_summary_partial(
             return_rate=round(return_rate, 2),
             valor_mxn=round(valor_mxn, 2),
             costo_usd=round(costo_usd, 2),
+            ml_claims_rate=ml_claims_rate,
         )
 
         return templates.TemplateResponse(request, "partials/returns_summary.html", {            "summary": summary,

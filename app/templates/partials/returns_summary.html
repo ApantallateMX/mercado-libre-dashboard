@@ -67,7 +67,16 @@
         <p class="text-2xl font-bold {% if summary.return_rate >= 5 %}text-red-600{% elif summary.return_rate >= 2 %}text-yellow-600{% else %}text-green-600{% endif %}">
             {{ "%.1f"|format(summary.return_rate) }}%
         </p>
-        <p class="text-[10px] text-gray-400 mt-1">sobre {{ summary.total_orders }} ventas</p>
+        <p class="text-[10px] text-gray-400 mt-1">empírica · {{ summary.total_orders }} ventas</p>
+        {% if summary.ml_claims_rate is not none %}
+        <p class="text-[10px] text-gray-500 mt-1 flex items-center gap-1">
+            <span class="text-gray-400">ML oficial:</span>
+            <span class="font-semibold {% if summary.ml_claims_rate >= 0.05 %}text-red-500{% elif summary.ml_claims_rate >= 0.02 %}text-yellow-500{% else %}text-green-500{% endif %}">
+                {{ "%.2f"|format(summary.ml_claims_rate * 100) }}%
+            </span>
+            <span class="text-[9px] text-gray-400">(60d)</span>
+        </p>
+        {% endif %}
         <div class="h-1.5 rounded-full mt-2 bg-gray-100">
             <div class="h-1.5 rounded-full {% if summary.return_rate >= 5 %}bg-red-500{% elif summary.return_rate >= 2 %}bg-yellow-500{% else %}bg-green-500{% endif %}"
                  style="width:{{ [summary.return_rate * 5, 100]|min }}%"></div>
