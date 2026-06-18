@@ -2342,10 +2342,18 @@ async def ml_item_analysis(
     import re as _re
     from datetime import datetime as _dt
 
-    # Accept full URL — extract MLM... ID from it
+    # Accept full URL — extraer item ID correcto
+    # Para URLs de variaciones (/up/MLMU...) el listing real está en product_trigger_id
     clean = item_id.strip()
-    m = _re.search(r'(MLM[A-Z0-9]+)', clean.upper())
-    clean_id = m.group(1) if m else clean.upper()
+    _trigger_m = _re.search(r'product_trigger_id=(MLM\d+)', clean, _re.IGNORECASE)
+    if _trigger_m:
+        clean_id = _trigger_m.group(1).upper()
+    else:
+        # Preferir MLM+dígitos (listing real) sobre MLMU (producto universal UP)
+        _m_digit = _re.search(r'\b(MLM\d+)\b', clean.upper())
+        _m_any   = _re.search(r'(MLM[A-Z0-9]+)', clean.upper())
+        m = _m_digit or _m_any
+        clean_id = m.group(1) if m else clean.upper()
 
     client = await get_meli_client()
     if not client:
@@ -2487,11 +2495,16 @@ async def ml_item_analysis(
             pass
 
     if item is None or item.get("error"):
+        _is_mlmu = clean_id.startswith("MLMU")
+        _err_msg = (
+            f"{clean_id} es un ID de Producto Universal (UP). "
+            f"Pega el link completo de la variación — el ID real del listing está en el parámetro product_trigger_id de la URL."
+            if _is_mlmu else
+            f"No se pudo obtener información de {clean_id}. "
+            f"El producto puede estar eliminado, archivado o sin acceso en ML."
+        )
         return JSONResponse({
-            "error": (
-                f"No se pudo obtener información de {clean_id}. "
-                f"El producto puede estar eliminado, archivado o sin acceso en ML."
-            ),
+            "error": _err_msg,
             "error_link": f"https://www.mercadolibre.com.mx/p/{clean_id}",
             "item_id": clean_id,
         }, status_code=404)
@@ -2719,6 +2732,23 @@ async def ml_item_analysis(
             "has_official_store": _cp_winner_official,
         }
 
+    # Variaciones del item (tallas, colores, etc.)
+    _variations = []
+    for _v in (item.get("variations") or []):
+        _v_attrs = [
+            {"name": a.get("name", ""), "value": a.get("value_name", "")}
+            for a in (_v.get("attributes") or [])
+            if a.get("value_name")
+        ]
+        _variations.append({
+            "id": _v.get("id"),
+            "price": float(_v.get("price") or price),
+            "available_quantity": int(_v.get("available_quantity") or 0),
+            "sold_quantity": int(_v.get("sold_quantity") or 0),
+            "attributes": _v_attrs,
+            "seller_sku": _v.get("seller_custom_field") or "",
+        })
+
     # Thumbnail (prefer pictures array over thumbnail field)
     thumbnail = ""
     pics = item.get("pictures") or []
@@ -2769,6 +2799,7 @@ async def ml_item_analysis(
         "status": item.get("status", ""),
         "real_sales": real_sales,
         "competition": competition,
+        "variations": _variations,
     })
 
 

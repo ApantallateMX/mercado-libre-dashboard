@@ -172,8 +172,27 @@ window.searchMlItem = function() {
     if (!input || !resultDiv) return;
     var raw = (input.value || '').trim();
     if (!raw) { input.focus(); return; }
-    var m = raw.match(/MLM[A-Z0-9]+/i);
-    var itemId = m ? m[0].toUpperCase() : raw.toUpperCase();
+    // Extraer item ID — soporta ID puro, URL normal, y URL de variación /up/ con product_trigger_id
+    var itemId;
+    if (raw.indexOf('mercadolibre.com') !== -1 || raw.indexOf('mercadolivre.com') !== -1) {
+        try {
+            var _parsed = new URL(raw.indexOf('://') !== -1 ? raw : 'https://' + raw);
+            var _trigger = _parsed.searchParams.get('product_trigger_id');
+            if (_trigger && /^MLM\d/i.test(_trigger)) {
+                itemId = _trigger.toUpperCase(); // URL /up/ — usar el listing real
+            } else {
+                var _pm = raw.match(/[\/\-](MLM\d+)/i);
+                itemId = _pm ? _pm[1].toUpperCase() : (raw.match(/MLM[A-Z0-9]+/i) || [''])[0].toUpperCase();
+            }
+        } catch(e) {
+            var _fm = raw.match(/MLM\d+/i) || raw.match(/MLM[A-Z0-9]+/i);
+            itemId = (_fm ? _fm[0] : raw).toUpperCase();
+        }
+    } else {
+        // ID puro: preferir MLM+dígitos sobre MLMU (producto universal)
+        var _im = raw.match(/\bMLM\d+\b/i) || raw.match(/MLM\d+/i) || raw.match(/MLM[A-Z0-9]+/i);
+        itemId = (_im ? _im[0] : raw).toUpperCase();
+    }
     resultDiv.innerHTML = '<div class="animate-pulse flex items-center gap-3 py-4"><div class="w-16 h-16 bg-gray-100 rounded shrink-0"></div><div class="flex-1 space-y-2"><div class="h-4 bg-gray-100 rounded w-3/4"></div><div class="h-3 bg-gray-100 rounded w-1/2"></div><div class="h-3 bg-gray-100 rounded w-1/4"></div></div></div>';
     btn.disabled = true; btn.classList.add('opacity-50');
     fetch('/api/ml/item-analysis?item_id=' + encodeURIComponent(itemId))
@@ -319,6 +338,26 @@ window._renderMlItem = function(d) {
         if (comp.used_sellers > 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">' + comp.used_sellers + ' usados</span>';
         if (comp.new_sellers > 0 && comp.used_sellers === 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">solo nuevos</span>';
         if (compBadges) html += '<div class="flex flex-wrap gap-1">' + compBadges + '</div>';
+        html += '</div></div>';
+    }
+    // Variaciones (tallas, colores, etc.)
+    if (d.variations && d.variations.length > 1) {
+        var totalVar = d.variations.length;
+        var inStock  = d.variations.filter(function(v){ return v.available_quantity > 0; }).length;
+        html += '<div class="border border-indigo-100 rounded-lg p-3 bg-indigo-50/30">';
+        html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-2">';
+        html += totalVar + ' variaciones — ' + inStock + ' con stock</p>';
+        html += '<div class="grid grid-cols-1 gap-1">';
+        d.variations.forEach(function(v) {
+            var vLabel = v.attributes.map(function(a){ return '<span class="text-gray-400">' + a.name + ':</span> ' + a.value; }).join(' · ');
+            var vStk  = v.available_quantity;
+            var vStkClr = vStk > 5 ? 'text-green-700 bg-green-50' : (vStk > 0 ? 'text-yellow-700 bg-yellow-50' : 'text-gray-400 bg-gray-100');
+            var vSku = v.seller_sku ? ' <span class="font-mono text-[10px] text-purple-600 bg-white border border-purple-100 px-1 rounded">' + v.seller_sku + '</span>' : '';
+            html += '<div class="flex items-center justify-between text-[11px] bg-white rounded border border-indigo-100 px-2 py-1.5 gap-2">';
+            html += '<span class="text-gray-700 flex-1 leading-tight">' + (vLabel || 'Variación #' + v.id) + vSku + '</span>';
+            html += '<span class="font-semibold shrink-0 text-[11px] px-1.5 py-0.5 rounded ' + vStkClr + '">' + vStk + ' ud</span>';
+            html += '</div>';
+        });
         html += '</div></div>';
     }
     // Veredicto semáforo
