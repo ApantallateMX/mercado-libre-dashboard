@@ -7,6 +7,28 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-18 — FEAT: Bridge Salud↔Retornos + tasa oficial ML en retornos
+
+### Mejoras de integración entre Salud y Retornos
+
+**Bridge Salud → Retornos:**
+- Card "Tasa Reclamos" en Salud: muestra "Ver análisis en Retornos →" cuando status es yellow/orange/red
+- Panel de alertas laterales: entry de claims rate orange/red incluye "Ver análisis detallado →"
+- Links incluyen `?date_from=X&date_to=Y` del período activo en Salud para cargar el mismo rango en Retornos
+
+**Tasa oficial ML en Retornos:**
+- Card "Tasa de Retorno" ahora muestra dos tasas: empírica (claims/órdenes del período) + oficial ML (seller_reputation 60d)
+- Tasa oficial usa misma escala de colores (≥5%=rojo, ≥2%=amarillo, <2%=verde)
+- Backend: `get_user_info()` en paralelo con `_fetch_all_claims_cached` (mejora latencia, elimina llamada duplicada)
+
+**URL param reading en Retornos:**
+- `returns.html` ahora lee `date_from`/`date_to` de query params al cargar
+- Si llega vía bridge desde Salud, precarga automáticamente el período correcto y marca preset 'custom'
+
+**Commit:** d64ae78
+
+---
+
 ## 2026-06-17 — FEAT: Returns — Fotos cliente, Análisis IA, Quality Score, Compartir equipo
 
 ### Cambios
