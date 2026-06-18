@@ -256,6 +256,12 @@ window._renderMlItem = function(d) {
     var netEst   = useReal ? rs.last_neto_final: (netML - socioAmt);
     var netPct   = displayPrice > 0 ? (netEst / displayPrice * 100).toFixed(1) : 0;
     var html = '<div class="space-y-4">';
+    if (d.is_synthetic_mlmu) {
+        html += '<div class="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-700">';
+        html += '<span class="shrink-0 mt-0.5">⚠</span>';
+        html += '<span><b>Producto Universal ML (' + (d.original_mlmu || d.item_id) + ')</b> — Datos limitados: el listing asociado está restringido por políticas de ML. Se muestra el precio y tipo de publicación disponibles vía catálogo.</span>';
+        html += '</div>';
+    }
     html += '<div class="flex items-start gap-3">' + thumbHtml + '<div class="flex-1 min-w-0">';
     html += '<div class="flex items-start justify-between gap-2">';
     html += '<a href="' + d.permalink + '" target="_blank" rel="noopener" class="text-sm font-semibold text-gray-800 hover:text-yellow-600 leading-snug">' + d.title + '</a>';

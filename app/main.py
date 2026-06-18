@@ -2407,6 +2407,71 @@ async def ml_item_analysis(
         except Exception:
             pass
 
+    # Intento 3b: ID de Producto Universal MLMU — resolver via /products/{id}/items
+    # /sites/MLM/search?catalog_product_id da 403; /products/{id}/items devuelve listings
+    # Si el listing está bloqueado (official_store con PolicyAgent), usar first_raw como
+    # item sintético para que el análisis financiero (precio, fees, márgenes) funcione
+    _mlmu_synthetic = None
+    if item is None and clean_id.startswith("MLMU"):
+        try:
+            _pr = await client.get(f"/products/{clean_id}/items", params={"limit": 1})
+            _pr_results = _pr.get("results") or []
+            if _pr_results:
+                _first_raw = _pr_results[0]
+                _resolved_id = str(_first_raw.get("item_id") or "").strip()
+                if _resolved_id.startswith("MLM"):
+                    # Intento: fetch real item via auth
+                    try:
+                        _pr_full = await client.get_item(_resolved_id)
+                        if not _pr_full.get("error"):
+                            item = _pr_full
+                            clean_id = _resolved_id
+                    except Exception:
+                        pass
+                    # Fallback: fetch via public API
+                    if item is None:
+                        try:
+                            import httpx as _httpx_3b
+                            async with _httpx_3b.AsyncClient(timeout=8.0) as _pub3:
+                                _rr = await _pub3.get(
+                                    f"https://api.mercadolibre.com/items/{_resolved_id}",
+                                    headers={"Accept": "application/json"}
+                                )
+                                if _rr.status_code == 200:
+                                    _bb = _rr.json()
+                                    if not _bb.get("error"):
+                                        item = _bb
+                                        clean_id = _resolved_id
+                        except Exception:
+                            pass
+                    # Last resort: build synthetic item from first_raw product data
+                    if item is None:
+                        _mlmu_synthetic = {
+                            "id": _resolved_id,
+                            "title": f"Producto Universal ({clean_id})",
+                            "price": float(_first_raw.get("price") or 0),
+                            "original_price": float(_first_raw.get("original_price") or 0),
+                            "currency_id": _first_raw.get("currency_id") or "MXN",
+                            "available_quantity": 0,
+                            "sold_quantity": 0,
+                            "condition": _first_raw.get("condition") or "new",
+                            "listing_type_id": _first_raw.get("listing_type_id") or "gold_special",
+                            "category_id": _first_raw.get("category_id") or "",
+                            "status": "active",
+                            "thumbnail": "",
+                            "permalink": f"https://www.mercadolibre.com.mx/p/{_resolved_id}",
+                            "shipping": _first_raw.get("shipping") or {},
+                            "seller_custom_field": "",
+                            "attributes": [],
+                            "variations": [],
+                            "_is_synthetic_mlmu": True,
+                            "_original_mlmu": clean_id,
+                        }
+                        item = _mlmu_synthetic
+                        clean_id = _resolved_id
+        except Exception:
+            pass
+
     # Intento 4: producto de catálogo ML (URL /p/MLM...) — /products/{id} + /products/{id}/items
     _is_catalog_product = False
     _comp_items_raw: list = []
@@ -2497,8 +2562,8 @@ async def ml_item_analysis(
     if item is None or item.get("error"):
         _is_mlmu = clean_id.startswith("MLMU")
         _err_msg = (
-            f"{clean_id} es un ID de Producto Universal (UP). "
-            f"Pega el link completo de la variación — el ID real del listing está en el parámetro product_trigger_id de la URL."
+            f"No se encontró ningún listing activo para el Producto Universal {clean_id}. "
+            f"El producto puede no tener publicaciones activas en ML MX."
             if _is_mlmu else
             f"No se pudo obtener información de {clean_id}. "
             f"El producto puede estar eliminado, archivado o sin acceso en ML."
@@ -2800,6 +2865,8 @@ async def ml_item_analysis(
         "real_sales": real_sales,
         "competition": competition,
         "variations": _variations,
+        "is_synthetic_mlmu": bool(item.get("_is_synthetic_mlmu")),
+        "original_mlmu": item.get("_original_mlmu") or "",
     })
 
 
@@ -16184,6 +16251,96 @@ async def diag_claims_raw(
         }, status_code=500)
     finally:
         await client.close()
+
+
+@app.get("/api/diag/mlmu")
+async def diag_mlmu(
+    token: str = Query(""),
+    mlmu_id: str = Query("MLMU3559888403"),
+):
+    """Diagnóstico: probar endpoints para resolver un MLMU Universal Product ID."""
+    _dk = _os_diag.environ.get("DIAG_TOKEN", "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5")
+    if token != _dk:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_auth"}, status_code=401)
+    results = {}
+    try:
+        # 1. /sites/MLM/search?catalog_product_id
+        try:
+            r1 = await client.get("/sites/MLM/search", params={"catalog_product_id": mlmu_id, "limit": 3})
+            results["search_catalog_product_id"] = {"count": len(r1.get("results") or []), "first": (r1.get("results") or [{}])[0].get("id") if r1.get("results") else None, "raw_keys": list(r1.keys())}
+        except Exception as e:
+            results["search_catalog_product_id"] = {"error": str(e)[:200]}
+        # 2. /products/{mlmu_id}
+        try:
+            r2 = await client.get(f"/products/{mlmu_id}")
+            results["products_endpoint"] = {"name": r2.get("name",""), "error": r2.get("error",""), "status": r2.get("status",""), "keys": list(r2.keys())[:10]}
+        except Exception as e:
+            results["products_endpoint"] = {"error": str(e)[:200]}
+        # 3. /catalog/search?query
+        try:
+            r3 = await client.get("/catalog/search", params={"site_id": "MLM", "q": mlmu_id})
+            results["catalog_search"] = {"count": len(r3.get("results") or []), "keys": list(r3.keys())}
+        except Exception as e:
+            results["catalog_search"] = {"error": str(e)[:200]}
+        # 4. /products/{mlmu_id}/items
+        try:
+            r4 = await client.get(f"/products/{mlmu_id}/items", params={"limit": 10})
+            _r4res = r4.get("results") or []
+            results["products_items"] = {"count": len(_r4res), "all_ids": [x.get("item_id") for x in _r4res], "raw_keys": list(r4.keys()), "first_raw": _r4res[0] if _r4res else None}
+        except Exception as e:
+            results["products_items"] = {"error": str(e)[:200]}
+        # 5. Try resolving each returned item via auth client
+        if results.get("products_items", {}).get("all_ids"):
+            _item_tests = {}
+            import httpx as _hx_diag
+            for _tid in (results["products_items"]["all_ids"] or [])[:5]:
+                try:
+                    _ti = await client.get_item(_tid)
+                    _item_tests[_tid] = {"ok": not _ti.get("error"), "title": _ti.get("title","")[:60], "error": _ti.get("error",""), "status": _ti.get("status","")}
+                except Exception as _te:
+                    _item_tests[_tid] = {"exception": str(_te)[:100]}
+            # Also try public API for first item
+            try:
+                _first_id = results["products_items"]["all_ids"][0]
+                async with _hx_diag.AsyncClient(timeout=8.0) as _hxc:
+                    _hr = await _hxc.get(f"https://api.mercadolibre.com/items/{_first_id}", headers={"Accept":"application/json"})
+                    _item_tests[f"{_first_id}_public"] = {"status_code": _hr.status_code, "body": str(_hr.text)[:200]}
+            except Exception as _hxe:
+                _item_tests["public_error"] = str(_hxe)[:100]
+            results["item_resolution_tests"] = _item_tests
+        # 6. Try /sites/MLM/search?user_product_id to find listings by MLMU
+        try:
+            r6 = await client.get("/sites/MLM/search", params={"user_product_id": mlmu_id, "limit": 3})
+            _r6res = r6.get("results") or []
+            results["search_user_product_id"] = {"count": len(_r6res), "ids": [x.get("id") for x in _r6res], "first_title": _r6res[0].get("title","") if _r6res else ""}
+        except Exception as e:
+            results["search_user_product_id"] = {"error": str(e)[:200]}
+        # 7. Try /products/{mlmu_id} with explicit Bearer auth
+        try:
+            import httpx as _hx7
+            _tok7 = getattr(client, 'access_token', '')
+            async with _hx7.AsyncClient(timeout=8.0) as _hxc7:
+                _hr7 = await _hxc7.get(f"https://api.mercadolibre.com/products/{mlmu_id}", headers={"Accept":"application/json", "Authorization": f"Bearer {_tok7}"})
+                results["products_direct_auth"] = {"status": _hr7.status_code, "keys": list(_hr7.json().keys())[:10] if _hr7.status_code == 200 else [], "name": _hr7.json().get("name","") if _hr7.status_code == 200 else "", "error": str(_hr7.text)[:150] if _hr7.status_code != 200 else ""}
+        except Exception as e:
+            results["products_direct_auth"] = {"error": str(e)[:200]}
+        # 8. Scrape ML product page HTML for OG title
+        try:
+            import httpx as _hx8, re as _re8
+            _page_url = f"https://www.mercadolibre.com.mx/p/{mlmu_id}"
+            async with _hx8.AsyncClient(timeout=10.0, follow_redirects=True) as _hxc8:
+                _hr8 = await _hxc8.get(_page_url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+                _og = _re8.search(r'<meta property="og:title" content="([^"]+)"', _hr8.text or "")
+                _h1 = _re8.search(r'<h1[^>]*>([^<]+)</h1>', _hr8.text or "")
+                results["page_scrape"] = {"status": _hr8.status_code, "og_title": _og.group(1) if _og else "", "h1": _h1.group(1).strip() if _h1 else "", "url": _page_url}
+        except Exception as e:
+            results["page_scrape"] = {"error": str(e)[:200]}
+    finally:
+        await client.close()
+    return JSONResponse(results)
 
 
 if __name__ == "__main__":
