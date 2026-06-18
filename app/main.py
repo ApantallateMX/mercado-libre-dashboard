@@ -2681,7 +2681,7 @@ async def ml_item_analysis(
             from app.config import DATABASE_PATH as _DBP2
             async with _aio2.connect(_DBP2) as _ohdb:
                 _oh_rows = await (await _ohdb.execute(
-                    """SELECT unit_price, sale_fee, neto_plat, order_date
+                    """SELECT unit_price, sale_fee, neto_plat, order_date, data_source
                        FROM order_history
                        WHERE (item_id=? OR (sku!='' AND LOWER(sku)=LOWER(?)))
                          AND platform='ml' AND status IN ('paid','delivered')
@@ -2708,7 +2708,7 @@ async def ml_item_analysis(
                             _lf2 = float(_loi.get("sale_fee") or 0)
                             _ld2 = (_lo.get("date_closed") or _lo.get("date_created") or "")[:19]
                             if _lp2 > 0:
-                                _live_row = (_lp2, _lf2, 0, _ld2)
+                                _live_row = (_lp2, _lf2, 0, _ld2, 'estimated')
                                 break
                         if _live_row:
                             break
@@ -2740,11 +2740,14 @@ async def ml_item_analysis(
                 # Última venta individual (más reciente)
                 _lp  = _oh_rows[0][0]
                 _lf  = _oh_rows[0][1]
+                _lnm_stored = _oh_rows[0][2]
+                _l_src = _oh_rows[0][4] if len(_oh_rows[0]) > 4 else 'estimated'
                 _lfp = round(_lf / _lp * 100, 2) if (_lp > 0 and _lf > 0) else _avg_fee_pct
                 _lfa = round(_lp * _lfp / 100, 2)
                 _li  = round(_lp * 0.0905, 2)
                 _lsh = 400 if _lp >= 8000 else (300 if _lp >= 5000 else (200 if _lp >= 2500 else (130 if _lp >= 1000 else 80)))
-                _lnm = round(_lp - _lfa - _li - _lsh, 2)
+                # Usar neto real almacenado (de ML Collections API) cuando está disponible
+                _lnm = _lnm_stored if (_l_src == 'real' and _lnm_stored > 0) else round(_lp - _lfa - _li - _lsh, 2)
                 _lsc = round(_lnm * _PARTNER_COMMISSION_PCT, 2)
                 _lnf = round(_lnm - _lsc, 2)
                 real_sales = {
@@ -2756,6 +2759,7 @@ async def ml_item_analysis(
                     "avg_fee_amt":      _avg_fee_amt,
                     "avg_imp":          _avg_imp,
                     "avg_ship_est":     _sh_est,
+                    "last_ship_est":    _lsh,
                     "avg_net_ml":       _avg_net_ml,
                     "avg_socio":        _avg_socio,
                     "avg_neto_final":   _avg_neto_fin,
@@ -2765,6 +2769,7 @@ async def ml_item_analysis(
                     "last_net_ml":      _lnm,
                     "last_socio":       _lsc,
                     "last_neto_final":  _lnf,
+                    "last_data_source": _l_src,
                 }
         except Exception:
             pass
@@ -3094,6 +3099,48 @@ async def orders_table_partial(
                 pack_id=o.get("pack_id"),
                 tags=o.get("tags", []),
             ))
+
+        # Persistir netos reales a order_history en background (no bloquea la respuesta)
+        _oh_real_batch: list[dict] = []
+        _fx_oh = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
+        for _eo in enriched:
+            if (_eo.status or "") not in ("paid", "delivered"):
+                continue
+            if (_eo.net_amount or 0) <= 0:
+                continue
+            _oid_oh   = str(_eo.id)
+            _odate_oh = (_eo.date_created or "")[:10]
+            _omonth_oh = _odate_oh[:7] if _odate_oh else ""
+            _total_eo = _eo.total_amount or 0
+            for _oitem in (_eo.order_items or []):
+                _iid_oh = getattr(_oitem, 'item_id', '') or ''
+                _up_oh  = float(getattr(_oitem, 'unit_price', 0) or 0)
+                _qty_oh = int(getattr(_oitem, 'quantity', 1) or 1)
+                _sf_oh  = float(getattr(_oitem, 'sale_fee', 0) or 0)
+                _sku_oh = getattr(_oitem, 'sku', '') or ''
+                if not _iid_oh or _up_oh <= 0:
+                    continue
+                _ratio_oh    = (_up_oh * _qty_oh / _total_eo) if _total_eo > 0 else 1.0
+                _neto_real_oh = round((_eo.net_amount or 0) * _ratio_oh, 2)
+                _oh_real_batch.append({
+                    "order_id": _oid_oh, "account_id": str(client.user_id), "platform": "ml",
+                    "item_id": _iid_oh, "sku": _sku_oh,
+                    "unit_price": _up_oh, "quantity": _qty_oh,
+                    "sale_fee": round(_sf_oh, 2), "neto_plat": _neto_real_oh,
+                    "costo_usd": 0.0, "costo_mxn": 0.0, "retail_ph_usd": 0.0,
+                    "ganancia_neta": 0.0, "margen_pct": 0.0, "recup_retail_pct": 0.0,
+                    "fx_rate": round(_fx_oh, 4), "currency": "MXN",
+                    "order_date": _odate_oh, "order_month": _omonth_oh,
+                    "status": _eo.status, "data_source": "real",
+                })
+        if _oh_real_batch:
+            async def _do_oh_real_upsert(_batch=_oh_real_batch):
+                try:
+                    from app.services import token_store as _ts_oh
+                    await _ts_oh.upsert_order_history(_batch)
+                except Exception:
+                    pass
+            asyncio.create_task(_do_oh_real_upsert())
 
         # Aplicar filtro de banda si está activo
         if margin_band in ("alto", "medio", "bajo"):

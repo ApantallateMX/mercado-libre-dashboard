@@ -2678,8 +2678,8 @@ async def upsert_order_history(rows: list[dict]) -> int:
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(order_id, item_id, platform) DO UPDATE SET
                     unit_price       = excluded.unit_price,
-                    sale_fee         = MAX(order_history.sale_fee, excluded.sale_fee),
-                    neto_plat        = MAX(order_history.neto_plat, excluded.neto_plat),
+                    sale_fee         = CASE WHEN excluded.data_source = 'real' THEN excluded.sale_fee ELSE MAX(order_history.sale_fee, excluded.sale_fee) END,
+                    neto_plat        = CASE WHEN excluded.data_source = 'real' THEN excluded.neto_plat ELSE MAX(order_history.neto_plat, excluded.neto_plat) END,
                     costo_usd        = CASE WHEN excluded.costo_usd > 0 THEN excluded.costo_usd ELSE order_history.costo_usd END,
                     costo_mxn        = CASE WHEN excluded.costo_mxn > 0 THEN excluded.costo_mxn ELSE order_history.costo_mxn END,
                     retail_ph_usd    = CASE WHEN excluded.retail_ph_usd > 0 THEN excluded.retail_ph_usd ELSE order_history.retail_ph_usd END,
