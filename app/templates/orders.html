@@ -283,12 +283,16 @@ window._renderMlItem = function(d) {
         }
         html += '</div>';
     } else {
-        html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p></div>';
+        var _origPrHtml = (d.original_price && d.original_price > d.price)
+            ? '<p class="text-[10px] text-gray-300 line-through mt-0.5">' + _mxn(d.original_price) + '</p>'
+            : '';
+        html += '<div class="text-right shrink-0"><p class="text-xl font-black text-gray-900">' + _mxn(d.price) + '</p><p class="text-[10px] text-gray-400">' + d.currency_id + '</p>' + _origPrHtml + '</div>';
     }
     html += '</div><div class="flex flex-wrap gap-1 mt-1.5">' + condBadge + ltBadge + fullBadge + mlCatBadge + catBadge + skuBadge;
     if (useReal) html += '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-semibold">✓ última venta real · ' + rs.count + ' órdenes</span>';
     html += '</div>';
     html += '<p class="text-xs text-gray-400 mt-1">' + d.category_name + ' · ' + d.item_id + '</p>';
+    if (d.warranty) html += '<p class="text-[10px] text-gray-400 mt-0.5">🛡 ' + d.warranty + '</p>';
     html += '</div></div>';
     html += '<div class="grid grid-cols-3 gap-3">';
     var demDaysLabel = d.is_catalog_product ? 'en catálogo' : ('en ' + d.days_on_market + ' días');
@@ -313,6 +317,31 @@ window._renderMlItem = function(d) {
     if (displayShip > 0) html += '<div class="flex justify-between text-[10px] text-gray-400"><span>- Envío (est.)</span><span>-' + _mxn(displayShip) + '</span></div>';
     html += '</div></div>';
     html += '</div>';
+    // Variaciones (tallas, colores, etc.) — después de métricas
+    if (d.variations && d.variations.length > 0) {
+        var totalVar = d.variations.length;
+        var inStock  = d.variations.filter(function(v){ return v.available_quantity > 0; }).length;
+        var totalSoldVar = d.variations.reduce(function(acc,v){ return acc + (v.sold_quantity||0); }, 0);
+        html += '<div class="border border-indigo-100 rounded-lg p-3 bg-indigo-50/30">';
+        html += '<div class="flex items-center justify-between mb-2">';
+        html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">📦 ' + totalVar + ' variaciones — ' + inStock + ' con stock</p>';
+        if (totalSoldVar > 0) html += '<span class="text-[10px] text-gray-400">' + totalSoldVar.toLocaleString('es-MX') + ' uds vendidas total</span>';
+        html += '</div>';
+        html += '<div class="flex flex-col gap-1">';
+        d.variations.forEach(function(v) {
+            var vLabel = v.attributes.map(function(a){ return '<span class="text-gray-400">' + a.name + ':</span> ' + a.value; }).join(' · ');
+            var vStk  = v.available_quantity;
+            var vStkClr = vStk > 5 ? 'text-green-700 bg-green-50' : (vStk > 0 ? 'text-yellow-700 bg-yellow-50' : 'text-gray-400 bg-gray-100');
+            var vSku  = v.seller_sku ? ' <span class="font-mono text-[10px] text-purple-600 bg-white border border-purple-100 px-1 rounded">' + v.seller_sku + '</span>' : '';
+            var vSold = v.sold_quantity > 0 ? '<span class="text-[10px] text-gray-400 shrink-0">' + v.sold_quantity + ' vend.</span>' : '';
+            var rowOp = vStk === 0 ? ' opacity-60' : '';
+            html += '<div class="flex items-center justify-between text-[11px] bg-white rounded border border-indigo-100 px-2 py-1.5 gap-2' + rowOp + '">';
+            html += '<span class="text-gray-700 flex-1 leading-tight min-w-0 truncate">' + (vLabel || 'Variación #' + v.id) + vSku + '</span>';
+            html += '<div class="flex items-center gap-2 shrink-0">' + vSold + '<span class="font-semibold text-[11px] px-1.5 py-0.5 rounded ' + vStkClr + '">' + vStk + ' ud</span></div>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+    }
     // Referencia secundaria: promedio de N ventas (cuando hay múltiples)
     if (useReal && rs.count > 1) {
         var avgNP = rs.avg_price > 0 ? (rs.avg_neto_final / rs.avg_price * 100).toFixed(1) : 0;
@@ -344,26 +373,6 @@ window._renderMlItem = function(d) {
         if (comp.used_sellers > 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">' + comp.used_sellers + ' usados</span>';
         if (comp.new_sellers > 0 && comp.used_sellers === 0) compBadges += '<span class="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px]">solo nuevos</span>';
         if (compBadges) html += '<div class="flex flex-wrap gap-1">' + compBadges + '</div>';
-        html += '</div></div>';
-    }
-    // Variaciones (tallas, colores, etc.)
-    if (d.variations && d.variations.length > 1) {
-        var totalVar = d.variations.length;
-        var inStock  = d.variations.filter(function(v){ return v.available_quantity > 0; }).length;
-        html += '<div class="border border-indigo-100 rounded-lg p-3 bg-indigo-50/30">';
-        html += '<p class="text-[10px] text-gray-500 font-semibold uppercase tracking-wide mb-2">';
-        html += totalVar + ' variaciones — ' + inStock + ' con stock</p>';
-        html += '<div class="grid grid-cols-1 gap-1">';
-        d.variations.forEach(function(v) {
-            var vLabel = v.attributes.map(function(a){ return '<span class="text-gray-400">' + a.name + ':</span> ' + a.value; }).join(' · ');
-            var vStk  = v.available_quantity;
-            var vStkClr = vStk > 5 ? 'text-green-700 bg-green-50' : (vStk > 0 ? 'text-yellow-700 bg-yellow-50' : 'text-gray-400 bg-gray-100');
-            var vSku = v.seller_sku ? ' <span class="font-mono text-[10px] text-purple-600 bg-white border border-purple-100 px-1 rounded">' + v.seller_sku + '</span>' : '';
-            html += '<div class="flex items-center justify-between text-[11px] bg-white rounded border border-indigo-100 px-2 py-1.5 gap-2">';
-            html += '<span class="text-gray-700 flex-1 leading-tight">' + (vLabel || 'Variación #' + v.id) + vSku + '</span>';
-            html += '<span class="font-semibold shrink-0 text-[11px] px-1.5 py-0.5 rounded ' + vStkClr + '">' + vStk + ' ud</span>';
-            html += '</div>';
-        });
         html += '</div></div>';
     }
     // Veredicto semáforo

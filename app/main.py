@@ -2865,6 +2865,8 @@ async def ml_item_analysis(
         "real_sales": real_sales,
         "competition": competition,
         "variations": _variations,
+        "original_price": float(item.get("original_price") or 0),
+        "warranty": item.get("warranty") or "",
         "is_synthetic_mlmu": bool(item.get("_is_synthetic_mlmu")),
         "original_mlmu": item.get("_original_mlmu") or "",
     })
