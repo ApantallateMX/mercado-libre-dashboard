@@ -2459,7 +2459,7 @@ async def ml_item_analysis(
                             "category_id": _first_raw.get("category_id") or "",
                             "status": "active",
                             "thumbnail": "",
-                            "permalink": f"https://www.mercadolibre.com.mx/p/{_resolved_id}",
+                            "permalink": f"https://www.mercadolibre.com.mx/up/{clean_id}",
                             "shipping": _first_raw.get("shipping") or {},
                             "seller_custom_field": "",
                             "attributes": [],
