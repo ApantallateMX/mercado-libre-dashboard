@@ -86,21 +86,50 @@
     </div>
 </div>
 
+<!-- ===== ZONA 2: Tendencia + Quality Score ===== -->
+<div class="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-6">
+    <!-- Timeline chart — 3/5 del ancho en desktop -->
+    <div class="lg:col-span-3 bg-white rounded-lg shadow">
+        <div class="px-5 py-3 border-b border-gray-100 flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+            </svg>
+            <h2 class="text-sm font-semibold text-gray-700">Tendencia de Retornos</h2>
+            <span class="text-[10px] text-gray-400">(por día o semana)</span>
+        </div>
+        <div id="ret-timeline-content" class="p-5">
+            <div id="ret-timeline-chart-wrap" class="relative" style="height:250px">
+                <canvas id="ret-timeline-chart"></canvas>
+                <div id="ret-timeline-empty" class="hidden absolute inset-0 flex items-center justify-center text-sm text-gray-400">Sin datos en este periodo</div>
+            </div>
+        </div>
+    </div>
+    <!-- Quality Score — 2/5 del ancho en desktop -->
+    <div class="lg:col-span-2 bg-white rounded-lg shadow p-4 flex flex-col">
+        <h3 class="text-sm font-bold text-gray-800 mb-1 flex items-center gap-1">
+            <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            Quality Score
+        </h3>
+        <p class="text-[10px] text-gray-400 mb-3">Calidad por producto (últimos 30 días)</p>
+        <div id="ret-quality-scores" class="flex-1 overflow-y-auto">
+            <div class="animate-pulse space-y-1.5">
+                {% for i in range(5) %}
+                <div class="h-7 bg-gray-100 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- ===== TOP PRODUCTOS ANALYTICS ===== -->
 <div id="ret-top-card" class="bg-white rounded-lg shadow mb-6">
     <!-- Header -->
-    <div class="px-6 py-3 flex items-center justify-between cursor-pointer select-none border-b border-gray-100"
-         onclick="toggleTopSection()">
-        <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-            </svg>
-            <h2 class="text-sm font-semibold text-gray-700">Top SKUs Retornados</h2>
-            <span class="text-[10px] text-gray-400 font-normal">(razones + recomendaciones + comparativa)</span>
-        </div>
-        <svg id="ret-top-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+    <div class="px-6 py-3 flex items-center gap-2 border-b border-gray-100">
+        <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
         </svg>
+        <h2 class="text-sm font-semibold text-gray-700">Top SKUs Retornados</h2>
+        <span class="text-[10px] text-gray-400 font-normal">(razones + recomendaciones + comparativa)</span>
     </div>
 
     <div id="ret-top-content" class="p-5">
@@ -202,30 +231,7 @@
     </div>
 </div>
 
-<!-- Timeline Chart — al fondo (trend analysis secundaria) -->
-<div id="ret-timeline-card" class="bg-white rounded-lg shadow mb-6">
-    <div class="px-6 py-3 flex items-center justify-between border-b border-gray-100 cursor-pointer select-none"
-         onclick="toggleTimelineSection()">
-        <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
-            </svg>
-            <h2 class="text-sm font-semibold text-gray-700">Tendencia de Retornos</h2>
-            <span class="text-[10px] text-gray-400 font-normal">(por día o semana)</span>
-        </div>
-        <svg id="ret-timeline-chevron" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-        </svg>
-    </div>
-    <div id="ret-timeline-content" class="p-5">
-        <div id="ret-timeline-chart-wrap" class="relative" style="height:220px">
-            <canvas id="ret-timeline-chart"></canvas>
-            <div id="ret-timeline-empty" class="hidden absolute inset-0 flex items-center justify-center text-sm text-gray-400">Sin datos en este periodo</div>
-        </div>
-    </div>
-</div>
-
-<!-- Main content + Sidebar -->
+<!-- ===== ZONA 4: Tabla + Sidebar ===== -->
 <div class="flex gap-6">
     <div class="flex-1 min-w-0">
         <!-- Returns Table -->
@@ -290,8 +296,8 @@
         </div>
     </div>
 
-    <!-- Sidebar -->
-    <div class="hidden lg:block lg:w-72 flex-shrink-0">
+    <!-- Sidebar — Estado + Doughnut -->
+    <div class="hidden lg:block lg:w-60 flex-shrink-0">
         <div class="bg-white rounded-lg shadow p-4 mb-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
                 <svg class="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -305,51 +311,9 @@
                 </div>
             </div>
         </div>
-
-        <div class="bg-white rounded-lg shadow p-4 mb-4">
+        <div class="bg-white rounded-lg shadow p-4">
             <h3 class="text-sm font-bold text-gray-800 mb-3">Distribución por Estado</h3>
             <canvas id="ret-status-chart" height="160"></canvas>
-        </div>
-
-        <div class="bg-white rounded-lg shadow p-4 mb-4">
-            <h3 class="text-sm font-bold text-gray-800 mb-3 flex items-center gap-1">
-                <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                Acciones Rápidas
-            </h3>
-            <div class="space-y-2">
-                <button onclick="setRetStatus('opened')"
-                        class="w-full text-left text-xs py-2 px-3 bg-red-50 hover:bg-red-100 text-red-700 rounded-lg font-medium transition">
-                    Ver reclamos abiertos
-                </button>
-                <button onclick="setRetStatus('')"
-                        class="w-full text-left text-xs py-2 px-3 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-lg font-medium transition">
-                    Ver todos los reclamos
-                </button>
-                <button onclick="setRetClaimType('pdd')"
-                        class="w-full text-left text-xs py-2 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg font-medium transition">
-                    Filtrar defectos/diferente
-                </button>
-                <button onclick="manualRefreshAll()"
-                        class="w-full text-left text-xs py-2 px-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 rounded-lg font-medium transition">
-                    Refrescar datos
-                </button>
-            </div>
-        </div>
-
-        <!-- Quality Score Widget -->
-        <div class="bg-white rounded-lg shadow p-4">
-            <h3 class="text-sm font-bold text-gray-800 mb-1 flex items-center gap-1">
-                <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                Quality Score
-            </h3>
-            <p class="text-[10px] text-gray-400 mb-3">Calidad por producto (últimos 30 días)</p>
-            <div id="ret-quality-scores">
-                <div class="animate-pulse space-y-1.5">
-                    {% for i in range(4) %}
-                    <div class="h-7 bg-gray-100 rounded"></div>
-                    {% endfor %}
-                </div>
-            </div>
         </div>
     </div>
 </div>
@@ -561,13 +525,7 @@ window.manualRefreshAll   = function() { loadSummary(); loadTable(); loadAnalysi
 var _timelineChart = null;
 var _timelineSectionOpen = true;
 
-window.toggleTimelineSection = function() {
-    _timelineSectionOpen = !_timelineSectionOpen;
-    var content = document.getElementById('ret-timeline-content');
-    var chevron = document.getElementById('ret-timeline-chevron');
-    content.classList.toggle('hidden', !_timelineSectionOpen);
-    chevron.style.transform = _timelineSectionOpen ? '' : 'rotate(-90deg)';
-};
+window.toggleTimelineSection = function() { /* siempre expandido */ };
 
 function loadTimeline() {
     var p = _buildParams();
@@ -698,13 +656,7 @@ function loadAnalysis() {
 // ============================================================
 var _topSectionOpen = true;
 
-window.toggleTopSection = function() {
-    _topSectionOpen = !_topSectionOpen;
-    var content = document.getElementById('ret-top-content');
-    var chevron = document.getElementById('ret-top-chevron');
-    content.classList.toggle('hidden', !_topSectionOpen);
-    chevron.style.transform = _topSectionOpen ? '' : 'rotate(-90deg)';
-};
+window.toggleTopSection = function() { /* siempre expandido */ };
 
 window.loadTopProducts = function() {
     var limit = document.getElementById('ret-top-limit').value;
