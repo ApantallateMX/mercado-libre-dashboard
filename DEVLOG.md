@@ -7,6 +7,65 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-19 — FEAT: Dashboard ML completo — 8 mejoras de ventas (CVR, ratings, tendencias, best sellers, purchase experience, returns breakdown, atributos, mensajes)
+
+### Motivación
+Continuación del análisis de docs ML. Implementación de las 8 mejoras restantes del plan de optimización aprobado.
+
+### Cambios — Commit 731c954
+
+**CVR (Tasa de Conversión) por listing:**
+- `meli_client.get_items_visits_bulk()` — `GET /items/visits?ids=...&date_from=...&date_to=...` en chunks de 50
+- `products_inventory_partial`: agrega visits bulk como tarea [2] en parallel_tasks (siempre, no solo full)
+- Calcula `_cvr = units_30d / visits_30d * 100`; `_visits_30d` guardado para contexto
+- `products_inventory.html`: columna CVR con badge rojo (<1%), amarillo (<3%), verde (≥3%); visible en preset top/full/accion
+- Mobile cards: badge CVR inline
+
+**Ratings/Reseñas por listing (enrich=full):**
+- `_get_page_reviews()` helper — fetcha ratings para toda la página en paralelo (sem=5)
+- Agrega `_rating` (avg) y `_rating_count` al product
+- `products_inventory.html`: columna Rating con estrellas (★★★★☆); visible en preset top/full
+
+**Widget de tendencias ML en Dashboard:**
+- `GET /partials/trends-widget` — renderiza top 20 búsquedas semanales con grid 2/4 cols
+- `trends_widget.html`: rank dorado para top 3, grid responsivo
+- `dashboard.html`: auto-carga con `delay:4s`
+
+### Cambios — Commit 8d0b7ee
+
+**Returns — Desglose por tipo:**
+- `returns_summary_partial`: agrega `by_category` {pdd/pntr/other} y `by_stage` {claim/dispute} al namespace summary
+- `returns_summary.html`: bloque "Desglose por tipo de reclamo" con barras visuales (categoría + stage)
+- `returns_table_partial._refresh_status()`: guarda `claim_type`, `affects_reputation`, `has_incentive` del detail
+- `returns_table.html`: badge "⚠ Afecta reputación" (rojo) y "Acción requerida" (naranja pulsante)
+
+### Cambios — Commit 4e12fd4
+
+**Purchase experience (penalización) por listing (enrich=full):**
+- `meli_client.get_purchase_experience()` — `GET /marketplace/items/{id}/purchase_experience`
+- `_get_page_purchase_experience()` — detecta listings penalizados, sets `_px_penalized`, `_px_penalties`
+- Badge rojo "⚠ Penalizado" en columna ID/SKU (desktop y mobile)
+
+**Best sellers Top 20 por categoría (enrich=full):**
+- `meli_client.get_category_highlights()` — `GET /highlights/MLM/category/{category_id}`
+- `_get_best_sellers_for_page()` — con cache 24h por category_id, marca `_is_bestseller`
+- Badge dorado "🏆 Top 20" en columna ID/SKU si listing aparece en top 20 de su categoría
+
+### Cambios — Commit 03d1db6
+
+**Atributos incompletos — widget dashboard:**
+- `GET /partials/attributes-widget` — llama `GET /users/{user_id}/attributes?v=3`
+- `attributes_widget.html`: barras visuales por categoría con items_to_fill count
+- `dashboard.html`: auto-carga con `delay:5s`
+
+**Mensajes no leídos — nav badges funcionando:**
+- `GET /api/health/counts` — **endpoint faltante implementado** (nav badges estaban silently failing)
+- Retorna: `{claims: N_abiertos, questions: N_sin_responder, messages: N_no_leidos}`
+- Badges en base.html ahora muestran contadores reales
+- `GET /api/ml/unread-count` — endpoint standalone para mensajes
+
+---
+
 ## 2026-06-19 — FEAT: Dashboard upgrades — neto real, /performance, ads throttle, reputación recovery, claims impact
 
 ### Motivación
