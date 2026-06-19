@@ -2130,6 +2130,11 @@
     // Load BM images
     _wizLoadBMImages();
 
+    // Auto-buscar fotos reales del producto si el grid está vacío
+    if (!_wiz.reference_images || _wiz.reference_images.length === 0) {
+      _wizAutoSearchWebImages();
+    }
+
     var status = document.getElementById('wiz-pub-status');
     status.classList.add('hidden');
     var btn = document.getElementById('wiz-btn-publish');
@@ -2235,6 +2240,42 @@
       _wiz.selected_images.push(url);
     }
     _wizRefreshBMGrid();
+  }
+
+  // ── Auto-buscar fotos reales del producto por marca+modelo (DuckDuckGo Images)
+  function _wizAutoSearchWebImages() {
+    var gap = _wiz.gap;
+    if (!gap) return;
+    var brand = (gap.brand || '').trim();
+    var model = (gap.model || '').trim();
+    if (!brand && !model) return;
+
+    // Mostrar estado "buscando..." en el primer slot
+    var grid = document.getElementById('wiz-ref-grid');
+    var countEl = document.getElementById('wiz-ref-count');
+    if (!grid) return;
+    if (countEl) countEl.textContent = 'Buscando...';
+
+    var params = new URLSearchParams();
+    if (brand) params.set('brand', brand);
+    if (model) params.set('model', model);
+
+    fetch('/api/lanzar/search-product-image?' + params.toString())
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        // Solo poblar si el usuario no agregó imágenes manualmente mientras tanto
+        if ((_wiz.reference_images || []).length > 0) return;
+        var imgs = (d.images || []).filter(function(i) { return i && (i.url || i); });
+        if (!imgs.length) {
+          if (countEl) countEl.textContent = '0 / 8';
+          return;
+        }
+        _wiz.reference_images = imgs.slice(0, 8).map(function(i) { return i.url || i; });
+        _renderRefGrid();
+      })
+      .catch(function() {
+        if (countEl) countEl.textContent = '0 / 8';
+      });
   }
 
   function _wizRefreshBMGrid() {
