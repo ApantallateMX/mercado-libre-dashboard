@@ -697,10 +697,11 @@ class MeliClient:
         return await self.get("/advertising/advertisers", params={"product_id": "PADS"})
 
     async def get_ads_campaigns(self, date_from: str = None, date_to: str = None) -> dict:
-        """Obtiene campanas con metricas (nuevo endpoint API v2, Feb 2026)."""
+        """Obtiene campanas con metricas (nuevo endpoint API v2, Feb 2026).
+        Nota: acos deprecado Mar-2026 → usar roas. Agrega impression_share y lost_impression_share."""
         adv_id = await self._get_advertiser_id()
         params = {
-            "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
+            "metrics": "clicks,prints,cost,cpc,roas,units_quantity,total_amount,impression_share,lost_impression_share_by_budget,lost_impression_share_by_ad_rank",
             "metrics_summary": "true",
         }
         if date_from:
@@ -1359,22 +1360,89 @@ class MeliClient:
             raise Exception(" | ".join(details) if details else f"Error {response.status_code}")
         return data
 
-    # === Item Health ===
+    # === Item Health / Performance ===
 
     async def get_item_health(self, item_id: str) -> dict | None:
-        """GET /items/{item_id}/health — score oficial de MeLi."""
+        """GET /item/{item_id}/performance — score oficial de MeLi (reemplaza /health deprecado).
+        Devuelve dict compatible + campos enriquecidos: score, level_wording, buckets."""
         try:
-            return await self.get(f"/items/{item_id}/health")
+            data = await self.get(f"/item/{item_id}/performance")
+            score = data.get("score", 0) or 0
+            level_wording = data.get("level_wording", "")
+            buckets = data.get("buckets", [])
+            # Mapear level_wording a nivel simple para compatibilidad
+            level_map = {"Profesional": "professional", "Bueno": "good", "Regular": "regular", "Malo": "bad"}
+            level = level_map.get(level_wording, level_wording.lower() if level_wording else "basic")
+            return {
+                "health": round(score / 100, 4),
+                "level": level,
+                "score": score,
+                "level_wording": level_wording,
+                "buckets": buckets,
+            }
         except Exception:
             return None
 
     async def get_item_health_actions(self, item_id: str) -> list:
-        """GET /items/{item_id}/health/actions — acciones pendientes."""
+        """Extrae acciones accionables desde /performance buckets."""
         try:
-            data = await self.get(f"/items/{item_id}/health/actions")
-            return data.get("actions", [])
+            data = await self.get(f"/item/{item_id}/performance")
+            actions = []
+            for bucket in (data.get("buckets") or []):
+                if bucket.get("status") in ("bad", "regular"):
+                    for var in (bucket.get("variables") or []):
+                        if var.get("status") in ("bad", "regular"):
+                            actions.append({
+                                "id": var.get("id", ""),
+                                "name": var.get("name", var.get("id", "")),
+                                "bucket": bucket.get("key", ""),
+                                "status": var.get("status", ""),
+                            })
+            return actions
         except Exception:
             return []
+
+    async def get_ads_bonificaciones(self) -> list:
+        """GET /advertising/advertisers/bonifications — créditos de ads con vencimiento."""
+        try:
+            data = await self._ads_get("/advertising/advertisers/bonifications")
+            return data if isinstance(data, list) else data.get("results", [])
+        except Exception:
+            return []
+
+    async def get_reputation_recovery_status(self) -> dict:
+        """GET /users/reputation/seller_recovery/status — programa de recuperación de reputación."""
+        try:
+            return await self.get("/users/reputation/seller_recovery/status")
+        except Exception:
+            return {}
+
+    async def get_trends(self, category_id: str = None) -> list:
+        """GET /trends/MLM[/{category_id}] — top 50 búsquedas más populares."""
+        try:
+            path = f"/trends/MLM/{category_id}" if category_id else "/trends/MLM"
+            data = await self.get(path)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    async def get_missed_feeds(self, topic: str = None, limit: int = 50) -> list:
+        """GET /missed_feeds — recuperar notificaciones perdidas post-deploy."""
+        try:
+            params: dict = {"limit": limit}
+            if topic:
+                params["topic"] = topic
+            data = await self.get("/missed_feeds", params=params)
+            return data if isinstance(data, list) else data.get("results", [])
+        except Exception:
+            return []
+
+    async def get_item_reviews(self, item_id: str, limit: int = 5) -> dict:
+        """GET /reviews/item/{item_id} — reseñas y rating del producto."""
+        try:
+            return await self.get(f"/reviews/item/{item_id}", params={"limit": limit})
+        except Exception:
+            return {}
 
     # === Seller Promotions ===
 

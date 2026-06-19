@@ -1047,7 +1047,8 @@ async def _enrich_with_sale_prices(client, products: list, id_key: str = "id", p
 
 
 async def _enrich_with_meli_health(client, products: list, id_key="id"):
-    """Consulta /items/{id}/health en paralelo y agrega _meli_health y _meli_health_level."""
+    """Consulta /item/{id}/performance en paralelo — reemplaza el deprecado /health.
+    Agrega _meli_health, _meli_health_level, _meli_perf_score, _meli_perf_wording, _meli_perf_buckets."""
     sem = asyncio.Semaphore(10)
 
     async def _fetch(item_id):
@@ -1071,6 +1072,9 @@ async def _enrich_with_meli_health(client, products: list, id_key="id"):
         if h:
             p["_meli_health"] = h.get("health", 0)
             p["_meli_health_level"] = h.get("level", "basic")
+            p["_meli_perf_score"] = h.get("score", 0)
+            p["_meli_perf_wording"] = h.get("level_wording", "")
+            p["_meli_perf_buckets"] = h.get("buckets", [])
 
 
 async def _enrich_with_promotions(client, products: list, id_key="id"):
@@ -2690,6 +2694,7 @@ async def ml_item_analysis(
                     (clean_id, seller_sku or "")
                 )).fetchall()
             # Live ML orders query — captura ventas frescas no en DB todavía
+            # Intenta obtener neto real desde /collections para precisión máxima
             _live_row = None
             try:
                 _uid = getattr(client, 'user_id', None) or getattr(client, 'seller_id', None)
@@ -2708,7 +2713,32 @@ async def ml_item_analysis(
                             _lf2 = float(_loi.get("sale_fee") or 0)
                             _ld2 = (_lo.get("date_closed") or _lo.get("date_created") or "")[:19]
                             if _lp2 > 0:
-                                _live_row = (_lp2, _lf2, 0, _ld2, 'estimated')
+                                # Intentar obtener neto real desde /collections
+                                _net_real = 0.0
+                                _data_src = 'estimated'
+                                try:
+                                    _lo_payments = _lo.get("payments") or []
+                                    if not _lo_payments:
+                                        # /orders/search a veces omite payments — fetch individual
+                                        _lo_full = await client.get(f"/orders/{_lo.get('id')}")
+                                        _lo_payments = _lo_full.get("payments") or []
+                                    if _lo_payments:
+                                        _total_order = float(_lo.get("total_amount") or 0)
+                                        _item_subtotal = _lp2 * float(_loi.get("quantity") or 1)
+                                        _ratio = (_item_subtotal / _total_order) if _total_order > 0 else 1.0
+                                        _net_sum = 0.0
+                                        for _pay in _lo_payments[:3]:
+                                            _pid = _pay.get("id")
+                                            if _pid:
+                                                _pnet = await client.get_payment_net_amount(str(_pid))
+                                                if _pnet:
+                                                    _net_sum += _pnet
+                                        if _net_sum > 0:
+                                            _net_real = round(_net_sum * _ratio, 2)
+                                            _data_src = 'real'
+                                except Exception:
+                                    pass
+                                _live_row = (_lp2, _lf2, _net_real, _ld2, _data_src)
                                 break
                         if _live_row:
                             break
@@ -6425,11 +6455,15 @@ async def health_claims_partial(
                             claim["status"] = detail["status"]
                             if detail.get("stage"):
                                 claim["stage"] = detail["stage"]
-                            # Also refresh players (for due_date / actions)
                             if detail.get("players"):
                                 claim["players"] = detail["players"]
+                            # Campos críticos para priorización por impacto real
+                            if "affects_reputation" in detail:
+                                claim["affects_reputation"] = detail["affects_reputation"]
+                            if "has_incentive" in detail:
+                                claim["has_incentive"] = detail["has_incentive"]
                     except Exception:
-                        pass  # Keep original status if detail fetch fails
+                        pass
 
             # Only refresh the most recent 10 opened claims (the ones most likely
             # to have a tight deadline). Older claims rarely change status and
@@ -6627,6 +6661,10 @@ async def health_claims_partial(
             # Tracking info for PNR claims
             tracking = shipment_tracking_map.get(resource_id, {})
 
+            # affects_reputation: "affected" | "not_affected" | "not_applies"
+            _affects_rep = c.get("affects_reputation", "")
+            _has_incentive = bool(c.get("has_incentive", False))
+
             enriched.append(SimpleNamespace(
                 id=c.get("id", ""),
                 order_id=resource_id,
@@ -6650,6 +6688,8 @@ async def health_claims_partial(
                 suggestions=suggestions,
                 conversation=conversation,
                 tracking=tracking,
+                affects_reputation=_affects_rep,
+                has_incentive=_has_incentive,
             ))
 
         # Sort: urgency first (red > yellow > green > gray), then by date
@@ -7246,7 +7286,15 @@ async def health_reputation_partial(request: Request):
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
     try:
-        user = await client.get_user_info()
+        user, recovery_data = await asyncio.gather(
+            client.get_user_info(),
+            client.get_reputation_recovery_status(),
+            return_exceptions=True,
+        )
+        if isinstance(user, Exception):
+            user = {}
+        if isinstance(recovery_data, Exception):
+            recovery_data = {}
         rep = user.get("seller_reputation", {})
         metrics = rep.get("metrics", {})
         transactions = rep.get("transactions", {})
@@ -7347,8 +7395,23 @@ async def health_reputation_partial(request: Request):
             period=period,
         )
 
-        return templates.TemplateResponse(request, "partials/health_reputation.html", {            "reputation": reputation,
+        # Programa de recuperación de reputación
+        recovery_status = (recovery_data or {}).get("status", "") if isinstance(recovery_data, dict) else ""
+        recovery_program = None
+        if recovery_status:
+            recovery_program = SimpleNamespace(
+                status=recovery_status,
+                available=recovery_status == "AVAILABLE",
+                active=recovery_status == "ACTIVE",
+                type=(recovery_data or {}).get("type", ""),
+                protection_end=(((recovery_data or {}).get("protection_limits") or {}).get("protection_end_date") or "")[:10],
+                days_remaining=int(((recovery_data or {}).get("protection_limits") or {}).get("days_remaining") or 0),
+            )
+
+        return templates.TemplateResponse(request, "partials/health_reputation.html", {
+            "reputation": reputation,
             "thresholds": _MELI_THRESHOLDS,
+            "recovery_program": recovery_program,
         })
     finally:
         await client.close()
@@ -7612,22 +7675,28 @@ def _default_dates(date_from, date_to):
 
 def _extract_metrics(data: dict) -> dict:
     """Extrae metricas de la respuesta de Product Ads (soporta summary y results)."""
-    # La API puede retornar metrics_summary o results con metricas embebidas
     summary = data.get("metrics_summary", {})
     if summary:
+        cost = summary.get("cost", 0) or 0
+        revenue = summary.get("total_amount", 0) or 0
         return {
-            "cost": summary.get("cost", 0) or 0,
+            "cost": cost,
             "clicks": summary.get("clicks", 0) or 0,
             "prints": summary.get("prints", 0) or 0,
             "cpc": summary.get("cpc", 0) or 0,
-            "acos": summary.get("acos", 0) or 0,
+            "roas": summary.get("roas", 0) or ((revenue / cost) if cost > 0 else 0),
+            "acos": (cost / revenue * 100) if revenue > 0 else 0,  # calculado localmente
             "units": summary.get("units_quantity", 0) or 0,
-            "revenue": summary.get("total_amount", 0) or 0,
+            "revenue": revenue,
+            "impression_share": summary.get("impression_share", 0) or 0,
+            "lost_by_budget": summary.get("lost_impression_share_by_budget", 0) or 0,
+            "lost_by_rank": summary.get("lost_impression_share_by_ad_rank", 0) or 0,
         }
     # Fallback: sumar de results
     results = data.get("results", data if isinstance(data, list) else [])
     if isinstance(results, list):
-        total = {"cost": 0, "clicks": 0, "prints": 0, "units": 0, "revenue": 0}
+        total = {"cost": 0, "clicks": 0, "prints": 0, "units": 0, "revenue": 0,
+                 "impression_share": 0, "lost_by_budget": 0, "lost_by_rank": 0}
         for r in results:
             m = r.get("metrics", r)
             total["cost"] += (m.get("cost", 0) or 0)
@@ -7635,8 +7704,11 @@ def _extract_metrics(data: dict) -> dict:
             total["prints"] += (m.get("prints", 0) or 0)
             total["units"] += (m.get("units_quantity", 0) or 0)
             total["revenue"] += (m.get("total_amount", 0) or 0)
+        total["roas"] = (total["revenue"] / total["cost"]) if total["cost"] > 0 else 0
+        total["acos"] = (total["cost"] / total["revenue"] * 100) if total["revenue"] > 0 else 0
         return total
-    return {"cost": 0, "clicks": 0, "prints": 0, "units": 0, "revenue": 0}
+    return {"cost": 0, "clicks": 0, "prints": 0, "units": 0, "revenue": 0,
+            "roas": 0, "acos": 0, "impression_share": 0, "lost_by_budget": 0, "lost_by_rank": 0}
 
 
 def _enrich_campaigns(campaigns_data) -> list:
@@ -7650,8 +7722,16 @@ def _enrich_campaigns(campaigns_data) -> list:
         prints = metrics.get("prints", 0) or 0
         revenue = metrics.get("total_amount", 0) or 0
         units = metrics.get("units_quantity", 0) or 0
+        roas_api = metrics.get("roas", 0) or 0
+        imp_share = metrics.get("impression_share", 0) or 0
+        lost_by_budget = metrics.get("lost_impression_share_by_budget", 0) or 0
+        lost_by_rank = metrics.get("lost_impression_share_by_ad_rank", 0) or 0
         budget_data = c.get("budget", {})
         daily_budget = budget_data.get("amount", 0) if isinstance(budget_data, dict) else (budget_data or 0)
+        roas = roas_api if roas_api > 0 else ((revenue / cost) if cost > 0 else 0)
+        acos = (cost / revenue * 100) if revenue > 0 else 0
+        # Detectar si presupuesto limita visibilidad (> 20% impresiones perdidas por budget)
+        throttled_by_budget = lost_by_budget > 0.20
         enriched.append({
             "id": c.get("id", "-"),
             "name": c.get("name", c.get("id", "-")),
@@ -7663,9 +7743,13 @@ def _enrich_campaigns(campaigns_data) -> list:
             "revenue": revenue,
             "units": units,
             "ctr": clicks / prints * 100 if prints > 0 else 0,
-            "roas": (revenue / cost) if cost > 0 else 0,
+            "roas": roas,
             "cpc": cost / clicks if clicks > 0 else 0,
-            "acos": (cost / revenue * 100) if revenue > 0 else 0,
+            "acos": acos,
+            "impression_share": round(imp_share * 100, 1) if imp_share <= 1 else round(imp_share, 1),
+            "lost_by_budget": round(lost_by_budget * 100, 1) if lost_by_budget <= 1 else round(lost_by_budget, 1),
+            "lost_by_rank": round(lost_by_rank * 100, 1) if lost_by_rank <= 1 else round(lost_by_rank, 1),
+            "throttled_by_budget": throttled_by_budget,
         })
     return enriched
 
@@ -8520,6 +8604,50 @@ async def update_ad_item_status_api(item_id: str, request: Request):
             "detail": str(e),
             "requires_certification": is_cert
         }, status_code=e.status_code)
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/api/ads/bonificaciones")
+async def get_ads_bonificaciones():
+    """GET créditos de ads (bonificaciones) con vencimiento. Alerta si quedan < 7 días."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        bons = await client.get_ads_bonificaciones()
+        result = []
+        for b in bons:
+            days_rem = b.get("days_remaining", 0) or 0
+            balance = float(b.get("balance", 0) or 0)
+            result.append({
+                "status": b.get("status", ""),
+                "end_date": (b.get("end_date") or "")[:10],
+                "days_remaining": days_rem,
+                "balance": balance,
+                "currency_id": b.get("currency_id", "MXN"),
+                "benefit_name": b.get("benefit_name", ""),
+                "level": b.get("level", ""),
+                "alert": days_rem > 0 and days_rem <= 7 and balance > 0,
+            })
+        return JSONResponse({"bonificaciones": result, "total": len(result)})
+    except Exception as e:
+        return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/api/trends")
+async def get_ml_trends(category_id: str = Query("", description="ID de categoría ML, opcional")):
+    """GET top 50 tendencias de búsqueda de ML. Actualizado semanalmente."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        trends = await client.get_trends(category_id.strip() or None)
+        return JSONResponse({"trends": trends, "total": len(trends)})
     except Exception as e:
         return JSONResponse({"detail": str(e)}, status_code=500)
     finally:

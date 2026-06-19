@@ -32,11 +32,21 @@
 
         <!-- Expandable detail section -->
         <div class="camp-detail hidden mt-3 pt-3 border-t border-gray-200">
+            {% if c.throttled_by_budget %}
+            <div class="flex items-start gap-2 mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs">
+                <svg class="w-3.5 h-3.5 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                <span class="text-red-700">Pierdes <strong>{{ "%.0f"|format(c.lost_by_budget or 0) }}%</strong> de impresiones — presupuesto insuficiente</span>
+            </div>
+            {% endif %}
             <!-- Extra metrics -->
             <div class="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                 <div>
                     <p class="text-gray-400 uppercase">Impresiones</p>
                     <p class="text-sm font-semibold text-gray-800">{{ "{:,}".format(c.impressions or 0) }}</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">Share impr.</p>
+                    <p class="text-sm font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' }}">{{ "%.1f"|format(c.impression_share or 0) }}%</p>
                 </div>
                 <div>
                     <p class="text-gray-400 uppercase">CTR</p>
@@ -153,6 +163,9 @@
         <tr class="hover:bg-gray-50 cursor-pointer" onclick="this.nextElementSibling.classList.toggle('hidden')">
             <td class="px-4 py-3 text-sm font-medium text-gray-800">
                 {{ c.name or c.id }}
+                {% if c.throttled_by_budget %}
+                <span class="ml-1 px-1.5 py-0.5 text-xs bg-red-100 text-red-700 rounded font-medium" title="Presupuesto limita {{ '%.0f'|format(c.lost_by_budget or 0) }}% de impresiones">Budget</span>
+                {% endif %}
             </td>
             <!-- Badge de estrategia inferida por ACOS -->
             <td class="px-4 py-3 text-center">
@@ -192,11 +205,31 @@
         <!-- Fila expandible con metricas + acciones -->
         <tr class="hidden">
             <td colspan="10" class="px-0 py-0">
-                <div class="bg-gray-50 border-l-4 border-yellow-400 px-6 py-4">
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="bg-gray-50 border-l-4 {{ 'border-red-500' if c.throttled_by_budget else 'border-yellow-400' }} px-6 py-4">
+
+                    <!-- Alerta presupuesto limitando visibilidad -->
+                    {% if c.throttled_by_budget %}
+                    <div class="flex items-start gap-2 mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                        <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+                        <div>
+                            <p class="text-xs font-semibold text-red-700">Presupuesto limitando visibilidad</p>
+                            <p class="text-xs text-red-600">Pierdes <strong>{{ "%.0f"|format(c.lost_by_budget or 0) }}%</strong> de impresiones por presupuesto insuficiente. Sube el budget para capturar esas ventas.</p>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
                         <div>
                             <p class="text-xs text-gray-400 uppercase">Impresiones</p>
                             <p class="text-lg font-semibold text-gray-800">{{ "{:,}".format(c.impressions or 0) }}</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400 uppercase">Share impr.</p>
+                            <p class="text-lg font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' if (c.impression_share or 0) >= 20 else 'text-red-600' }}">{{ "%.1f"|format(c.impression_share or 0) }}%</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400 uppercase">Perdidas x Budget</p>
+                            <p class="text-lg font-semibold {{ 'text-red-600' if (c.lost_by_budget or 0) > 20 else 'text-yellow-600' if (c.lost_by_budget or 0) > 10 else 'text-gray-800' }}">{{ "%.1f"|format(c.lost_by_budget or 0) }}%</p>
                         </div>
                         <div>
                             <p class="text-xs text-gray-400 uppercase">CTR</p>

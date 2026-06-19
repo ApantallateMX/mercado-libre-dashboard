@@ -68,6 +68,16 @@
                 {% elif claim.urgency == 'yellow' %}
                 <span class="w-2.5 h-2.5 rounded-full bg-yellow-500"></span>
                 {% endif %}
+
+                <!-- Badge: impacto en reputación -->
+                {% if claim.affects_reputation == 'affected' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 font-semibold" title="Este reclamo afecta directamente tu reputación">⚠ Afecta reputación</span>
+                {% elif claim.affects_reputation == 'not_affected' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700" title="Este reclamo no impacta tu reputación">✓ No afecta rep.</span>
+                {% endif %}
+                {% if claim.has_incentive and claim.status == 'opened' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-semibold" title="Actúa ahora — ML requiere tu respuesta">Acción requerida</span>
+                {% endif %}
             </div>
             <span class="text-xs text-gray-500">{{ claim.date_created }} &middot; {{ claim.elapsed }}</span>
         </div>
