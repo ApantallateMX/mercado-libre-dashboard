@@ -641,6 +641,34 @@ class MeliClient:
             "unit": "day",
         })
 
+    async def get_items_visits_bulk(self, item_ids: list, days: int = 30) -> dict:
+        """GET /items/visits?ids=...&date_from=...&date_to=... — visitas bulk para calcular CVR."""
+        if not item_ids:
+            return {}
+        from datetime import date, timedelta
+        date_to = date.today().isoformat()
+        date_from = (date.today() - timedelta(days=days)).isoformat()
+        result = {}
+        chunks = [item_ids[i:i + 50] for i in range(0, len(item_ids), 50)]
+        for chunk in chunks:
+            try:
+                data = await self.get("/items/visits", params={
+                    "ids": ",".join(chunk),
+                    "date_from": date_from,
+                    "date_to": date_to,
+                })
+                items = data if isinstance(data, list) else data.get("results", [])
+                for item in items:
+                    item_id = item.get("id", "")
+                    total = item.get("total_visits", 0) or 0
+                    if not total:
+                        total = sum(d.get("total", 0) for d in item.get("results", []))
+                    if item_id:
+                        result[item_id] = int(total)
+            except Exception:
+                pass
+        return result
+
     # === Search (competencia) ===
 
     async def search_items(self, query: str, category: str = None, limit: int = 10) -> dict:

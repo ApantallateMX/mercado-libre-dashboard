@@ -1,0 +1,29 @@
+{% if trends %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mt-4">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">🔥</span>
+            <h3 class="text-sm font-semibold text-gray-700">Tendencias MeLi esta semana</h3>
+            <span class="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">MX</span>
+        </div>
+        <a href="#" onclick="htmx.trigger(document.getElementById('ml-trends-widget'), 'refresh')" class="text-xs text-gray-400 hover:text-gray-600 transition">actualizar</a>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+        {% for t in trends %}
+        {% set rank = loop.index %}
+        <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg {{ 'bg-yellow-50 border border-yellow-200' if rank <= 3 else 'bg-gray-50 hover:bg-gray-100' }} transition group">
+            <span class="text-[11px] font-bold w-5 text-center flex-shrink-0 {{ 'text-yellow-600' if rank <= 3 else 'text-gray-400' }}">
+                {{ rank }}
+            </span>
+            <span class="text-xs text-gray-700 truncate group-hover:text-gray-900" title="{{ t.keyword }}">
+                {{ t.keyword }}
+            </span>
+            {% if t.get('url') %}
+            <a href="{{ t.url }}" target="_blank" class="ml-auto flex-shrink-0 text-gray-300 hover:text-blue-500 transition text-[10px]">↗</a>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    <p class="text-[10px] text-gray-400 mt-2">Actualizado semanalmente por Mercado Libre · {{ trends|length }} búsquedas más populares</p>
+</div>
+{% endif %}

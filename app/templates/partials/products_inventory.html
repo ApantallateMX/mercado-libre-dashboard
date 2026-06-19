@@ -321,6 +321,14 @@
             <span>MTY/CDMX/TJ</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" class="col-toggle rounded" data-col="cvr" {{ 'checked' if preset in ('top', 'full', 'accion') }} onchange="toggleColumn('cvr', this.checked)">
+            <span>CVR</span>
+        </label>
+        <label class="inline-flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" class="col-toggle rounded" data-col="rating" {{ 'checked' if preset in ('top', 'full') }} onchange="toggleColumn('rating', this.checked)">
+            <span>Rating</span>
+        </label>
+        <label class="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" class="col-toggle rounded" data-col="revenue" {{ 'checked' if preset in ('top', 'stock', 'full') }} onchange="toggleColumn('revenue', this.checked)">
             <span>Revenue</span>
         </label>
@@ -407,7 +415,7 @@
                     Res: {{ p_res_m }}
                 </div>
             </div>
-            <!-- Ventas + Días inventario (mobile) -->
+            <!-- Ventas + CVR + Días inventario (mobile) -->
             <div>
                 <span class="text-gray-500">Ventas:</span>
                 <span class="font-bold {{ 'text-gray-800' if p.get('units', 0) > 0 else 'text-red-500' }}">{{ p.get('units', 0) }}</span>
@@ -421,6 +429,18 @@
                 </span>
                 {% endif %}
             </div>
+            {% set _mcvr = p.get('_cvr') %}
+            {% if _mcvr is not none %}
+            <div>
+                <span class="text-gray-500 text-[10px]">CVR:</span>
+                <span class="text-[10px] font-bold px-1 py-0.5 rounded
+                    {% if _mcvr < 1.0 %}bg-red-100 text-red-700
+                    {% elif _mcvr < 3.0 %}bg-yellow-100 text-yellow-700
+                    {% else %}bg-green-100 text-green-700{% endif %}">
+                    {{ _mcvr }}%
+                </span>
+            </div>
+            {% endif %}
             {% if p.get('_margen_pct') is not none %}
             <div>
                 <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold
@@ -481,6 +501,8 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">TJ</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas {{ alert_days }}d</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'full', 'accion') }}" data-col="cvr" title="Tasa de conversión = unidades vendidas 30d / visitas 30d × 100">CVR</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'full') }}" data-col="rating" title="Rating promedio y número de reseñas">Rating</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="revenue">Revenue</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="cost">Costo BM</th>
@@ -633,6 +655,50 @@
                     <span class="font-bold {{ 'text-gray-800' if p.get('units', 0) > 0 else 'text-red-500' }}">
                         {{ p.get('units', 0) }}
                     </span>
+                </td>
+                <!-- CVR (Tasa de Conversión) -->
+                {% set _cvr = p.get('_cvr') %}
+                {% set _visits = p.get('_visits_30d', 0) or 0 %}
+                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'full', 'accion') }}" data-col="cvr">
+                    {% if _cvr is not none %}
+                    <div class="flex flex-col items-center gap-0.5">
+                        <span class="text-xs font-bold px-1.5 py-0.5 rounded
+                            {% if _cvr < 1.0 %}bg-red-100 text-red-700
+                            {% elif _cvr < 3.0 %}bg-yellow-100 text-yellow-700
+                            {% else %}bg-green-100 text-green-700{% endif %}"
+                            title="{{ _visits }} visitas · {{ p.get('units', 0) }} ventas">
+                            {{ _cvr }}%
+                        </span>
+                        <span class="text-[10px] text-gray-400">{{ _visits }} vis.</span>
+                    </div>
+                    {% elif _visits > 0 %}
+                    <div class="flex flex-col items-center gap-0.5">
+                        <span class="text-xs text-gray-400">0%</span>
+                        <span class="text-[10px] text-gray-400">{{ _visits }} vis.</span>
+                    </div>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
+                </td>
+                <!-- Rating (reseñas) -->
+                {% set _rating = p.get('_rating') %}
+                {% set _rcount = p.get('_rating_count', 0) or 0 %}
+                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'full') }}" data-col="rating">
+                    {% if _rating and _rating > 0 %}
+                    <div class="flex flex-col items-center gap-0.5">
+                        <div class="flex items-center gap-0.5">
+                            {% set stars_full = (_rating | round(0, 'floor')) | int %}
+                            {% for s in range(5) %}
+                            <span class="text-[11px] {{ 'text-yellow-400' if s < stars_full else 'text-gray-200' }}">★</span>
+                            {% endfor %}
+                        </div>
+                        <span class="text-[10px] text-gray-500">{{ "%.1f"|format(_rating) }}
+                            {% if _rcount > 0 %}({{ _rcount }}){% endif %}
+                        </span>
+                    </div>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">-</span>
+                    {% endif %}
                 </td>
                 <!-- Días de inventario -->
                 {% set _u30 = p.get('units', 0) %}

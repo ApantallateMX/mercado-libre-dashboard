@@ -5222,6 +5222,23 @@ async def _enrich_variation_skus(client, products: list):
                 v["sku"] = var_sku_map[iid].get(str(v["id"]), "")
 
 
+async def _get_page_reviews(client, products: list):
+    """Fetcha ratings/reseñas para todos los items de la página en paralelo. Modifica products in-place."""
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch(p):
+        async with sem:
+            rv = await client.get_item_reviews(p["id"], limit=1)
+            if isinstance(rv, dict) and rv:
+                p["_rating"] = rv.get("rating_average") or rv.get("data", {}).get("rating_average") or 0
+                p["_rating_count"] = rv.get("paging", {}).get("total") or rv.get("total") or 0
+            else:
+                p["_rating"] = None
+                p["_rating_count"] = 0
+
+    await asyncio.gather(*[_fetch(p) for p in products], return_exceptions=True)
+
+
 # ---------- Product Intelligence tabs ----------
 
 @app.post("/api/cache/invalidate-products")
@@ -5501,23 +5518,33 @@ async def products_inventory_partial(
         # Paso 1: SKUs de variaciones (debe terminar antes del BM fetch)
         await _enrich_variation_skus(client, page_products)
 
-        # Paso 2: BM + precios en paralelo (variaciones ya tienen SKU correcto)
+        # Paso 2: BM + precios + visitas en paralelo (variaciones ya tienen SKU correcto)
         parallel_tasks = [
-            _get_bm_stock_cached(page_products),
-            _get_sale_prices_cached(client, page_ids),
+            _get_bm_stock_cached(page_products),       # [0] bm_map
+            _get_sale_prices_cached(client, page_ids), # [1] sale_prices
+            client.get_items_visits_bulk(page_ids),    # [2] visits_map (CVR)
         ]
         if enrich == "full":
-            parallel_tasks.append(_enrich_with_bm_product_info(page_products))
-            parallel_tasks.append(_get_usd_to_mxn(client))
+            parallel_tasks.append(_enrich_with_bm_product_info(page_products))  # [3]
+            parallel_tasks.append(_get_usd_to_mxn(client))                      # [4]
+            parallel_tasks.append(_get_page_reviews(client, page_products))     # [5] in-place
 
         enrich_results = await asyncio.gather(*parallel_tasks)
         bm_map = enrich_results[0]
         sale_prices = enrich_results[1]
+        visits_map = enrich_results[2] if isinstance(enrich_results[2], dict) else {}
 
         _apply_bm_stock(page_products, bm_map)
 
+        # Calcular CVR (Conversion Rate) = unidades vendidas / visitas * 100
+        for p in page_products:
+            visits = visits_map.get(p["id"], 0) or 0
+            units = p.get("units", 0) or 0
+            p["_visits_30d"] = visits
+            p["_cvr"] = round(units / visits * 100, 1) if visits > 0 else None
+
         if enrich == "full":
-            usd_to_mxn = enrich_results[3] if len(enrich_results) > 3 else 0.0
+            usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
             _calc_margins(page_products, usd_to_mxn)
 
         for p in page_products:
@@ -8635,6 +8662,24 @@ async def get_ads_bonificaciones():
         return JSONResponse({"bonificaciones": result, "total": len(result)})
     except Exception as e:
         return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/partials/trends-widget", response_class=HTMLResponse)
+async def trends_widget_partial(request: Request, category_id: str = ""):
+    """Widget HTMX de tendencias ML para el dashboard principal."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("")
+    try:
+        trends = await client.get_trends(category_id.strip() or None)
+        return templates.TemplateResponse(request, "partials/trends_widget.html", {
+            "trends": trends[:20],
+            "category_id": category_id,
+        })
+    except Exception:
+        return HTMLResponse("")
     finally:
         await client.close()
 

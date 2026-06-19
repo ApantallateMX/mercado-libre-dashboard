@@ -302,6 +302,13 @@
     <!-- Carga automática 3s después del dashboard para no bloquear lo crítico -->
 </div>
 
+<!-- ═══ TENDENCIAS ML ═══ -->
+<div id="ml-trends-widget"
+     hx-get="/partials/trends-widget"
+     hx-trigger="load delay:4s, refresh from:this"
+     hx-swap="innerHTML">
+</div>
+
 <!-- ═══ SALUD DE PRECIOS BM ═══ -->
 <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mt-4" id="bm-price-health-widget">
   <div class="flex items-center justify-between mb-3">
