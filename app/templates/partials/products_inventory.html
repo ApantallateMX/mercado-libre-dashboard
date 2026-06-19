@@ -374,7 +374,15 @@
             {% endif %}
             <div class="flex-1 min-w-0">
                 <p class="text-sm font-medium text-gray-800 leading-tight line-clamp-2">{{ p.title }}</p>
-                <p class="text-xs text-gray-400 font-mono mt-0.5">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                <div class="flex items-center gap-1 mt-0.5 flex-wrap">
+                    <p class="text-xs text-gray-400 font-mono">{{ p.id }}{% if p.sku %} | {{ p.sku }}{% endif %}</p>
+                    {% if p.get('_px_penalized') %}
+                    <span class="text-[9px] bg-red-600 text-white px-1 py-0.5 rounded font-bold">⚠ Pen.</span>
+                    {% endif %}
+                    {% if p.get('_is_bestseller') %}
+                    <span class="text-[9px] bg-yellow-400 text-yellow-900 px-1 py-0.5 rounded font-bold">🏆 Top20</span>
+                    {% endif %}
+                </div>
             </div>
         </div>
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs">
@@ -563,10 +571,20 @@
                 </td>
                 <!-- ID / SKU -->
                 <td class="px-3 py-2">
-                    <div class="flex flex-col">
+                    <div class="flex flex-col gap-0.5">
                         <a href="{{ p.permalink }}" target="_blank"
                            class="text-xs text-blue-600 font-mono font-semibold hover:underline">{{ p.id }}</a>
                         <span class="text-[10px] text-gray-400 font-mono">{{ p.sku or '-' }}</span>
+                        {% if p.get('_px_penalized') %}
+                        <span class="text-[9px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">
+                            ⚠ Penalizado
+                        </span>
+                        {% endif %}
+                        {% if p.get('_is_bestseller') %}
+                        <span class="text-[9px] bg-yellow-400 text-yellow-900 px-1.5 py-0.5 rounded font-bold uppercase tracking-wide">
+                            🏆 Top 20
+                        </span>
+                        {% endif %}
                     </div>
                 </td>
                 <!-- Precio (editable) -->

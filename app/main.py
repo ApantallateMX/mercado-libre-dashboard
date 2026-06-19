@@ -5239,6 +5239,58 @@ async def _get_page_reviews(client, products: list):
     await asyncio.gather(*[_fetch(p) for p in products], return_exceptions=True)
 
 
+async def _get_page_purchase_experience(client, products: list):
+    """Fetcha purchase_experience por item — detecta listings penalizados. Modifica products in-place."""
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch(p):
+        async with sem:
+            data = await client.get_purchase_experience(p["id"])
+            if isinstance(data, dict):
+                p["_px_status"] = data.get("status", "")
+                p["_px_penalized"] = data.get("status", "").upper() == "PENALIZED"
+                penalties = data.get("penalties", [])
+                p["_px_penalties"] = [pen.get("type", "") for pen in penalties if isinstance(pen, dict)]
+            else:
+                p["_px_status"] = ""
+                p["_px_penalized"] = False
+                p["_px_penalties"] = []
+
+    await asyncio.gather(*[_fetch(p) for p in products], return_exceptions=True)
+
+
+# Cache para highlights por categoría — TTL 24h (se actualiza semanalmente)
+_highlights_cache: dict = {}
+_HIGHLIGHTS_TTL = 86400
+
+
+async def _get_best_sellers_for_page(client, products: list):
+    """Fetcha bestsellers de cada categoría única en la página. Marca _is_bestseller en los items del top 20."""
+    cat_ids = list({p.get("category_id", "") for p in products if p.get("category_id")})
+    if not cat_ids:
+        return
+
+    bestseller_ids: set = set()
+    now = _time.time()
+
+    async def _fetch_cat(cat_id):
+        cached = _highlights_cache.get(cat_id)
+        if cached and (now - cached[0]) < _HIGHLIGHTS_TTL:
+            return cached[1]
+        items = await client.get_category_highlights(cat_id)
+        id_set = {i.get("id", "") for i in items if isinstance(i, dict) and i.get("id")}
+        _highlights_cache[cat_id] = (now, id_set)
+        return id_set
+
+    results = await asyncio.gather(*[_fetch_cat(c) for c in cat_ids], return_exceptions=True)
+    for r in results:
+        if isinstance(r, set):
+            bestseller_ids.update(r)
+
+    for p in products:
+        p["_is_bestseller"] = p["id"] in bestseller_ids
+
+
 # ---------- Product Intelligence tabs ----------
 
 @app.post("/api/cache/invalidate-products")
@@ -5546,6 +5598,12 @@ async def products_inventory_partial(
         if enrich == "full":
             usd_to_mxn = enrich_results[4] if len(enrich_results) > 4 else 0.0
             _calc_margins(page_products, usd_to_mxn)
+            # Purchase experience (penalizaciones) + Best sellers — enrich=full only
+            await asyncio.gather(
+                _get_page_purchase_experience(client, page_products),
+                _get_best_sellers_for_page(client, page_products),
+                return_exceptions=True,
+            )
 
         for p in page_products:
             sp = sale_prices.get(p["id"])

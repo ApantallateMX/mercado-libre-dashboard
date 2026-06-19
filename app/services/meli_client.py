@@ -1472,6 +1472,21 @@ class MeliClient:
         except Exception:
             return {}
 
+    async def get_purchase_experience(self, item_id: str) -> dict:
+        """GET /marketplace/items/{item_id}/purchase_experience — estado de penalización del listing."""
+        try:
+            return await self.get(f"/marketplace/items/{item_id}/purchase_experience")
+        except Exception:
+            return {}
+
+    async def get_category_highlights(self, category_id: str) -> list:
+        """GET /highlights/MLM/category/{category_id} — top 20 bestsellers de la categoría."""
+        try:
+            data = await self.get(f"/highlights/MLM/category/{category_id}")
+            return data if isinstance(data, list) else data.get("results", data.get("content", []))
+        except Exception:
+            return []
+
     # === Seller Promotions ===
 
     async def get_user_promotions(self) -> list:
