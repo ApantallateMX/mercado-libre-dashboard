@@ -1,0 +1,39 @@
+{% if categories and total_pending > 0 %}
+<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-5 mt-4">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <span class="text-lg">📋</span>
+            <h3 class="text-sm font-semibold text-gray-700">Atributos incompletos</h3>
+            <span class="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">
+                {{ total_pending }} items
+            </span>
+        </div>
+        <span class="text-xs text-gray-400">Mejora tu posicionamiento</span>
+    </div>
+    <div class="space-y-2">
+        {% for cat in categories %}
+        {% set items_count = cat.get('items_to_fill') or cat.get('total_items_to_fill') or 0 %}
+        {% set cat_name = cat.get('name') or cat.get('category_name') or cat.get('id', 'Sin nombre') %}
+        <div class="flex items-center gap-3 py-1.5 border-b border-gray-50 last:border-0">
+            <div class="flex-1 min-w-0">
+                <span class="text-xs text-gray-700 truncate block" title="{{ cat_name }}">{{ cat_name }}</span>
+                {% if cat.get('id') %}
+                <span class="text-[10px] text-gray-400 font-mono">{{ cat.id }}</span>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <div class="w-20 bg-gray-100 rounded-full h-1.5">
+                    {% set fill_pct = [(100 - items_count * 5), 0]|max %}
+                    <div class="h-1.5 rounded-full {{ 'bg-red-400' if items_count > 10 else 'bg-orange-400' if items_count > 5 else 'bg-yellow-400' }}"
+                         style="width:{{ [(items_count * 10), 100]|min }}%"></div>
+                </div>
+                <span class="text-xs font-bold {{ 'text-red-600' if items_count > 10 else 'text-orange-600' if items_count > 5 else 'text-yellow-600' }} w-16 text-right">
+                    {{ items_count }} items
+                </span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <p class="text-[10px] text-gray-400 mt-2">Completar atributos mejora el ranking y la conversión en búsquedas ML</p>
+</div>
+{% endif %}

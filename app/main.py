@@ -6359,6 +6359,39 @@ def _elapsed_str(iso_date: str) -> tuple:
         return ("-", 0)
 
 
+@app.get("/api/health/counts")
+async def health_counts():
+    """Contadores rápidos para badges de navegación: reclamos abiertos + preguntas sin respuesta."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"claims": 0, "questions": 0, "messages": 0})
+    try:
+        all_claims = await _fetch_all_claims_cached(client, None, None)
+        open_claims = sum(1 for c in all_claims if c.get("status") == "opened")
+
+        unanswered = 0
+        try:
+            q_data = await client.get_questions(status="UNANSWERED", limit=1)
+            unanswered = q_data.get("paging", {}).get("total", 0)
+        except Exception:
+            pass
+
+        unread_msgs = 0
+        try:
+            m_data = await client.get("/messages", params={"status": "unread", "mark_as_read": "false", "limit": 1})
+            unread_msgs = (m_data.get("paging", {}).get("total", 0) or
+                           m_data.get("total", 0) or
+                           len(m_data.get("messages", [])))
+        except Exception:
+            pass
+
+        return JSONResponse({"claims": open_claims, "questions": unanswered, "messages": unread_msgs})
+    except Exception:
+        return JSONResponse({"claims": 0, "questions": 0, "messages": 0})
+    finally:
+        await client.close()
+
+
 @app.get("/partials/health-summary", response_class=HTMLResponse)
 async def health_summary_partial(
     request: Request,
@@ -8720,6 +8753,50 @@ async def get_ads_bonificaciones():
         return JSONResponse({"bonificaciones": result, "total": len(result)})
     except Exception as e:
         return JSONResponse({"detail": str(e)}, status_code=500)
+    finally:
+        await client.close()
+
+
+@app.get("/partials/attributes-widget", response_class=HTMLResponse)
+async def attributes_widget_partial(request: Request):
+    """Widget HTMX: atributos incompletos por categoría del vendedor."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("")
+    try:
+        data = await client.get(f"/users/{client.user_id}/attributes", params={"v": "3"})
+        raw = data if isinstance(data, list) else data.get("categories", data.get("data", []))
+        pending = [c for c in raw if isinstance(c, dict) and (c.get("items_to_fill", 0) or c.get("total_items_to_fill", 0)) > 0]
+        pending.sort(key=lambda x: x.get("items_to_fill", x.get("total_items_to_fill", 0)), reverse=True)
+        total_pending = sum(c.get("items_to_fill", c.get("total_items_to_fill", 0)) for c in pending)
+        return templates.TemplateResponse(request, "partials/attributes_widget.html", {
+            "categories": pending[:12],
+            "total_pending": total_pending,
+        })
+    except Exception:
+        return HTMLResponse("")
+    finally:
+        await client.close()
+
+
+@app.get("/api/ml/unread-count")
+async def ml_unread_count():
+    """Conteo de mensajes no leídos de ML (post-venta)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"count": 0})
+    try:
+        data = await client.get("/messages", params={
+            "status": "unread",
+            "mark_as_read": "false",
+            "limit": 1,
+        })
+        count = (data.get("paging", {}).get("total", 0) or
+                 data.get("total", 0) or
+                 len(data.get("messages", [])))
+        return JSONResponse({"count": count})
+    except Exception:
+        return JSONResponse({"count": 0})
     finally:
         await client.close()
 
