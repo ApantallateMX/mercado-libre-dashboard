@@ -7,6 +7,59 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-19 — FEAT: Dashboard upgrades — neto real, /performance, ads throttle, reputación recovery, claims impact
+
+### Motivación
+Análisis completo de docs ML (mensajería, reclamos, reputación, tendencias, best sellers, calidad, visitas,
+atributos, tienda oficial, Mercado Ads PADS/BADS) + auditoría del dashboard → 15 mejoras priorizadas.
+
+### Cambios implementados (commit 17d5b9f)
+
+**Bug crítico — Neto real en ML Analyzer:**
+- Live order ahora llama `/collections/{payment_id}` para obtener `net_received_amount` real
+- Si la orden search omite payments, hace fetch individual `/orders/{id}` para obtenerlos
+- Neto proporcional por ítem (ratio = item_subtotal / total_order)
+- `_live_row` ahora se llena con `data_source='real'` inmediatamente, sin esperar el tab Orders
+
+**Bug crítico — Migración /health → /performance:**
+- `get_item_health()` en meli_client ahora llama `/item/{item_id}/performance` (deprecado /items/{id}/health)
+- Devuelve: `score` (0–100), `level_wording` (Profesional/Bueno/Regular/Malo), `buckets[]`
+- `_enrich_with_meli_health()` expone `_meli_perf_score`, `_meli_perf_wording`, `_meli_perf_buckets`
+- `get_item_health_actions()` reescrito: extrae `variables` con status bad/regular de cada bucket
+
+**Ads — Budget throttling:**
+- `get_ads_campaigns()` ahora pide `impression_share`, `lost_impression_share_by_budget`,
+  `lost_impression_share_by_ad_rank` (campo `acos` deprecado mar-2026 → calculado localmente)
+- `_enrich_campaigns()`: nuevo campo `throttled_by_budget` (True si >20% impresiones perdidas x budget)
+- `ads_campaigns.html`: alerta roja si `throttled_by_budget`, badge "Budget" en nombre de campaña,
+  grid expandido con share de impresiones y perdidas por budget
+
+**Ads — Bonificaciones:**
+- `get_ads_bonificaciones()` → `GET /advertising/advertisers/bonifications`
+- Endpoint `GET /api/ads/bonificaciones`: retorna créditos con `days_remaining`, `balance`, `alert`
+  (True si ≤7 días y saldo > 0)
+
+**Tendencias:**
+- `get_trends()` → `GET /trends/MLM[/{category_id}]`
+- Endpoint `GET /api/trends[?category_id=]`: top 50 búsquedas semanales
+
+**Salud — Recuperación de reputación:**
+- `get_reputation_recovery_status()` → `GET /users/reputation/seller_recovery/status`
+- `health_reputation_partial` llama en paralelo `get_user_info()` + `get_reputation_recovery_status()`
+- `health_reputation.html`: banner azul si AVAILABLE ("¡Puedes activar protección!"),
+  banner verde si ACTIVE (muestra fecha fin + días restantes)
+
+**Salud — Claims con impacto real:**
+- `_refresh_status()` guarda `affects_reputation` y `has_incentive` del detail endpoint
+- `health_claims.html`: badge `⚠ Afecta reputación` (rojo) / `✓ No afecta rep.` (verde)
+  + badge `Acción requerida` (naranja) cuando `has_incentive=True` y status=opened
+
+**Nuevos métodos en meli_client.py:**
+- `get_ads_bonificaciones()`, `get_reputation_recovery_status()`, `get_trends()`,
+  `get_missed_feeds()`, `get_item_reviews()`
+
+---
+
 ## 2026-06-18 — FEAT: Bridge Salud↔Retornos + tasa oficial ML en retornos
 
 ### Mejoras de integración entre Salud y Retornos
