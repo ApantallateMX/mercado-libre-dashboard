@@ -13343,6 +13343,16 @@ async def returns_summary_partial(
         except Exception as _ev:
             logger.warning(f"[RETURNS-SUMMARY] valor error: {_ev}")
 
+        # Breakdown por categoría y stage
+        by_category = {"pdd": 0, "pntr": 0, "other": 0}
+        by_stage = {"claim": 0, "dispute": 0, "other": 0}
+        for c in all_claims:
+            cat = _claim_category(c.get("reason_id", ""))
+            by_category[cat] = by_category.get(cat, 0) + 1
+            stg = (c.get("stage") or "other").lower()
+            stage_key = stg if stg in ("claim", "dispute") else "other"
+            by_stage[stage_key] = by_stage.get(stage_key, 0) + 1
+
         summary = SimpleNamespace(
             total=total,
             opened=opened,
@@ -13353,6 +13363,8 @@ async def returns_summary_partial(
             valor_mxn=round(valor_mxn, 2),
             costo_usd=round(costo_usd, 2),
             ml_claims_rate=ml_claims_rate,
+            by_category=by_category,
+            by_stage=by_stage,
         )
 
         return templates.TemplateResponse(request, "partials/returns_summary.html", {            "summary": summary,
@@ -13412,6 +13424,12 @@ async def returns_table_partial(
                                 claim["stage"] = detail["stage"]
                             if detail.get("players"):
                                 claim["players"] = detail["players"]
+                            if detail.get("type"):
+                                claim["claim_type"] = detail["type"]
+                            if "affects_reputation" in detail:
+                                claim["affects_reputation"] = detail["affects_reputation"]
+                            if "has_incentive" in detail:
+                                claim["has_incentive"] = detail["has_incentive"]
                     except Exception:
                         pass
 
@@ -13555,11 +13573,18 @@ async def returns_table_partial(
             else:
                 suggestions.append("Retorno resuelto — revisa si el producto tiene un problema recurrente")
 
+            _affects_rep = c.get("affects_reputation", "")
+            _has_incentive = c.get("has_incentive", False)
+            _claim_type = c.get("claim_type", "")
+
             enriched.append(SimpleNamespace(
                 id=c.get("id", ""),
                 order_id=resource_id,
                 status=c_status,
                 stage=stage,
+                claim_type=_claim_type,
+                affects_reputation=_affects_rep,
+                has_incentive=_has_incentive,
                 date_created=date_created[:10] if date_created else "-",
                 _sort_date=date_created or "",
                 elapsed=elapsed_str,

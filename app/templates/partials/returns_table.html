@@ -59,6 +59,18 @@
                 {% if ret.stage == 'dispute' %}
                 <span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-medium">En Disputa</span>
                 {% endif %}
+
+                <!-- Afecta reputación -->
+                {% if ret.affects_reputation == 'affected' %}
+                <span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full border border-red-300 font-semibold">⚠ Afecta reputación</span>
+                {% elif ret.affects_reputation == 'not_affected' %}
+                <span class="text-[10px] bg-green-50 text-green-700 px-2 py-0.5 rounded-full border border-green-200">✓ No afecta rep.</span>
+                {% endif %}
+
+                <!-- Incentivo (acción requerida) -->
+                {% if ret.has_incentive and ret.status == 'opened' %}
+                <span class="text-[10px] bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full border border-orange-300 font-semibold animate-pulse">Acción requerida</span>
+                {% endif %}
             </div>
             <span class="text-xs text-gray-500 flex-shrink-0">{{ ret.date_created }} &middot; {{ ret.elapsed }}</span>
         </div>
