@@ -2963,15 +2963,16 @@ PRODUCTO:
 - Stock: {stock} unidades
 
 REGLAS MeLi 2026:
-1. TÍTULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55). Usa TODO el espacio disponible. 59 chars > 49 chars.
+1. TÍTULO: ENTRE 55-60 caracteres (OBLIGATORIO — nunca menos de 55, NUNCA más de 60). Usa TODO el espacio disponible. 59 chars > 49 chars.
    Formato: Marca + Tipo de producto + Tecnología/Característica clave + Tamaño/Capacidad.
+   - Primera letra del título en MAYÚSCULA, resto en minúsculas (salvo marcas/siglas: Bosch, Samsung, SDS-Max)
    - SIN número de modelo (va en ficha técnica)
-   - SIN signos de puntuación ni mayúsculas innecesarias
+   - SIN signos de puntuación ni mayúsculas innecesarias en palabras comunes
    - SIN palabras como "nuevo", "oferta", "envío gratis"
    - Ejemplo correcto (60 chars): "Samsung Televisor QLED 4K Smart HDR 65 Pulgadas Google TV"
    - Si el título queda corto, agrega características adicionales del producto hasta llegar a 55-60 chars.
 2. DESCRIPCIÓN: mínimo 4 párrafos. Incluye: beneficios principales, tecnología destacada, conectividad, compatibilidad, uso recomendado. Texto natural, orientado a compra.
-3. BULLETS: 5 puntos cortos y contundentes. Cada uno destaca UN beneficio/característica. Empiezan con sustantivo o verbo de acción.
+3. BULLETS: 5 puntos cortos y contundentes. Cada uno destaca UN beneficio/característica. PRIMERA LETRA DE CADA BULLET EN MAYÚSCULA (ej: "Potencia profesional de 15 amp para demolición eficiente"). Empiezan con sustantivo o verbo de acción.
 4. KEYWORDS: 8 palabras clave que los compradores mexicanos buscan en MeLi para este producto. Sin repetir palabras del título.
 5. GARANTÍA: sugiere tipo y tiempo de garantía apropiados para el producto.
 
@@ -2994,6 +2995,15 @@ Retorna SOLO este JSON (sin markdown, sin texto extra):
         raw = _re.sub(r'^```[a-z]*\n?', '', raw.strip(), flags=_re.MULTILINE)
         raw = _re.sub(r'\n?```$', '', raw.strip(), flags=_re.MULTILINE)
         data = _json.loads(raw.strip())
+        # Forzar mayúscula inicial en título y cada bullet (seguro ante modelos que ignoran el prompt)
+        if isinstance(data.get("title"), str) and data["title"]:
+            t = data["title"].strip()
+            data["title"] = t[0].upper() + t[1:] if len(t) > 1 else t.upper()
+        if isinstance(data.get("bullet_points"), list):
+            data["bullet_points"] = [
+                (b.strip()[0].upper() + b.strip()[1:]) if b and b.strip() else b
+                for b in data["bullet_points"]
+            ]
         return data
     except Exception as e:
         logger.error(f"ai-draft-json error: {e}")
