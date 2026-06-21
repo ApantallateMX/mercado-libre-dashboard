@@ -485,18 +485,28 @@ async def lifespan(app: FastAPI):
         logger.info("[BM] DISABLE_BM_MONITOR=true — polling BM deshabilitado en este ambiente")
 
     async def _seed_tokens_with_retry():
-        """Intenta _seed_tokens() cada 30s hasta que al menos 1 cuenta quede activa.
+        """Intenta _seed_tokens() cada 30s hasta que TODAS las cuentas esperadas estén activas.
         Necesario cuando ML rate-limita el token endpoint al arrancar."""
+        import os as _os_r
+        # Contar cuentas esperadas según env vars
+        n_expected = 1 if (_os_r.getenv("MELI_USER_ID") and _os_r.getenv("MELI_REFRESH_TOKEN")) else 0
+        for _n in range(2, 10):
+            if _os_r.getenv(f"MELI_USER_ID_{_n}") and _os_r.getenv(f"MELI_REFRESH_TOKEN_{_n}"):
+                n_expected += 1
+            else:
+                break
+        n_expected = max(n_expected, 1)
+
         for attempt in range(1, 25):  # max 12 min
             await _seed_tokens()
             accounts = await token_store.get_all_tokens()
-            if accounts:
-                print(f"[SEED-RETRY] Tokens OK en intento #{attempt}: {len(accounts)} cuentas")
+            if len(accounts) >= n_expected:
+                print(f"[SEED-RETRY] Tokens OK en intento #{attempt}: {len(accounts)}/{n_expected} cuentas")
                 return
-            print(f"[SEED-RETRY] Intento #{attempt} fallido, reintentando en 30s...")
+            print(f"[SEED-RETRY] Intento #{attempt}: {len(accounts)}/{n_expected} cuentas. Reintentando en 30s...")
             import asyncio as _aio_retry
             await _aio_retry.sleep(30)
-        print("[SEED-RETRY] No se pudieron recuperar tokens ML tras 24 intentos")
+        print(f"[SEED-RETRY] Máx intentos alcanzado. Cuentas activas: {len(await token_store.get_all_tokens())}/{n_expected}")
 
     async def _deferred_init():
         """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
