@@ -224,69 +224,517 @@ Video (MeLi lo integró en 2024):
   Recomendado para productos que necesitan demostración
 ```
 
-## 5. MERCADO ADS 2026
+## 5. MERCADO ADS 2026 — API COMPLETA (docs oficiales junio 2026)
 
-### Tipos de campañas disponibles
+### Productos disponibles
 ```
-Product Ads (Sponsored Products):
-  - Aparecen en resultados de búsqueda y fichas de producto
-  - CPC (costo por click)
-  - Mejor para conversiones directas
-  - Límite: app APANTALLATEMX no certificada → solo lectura via API
-    (Ejecutar cambios manualmente en ads.mercadolibre.com.mx)
-
-Display Ads:
-  - Requiere inversión mínima alta (~$5,000+ MXN/mes)
-  - Impresiones en toda la red MeLi (no solo búsquedas)
-  - Para awareness y reconocimiento de marca
-
-Brand Ads (nuevo 2024-2026):
-  - Requiere Brand Account en MeLi
-  - Formato banner con logo y productos
-  - Para sellers con catálogo > 20 SKUs de la misma marca
+1. Product Ads (PADS) — sponsored products en resultados de búsqueda (CPC)
+2. Brand Ads (BADS)   — posición premium "0" antes de resultados (CPC por keyword)
+3. Display Ads        — banners/video en toda la red ML+MP (CPM/CPC)
 ```
 
-### Métricas y umbrales de ads MeLi 2026
+### AUTH HEADERS requeridos
 ```
-ROAS target según margen del producto:
-  Margen 20%: ROAS mínimo rentable = 5x
-  Margen 25%: ROAS mínimo rentable = 4x
-  Margen 30%: ROAS mínimo rentable = 3.3x
+Authorization: Bearer $ACCESS_TOKEN
+Content-Type: application/json
+Api-Version: 1     ← mayoría de endpoints PADS
+api-version: 2     ← endpoints campaign search con métricas
+```
+
+---
+
+### PRODUCT ADS (PADS) — API completa
+
+**Requisitos para activar PADS:**
+- Reputación amarilla o verde
+- Mínimo 15 días de antigüedad en ML
+- Mínimo 1 venta (empresas) / 10 ventas (personas físicas)
+- Sin facturas vencidas
+
+**Modos de campaña:**
+- **Automático**: ML selecciona top-performing items, sin control manual
+- **Personalizado**: campañas múltiples, presupuesto propio, control total
+
+**IMPORTANTE — Migración variantes (2026):**
+Todas las variantes de un producto se unifican en una sola campaña con `family_id` / `catalog_product_id`. Elimina fragmentación de campañas.
+
+**Estrategias de campaña (campo `strategy`):**
+- `PROFITABILITY` — maximizar ROAS (rentabilidad)
+- `INCREASE` — maximizar ventas
+- `VISIBILITY` — maximizar impresiones
+
+**Actualización ene 2026:** `roas_target` reemplaza `acos_target` como target primario.
+`acos` visible hasta 30 mar 2026 para comparación.
+
+**ENDPOINTS PRODUCT ADS:**
+
+```bash
+# 1. Obtener advertiser_id
+GET /advertising/advertisers?product_id=PADS
+Response: { results: [{ advertiser_id, site_id, advertiser_name, account_name }] }
+
+# 2. Buscar anuncio por item_id → obtener ad_group_id
+GET /advertising/{SITE_ID}/advertisers/{ADV_ID}/product_ads/ads/search?filters[item_id]={ITEM_ID}
+Response: { ad_group_id, ... }
+
+# 3. Detalle de ad group con métricas
+GET /advertising/{SITE_ID}/product_ads/ad_groups/{AD_GROUP_ID}
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+  &metrics=clicks,prints,ctr,cost,cpc,acos,roas,cvr,sov,direct_amount,indirect_amount,total_amount
+
+# 4. Buscar campañas con métricas (api-version: 2)
+GET /advertising/{SITE_ID}/advertisers/{ADV_ID}/product_ads/campaigns/search
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+  &metrics=clicks,prints,ctr,cost,cpc,acos,roas,cvr,sov,units_quantity,direct_amount,total_amount
+
+# 5. Detalle de campaña
+GET /advertising/{SITE_ID}/product_ads/campaigns/{CAMPAIGN_ID}
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&metrics=...
+
+# 6. Métricas diarias de campaña
+GET /advertising/{SITE_ID}/product_ads/campaigns/{CAMPAIGN_ID}/daily_metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+
+# 7. Métricas de anuncios por ad group
+GET /advertising/{SITE_ID}/product_ads/ad_groups/{AD_GROUP_ID}/ads/metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+```
+
+**DEPRECADOS (404 desde feb 26, 2026) — NUNCA usar:**
+```
+GET /advertising/product_ads/items/$ITEM_ID
+GET /advertising/$SITE/product_ads/items/$ITEM_ID
+GET /advertising/advertisers/$ADV/product_ads/items
+GET /advertising/$SITE/advertisers/$ADV/product_ads/items/search
+GET /advertising/product_ads/campaigns/$CAM_ID
+GET /advertising/advertisers/$ADV/product_ads/campaigns
+GET /advertising/product_ads/campaigns/$CAM_ID/metrics
+GET /advertising/product_ads_2/campaigns/$CAM_ID/metrics
+GET /advertising/product_ads/campaigns/$CAM_ID/ads/metrics
+GET /advertising/product_ads_2/campaigns/$CAM_ID/ads/metrics
+GET /advertising/product_ads/ads/search
+```
+
+**MÉTRICAS DISPONIBLES PADS (campo `metrics=`):**
+```
+clicks                    — clics en el anuncio
+prints                    — impresiones
+ctr                       — click-through rate
+cost / cost_usd           — gasto total (MXN / USD)
+cpc                       — costo por click
+acos                      — advertising cost of sales (gasto/ingresos %)
+acos_benchmark            — ACOS objetivo calculado por ML para ads con buenos resultados ← NUEVO
+roas                      — return on ad spend (ingresos/gasto)
+cvr                       — conversion rate (ventas/clicks)
+sov                       — share of voice (% subastas ganadas)
+direct_amount             — ingresos ventas directas desde el anuncio
+indirect_amount           — ingresos ventas asistidas
+total_amount              — ingresos totales atribuidos
+direct_units_quantity     — unidades vendidas directamente
+indirect_units_quantity   — unidades vendidas asistidas
+units_quantity            — total unidades
+direct_items_quantity     — items distintos vendidos directamente
+indirect_items_quantity   — items distintos vendidos asistidos
+advertising_items_quantity — total items con venta atribuida a ads
+organic_units_quantity    — unidades vendidas sin ads
+organic_units_amount      — ingresos orgánicos
+organic_items_quantity    — items vendidos orgánicamente
+impression_share          — % subastas ganadas vs disponibles
+top_impression_share      — % posiciones top ganadas
+lost_impression_share_by_budget   — impresiones perdidas por presupuesto bajo
+lost_impression_share_by_ad_rank  — impresiones perdidas por ranking bajo
+tacos                     — total advertising cost of sales (incluye asistidas)
+```
+
+**Parámetro extra para resumen de métricas:**
+```bash
+# Agregar metrics_summary=true para obtener resumen del período además del detalle diario
+GET /advertising/{SITE_ID}/advertisers/{ADV_ID}/product_ads/campaigns/search
+  ?date_from=...&date_to=...&metrics=clicks,roas,...&metrics_summary=true
+```
+
+**BONIFICACIONES PADS:**
+```
+GET /advertising/advertisers/bonifications
+Response: { status, creation_date, end_date, campaign_name, currency_id,
+            level (Campaign/Account), amount, balance, days_remaining,
+            campaign_id, campaign_status, benefit_name }
+
+Tipos de bonificación:
+  CERTIFICATION       — certificados Ads Academy con contrato activo
+  SELLER_STARTUP      — programa de despegue para nuevos vendedores
+  SMART_BENEFITS      — bonos estacionales por creación de campaña
+  MANUAL              — discrecional del equipo de negocios
+
+Reglas de bonificación:
+  - level: Campaign → aplica solo a la campaign_id indicada en la respuesta
+  - level: Account  → aplica a TODAS las campañas del advertiser
+  - `balance` = saldo restante (amount - ya consumido por ads)
+  - Cuando balance llega a 0, la campaña sigue corriendo con cargo normal al vendedor
+  - `days_remaining` = días hasta expiración; al expirar se pierde el saldo no usado
+  - NO se apilan dos bonificaciones del mismo tipo simultáneamente en una misma campaña
+  - SMART_BENEFITS puede activarse automáticamente al crear campaña nueva en temporadas
+  - Para validar si aplica: status="active" AND balance > 0 AND days_remaining > 0
+```
+
+---
+
+### PRODUCT ADS (PADS) — ESCRITURA (create / update / pause)
+
+**Crear campaña personalizada:**
+```bash
+POST /advertising/{SITE_ID}/advertisers/{ADV_ID}/product_ads/campaigns
+Body: {
+  "name": "Campaña TV Samsung junio",
+  "type": "PRODUCT",
+  "strategy": "PROFITABILITY",   ← PROFITABILITY | INCREASE | VISIBILITY
+  "roas_target": 5.0,            ← solo si strategy=PROFITABILITY
+  "budget": 500.00               ← presupuesto diario en MXN
+}
+Response: { campaign_id, name, type, strategy, roas_target, budget, status }
+```
+
+**Actualizar campaña (presupuesto / status / estrategia):**
+```bash
+PUT /advertising/{SITE_ID}/product_ads/campaigns/{CAMPAIGN_ID}
+Body: {
+  "budget": 800.00,        ← nuevo presupuesto diario MXN
+  "status": "paused",      ← active | paused
+  "strategy": "INCREASE",
+  "roas_target": 4.0
+}
+```
+
+**Agregar item a ad group (anunciar un producto):**
+```bash
+POST /advertising/{SITE_ID}/product_ads/ad_groups/{AD_GROUP_ID}/ads
+Body: {
+  "item_id": "MLM123456789"             ← item estándar
+}
+# Para items de catálogo: usar catalog_product_id, NO item_id (ver sección catálogo)
+```
+
+**Eliminar item del ad group:**
+```bash
+DELETE /advertising/{SITE_ID}/product_ads/ad_groups/{AD_GROUP_ID}/ads/{AD_ID}
+```
+
+**Status de campaña:**
+```
+active   → corriendo, consumiendo presupuesto
+paused   → pausada por vendedor — sin gasto, modelo de aprendizaje conservado
+ended    → presupuesto agotado o fecha límite alcanzada
+```
+
+**Reglas críticas de escritura PADs:**
+- `PROFITABILITY` + `roas_target` → ML reduce gasto si no puede mantener el ROAS objetivo
+- `INCREASE` → maximiza ventas aunque el ROAS caiga (úsalo en lanzamientos)
+- `VISIBILITY` → maximiza impresiones (listings nuevos sin historial de ventas)
+- Cambiar estrategia mid-campaña resetea el modelo de aprendizaje (~7 días para re-estabilizar)
+- Pausar campaña en < 30 días conserva el modelo; reactivar recupera el historial
+- NUNCA eliminar campañas con historial — solo pausar. Eliminar borra métricas acumuladas
+
+---
+
+### BRAND ADS (BADS) — API completa
+
+**Requisitos:**
+- Tienda Oficial o Mi Página en ML
+- Reputación verde o mejor
+- Mínimo 3 publicaciones activas
+- Disponible en: MLA, MLB, MLM, MLC, MCO, MLU, MPE
+
+**MIGRACIÓN CRÍTICA (jun 17, 2026):**
+Campañas BADS se migran a PAds automáticamente.
+Impacto API: después de migración → `product_id=BADS` retorna 204.
+Métricas históricas disponibles 30 días post-migración.
+
+**Tipos de campaña BADS:**
+- **Automática**: ML gestiona keywords y items de la tienda oficial
+- **Personalizada**: 3-10 items, 1-200 keywords, CPC configurable
+
+**Posicionamiento:**
+- "Posición 0" — antes de todos los resultados de búsqueda
+- Subasta por keyword: Ad-Score × CPC máximo = Ad Rank
+- Ad-Score mide probabilidad de conversión de ese anuncio
+
+**Keyword match types (BADS personalizada):**
+```
+BROAD   — coincidencia amplia: activa el anuncio en búsquedas relacionadas aunque el orden
+          o palabras varíen. Más reach, menos control.
+          Ejemplo: keyword "Samsung TV" → activa en "televisor samsung 55 pulgadas"
+
+PHRASE  — coincidencia de frase: las palabras de la keyword deben aparecer juntas en la búsqueda.
+          Ejemplo: keyword "Samsung TV" → activa en "comprar Samsung TV barato" pero NO en "TV Sony Samsung"
+
+EXACT   — coincidencia exacta: la búsqueda debe coincidir exactamente con la keyword.
+          Máximo control, menor volumen. Mejor para keywords de alta conversión confirmada.
+          Ejemplo: keyword "Samsung Smart TV 55" → activa SOLO en "Samsung Smart TV 55"
+
+Estrategia de keywords BADS:
+  Fase 1 (launch): BROAD para descubrir qué términos convierten
+  Fase 2 (optimize): agregar como EXACT las keywords con CTR > 3% y CVR > 2%
+  Fase 3 (escalar): pausar BROAD de bajo rendimiento, escalar EXACT que convierten
+  Máximo 200 keywords por campaña personalizada
+```
+
+**BADS — Escritura (crear/actualizar antes de migración a PAds):**
+```bash
+# Crear campaña BADS personalizada
+POST /advertising/advertisers/{ADV_ID}/brand_ads/campaigns
+Body: {
+  "name": "Marca Samsung junio",
+  "campaign_type": "CUSTOM",           ← CUSTOM | AUTOMATIC
+  "headline": "Televisiores Samsung Apantallate",  ← texto del banner (max 60 chars)
+  "official_store_id": 123,            ← ID de tienda oficial (obligatorio)
+  "budget": 1000.00,                   ← presupuesto diario MXN
+  "cpc": 8.50,                         ← costo por click máximo MXN
+  "start_date": "2026-07-01",
+  "end_date": "2026-07-31",
+  "items": ["MLM123", "MLM456"],       ← 3-10 items de la tienda oficial
+  "keywords": [
+    {"text": "samsung tv", "match_type": "BROAD"},
+    {"text": "televisor samsung 55", "match_type": "EXACT"}
+  ]
+}
+
+# Actualizar campaña (budget, CPC, status)
+PUT /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}
+Body: { "budget": 1500.00, "cpc": 10.00, "status": "paused" }
+```
+
+⚠️ POST-MIGRACIÓN (jun 17, 2026): Usar endpoints PAds para nuevas campañas. BADS write endpoints pueden retornar 204 o error.
+
+**ENDPOINTS BRAND ADS:**
+```bash
+# 1. Obtener advertiser
+GET /advertising/advertisers?product_id=BADS
+
+# 2. Listar campañas
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns
+Response: { campaign_id, name, start_date, end_date, campaign_type,
+            status, site_id, official_store_id, destination_id,
+            headline, budget, cpc, items[], keywords[] }
+
+# 3. Detalle de campaña
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}
+
+# 4. Items de campaña
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}/items
+
+# 5. Keywords de campaña
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}/keywords
+
+# 6. Métricas globales de campaña (max 90 días)
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+  &aggregation_type=daily|summary
+
+# 7. Métricas de campaña específica
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}/metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+
+# 8. Métricas por keyword
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/{CAM_ID}/keywords/metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+
+# 9. Full summary
+GET /advertising/advertisers/{ADV_ID}/brand_ads/campaigns/full_summary
+```
+
+**Response métricas BADS:**
+```json
+{
+  "dashboard": {
+    "ctr": [{"x": "YYYY-MM-DD", "y": 0.05}],
+    "prints": [...], "clicks": [...], "consumed_budget": [...],
+    "cvr": [...], "acos": [...], "attribution_order_amount": [...]
+  },
+  "metrics": [
+    {
+      "date": "YYYY-MM-DD",
+      "metrics": {
+        "prints": 1200, "clicks": 60, "ctr": 0.05, "cvr": 0.08,
+        "acos": 0.12, "attribution_order_conversions": 5,
+        "attribution_order_amount": 3500.00, "consumed_budget": 420.00,
+        "cost_per_clicks": 7.0, "leads": 0
+      }
+    }
+  ],
+  "summary": { "prints": ..., "clicks": ..., ... }
+}
+```
+
+**Métricas competitivas BADS (últimos 7 días):**
+```
+lost_impression_share_by_budget  — % impresiones perdidas por budget bajo
+lost_impression_share_by_ad_rank — % impresiones perdidas por ranking bajo
+impression_share                 — % subastas ganadas con esta keyword
+competitive_cpc                  — CPC promedio de competidores
+```
+
+---
+
+### DISPLAY ADS — API completa
+
+**Activación:** Solo vía asesor comercial de ML. No es self-serve.
+
+**Tipos de campaña:**
+```
+Programmatic Awareness     — reach y frecuencia
+Programmatic Consideration — clicks y visitas
+Programmatic Conversion    — ventas y ROAS
+Guaranteed                 — CPM fijo, impresiones garantizadas
+```
+
+**Formatos de anuncio:**
+```
+Display  — banner estático (imagen + texto)
+Social   — video vertical con banner inferior (Clips)
+Video    — video horizontal (streaming)
+```
+
+**ENDPOINTS DISPLAY:**
+```bash
+# Listar campañas
+GET /advertising/advertisers/{ADV_ID}/display/campaigns
+
+# Métricas de campaña
+GET /advertising/advertisers/{ADV_ID}/display/campaigns/{CAM_ID}/metrics
+  ?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+
+# Line items de campaña
+GET /advertising/advertisers/{ADV_ID}/display/campaigns/{CAM_ID}/line_items
+
+# Métricas por line item
+GET /advertising/advertisers/{ADV_ID}/display/metrics
+  ?dimension=line_items&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&campaign_id={CAM_ID}
+
+# Creativos de line item
+GET /advertising/advertisers/{ADV_ID}/display/campaigns/{CAM_ID}/line_items/{LI_ID}/creatives
+
+# Métricas por creativo
+GET /advertising/advertisers/{ADV_ID}/display/metrics
+  ?dimension=creatives&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+```
+
+**Métricas Display:**
+```
+prints               — impresiones
+clicks               — clics
+active_views         — veces que el usuario vio los primeros 6 segundos del video (Social/Video)
+                       NOTA: solo disponible para campañas con objetivo Awareness
+completed_views      — veces que el usuario vio el video COMPLETO (Social/Video)
+                       NOTA: solo disponible para campañas con objetivo Awareness
+reach                — usuarios únicos alcanzados
+ctr                  — click-through rate
+consumed_budget      — presupuesto consumido
+cpm                  — costo por mil impresiones (Guaranteed)
+cpc                  — costo por click
+average_frequency    — frecuencia promedio de exposición por usuario
+roas                 — retorno sobre inversión en ads
+attribution metrics  — ventas y conversiones atribuidas
+```
+
+---
+
+---
+
+### PRODUCT ADS PARA CATÁLOGO Y USER PRODUCTS
+
+**Identificar si un item es user_product (catálogo):**
+```bash
+# Opción 1: verificar tags del item
+GET /items/{ITEM_ID}?attributes=catalog_product_id,tags
+# tags[] contiene "user_product_listing" → item en catálogo
+# catalog_product_id != null → usar catalog_product_id para anunciar, NO item_id
+
+# Opción 2: buscar en catálogo
+GET /catalog/products/search?status=active&site_id=MLM&q={modelo}
+# Si aparece con family_name y catalog_product_id → es producto catalogado
+```
+
+**Diferencia de flujo publicitario:**
+```
+Item estándar:
+  → Anuncia por item_id
+  → Compite en resultados de búsqueda generales
+  → Tu ad aparece en el listing de tu publicación
+
+Item catálogo (user_product_listing):
+  → Anuncia por catalog_product_id (family_id en ad groups)
+  → Compite en el "slot de catálogo" (buy box) con OTROS vendedores del mismo producto
+  → ML muestra el anuncio del mejor postor que también tenga el mejor precio/rating
+  → Si no ganas el buy box, tu ad puede no mostrarse aunque tengas presupuesto
+```
+
+**Buscar ads de un catalog_product_id:**
+```bash
+GET /advertising/{SITE_ID}/advertisers/{ADV_ID}/product_ads/ads/search
+  ?filters[catalog_product_id]={CATALOG_PRODUCT_ID}
+Response: { ad_group_id, family_id, catalog_product_id, status, ... }
+```
+
+**Agregar producto de catálogo a campaña:**
+```bash
+POST /advertising/{SITE_ID}/product_ads/ad_groups/{AD_GROUP_ID}/ads
+Body: {
+  "catalog_product_id": "MLM-PROD-123456"
+  # NO usar item_id para productos catalogados — será ignorado o dará error
+}
+```
+
+**family_id en ads de catálogo:**
+- El `family_id` agrupa todas las variantes del mismo catalog_product bajo una sola campaña
+- Al anunciar un `catalog_product_id`, ML automáticamente incluye TODAS las variantes
+- No es necesario anunciar variante por variante (color, tamaño, etc.)
+- Métricas se reportan a nivel `family_id` (suma de todas las variantes)
+
+**Reglas estratégicas para catálogo:**
+```
+✓ Anunciar catálogo solo si GANAS el buy box con frecuencia (precio + rating)
+✓ Revisar tu share of voice (sov) — si < 40%, el presupuesto se desperdicia
+✓ Antes de activar catalog ads: asegurarte de ser el vendedor más competitivo del catálogo
+✗ Si hay 10 vendedores en el mismo catálogo con precios menores, los ads no ayudan
+```
+
+---
+
+### MÉTRICAS ADS — UMBRALES Y ESTRATEGIA
+
+```
+ROAS target según margen:
+  Margen 20% → ROAS mínimo rentable = 5x
+  Margen 25% → ROAS mínimo rentable = 4x
+  Margen 30% → ROAS mínimo rentable = 3.3x
   Fórmula: ROAS_min = 1 / margen_decimal
 
-ACoS equivalente MeLi:
+ACoS (acos):
   < 10%: Excelente
   10-15%: Bueno
   15-20%: Aceptable
-  > 20%: Revisar (puede no ser rentable según margen)
+  > 20%: Revisar rentabilidad
 
-CTR en MeLi (benchmarks categoría electrónica MX):
-  > 3%: Excelente (foto y precio muy competitivos)
-  1-3%: Normal
-  < 1%: Revisar foto principal y precio
+CTR electrónica MX:
+  > 3%: Excelente   1-3%: Normal   < 1%: Revisar foto/precio
 
 CVR desde ad (electronics):
-  > 5%: Excelente
-  2-5%: Normal
-  < 1%: Problema de listing, NO de visibilidad
+  > 5%: Excelente   2-5%: Normal   < 1%: Problema de listing
+
+Actualización métricas:
+  General: diario a las 10:00 hrs GMT-3
+  Métricas del día: cada 15 minutos
+  Rango máximo consulta: 90 días
 ```
 
-### Estrategia de ads
 ```
-Items QUE SÍ anunciar:
-  ✓ Margen neto > 20%
-  ✓ Stock > 15 días de cobertura al ritmo con ads
-  ✓ CVR orgánica > 2%
-  ✓ Precio competitivo vs top 3 del mercado
-  ✓ Fotos de alta calidad (CTR > 1% estimado)
-  ✓ Publicación con historial de ventas (ads amplifica, no crea demanda)
+SÍ anunciar:
+  ✓ Margen > 20%, stock > 15 días, CVR orgánica > 2%
+  ✓ Precio competitivo vs top 3, listing con historial de ventas
 
-Items que NO anunciar:
-  ✗ Margen < 10% (ads se come todo)
-  ✗ Stock < 5 unidades (se agota antes de amortizar el costo)
-  ✗ CVR < 0.5% (problema de listing primero)
-  ✗ Precio notoriamente más alto que competidores
-  ✗ Publicaciones con health score bajo o issues de reputación
+NO anunciar:
+  ✗ Margen < 10%, stock < 5 uds, CVR < 0.5%
+  ✗ Precio más alto que competidores, listing con health issues
 ```
 
 ## 6. REPUTACIÓN Y SALUD 2026
@@ -355,84 +803,407 @@ Día del evento: monitorear stock cada 6 horas, ajustar presupuesto de ads
 Post-evento: analizar sell-through, identificar ganadores para siguiente evento
 ```
 
-## 9. DEALS Y PROMOCIONES MELI 2026
+## 9. DEALS Y PROMOCIONES MELI 2026 — API COMPLETA (docs oficiales junio 2026)
 
-### 11 tipos de promoción disponibles en MLM (México)
-
+### Endpoint base unificado
 ```
-1. PRICE_DISCOUNT          — descuento directo sobre el precio del item
-2. CROSS_SELLING           — pack/combo de 2+ productos
-3. LOYALTY_DISCOUNT        — descuento exclusivo para compradores frecuentes
-4. CAMPAIGN                — campaña tradicional (requiere invitación de ML)
-5. DOD (Deal of the Day)   — oferta del día (requiere invitación de ML)
-6. FLASH_SALE              — venta flash por horas, stock limitado
-7. MELI_PLUS_DISCOUNT      — descuento para suscriptores de Meli+
-8. DIGITAL_COUPON          — cupón digital redimible en checkout
-9. COUPON_CAMPAIGN         — cupón de campaña para todos los compradores
-10. BUNDLE                 — conjunto de productos con precio especial
-11. CO_FUNDED              — co-financiado ML+vendedor (ML pone parte del descuento)
-
-SELLER_COUPON_CAMPAIGN     ← NO disponible en MLM (solo Brasil)
-
-Descuento máximo: 80% sobre el precio base
-Descuento mínimo recomendado: 10% (menos no genera badge visible)
+Base URL: https://api.mercadolibre.com
+Query obligatorio: ?app_version=v2   ← SIEMPRE en todos los endpoints de promociones
+Auth: Authorization: Bearer $ACCESS_TOKEN
 ```
 
-### API de Promociones
-
+### 12 tipos de promoción (Central de Promociones)
 ```
-Crear descuento en un item:
-  POST /seller-promotions/items/{item_id}?app_version=v2
-  Body:
-  {
-    "deal_price": 5999,
-    "promotion_type": "PRICE_DISCOUNT",
-    "start_date": "2026-05-01T00:00:00Z",
-    "finish_date": "2026-05-03T23:59:59Z"
-  }
-
-Listar promociones activas de un item:
-  GET /seller-promotions/items/{item_id}?app_version=v2
-
-Eliminar descuento:
-  DELETE /seller-promotions/items/{item_id}/{promotion_id}?app_version=v2
+Tipo API                  Nombre visible             Requiere invitación ML
+─────────────────────────────────────────────────────────────────────────
+DEAL                      Campaña tradicional        Sí (ML invita)
+MARKETPLACE_CAMPAIGN      Co-financiada ML           Sí (ML invita)
+PRICE_DISCOUNT            Descuento individual       No (self-serve)
+VOLUME                    Descuento por cantidad     Sí (ML invita)
+PRE_NEGOTIATED            Pre-acordado por item      Sí (ML invita)
+DOD                       Oferta del día             Sí (ML invita)
+LIGHTNING                 Oferta relámpago           Sí (ML invita)
+SELLER_CAMPAIGN           Campaña del vendedor       No (self-serve)
+SMART                     Co-financiada automática   No (auto-detecta)
+PRICE_MATCHING            Smart Price Matching       No (auto-detecta)
+UNHEALTHY_STOCK           Liquidación de stock       Sí (ML invita)
+SELLER_COUPON_CAMPAIGN    Cupones del vendedor       No (solo MLB Brasil)
 ```
 
-### Campañas que requieren invitación de ML
+---
+
+### ENDPOINTS CENTRALES — Lectura
+
+```bash
+# Ver TODAS las promociones del usuario
+GET /seller-promotions/users/{USER_ID}?app_version=v2
+Response: { paging: { limit, offset, total }, results: [...] }
+Nota: usa search_after para paginar (TTL 5 min), max 50 items por página
+
+# Detalle de una promoción
+GET /seller-promotions/promotions/{PROMOTION_ID}
+  ?promotion_type={TYPE}&app_version=v2
+
+# Items de una promoción
+GET /seller-promotions/promotions/{PROMOTION_ID}/items
+  ?promotion_type={TYPE}&app_version=v2
+  &filters[item_id]={ITEM_ID}      ← opcional
+  &filters[status]={status}        ← optional: candidate|pending|started|finished
+  &filters[status_item]={status}   ← opcional
+
+# Todas las promociones de un item
+GET /seller-promotions/items/{ITEM_ID}?app_version=v2
+
+# Detalle de candidato
+GET /seller-promotions/candidates/{CANDIDATE_ID}?app_version=v2
+
+# Detalle de oferta
+GET /seller-promotions/offers/{OFFER_ID}?app_version=v2
+```
+
+### Campos de promoción — Boost Fields (novedad 2025)
+Cuando `boosted_offer: true`, la respuesta incluye:
+```
+discount_meli_boosted_percentage  — % adicional que ML agrega
+discount_meli_boost_amount        — monto absoluto del boost de ML
+total_price_for_boosted_offer     — precio final para el comprador
+```
+
+### Exclusion List — Controlar participación automática
+```bash
+# Ver si el seller está excluido
+GET /seller-promotions/exclusion-list/seller?app_version=v2
+
+# Excluir/incluir seller de promociones automáticas
+POST /seller-promotions/exclusion-list/seller?app_version=v2
+Body: { "status": "excluded" | "included" }
+
+# Ver si un item específico está excluido
+GET /seller-promotions/exclusion-list/seller/{ITEM_ID}?app_version=v2
+
+# Excluir/incluir item específico
+POST /seller-promotions/exclusion-list/item?app_version=v2
+Body: { "item_id": "MLM123", "status": "excluded" | "included" }
+
+# Eliminar todas las ofertas de un item
+DELETE /seller-promotions/items/{ITEM_ID}?app_version=v2
+```
+
+---
+
+### DEAL — Campaña Tradicional
+
+Estados: `pending → started → finished`
+Estados de item: `candidate → pending → started → finished`
+
+Campos clave de respuesta:
+```
+min_discounted_price       — precio mínimo permitido por ML
+max_discounted_price       — precio máximo creíble para el deal
+suggested_discounted_price — precio recomendado por ML
+```
+
+```bash
+# Ver campaña
+GET /seller-promotions/promotions/P-{SITE}_{ID}
+  ?promotion_type=DEAL&app_version=v2
+
+# Ver items de la campaña
+GET /seller-promotions/promotions/{PROMO_ID}/items
+  ?promotion_type=DEAL&app_version=v2
+
+# Agregar item a campaña
+POST /seller-promotions/items/{ITEM_ID}
+Body: {
+  "deal_price": 5999,
+  "top_deal_price": 5799,  ← precio exclusivo para compradores Mercado Puntos nivel 3-6
+  "promotion_id": "P-MLM_12345",
+  "promotion_type": "DEAL"
+}
+
+# Modificar precio del item en campaña
+PUT /seller-promotions/items/{ITEM_ID}?app_version=v2
+Body: { "deal_price": 5499, "promotion_id": "...", "promotion_type": "DEAL" }
+
+# Eliminar item de campaña
+DELETE /seller-promotions/items/{ITEM_ID}
+  ?promotion_type=DEAL&promotion_id={PROMO_ID}&app_version=v2
+```
+
+Sub-tipos DEAL: `FLEXIBLE_PERCENTAGE`, `FIXED_AMOUNT`
+⚠️ `top_deal_price` NO es para ganar competencia interna — es precio para compradores leales (Mercado Puntos L3-L6).
+
+---
+
+### MARKETPLACE_CAMPAIGN — Co-financiada ML
+
+ML cubre `meli_percent` del descuento, vendedor cubre `seller_percent`.
+`meli_percent + seller_percent = descuento total`
+
+```bash
+# Ver campaña co-financiada
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=MARKETPLACE_CAMPAIGN&app_version=v2
+
+# Items de la campaña
+GET /seller-promotions/promotions/{PROMO_ID}/items
+  ?promotion_type=MARKETPLACE_CAMPAIGN&app_version=v2
+
+# Aceptar item en campaña (precio lo define ML, no se puede editar)
+POST /seller-promotions/items/{ITEM_ID}
+Body: { "promotion_id": "...", "promotion_type": "MARKETPLACE_CAMPAIGN" }
+
+# Eliminar item
+DELETE /seller-promotions/items/{ITEM_ID}
+  ?promotion_type=MARKETPLACE_CAMPAIGN&promotion_id={PROMO_ID}&offer_id={OFFER_ID}
+```
+
+⚠️ Para cambiar el precio: eliminar item, actualizar precio en ML, volver a agregar.
+
+---
+
+### PRICE_DISCOUNT — Descuento Individual (self-serve)
+
+Requisitos: reputación verde + publicación activa + condición nueva.
+
+⚠️ CAMBIO 03/24/2025: duración máxima reducida de 31 → **14 días**.
+⚠️ Las fechas ignoran la hora: inicia a las 00:00:00 del día inicio, termina a las 23:59:59 del día fin.
+⚠️ Si el item está en un DEAL activo, el PRICE_DISCOUNT no aplica hasta que el DEAL termine.
+
+```bash
+# Agregar descuento directo a un item
+POST /seller-promotions/items/{ITEM_ID}
+Body: {
+  "promotion_type": "PRICE_DISCOUNT",
+  "deal_price": 4999,           ← precio para TODOS los compradores
+  "top_deal_price": 4799,       ← precio para Mercado Puntos nivel 3-6 (opcional)
+  "start_date": "2026-07-01",   ← solo fecha, hora se ignora (inicia 00:00:00)
+  "finish_date": "2026-07-14"   ← solo fecha, hora se ignora (termina 23:59:59). Máx 14 días.
+}
+
+# Modificar descuento
+PUT /seller-promotions/items/{ITEM_ID}?app_version=v2
+Body: { "promotion_type": "PRICE_DISCOUNT", "deal_price": 4799 }
+
+# Eliminar descuento
+DELETE /seller-promotions/items/{ITEM_ID}
+  ?promotion_type=PRICE_DISCOUNT&app_version=v2
+```
+
+---
+
+### VOLUME — Descuento por Cantidad
+
+Descuento por comprar múltiples unidades. Requiere invitación de ML.
+
+Sub-tipos disponibles:
+```
+BNGM   — Buy N Get M: compra 9, paga 3 (buy_quantity + pay_quantity)
+BNSP   — Buy N Save P%: compra 2, ahorra 50% (buy_quantity + discount_percentage)
+SPONTH — Save P% on the Nth: 50% OFF en la 2da unidad (buy_quantity + discount_percentage)
+```
+
+```bash
+# Ver campaña volume
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=VOLUME&app_version=v2
+
+# Crear campaña VOLUME
+POST /seller-promotions/promotions?app_version=v2
+Body: {
+  "promotion_type": "VOLUME",
+  "sub_type": "BNSP",             ← BNGM | BNSP | SPONTH
+  "name": "Descuento por cantidad",
+  "buy_quantity": 2,              ← cantidad a comprar
+  "pay_quantity": 1,              ← cantidad que paga (solo BNGM)
+  "discount_percentage": 50,      ← % descuento (BNSP y SPONTH)
+  "allow_combination": true       ← combinable con otras campañas
+}
+
+# Agregar item
+POST /seller-promotions/items/{ITEM_ID}
+Body: { "promotion_id": "...", "promotion_type": "VOLUME" }
+```
+
+---
+
+### PRE_NEGOTIATED — Pre-acordado por Item
+
+ML y vendedor acuerdan precio por item individualmente. Requiere invitación.
+Campo extra en respuesta: `deadline_date` — fecha límite para aceptar la invitación.
+
+```bash
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=PRE_NEGOTIATED&app_version=v2
+
+# Agregar con descuento pre-acordado
+POST /seller-promotions/items/{ITEM_ID}
+Body: { "promotion_id": "...", "promotion_type": "PRE_NEGOTIATED", "deal_price": 3999 }
+```
+
+---
+
+### DOD — Oferta del Día
+
+ML invita → precio 24h con badge prominente en home.
+ID de campaña formato: `DOD-MLM1000`
+Novedad: respuesta de GET /promotions/$ID/items incluye objeto `net_proceeds` → monto neto estimado que recibe el vendedor.
+
+```bash
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=DOD&app_version=v2
+
+POST /seller-promotions/items/{ITEM_ID}
+Body: {
+  "promotion_id": "DOD-MLM1000",
+  "promotion_type": "DOD",
+  "deal_price": 3499,
+  "top_deal_price": 3299   ← precio para Mercado Puntos L3-L6 (opcional)
+}
+```
+
+---
+
+### LIGHTNING — Oferta Relámpago
+
+Stock limitado, duración corta (2-6h), badge de urgencia. Requiere invitación.
+Campo `stock` (no `quantity`) reserva unidades para la oferta.
+Nuevo filtro `status_item` en GET items: `active` | `paused`
+
+Campos en respuesta de items:
+```
+id, start_date, finish_date, status, price, original_price,
+max_discounted_price, min_discounted_price,
+stock: { min, max }   ← rango de stock permitido
+```
+
+```bash
+GET /seller-promotions/promotions/{PROMO_ID}/items
+  ?promotion_type=LIGHTNING&app_version=v2
+  &status_item=active   ← nuevo filtro: active | paused
+
+POST /seller-promotions/items/{ITEM_ID}
+Body: {
+  "promotion_id": "...",
+  "promotion_type": "LIGHTNING",
+  "deal_price": 2999,
+  "stock": 10   ← ⚠️ campo correcto es "stock", NO "quantity"
+}
+```
+
+---
+
+### SELLER_CAMPAIGN — Campaña del Vendedor (self-serve)
+
+Vendedor define nombre, fechas, items y precios. NO requiere invitación.
+`sub_type` DEBE ser `FLEXIBLE_PERCENTAGE` — el % de descuento se define por item al agregar, no al crear la campaña.
+Respuesta ID formato: `C-{SITE_ID}{NUMBER}` ej. `C-MLM123456`
+El inicio del día se toma siempre como hora de inicio. El fin del día como hora de fin.
+
+```bash
+# Crear campaña
+POST /seller-promotions/promotions?app_version=v2
+Body: {
+  "promotion_type": "SELLER_CAMPAIGN",
+  "sub_type": "FLEXIBLE_PERCENTAGE",   ← OBLIGATORIO
+  "name": "Fin de semana electrónica",
+  "start_date": "2026-07-05",          ← solo fecha (hora se ignora)
+  "finish_date": "2026-07-07"          ← solo fecha (hora se ignora)
+}
+# Respuesta: { "id": "C-MLM123456", "type": "SELLER_CAMPAIGN", "sub_type": "FLEXIBLE_PERCENTAGE",
+#              "status": "pending", "start_date": "...", "finish_date": "...", "name": "..." }
+
+# Agregar item a la campaña (deal_price se define aquí, no al crear)
+POST /seller-promotions/items/{ITEM_ID}
+Body: {
+  "promotion_id": "C-MLM123456",
+  "promotion_type": "SELLER_CAMPAIGN",
+  "deal_price": 4299,
+  "top_deal_price": 4099   ← precio para Mercado Puntos L3-L6 (opcional)
+}
+
+# Modificar precio de un item en la campaña
+PUT /seller-promotions/items/{ITEM_ID}?app_version=v2
+Body: { "promotion_id": "C-MLM123456", "promotion_type": "SELLER_CAMPAIGN", "deal_price": 3999 }
+
+# Eliminar item de campaña
+DELETE /seller-promotions/items/{ITEM_ID}
+  ?promotion_type=SELLER_CAMPAIGN&promotion_id={PROMO_ID}&app_version=v2
+```
+
+---
+
+### SMART / PRICE_MATCHING — Co-financiada Automática
+
+ML detecta automáticamente oportunidades y co-financia.
+El vendedor puede aceptar o excluir items/seller.
+```bash
+# Ver campañas activas SMART
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=SMART&app_version=v2
+
+# Ver campañas PRICE_MATCHING
+GET /seller-promotions/promotions/{PROMO_ID}
+  ?promotion_type=PRICE_MATCHING&app_version=v2
+
+# Excluir item de participación automática
+POST /seller-promotions/exclusion-list/item?app_version=v2
+Body: { "item_id": "MLM123456789", "status": "excluded" }
+```
+
+---
+
+### SELLER_COUPON_CAMPAIGN — Cupones (solo MLB Brasil)
+
+```bash
+# Crear cupón porcentaje
+POST /seller-promotions/promotions?app_version=v2
+Body: {
+  "promotion_type": "SELLER_COUPON_CAMPAIGN",
+  "coupon_type": "FIXED_PERCENTAGE",  ← o "FIXED_AMOUNT"
+  "discount_percentage": 15,          ← para FIXED_PERCENTAGE
+  "max_uses": 500,
+  "start_date": "...", "finish_date": "..."
+}
+```
+⚠️ Solo disponible en MLB (Brasil). NO usar en MLM (México).
+
+---
+
+### PIX — NO es tipo de promoción
+
+PIX es el método de pago instantáneo de Brasil (equivalente a SPEI en México).
+**NO existe `promotion_type: "PIX"`** en la API de seller-promotions.
+No aplica para MLM (México). Si aparece en docs, es referencia al medio de pago, no a promos.
+
+---
+
+### ESTRATEGIA DE PROMOCIONES
 
 ```
-DOD (Deal of the Day) — Deal del Día:
-  - ML invita al vendedor vía Seller Central
-  - Requiere: descuento ≥ 30% + stock garantizado para 24h
-  - Posición prominente en la home de ML
+CASO                                   → TIPO RECOMENDADO
+──────────────────────────────────────────────────────────
+Liquidar stock sin bajar precio base   → PRICE_DISCOUNT (máx 14d) o SELLER_CAMPAIGN
+Evento estacional (Hot Sale, Buen Fin) → DEAL oficial (requiere invitación)
+Campaña propia fin de semana/temporal  → SELLER_CAMPAIGN (self-serve, sin invitación)
+Máxima visibilidad 24h                 → DOD (requiere invitación)
+Urgencia / escasez                     → LIGHTNING (requiere invitación, campo: stock)
+Aumentar ticket promedio               → VOLUME — BNGM/BNSP/SPONTH
+Co-financiar sin esfuerzo             → SMART o PRICE_MATCHING (automático)
+Generar lealtad compradores frecuentes → MARKETPLACE_CAMPAIGN co-financiada
+Premiar compradores Mercado Puntos L3+ → top_deal_price en DEAL/PRICE_DISCOUNT/DOD
+Brasil: acquisition                    → SELLER_COUPON_CAMPAIGN
 
-Traditional Campaign (ej: Hot Sale, Buen Fin):
-  - Seller Central → Herramientas de marketing → Eventos
-  - Requiere: descuento ≥ 20% vs precio histórico verificado por ML
-  - Badge oficial del evento → visibilidad premium
+Descuento mínimo visible (badge):      10%
+Descuento máximo permitido:            80%
+PRICE_DISCOUNT duración máxima:        14 días (desde 03/24/2025)
 ```
 
-### Co-funded campaigns
-
-```
-ML aporta parte del descuento (típicamente 5-10%)
-Vendedor aporta el resto
-Ejemplo: descuento total 20% → ML cubre 8%, vendedor cubre 12%
-
-Cómo activar: Seller Central → Promociones → Co-financiadas
-Requiere: historial de ventas sólido + reputación verde
-```
-
-### Estrategia de promociones según caso
-
-```
-Liquidar stock lento sin bajar precio base:  → DIGITAL_COUPON
-Evento estacional (Hot Sale, Buen Fin):       → CAMPAIGN oficial
-Generar urgencia de compra:                   → FLASH_SALE (horas limitadas)
-Incentivar compra recurrente:                 → LOYALTY_DISCOUNT
-Aumentar ticket promedio:                     → CROSS_SELLING/BUNDLE
-Máxima visibilidad en categoría:              → DOD (si ML invita)
-```
+### CAMPOS top_deal_price — Aclaración importante
+`top_deal_price` existe en DEAL, PRICE_DISCOUNT, DOD, SELLER_CAMPAIGN.
+**NO** es para ganar competencia interna de ML.
+**SÍ** es precio especial para compradores con Mercado Puntos nivel 3, 4, 5 o 6 (buyers leales).
+Siempre debe ser menor que `deal_price`.
 
 ## 10. RECLAMOS Y DEVOLUCIONES — API 2024+
 

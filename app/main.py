@@ -5946,7 +5946,40 @@ async def products_deals_partial(request: Request):
         deals_revenue = sum(p.get("revenue_30d", 0) for p in active_deals)
         deals_units = sum(p.get("units_30d", 0) for p in active_deals)
 
+        # Calcular días restantes para cada deal activo (basado en _promo_finish)
+        for p in active_deals:
+            pf = p.get("_promo_finish")
+            p["_days_remaining"] = None
+            if pf:
+                try:
+                    fin_str = str(pf)[:19].replace("T", " ")
+                    fin = datetime.strptime(fin_str, "%Y-%m-%d %H:%M:%S")
+                    p["_days_remaining"] = max(0, (fin - now).days)
+                except Exception:
+                    try:
+                        p["_days_remaining"] = max(0, (datetime.strptime(str(pf)[:10], "%Y-%m-%d") - now).days)
+                    except Exception:
+                        pass
+
+        # Score de oportunidad para candidatos (ventas × peso + margen disponible + stock BM)
+        for p in candidates:
+            ventas = p.get("units_30d", 0) or 0
+            margen = p.get("_margen_pct") or 0
+            bm_stock = p.get("_bm_avail", 0) or 0
+            score = (ventas * 3.0) + (max(0.0, margen - 10.0) * 0.8) + (min(bm_stock, 60) * 0.25)
+            p["_opp_score"] = round(score, 1)
+
         recs = []
+        # 0. Deals próximos a vencer (urgente — insert al inicio)
+        expiring_soon = [p for p in active_deals if p.get("_days_remaining") is not None and p["_days_remaining"] <= 5]
+        if expiring_soon:
+            expiring_soon.sort(key=lambda p: p.get("_days_remaining", 99))
+            recs.append({
+                "type": "danger", "icon": "!",
+                "title": f"{len(expiring_soon)} deal(s) vencen en los proximos 5 dias",
+                "desc": "Si vencen sin renovar perdes posicionamiento. Revisa y renueva los que esten vendiendo bien.",
+                "products": [{"id": p["id"], "title": p["title"][:40], "detail": f"{p.get('_days_remaining', '?')}d — {p.get('_promo_type_str', 'DEAL')}"} for p in expiring_soon[:5]],
+            })
         neg_margin = [p for p in active_deals if p.get("_margen_pct") is not None and p["_margen_pct"] < 0]
         if neg_margin:
             neg_margin.sort(key=lambda p: p["_margen_pct"])
@@ -8798,6 +8831,57 @@ async def attributes_widget_partial(request: Request):
         })
     except Exception:
         return HTMLResponse("")
+    finally:
+        await client.close()
+
+
+@app.get("/api/ads/campaigns/{campaign_id}/items")
+async def get_campaign_items_api(campaign_id: str):
+    """Obtiene los productos/items asignados a una campaña de Product Ads (lectura)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+    try:
+        data = await client.get_campaign_items(campaign_id, limit=200)
+        raw_items = data.get("results", [])
+        # Extraer item_ids únicos
+        item_ids = list({r.get("item_id") or r.get("id") for r in raw_items if r.get("item_id") or r.get("id")})
+        # Enriquecer con título/thumbnail en chunks de 20
+        details: dict = {}
+        for i in range(0, min(len(item_ids), 100), 20):
+            chunk = item_ids[i:i+20]
+            try:
+                bulk = await client.get_items_details(chunk)
+                if isinstance(bulk, list):
+                    for it in bulk:
+                        if it and isinstance(it, dict):
+                            iid = it.get("id", "")
+                            details[iid] = {
+                                "title": it.get("title", ""),
+                                "thumbnail": (it.get("thumbnail") or "").replace("http://", "https://"),
+                                "price": it.get("price", 0),
+                                "permalink": it.get("permalink", ""),
+                                "status": it.get("status", ""),
+                            }
+            except Exception:
+                pass
+        items = []
+        for r in raw_items:
+            item_id = r.get("item_id") or r.get("id") or ""
+            info = details.get(item_id, {})
+            items.append({
+                "item_id": item_id,
+                "title": info.get("title") or r.get("title", item_id),
+                "thumbnail": info.get("thumbnail", ""),
+                "price": info.get("price") or r.get("price", 0),
+                "permalink": info.get("permalink", ""),
+                "ad_status": r.get("status", ""),
+                "listing_status": info.get("status", ""),
+            })
+        items.sort(key=lambda x: x["title"])
+        return JSONResponse({"items": items, "total": len(items), "campaign_id": campaign_id})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
     finally:
         await client.close()
 

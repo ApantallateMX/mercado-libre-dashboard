@@ -144,6 +144,14 @@
                 {% if p.get('_deal_is_ml_auto') %}
                 <span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold text-[10px]">ML Auto</span>
                 {% endif %}
+                {% set _mpt = p.get('_promo_type_str', '') %}
+                {% if _mpt %}<span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-medium text-[10px]">{{ _mpt | replace('_',' ') | truncate(14, true, '') }}</span>{% endif %}
+                {% set _mdays = p.get('_days_remaining') %}
+                {% if _mdays is not none %}
+                <span class="px-1.5 py-0.5 rounded font-semibold text-[10px] {% if _mdays <= 2 %}bg-red-100 text-red-600{% elif _mdays <= 5 %}bg-orange-100 text-orange-600{% else %}bg-gray-50 text-gray-400{% endif %}">
+                    {% if _mdays == 0 %}Vence hoy{% elif _mdays == 1 %}1d{% else %}{{ _mdays }}d{% endif %}
+                </span>
+                {% endif %}
                 {# Precio lista (tachado) y precio deal real #}
                 {% set _pdeal_m = p.get('_promo_deal_price') %}
                 {% if _pdeal_m and _pdeal_m > 0 and _pdeal_m < p.price %}
@@ -226,6 +234,7 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">P. Lista</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">P. Deal</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Desc.</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs whitespace-nowrap">Tipo / Vence</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail BM</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Neto ML</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">% Retail</th>
@@ -319,6 +328,36 @@
                         {% else %}
                         <span class="text-gray-400 text-xs">-</span>
                         {% endif %}
+                    </td>
+                    {# Tipo / Vence #}
+                    <td class="px-3 py-2 text-center">
+                        {% set _ptype = p.get('_promo_type_str', '') %}
+                        {% set _days = p.get('_days_remaining') %}
+                        <div class="flex flex-col items-center gap-0.5">
+                            {% if _ptype %}
+                            {% set _type_colors = {
+                                'DEAL': 'bg-green-100 text-green-700',
+                                'PRICE_DISCOUNT': 'bg-gray-100 text-gray-700',
+                                'MARKETPLACE_CAMPAIGN': 'bg-purple-100 text-purple-700',
+                                'DOD': 'bg-indigo-100 text-indigo-700',
+                                'LIGHTNING': 'bg-yellow-100 text-yellow-700',
+                                'SMART': 'bg-blue-100 text-blue-600',
+                                'PRE_NEGOTIATED': 'bg-blue-100 text-blue-600',
+                                'SELLER_CAMPAIGN': 'bg-orange-100 text-orange-700'
+                            } %}
+                            {% set _tc = _type_colors.get(_ptype, 'bg-gray-100 text-gray-600') %}
+                            <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold {{ _tc }}">{{ _ptype | replace('_', ' ') | truncate(14, true, '') }}</span>
+                            {% elif p.get('_deal_is_ml_auto') %}
+                            <span class="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-blue-100 text-blue-600">ML AUTO</span>
+                            {% else %}
+                            <span class="text-gray-300 text-[9px]">—</span>
+                            {% endif %}
+                            {% if _days is not none %}
+                            <span class="text-[9px] font-medium {% if _days <= 2 %}text-red-600 animate-pulse{% elif _days <= 5 %}text-orange-500{% else %}text-gray-400{% endif %}">
+                                {% if _days == 0 %}Vence hoy{% elif _days == 1 %}1 día{% else %}{{ _days }}d{% endif %}
+                            </span>
+                            {% endif %}
+                        </div>
                     </td>
                     <td class="px-3 py-2 text-right">
                         {% if p.get('_retail_mxn') and p._retail_mxn > 0 %}
@@ -478,9 +517,10 @@
     <div class="flex items-start gap-4 mb-3 flex-wrap bg-white rounded-lg shadow p-3">
         <div class="flex items-center gap-2 flex-wrap">
             <p class="text-xs text-gray-500 font-medium">Ordenar:</p>
-            <div class="flex gap-1">
-                <button onclick="sortCandidates('stock')" id="sort-stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-yellow-100 text-yellow-700 border border-yellow-300">Stock</button>
+            <div class="flex gap-1 flex-wrap">
+                <button onclick="sortCandidates('score')" id="sort-score" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-indigo-100 text-indigo-700 border border-indigo-300">Score</button>
                 <button onclick="sortCandidates('sales')" id="sort-sales" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Ventas</button>
+                <button onclick="sortCandidates('stock')" id="sort-stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock</button>
                 <button onclick="sortCandidates('margin')" id="sort-margin" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">% Retail</button>
                 <button onclick="sortCandidates('price')" id="sort-price" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Precio</button>
                 <button onclick="sortCandidates('bm_stock')" id="sort-bm_stock" class="sort-btn px-2.5 py-1 text-[11px] rounded font-medium bg-gray-100 text-gray-600 hover:bg-gray-200">Stock BM</button>
@@ -493,6 +533,14 @@
                 {% for cat in categories %}
                 <option value="{{ cat }}">{{ cat }} ({{ cat_counts[cat] }})</option>
                 {% endfor %}
+            </select>
+            <p class="text-xs text-gray-500 font-medium">Margen:</p>
+            <select id="margin-filter" onchange="filterByMargin()" class="text-xs border rounded px-2 py-1 bg-white text-gray-700">
+                <option value="0">Todos</option>
+                <option value="10">&gt;10%</option>
+                <option value="15">&gt;15%</option>
+                <option value="20">&gt;20%</option>
+                <option value="30">&gt;30%</option>
             </select>
         </div>
     </div>
@@ -587,6 +635,7 @@
                 <tr>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Categoria</th>
+                    <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Score</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">% Retail</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
@@ -603,6 +652,8 @@
                     data-sales="{{ p.get('units_30d', 0) }}"
                     data-account="{{ p.get('_account_id', '') }}"
                     data-margin="{{ p.get('_recup_retail_pct', -999) if p.get('_recup_retail_pct') is not none else -999 }}"
+                    data-margin-val="{{ p.get('_margen_pct', -999) if p.get('_margen_pct') is not none else -999 }}"
+                    data-score="{{ p.get('_opp_score', 0) }}"
                     data-price="{{ p.price }}"
                     data-bm-stock="{{ p.get('_bm_avail', 0) if p.get('_bm_avail') is not none else 0 }}"
                     data-category="{{ p.get('category_name', '') }}"
@@ -630,6 +681,18 @@
                     </td>
                     <td class="px-3 py-2">
                         <span class="text-[10px] text-gray-500 leading-tight block max-w-[100px] truncate" title="{{ p.get('category_name', '') }}">{{ p.get('category_name', '-') }}</span>
+                    </td>
+                    {# Score de oportunidad #}
+                    <td class="px-3 py-2 text-center">
+                        {% set _sc = p.get('_opp_score', 0) %}
+                        <span class="inline-block px-2 py-0.5 rounded text-[10px] font-bold
+                            {% if _sc >= 30 %}bg-indigo-100 text-indigo-700
+                            {% elif _sc >= 15 %}bg-blue-100 text-blue-700
+                            {% elif _sc >= 5 %}bg-gray-100 text-gray-600
+                            {% else %}bg-gray-50 text-gray-400{% endif %}"
+                            title="Score = ventas×3 + (margen-10)×0.8 + stock_bm×0.25">
+                            {{ "%.0f"|format(_sc) }}
+                        </span>
                     </td>
                     <td class="px-3 py-2 text-right font-semibold text-gray-700 text-xs">${{ "{:,.0f}".format(p.price) }}</td>
                     <td class="px-3 py-2 text-center">
@@ -1056,11 +1119,14 @@ function paginateTable(tableId, rowClass, search, page, prefix) {
 
     var mainRows = Array.from(tbody.querySelectorAll('tr.' + rowClass));
 
-    // Filter by search + category (for candidates)
+    // Filter by search + category + margin (for candidates)
     var catFilter = '';
+    var marginMin = 0;
     if (prefix === 'cd') {
         var catEl = document.getElementById('cat-filter');
         if (catEl) catFilter = catEl.value;
+        var marginEl = document.getElementById('margin-filter');
+        if (marginEl) marginMin = parseFloat(marginEl.value) || 0;
     }
 
     var visible = [];
@@ -1073,6 +1139,10 @@ function paginateTable(tableId, rowClass, search, page, prefix) {
         if (match && catFilter) {
             var cat = row.getAttribute('data-category') || '';
             if (cat !== catFilter) match = false;
+        }
+        if (match && marginMin > 0) {
+            var mval = parseFloat(row.getAttribute('data-margin-val'));
+            if (isNaN(mval) || mval < marginMin) match = false;
         }
         if (match && _recFilterIds && prefix === 'ad') {
             var rowId = (row.getAttribute('data-id') || '').toLowerCase();
@@ -2205,6 +2275,11 @@ function filterByCategory() {
     _cdCurrentPage = 1;
     applySearchAndPaginate();
 }
+
+window.filterByMargin = function() {
+    _cdCurrentPage = 1;
+    applySearchAndPaginate();
+};
 
 // ===== Sorting generico =====
 function _sortTable(tableId, rowClass, btnClass, activeClass, field) {
