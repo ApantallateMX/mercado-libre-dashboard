@@ -9434,6 +9434,8 @@ async def activate_item_promotion_api(item_id: str, request: Request):
             kwargs["promotion_id"] = body["promotion_id"]
         if body.get("is_modification"):
             kwargs["is_modification"] = True
+        if body.get("stock") is not None:
+            kwargs["stock"] = int(body["stock"])
         result = await client.activate_item_promotion(
             item_id, float(deal_price), promotion_type, **kwargs
         )
