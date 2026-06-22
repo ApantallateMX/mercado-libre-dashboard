@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-22 — FEAT: Ads tab mejoras 1-7 — ROAS primario, IS%, estrategia real, bonificaciones, Brand Ads tab, ops UX
+
+### Motivación
+Refactorización completa de la pestaña Mercado Ads para alinearse con la API 2026 (ROAS reemplaza ACOS deprecated Mar-2026), agregar columna IS% de impression share, estrategia real desde API, bonificaciones de créditos, tab Brand Ads con aviso de migración Jun-17-2026, y mejoras de operaciones (botón +20% budget, input ROAS objetivo).
+
+### Cambios — Commit 643dd4e
+
+**Backend `meli_client.py`:**
+- `get_ads_campaigns`: agrega `acos` a métricas solicitadas
+- Migración paths write: `update_campaign`, `create_campaign`, `assign_items_to_campaign` → `/advertising/MLM/` (sin `/marketplace/`)
+- Nuevo `get_bads_campaigns()` — Brand Ads search con manejo de migración Jun-17-2026
+
+**Backend `main.py`:**
+- `_enrich_campaigns`: agrega `strategy` (PROFITABILITY/INCREASE/VISIBILITY con fallback por ACOS), `roas_target`, `acos` real de API
+- `POST /api/ads/campaigns/{id}`: pasa `roas_target` al `update_campaign`
+- `POST /api/ads/campaigns`: pasa `roas_target` + `strategy` al `create_campaign`
+- `POST /api/ads/campaigns-with-items`: pasa `roas_target` + `strategy`
+- Nuevo `GET /partials/ads-brand` — partial Brand Ads
+
+**Frontend `ads.html`:**
+- KPI bar: ROAS primero, ACOS marcado como legacy (opaco)
+- `kpiCardAcos()` — variante opaca para KPIs deprecated
+- `loadBonificaciones()` — carga async créditos de ads, muestra alerta si vencen ≤7 días, oculto si vacío
+- Tab "Brand Ads" + panel `panel-brand`
+- `saveRoasTarget(campaignId, inputId, btn)` — reemplaza `saveAcos()` (deprecated)
+- `quickBudgetIncrease(campaignId, current, inputId, btn)` — aplica +20% al budget en un click
+
+**Frontend `ads_campaigns.html`:**
+- Desktop: nueva columna IS% (impression share %) con badge -X% budget si pierde >10%
+- Desktop: celda ROAS muestra objetivo en pequeño debajo del valor real
+- Badge Estrategia: usa campo real `c.strategy` (PROFITABILITY/INCREASE/VISIBILITY) desde API + fallback
+- ACOS expandido: marcado como "(legacy)", fuente gris
+- ROAS objetivo en expandido: campo dedicado
+- ACOS Target input → ROAS Target input (min=1, max=35, step=0.5)
+- Botón "+20%" junto a Guardar presupuesto
+- Perdidas x Ranking en expanded row (lost_by_rank)
+
+**Frontend `ads_brand.html`** (nuevo):
+- Muestra aviso migración Jun-17-2026 si BADS retorna vacío
+- Tabla de campanas BADS si existen datos activos
+
+### Nota técnica
+ML API campaigns endpoint rechaza `impression_share` como métrica (cambio de API). IS% column queda cargada con 0 hasta identificar endpoint correcto. El campo existe en `_enrich_campaigns` listo para cuando se resuelva.
+
+---
+
 ## 2026-06-19 — FEAT: Dashboard ML completo — 8 mejoras de ventas (CVR, ratings, tendencias, best sellers, purchase experience, returns breakdown, atributos, mensajes)
 
 ### Motivación
