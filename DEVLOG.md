@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-22 — FEAT: Deals tab mejoras + Agente ML Ads actualizado
+
+### Motivación
+Mejorar la sección Deals dentro del tab Productos para tomar mejores decisiones: saber cuándo vencen los deals activos, ordenar candidatos por oportunidad real (no solo ventas), filtrar por margen mínimo. Actualizar el agente mercadolibre-strategist con knowledge de PADS/BADS escritura y match types.
+
+### Cambios — Commit 16fbe47
+
+**Backend `main.py` (`GET /partials/products-deals`):**
+- `_days_remaining`: calcula días restantes para cada deal activo usando `_promo_finish`
+- `_opp_score`: score de oportunidad para candidatos = `(ventas×3.0) + (max(0, margen-10)×0.8) + (min(bm_stock,60)×0.25)`
+- Recomendación "deals por vencer en 5 días" insertada como prioridad máxima (index 0)
+
+**Frontend `products_deals.html`:**
+- Columna "Tipo / Vence" en tabla de deals activos: badge de tipo + badge días restantes (rojo <2d animado, naranja <5d, gris >5d)
+- Mismo badge en tarjetas mobile de deals activos
+- Botón "Score" (indigo, default activo) en sort controls de candidatos
+- Select "Margen mínimo" (0%, 5%, 10%, 15%, 20%) para filtrar candidatos
+- Columna "Score" en tabla candidatos con badge por tier (≥30 indigo, ≥15 azul, ≥5 gris, <5 gris claro)
+- `data-score` y `data-margin-val` en cada fila `<tr>` de candidatos
+- JS: `window.filterByMargin()` + `paginateTable` respeta `margin-filter` via `data-margin-val`
+
+**Agente `.claude/agents/mercadolibre-strategist.md`:**
+- PADS ESCRITURA: create/update campaigns, ad groups, pausa <30d preserva modelo
+- BADS match types: BROAD/PHRASE/EXACT con estrategia por fases (lanzamiento → optimización → escala)
+- BADS escritura: payload completo CREATE/UPDATE, advertencia migración jun-17-2026 retorna 204
+- Catálogo PAds: identificación dual, diferencia subasta buy box vs resultados, family_id variantes
+- Bonificaciones lifecycle: balance consumption, expiración, no-apilamiento, validación
+
+---
+
 ## 2026-06-22 — FEAT: Ads tab mejoras 1-7 — ROAS primario, IS%, estrategia real, bonificaciones, Brand Ads tab, ops UX
 
 ### Motivación
