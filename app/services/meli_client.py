@@ -729,7 +729,7 @@ class MeliClient:
         Nota: acos deprecado Mar-2026 → usar roas. Agrega impression_share y lost_impression_share."""
         adv_id = await self._get_advertiser_id()
         params = {
-            "metrics": "clicks,prints,cost,cpc,roas,units_quantity,total_amount,impression_share,lost_impression_share_by_budget,lost_impression_share_by_ad_rank",
+            "metrics": "clicks,prints,cost,cpc,acos,roas,units_quantity,total_amount",
             "metrics_summary": "true",
         }
         if date_from:
@@ -813,7 +813,7 @@ class MeliClient:
         elif acos_target is not None:
             payload["acos_target"] = max(3, min(500, acos_target))
         return await self._ads_put(
-            f"/marketplace/advertising/MLM/product_ads/campaigns/{campaign_id}",
+            f"/advertising/MLM/product_ads/campaigns/{campaign_id}",
             json=payload
         )
 
@@ -834,7 +834,7 @@ class MeliClient:
         elif acos_target is not None:
             payload["acos_target"] = max(3, min(500, acos_target))
         return await self._ads_post(
-            f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns",
+            f"/advertising/MLM/advertisers/{adv_id}/product_ads/campaigns",
             json=payload
         )
 
@@ -847,7 +847,7 @@ class MeliClient:
         batch = item_ids[:10000]
         try:
             resp = await self._ads_put(
-                f"/marketplace/advertising/MLM/advertisers/{adv_id}/product_ads/ads",
+                f"/advertising/MLM/advertisers/{adv_id}/product_ads/ads",
                 params={"channel": "marketplace"},
                 json={
                     "target": batch,
@@ -1429,6 +1429,26 @@ class MeliClient:
             return actions
         except Exception:
             return []
+
+    async def get_bads_campaigns(self, date_from: str = None, date_to: str = None) -> dict:
+        """Obtiene campañas Brand Ads (BADS). Post Jun-17-2026 pueden estar migradas a PAds (retorna vacío)."""
+        adv_id = await self._get_advertiser_id()
+        params: dict = {
+            "metrics": "clicks,prints,cost,cpc,roas,units_quantity,total_amount",
+            "metrics_summary": "true",
+        }
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+        try:
+            data = await self._ads_get(
+                f"/advertising/MLM/advertisers/{adv_id}/brand_ads/campaigns/search",
+                params=params,
+            )
+            return data if isinstance(data, dict) else {"results": []}
+        except Exception:
+            return {"results": [], "migrated": True}
 
     async def get_ads_bonificaciones(self) -> list:
         """GET /advertising/advertisers/bonifications — créditos de ads con vencimiento."""

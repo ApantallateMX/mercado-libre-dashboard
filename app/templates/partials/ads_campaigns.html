@@ -28,7 +28,7 @@
         </div>
 
         <!-- Budget + units summary -->
-        <div class="text-xs text-gray-500 mt-1">Presup.: ${{ "%.2f"|format(c.daily_budget or 0) }}/dia | Uds: {{ c.units or 0 }}</div>
+        <div class="text-xs text-gray-500 mt-1">Presup.: ${{ "%.2f"|format(c.daily_budget or 0) }}/dia | Uds: {{ c.units or 0 }} | IS: {{ "%.1f"|format(c.impression_share or 0) }}%</div>
 
         <!-- Expandable detail section -->
         <div class="camp-detail hidden mt-3 pt-3 border-t border-gray-200">
@@ -49,6 +49,14 @@
                     <p class="text-sm font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' }}">{{ "%.1f"|format(c.impression_share or 0) }}%</p>
                 </div>
                 <div>
+                    <p class="text-gray-400 uppercase">Perd. x Budget</p>
+                    <p class="text-sm font-semibold {{ 'text-red-600' if (c.lost_by_budget or 0) > 20 else 'text-yellow-600' if (c.lost_by_budget or 0) > 10 else 'text-gray-800' }}">{{ "%.1f"|format(c.lost_by_budget or 0) }}%</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">Perd. x Rank</p>
+                    <p class="text-sm font-semibold {{ 'text-red-600' if (c.lost_by_rank or 0) > 20 else 'text-yellow-600' if (c.lost_by_rank or 0) > 10 else 'text-gray-800' }}">{{ "%.1f"|format(c.lost_by_rank or 0) }}%</p>
+                </div>
+                <div>
                     <p class="text-gray-400 uppercase">CTR</p>
                     <p class="text-sm font-semibold {{ 'text-green-600' if (c.ctr or 0) > 0.5 else 'text-gray-800' }}">{{ "%.2f"|format(c.ctr or 0) }}%</p>
                 </div>
@@ -57,8 +65,12 @@
                     <p class="text-sm font-semibold text-gray-800">${{ "%.2f"|format(c.cpc or 0) }}</p>
                 </div>
                 <div>
-                    <p class="text-gray-400 uppercase">ACOS</p>
-                    <p class="text-sm font-semibold {{ 'text-green-600' if (c.acos or 0) <= 15 else 'text-red-600' if (c.acos or 0) > 30 else 'text-yellow-600' }}">{{ "%.1f"|format(c.acos or 0) }}%</p>
+                    <p class="text-gray-400 uppercase">ROAS</p>
+                    <p class="text-sm font-semibold {{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' }}">{{ "%.2f"|format(c.roas or 0) }}x</p>
+                </div>
+                <div>
+                    <p class="text-gray-400 uppercase">ACOS <span class="text-gray-300">(legacy)</span></p>
+                    <p class="text-sm font-semibold text-gray-500">{{ "%.1f"|format(c.acos or 0) }}%</p>
                 </div>
             </div>
 
@@ -106,7 +118,7 @@
                     <!-- Edit Budget -->
                     <div class="flex items-end gap-2">
                         <div class="flex-1">
-                            <label class="block text-xs text-gray-500 mb-1">Presupuesto diario</label>
+                            <label class="block text-xs text-gray-500 mb-1">Presupuesto diario ($MXN)</label>
                             <input type="number" step="0.01" min="1" value="{{ '%.2f'|format(c.daily_budget or 0) }}"
                                    id="m-budget-input-{{ c.id }}"
                                    onclick="event.stopPropagation()"
@@ -117,17 +129,23 @@
                             Guardar
                         </button>
                     </div>
+                    <div>
+                        <button type="button" onclick="event.stopPropagation(); quickBudgetIncrease('{{ c.id }}', {{ c.daily_budget or 0 }}, 'm-budget-input-{{ c.id }}', this)"
+                                class="w-full px-3 py-1.5 text-xs font-medium rounded bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition">
+                            Aumentar +20%
+                        </button>
+                    </div>
 
-                    <!-- Edit ACOS Target -->
+                    <!-- ROAS Target -->
                     <div class="flex items-end gap-2">
                         <div class="flex-1">
-                            <label class="block text-xs text-gray-500 mb-1">ACOS Target (3-500)</label>
-                            <input type="number" step="1" min="3" max="500" value="{{ '%.0f'|format(c.acos or 15) }}"
-                                   id="m-acos-input-{{ c.id }}"
+                            <label class="block text-xs text-gray-500 mb-1">ROAS objetivo (x)</label>
+                            <input type="number" step="0.5" min="1" max="35" value="{{ '%.1f'|format(c.roas_target or c.roas or 4.0) }}"
+                                   id="m-roas-input-{{ c.id }}"
                                    onclick="event.stopPropagation()"
                                    class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:border-yellow-400 focus:outline-none">
                         </div>
-                        <button type="button" onclick="event.stopPropagation(); var inp=document.getElementById('m-acos-input-{{ c.id }}'); var v=parseFloat(inp.value); if(isNaN(v)||v<3||v>500){alert('ACOS target debe estar entre 3 y 500');return;} _campAction('{{ c.id }}',{acos_target:v},this,'Guardado');"
+                        <button type="button" onclick="event.stopPropagation(); saveRoasTarget('{{ c.id }}', 'm-roas-input-{{ c.id }}', this)"
                                 class="px-3 py-1.5 text-sm font-medium rounded bg-yellow-400 text-gray-800 hover:bg-yellow-500 transition whitespace-nowrap">
                             Guardar
                         </button>
@@ -152,8 +170,9 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Presup. Diario</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Gasto</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingresos</th>
-            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Uds Vendidas</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Uds</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Clics</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Impression Share — porcentaje de impresiones capturadas">IS%</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROAS</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
         </tr>
@@ -167,16 +186,16 @@
                 <span class="ml-1 px-1.5 py-0.5 text-xs bg-red-100 text-red-700 rounded font-medium" title="Presupuesto limita {{ '%.0f'|format(c.lost_by_budget or 0) }}% de impresiones">Budget</span>
                 {% endif %}
             </td>
-            <!-- Badge de estrategia inferida por ACOS -->
+            <!-- Badge de estrategia desde la API (con fallback inferido) -->
             <td class="px-4 py-3 text-center">
-                {% if c.cost == 0 or c.revenue == 0 %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500" title="Sin ventas registradas">Sin ventas</span>
-                {% elif (c.acos or 0) <= 15 %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium" title="ACOS ≤ 15% — muy eficiente">Rentabilidad</span>
-                {% elif (c.acos or 0) <= 30 %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 font-medium" title="ACOS 15-30% — crecimiento">Crecimiento</span>
+                {% if c.strategy == 'PROFITABILITY' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-medium" title="Estrategia de Rentabilidad — ROAS alto">Rentabilidad</span>
+                {% elif c.strategy == 'INCREASE' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 font-medium" title="Estrategia de Crecimiento — balance gasto/ventas">Crecimiento</span>
+                {% elif c.strategy == 'VISIBILITY' %}
+                <span class="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-medium" title="Estrategia de Visibilidad — maximizar impresiones">Visibilidad</span>
                 {% else %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700 font-medium" title="ACOS > 30% — visibilidad">Visibilidad</span>
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">—</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 text-center" id="camp-status-badge-{{ c.id }}">
@@ -193,8 +212,21 @@
             <td class="px-4 py-3 text-sm text-right font-medium text-green-600">${{ "%.2f"|format(c.revenue or 0) }}</td>
             <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.units or 0 }}</td>
             <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.clicks or 0 }}</td>
-            <td class="px-4 py-3 text-sm text-right font-bold {{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' }}">
-                {{ "%.2f"|format(c.roas or 0) }}x
+            <td class="px-4 py-3 text-sm text-right">
+                <span class="font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' if (c.impression_share or 0) >= 20 else 'text-red-600' }}">
+                    {{ "%.1f"|format(c.impression_share or 0) }}%
+                </span>
+                {% if (c.lost_by_budget or 0) > 10 %}
+                <div class="text-xs text-red-500 leading-tight">-{{ "%.0f"|format(c.lost_by_budget or 0) }}% bgt</div>
+                {% endif %}
+            </td>
+            <td class="px-4 py-3 text-right">
+                <span class="text-sm font-bold {{ 'text-green-600' if (c.roas or 0) >= 3 else 'text-red-600' }}">
+                    {{ "%.2f"|format(c.roas or 0) }}x
+                </span>
+                {% if c.roas_target %}
+                <div class="text-xs text-gray-400 leading-tight">obj: {{ "%.1f"|format(c.roas_target) }}x</div>
+                {% endif %}
             </td>
             <td class="px-4 py-3 text-center">
                 <span class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 select-none">
@@ -204,7 +236,7 @@
         </tr>
         <!-- Fila expandible con metricas + acciones -->
         <tr class="hidden">
-            <td colspan="10" class="px-0 py-0">
+            <td colspan="11" class="px-0 py-0">
                 <div class="bg-gray-50 border-l-4 {{ 'border-red-500' if c.throttled_by_budget else 'border-yellow-400' }} px-6 py-4">
 
                     <!-- Alerta presupuesto limitando visibilidad -->
@@ -218,18 +250,22 @@
                     </div>
                     {% endif %}
 
-                    <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div>
                             <p class="text-xs text-gray-400 uppercase">Impresiones</p>
                             <p class="text-lg font-semibold text-gray-800">{{ "{:,}".format(c.impressions or 0) }}</p>
                         </div>
                         <div>
-                            <p class="text-xs text-gray-400 uppercase">Share impr.</p>
+                            <p class="text-xs text-gray-400 uppercase">Impression Share</p>
                             <p class="text-lg font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' if (c.impression_share or 0) >= 20 else 'text-red-600' }}">{{ "%.1f"|format(c.impression_share or 0) }}%</p>
                         </div>
                         <div>
                             <p class="text-xs text-gray-400 uppercase">Perdidas x Budget</p>
                             <p class="text-lg font-semibold {{ 'text-red-600' if (c.lost_by_budget or 0) > 20 else 'text-yellow-600' if (c.lost_by_budget or 0) > 10 else 'text-gray-800' }}">{{ "%.1f"|format(c.lost_by_budget or 0) }}%</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400 uppercase">Perdidas x Ranking</p>
+                            <p class="text-lg font-semibold {{ 'text-red-600' if (c.lost_by_rank or 0) > 20 else 'text-yellow-600' if (c.lost_by_rank or 0) > 10 else 'text-gray-800' }}">{{ "%.1f"|format(c.lost_by_rank or 0) }}%</p>
                         </div>
                         <div>
                             <p class="text-xs text-gray-400 uppercase">CTR</p>
@@ -240,8 +276,12 @@
                             <p class="text-lg font-semibold text-gray-800">${{ "%.2f"|format(c.cpc or 0) }}</p>
                         </div>
                         <div>
-                            <p class="text-xs text-gray-400 uppercase">ACOS</p>
-                            <p class="text-lg font-semibold {{ 'text-green-600' if (c.acos or 0) <= 15 else 'text-red-600' if (c.acos or 0) > 30 else 'text-yellow-600' }}">{{ "%.1f"|format(c.acos or 0) }}%</p>
+                            <p class="text-xs text-gray-400 uppercase">ROAS objetivo</p>
+                            <p class="text-lg font-semibold text-gray-800">{{ "%.1f"|format(c.roas_target or 0) if c.roas_target else '—' }}{% if c.roas_target %}x{% endif %}</p>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400 uppercase">ACOS <span class="text-gray-300 normal-case">(legacy)</span></p>
+                            <p class="text-lg font-semibold text-gray-500">{{ "%.1f"|format(c.acos or 0) }}%</p>
                         </div>
                     </div>
                     {% if c.cost > 0 %}
@@ -290,7 +330,7 @@
                             <!-- Editar Presupuesto -->
                             <div class="flex items-end gap-2">
                                 <div>
-                                    <label class="block text-xs text-gray-500 mb-1">Presupuesto diario</label>
+                                    <label class="block text-xs text-gray-500 mb-1">Presupuesto diario ($MXN)</label>
                                     <input type="number" step="0.01" min="1" value="{{ '%.2f'|format(c.daily_budget or 0) }}"
                                            id="budget-input-{{ c.id }}"
                                            onclick="event.stopPropagation()"
@@ -300,18 +340,22 @@
                                         class="px-3 py-1.5 text-sm font-medium rounded bg-yellow-400 text-gray-800 hover:bg-yellow-500 transition">
                                     Guardar
                                 </button>
+                                <button type="button" onclick="event.stopPropagation(); quickBudgetIncrease('{{ c.id }}', {{ c.daily_budget or 0 }}, 'budget-input-{{ c.id }}', this)"
+                                        class="px-3 py-1.5 text-sm font-medium rounded bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-200 transition" title="Aumentar presupuesto 20%">
+                                    +20%
+                                </button>
                             </div>
 
-                            <!-- Editar ACOS Target -->
+                            <!-- ROAS Target (reemplaza ACOS Target) -->
                             <div class="flex items-end gap-2">
                                 <div>
-                                    <label class="block text-xs text-gray-500 mb-1">ACOS Target (3-500)</label>
-                                    <input type="number" step="1" min="3" max="500" value="{{ '%.0f'|format(c.acos or 15) }}"
-                                           id="acos-input-{{ c.id }}"
+                                    <label class="block text-xs text-gray-500 mb-1">ROAS objetivo (1–35x)</label>
+                                    <input type="number" step="0.5" min="1" max="35" value="{{ '%.1f'|format(c.roas_target or c.roas or 4.0) }}"
+                                           id="roas-input-{{ c.id }}"
                                            onclick="event.stopPropagation()"
-                                           class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm focus:border-yellow-400 focus:outline-none">
+                                           class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm focus:border-yellow-400 focus:outline-none">
                                 </div>
-                                <button type="button" onclick="event.stopPropagation(); saveAcos('{{ c.id }}', this)"
+                                <button type="button" onclick="event.stopPropagation(); saveRoasTarget('{{ c.id }}', 'roas-input-{{ c.id }}', this)"
                                         class="px-3 py-1.5 text-sm font-medium rounded bg-yellow-400 text-gray-800 hover:bg-yellow-500 transition">
                                     Guardar
                                 </button>
@@ -323,7 +367,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="10" class="px-6 py-8 text-center text-gray-500">No se encontraron campanas</td>
+            <td colspan="11" class="px-6 py-8 text-center text-gray-500">No se encontraron campanas</td>
         </tr>
         {% endfor %}
     </tbody>

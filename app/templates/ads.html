@@ -50,7 +50,7 @@
 </div>
 
 <!-- KPIs secundarios (4 columnas) -->
-<div id="ads-metrics-2" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+<div id="ads-metrics-2" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-2">
     {% for i in range(4) %}
     <div class="bg-white p-3 rounded-lg shadow animate-pulse">
         <div class="h-3 bg-gray-200 rounded w-1/2 mb-1"></div>
@@ -58,6 +58,9 @@
     </div>
     {% endfor %}
 </div>
+
+<!-- Bonificaciones bar (carga async, se oculta si no hay creditos) -->
+<div id="ads-bonificaciones" class="mb-4"></div>
 
 <!-- Grafica Gasto vs Ingresos -->
 <div class="bg-white rounded-lg shadow mb-4">
@@ -97,6 +100,10 @@
             <button onclick="showTab('by-category')" id="tab-by-category"
                     class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
                 Por Categoria
+            </button>
+            <button onclick="showTab('brand')" id="tab-brand"
+                    class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
+                Brand Ads
             </button>
             <button onclick="showTab('burning')" id="tab-burning"
                     class="ads-tab px-5 py-3 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 whitespace-nowrap">
@@ -158,6 +165,21 @@
         <div id="ads-by-category-table">
             <div class="animate-pulse p-4 space-y-3">
                 {% for i in range(5) %}
+                <div class="h-12 bg-gray-200 rounded"></div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Brand Ads (BADS) -->
+    <div id="panel-brand" class="hidden">
+        <div class="px-6 py-3 border-b border-gray-100 flex items-center gap-2">
+            <h2 class="text-base font-semibold text-gray-800">Brand Ads</h2>
+            <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">BADS</span>
+        </div>
+        <div id="ads-brand-table">
+            <div class="animate-pulse p-4 space-y-3">
+                {% for i in range(3) %}
                 <div class="h-12 bg-gray-200 rounded"></div>
                 {% endfor %}
             </div>
@@ -415,12 +437,12 @@
 
     // === TABS ===
     var activeTab = 'campaigns';
-    var tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false, asignar: false };
+    var tabLoaded = { campaigns: false, performance: false, 'by-category': false, brand: false, burning: false, 'no-ads': false, asignar: false };
 
     function showTab(name) {
         activeTab = name;
         // Ocultar todos los panels
-        ['campaigns', 'performance', 'by-category', 'burning', 'no-ads', 'asignar'].forEach(function(t) {
+        ['campaigns', 'performance', 'by-category', 'brand', 'burning', 'no-ads', 'asignar'].forEach(function(t) {
             var panel = document.getElementById('panel-' + t);
             var tab = document.getElementById('tab-' + t);
             if (panel) panel.classList.add('hidden');
@@ -462,6 +484,11 @@
             tabLoaded.performance = true;
         } else if (name === 'by-category') {
             loadByCategory();
+        } else if (name === 'brand') {
+            showSpinner(document.getElementById('ads-brand-table'));
+            fetch('/partials/ads-brand?' + p)
+                .then(r => r.text())
+                .then(html => { document.getElementById('ads-brand-table').innerHTML = html; tabLoaded.brand = true; });
         } else if (name === 'burning') {
             showSpinner(document.getElementById('ads-burning-table'));
             fetch('/partials/ads-burning?' + p)
@@ -541,7 +568,7 @@
         btn.classList.add('opacity-50');
 
         // Reset tab loaded state
-        tabLoaded = { campaigns: false, performance: false, 'by-category': false, burning: false, 'no-ads': false, asignar: false };
+        tabLoaded = { campaigns: false, performance: false, 'by-category': false, brand: false, burning: false, 'no-ads': false, asignar: false };
 
         // KPIs
         fetch('/api/ads/metrics?' + p)
@@ -552,12 +579,14 @@
                     document.getElementById('ads-metrics-2').innerHTML = '';
                     return;
                 }
+                var roasVal = parseFloat(data.roas);
+                var acosVal = parseFloat(data.acos);
                 document.getElementById('ads-metrics').innerHTML =
+                    kpiCard('ROAS', data.roas + 'x', roasVal >= 3 ? 'text-green-600' : roasVal >= 1 ? 'text-yellow-600' : 'text-red-600') +
                     kpiCard('Gasto Total', '$' + fmt(data.total_cost), 'text-red-600') +
                     kpiCard('Ingresos Ads', '$' + fmt(data.total_revenue), 'text-green-600') +
                     kpiCard('Ventas', fmtInt(data.sales) + ' uds', 'text-gray-800') +
-                    kpiCard('ROAS', data.roas + 'x', parseFloat(data.roas) >= 3 ? 'text-green-600' : parseFloat(data.roas) >= 1 ? 'text-yellow-600' : 'text-red-600') +
-                    kpiCard('ACOS', data.acos + '%', parseFloat(data.acos) <= 15 ? 'text-green-600' : parseFloat(data.acos) <= 30 ? 'text-yellow-600' : 'text-red-600');
+                    kpiCardAcos('ACOS', data.acos + '%', acosVal <= 15 ? 'text-green-600' : acosVal <= 30 ? 'text-yellow-600' : 'text-red-600');
                 document.getElementById('ads-metrics-2').innerHTML =
                     kpiCardSmall('Impresiones', fmtInt(data.impressions), 'text-gray-700') +
                     kpiCardSmall('Clics', fmtInt(data.clicks), 'text-blue-600') +
@@ -568,6 +597,9 @@
                 document.getElementById('ads-metrics').innerHTML = '<div class="col-span-5 bg-white p-6 rounded-lg shadow text-center text-gray-500">Error cargando metricas de Ads</div>';
                 document.getElementById('ads-metrics-2').innerHTML = '';
             });
+
+        // Bonificaciones (creditos de ads)
+        loadBonificaciones();
 
         // Cargar tab activo
         loadTab(activeTab);
@@ -646,8 +678,39 @@
     function kpiCard(label, value, colorClass) {
         return '<div class="bg-white p-5 rounded-lg shadow"><p class="text-gray-500 text-sm">' + label + '</p><p class="text-2xl font-bold ' + colorClass + '">' + value + '</p></div>';
     }
+    function kpiCardAcos(label, value, colorClass) {
+        return '<div class="bg-white p-5 rounded-lg shadow opacity-70"><p class="text-gray-400 text-sm">' + label + ' <span class="text-xs text-gray-300">(legacy)</span></p><p class="text-2xl font-bold ' + colorClass + '">' + value + '</p></div>';
+    }
     function kpiCardSmall(label, value, colorClass) {
         return '<div class="bg-white p-3 rounded-lg shadow"><p class="text-gray-400 text-xs">' + label + '</p><p class="text-lg font-bold ' + colorClass + '">' + value + '</p></div>';
+    }
+
+    function loadBonificaciones() {
+        fetch('/api/ads/bonificaciones')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var bons = (data.bonificaciones || []).filter(function(b) { return b.balance > 0 && b.status !== 'expired'; });
+                if (bons.length === 0) {
+                    document.getElementById('ads-bonificaciones').innerHTML = '';
+                    return;
+                }
+                var html = '<div class="flex flex-wrap gap-2 mb-4">';
+                bons.forEach(function(b) {
+                    var alertCls = b.alert ? 'bg-amber-50 border-amber-400 text-amber-800' : 'bg-green-50 border-green-300 text-green-800';
+                    var icon = b.alert
+                        ? '<svg class="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>'
+                        : '<svg class="w-3.5 h-3.5 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+                    var label = b.benefit_name || 'Bonificacion Ads';
+                    var expires = b.alert ? ' · vence en ' + b.days_remaining + ' dias' : (b.end_date ? ' · hasta ' + b.end_date : '');
+                    html += '<div class="flex items-center gap-2 text-xs px-3 py-2 rounded-lg border ' + alertCls + '">';
+                    html += icon;
+                    html += '<span><strong>$' + parseFloat(b.balance).toLocaleString('es-MX', {minimumFractionDigits:2}) + ' ' + b.currency_id + '</strong> — ' + label + expires + '</span>';
+                    html += '</div>';
+                });
+                html += '</div>';
+                document.getElementById('ads-bonificaciones').innerHTML = html;
+            })
+            .catch(function() { document.getElementById('ads-bonificaciones').innerHTML = ''; });
     }
     function fmt(n) { return parseFloat(n).toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2}); }
     function fmtInt(n) { return parseInt(n).toLocaleString('es-MX'); }
@@ -699,11 +762,19 @@
         _campAction(campaignId, {budget: val}, btn, 'Guardado');
     }
 
-    function saveAcos(campaignId, btn) {
-        var input = document.getElementById('acos-input-' + campaignId);
+    function saveRoasTarget(campaignId, inputId, btn) {
+        var input = document.getElementById(inputId);
         var val = parseFloat(input.value);
-        if (isNaN(val) || val < 3 || val > 500) { alert('ACOS target debe estar entre 3 y 500'); return; }
-        _campAction(campaignId, {acos_target: val}, btn, 'Guardado');
+        if (isNaN(val) || val < 1 || val > 35) { alert('ROAS objetivo debe estar entre 1 y 35'); return; }
+        _campAction(campaignId, {roas_target: val}, btn, 'Guardado');
+    }
+
+    function quickBudgetIncrease(campaignId, currentBudget, inputId, btn) {
+        var newBudget = Math.round(currentBudget * 1.2 * 100) / 100;
+        if (newBudget <= currentBudget) newBudget = currentBudget + 50;
+        var input = document.getElementById(inputId);
+        if (input) input.value = newBudget.toFixed(2);
+        _campAction(campaignId, {budget: newBudget}, btn, '+20% aplicado');
     }
 
     // === NO-ADS FUNCTIONS ===

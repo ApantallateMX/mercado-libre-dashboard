@@ -7857,13 +7857,26 @@ def _enrich_campaigns(campaigns_data) -> list:
         budget_data = c.get("budget", {})
         daily_budget = budget_data.get("amount", 0) if isinstance(budget_data, dict) else (budget_data or 0)
         roas = roas_api if roas_api > 0 else ((revenue / cost) if cost > 0 else 0)
-        acos = (cost / revenue * 100) if revenue > 0 else 0
+        acos_api = metrics.get("acos", 0) or 0
+        acos = acos_api if acos_api > 0 else ((cost / revenue * 100) if revenue > 0 else 0)
+        # strategy: PROFITABILITY, INCREASE, VISIBILITY (from API) — fallback inferido por ACOS
+        strategy_raw = (c.get("strategy") or "").upper()
+        if not strategy_raw:
+            if acos <= 15 and revenue > 0:
+                strategy_raw = "PROFITABILITY"
+            elif acos <= 30 and revenue > 0:
+                strategy_raw = "INCREASE"
+            elif revenue > 0:
+                strategy_raw = "VISIBILITY"
+        roas_target_raw = c.get("roas_target") or (c.get("target") or {}).get("roas")
         # Detectar si presupuesto limita visibilidad (> 20% impresiones perdidas por budget)
         throttled_by_budget = lost_by_budget > 0.20
         enriched.append({
             "id": c.get("id", "-"),
             "name": c.get("name", c.get("id", "-")),
             "status": c.get("status", "-"),
+            "strategy": strategy_raw,
+            "roas_target": float(roas_target_raw) if roas_target_raw else None,
             "daily_budget": daily_budget,
             "cost": cost,
             "clicks": clicks,
@@ -8789,6 +8802,31 @@ async def attributes_widget_partial(request: Request):
         await client.close()
 
 
+@app.get("/partials/ads-brand", response_class=HTMLResponse)
+async def ads_brand_partial(
+    request: Request,
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+):
+    """Partial: Brand Ads (BADS) — post Jun-17-2026 migradas a PAds."""
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p class='p-6 text-center text-gray-500'>No autenticado</p>")
+    try:
+        date_from, date_to = _default_dates(date_from, date_to)
+        data = await client.get_bads_campaigns(date_from, date_to)
+        migrated = data.get("migrated", False)
+        campaigns = _enrich_campaigns(data)
+        return templates.TemplateResponse(request, "partials/ads_brand.html", {
+            "campaigns": campaigns,
+            "migrated": migrated or len(campaigns) == 0,
+        })
+    except Exception as e:
+        return HTMLResponse(f"<p class='p-6 text-center text-gray-500'>Error: {e}</p>")
+    finally:
+        await client.close()
+
+
 @app.get("/api/ml/unread-count")
 async def ml_unread_count():
     """Conteo de mensajes no leídos de ML (post-venta)."""
@@ -8993,7 +9031,7 @@ async def check_ads_write_permission():
 
 @app.post("/api/ads/campaigns/{campaign_id}")
 async def update_campaign_api(request: Request, campaign_id: str):
-    """Actualiza una campaña de Product Ads (status, budget, acos_target)."""
+    """Actualiza una campaña de Product Ads (status, budget, roas_target, acos_target)."""
     client = await get_meli_client()
     if not client:
         return {"error": "No autenticado"}
@@ -9003,6 +9041,7 @@ async def update_campaign_api(request: Request, campaign_id: str):
             campaign_id,
             status=body.get("status"),
             budget=body.get("budget"),
+            roas_target=body.get("roas_target"),
             acos_target=body.get("acos_target"),
         )
         return {"ok": True, "result": result}
@@ -9028,6 +9067,8 @@ async def create_campaign_api(request: Request):
             name=name,
             budget=float(budget),
             acos_target=body.get("acos_target"),
+            roas_target=body.get("roas_target"),
+            strategy=body.get("strategy", "profitability"),
             status=body.get("status", "active"),
         )
         return {"ok": True, "result": result}
@@ -9054,6 +9095,8 @@ async def create_campaign_with_items_api(request: Request):
         name = body.get("name", "")
         budget = body.get("budget", 0)
         acos_target = body.get("acos_target")
+        roas_target = body.get("roas_target")
+        strategy = body.get("strategy", "profitability")
         item_ids = body.get("item_ids", [])
         if not name or not budget:
             return JSONResponse({"detail": "name y budget son requeridos"}, status_code=400)
@@ -9062,6 +9105,8 @@ async def create_campaign_with_items_api(request: Request):
             name=name,
             budget=float(budget),
             acos_target=acos_target,
+            roas_target=roas_target,
+            strategy=strategy,
             status="active",
         )
         campaign_id = campaign.get("id", campaign.get("campaign_id"))
