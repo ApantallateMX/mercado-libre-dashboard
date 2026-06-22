@@ -208,7 +208,8 @@
                     data-original-price="{{ p.original_price or p.price }}"
                     data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
-                    data-thumb="{{ p.thumbnail or '' }}">
+                    data-thumb="{{ p.thumbnail or '' }}"
+                    data-avail-qty="{{ p.available_quantity }}">
                     Ver promos
                 </button>
                 {% if p.sku %}
@@ -452,7 +453,8 @@
                                 data-original-price="{{ p.original_price or p.price }}"
                                 data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
-                                data-thumb="{{ p.thumbnail or '' }}">
+                                data-thumb="{{ p.thumbnail or '' }}"
+                                data-avail-qty="{{ p.available_quantity }}">
                                 Ver promos
                             </button>
                             {% if p.sku %}
@@ -605,7 +607,8 @@
                     data-original-price="{{ p.original_price or p.price }}"
                     data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
-                    data-thumb="{{ p.thumbnail or '' }}">
+                    data-thumb="{{ p.thumbnail or '' }}"
+                    data-avail-qty="{{ p.available_quantity }}">
                     Ver promos
                 </button>
                 {% if p.sku %}
@@ -621,7 +624,8 @@
                     data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                     data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
                     data-thumb="{{ p.thumbnail or '' }}"
-                    data-title="{{ p.title }}">
+                    data-title="{{ p.title }}"
+                    data-avail-qty="{{ p.available_quantity }}">
                     Activar Deal
                 </button>
             </div>
@@ -803,7 +807,8 @@
                                 data-original-price="{{ p.original_price or p.price }}"
                                 data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-meli-pct="{{ p.get('_meli_promo_pct', 0) or 0 }}"
-                                data-thumb="{{ p.thumbnail or '' }}">
+                                data-thumb="{{ p.thumbnail or '' }}"
+                                data-avail-qty="{{ p.available_quantity }}">
                                 Ver promos
                             </button>
                             {% if p.sku %}
@@ -819,7 +824,8 @@
                                 data-bm-cost="{{ p.get('_bm_eff_cost_usd', 0) or 0 }}"
                                 data-bm-retail="{{ p.get('_bm_retail_price', 0) or 0 }}"
                                 data-thumb="{{ p.thumbnail or '' }}"
-                                data-title="{{ p.title }}">
+                                data-title="{{ p.title }}"
+                                data-avail-qty="{{ p.available_quantity }}">
                                 Activar Deal
                             </button>
                         </div>
@@ -979,6 +985,24 @@
                 <div class="flex justify-between">
                     <span class="font-semibold text-gray-700">Margen</span>
                     <span id="calc-margen" class="font-bold text-lg">0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- LIGHTNING/DOD stock section (hidden by default) -->
+        <div id="dm-stock-section" class="p-5 border-b hidden">
+            <h4 class="text-sm font-semibold text-gray-700 mb-2">Unidades a comprometer en el deal</h4>
+            <p class="text-xs text-gray-400 mb-3">ML requiere entre 6 y 61 unidades para Lightning/DOD deals.</p>
+            <div id="dm-stock-warning" class="hidden mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700"></div>
+            <div class="flex items-center gap-3">
+                <div class="flex-1">
+                    <label class="text-xs text-gray-500 block mb-1">Cantidad (6–61)</label>
+                    <input type="number" id="dm-stock-input" min="6" max="61" step="1"
+                        class="w-full border rounded-lg px-3 py-2 text-lg font-bold focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400">
+                </div>
+                <div class="text-center">
+                    <div class="text-xs text-gray-400">Stock en ML</div>
+                    <div id="dm-stock-avail" class="text-lg font-bold text-gray-600">—</div>
                 </div>
             </div>
         </div>
@@ -1268,7 +1292,8 @@ document.addEventListener('click', function(e) {
             parseFloat(btnActivar.dataset.bmCost) || 0,
             parseFloat(btnActivar.dataset.bmRetail) || 0,
             btnActivar.dataset.thumb || '',
-            btnActivar.dataset.title || ''
+            btnActivar.dataset.title || '',
+            parseInt(btnActivar.dataset.availQty) || 0
         );
         return;
     }
@@ -1284,7 +1309,8 @@ document.addEventListener('click', function(e) {
             parseFloat(btnVerPromos.dataset.originalPrice) || 0,
             parseFloat(btnVerPromos.dataset.bmCost) || 0,
             btnVerPromos.dataset.thumb || '',
-            parseFloat(btnVerPromos.dataset.meliPct) || 0
+            parseFloat(btnVerPromos.dataset.meliPct) || 0,
+            parseInt(btnVerPromos.dataset.availQty) || 0
         );
         return;
     }
@@ -1300,8 +1326,8 @@ document.addEventListener('click', function(e) {
 
 // ===== Deal Modal =====
 
-function openDealModal(itemId, price, sku, bmCostUsd, bmRetailUsd, thumb, title) {
-    _modalState = { itemId, price, sku, bmCostUsd, bmRetailUsd, selectedPromo: null, selectedPromoData: null };
+function openDealModal(itemId, price, sku, bmCostUsd, bmRetailUsd, thumb, title, availQty) {
+    _modalState = { itemId, price, sku, bmCostUsd, bmRetailUsd, availQty: availQty || 0, selectedPromo: null, selectedPromoData: null };
     const bmCostMxn = bmCostUsd * USD_TO_MXN;
     const bmRetailMxn = bmRetailUsd * USD_TO_MXN;
     _modalState.bmCostMxn = bmCostMxn;
@@ -1453,6 +1479,30 @@ function selectPromo(index, promo) {
         datesSection.classList.add('hidden');
     }
 
+    // Show stock section for LIGHTNING/DOD
+    var stockSection = document.getElementById('dm-stock-section');
+    var stockInput = document.getElementById('dm-stock-input');
+    var stockAvailEl = document.getElementById('dm-stock-avail');
+    var stockWarn = document.getElementById('dm-stock-warning');
+    if (promo.type === 'LIGHTNING' || promo.type === 'DOD') {
+        stockSection.classList.remove('hidden');
+        var avail = _modalState.availQty || 0;
+        stockAvailEl.textContent = avail;
+        stockAvailEl.className = 'text-lg font-bold ' + (avail >= 6 ? 'text-green-600' : 'text-red-600');
+        if (avail < 6) {
+            stockWarn.textContent = 'Stock insuficiente en ML (' + avail + ' unid.) — necesitas al menos 6 para participar en este deal.';
+            stockWarn.classList.remove('hidden');
+            stockInput.disabled = true;
+            document.getElementById('dm-activate-btn').disabled = true;
+        } else {
+            stockWarn.classList.add('hidden');
+            stockInput.disabled = false;
+            stockInput.value = Math.min(avail, 61);
+        }
+    } else {
+        stockSection.classList.add('hidden');
+    }
+
     document.getElementById('dm-activate-btn').disabled = false;
     updateDealCalc();
 }
@@ -1520,6 +1570,13 @@ async function activateDeal() {
         if (endDate) body.finish_date = endDate + ':00';
     } else if (_modalState.selectedPromoData && _modalState.selectedPromoData.id) {
         body.promotion_id = _modalState.selectedPromoData.id;
+    }
+    if (promoType === 'LIGHTNING' || promoType === 'DOD') {
+        var stockInput = document.getElementById('dm-stock-input');
+        if (stockInput && !stockInput.disabled) {
+            var qty = parseInt(stockInput.value);
+            if (qty >= 6 && qty <= 61) body.stock = qty;
+        }
     }
 
     try {
@@ -1634,10 +1691,10 @@ async function deactivateDeal(itemId) {
 
 var _pdState = {};
 
-function openPromoDetail(itemId, title, currentPrice, originalPrice, bmCostUsd, thumb, meliPct) {
+function openPromoDetail(itemId, title, currentPrice, originalPrice, bmCostUsd, thumb, meliPct, availQty) {
     meliPct = meliPct || 0;
     var meliContribMxn = meliPct > 0 && originalPrice > 0 ? (originalPrice * meliPct / 100) : 0;
-    _pdState = { itemId: itemId, currentPrice: currentPrice, originalPrice: originalPrice, bmCostUsd: bmCostUsd, bmCostMxn: bmCostUsd * USD_TO_MXN, meliPct: meliPct, meliContribMxn: meliContribMxn };
+    _pdState = { itemId: itemId, currentPrice: currentPrice, originalPrice: originalPrice, bmCostUsd: bmCostUsd, bmCostMxn: bmCostUsd * USD_TO_MXN, meliPct: meliPct, meliContribMxn: meliContribMxn, availQty: availQty || 0 };
 
     document.getElementById('pd-title').textContent = title || itemId;
     document.getElementById('pd-item-id').textContent = itemId;
@@ -1793,9 +1850,36 @@ function renderPromoCards(promos) {
                 '</div>';
             }
 
-            // Submit button
-            html += '<button id="pd-submit-' + idx + '" class="w-full px-4 py-2 text-sm text-white rounded-lg font-semibold ' + actionColor + ' transition disabled:opacity-50" ' +
-                'onclick="submitPromoAction(' + idx + ', \'' + p.type + '\', ' + (p.original_price || _pdState.originalPrice || 0) + ', \'' + (p.id || '') + '\')">' +
+            // LIGHTNING / DOD stock commitment input
+            var isStockType = (p.type === 'LIGHTNING' || p.type === 'DOD');
+            if (isStockType) {
+                var pdAvail = _pdState.availQty || 0;
+                if (pdAvail < 6) {
+                    html += '<div class="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">' +
+                        '⚠ Stock insuficiente en ML (' + pdAvail + ' unid.) — necesitas al menos 6 para participar.' +
+                    '</div>';
+                } else {
+                    var pdDefaultQty = Math.min(pdAvail, 61);
+                    html += '<div class="mb-3">' +
+                        '<div class="flex items-center justify-between mb-1">' +
+                            '<label class="text-[10px] text-gray-500">Unidades a comprometer (6–61)</label>' +
+                            '<span class="text-[10px] text-gray-400">Stock en ML: <b class="text-gray-600">' + pdAvail + '</b></span>' +
+                        '</div>' +
+                        '<input type="number" id="pd-qty-' + idx + '" min="6" max="61" step="1" value="' + pdDefaultQty + '" ' +
+                            'class="w-full border rounded px-3 py-1.5 text-sm font-bold focus:ring-2 focus:ring-green-400">' +
+                    '</div>';
+                }
+            }
+
+            // Price limits warning
+            if (p.min_discounted_price > 0 || p.max_discounted_price > 0) {
+                html += '<div id="pd-plimit-' + idx + '" class="hidden mb-2 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700"></div>';
+            }
+
+            // Submit button (disabled if stock insufficient for LIGHTNING/DOD)
+            var submitDisabled = (isStockType && (_pdState.availQty || 0) < 6) ? ' disabled' : '';
+            html += '<button id="pd-submit-' + idx + '" class="w-full px-4 py-2 text-sm text-white rounded-lg font-semibold ' + actionColor + ' transition disabled:opacity-50 disabled:cursor-not-allowed"' + submitDisabled + ' ' +
+                'onclick="submitPromoAction(' + idx + ', \'' + p.type + '\', ' + (p.original_price || _pdState.originalPrice || 0) + ', \'' + (p.id || '') + '\', ' + (p.min_discounted_price || 0) + ', ' + (p.max_discounted_price || 0) + ')">' +
                 (isActive ? 'Guardar Cambios' : 'Participar en Promocion') +
             '</button>' +
             '<div id="pd-submsg-' + idx + '" class="mt-2 text-xs hidden"></div>' +
@@ -1865,10 +1949,11 @@ function calcPromoMargin(idx) {
     }
 }
 
-async function submitPromoAction(idx, promoType, originalPrice, promotionId) {
+async function submitPromoAction(idx, promoType, originalPrice, promotionId, minPrice, maxPrice) {
     var priceEl = document.getElementById('pd-price-' + idx);
     var submitBtn = document.getElementById('pd-submit-' + idx);
     var msgEl = document.getElementById('pd-submsg-' + idx);
+    var plimitEl = document.getElementById('pd-plimit-' + idx);
     var dealPrice = parseFloat(priceEl.value);
 
     if (!dealPrice || dealPrice <= 0) {
@@ -1876,6 +1961,21 @@ async function submitPromoAction(idx, promoType, originalPrice, promotionId) {
         msgEl.className = 'mt-2 text-xs text-red-600';
         msgEl.classList.remove('hidden');
         return;
+    }
+
+    // Validate price limits from promo
+    if (plimitEl) {
+        if (maxPrice > 0 && dealPrice > maxPrice) {
+            plimitEl.textContent = 'Precio mayor al maximo permitido (' + fmt(maxPrice) + ')';
+            plimitEl.classList.remove('hidden');
+            return;
+        } else if (minPrice > 0 && dealPrice < minPrice) {
+            plimitEl.textContent = 'Precio menor al minimo permitido (' + fmt(minPrice) + ')';
+            plimitEl.classList.remove('hidden');
+            return;
+        } else {
+            plimitEl.classList.add('hidden');
+        }
     }
 
     submitBtn.disabled = true;
@@ -1891,6 +1991,13 @@ async function submitPromoAction(idx, promoType, originalPrice, promotionId) {
         if (ed && ed.value) body.finish_date = ed.value + ':00';
     } else if (promotionId) {
         body.promotion_id = promotionId;
+    }
+    if (promoType === 'LIGHTNING' || promoType === 'DOD') {
+        var qtyEl = document.getElementById('pd-qty-' + idx);
+        if (qtyEl) {
+            var qty = parseInt(qtyEl.value);
+            if (qty >= 6 && qty <= 61) body.stock = qty;
+        }
     }
 
     try {

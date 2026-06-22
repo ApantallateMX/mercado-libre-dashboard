@@ -92,7 +92,7 @@
     <div class="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
         <div class="flex justify-between"><span class="text-gray-500">Precio Deal</span><span id="idm-c-price" class="font-medium">$0</span></div>
         <div class="flex justify-between"><span class="text-gray-500">- Costo BM</span><span id="idm-c-cost" class="text-red-500">$0</span></div>
-        <div class="flex justify-between"><span class="text-gray-500">- Comision MeLi (~17%)</span><span id="idm-c-com" class="text-red-500">$0</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">- Comision MeLi</span><span id="idm-c-com" class="text-red-500">$0</span></div>
         <div class="flex justify-between"><span class="text-gray-500">- IVA Comision (16%)</span><span id="idm-c-iva" class="text-red-500">$0</span></div>
         <div class="flex justify-between"><span class="text-gray-500">- Envio estimado</span><span class="text-red-500">-$150</span></div>
         <div class="flex justify-between border-t pt-2 mt-2">
@@ -153,6 +153,12 @@
     var _activePromos = []; // track all active (started) promos
 
     function fmt(n) { return '$' + Math.round(n).toLocaleString('es-MX'); }
+    function mlFee(price) {
+        if (price >= 5000) return 0.12;
+        if (price >= 1500) return 0.14;
+        if (price >= 500)  return 0.16;
+        return 0.18;
+    }
 
     // Calculator
     window._idmCalc = function() {
@@ -163,7 +169,7 @@
         discEl.textContent = disc > 0 ? Math.round(disc) + '%' : '0%';
         discEl.className = 'text-lg font-bold ' + (disc >= 20 ? 'text-green-600' : disc >= 10 ? 'text-yellow-600' : 'text-gray-400');
 
-        var com = dp * 0.17;
+        var com = dp * mlFee(dp);
         var iva = com * 0.16;
         var gan = dp - BM_COST_MXN - com - iva - 150;
         var mar = dp > 0 ? (gan / dp * 100) : 0;
