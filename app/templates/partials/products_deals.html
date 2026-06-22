@@ -1810,20 +1810,43 @@ function renderPromoCards(promos) {
         // Expandable action panel (hidden by default)
         if (isActionable) {
             var suggestedPrice = p.suggested_discounted_price || p.price || '';
-            html += '<div id="pd-action-' + idx + '" class="hidden border-t bg-gray-50 p-4">' +
-                '<div class="flex items-center gap-3 mb-3">' +
-                    '<div class="flex-1">' +
-                        '<label class="text-xs text-gray-500 block mb-1">Nuevo Precio</label>' +
-                        '<input type="number" id="pd-price-' + idx + '" step="1" min="0" ' +
-                            'value="' + (suggestedPrice ? Math.round(suggestedPrice) : '') + '" ' +
-                            'class="w-full border rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-400 focus:border-blue-400" ' +
-                            'oninput="calcPromoMargin(' + idx + ')">' +
-                    '</div>' +
-                    '<div class="text-center">' +
-                        '<label class="text-xs text-gray-500 block mb-1">Descuento</label>' +
-                        '<span id="pd-disc-' + idx + '" class="text-sm font-bold text-gray-400">0%</span>' +
+            var mlDealPrice = p.price || 0;
+            var isStockType = (p.type === 'LIGHTNING' || p.type === 'DOD');
+
+            html += '<div id="pd-action-' + idx + '" class="hidden border-t bg-gray-50 p-4">';
+
+            // [1] Banner informativo para LIGHTNING/DOD
+            if (isStockType) {
+                var bannerMeta = [];
+                if (mlDealPrice > 0) bannerMeta.push('Precio asignado por ML: <b>' + fmt(mlDealPrice) + '</b>');
+                if (p.start_date) bannerMeta.push('Inicio: ' + new Date(p.start_date).toLocaleDateString('es-MX'));
+                if (p.finish_date) bannerMeta.push('Fin: ' + new Date(p.finish_date).toLocaleDateString('es-MX'));
+                html += '<div class="mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">' +
+                    '<div class="font-semibold mb-0.5">Oferta Relampago — ' + (p.type || 'LIGHTNING') + '</div>' +
+                    '<div class="leading-relaxed">ML controla el precio y la ventana de tiempo. Tu rol es confirmar el precio y comprometer las unidades que se vendran durante la ventana activa.' +
+                    (bannerMeta.length ? '<br><span class="mt-0.5 block">' + bannerMeta.join(' &middot; ') + '</span>' : '') +
                     '</div>' +
                 '</div>';
+            }
+
+            // [2] Precio con advertencia si se aleja del deal price de ML
+            html += '<div class="flex items-center gap-3 mb-3">' +
+                '<div class="flex-1">' +
+                    '<label class="text-xs text-gray-500 block mb-1">' + (isStockType ? 'Precio de participacion' : 'Nuevo Precio') + '</label>' +
+                    '<input type="number" id="pd-price-' + idx + '" step="1" min="0" ' +
+                        'value="' + (suggestedPrice ? Math.round(suggestedPrice) : '') + '" ' +
+                        'class="w-full border rounded-lg px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-blue-400 focus:border-blue-400" ' +
+                        'oninput="calcPromoMargin(' + idx + ')"' +
+                        (isStockType && mlDealPrice > 0 ? ' onchange="checkDealPrice(' + idx + ',' + mlDealPrice + ')"' : '') + '>' +
+                    (isStockType && mlDealPrice > 0
+                        ? '<div id="pd-price-warn-' + idx + '" class="hidden mt-1 text-[10px] text-orange-600">⚠ ML puede rechazar este precio — el deal fue asignado en ' + fmt(mlDealPrice) + '. Modifica solo dentro del rango min/max y con cambios pequenos.</div>'
+                        : '') +
+                '</div>' +
+                '<div class="text-center">' +
+                    '<label class="text-xs text-gray-500 block mb-1">Descuento</label>' +
+                    '<span id="pd-disc-' + idx + '" class="text-sm font-bold text-gray-400">0%</span>' +
+                '</div>' +
+            '</div>';
 
             // Mini calculator
             var hasMeliContrib = (_pdState.meliPct || 0) > 0;
@@ -1851,21 +1874,21 @@ function renderPromoCards(promos) {
                 '</div>';
             }
 
-            // LIGHTNING / DOD stock commitment input
-            var isStockType = (p.type === 'LIGHTNING' || p.type === 'DOD');
+            // [3] LIGHTNING / DOD stock — label mejorado
             if (isStockType) {
                 var pdAvail = _pdState.availQty || 0;
                 if (pdAvail < 6) {
                     html += '<div class="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">' +
-                        '⚠ Stock insuficiente en ML (' + pdAvail + ' unid.) — necesitas al menos 6 para poder comprometer unidades en este deal.' +
+                        '⚠ Stock insuficiente en ML (' + pdAvail + ' unid.) — necesitas al menos 6 unidades disponibles en ML para participar en este deal.' +
                     '</div>';
                 } else {
                     var pdDefaultQty = Math.min(pdAvail, 61);
                     html += '<div class="mb-3">' +
-                        '<div class="flex items-center justify-between mb-1">' +
-                            '<label class="text-[10px] text-gray-500">Unidades a comprometer en este deal (6–61)</label>' +
-                            '<span class="text-[10px] text-gray-400">Stock en ML: <b class="text-gray-600">' + pdAvail + '</b></span>' +
+                        '<div class="flex items-center justify-between mb-0.5">' +
+                            '<label class="text-xs text-gray-700 font-medium">Unidades a vender en el deal</label>' +
+                            '<span class="text-[10px] text-gray-400">Disponible en ML: <b class="text-gray-600">' + pdAvail + '</b></span>' +
                         '</div>' +
+                        '<div class="text-[10px] text-gray-400 mb-1.5">ML vendera hasta este numero de unidades al precio del deal durante la ventana activa (min. 6, max. 61)</div>' +
                         '<input type="number" id="pd-qty-' + idx + '" min="6" max="61" step="1" value="' + pdDefaultQty + '" ' +
                             'class="w-full border rounded px-3 py-1.5 text-sm font-bold focus:ring-2 focus:ring-green-400">' +
                     '</div>';
@@ -1877,7 +1900,7 @@ function renderPromoCards(promos) {
                 html += '<div id="pd-plimit-' + idx + '" class="hidden mb-2 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700"></div>';
             }
 
-            // Submit button (disabled only if stock < 6)
+            // Submit button
             var submitDisabled = (isStockType && (_pdState.availQty || 0) < 6) ? ' disabled' : '';
             html += '<button id="pd-submit-' + idx + '" class="w-full px-4 py-2 text-sm text-white rounded-lg font-semibold ' + actionColor + ' transition disabled:opacity-50 disabled:cursor-not-allowed"' + submitDisabled + ' ' +
                 'onclick="submitPromoAction(' + idx + ', \'' + p.type + '\', ' + (p.original_price || _pdState.originalPrice || 0) + ', \'' + (p.id || '') + '\', ' + (p.min_discounted_price || 0) + ', ' + (p.max_discounted_price || 0) + ')">' +
@@ -1950,6 +1973,20 @@ function calcPromoMargin(idx) {
     }
 }
 
+window.checkDealPrice = function(idx, mlDealPrice) {
+    var priceEl = document.getElementById('pd-price-' + idx);
+    var warnEl = document.getElementById('pd-price-warn-' + idx);
+    if (!priceEl || !warnEl || !mlDealPrice) return;
+    var entered = parseFloat(priceEl.value);
+    if (!entered) return;
+    var diff = Math.abs(entered - mlDealPrice) / mlDealPrice;
+    if (diff > 0.05) {
+        warnEl.classList.remove('hidden');
+    } else {
+        warnEl.classList.add('hidden');
+    }
+};
+
 async function submitPromoAction(idx, promoType, originalPrice, promotionId, minPrice, maxPrice) {
     var priceEl = document.getElementById('pd-price-' + idx);
     var submitBtn = document.getElementById('pd-submit-' + idx);
@@ -2019,7 +2056,17 @@ async function submitPromoAction(idx, promoType, originalPrice, promotionId, min
             setTimeout(function() { closePromoDetail(); }, 800);
         } else {
             var errMsg = data.detail || data.error || 'Error al procesar la promocion';
-            msgEl.textContent = 'Error: ' + errMsg;
+            // [4] Traducir errores tecnicos de ML a mensajes claros
+            if (errMsg.includes('CREDIBILITY') || errMsg.includes('credible')) {
+                errMsg = 'ML rechazo el precio — el descuento no es suficiente para este deal. Usa el precio asignado por ML (que aparece en "Precio Deal" arriba) o un valor muy cercano.';
+            } else if (errMsg.includes('stock') || errMsg.includes('Stock')) {
+                errMsg = 'Unidades invalidas — ML requiere entre 6 y 61 unidades. Verifica el campo de unidades.';
+            } else if (errMsg.includes('promotion_price') || errMsg.includes('price_not_allowed')) {
+                errMsg = 'Precio fuera del rango permitido por ML. Revisa los limites Min/Max del deal.';
+            } else if (errMsg.includes('already_exists') || errMsg.includes('OFFER_ALREADY_EXISTS')) {
+                errMsg = 'Ya hay una oferta activa para este item. Se intento reemplazar automaticamente — vuelve a intentar.';
+            }
+            msgEl.textContent = errMsg;
             msgEl.className = 'mt-2 text-xs text-red-600 bg-red-50 p-2 rounded';
             msgEl.classList.remove('hidden');
             submitBtn.disabled = false;
