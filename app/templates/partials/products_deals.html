@@ -1890,7 +1890,8 @@ function renderPromoCards(promos) {
                         '</div>' +
                         '<div class="text-[10px] text-gray-400 mb-1.5">ML vendera hasta este numero de unidades al precio del deal durante la ventana activa (min. 6, max. 61)</div>' +
                         '<input type="number" id="pd-qty-' + idx + '" min="6" max="61" step="1" value="' + pdDefaultQty + '" ' +
-                            'class="w-full border rounded px-3 py-1.5 text-sm font-bold focus:ring-2 focus:ring-green-400">' +
+                            'class="w-full border rounded px-3 py-1.5 text-sm font-bold focus:ring-2 focus:ring-green-400" ' +
+                            'oninput="validateStockQty(this)">' +
                     '</div>';
                 }
             }
@@ -1973,6 +1974,16 @@ function calcPromoMargin(idx) {
     }
 }
 
+window.validateStockQty = function(el) {
+    var qty = parseInt(el.value);
+    if (!qty || qty < 6 || qty > 61) {
+        el.classList.add('border-red-500', 'ring-2', 'ring-red-300');
+        el.classList.remove('border-gray-300');
+    } else {
+        el.classList.remove('border-red-500', 'ring-2', 'ring-red-300');
+    }
+};
+
 window.checkDealPrice = function(idx, mlDealPrice) {
     var priceEl = document.getElementById('pd-price-' + idx);
     var warnEl = document.getElementById('pd-price-warn-' + idx);
@@ -2034,7 +2045,15 @@ async function submitPromoAction(idx, promoType, originalPrice, promotionId, min
         var qtyEl = document.getElementById('pd-qty-' + idx);
         if (qtyEl) {
             var qty = parseInt(qtyEl.value);
-            if (qty >= 6 && qty <= 61) body.stock = qty;
+            if (!qty || qty < 6 || qty > 61) {
+                msgEl.textContent = 'Ingresa entre 6 y 61 unidades para este deal.';
+                msgEl.className = 'mt-2 text-xs text-red-600 bg-red-50 p-2 rounded';
+                msgEl.classList.remove('hidden');
+                submitBtn.disabled = false;
+                submitBtn.textContent = isActive ? 'Guardar Cambios' : 'Participar en Promocion';
+                return;
+            }
+            body.stock = qty;
         }
     }
 
