@@ -7,6 +7,23 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-22 — UX: Deals LIGHTNING/DOD — banner informativo, advertencia precio, errores traducidos
+
+### Motivación
+El flujo de activación de LIGHTNING/DOD deals era confuso: el usuario no sabía qué precio exige ML, el error de "precio no creíble" llegaba en inglés técnico, y el campo de stock no explicaba qué significaba comprometer unidades. Se mejora toda la UX del panel expandible sin tocar backend.
+
+### Cambios — Commit 07baf3a
+
+**Frontend `products_deals.html`:**
+- Banner amber en panel LIGHTNING/DOD: explica mecánica del deal, muestra precio asignado por ML y fechas del deal
+- Label precio cambia a "Precio de participación" para LIGHTNING/DOD
+- Advertencia naranja inline si el usuario cambia el precio más de 5% del precio asignado por ML
+- `window.checkDealPrice(idx, mlDealPrice)`: función que activa/desactiva la advertencia al editar el precio
+- Sección stock: label mejorado "Unidades a vender en el deal" + subtítulo explicativo de la mecánica
+- Traducción de errores ML: `ERROR_CREDIBILITY_DISCOUNTED_PRICE` → mensaje claro en español; stock error, price_not_allowed, OFFER_ALREADY_EXISTS también traducidos
+
+---
+
 ## 2026-06-22 — FEAT: Deals tab mejoras + Agente ML Ads actualizado
 
 ### Motivación
