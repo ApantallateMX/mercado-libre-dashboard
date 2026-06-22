@@ -1488,13 +1488,20 @@ function selectPromo(index, promo) {
         stockSection.classList.remove('hidden');
         var avail = _modalState.availQty || 0;
         stockAvailEl.textContent = avail;
-        stockAvailEl.className = 'text-lg font-bold ' + (avail >= 6 ? 'text-green-600' : 'text-red-600');
         if (avail < 6) {
-            stockWarn.textContent = 'Stock insuficiente en ML (' + avail + ' unid.) — necesitas al menos 6 para participar en este deal.';
+            stockAvailEl.className = 'text-lg font-bold text-red-600';
+            stockWarn.textContent = 'Stock insuficiente en ML (' + avail + ' unid.) — necesitas al menos 6 para participar.';
+            stockWarn.classList.remove('hidden');
+            stockInput.disabled = true;
+            document.getElementById('dm-activate-btn').disabled = true;
+        } else if (avail > 61) {
+            stockAvailEl.className = 'text-lg font-bold text-amber-600';
+            stockWarn.textContent = 'Stock demasiado alto (' + avail + ' unid.). ML requiere máximo 61. Usa el editor de stock para bajar a 61 y reintenta.';
             stockWarn.classList.remove('hidden');
             stockInput.disabled = true;
             document.getElementById('dm-activate-btn').disabled = true;
         } else {
+            stockAvailEl.className = 'text-lg font-bold text-green-600';
             stockWarn.classList.add('hidden');
             stockInput.disabled = false;
             stockInput.value = Math.min(avail, 61);
@@ -1858,6 +1865,17 @@ function renderPromoCards(promos) {
                     html += '<div class="mb-3 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">' +
                         '⚠ Stock insuficiente en ML (' + pdAvail + ' unid.) — necesitas al menos 6 para participar.' +
                     '</div>';
+                } else if (pdAvail > 61) {
+                    html += '<div class="mb-3 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700">' +
+                        '<b>Stock demasiado alto:</b> tu listing tiene ' + pdAvail + ' unidades en ML. Lightning/DOD requieren máximo 61. ' +
+                        'Necesitas reducir el stock del listing antes de participar.' +
+                    '</div>' +
+                    '<button type="button" id="pd-reduce-btn-' + idx + '" ' +
+                        'class="mb-3 w-full px-3 py-2 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-semibold transition" ' +
+                        'onclick="pdReduceStockForDeal(\'' + _pdState.itemId + '\', ' + idx + ')">' +
+                        'Bajar stock a 61 y continuar' +
+                    '</button>' +
+                    '<div id="pd-reduce-msg-' + idx + '" class="hidden mb-2 text-xs"></div>';
                 } else {
                     var pdDefaultQty = Math.min(pdAvail, 61);
                     html += '<div class="mb-3">' +
@@ -1876,8 +1894,9 @@ function renderPromoCards(promos) {
                 html += '<div id="pd-plimit-' + idx + '" class="hidden mb-2 p-2 bg-amber-50 border border-amber-300 rounded text-xs text-amber-700"></div>';
             }
 
-            // Submit button (disabled if stock insufficient for LIGHTNING/DOD)
-            var submitDisabled = (isStockType && (_pdState.availQty || 0) < 6) ? ' disabled' : '';
+            // Submit button (disabled if stock out of range for LIGHTNING/DOD)
+            var _stockOk = !isStockType || ((_pdState.availQty || 0) >= 6 && (_pdState.availQty || 0) <= 61);
+            var submitDisabled = !_stockOk ? ' disabled' : '';
             html += '<button id="pd-submit-' + idx + '" class="w-full px-4 py-2 text-sm text-white rounded-lg font-semibold ' + actionColor + ' transition disabled:opacity-50 disabled:cursor-not-allowed"' + submitDisabled + ' ' +
                 'onclick="submitPromoAction(' + idx + ', \'' + p.type + '\', ' + (p.original_price || _pdState.originalPrice || 0) + ', \'' + (p.id || '') + '\', ' + (p.min_discounted_price || 0) + ', ' + (p.max_discounted_price || 0) + ')">' +
                 (isActive ? 'Guardar Cambios' : 'Participar en Promocion') +
@@ -2038,6 +2057,35 @@ function closePromoDetail() {
     modal.classList.add('hidden');
     modal.classList.remove('flex');
 }
+
+window.pdReduceStockForDeal = async function(itemId, idx) {
+    var btn = document.getElementById('pd-reduce-btn-' + idx);
+    var msgEl = document.getElementById('pd-reduce-msg-' + idx);
+    if (btn) { btn.disabled = true; btn.textContent = 'Reduciendo...'; }
+    try {
+        var resp = await fetch('/api/items/' + itemId + '/stock', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            body: JSON.stringify({ quantity: 61 })
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            if (msgEl) { msgEl.textContent = 'Stock reducido a 61. Ahora intenta participar.'; msgEl.className = 'mb-2 text-xs text-green-700 bg-green-50 p-2 rounded'; msgEl.classList.remove('hidden'); }
+            if (btn) { btn.textContent = 'Listo — ya puedes participar'; btn.className = btn.className.replace('bg-amber-500 hover:bg-amber-600', 'bg-green-500'); }
+            _pdState.availQty = 61;
+        } else if (data.has_variations) {
+            if (msgEl) { msgEl.textContent = 'Este item tiene variaciones — reduce el stock de cada variante manualmente desde la tabla de stock.'; msgEl.className = 'mb-2 text-xs text-red-700 bg-red-50 p-2 rounded'; msgEl.classList.remove('hidden'); }
+            if (btn) { btn.disabled = false; btn.textContent = 'Bajar stock a 61 y continuar'; }
+        } else {
+            var err = data.detail || 'Error al actualizar stock';
+            if (msgEl) { msgEl.textContent = err; msgEl.className = 'mb-2 text-xs text-red-700 bg-red-50 p-2 rounded'; msgEl.classList.remove('hidden'); }
+            if (btn) { btn.disabled = false; btn.textContent = 'Bajar stock a 61 y continuar'; }
+        }
+    } catch (e) {
+        if (msgEl) { msgEl.textContent = 'Error de red: ' + e.message; msgEl.className = 'mb-2 text-xs text-red-700 bg-red-50 p-2 rounded'; msgEl.classList.remove('hidden'); }
+        if (btn) { btn.disabled = false; btn.textContent = 'Bajar stock a 61 y continuar'; }
+    }
+};
 
 // ===== Reload tab =====
 
