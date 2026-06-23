@@ -7,6 +7,40 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-23 — FEAT: Admin Audit — Cuenta ML, Sección, Usuarios Activos
+
+### Commit `2e2f3f2` — subido a Railway y Coolify
+
+5 mejoras al módulo de auditoría de admin para control del personal remoto.
+
+**1. Columna Cuenta ML en audit_log**
+- `ALTER TABLE audit_log ADD COLUMN ml_account TEXT NOT NULL DEFAULT ''` (migration idempotente)
+- `_audit()` en `items.py` llama `_get_ml_account_name()` → nickname desde tabla `tokens`
+- `_render_timeline_rows` muestra la cuenta en columna amarilla `text-yellow-700`
+
+**2. Columna Sección en audit_log**
+- `ALTER TABLE audit_log ADD COLUMN section TEXT NOT NULL DEFAULT ''`
+- `_derive_section(path)` en `items.py` mapea rutas a nombres: `/items/` → Items, `/ads` → Ads, etc.
+- `AuthMiddleware` en `main.py` usa `_derive_audit_section()` para registrar en update_last_seen
+
+**3. Timeline 7 columnas + alertas críticas**
+- `_render_timeline_rows`: de 5 a 7 columnas (Cuenta ML + Sección entre Acción e Item/SKU)
+- Acciones críticas (`ml_status_update`, `ml_item_closed`, `ml_concentration`) muestran fondo rojo + badge "CRÍTICO"
+- `auditoria.html`: headers actualizados, `colspan="7"` en todos los TD vacíos, JS actualizado
+
+**4. Panel "¿Quién está activo ahora?"**
+- `user_last_seen` tabla: upsert por username con last_seen REAL, last_url, section, ml_account, ip
+- `get_online_users(active_minutes=5)` con flag `is_online` (< 5 min) vs reciente
+- `GET /api/users/audit/online` → HTML con tarjetas por usuario activo, dot verde/gris, cuenta, sección, tiempo hace
+- `auditoria.html`: panel HTMX `hx-trigger="load, every 30s"` al tope de la página
+
+**5. Filtro por Cuenta ML**
+- `get_audit_log()` acepta parámetro `ml_account` → `WHERE ml_account = ?`
+- `GET /api/users/audit/log`: parámetro `ml_account` nuevo
+- `auditoria.html`: select "Todas las cuentas / APANTALLATEMX / AUTOBOT / BLOWTECHNOLOGIES / LUTEMAMEXICO"
+
+---
+
 ## 2026-06-23 — FEAT: Auditoría dashboard — Batch 3 (últimas 4 mejoras)
 
 ### Commit `ca57252` — subido a Railway y Coolify
