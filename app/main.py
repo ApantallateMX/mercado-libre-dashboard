@@ -772,16 +772,38 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.dashboard_user = du
         # Registrar presencia activa (fire-and-forget — no bloquea la respuesta)
         if not path.startswith("/static/") and path not in ("/favicon.ico",):
-            _account_id = request.cookies.get("active_account_id", "")
             _ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
-            asyncio.create_task(user_store.update_last_seen(
-                username=du["username"],
-                display_name=du.get("display_name") or du["username"],
-                url=path,
-                section=_PATH_TO_SECTION.get(path, _derive_audit_section(path)),
-                ml_account=_account_id,
-                ip=_ip,
-            ))
+            _section = _PATH_TO_SECTION.get(path, _derive_audit_section(path))
+            _is_amazon = path.startswith("/amazon") or path.startswith("/api/amazon") or "/amazon" in path
+            async def _record_presence(username=du["username"], display=du.get("display_name") or du["username"],
+                                       url=path, section=_section, ip=_ip, is_amazon=_is_amazon,
+                                       cookies=dict(request.cookies)):
+                account_name = ""
+                try:
+                    import aiosqlite as _sq
+                    if is_amazon:
+                        seller_id = cookies.get("active_amazon_id", "")
+                        if seller_id:
+                            async with _sq.connect(token_store.DATABASE_PATH) as _db:
+                                cur = await _db.execute(
+                                    "SELECT nickname FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
+                                row = await cur.fetchone()
+                                account_name = row[0] if row else seller_id
+                    else:
+                        uid = cookies.get("active_account_id", "")
+                        if uid:
+                            async with _sq.connect(token_store.DATABASE_PATH) as _db:
+                                cur = await _db.execute(
+                                    "SELECT nickname FROM tokens WHERE user_id = ?", (uid,))
+                                row = await cur.fetchone()
+                                account_name = row[0] if row else uid
+                except Exception:
+                    pass
+                await user_store.update_last_seen(
+                    username=username, display_name=display,
+                    url=url, section=section, ml_account=account_name, ip=ip,
+                )
+            asyncio.create_task(_record_presence())
         return await call_next(request)
 
 

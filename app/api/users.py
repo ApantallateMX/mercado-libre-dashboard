@@ -326,23 +326,10 @@ async def audit_online_api(request: Request):
     if not users:
         return '<p class="text-sm text-gray-400 italic py-2">Sin usuarios activos en este momento.</p>'
 
-    # Build account nickname lookup from tokens table
-    import aiosqlite as _aiosqlite
-    acct_map: dict = {}
-    try:
-        async with _aiosqlite.connect(user_store.DATABASE_PATH) as _db:
-            _db.row_factory = _aiosqlite.Row
-            cur = await _db.execute("SELECT user_id, nickname FROM tokens")
-            for row in await cur.fetchall():
-                acct_map[str(row["user_id"])] = row["nickname"]
-    except Exception:
-        pass
-
     html = '<div class="flex flex-wrap gap-3">'
     for u in users:
         is_online = u.get("is_online", False)
         dot_cls = "bg-green-400" if is_online else "bg-gray-300"
-        label = "Activo" if is_online else "Reciente"
         last_seen = u.get("last_seen", 0)
         ago_secs = int(_time.time() - last_seen) if last_seen else 0
         if ago_secs < 60:
@@ -351,8 +338,7 @@ async def audit_online_api(request: Request):
             ago_str = f"hace {ago_secs // 60}m"
         else:
             ago_str = f"hace {ago_secs // 3600}h"
-        account_raw = u.get("ml_account") or ""
-        account_name = acct_map.get(account_raw, account_raw) or "—"
+        account_name = u.get("ml_account") or "—"
         section = u.get("section") or "—"
         display = u.get("display_name") or u.get("username") or "—"
         url = u.get("last_url") or ""
