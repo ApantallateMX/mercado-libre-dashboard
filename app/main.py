@@ -784,23 +784,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 account_name = ""
                 if is_page:
                     try:
-                        import aiosqlite as _sq
                         if last_platform == "amz":
                             seller_id = cookies.get("active_amazon_id", "")
                             if seller_id:
-                                async with _sq.connect(token_store.DATABASE_PATH) as _db:
-                                    cur = await _db.execute(
-                                        "SELECT nickname FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
-                                    row = await cur.fetchone()
-                                    account_name = row[0] if row else seller_id
+                                acct = await token_store.get_amazon_account(seller_id)
+                                account_name = acct.get("nickname") or seller_id if acct else seller_id
                         else:
                             uid = cookies.get("active_account_id", "")
-                            if uid:
-                                async with _sq.connect(token_store.DATABASE_PATH) as _db:
-                                    cur = await _db.execute(
-                                        "SELECT nickname FROM tokens WHERE user_id = ?", (uid,))
-                                    row = await cur.fetchone()
-                                    account_name = row[0] if row else uid
+                            all_ml = await token_store.get_all_tokens()
+                            # Buscar por uid exacto; si vacío, usar la primera cuenta
+                            match = next((a for a in all_ml if str(a["user_id"]) == str(uid)), None)
+                            if not match and all_ml:
+                                match = all_ml[0]
+                            account_name = match["nickname"] if match else uid
                     except Exception:
                         pass
                 await user_store.update_last_seen(
@@ -11008,16 +11004,14 @@ async def stock_concentration_execute_api(request: Request):
             if du:
                 _uid = request.cookies.get("active_account_id", "")
                 _acct = ""
-                if _uid:
-                    try:
-                        import aiosqlite as _sq2
-                        async with _sq2.connect(token_store.DATABASE_PATH) as _db2:
-                            _row2 = await (await _db2.execute(
-                                "SELECT nickname FROM tokens WHERE user_id = ?", (_uid,)
-                            )).fetchone()
-                            _acct = _row2[0] if _row2 else _uid
-                    except Exception:
-                        _acct = _uid
+                try:
+                    _all_ml = await token_store.get_all_tokens()
+                    _match = next((a for a in _all_ml if str(a["user_id"]) == str(_uid)), None)
+                    if not _match and _all_ml:
+                        _match = _all_ml[0]
+                    _acct = _match["nickname"] if _match else _uid
+                except Exception:
+                    _acct = _uid
                 await user_store.log_action(
                     username=du["username"],
                     user_id=du.get("id"),
