@@ -389,6 +389,7 @@
                         {% for account in accounts %}
                         <form action="/auth/switch-account" method="POST">
                             <input type="hidden" name="user_id" value="{{ account.user_id }}">
+                            <input type="hidden" name="redirect" value="{{ request.url.path }}">
                             <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-yellow-50 transition-colors">
                                 {% if account.user_id == active_user_id %}
                                 <span class="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center text-xs font-bold text-gray-800 shrink-0">✓</span>
@@ -411,7 +412,7 @@
                         {% for amz in amazon_accounts %}
                         <form action="/auth/switch-amazon" method="POST">
                             <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                            <input type="hidden" name="next" value="/amazon">
+                            <input type="hidden" name="next" value="{{ request.url.path }}">
                             <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
                                 {% if amz.seller_id == active_amazon_id %}
                                 <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
@@ -607,6 +608,7 @@
                 {% for account in accounts %}
                 <form action="/auth/switch-account" method="POST">
                     <input type="hidden" name="user_id" value="{{ account.user_id }}">
+                    <input type="hidden" name="redirect" value="{{ request.url.path }}">
                     <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
                         {% if account.user_id == active_user_id %}bg-yellow-500 font-bold text-gray-800{% else %}bg-yellow-300 hover:bg-yellow-400 text-gray-700{% endif %}">
                         {% if account.user_id == active_user_id %}<span class="shrink-0">✓</span>{% endif %}

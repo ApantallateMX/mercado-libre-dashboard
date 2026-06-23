@@ -1000,11 +1000,11 @@ async def switch_account(request: Request):
     if uid:
         tokens = await token_store.get_tokens(uid)
         if tokens:
-            # Allow explicit redirect field; else use referer
+            # Explicit redirect from form (navbar sends current page) → use it
+            # Fallback to referer; if referer is /amazon page, go to /dashboard
             redirect_to = form.get("redirect", "")
             if not redirect_to:
                 redirect_to = request.headers.get("referer", "/dashboard")
-                # Si venimos desde cualquier página Amazon, ir al dashboard MeLi
                 if "/amazon" in redirect_to:
                     redirect_to = "/dashboard"
             response = RedirectResponse(redirect_to, status_code=303)
