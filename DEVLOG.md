@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-23 — FEAT: Auditoría dashboard — Batch 3 (últimas 4 mejoras)
+
+### Commit `ca57252` — subido a Railway y Coolify
+
+**H4.4 — Historial de cambios por item**
+- Nueva tabla `item_history` en `token_store.py`: item_id, field, old_value, new_value, changed_by, changed_at
+- `save_item_change()` + `get_item_history()` en `token_store.py`
+- Hooks en `app/api/items.py`: endpoints price, title, description, stock, status registran cada cambio via `asyncio.create_task`
+- `GET /api/items/{id}/history` — nuevo endpoint, devuelve últimos 50 cambios
+- `item_edit_modal.html`: botón "Ver historial de cambios" con panel expandible + renderizado JS
+
+**H3.2 — Mobile responsive fixes**
+- `orders_table.html`: desktop table envuelta en `overflow-x-auto` + `min-w-[900px]`
+- `ads_campaigns.html`: desktop table ídem
+- Mobile order cards: añadido `net_pct` (% vs retail) con color coding verde/amarillo/rojo
+
+**H4.1 — Widget ML vs Amazon (30d)**
+- `GET /api/orders/platform-comparison` — JSON con revenue, órdenes, avg_margin, ganancia por plataforma
+- `GET /partials/platform-comparison` — HTML listo: dos columnas, barra de distribución de ingresos
+- `orders.html`: widget cargado con HTMX `hx-trigger="load"` + `outerHTML` swap
+
+**H1.4 — Consistencia de colores**
+- `dashboard.html`: active period buttons `bg-blue-600` → `bg-yellow-400` (HTML + JS)
+- `returns.html`: `setGlobalPlatform` active state `bg-blue-500` → `bg-yellow-400`
+
+---
+
 ## 2026-06-23 — FEAT: Auditoría dashboard — Batch 2 (mejoras con backend)
 
 ### Motivación
