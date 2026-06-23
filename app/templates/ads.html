@@ -777,6 +777,101 @@
         _campAction(campaignId, {budget: newBudget}, btn, '+20% aplicado');
     }
 
+    // === VER PRODUCTOS POR CAMPANA ===
+    window.toggleCampaignItems = function(campaignId, btn) {
+        // Sincronizar ambos botones (mobile y desktop)
+        var ids = ['camp-items-' + campaignId, 'camp-items-m-' + campaignId];
+        var btns = ['btn-items-' + campaignId, 'btn-items-m-' + campaignId];
+        var label = btn.querySelector('span');
+        var isOpen = false;
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && !el.classList.contains('hidden')) isOpen = true;
+        });
+        // Toggle
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (isOpen) {
+                el.classList.add('hidden');
+            } else {
+                el.classList.remove('hidden');
+                if (!el.dataset.loaded) {
+                    _loadCampaignItems(campaignId, el);
+                }
+            }
+        });
+        btns.forEach(function(bid) {
+            var b = document.getElementById(bid);
+            if (!b) return;
+            var sp = b.querySelector('span');
+            if (sp) sp.textContent = isOpen ? 'Ver productos en esta campana' : 'Ocultar productos';
+        });
+    };
+
+    function _loadCampaignItems(campaignId, container) {
+        container.innerHTML = '<div class="py-3 text-xs text-gray-400 flex items-center gap-2"><svg class="animate-spin h-3 w-3 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Cargando productos...</div>';
+        fetch('/api/ads/campaigns/' + campaignId + '/items')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    container.innerHTML = '<p class="text-xs text-red-500 py-2">Error: ' + data.error + '</p>';
+                    return;
+                }
+                if (!data.items || data.items.length === 0) {
+                    container.innerHTML = '<p class="text-xs text-gray-400 py-2">No hay productos asignados a esta campana.</p>';
+                    container.dataset.loaded = '1';
+                    return;
+                }
+                var html = '<div class="border border-gray-200 rounded-lg overflow-hidden">';
+                html += '<div class="bg-gray-50 px-3 py-2 flex items-center justify-between">';
+                html += '<span class="text-xs font-semibold text-gray-700">' + data.total + ' producto(s) en esta campana</span>';
+                html += '<span class="text-xs text-gray-400">Escribe para filtrar</span>';
+                html += '</div>';
+                html += '<div class="overflow-x-auto max-h-72 overflow-y-auto">';
+                html += '<table class="w-full text-xs">';
+                html += '<thead class="bg-gray-50 sticky top-0"><tr>';
+                html += '<th class="px-3 py-2 text-left font-medium text-gray-500">Producto</th>';
+                html += '<th class="px-3 py-2 text-center font-medium text-gray-500">Ad</th>';
+                html += '<th class="px-3 py-2 text-right font-medium text-gray-500">Precio</th>';
+                html += '<th class="px-3 py-2 text-center font-medium text-gray-500 opacity-50" title="Requiere certificacion ML">Mover</th>';
+                html += '</tr></thead><tbody>';
+                data.items.forEach(function(item) {
+                    var adCls = item.ad_status === 'active' ? 'bg-green-100 text-green-700' : item.ad_status === 'paused' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500';
+                    html += '<tr class="border-t border-gray-100 hover:bg-blue-50">';
+                    html += '<td class="px-3 py-2">';
+                    html += '<div class="flex items-center gap-2">';
+                    if (item.thumbnail) {
+                        html += '<img src="' + item.thumbnail + '" class="w-9 h-9 rounded object-cover flex-shrink-0" onerror="this.style.display=\'none\'">';
+                    } else {
+                        html += '<div class="w-9 h-9 bg-gray-100 rounded flex-shrink-0"></div>';
+                    }
+                    html += '<div class="min-w-0">';
+                    if (item.permalink) {
+                        html += '<a href="' + item.permalink + '" target="_blank" class="font-medium text-blue-600 hover:underline line-clamp-1 block leading-tight">' + (item.title || item.item_id) + '</a>';
+                    } else {
+                        html += '<p class="font-medium text-gray-800 line-clamp-1 leading-tight">' + (item.title || item.item_id) + '</p>';
+                    }
+                    html += '<p class="text-gray-400 font-mono mt-0.5">' + item.item_id + '</p>';
+                    html += '</div></div>';
+                    html += '</td>';
+                    html += '<td class="px-3 py-2 text-center"><span class="px-1.5 py-0.5 rounded text-xs font-medium ' + adCls + '">' + (item.ad_status || '—') + '</span></td>';
+                    html += '<td class="px-3 py-2 text-right text-gray-700 font-medium">$' + parseFloat(item.price || 0).toLocaleString('es-MX', {minimumFractionDigits:2}) + '</td>';
+                    html += '<td class="px-3 py-2 text-center"><button disabled class="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-300 cursor-not-allowed" title="Requiere certificacion ML">Mover</button></td>';
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div></div>';
+                // Sincronizar en todos los contenedores del mismo campaignId
+                ['camp-items-' + campaignId, 'camp-items-m-' + campaignId].forEach(function(id) {
+                    var el = document.getElementById(id);
+                    if (el) { el.innerHTML = html; el.dataset.loaded = '1'; }
+                });
+            })
+            .catch(function(e) {
+                container.innerHTML = '<p class="text-xs text-red-500 py-2">Error cargando productos: ' + e.message + '</p>';
+            });
+    }
+
     // === NO-ADS FUNCTIONS ===
     function toggleAllNoAds(master) {
         document.querySelectorAll('.noads-check').forEach(function(cb) { cb.checked = master.checked; });

@@ -933,6 +933,35 @@ class MeliClient:
             params=params
         )
 
+    async def get_campaign_items(self, campaign_id: str, limit: int = 100) -> dict:
+        """Obtiene los items/ads de una campaña específica con paginación."""
+        adv_id = await self._get_advertiser_id()
+        all_results: list = []
+        offset = 0
+        while True:
+            params = {
+                "campaign_id": campaign_id,
+                "limit": min(limit, 100),
+                "offset": offset,
+            }
+            try:
+                data = await self._ads_get(
+                    f"/advertising/MLM/advertisers/{adv_id}/product_ads/ads/search",
+                    params=params,
+                )
+            except Exception:
+                break
+            results = data.get("results", data if isinstance(data, list) else [])
+            if not results:
+                break
+            all_results.extend(results)
+            paging = data.get("paging", {})
+            total = paging.get("total", 0)
+            offset += len(results)
+            if offset >= total or len(results) < params["limit"] or offset >= limit:
+                break
+        return {"results": all_results, "total": len(all_results)}
+
     async def get_all_ads_item_ids(self) -> set[str]:
         """Obtiene TODOS los item_ids que tienen ads (nuevo endpoint ads/search, sin metricas)."""
         adv_id = await self._get_advertiser_id()
@@ -1585,6 +1614,8 @@ class MeliClient:
             body["start_date"] = kwargs["start_date"]
         if kwargs.get("finish_date"):
             body["finish_date"] = kwargs["finish_date"]
+        if kwargs.get("stock") is not None:
+            body["stock"] = int(kwargs["stock"])
 
         # Try POST; if OFFER_ALREADY_EXISTS, delete existing and retry
         try:
@@ -1610,12 +1641,20 @@ class MeliClient:
             await asyncio.sleep(0.5)
             return await self.post(endpoint, params=params, json=body)
 
-    async def delete_item_promotion(self, item_id: str, promotion_type: str) -> dict:
-        """DELETE /seller-promotions/items/{item_id}?app_version=v2&promotion_type=TYPE"""
-        return await self.delete(
+    async def modify_item_promotion(self, item_id: str, deal_price: float, promotion_type: str) -> dict:
+        """PUT /seller-promotions/items/{item_id} — modifica precio de una promocion activa."""
+        return await self.put(
             f"/seller-promotions/items/{item_id}",
-            params={"app_version": "v2", "promotion_type": promotion_type}
+            params={"app_version": "v2"},
+            json={"deal_price": deal_price, "promotion_type": promotion_type}
         )
+
+    async def delete_item_promotion(self, item_id: str, promotion_type: str, offer_id: str = None) -> dict:
+        """DELETE /seller-promotions/items/{item_id}?app_version=v2&promotion_type=TYPE[&offer_id=ID]"""
+        params = {"app_version": "v2", "promotion_type": promotion_type}
+        if offer_id:
+            params["offer_id"] = offer_id
+        return await self.delete(f"/seller-promotions/items/{item_id}", params=params)
 
     # === Listing Types ===
 

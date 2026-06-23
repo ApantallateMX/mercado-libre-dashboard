@@ -1,3 +1,25 @@
+<!-- Timestamp + Refresh -->
+<div class="flex items-center justify-end gap-2 mb-2 text-xs text-gray-400" id="orders-ts-bar">
+    <span>Actualizado: <span id="orders-ts-label">ahora</span></span>
+    <button hx-get="/partials/orders-table?sort={{ sort }}&limit={{ limit }}&offset={{ offset }}{% if margin_band %}&margin_band={{ margin_band }}{% endif %}{% if date_from %}&date_from={{ date_from }}{% endif %}{% if date_to %}&date_to={{ date_to }}{% endif %}"
+            hx-target="#orders-table"
+            hx-swap="innerHTML"
+            class="flex items-center gap-1 text-gray-400 hover:text-yellow-600 transition"
+            title="Refrescar tabla">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Refrescar
+    </button>
+</div>
+<script>
+(function() {
+    var el = document.getElementById('orders-ts-label');
+    if (el) {
+        var now = new Date();
+        el.textContent = now.toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'});
+    }
+})();
+</script>
+
 <!-- GAP 10: P&L Summary -->
 {% if pl_revenue %}
 <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
@@ -97,7 +119,7 @@
             {% elif order.status == 'cancelled' %}
                 <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800 flex-shrink-0">Cancelado</span>
             {% else %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800 flex-shrink-0">{{ order.status }}</span>
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800 flex-shrink-0">{{ {'pending':'Pendiente','confirmed':'Confirmado','payment_required':'Pago pendiente','payment_in_process':'Procesando pago','partially_refunded':'Dev. parcial','refunded':'Devuelto','in_mediation':'En mediación','charged_back':'Contracargo'}.get(order.status, order.status) }}</span>
             {% endif %}
         </div>
         <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
@@ -138,7 +160,11 @@
         </div>
     </div>
     {% else %}
-    <div class="text-center py-8 text-gray-500">No hay ordenes</div>
+    <div class="text-center py-10 px-4">
+        <svg class="w-10 h-10 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        <p class="text-gray-500 font-medium">Sin órdenes en este periodo</p>
+        <p class="text-gray-400 text-xs mt-1">Ajusta el rango de fechas o selecciona otra cuenta</p>
+    </div>
     {% endfor %}
 </div>
 
@@ -230,7 +256,7 @@
                 {% elif order.status == 'cancelled' %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-800">Cancelado</span>
                 {% else %}
-                    <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ order.status }}</span>
+                    <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ {'pending':'Pendiente','confirmed':'Confirmado','payment_required':'Pago pendiente','payment_in_process':'Procesando pago','partially_refunded':'Dev. parcial','refunded':'Devuelto','in_mediation':'En mediación','charged_back':'Contracargo'}.get(order.status, order.status) }}</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 text-center">
@@ -367,7 +393,11 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="10" class="px-6 py-8 text-center text-gray-500">No hay ordenes</td>
+            <td colspan="10" class="px-6 py-10 text-center">
+                <svg class="w-10 h-10 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                <p class="text-gray-500 font-medium">Sin órdenes en este periodo</p>
+                <p class="text-gray-400 text-xs mt-1">Ajusta el rango de fechas o selecciona otra cuenta</p>
+            </td>
         </tr>
         {% endfor %}
     </tbody>
@@ -405,6 +435,7 @@
         {% if current_page > 1 %}
         <button hx-get="{{ base_url }}&offset={{ (current_page - 2) * limit }}"
                 hx-target="#orders-table"
+                hx-push-url="true"
                 class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
                        text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
             ‹ Ant
@@ -434,6 +465,7 @@
                 {% else %}
                 <button hx-get="{{ base_url }}&offset={{ (p - 1) * limit }}"
                         hx-target="#orders-table"
+                        hx-push-url="true"
                         class="min-w-[32px] h-8 px-2 rounded-lg text-xs font-semibold border border-gray-200
                                text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
                     {{ p }}
@@ -447,6 +479,7 @@
         {% if current_page < total_pages %}
         <button hx-get="{{ base_url }}&offset={{ current_page * limit }}"
                 hx-target="#orders-table"
+                hx-push-url="true"
                 class="h-8 px-3 rounded-lg text-xs font-semibold border border-gray-200
                        text-gray-600 hover:border-yellow-400 hover:text-yellow-700 transition">
             Sig ›

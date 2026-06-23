@@ -7,6 +7,52 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-23 — UX: Auditoría dashboard — 10 mejoras batch 1
+
+### Motivación
+Auditoría completa del dashboard identificó 20 mejoras agrupadas por prioridad. Se implementa Batch 1 (mejoras puras de frontend, sin backend requerido).
+
+### Cambios (sin commit aún)
+
+**H1.1 — `health.html` + `health_claims.html`: Confirmación 2 pasos en reclamos**
+- `respondClaim()`: validación mín. 10 caracteres antes de enviar
+- Primer clic → botón cambia a "¿Confirmar envío?" (naranja, timeout 6s)
+- Segundo clic → envía (previene envíos accidentales de reclamos a ML)
+- Contador de caracteres inline en el textarea (`claim-chars-{id}`)
+
+**H1.2 — Empty states mejorados**
+- `orders_table.html:141,398` (mobile + desktop): icono + contexto + CTA
+- `health_claims.html:278`: icono verde checkmark + mensaje contextual + hint de fechas
+- `returns_table.html:355`: icono verde + texto más específico + hint de cuenta/fechas
+
+**H2.2 — `orders_table.html`: `hx-push-url="true"` en paginación**
+- Botones Ant/Sig/números ahora actualizan la URL del browser al paginar
+- Permite compartir enlace a página específica y usar el botón Atrás del navegador
+
+**H2.4 — `orders_table.html`: Timestamp + botón Refrescar**
+- Barra superior con hora de última carga (HH:MM) + botón "Refrescar" con ícono
+- Recarga la tabla completa con los mismos filtros activos
+
+**H2.5 — `item_edit_modal.html`: Validaciones + char counters**
+- Descripción: contador `desc-len` actualizado en tiempo real (en car.)
+- Precio: mínimo $1 (min="1"), bloquea guardado si ≤ 0, muestra error en español
+- Price hint: muestra el valor formateado ($1,500.00 MXN) bajo el input al tipear
+
+**H2.6 — Traducción de strings en inglés**
+- `ads_campaigns.html`: fallback status en Jinja → dict `enabled/disabled/archived` → español
+- `orders_table.html`: fallback status en Jinja → dict `pending/confirmed/payment_required/...` → español
+
+**H3.3 — `items.html`: Toast responsivo**
+- `showToast()`: detecta `window.innerWidth < 768` → mobile usa `bottom-4 left-4 right-4`, desktop usa `top-4 right-4 max-w-sm`
+
+**H3.4 — `health_claims.html`: Scroll conversación**
+- `scroll-smooth` añadido al div de conversación del reclamo (max-h-52)
+
+**H4.3 — `products_stock_issues.html`: Confirmación bulk restock**
+- `bulkSyncRestock()`: diálogo de confirmación antes de ejecutar con cantidad de productos afectados
+
+---
+
 ## 2026-06-22 — UX: Deals LIGHTNING/DOD — banner informativo, advertencia precio, errores traducidos
 
 ### Motivación

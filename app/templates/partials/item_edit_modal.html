@@ -159,7 +159,10 @@
         <textarea id="edit-description" rows="5"
                   class="w-full border rounded px-3 py-2 text-sm tracked-field font-mono text-xs"
                   data-field="plain_text" data-original="{{ description }}"
-                  oninput="checkModified(this)">{{ description }}</textarea>
+                  oninput="checkModified(this); document.getElementById('desc-len').textContent = this.value.length + ' car.'">{{ description }}</textarea>
+        <div class="flex items-center gap-2 mt-1">
+            <span id="desc-len" class="text-[10px] text-gray-400 ml-auto">{{ description|length }} car.</span>
+        </div>
         <div class="flex items-center gap-2 mt-1">
             <button id="btn-save-desc"
                     onclick="saveField('{{ item.id }}', 'description', {plain_text: document.getElementById('edit-description').value}, 'btn-save-desc', 'msg-desc')"
@@ -304,14 +307,17 @@
             <div class="flex gap-2">
                 <div class="relative flex-1">
                     <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
-                    <input type="number" id="edit-price" value="{{ item.price or 0 }}" min="0" step="0.01"
+                    <input type="number" id="edit-price" value="{{ item.price or 0 }}" min="1" step="0.01"
                            class="w-full pl-7 pr-3 py-2 border rounded text-sm tracked-field"
                            data-field="price" data-original="{{ item.price or 0 }}"
-                           oninput="checkModified(this)">
+                           oninput="checkModified(this); var v=parseFloat(this.value); var h=document.getElementById('price-hint'); if(h){h.textContent=(!isNaN(v)&&v>0)?('$'+v.toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2})):''; h.className='text-[10px] '+(v<=0?'text-red-400':'text-green-600');}">
                 </div>
                 <button id="btn-save-price"
-                        onclick="saveField('{{ item.id }}', 'price', {price: parseFloat(document.getElementById('edit-price').value)}, 'btn-save-price', 'msg-price')"
+                        onclick="var v=parseFloat(document.getElementById('edit-price').value); if(!v||v<=0){document.getElementById('msg-price').textContent='El precio debe ser mayor a $0'; document.getElementById('msg-price').className='text-xs text-red-500'; return;} saveField('{{ item.id }}', 'price', {price:v}, 'btn-save-price', 'msg-price')"
                         class="bg-yellow-400 text-gray-800 font-semibold px-3 py-2 rounded hover:bg-yellow-500 text-sm">Guardar</button>
+            </div>
+            <div class="flex items-center justify-between mt-0.5">
+                <span id="price-hint" class="text-[10px] text-green-600">{% if item.price %} ${{ "{:,.2f}".format(item.price) }}{% endif %}</span>
             </div>
             <span id="msg-price" class="text-xs"></span>
         </div>

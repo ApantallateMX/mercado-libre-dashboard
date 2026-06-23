@@ -354,8 +354,9 @@ window.respondReturn = function(claimId) {
 
 {% else %}
 <div class="text-center py-12">
-    <svg class="w-12 h-12 text-gray-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-    <p class="text-gray-500 font-medium">Sin retornos en este periodo</p>
-    <p class="text-gray-400 text-sm mt-1">No se encontraron reclamos por producto defectuoso o diferente</p>
+    <svg class="w-12 h-12 text-green-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="text-gray-600 font-semibold">Sin devoluciones en este periodo</p>
+    <p class="text-gray-400 text-sm mt-1">No hay reclamos por producto defectuoso o diferente al anunciado</p>
+    <p class="text-xs text-gray-300 mt-2">Si esperas ver datos, amplía el rango de fechas o selecciona otra cuenta</p>
 </div>
 {% endif %}

@@ -134,7 +134,7 @@
                 <svg class="chevron w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 Conversacion del reclamo ({{ claim.conversation|length }} mensaje{{ 's' if claim.conversation|length != 1 else '' }})
             </button>
-            <div class="hidden ml-2 border-l-2 border-blue-100 pl-3 space-y-2 mt-1 max-h-60 overflow-y-auto">
+            <div class="hidden ml-2 border-l-2 border-blue-100 pl-3 space-y-2 mt-1 max-h-52 overflow-y-auto scroll-smooth">
                 {% for msg in claim.conversation %}
                 <div class="text-xs {% if msg.sender == 'complainant' %}bg-gray-50 border-l-2 border-gray-300{% else %}bg-blue-50 border-l-2 border-blue-300{% endif %} rounded p-2">
                     <div class="flex items-center gap-2 text-gray-400 mb-0.5">
@@ -240,7 +240,11 @@
                 </select>
             </div>
             <textarea id="claim-text-{{ claim.id }}" rows="2"
-                      class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu respuesta..."></textarea>
+                      class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu respuesta (mín. 10 caracteres)..."
+                      oninput="var c=document.getElementById('claim-chars-{{ claim.id }}');if(c){var n=this.value.trim().length;c.textContent=n+' car.';c.className='text-[10px] '+(n<10?'text-red-400':'text-green-500');}"></textarea>
+            <div class="flex items-center justify-between mt-1">
+                <span id="claim-chars-{{ claim.id }}" class="text-[10px] text-red-400">0 car.</span>
+            </div>
             <div class="flex items-center gap-2 mt-2">
                 <button id="btn-claim-{{ claim.id }}" onclick="respondClaim('{{ claim.id }}')"
                         class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm">
@@ -275,5 +279,10 @@
 {% endif %}
 
 {% else %}
-<p class="text-center py-8 text-gray-500">No hay reclamos</p>
+<div class="text-center py-10">
+    <svg class="w-12 h-12 text-green-300 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="text-gray-600 font-semibold">Sin reclamos activos</p>
+    <p class="text-gray-400 text-sm mt-1">No hay reclamos pendientes en el periodo seleccionado</p>
+    <p class="text-xs text-gray-300 mt-2">Si esperas ver reclamos, ajusta el filtro de fechas</p>
+</div>
 {% endif %}

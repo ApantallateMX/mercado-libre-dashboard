@@ -1464,6 +1464,7 @@ function bulkSyncRestock() {
         return document.getElementById('restock-d-' + x.id) || document.getElementById('restock-m-' + x.id);
     });
     if (!items.length) { alert('No hay items pendientes en Reabastecer.'); return; }
+    if (!confirm('¿Sincronizar stock BM→ML para ' + items.length + ' producto(s)?\n\nEsto actualizará las cantidades en Mercado Libre al 60% del stock de BinManager.')) return;
     var btn = document.getElementById('bulk-restock-btn');
     var msg = document.getElementById('bulk-restock-msg');
     btn.disabled = true;

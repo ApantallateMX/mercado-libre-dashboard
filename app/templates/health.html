@@ -620,10 +620,38 @@ window.respondClaim = function(claimId) {
     var textarea = document.getElementById('claim-text-' + claimId);
     var action   = document.getElementById('claim-action-' + claimId).value;
     var text = textarea.value.trim();
-    if (!text) return;
     var btn   = document.getElementById('btn-claim-' + claimId);
     var msgEl = document.getElementById('msg-claim-' + claimId);
+
+    if (text.length < 10) {
+        msgEl.textContent = 'Escribe al menos 10 caracteres para responder.';
+        msgEl.className = 'text-xs text-red-600 mt-1';
+        return;
+    }
+
+    // Two-step confirmation
+    if (btn.dataset.confirming !== '1') {
+        btn.dataset.confirming = '1';
+        btn.textContent = '¿Confirmar envío?';
+        btn.className = 'bg-orange-500 hover:bg-orange-600 text-white font-semibold px-4 py-1.5 rounded text-sm transition';
+        msgEl.textContent = 'Revisa tu respuesta y haz clic de nuevo para confirmar.';
+        msgEl.className = 'text-xs text-orange-600 mt-1';
+        btn._resetTimer = setTimeout(function() {
+            if (btn.dataset.confirming === '1') {
+                btn.dataset.confirming = '';
+                btn.textContent = 'Responder';
+                btn.className = 'bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm';
+                msgEl.textContent = '';
+            }
+        }, 6000);
+        return;
+    }
+
+    clearTimeout(btn._resetTimer);
+    btn.dataset.confirming = '';
     btn.disabled = true; btn.textContent = 'Enviando...';
+    btn.className = 'bg-gray-400 text-white font-semibold px-4 py-1.5 rounded text-sm';
+
     fetch('/api/health/claims/' + claimId + '/respond', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({action: action, text: text})
@@ -632,11 +660,13 @@ window.respondClaim = function(claimId) {
         if (r.ok) {
             msgEl.textContent = 'Respuesta enviada'; msgEl.className = 'text-xs text-green-600 mt-1';
             btn.textContent = 'Enviado';
+            btn.className = 'bg-green-500 text-white font-semibold px-4 py-1.5 rounded text-sm';
         } else { return r.json().then(function(d) { throw new Error(d.detail || 'Error'); }); }
     })
     .catch(function(e) {
         msgEl.textContent = 'Error: ' + e.message; msgEl.className = 'text-xs text-red-600 mt-1';
         btn.disabled = false; btn.textContent = 'Responder';
+        btn.className = 'bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-sm';
     });
 };
 
