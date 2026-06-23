@@ -775,15 +775,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             _ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
             _is_page = not path.startswith("/api/") and not path.startswith("/partials/")
             _section = _PATH_TO_SECTION.get(path, _derive_audit_section(path)) if _is_page else ""
-            _is_amazon = path.startswith("/amazon") or path.startswith("/api/amazon") or "/amazon" in path
+            # Cuenta activa = last_platform cookie determina ML vs Amazon (no depende de la URL)
+            _last_platform = request.cookies.get("last_platform", "ml")
             async def _record_presence(username=du["username"], display=du.get("display_name") or du["username"],
-                                       url=path, section=_section, ip=_ip, is_amazon=_is_amazon,
-                                       is_page=_is_page, cookies=dict(request.cookies)):
+                                       url=path, section=_section, ip=_ip,
+                                       is_page=_is_page, last_platform=_last_platform,
+                                       cookies=dict(request.cookies)):
                 account_name = ""
                 if is_page:
                     try:
                         import aiosqlite as _sq
-                        if is_amazon:
+                        if last_platform == "amz":
                             seller_id = cookies.get("active_amazon_id", "")
                             if seller_id:
                                 async with _sq.connect(token_store.DATABASE_PATH) as _db:

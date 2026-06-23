@@ -360,7 +360,7 @@
                     <button type="button"
                         onclick="document.getElementById('account-dropdown').classList.toggle('hidden')"
                         class="flex items-center gap-1.5 text-gray-700 text-sm hover:text-gray-900 cursor-pointer select-none bg-yellow-300 hover:bg-yellow-200 px-3 py-1.5 rounded-lg transition">
-                        {% if active_platform == "amazon" %}
+                        {% if active_platform == "amz" %}
                         <span class="text-xs font-bold text-white bg-orange-500 px-1 py-0.5 rounded">AMZ</span>
                         {% if amazon_account %}
                         <span class="max-w-[110px] truncate font-medium">{{ amazon_account.nickname or amazon_account.seller_id }}</span>
