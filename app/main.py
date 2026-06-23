@@ -3337,6 +3337,186 @@ async def export_orders_csv(
                  headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+@app.get("/api/orders/platform-comparison")
+async def orders_platform_comparison(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+):
+    """Compara ML vs Amazon: ingresos, órdenes, margen promedio — últimos N días."""
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB
+    from datetime import datetime as _dt, timedelta as _td
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+    await client.close()
+
+    date_to = _dt.utcnow().strftime("%Y-%m-%d")
+    date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+
+    SQL = """
+        SELECT platform,
+               COUNT(*) AS orders,
+               SUM(unit_price * quantity) AS revenue,
+               AVG(CASE WHEN margen_pct != 0 THEN margen_pct END) AS avg_margin,
+               SUM(ganancia_neta) AS ganancia
+        FROM order_history
+        WHERE order_date >= ? AND order_date <= ?
+          AND status IN ('paid', 'delivered', 'shipped')
+        GROUP BY platform
+    """
+    async with _aio.connect(_DB) as db:
+        rows = await (await db.execute(SQL, (date_from, date_to))).fetchall()
+
+    result = {"ml": {}, "amazon": {}, "date_from": date_from, "date_to": date_to, "days": days}
+    for row in rows:
+        platform, orders, revenue, avg_margin, ganancia = row
+        key = "amazon" if platform in ("amazon", "amz") else "ml"
+        result[key] = {
+            "orders": orders or 0,
+            "revenue": round(revenue or 0, 2),
+            "avg_margin": round(avg_margin or 0, 1),
+            "ganancia": round(ganancia or 0, 2),
+        }
+    return result
+
+
+@app.get("/partials/platform-comparison", response_class=HTMLResponse)
+async def platform_comparison_partial(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+):
+    """Widget HTML comparativa ML vs Amazon."""
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB
+    from datetime import datetime as _dt, timedelta as _td
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("")
+    await client.close()
+
+    date_to = _dt.utcnow().strftime("%Y-%m-%d")
+    date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+
+    SQL = """
+        SELECT platform,
+               COUNT(*) AS orders,
+               SUM(unit_price * quantity) AS revenue,
+               AVG(CASE WHEN margen_pct != 0 THEN margen_pct END) AS avg_margin,
+               SUM(ganancia_neta) AS ganancia
+        FROM order_history
+        WHERE order_date >= ? AND order_date <= ?
+          AND status IN ('paid', 'delivered', 'shipped')
+        GROUP BY platform
+    """
+    async with _aio.connect(_DB) as db:
+        rows = await (await db.execute(SQL, (date_from, date_to))).fetchall()
+
+    data: dict = {"ml": {}, "amazon": {}}
+    for row in rows:
+        platform, orders, revenue, avg_margin, ganancia = row
+        key = "amazon" if platform in ("amazon", "amz") else "ml"
+        data[key] = {
+            "orders": orders or 0,
+            "revenue": round(revenue or 0, 2),
+            "avg_margin": round(avg_margin or 0, 1),
+            "ganancia": round(ganancia or 0, 2),
+        }
+
+    ml = data.get("ml", {})
+    amz = data.get("amazon", {})
+
+    if not ml and not amz:
+        return HTMLResponse("")
+
+    def fmt_money(v):
+        return f"${v:,.0f}"
+
+    def margin_class(v):
+        if v >= 30: return "text-green-600"
+        if v >= 15: return "text-yellow-600"
+        return "text-red-500"
+
+    ml_rev = ml.get("revenue", 0)
+    amz_rev = amz.get("revenue", 0)
+    total_rev = ml_rev + amz_rev
+    ml_share = round(ml_rev / total_rev * 100) if total_rev else 0
+    amz_share = 100 - ml_share
+
+    html = f"""
+<div class="bg-white rounded-xl shadow mb-5 overflow-hidden">
+  <div class="px-4 md:px-6 py-3 border-b border-gray-100 flex items-center justify-between">
+    <div>
+      <h2 class="text-sm font-bold text-gray-700">ML vs Amazon — últimos {days} días</h2>
+      <p class="text-[10px] text-gray-400">{date_from} → {date_to}</p>
+    </div>
+    <span class="text-[10px] text-gray-400 font-mono">Todas las cuentas</span>
+  </div>
+  <div class="grid grid-cols-2 divide-x divide-gray-100">
+    <!-- ML -->
+    <div class="p-4 md:p-5">
+      <div class="flex items-center gap-2 mb-3">
+        <div class="w-2 h-2 rounded-full bg-yellow-400"></div>
+        <span class="text-xs font-semibold text-gray-700">Mercado Libre</span>
+        <span class="ml-auto text-[10px] font-bold text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded">{ml_share}%</span>
+      </div>
+      <div class="space-y-2">
+        <div>
+          <div class="text-[10px] text-gray-400 uppercase font-medium">Ingresos</div>
+          <div class="text-xl font-bold text-gray-800">{fmt_money(ml_rev)}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <div class="text-[10px] text-gray-400">Órdenes</div>
+            <div class="font-bold text-gray-700">{ml.get("orders", 0):,}</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-gray-400">Margen prom.</div>
+            <div class="font-bold {margin_class(ml.get("avg_margin", 0))}">{ml.get("avg_margin", 0):.1f}%</div>
+          </div>
+        </div>
+        <div class="text-[10px] text-gray-400">Ganancia neta: <span class="font-semibold text-gray-600">{fmt_money(ml.get("ganancia", 0))}</span></div>
+      </div>
+    </div>
+    <!-- Amazon -->
+    <div class="p-4 md:p-5">
+      <div class="flex items-center gap-2 mb-3">
+        <div class="w-2 h-2 rounded-full bg-orange-400"></div>
+        <span class="text-xs font-semibold text-gray-700">Amazon</span>
+        <span class="ml-auto text-[10px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{amz_share}%</span>
+      </div>
+      <div class="space-y-2">
+        <div>
+          <div class="text-[10px] text-gray-400 uppercase font-medium">Ingresos</div>
+          <div class="text-xl font-bold text-gray-800">{fmt_money(amz_rev)}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <div class="text-[10px] text-gray-400">Órdenes</div>
+            <div class="font-bold text-gray-700">{amz.get("orders", 0):,}</div>
+          </div>
+          <div>
+            <div class="text-[10px] text-gray-400">Margen prom.</div>
+            <div class="font-bold {margin_class(amz.get("avg_margin", 0))}">{amz.get("avg_margin", 0):.1f}%</div>
+          </div>
+        </div>
+        <div class="text-[10px] text-gray-400">Ganancia neta: <span class="font-semibold text-gray-600">{fmt_money(amz.get("ganancia", 0))}</span></div>
+      </div>
+    </div>
+  </div>
+  <!-- Bar de distribucion -->
+  <div class="px-4 pb-4">
+    <div class="text-[10px] text-gray-400 mb-1">Distribución de ingresos</div>
+    <div class="w-full flex rounded-full overflow-hidden h-2">
+      <div class="bg-yellow-400 transition-all" style="width:{ml_share}%"></div>
+      <div class="bg-orange-400 transition-all flex-1"></div>
+    </div>
+  </div>
+</div>
+"""
+    return HTMLResponse(html)
+
+
 @app.get("/partials/items-grid", response_class=HTMLResponse)
 async def items_grid_partial(
     request: Request,

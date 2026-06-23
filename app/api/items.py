@@ -5,6 +5,7 @@ import httpx
 import asyncio
 from app.services.meli_client import get_meli_client, MeliApiError
 from app.services import user_store as _user_store
+from app.services import token_store as _token_store
 import app.main as _main_module
 
 
@@ -23,6 +24,11 @@ async def _audit(request: Request, action: str, item_id: str = None, detail: dic
             )
     except Exception:
         pass
+
+
+def _get_changed_by(request: Request) -> str:
+    du = getattr(request.state, "dashboard_user", None)
+    return du["username"] if du else ""
 
 
 def _invalidate_user_products_cache(user_id: str):
@@ -400,6 +406,9 @@ async def update_price(item_id: str, data: PriceUpdate, request: Request):
         result = await client.update_item_price(item_id, data.price)
         _invalidate_user_products_cache(str(client.user_id))
         await _audit(request, "ml_price_update", item_id, {"price": data.price})
+        asyncio.create_task(_token_store.save_item_change(
+            item_id, str(client.user_id), "price", str(data.price), changed_by=_get_changed_by(request)
+        ))
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -418,6 +427,9 @@ async def update_stock(item_id: str, data: StockUpdate, request: Request):
         result = await client.update_item_stock(item_id, data.quantity)
         _invalidate_user_products_cache(str(client.user_id))
         await _audit(request, "ml_stock_update", item_id, {"qty": data.quantity})
+        asyncio.create_task(_token_store.save_item_change(
+            item_id, str(client.user_id), "stock", str(data.quantity), changed_by=_get_changed_by(request)
+        ))
         # me1_warning: MeLi acepto el PUT pero puede revertir — devolver 200 con flag warning
         if isinstance(result, dict) and result.get("_me1_warning"):
             from fastapi.responses import JSONResponse
@@ -479,6 +491,9 @@ async def update_title(item_id: str, data: TitleUpdate, request: Request):
     try:
         result = await client.update_item_title(item_id, data.title)
         await _audit(request, "ml_title_update", item_id, {"title": data.title[:80]})
+        asyncio.create_task(_token_store.save_item_change(
+            item_id, str(client.user_id), "title", data.title[:200], changed_by=_get_changed_by(request)
+        ))
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -495,6 +510,11 @@ async def update_description(item_id: str, data: DescriptionUpdate, request: Req
     try:
         result = await client.update_item_description(item_id, data.plain_text)
         await _audit(request, "ml_description_update", item_id)
+        asyncio.create_task(_token_store.save_item_change(
+            item_id, str(client.user_id), "description",
+            (data.plain_text[:200] + "…") if len(data.plain_text) > 200 else data.plain_text,
+            changed_by=_get_changed_by(request)
+        ))
         return result
     finally:
         await client.close()
@@ -512,6 +532,9 @@ async def update_status(item_id: str, data: StatusUpdate, request: Request):
         result = await client.update_item_status(item_id, data.status)
         _invalidate_user_products_cache(str(client.user_id))
         await _audit(request, "ml_status_update", item_id, {"status": data.status})
+        asyncio.create_task(_token_store.save_item_change(
+            item_id, str(client.user_id), "status", data.status, changed_by=_get_changed_by(request)
+        ))
         return result
     except MeliApiError as e:
         body = e.body
@@ -696,6 +719,13 @@ async def batch_update_item(item_id: str, data: BatchUpdate):
         return {"ok": all_ok, "results": results}
     finally:
         await client.close()
+
+
+@router.get("/{item_id}/history")
+async def get_item_history(item_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Retorna el historial de cambios de un item (precio, título, stock, estado, descripción)."""
+    rows = await _token_store.get_item_history(item_id, limit=limit)
+    return {"item_id": item_id, "history": rows, "count": len(rows)}
 
 
 def _calculate_health_score(body: dict, description: str = "") -> tuple:

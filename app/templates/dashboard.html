@@ -171,10 +171,10 @@
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-sm font-semibold text-gray-700">Top Productos</h3>
                     <div class="flex gap-1" id="tp-period-btns">
-                        <button onclick="window.loadTopProducts(7)"  id="tp-btn-7"  class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">7d</button>
-                        <button onclick="window.loadTopProducts(15)" id="tp-btn-15" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">15d</button>
-                        <button onclick="window.loadTopProducts(30)" id="tp-btn-30" class="px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition">30d</button>
-                        <button onclick="window.loadTopProducts(90)" id="tp-btn-90" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition">90d</button>
+                        <button onclick="window.loadTopProducts(7)"  id="tp-btn-7"  class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-yellow-100 text-gray-600 transition">7d</button>
+                        <button onclick="window.loadTopProducts(15)" id="tp-btn-15" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-yellow-100 text-gray-600 transition">15d</button>
+                        <button onclick="window.loadTopProducts(30)" id="tp-btn-30" class="px-2 py-0.5 text-xs rounded bg-yellow-400 text-gray-900 font-semibold transition">30d</button>
+                        <button onclick="window.loadTopProducts(90)" id="tp-btn-90" class="px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-yellow-100 text-gray-600 transition">90d</button>
                     </div>
                 </div>
                 <div id="top-products-content">
@@ -944,9 +944,9 @@ window.loadTopProducts = function(days) {
         var btn = document.getElementById('tp-btn-' + d);
         if (!btn) return;
         if (d === _tpActiveDays) {
-            btn.className = 'px-2 py-0.5 text-xs rounded bg-blue-600 text-white transition';
+            btn.className = 'px-2 py-0.5 text-xs rounded bg-yellow-400 text-gray-900 font-semibold transition';
         } else {
-            btn.className = 'px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-blue-100 text-gray-600 transition';
+            btn.className = 'px-2 py-0.5 text-xs rounded bg-gray-100 hover:bg-yellow-100 text-gray-600 transition';
         }
     });
     var content = document.getElementById('top-products-content');

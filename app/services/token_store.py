@@ -705,6 +705,27 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: item_history — auditoría de cambios por listing
+        # field: price | title | description | stock | status | shipping | pictures | attributes
+        # old_value/new_value: TEXT (serializado) para cualquier tipo
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS item_history (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id    TEXT NOT NULL,
+                account_id TEXT NOT NULL DEFAULT '',
+                field      TEXT NOT NULL,
+                old_value  TEXT NOT NULL DEFAULT '',
+                new_value  TEXT NOT NULL DEFAULT '',
+                changed_by TEXT NOT NULL DEFAULT '',
+                changed_at TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL DEFAULT 0
+            )
+        """)
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ih_item ON item_history(item_id, created_at)"
+        )
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: suggestions — notificaciones cruzadas entre cuentas
         # Propuestas de acción desde el análisis de competencia
         # ─────────────────────────────────────────────────────────────────
@@ -3408,3 +3429,40 @@ async def get_parent_listings(seller_id: str, page: int = 1, per_page: int = 20)
         "page": page, "per_page": per_page,
         "pages": max(1, (total + per_page - 1) // per_page),
     }
+
+
+async def save_item_change(
+    item_id: str,
+    account_id: str,
+    field: str,
+    new_value: str,
+    old_value: str = "",
+    changed_by: str = "",
+) -> None:
+    """Registra un cambio de campo en item_history. Fire-and-forget desde endpoints de edición."""
+    import time as _time
+    now = _time.time()
+    changed_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT INTO item_history
+               (item_id, account_id, field, old_value, new_value, changed_by, changed_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (item_id, account_id, field, old_value, new_value, changed_by, changed_at, now),
+        )
+        await db.commit()
+
+
+async def get_item_history(item_id: str, limit: int = 50) -> list:
+    """Retorna los últimos cambios de un item, del más reciente al más antiguo."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            """SELECT field, old_value, new_value, changed_by, changed_at
+               FROM item_history
+               WHERE item_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (item_id, limit),
+        )).fetchall()
+    return [dict(r) for r in rows]
