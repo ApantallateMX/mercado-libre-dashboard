@@ -649,6 +649,26 @@ document.addEventListener('click', function(e) {
 });
 </script>
 
+<!-- HTMX global progress bar -->
+<div id="htmx-bar" class="hidden fixed top-0 left-0 h-[2px] bg-yellow-400 z-[9998]" style="width:0%;transition:width 0.4s ease-out,opacity 0.3s"></div>
+<script>
+(function() {
+    var bar = null, timer = null;
+    function _bar() { return bar || (bar = document.getElementById('htmx-bar')); }
+    document.addEventListener('htmx:beforeRequest', function() {
+        var b = _bar(); if (!b) return;
+        clearTimeout(timer);
+        b.style.opacity = '1'; b.style.width = '0%'; b.classList.remove('hidden');
+        requestAnimationFrame(function() { b.style.width = '70%'; });
+    });
+    document.addEventListener('htmx:afterRequest', function() {
+        var b = _bar(); if (!b) return;
+        b.style.width = '100%';
+        timer = setTimeout(function() { b.style.opacity = '0'; setTimeout(function() { b.classList.add('hidden'); b.style.width = '0%'; b.style.opacity = '1'; }, 300); }, 250);
+    });
+})();
+</script>
+
 <!-- Notification Toast Container -->
 <div id="notif-container" class="fixed top-4 left-4 right-4 md:left-auto md:right-4 md:max-w-sm z-50 flex flex-col gap-2"></div>
 

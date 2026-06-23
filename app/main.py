@@ -3228,6 +3228,115 @@ async def orders_table_partial(
         await client.close()
 
 
+@app.get("/api/orders/period-stats")
+async def orders_period_stats(
+    request: Request,
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """P&L aggregates for current + prior period from order_history (SQLite, fast — no ML API calls)."""
+    if not date_from or not date_to:
+        return JSONResponse({"current": {}, "prior": {}, "delta": {}})
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+    try:
+        user = await client.get_user_info()
+        account_id = str(user.get("id", ""))
+    finally:
+        await client.close()
+    if not account_id:
+        return JSONResponse({"current": {}, "prior": {}, "delta": {}})
+    from datetime import date as _date, timedelta as _td
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB
+    try:
+        d_from = _date.fromisoformat(date_from)
+        d_to   = _date.fromisoformat(date_to)
+        delta_days  = (d_to - d_from).days + 1
+        prior_to    = d_from - _td(days=1)
+        prior_from  = prior_to - _td(days=delta_days - 1)
+        prior_from_s = prior_from.isoformat()
+        prior_to_s   = prior_to.isoformat()
+    except Exception:
+        return JSONResponse({"current": {}, "prior": {}, "delta": {}})
+    SQL = """SELECT COUNT(*) as cnt,
+                    SUM(unit_price * quantity)      AS revenue,
+                    SUM(neto_plat)                  AS neto,
+                    SUM(neto_plat * 0.93)           AS neto_final,
+                    AVG(margen_pct)                 AS avg_margin
+             FROM order_history
+             WHERE account_id=? AND platform='ml'
+               AND status IN ('paid','delivered')
+               AND order_date>=? AND order_date<=?"""
+    async with _aio.connect(_DB) as db:
+        cur_r = await (await db.execute(SQL, (account_id, date_from, date_to))).fetchone()
+        pri_r = await (await db.execute(SQL, (account_id, prior_from_s, prior_to_s))).fetchone()
+    def _row(r):
+        if not r or not r[0]:
+            return {"count": 0, "revenue": 0.0, "neto": 0.0, "neto_final": 0.0, "avg_margin": 0.0}
+        return {"count": r[0] or 0, "revenue": round(r[1] or 0, 2),
+                "neto": round(r[2] or 0, 2), "neto_final": round(r[3] or 0, 2),
+                "avg_margin": round(r[4] or 0, 1)}
+    def _pct(a, b):
+        return round((a - b) / b * 100, 1) if b else None
+    cur = _row(cur_r)
+    pri = _row(pri_r)
+    delta = {
+        "revenue_pct": _pct(cur["revenue"], pri["revenue"]),
+        "neto_pct":    _pct(cur["neto"],    pri["neto"]),
+        "count_pct":   _pct(cur["count"],   pri["count"]),
+    }
+    return JSONResponse({"current": cur, "prior": pri, "delta": delta,
+                         "prior_range": f"{prior_from_s} → {prior_to_s}"})
+
+
+@app.get("/api/orders/export.csv")
+async def export_orders_csv(
+    request: Request,
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Descarga CSV de order_history para el periodo indicado."""
+    import csv, io
+    import aiosqlite as _aio
+    from app.config import DATABASE_PATH as _DB
+    from starlette.responses import Response as _Resp
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "No autenticado"}, status_code=401)
+    try:
+        user = await client.get_user_info()
+        account_id = str(user.get("id", ""))
+    finally:
+        await client.close()
+    conds = ["platform='ml'"]
+    params: list = []
+    if account_id:
+        conds.append("account_id=?"); params.append(account_id)
+    if date_from:
+        conds.append("order_date>=?"); params.append(date_from)
+    if date_to:
+        conds.append("order_date<=?"); params.append(date_to)
+    SQL = f"""SELECT order_id, order_date, sku, item_id, quantity,
+                     unit_price, sale_fee, neto_plat, costo_mxn,
+                     ganancia_neta, margen_pct, recup_retail_pct, status
+              FROM order_history WHERE {' AND '.join(conds)}
+              ORDER BY order_date DESC LIMIT 5000"""
+    async with _aio.connect(_DB) as db:
+        rows = await (await db.execute(SQL, params)).fetchall()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Orden", "Fecha", "SKU", "Item ML", "Cant.", "Precio",
+                "Cargos ML", "Neto Plat.", "Costo MXN", "Ganancia",
+                "Margen %", "Recup. Retail %", "Estado"])
+    w.writerows(rows)
+    fname = f"ordenes_{date_from or 'all'}_{date_to or 'all'}.csv"
+    return _Resp(content=buf.getvalue().encode("utf-8-sig"),
+                 media_type="text/csv",
+                 headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @app.get("/partials/items-grid", response_class=HTMLResponse)
 async def items_grid_partial(
     request: Request,

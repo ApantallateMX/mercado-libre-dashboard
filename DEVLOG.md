@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-23 — FEAT: Auditoría dashboard — Batch 2 (mejoras con backend)
+
+### Motivación
+Segunda ronda de la auditoría del dashboard: mejoras que requieren backend (endpoints nuevos), un nuevo indicador visual global (barra de progreso HTMX), comparativa histórica de métricas, CTR en tabla de campañas, búsqueda en tabla, exportación CSV.
+
+### Cambios — commit pending
+
+**H1.3 — Comparativa histórica en P&L de órdenes**
+- Nuevo endpoint `GET /api/orders/period-stats?date_from&date_to`
+- Consulta `order_history` SQLite para el periodo actual Y el periodo anterior (misma duración, shifted back)
+- Sin llamadas extra a ML API — es instantáneo
+- JS en `orders_table.html` muestra badges ▲↑% / ▼↓% sobre las tarjetas de Ventas brutas y Neto MeLi
+- Solo se activa cuando hay `date_from` y `date_to` definidos en la URL
+
+**H2.1 — Barra de progreso HTMX global**
+- `base.html`: `<div id="htmx-bar">` — línea de 2px en amarillo en el top del viewport
+- Animación: 0→70% durante request, 70→100% al completar, fade out
+- Se dispara en todos los `htmx:beforeRequest` / `htmx:afterRequest` del sitio
+
+**H2.3 — CTR en tabla de campañas Ads (desktop)**
+- `ads_campaigns.html`: columna CTR añadida al header y data row del desktop table
+- Colores: verde si CTR>0.5%, amarillo si 0.2–0.5%, gris si bajo
+- colspan fila expandida actualizado a 12
+
+**H2.6 — Traducción status desktop en campañas**
+- Fallback status en desktop ya usa dict `enabled/disabled/archived → español` (igual que mobile)
+
+**H3.1 — Búsqueda en tabla de órdenes (client-side)**
+- Input de búsqueda con ícono de lupa sobre la tabla de órdenes
+- Filtra tanto tarjetas mobile (`data-order-card`) como filas desktop (`data-order-row`) mientras se escribe
+- Solo filtra la página actual (server-side pagination no cambia)
+
+**H4.2 — Exportar CSV de órdenes**
+- Nuevo endpoint `GET /api/orders/export.csv?date_from&date_to`
+- Consulta `order_history` (max 5000 filas) con BOM UTF-8 para Excel
+- Botón "CSV" con ícono de descarga junto al buscador en la tabla
+
+---
+
 ## 2026-06-23 — UX: Auditoría dashboard — 10 mejoras batch 1
 
 ### Motivación

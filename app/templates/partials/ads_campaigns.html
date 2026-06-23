@@ -166,7 +166,11 @@
         </div>
     </div>
     {% else %}
-    <div class="bg-white rounded-lg shadow p-6 text-center text-gray-500">No se encontraron campanas</div>
+    <div class="bg-white rounded-lg shadow p-8 text-center">
+        <svg class="w-10 h-10 text-gray-200 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
+        <p class="text-gray-500 font-medium">Sin campañas en este periodo</p>
+        <p class="text-gray-400 text-xs mt-1">Ajusta el rango de fechas o verifica que haya campañas activas</p>
+    </div>
     {% endfor %}
 </div>
 
@@ -183,6 +187,7 @@
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Ingresos</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Uds</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Clics</th>
+            <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Click-Through Rate — clics / impresiones">CTR</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300" title="Impression Share — porcentaje de impresiones capturadas">IS%</th>
             <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">ROAS</th>
             <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase border-b-2 border-gray-300">Detalle</th>
@@ -215,7 +220,7 @@
                 {% elif c.status == 'paused' %}
                 <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-800">Pausada</span>
                 {% else %}
-                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ c.status }}</span>
+                <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-800">{{ {'enabled':'Activa','disabled':'Inactiva','archived':'Archivada'}.get(c.status, c.status) }}</span>
                 {% endif %}
             </td>
             <td class="px-4 py-3 text-sm text-right text-gray-800">${{ "%.2f"|format(c.daily_budget or 0) }}</td>
@@ -223,6 +228,9 @@
             <td class="px-4 py-3 text-sm text-right font-medium text-green-600">${{ "%.2f"|format(c.revenue or 0) }}</td>
             <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.units or 0 }}</td>
             <td class="px-4 py-3 text-sm text-right text-gray-800">{{ c.clicks or 0 }}</td>
+            <td class="px-4 py-3 text-sm text-right">
+                <span class="font-semibold {{ 'text-green-600' if (c.ctr or 0) > 0.5 else 'text-yellow-600' if (c.ctr or 0) > 0.2 else 'text-gray-600' }}">{{ "%.2f"|format(c.ctr or 0) }}%</span>
+            </td>
             <td class="px-4 py-3 text-sm text-right">
                 <span class="font-semibold {{ 'text-green-600' if (c.impression_share or 0) >= 50 else 'text-yellow-600' if (c.impression_share or 0) >= 20 else 'text-red-600' }}">
                     {{ "%.1f"|format(c.impression_share or 0) }}%
@@ -247,7 +255,7 @@
         </tr>
         <!-- Fila expandible con metricas + acciones -->
         <tr class="hidden">
-            <td colspan="11" class="px-0 py-0">
+            <td colspan="12" class="px-0 py-0">
                 <div class="bg-gray-50 border-l-4 {{ 'border-red-500' if c.throttled_by_budget else 'border-yellow-400' }} px-6 py-4">
 
                     <!-- Alerta presupuesto limitando visibilidad -->
@@ -389,7 +397,10 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="11" class="px-6 py-8 text-center text-gray-500">No se encontraron campanas</td>
+            <td colspan="12" class="px-6 py-10 text-center">
+                <p class="text-gray-500 font-medium">Sin campañas en este periodo</p>
+                <p class="text-gray-400 text-xs mt-1">Ajusta el rango de fechas o verifica que haya campañas activas en Mercado Ads</p>
+            </td>
         </tr>
         {% endfor %}
     </tbody>
