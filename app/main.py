@@ -1003,8 +1003,6 @@ async def switch_account(request: Request):
     if uid:
         tokens = await token_store.get_tokens(uid)
         if tokens:
-            # Explicit redirect from form (navbar sends current page) → use it
-            # Fallback to referer; if referer is /amazon page, go to /dashboard
             redirect_to = form.get("redirect", "")
             if not redirect_to:
                 redirect_to = request.headers.get("referer", "/dashboard")
@@ -1012,6 +1010,7 @@ async def switch_account(request: Request):
                     redirect_to = "/dashboard"
             response = RedirectResponse(redirect_to, status_code=303)
             response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
+            response.set_cookie("last_platform", "ml", max_age=2592000, httponly=True, samesite="lax")
             return response
     return RedirectResponse("/dashboard", status_code=303)
 
@@ -1030,12 +1029,10 @@ async def switch_amazon_account(request: Request):
         account = await token_store.get_amazon_account(seller_id)
         if account:
             # Prioridad: campo "next" > referer > /amazon (siempre va al dashboard Amazon)
-            next_url = form.get("next") or "/amazon"
+            next_url = form.get("next") or request.headers.get("referer", "/amazon")
             response = RedirectResponse(next_url, status_code=303)
-            response.set_cookie(
-                "active_amazon_id", seller_id,
-                max_age=2592000, httponly=True, samesite="lax"
-            )
+            response.set_cookie("active_amazon_id", seller_id, max_age=2592000, httponly=True, samesite="lax")
+            response.set_cookie("last_platform", "amz", max_age=2592000, httponly=True, samesite="lax")
             return response
     return RedirectResponse("/amazon", status_code=303)
 
@@ -1073,11 +1070,20 @@ async def _accounts_ctx(request: Request) -> dict:
     if not active_amazon_id and amazon_accounts:
         active_amazon_id = amazon_accounts[0]["seller_id"]
 
+    # Plataforma activa: determinada por la última selección explícita del usuario
+    last_platform = request.cookies.get("last_platform", "ml")
+    # Validar: si no hay amazon_accounts, forzar ml
+    if last_platform == "amz" and not amazon_accounts:
+        last_platform = "ml"
+    amazon_account = next((a for a in amazon_accounts if a["seller_id"] == active_amazon_id), None)
+
     return {
         "accounts": accounts,
         "active_user_id": active_uid,
         "amazon_accounts": amazon_accounts,
         "active_amazon_id": active_amazon_id,
+        "active_platform": last_platform,
+        "amazon_account": amazon_account,
         "dashboard_user": getattr(request.state, "dashboard_user", None),
     }
 

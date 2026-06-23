@@ -391,12 +391,12 @@
                             <input type="hidden" name="user_id" value="{{ account.user_id }}">
                             <input type="hidden" name="redirect" value="{{ request.url.path }}">
                             <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-yellow-50 transition-colors">
-                                {% if account.user_id == active_user_id %}
+                                {% if account.user_id == active_user_id and active_platform != 'amz' %}
                                 <span class="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center text-xs font-bold text-gray-800 shrink-0">✓</span>
                                 {% else %}
                                 <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
                                 {% endif %}
-                                <span class="{% if account.user_id == active_user_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
+                                <span class="{% if account.user_id == active_user_id and active_platform != 'amz' %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
                                     {{ account.nickname or account.user_id }}
                                 </span>
                             </button>
@@ -414,13 +414,13 @@
                             <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
                             <input type="hidden" name="next" value="{{ request.url.path }}">
                             <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
-                                {% if amz.seller_id == active_amazon_id %}
+                                {% if amz.seller_id == active_amazon_id and active_platform == 'amz' %}
                                 <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
                                 {% else %}
                                 <span class="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-400 shrink-0">○</span>
                                 {% endif %}
                                 <div class="flex flex-col min-w-0">
-                                    <span class="{% if amz.seller_id == active_amazon_id %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
+                                    <span class="{% if amz.seller_id == active_amazon_id and active_platform == 'amz' %}font-semibold text-gray-800{% else %}text-gray-600{% endif %} truncate">
                                         {{ amz.nickname or amz.seller_id }}
                                     </span>
                                     <span class="text-xs text-gray-400">{{ amz.marketplace_name }} · {{ amz.seller_id }}</span>
@@ -610,8 +610,8 @@
                     <input type="hidden" name="user_id" value="{{ account.user_id }}">
                     <input type="hidden" name="redirect" value="{{ request.url.path }}">
                     <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                        {% if account.user_id == active_user_id %}bg-yellow-500 font-bold text-gray-800{% else %}bg-yellow-300 hover:bg-yellow-400 text-gray-700{% endif %}">
-                        {% if account.user_id == active_user_id %}<span class="shrink-0">✓</span>{% endif %}
+                        {% if account.user_id == active_user_id and active_platform != 'amz' %}bg-yellow-500 font-bold text-gray-800{% else %}bg-yellow-300 hover:bg-yellow-400 text-gray-700{% endif %}">
+                        {% if account.user_id == active_user_id and active_platform != 'amz' %}<span class="shrink-0">✓</span>{% endif %}
                         <span class="truncate">{{ account.nickname or account.user_id }}</span>
                     </button>
                 </form>
@@ -626,10 +626,10 @@
                 {% for amz in amazon_accounts %}
                 <form action="/auth/switch-amazon" method="POST">
                     <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
-                    <input type="hidden" name="next" value="/amazon">
+                    <input type="hidden" name="next" value="{{ request.url.path }}">
                     <button type="submit" class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left transition
-                        {% if amz.seller_id == active_amazon_id %}bg-orange-400 font-bold text-white{% else %}bg-orange-100 hover:bg-orange-200 text-gray-700{% endif %}">
-                        {% if amz.seller_id == active_amazon_id %}<span class="shrink-0">✓</span>{% endif %}
+                        {% if amz.seller_id == active_amazon_id and active_platform == 'amz' %}bg-orange-400 font-bold text-white{% else %}bg-orange-100 hover:bg-orange-200 text-gray-700{% endif %}">
+                        {% if amz.seller_id == active_amazon_id and active_platform == 'amz' %}<span class="shrink-0">✓</span>{% endif %}
                         <span class="truncate">{{ amz.nickname or amz.seller_id }}</span>
                     </button>
                 </form>
