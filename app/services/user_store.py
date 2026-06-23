@@ -154,7 +154,27 @@ async def init_user_db(admin_password: str = "010817xD"):
                 item_id     TEXT,
                 detail      TEXT,
                 ip          TEXT,
+                ml_account  TEXT NOT NULL DEFAULT '',
+                section     TEXT NOT NULL DEFAULT '',
                 ts          TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        # Migrations: agregar columnas a audit_log existente
+        for _col, _def in [("ml_account", "TEXT NOT NULL DEFAULT ''"), ("section", "TEXT NOT NULL DEFAULT ''")]:
+            try:
+                await db.execute(f"ALTER TABLE audit_log ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass
+        # Tabla: presencia activa de usuarios (actualizada en cada request)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_last_seen (
+                username     TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                last_seen    REAL NOT NULL DEFAULT 0,
+                last_url     TEXT NOT NULL DEFAULT '',
+                section      TEXT NOT NULL DEFAULT '',
+                ml_account   TEXT NOT NULL DEFAULT '',
+                ip           TEXT NOT NULL DEFAULT ''
             )
         """)
         # Crear admin inicial si no existe
@@ -352,13 +372,15 @@ async def log_action(
     detail: dict | str = None,
     ip: str = None,
     user_id: int = None,
+    ml_account: str = "",
+    section: str = "",
 ):
     detail_str = json.dumps(detail, ensure_ascii=False) if isinstance(detail, dict) else (detail or "")
     async with aiosqlite.connect(DATABASE_PATH) as db:
         await db.execute("""
-            INSERT INTO audit_log (user_id, username, action, item_id, detail, ip)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, username, action, item_id, detail_str, ip))
+            INSERT INTO audit_log (user_id, username, action, item_id, detail, ip, ml_account, section)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, username, action, item_id, detail_str, ip, ml_account or "", section or ""))
         await db.commit()
 
 
@@ -368,6 +390,7 @@ async def get_audit_log(
     username: str = None,
     action: str = None,
     date_from: str = None,
+    ml_account: str = None,
 ) -> list[dict]:
     conditions = []
     params = []
@@ -380,6 +403,9 @@ async def get_audit_log(
     if date_from:
         conditions.append("ts >= ?")
         params.append(date_from)
+    if ml_account:
+        conditions.append("ml_account = ?")
+        params.append(ml_account)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.extend([limit, offset])
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -464,3 +490,45 @@ async def get_audit_user_timeline(
         )
         rows = await cur.fetchall()
         return {"stats": stats, "rows": [dict(r) for r in rows]}
+
+
+async def update_last_seen(
+    username: str,
+    display_name: str,
+    url: str,
+    section: str,
+    ml_account: str,
+    ip: str,
+) -> None:
+    """Registra la última actividad de un usuario. Fire-and-forget desde middleware."""
+    import time as _time
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO user_last_seen (username, display_name, last_seen, last_url, section, ml_account, ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(username) DO UPDATE SET
+                display_name = excluded.display_name,
+                last_seen    = excluded.last_seen,
+                last_url     = excluded.last_url,
+                section      = excluded.section,
+                ml_account   = excluded.ml_account,
+                ip           = excluded.ip
+        """, (username, display_name, _time.time(), url[:200], section, ml_account, ip))
+        await db.commit()
+
+
+async def get_online_users(active_minutes: int = 5) -> list:
+    """Retorna todos los usuarios con last_seen, marcando quién está activo ahora."""
+    import time as _time
+    cutoff = _time.time() - active_minutes * 60
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            "SELECT * FROM user_last_seen ORDER BY last_seen DESC"
+        )).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["is_online"] = d["last_seen"] > cutoff
+        result.append(d)
+    return result

@@ -238,14 +238,18 @@ ACTION_META: dict = {
 }
 
 
+_CRITICAL_ACTIONS = {"ml_status_update", "ml_item_closed", "ml_concentration"}
+
 def _render_timeline_rows(rows: list) -> str:
     """Genera HTML de filas <tr> para el timeline de auditoría."""
     import json as _json
     if not rows:
-        return '<tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">Sin registros en este período</td></tr>'
+        return '<tr><td colspan="7" class="px-4 py-10 text-center text-gray-400">Sin registros en este período</td></tr>'
     html = ""
     for r in rows:
-        icon, badge_cls, label = ACTION_META.get(r["action"], ("•", "bg-gray-50 text-gray-500", r["action"]))
+        action = r["action"]
+        icon, badge_cls, label = ACTION_META.get(action, ("•", "bg-gray-50 text-gray-500", action))
+        is_critical = action in _CRITICAL_ACTIONS
         detail_raw = r.get("detail") or ""
         try:
             d = _json.loads(detail_raw) if detail_raw else {}
@@ -258,7 +262,8 @@ def _render_timeline_rows(rows: list) -> str:
                 elif k == "qty":
                     parts.append(f"qty: <b>{v}</b>")
                 elif k == "status":
-                    parts.append(f"→ <b>{v}</b>")
+                    status_es = {"active": "activo", "paused": "pausado"}.get(str(v), str(v))
+                    parts.append(f"→ <b>{status_es}</b>")
                 elif k == "title":
                     parts.append(f'"{str(v)[:50]}"')
                 elif k == "fields":
@@ -270,17 +275,23 @@ def _render_timeline_rows(rows: list) -> str:
             detail_str = detail_raw[:100] if detail_raw else ""
         item_html = f'<span class="font-mono text-blue-500">{r["item_id"]}</span>' if r.get("item_id") else "—"
         ts = (r.get("ts") or "")[:16].replace("T", " ")
+        ml_account = r.get("ml_account") or "—"
+        section = r.get("section") or "—"
+        row_cls = "bg-red-50 hover:bg-red-100" if is_critical else "hover:bg-gray-50"
+        critical_badge = ' <span class="ml-1 text-[9px] bg-red-100 text-red-600 px-1 rounded font-bold">CRÍTICO</span>' if is_critical else ""
         html += f"""
-        <tr class="hover:bg-gray-50 border-b border-gray-100">
+        <tr class="{row_cls} border-b border-gray-100">
             <td class="px-3 py-2 text-xs text-gray-400 whitespace-nowrap">{ts}</td>
             <td class="px-3 py-2">
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium {badge_cls}">
                     {icon} {label}
-                </span>
+                </span>{critical_badge}
             </td>
+            <td class="px-3 py-2 text-xs font-semibold text-yellow-700 whitespace-nowrap">{ml_account}</td>
+            <td class="px-3 py-2 text-xs text-gray-500 whitespace-nowrap">{section}</td>
             <td class="px-3 py-2 text-xs">{item_html}</td>
             <td class="px-3 py-2 text-xs text-gray-500">{detail_str}</td>
-            <td class="px-3 py-2 text-xs text-gray-400">{r.get('ip') or '—'}</td>
+            <td class="px-3 py-2 text-xs text-gray-400 hidden md:table-cell">{r.get('ip') or '—'}</td>
         </tr>"""
     return html
 
@@ -291,6 +302,7 @@ async def audit_log_api(
     username: str = None,
     action: str = None,
     date_from: str = None,
+    ml_account: str = None,
     limit: int = 100,
     offset: int = 0,
 ):
@@ -300,8 +312,62 @@ async def audit_log_api(
         username=username or None,
         action=action or None,
         date_from=date_from or None,
+        ml_account=ml_account or None,
     )
     return _render_timeline_rows(rows)
+
+
+@router.get("/audit/online", response_class=HTMLResponse)
+async def audit_online_api(request: Request):
+    """Panel de usuarios activos en los últimos 5 minutos."""
+    _require_admin(request)
+    import time as _time
+    users = await user_store.get_online_users(active_minutes=5)
+    if not users:
+        return '<p class="text-sm text-gray-400 italic py-2">Sin usuarios activos en este momento.</p>'
+
+    # Build account nickname lookup from tokens table
+    import aiosqlite as _aiosqlite
+    acct_map: dict = {}
+    try:
+        async with _aiosqlite.connect(user_store.DATABASE_PATH) as _db:
+            _db.row_factory = _aiosqlite.Row
+            cur = await _db.execute("SELECT user_id, nickname FROM tokens")
+            for row in await cur.fetchall():
+                acct_map[str(row["user_id"])] = row["nickname"]
+    except Exception:
+        pass
+
+    html = '<div class="flex flex-wrap gap-3">'
+    for u in users:
+        is_online = u.get("is_online", False)
+        dot_cls = "bg-green-400" if is_online else "bg-gray-300"
+        label = "Activo" if is_online else "Reciente"
+        last_seen = u.get("last_seen", 0)
+        ago_secs = int(_time.time() - last_seen) if last_seen else 0
+        if ago_secs < 60:
+            ago_str = f"hace {ago_secs}s"
+        elif ago_secs < 3600:
+            ago_str = f"hace {ago_secs // 60}m"
+        else:
+            ago_str = f"hace {ago_secs // 3600}h"
+        account_raw = u.get("ml_account") or ""
+        account_name = acct_map.get(account_raw, account_raw) or "—"
+        section = u.get("section") or "—"
+        display = u.get("display_name") or u.get("username") or "—"
+        url = u.get("last_url") or ""
+        html += f"""
+        <div class="flex items-start gap-3 bg-white border border-gray-100 rounded-xl px-4 py-3 shadow-sm min-w-[220px]">
+            <span class="mt-1 h-2.5 w-2.5 rounded-full {dot_cls} shrink-0 ring-2 ring-white shadow"></span>
+            <div class="flex flex-col gap-0.5 min-w-0">
+                <p class="font-semibold text-gray-800 text-sm leading-tight truncate">{display}</p>
+                <p class="text-xs text-yellow-700 font-medium truncate">{account_name}</p>
+                <p class="text-xs text-gray-400">Sección: <span class="text-gray-600">{section}</span></p>
+                <p class="text-[10px] text-gray-400 truncate" title="{url}">{ago_str} · {url[:45] or '—'}</p>
+            </div>
+        </div>"""
+    html += "</div>"
+    return html
 
 
 @router.get("/audit/summary", response_class=HTMLResponse)

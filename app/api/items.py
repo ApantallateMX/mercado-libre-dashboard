@@ -9,11 +9,54 @@ from app.services import token_store as _token_store
 import app.main as _main_module
 
 
+def _derive_section(path: str) -> str:
+    """Mapea un URL path a un nombre de sección legible para el audit log."""
+    p = path.lower()
+    if any(x in p for x in ("/items", "/products", "/lanzar", "/sin-lanzar")):
+        return "Productos"
+    if any(x in p for x in ("/orders", "orders-table")):
+        return "Órdenes"
+    if "/ads" in p:
+        return "Ads"
+    if any(x in p for x in ("/health", "/claims")):
+        return "Reclamos"
+    if "/returns" in p:
+        return "Devoluciones"
+    if any(x in p for x in ("/stock", "/inventory", "/distribucion")):
+        return "Stock"
+    if "/amazon" in p:
+        return "Amazon"
+    if any(x in p for x in ("/users", "/auditoria")):
+        return "Admin"
+    if any(x in p for x in ("/billing", "/facturacion")):
+        return "Facturación"
+    return "Dashboard"
+
+
+async def _get_ml_account_name(account_id: str) -> str:
+    """Devuelve el nickname de ML dado el user_id numérico. Consulta DB local."""
+    if not account_id:
+        return ""
+    try:
+        import aiosqlite as _aio
+        from app.config import DATABASE_PATH as _DB
+        async with _aio.connect(_DB) as db:
+            row = await (await db.execute(
+                "SELECT nickname FROM tokens WHERE user_id = ?", (account_id,)
+            )).fetchone()
+        return row[0] if row else account_id
+    except Exception:
+        return account_id
+
+
 async def _audit(request: Request, action: str, item_id: str = None, detail: dict = None):
     """Fire-and-forget audit log. Nunca interrumpe la respuesta principal."""
     try:
         du = getattr(request.state, "dashboard_user", None)
         if du:
+            account_id = request.cookies.get("active_account_id", "")
+            ml_account = await _get_ml_account_name(account_id)
+            section = _derive_section(request.url.path)
             await _user_store.log_action(
                 username=du["username"],
                 user_id=du.get("id"),
@@ -21,6 +64,8 @@ async def _audit(request: Request, action: str, item_id: str = None, detail: dic
                 item_id=item_id,
                 detail=detail,
                 ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                ml_account=ml_account,
+                section=section,
             )
     except Exception:
         pass

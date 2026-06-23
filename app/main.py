@@ -719,6 +719,32 @@ _SECTION_FIRST_URL: dict[str, str] = {
 }
 
 
+def _derive_audit_section(path: str) -> str:
+    """Mapea un URL path a sección legible para auditoría y last_seen."""
+    p = path.lower()
+    if any(x in p for x in ("/items", "/products", "/lanzar", "/sin-lanzar")):
+        return "Productos"
+    if any(x in p for x in ("/orders", "orders-table")):
+        return "Órdenes"
+    if "/ads" in p:
+        return "Ads"
+    if any(x in p for x in ("/health", "/claims")):
+        return "Reclamos"
+    if "/returns" in p:
+        return "Devoluciones"
+    if any(x in p for x in ("/stock", "/inventory", "/distribucion")):
+        return "Stock"
+    if "/amazon" in p:
+        return "Amazon"
+    if any(x in p for x in ("/users", "/auditoria")):
+        return "Admin"
+    if any(x in p for x in ("/billing", "/facturacion")):
+        return "Facturación"
+    if any(x in p for x in ("/login", "/logout", "/set-password", "/auth")):
+        return "Sistema"
+    return "Dashboard"
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -744,6 +770,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     first_url = _SECTION_FIRST_URL.get(allowed_sections[0], "/facturacion")
                     return RedirectResponse(first_url, status_code=302)
         request.state.dashboard_user = du
+        # Registrar presencia activa (fire-and-forget — no bloquea la respuesta)
+        if not path.startswith("/static/") and path not in ("/favicon.ico",):
+            _account_id = request.cookies.get("active_account_id", "")
+            _ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
+            asyncio.create_task(user_store.update_last_seen(
+                username=du["username"],
+                display_name=du.get("display_name") or du["username"],
+                url=path,
+                section=_PATH_TO_SECTION.get(path, _derive_audit_section(path)),
+                ml_account=_account_id,
+                ip=_ip,
+            ))
         return await call_next(request)
 
 
@@ -10942,6 +10980,8 @@ async def stock_concentration_execute_api(request: Request):
                     item_id=sku,
                     detail={"winner": winner_uid, "total_stock": total_stock},
                     ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
+                    ml_account=request.cookies.get("active_account_id", ""),
+                    section="Stock",
                 )
         except Exception:
             pass

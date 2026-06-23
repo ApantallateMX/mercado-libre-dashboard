@@ -3,6 +3,25 @@
 {% block content %}
 <div class="space-y-5">
 
+  <!-- ── Panel: ¿Quién está activo ahora? ────────────────────────────────── -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <span class="h-2.5 w-2.5 rounded-full bg-green-400 ring-2 ring-green-100 animate-pulse"></span>
+        <h2 class="text-sm font-semibold text-gray-700">¿Quién está activo ahora?</h2>
+        <span class="text-xs text-gray-400">(últimos 5 min)</span>
+      </div>
+      <button onclick="document.getElementById('online-panel').dispatchEvent(new Event('htmx:poll'))"
+              class="text-xs text-gray-400 hover:text-gray-600 transition">↻</button>
+    </div>
+    <div id="online-panel"
+         hx-get="/api/users/audit/online"
+         hx-trigger="load, every 30s"
+         hx-swap="innerHTML">
+      <p class="text-sm text-gray-400 italic">Cargando…</p>
+    </div>
+  </div>
+
   <!-- ── Vista: Tarjetas de usuarios ──────────────────────────────────────── -->
   <div id="view-cards">
 
@@ -81,7 +100,15 @@
 
     <!-- Filtros de timeline -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-3 flex flex-wrap items-center gap-3">
-      <span class="text-xs text-gray-500 font-medium">Filtrar por tipo:</span>
+      <span class="text-xs text-gray-500 font-medium">Filtrar:</span>
+      <select id="detail-account-filter" onchange="window._auditReloadDetail()"
+              class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-yellow-400">
+        <option value="">Todas las cuentas</option>
+        <option value="APANTALLATEMX">APANTALLATEMX</option>
+        <option value="AUTOBOT">AUTOBOT</option>
+        <option value="BLOWTECHNOLOGIES">BLOWTECHNOLOGIES</option>
+        <option value="LUTEMAMEXICO">LUTEMAMEXICO</option>
+      </select>
       <select id="detail-action-filter" onchange="window._auditReloadDetail()"
               class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-blue-400">
         <option value="">Todas las acciones</option>
@@ -120,13 +147,15 @@
             <tr class="bg-gray-50 border-b border-gray-100">
               <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Fecha/Hora</th>
               <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Acción</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Cuenta ML</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Sección</th>
               <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Item / SKU</th>
               <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalle</th>
               <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide hidden md:table-cell">IP</th>
             </tr>
           </thead>
           <tbody id="detail-tbody">
-            <tr><td colspan="5" class="px-4 py-10 text-center text-gray-400">Cargando…</td></tr>
+            <tr><td colspan="7" class="px-4 py-10 text-center text-gray-400">Cargando…</td></tr>
           </tbody>
         </table>
       </div>
@@ -182,6 +211,7 @@
     document.getElementById('detail-username-label').textContent = _currentDisplay;
     document.getElementById('detail-username-mono').textContent = '@' + username;
     document.getElementById('detail-action-filter').value = '';
+    if (document.getElementById('detail-account-filter')) document.getElementById('detail-account-filter').value = '';
     document.getElementById('detail-days').value = document.getElementById('cards-days').value;
     _loadDetailStats();
     _loadDetailTimeline();
@@ -237,16 +267,18 @@
 
   // ── Cargar timeline del usuario ──────────────────────────────────────────
   async function _loadDetailTimeline() {
-    var days   = document.getElementById('detail-days').value;
-    var action = document.getElementById('detail-action-filter').value;
-    var tbody  = document.getElementById('detail-tbody');
-    tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>';
+    var days    = document.getElementById('detail-days').value;
+    var action  = document.getElementById('detail-action-filter').value;
+    var account = document.getElementById('detail-account-filter') ? document.getElementById('detail-account-filter').value : '';
+    var tbody   = document.getElementById('detail-tbody');
+    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-400">Cargando…</td></tr>';
     var params = new URLSearchParams({
       username: _currentUser,
       days: days,
       offset: _detailOffset,
     });
     if (action) params.set('action', action);
+    if (account) params.set('ml_account', account);
     try {
       var resp = await fetch('/api/users/audit/user-timeline?' + params.toString());
       var html = await resp.text();
@@ -260,7 +292,7 @@
       document.getElementById('btn-detail-prev').disabled = _detailOffset === 0;
       document.getElementById('btn-detail-next').disabled = !_detailHasMore;
     } catch(e) {
-      tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-red-400">Error al cargar</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400">Error al cargar</td></tr>';
     }
   }
 
