@@ -499,21 +499,37 @@ async def update_last_seen(
     section: str,
     ml_account: str,
     ip: str,
+    is_page: bool = True,
 ) -> None:
-    """Registra la última actividad de un usuario. Fire-and-forget desde middleware."""
+    """Registra la última actividad de un usuario. Fire-and-forget desde middleware.
+
+    is_page=True  → navegación real (actualiza sección, cuenta, URL visible)
+    is_page=False → poll de API en background (solo actualiza timestamp e IP,
+                    preserva la última página/sección conocida)
+    """
     import time as _time
     async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute("""
-            INSERT INTO user_last_seen (username, display_name, last_seen, last_url, section, ml_account, ip)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                display_name = excluded.display_name,
-                last_seen    = excluded.last_seen,
-                last_url     = excluded.last_url,
-                section      = excluded.section,
-                ml_account   = excluded.ml_account,
-                ip           = excluded.ip
-        """, (username, display_name, _time.time(), url[:200], section, ml_account, ip))
+        if is_page:
+            await db.execute("""
+                INSERT INTO user_last_seen (username, display_name, last_seen, last_url, section, ml_account, ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    last_seen    = excluded.last_seen,
+                    last_url     = excluded.last_url,
+                    section      = excluded.section,
+                    ml_account   = excluded.ml_account,
+                    ip           = excluded.ip
+            """, (username, display_name, _time.time(), url[:200], section, ml_account, ip))
+        else:
+            # Solo bump del timestamp — no pisar la sección/cuenta que se fijó en la última carga de página
+            await db.execute("""
+                INSERT INTO user_last_seen (username, display_name, last_seen, last_url, section, ml_account, ip)
+                VALUES (?, ?, ?, '', '', '', ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    last_seen = excluded.last_seen,
+                    ip        = excluded.ip
+            """, (username, display_name, _time.time(), ip))
         await db.commit()
 
 

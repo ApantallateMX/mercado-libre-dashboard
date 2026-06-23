@@ -773,35 +773,38 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Registrar presencia activa (fire-and-forget — no bloquea la respuesta)
         if not path.startswith("/static/") and path not in ("/favicon.ico",):
             _ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
-            _section = _PATH_TO_SECTION.get(path, _derive_audit_section(path))
+            _is_page = not path.startswith("/api/") and not path.startswith("/partials/")
+            _section = _PATH_TO_SECTION.get(path, _derive_audit_section(path)) if _is_page else ""
             _is_amazon = path.startswith("/amazon") or path.startswith("/api/amazon") or "/amazon" in path
             async def _record_presence(username=du["username"], display=du.get("display_name") or du["username"],
                                        url=path, section=_section, ip=_ip, is_amazon=_is_amazon,
-                                       cookies=dict(request.cookies)):
+                                       is_page=_is_page, cookies=dict(request.cookies)):
                 account_name = ""
-                try:
-                    import aiosqlite as _sq
-                    if is_amazon:
-                        seller_id = cookies.get("active_amazon_id", "")
-                        if seller_id:
-                            async with _sq.connect(token_store.DATABASE_PATH) as _db:
-                                cur = await _db.execute(
-                                    "SELECT nickname FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
-                                row = await cur.fetchone()
-                                account_name = row[0] if row else seller_id
-                    else:
-                        uid = cookies.get("active_account_id", "")
-                        if uid:
-                            async with _sq.connect(token_store.DATABASE_PATH) as _db:
-                                cur = await _db.execute(
-                                    "SELECT nickname FROM tokens WHERE user_id = ?", (uid,))
-                                row = await cur.fetchone()
-                                account_name = row[0] if row else uid
-                except Exception:
-                    pass
+                if is_page:
+                    try:
+                        import aiosqlite as _sq
+                        if is_amazon:
+                            seller_id = cookies.get("active_amazon_id", "")
+                            if seller_id:
+                                async with _sq.connect(token_store.DATABASE_PATH) as _db:
+                                    cur = await _db.execute(
+                                        "SELECT nickname FROM amazon_accounts WHERE seller_id = ?", (seller_id,))
+                                    row = await cur.fetchone()
+                                    account_name = row[0] if row else seller_id
+                        else:
+                            uid = cookies.get("active_account_id", "")
+                            if uid:
+                                async with _sq.connect(token_store.DATABASE_PATH) as _db:
+                                    cur = await _db.execute(
+                                        "SELECT nickname FROM tokens WHERE user_id = ?", (uid,))
+                                    row = await cur.fetchone()
+                                    account_name = row[0] if row else uid
+                    except Exception:
+                        pass
                 await user_store.update_last_seen(
                     username=username, display_name=display,
                     url=url, section=section, ml_account=account_name, ip=ip,
+                    is_page=is_page,
                 )
             asyncio.create_task(_record_presence())
         return await call_next(request)
@@ -10995,6 +10998,18 @@ async def stock_concentration_execute_api(request: Request):
         try:
             du = getattr(request.state, "dashboard_user", None)
             if du:
+                _uid = request.cookies.get("active_account_id", "")
+                _acct = ""
+                if _uid:
+                    try:
+                        import aiosqlite as _sq2
+                        async with _sq2.connect(token_store.DATABASE_PATH) as _db2:
+                            _row2 = await (await _db2.execute(
+                                "SELECT nickname FROM tokens WHERE user_id = ?", (_uid,)
+                            )).fetchone()
+                            _acct = _row2[0] if _row2 else _uid
+                    except Exception:
+                        _acct = _uid
                 await user_store.log_action(
                     username=du["username"],
                     user_id=du.get("id"),
@@ -11002,7 +11017,7 @@ async def stock_concentration_execute_api(request: Request):
                     item_id=sku,
                     detail={"winner": winner_uid, "total_stock": total_stock},
                     ip=request.headers.get("X-Forwarded-For", request.client.host if request.client else None),
-                    ml_account=request.cookies.get("active_account_id", ""),
+                    ml_account=_acct,
                     section="Stock",
                 )
         except Exception:

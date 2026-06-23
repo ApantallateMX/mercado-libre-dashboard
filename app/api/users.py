@@ -240,6 +240,23 @@ ACTION_META: dict = {
 
 _CRITICAL_ACTIONS = {"ml_status_update", "ml_item_closed", "ml_concentration"}
 
+from datetime import datetime, timezone, timedelta as _timedelta
+_TJ_TZ = timezone(_timedelta(hours=-7))  # Tijuana = UTC-7 (sin cambio de horario)
+
+def _fmt_ts_tj(ts_str: str) -> str:
+    """Convierte timestamp UTC a hora Tijuana (UTC-7) en formato 12h con AM/PM."""
+    try:
+        raw = (ts_str or "")[:19].replace(" ", "T")
+        if not raw:
+            return "—"
+        dt = datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).astimezone(_TJ_TZ)
+        h = dt.hour
+        ampm = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{dt.month}/{dt.day} {h12}:{dt.minute:02d} {ampm}"
+    except Exception:
+        return (ts_str or "")[:16]
+
 def _render_timeline_rows(rows: list) -> str:
     """Genera HTML de filas <tr> para el timeline de auditoría."""
     import json as _json
@@ -274,7 +291,7 @@ def _render_timeline_rows(rows: list) -> str:
         except Exception:
             detail_str = detail_raw[:100] if detail_raw else ""
         item_html = f'<span class="font-mono text-blue-500">{r["item_id"]}</span>' if r.get("item_id") else "—"
-        ts = (r.get("ts") or "")[:16].replace("T", " ")
+        ts = _fmt_ts_tj(r.get("ts") or "")
         ml_account = r.get("ml_account") or "—"
         section = r.get("section") or "—"
         row_cls = "bg-red-50 hover:bg-red-100" if is_critical else "hover:bg-gray-50"
@@ -386,7 +403,7 @@ async def audit_users_summary(request: Request, days: int = 7):
         role_label = ROLE_LABELS.get(role, role)
         role_cls = ROLE_COLOR.get(role, "bg-gray-100 text-gray-500")
         display = display_map.get(un, un)
-        last_ts = (u.get("last_action") or "")[:16].replace("T", " ")
+        last_ts = _fmt_ts_tj(u.get("last_action") or "")
         launches = u.get("launches", 0) or 0
         prices   = u.get("prices", 0) or 0
         stocks   = u.get("stocks", 0) or 0
