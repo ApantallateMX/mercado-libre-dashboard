@@ -993,6 +993,12 @@ async def logout(request: Request):
     return response
 
 
+_AMZ_ONLY_PATHS = {"/amazon"}  # prefix — startswith check below
+_ML_ONLY_PATHS = {
+    "/dashboard", "/ventas", "/productos", "/sku", "/salud",
+    "/retornos", "/planeacion", "/facturacion", "/sync-stock", "/distribucion",
+}
+
 @app.post("/auth/switch-account")
 async def switch_account(request: Request):
     """Cambia la cuenta activa y setea la cookie active_account_id."""
@@ -1004,8 +1010,9 @@ async def switch_account(request: Request):
             redirect_to = form.get("redirect", "")
             if not redirect_to:
                 redirect_to = request.headers.get("referer", "/dashboard")
-                if "/amazon" in redirect_to:
-                    redirect_to = "/dashboard"
+            # Si viene de una página Amazon-only, ir al dashboard ML
+            if redirect_to.startswith("/amazon"):
+                redirect_to = "/dashboard"
             response = RedirectResponse(redirect_to, status_code=303)
             response.set_cookie("active_account_id", uid, max_age=2592000, httponly=True, samesite="lax")
             response.set_cookie("last_platform", "ml", max_age=2592000, httponly=True, samesite="lax")
@@ -1026,8 +1033,10 @@ async def switch_amazon_account(request: Request):
     if seller_id:
         account = await token_store.get_amazon_account(seller_id)
         if account:
-            # Prioridad: campo "next" > referer > /amazon (siempre va al dashboard Amazon)
             next_url = form.get("next") or request.headers.get("referer", "/amazon")
+            # Si viene de una página ML-only, redirigir al dashboard Amazon
+            if next_url in _ML_ONLY_PATHS:
+                next_url = "/amazon"
             response = RedirectResponse(next_url, status_code=303)
             response.set_cookie("active_amazon_id", seller_id, max_age=2592000, httponly=True, samesite="lax")
             response.set_cookie("last_platform", "amz", max_age=2592000, httponly=True, samesite="lax")
