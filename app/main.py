@@ -13280,36 +13280,36 @@ async def diag_bm_web_payload(token: str = "", sku: str = "SNHT000293"):
         "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
         "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
     }
-    try:
-        r = await bm._post(
-            f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
-            json=payload, headers=_AJAX_HEADERS, timeout=30,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            match = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), None)
-            return JSONResponse({
-                "logged_in": bm._logged_in,
-                "sku_searched": sku,
-                "http_status": r.status_code,
-                "total_rows": len(data) if isinstance(data, list) else 0,
-                "sku_found": match is not None,
-                "AvailableQTY": match.get("AvailableQTY") if match else None,
-                "Reserve": match.get("Reserve") if match else None,
-                "TotalQty": match.get("TotalQty") if match else None,
-                "AvgCostQTY": match.get("AvgCostQTY") if match else None,
-                "LastRetailPricePurchaseHistory": match.get("LastRetailPricePurchaseHistory") if match else None,
-                "raw_match": match,
-            })
-        else:
-            return JSONResponse({
-                "logged_in": bm._logged_in,
-                "http_status": r.status_code,
-                "error": f"HTTP {r.status_code}",
-                "raw_preview": r.text[:500],
-            })
-    except Exception as e:
-        return JSONResponse({"logged_in": bm._logged_in, "error": str(e)}, status_code=500)
+    # Probar múltiples variaciones para aislar qué campo causa el 500
+    variants = {
+        "full_web_payload": payload,
+        "no_sales_no_tier": {**payload, "NEEDSALES": False, "NEEDTIER": False, "StartDate": None, "EndDate": None},
+        "no_sales_no_tier_tvl_true": {**payload, "NEEDSALES": False, "NEEDTIER": False, "TVL": True, "StartDate": None, "EndDate": None},
+        "minimal_working": {**payload, "NEEDSALES": False, "NEEDTIER": False, "NEEDUPC": False, "StartDate": None, "EndDate": None, "TVL": True},
+    }
+    results = {}
+    for label, p in variants.items():
+        try:
+            r = await bm._post(
+                f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+                json=p, headers=_AJAX_HEADERS, timeout=30,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                match = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), None)
+                results[label] = {
+                    "status": 200, "rows": len(data),
+                    "sku_found": match is not None,
+                    "AvailableQTY": match.get("AvailableQTY") if match else None,
+                    "Reserve": match.get("Reserve") if match else None,
+                    "TotalQty": match.get("TotalQty") if match else None,
+                    "NoVendibleQty": match.get("NoVendibleQty") if match else None,
+                }
+            else:
+                results[label] = {"status": r.status_code, "error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            results[label] = {"error": str(e)}
+    return JSONResponse({"logged_in": bm._logged_in, "sku_searched": sku, "variants": results})
 
 
 @app.get("/api/debug/item-stock")
