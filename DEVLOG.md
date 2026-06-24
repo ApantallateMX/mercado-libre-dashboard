@@ -7,6 +7,45 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-24 — FIX: BM bulk stock restaurado — payload corregido
+
+### Commits `63ca079`, `b190a4f`, `6b2864d` — subidos a Railway
+
+**Problema:** SNHT000293 mostraba 0 unidades en dashboard aunque BM web mostraba 37.
+Diagnóstico: `Get_GlobalStock_InventoryBySKU` retornaba HTTP 500 para TODAS las variaciones
+de payload que enviábamos. BM web (que funciona) usa exactamente el mismo endpoint.
+
+**Root cause identificado** capturando el payload del browser web via DevTools:
+`Arrayfilters_Condition: null` → BM lanza `NullReferenceException` (C# server-side).
+BM requiere que `Arrayfilters_Condition` sea un **array de objetos** (`[{Condition, Name, selected}]`),
+no `null`. Todos los demás `Arrayfilters_*` también deben ser `[]` (no `null`).
+
+**Campos corregidos en el payload:**
+- `Arrayfilters_Condition`: `null` → `[{Condition:"GRA", Name:"GRA", selected:true}, ...]`
+- `Arrayfilters_Brand/Model/Size/Category/Tags/Supplier`: `null` → `[]`
+- `NEEDFILE`: `false` → `true`
+- `NEEDTIER`: `false` → `true`
+- `OPENCELL`/`OCCOMPTABILITY`: `False` → `""` (string vacío, no bool)
+- `Jsonfilter`: `"[]"` → `'[{"LRow":1,"FColumn":null,...}]'` (estructura completa)
+
+**Archivos modificados:** `app/services/binmanager_client.py`
+- `_GS_BASE_PAYLOAD` — base payload para `get_retail_price_ph()`
+- `get_global_inventory()` — inventario sin filtro de ubicación
+- `get_bulk_stock()` — bulk paginado (fuente del caché GR y ALL)
+- `_query_bm_stock()` — consulta puntual por SKU
+
+**Nuevo campo descubierto:** `NoVendibleQty` — unidades en stock pero no vendibles.
+BM lo calcula server-side como campo independiente. No afecta `AvailableQTY`
+(BM no lo descuenta de AvailableQTY). Queda disponible en los rows del bulk cache
+para display futuro en dashboard.
+
+**Verificado post-fix:**
+- `SNHT000293`: avail=37, reserve=0 en caché y BM live ✅
+- `SNTV001764`: avail=1602, reserve=0, NoVendibleQty=844 ✅
+- Bulk cache GR: 1,827 filas | Bulk cache ALL: 1,984 filas ✅
+
+---
+
 ## 2026-06-23 — FEAT: Admin Audit — Cuenta ML, Sección, Usuarios Activos
 
 ### Commit `2e2f3f2` — subido a Railway y Coolify
