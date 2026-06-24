@@ -16,6 +16,20 @@
             input, select, textarea, button { min-height: 44px; font-size: 16px; }
             input[type="checkbox"], input[type="radio"] { min-height: auto; }
         }
+        /* Tabular nums — alineación de cifras en tablas y KPIs */
+        .tabular-nums { font-variant-numeric: tabular-nums; }
+        /* KPI card hover lift */
+        .kpi-card {
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            will-change: transform;
+        }
+        .kpi-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 28px -6px rgba(0,0,0,0.12), 0 4px 8px -2px rgba(0,0,0,0.06);
+        }
+        /* Tablas — hover de fila consistente */
+        .data-table tbody tr { transition: background-color 0.1s ease; }
+        .data-table tbody tr:hover { background-color: #f9fafb; }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -28,7 +42,7 @@
    active_platform == "amazon"  →  tabs Amazon
    active_platform != "amazon"  →  tabs Mercado Libre
    ════════════════════════════════════════════════════════════════════════ #}
-<nav class="bg-yellow-400 shadow-lg">
+<nav class="bg-yellow-400 shadow-md {% if active_platform == 'amz' %}border-b-2 border-orange-500{% else %}border-b-2 border-yellow-500{% endif %}">
     <div class="max-w-7xl mx-auto px-4">
         <div class="flex justify-between h-14 md:h-16 items-center">
 
@@ -115,7 +129,7 @@
                 {% if not _sec or 'productos' in _sec %}
                 <a href="/items" class="relative text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition {% if active in ['items', 'items_health', 'sku_inventory', 'productos'] %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
                   Productos
-                  <span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
+                  <span id="orphans-nav-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
                 {% endif %}
                 {% if not _sec or 'sku' in _sec %}
@@ -127,13 +141,13 @@
                 {% if not _sec or 'salud' in _sec %}
                 <a href="/health" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition relative {% if active == 'health' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
                     Salud
-                    <span id="health-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
+                    <span id="health-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
                 {% endif %}
                 {% if not _sec or 'devoluciones' in _sec %}
                 <a href="/returns" class="text-gray-700 hover:text-gray-900 hover:bg-yellow-500 px-2 py-1 rounded transition relative {% if active == 'returns' %}font-semibold bg-yellow-500{% endif %} whitespace-nowrap">
                     Retornos
-                    <span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
+                    <span id="returns-badge" class="hidden absolute -top-1 -right-1 bg-gray-800 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold" style="font-size:10px"></span>
                 </a>
                 {% endif %}
                 {% if not _sec or 'planning' in _sec %}
@@ -350,7 +364,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                   d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
                         </svg>
-                        <span id="notif-bell-badge" class="hidden absolute -top-0.5 -right-0.5 bg-red-500 text-white rounded-full flex items-center justify-center font-bold" style="font-size:9px;min-width:16px;height:16px;padding:0 3px"></span>
+                        <span id="notif-bell-badge" class="hidden absolute -top-0.5 -right-0.5 bg-gray-800 text-white rounded-full flex items-center justify-center font-bold" style="font-size:9px;min-width:16px;height:16px;padding:0 3px"></span>
                     </button>
                 </div>
                 {% endif %}{# end ML-only widgets #}
@@ -377,7 +391,7 @@
                     </button>
 
                     <!-- Dropdown — mismo para ML y Amazon -->
-                    <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-gray-100 z-50 min-w-[240px] py-2">
+                    <div id="account-dropdown" class="hidden absolute right-0 top-full mt-1 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 min-w-[260px] py-2">
                         <!-- Sección MeLi -->
                         <div class="px-4 py-1.5 flex items-center gap-2">
                             <span class="text-xs font-bold bg-yellow-400 text-gray-800 px-1.5 py-0.5 rounded">ML</span>
@@ -387,7 +401,7 @@
                         <form action="/auth/switch-account" method="POST">
                             <input type="hidden" name="user_id" value="{{ account.user_id }}">
                             <input type="hidden" name="redirect" value="{{ request.url.path }}">
-                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-yellow-50 transition-colors">
+                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-left hover:bg-yellow-50 transition-colors rounded-lg mx-1" style="width:calc(100% - 8px)">
                                 {% if account.user_id == active_user_id and active_platform != 'amz' %}
                                 <span class="w-5 h-5 rounded-full bg-yellow-400 flex items-center justify-center text-xs font-bold text-gray-800 shrink-0">✓</span>
                                 {% else %}
@@ -410,7 +424,7 @@
                         <form action="/auth/switch-amazon" method="POST">
                             <input type="hidden" name="seller_id" value="{{ amz.seller_id }}">
                             <input type="hidden" name="next" value="{{ request.url.path }}">
-                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2 text-sm text-left hover:bg-orange-50 transition-colors">
+                            <button type="submit" class="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-left hover:bg-orange-50 transition-colors rounded-lg mx-1" style="width:calc(100% - 8px)">
                                 {% if amz.seller_id == active_amazon_id and active_platform == 'amz' %}
                                 <span class="w-5 h-5 rounded-full bg-orange-400 flex items-center justify-center text-xs font-bold text-white shrink-0">✓</span>
                                 {% else %}

@@ -1820,10 +1820,10 @@ function _renderAmzStatsRow() {
     var action = c.filter === 'operaciones'
       ? 'switchAmzTab(\'operaciones\')'
       : 'switchAmzTab(\'operaciones\'); setAmzOpsFilter(\'' + c.filter + '\')';
-    return '<div onclick="' + action + '" class="bg-white rounded-xl border p-3 flex items-center gap-3 cursor-pointer ' + c.hover + ' hover:shadow-sm transition">' +
-      '<div class="w-9 h-9 rounded-lg ' + c.bg + ' flex items-center justify-center shrink-0">' + c.icon + '</div>' +
-      '<div><p class="text-xs text-gray-500">' + c.label + '</p>' +
-      '<p class="font-bold text-lg text-gray-800">' + c.value + '</p></div>' +
+    return '<div onclick="' + action + '" class="kpi-card bg-white rounded-xl border p-4 flex items-center gap-3 cursor-pointer ' + c.hover + ' transition">' +
+      '<div class="w-10 h-10 rounded-xl ' + c.bg + ' flex items-center justify-center shrink-0">' + c.icon + '</div>' +
+      '<div><p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">' + c.label + '</p>' +
+      '<p class="font-black text-2xl text-gray-800 tabular-nums leading-none">' + c.value + '</p></div>' +
       '</div>';
   }).join('');
 }

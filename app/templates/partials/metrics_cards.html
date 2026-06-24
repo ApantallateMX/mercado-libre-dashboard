@@ -1,22 +1,22 @@
-<div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mb-6 md:mb-8">
-    <a href="/orders" class="bg-white p-3 md:p-6 rounded-lg shadow hover:shadow-md active:ring-2 active:ring-yellow-300 transition block group">
-        <p class="text-gray-500 text-xs md:text-sm">Ordenes</p>
-        <p class="text-2xl md:text-3xl font-bold text-gray-800">{{ metrics.summary.total_orders }}</p>
-        <p class="text-[10px] md:text-xs text-gray-400 mt-1 hidden md:block group-hover:text-yellow-600 transition">Ver ordenes &rarr;</p>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8">
+    <a href="/orders" class="kpi-card bg-white rounded-xl shadow-sm border-t-4 border-amber-400 p-4 md:p-5 block group">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Órdenes</p>
+        <p class="text-3xl md:text-4xl font-black text-gray-800 tabular-nums leading-none">{{ metrics.summary.total_orders }}</p>
+        <p class="text-xs text-amber-500 mt-3 group-hover:underline transition">Ver órdenes →</p>
     </a>
-    <a href="/orders" class="bg-white p-3 md:p-6 rounded-lg shadow hover:shadow-md active:ring-2 active:ring-green-300 transition block group">
-        <p class="text-gray-500 text-xs md:text-sm">Ventas</p>
-        <p class="text-2xl md:text-3xl font-bold text-green-600">{{ metrics.summary.monthly_sales }}</p>
-        <p class="text-[10px] md:text-xs text-gray-400 mt-1 hidden md:block group-hover:text-green-600 transition">Pagadas/entregadas &rarr;</p>
+    <a href="/orders" class="kpi-card bg-white rounded-xl shadow-sm border-t-4 border-emerald-400 p-4 md:p-5 block group">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Ventas Pagadas</p>
+        <p class="text-3xl md:text-4xl font-black text-emerald-600 tabular-nums leading-none">{{ metrics.summary.monthly_sales }}</p>
+        <p class="text-xs text-emerald-500 mt-3 group-hover:underline transition">Órdenes entregadas →</p>
     </a>
-    <a href="/sku-sales" class="bg-white p-3 md:p-6 rounded-lg shadow hover:shadow-md active:ring-2 active:ring-blue-300 transition block group">
-        <p class="text-gray-500 text-xs md:text-sm">Ingresos</p>
-        <p class="text-lg md:text-3xl font-bold text-gray-800 truncate">${{ "%.0f"|format(metrics.summary.monthly_revenue) }}</p>
-        <p class="text-[10px] md:text-xs text-gray-400 mt-1 hidden md:block group-hover:text-blue-600 transition">Ver por SKU &rarr;</p>
+    <a href="/sku-sales" class="kpi-card bg-white rounded-xl shadow-sm border-t-4 border-yellow-400 p-4 md:p-5 block group">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Ingresos Netos</p>
+        <p class="text-2xl md:text-3xl font-black text-gray-800 tabular-nums leading-none truncate">${{ "%.0f"|format(metrics.summary.monthly_revenue) }}</p>
+        <p class="text-xs text-yellow-600 mt-3 group-hover:underline transition">Desglose por SKU →</p>
     </a>
-    <a href="/items" class="bg-white p-3 md:p-6 rounded-lg shadow hover:shadow-md active:ring-2 active:ring-blue-300 transition block group">
-        <p class="text-gray-500 text-xs md:text-sm">Productos</p>
-        <p class="text-2xl md:text-3xl font-bold text-blue-600">{{ metrics.summary.active_items }}</p>
-        <p class="text-[10px] md:text-xs text-gray-400 mt-1 hidden md:block group-hover:text-blue-600 transition">Ver catalogo &rarr;</p>
+    <a href="/items" class="kpi-card bg-white rounded-xl shadow-sm border-t-4 border-blue-400 p-4 md:p-5 block group">
+        <p class="text-xs font-medium text-gray-400 uppercase tracking-wide mb-3">Productos Activos</p>
+        <p class="text-3xl md:text-4xl font-black text-blue-600 tabular-nums leading-none">{{ metrics.summary.active_items }}</p>
+        <p class="text-xs text-blue-500 mt-3 group-hover:underline transition">Ver catálogo →</p>
     </a>
 </div>
