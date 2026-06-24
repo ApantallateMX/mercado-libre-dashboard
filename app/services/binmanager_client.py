@@ -38,14 +38,15 @@ _AJAX_HEADERS = {
 }
 
 # Payload base para Get_GlobalStock_InventoryBySKU con NEEDRETAILPRICEPH=True
+# Arrayfilters_* deben ser listas vacías (no None) — BM lanza NullReferenceException con null.
 _GS_BASE_PAYLOAD = {
     "COMPANYID": 1, "CATEGORYID": None, "WAREHOUSEID": None,
     "LOCATIONID": None, "BINID": None, "CONDITION": None,
     "FORINVENTORY": None, "BUSCADOR": False, "BRAND": None,
     "MODEL": None, "SIZE": None, "LCN": None, "CONCEPTID": 8,
-    "OPENCELL": False, "OCCOMPTABILITY": False,
+    "OPENCELL": "", "OCCOMPTABILITY": "",
     "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
-    "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+    "NEEDIPS": False, "NEEDTIER": True, "NEEDFILE": True,
     "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False, "NEEDAVGCOST": False,
     "NUMBERPAGE": 1, "RECORDSPAGE": 5,
     "ORDERBYNAME": None, "ORDERBYTYPE": None,
@@ -58,15 +59,15 @@ _GS_BASE_PAYLOAD = {
     "NEEDSALES": False, "StartDate": None, "EndDate": None,
     "SUPPLIERS": None, "TAGSNOTIN": None,
     "NEEDLASTREPORTEDSALESPRICE": False, "SALESPRICE": None,
-    "Jsonfilter": "[]",
-    "Arrayfilters_Condition": None, "Namefilters_Condition": None,
-    "Arrayfilters_Brand": None, "Namefilters_Brand": None,
-    "Arrayfilters_Model": None, "Namefilters_Model": None,
-    "Arrayfilters_Size": None, "Namefilters_Size": None,
-    "Arrayfilters_Category": None, "Namefilters_Category": None,
-    "Arrayfilters_Tags": None, "Namefilters_Tags": None,
-    "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
-    "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
+    "Jsonfilter": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+    "Arrayfilters_Condition": [], "Namefilters_Condition": None,
+    "Arrayfilters_Brand": [], "Namefilters_Brand": None,
+    "Arrayfilters_Model": [], "Namefilters_Model": None,
+    "Arrayfilters_Size": [], "Namefilters_Size": None,
+    "Arrayfilters_Category": [], "Namefilters_Category": None,
+    "Arrayfilters_Tags": [], "Namefilters_Tags": None,
+    "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
+    "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
 }
 
 
@@ -225,10 +226,26 @@ class BinManagerClient:
             "BINID": None, "CONDITION": None, "FORINVENTORY": None,
             "BUSCADOR": False, "BRAND": None, "MODEL": None,
             "ORDERBYNAME": None, "ORDERBYTYPE": None,
-            "SIZE": None, "LCN": None,
-            "NEEDAVGCOST": True,
-            "NEEDLASTREPORTEDSALESPRICE": None,
-            "Jsonfilter": "[]",
+            "SIZE": None, "LCN": None, "OPENCELL": "", "OCCOMPTABILITY": "",
+            "NEEDAVGCOST": True, "NEEDTIER": True, "NEEDFILE": True,
+            "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
+            "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False, "NEEDIPS": False,
+            "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+            "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
+            "PorcentajeFloor": 20, "StatusConcept": None, "Tier": None,
+            "RetailBalance": None, "RetailAvailable": None,
+            "MaxQty": None, "NameQty": None,
+            "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+            "SUPPLIERS": None, "filterUPC": None,
+            "Jsonfilter": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+            "Arrayfilters_Condition": [], "Namefilters_Condition": None,
+            "Arrayfilters_Brand": [], "Namefilters_Brand": None,
+            "Arrayfilters_Model": [], "Namefilters_Model": None,
+            "Arrayfilters_Size": [], "Namefilters_Size": None,
+            "Arrayfilters_Category": [], "Namefilters_Category": None,
+            "Arrayfilters_Tags": [], "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
         }
         for attempt in range(2):
             try:
@@ -259,11 +276,10 @@ class BinManagerClient:
         LOCATIONID=47,62,68 + CONCEPTID=1.
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
-        Incluye AvgCostQTY y LastRetailPricePurchaseHistory.
+        Incluye AvgCostQTY, LastRetailPricePurchaseHistory y NoVendibleQty.
 
-        Cambio post-mantenimiento BM (2026-04-16):
-          - SEARCH=null ya no funciona → usar SEARCH=""
-          - RECORDSPAGE>500 retorna 0 → paginar con RECORDSPAGE=500
+        Fix 2026-06-24: Arrayfilters_Condition debe ser array (no null) —
+          BM lanza NullReferenceException (HTTP 500) si recibe null.
         """
         if not self._logged_in:
             if not await self.login():
@@ -271,6 +287,8 @@ class BinManagerClient:
         _BM_PAGE_SIZE = 500   # límite impuesto por BM post-mantenimiento
         _BM_MAX_PAGES = 20    # tope de seguridad (20×500 = 10,000 SKUs máx)
         url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        cond_list = [c.strip() for c in conditions.split(",") if c.strip()]
+        arrayfilters_condition = [{"Condition": c, "Name": c, "selected": True} for c in cond_list]
         base_payload = {
             "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
             "LOCATIONID": "47,62,68",
@@ -282,7 +300,7 @@ class BinManagerClient:
             "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
             "OPENCELL": "", "OCCOMPTABILITY": "",
             "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
-            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDIPS": False, "NEEDTIER": True, "NEEDFILE": True,
             "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
             "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
             "ORDERBYNAME": None, "ORDERBYTYPE": None,
@@ -292,15 +310,16 @@ class BinManagerClient:
             "TAGS": None, "TVL": False, "TAGSNOTIN": None,
             "SUPPLIERS": None, "filterUPC": None,
             "NEEDLASTREPORTEDSALESPRICE": None, "StartDate": None, "EndDate": None,
-            "Jsonfilter": "[]",
-            "Arrayfilters_Condition": None, "Namefilters_Condition": None,
-            "Arrayfilters_Brand": None, "Namefilters_Brand": None,
-            "Arrayfilters_Model": None, "Namefilters_Model": None,
-            "Arrayfilters_Size": None, "Namefilters_Size": None,
-            "Arrayfilters_Category": None, "Namefilters_Category": None,
-            "Arrayfilters_Tags": None, "Namefilters_Tags": None,
-            "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
-            "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
+            "Jsonfilter": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+            "Arrayfilters_Condition": arrayfilters_condition,
+            "Namefilters_Condition": conditions,
+            "Arrayfilters_Brand": [], "Namefilters_Brand": None,
+            "Arrayfilters_Model": [], "Namefilters_Model": None,
+            "Arrayfilters_Size": [], "Namefilters_Size": None,
+            "Arrayfilters_Category": [], "Namefilters_Category": None,
+            "Arrayfilters_Tags": [], "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
         }
         all_rows: list = []
         for page in range(1, _BM_MAX_PAGES + 1):
@@ -377,6 +396,8 @@ class BinManagerClient:
                 break
 
         url = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU"
+        cond_list = [c.strip() for c in conditions.split(",") if c.strip()]
+        arrayfilters_condition = [{"Condition": c, "Name": c, "selected": True} for c in cond_list]
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": None, "WAREHOUSEID": None,
@@ -390,7 +411,7 @@ class BinManagerClient:
             "CONCEPTID": 1,
             "OPENCELL": "", "OCCOMPTABILITY": "",
             "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
-            "NEEDIPS": False, "NEEDTIER": False, "NEEDFILE": False,
+            "NEEDIPS": False, "NEEDTIER": True, "NEEDFILE": True,
             "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
             "NEEDAVGCOST": False, "NEEDRETAILPRICEPH": False,
             "NEEDSALES": False, "NEEDUPC": False, "NEEDPORCENTAGE": False,
@@ -403,15 +424,16 @@ class BinManagerClient:
             "SUPPLIERS": None, "filterUPC": None,
             "NEEDLASTREPORTEDSALESPRICE": None,
             "StartDate": None, "EndDate": None,
-            "Jsonfilter": "[]",
-            "Arrayfilters_Condition": None, "Namefilters_Condition": None,
-            "Arrayfilters_Brand": None, "Namefilters_Brand": None,
-            "Arrayfilters_Model": None, "Namefilters_Model": None,
-            "Arrayfilters_Size": None, "Namefilters_Size": None,
-            "Arrayfilters_Category": None, "Namefilters_Category": None,
-            "Arrayfilters_Tags": None, "Namefilters_Tags": None,
-            "Arrayfilters_Tags_Exclude": None, "Namefilters_Tags_Exlude": None,
-            "Arrayfilters_Supplier": None, "Namefilters_Supplier": None,
+            "Jsonfilter": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+            "Arrayfilters_Condition": arrayfilters_condition,
+            "Namefilters_Condition": conditions,
+            "Arrayfilters_Brand": [], "Namefilters_Brand": None,
+            "Arrayfilters_Model": [], "Namefilters_Model": None,
+            "Arrayfilters_Size": [], "Namefilters_Size": None,
+            "Arrayfilters_Category": [], "Namefilters_Category": None,
+            "Arrayfilters_Tags": [], "Namefilters_Tags": None,
+            "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
+            "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
         }
         _COND_SFXS = ("-GRA", "-GRB", "-GRC", "-ICB", "-ICC", "-NEW")
         for attempt in range(2):
