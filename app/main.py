@@ -13228,6 +13228,90 @@ async def diag_bm_bulk_test(token: str = "", page_size: int = 10, search: str = 
     return JSONResponse({"logged_in": bm._logged_in, "page_size_tested": page_size, "results": results})
 
 
+@app.get("/api/diag/bm-web-payload")
+async def diag_bm_web_payload(token: str = "", sku: str = "SNHT000293"):
+    """Diagnóstico: prueba Get_GlobalStock_InventoryBySKU con el payload EXACTO del browser web.
+    Sirve para verificar si el 500 se resuelve con los campos que faltaban.
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    from datetime import date, timedelta
+    from app.services.binmanager_client import _BM_BASE, _AJAX_HEADERS, get_shared_bm as _gsb_wp
+    bm = await _gsb_wp()
+    if not bm._logged_in:
+        await bm.login()
+
+    today = date.today()
+    start_date = (today - timedelta(days=30)).strftime("%m-%d-%Y")
+    end_date = (today + timedelta(days=1)).strftime("%m-%d-%Y")
+    conditions = "GRA,GRB,GRC,ICB,ICC,NEW"
+    cond_list = conditions.split(",")
+    arrayfilters_condition = [{"Condition": c, "Name": c, "selected": True} for c in cond_list]
+
+    payload = {
+        "COMPANYID": 1, "SEARCH": sku, "CONCEPTID": 1,
+        "LOCATIONID": "47,62,68", "CONDITION": conditions,
+        "FORINVENTORY": 0, "BUSCADOR": False,
+        "CATEGORYID": None, "WAREHOUSEID": None, "BINID": None,
+        "BRAND": None, "MODEL": None, "SIZE": None, "LCN": None,
+        "OPENCELL": "", "OCCOMPTABILITY": "",
+        "NEEDRETAILPRICE": False, "NEEDFLOORPRICE": False,
+        "NEEDIPS": False, "NEEDTIER": True, "NEEDFILE": True,
+        "NEEDVIRTUALQTY": False, "NEEDINCOMINGQTY": False,
+        "NEEDAVGCOST": True, "NEEDRETAILPRICEPH": True,
+        "NEEDSALES": True, "NEEDUPC": True, "NEEDPORCENTAGE": False,
+        "NUMBERPAGE": 1, "RECORDSPAGE": 100,
+        "ORDERBYNAME": None, "ORDERBYTYPE": None,
+        "PorcentajeFloor": 20, "StatusConcept": None,
+        "RetailBalance": None, "RetailAvailable": None,
+        "MaxQty": None, "MinQty": None, "NameQty": None, "Tier": None,
+        "TAGS": None, "TVL": False, "TAGSNOTIN": None,
+        "SUPPLIERS": None, "filterUPC": None,
+        "NEEDLASTREPORTEDSALESPRICE": None,
+        "StartDate": start_date, "EndDate": end_date,
+        "Jsonfilter": '[{"LRow":1,"FColumn":null,"FCondition":null,"FValue":null,"CheckAnother":false,"AndOr":null,"SCondition":null,"SValue":null}]',
+        "Arrayfilters_Condition": arrayfilters_condition,
+        "Namefilters_Condition": conditions,
+        "Arrayfilters_Brand": [], "Namefilters_Brand": None,
+        "Arrayfilters_Model": [], "Namefilters_Model": None,
+        "Arrayfilters_Size": [], "Namefilters_Size": None,
+        "Arrayfilters_Category": [], "Namefilters_Category": None,
+        "Arrayfilters_Tags": [], "Namefilters_Tags": None,
+        "Arrayfilters_Tags_Exclude": [], "Namefilters_Tags_Exlude": None,
+        "Arrayfilters_Supplier": [], "Namefilters_Supplier": None,
+    }
+    try:
+        r = await bm._post(
+            f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock_InventoryBySKU",
+            json=payload, headers=_AJAX_HEADERS, timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            match = next((x for x in data if (x.get("SKU") or "").upper() == sku.upper()), None)
+            return JSONResponse({
+                "logged_in": bm._logged_in,
+                "sku_searched": sku,
+                "http_status": r.status_code,
+                "total_rows": len(data) if isinstance(data, list) else 0,
+                "sku_found": match is not None,
+                "AvailableQTY": match.get("AvailableQTY") if match else None,
+                "Reserve": match.get("Reserve") if match else None,
+                "TotalQty": match.get("TotalQty") if match else None,
+                "AvgCostQTY": match.get("AvgCostQTY") if match else None,
+                "LastRetailPricePurchaseHistory": match.get("LastRetailPricePurchaseHistory") if match else None,
+                "raw_match": match,
+            })
+        else:
+            return JSONResponse({
+                "logged_in": bm._logged_in,
+                "http_status": r.status_code,
+                "error": f"HTTP {r.status_code}",
+                "raw_preview": r.text[:500],
+            })
+    except Exception as e:
+        return JSONResponse({"logged_in": bm._logged_in, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/debug/item-stock")
 async def debug_item_stock(item_id: str = "", key: str = "", live: int = 0):
     """Diagnóstico: muestra stock ML (DB) + BM caché para un item_id (MLM...).
