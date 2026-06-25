@@ -41,7 +41,7 @@ _BM_AVAIL_URL = (
     "https://binmanager.mitechnologiesinc.com"
     "/InventoryReport/InventoryReport/InventoryBySKUAndCondicion_Quantity"
 )
-_BM_LOC_IDS      = "47,62,68"
+_BM_LOC_IDS      = "47,68"
 _COND_SUFFIXES   = ("-NEW", "-GRA", "-GRB", "-GRC", "-ICB", "-ICC")
 
 

@@ -65,7 +65,7 @@ _BM_WAREHOUSE_URL = f"{_BM_BASE}/InventoryReport/InventoryReport/Get_GlobalStock
 _BM_AJAX = {"Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}
 _BM_COMPANY = 1
 _BM_CONCEPT = 8
-_BM_LOCATIONS = "47,62,68"
+_BM_LOCATIONS = "47,68"
 
 # ─── Background scan state ────────────────────────────────────────────────────
 _scan_lock = asyncio.Lock()

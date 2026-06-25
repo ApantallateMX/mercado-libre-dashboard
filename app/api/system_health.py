@@ -142,7 +142,7 @@ async def _check_binmanager() -> dict:
         # Usamos un SKU conocido (liviano — solo ping al API)
         r = await _bm_post_health(BM_URL, {
             "COMPANYID": 1, "TYPEINVENTORY": 0, "WAREHOUSEID": None,
-            "LOCATIONID": "47,62,68", "BINID": None,
+            "LOCATIONID": "47,68", "BINID": None,
             "PRODUCTSKU": "PING_TEST", "CONDITION": "GRA",
             "SUPPLIERS": None, "LCN": None, "SEARCH": "PING_TEST"
         }, timeout=_TIMEOUT)

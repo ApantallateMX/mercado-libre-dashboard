@@ -273,7 +273,8 @@ class BinManagerClient:
     async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW") -> list:
         """Retorna TODOS los SKUs vendibles paginando de 500 en 500.
 
-        LOCATIONID=47,62,68 + CONCEPTID=1.
+        LOCATIONID=47,68 (MTY+CDMX) + CONCEPTID=1.
+        LOC62 (Tijuana B2B) excluida — es informativa y no suma al stock vendible.
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
         Incluye AvgCostQTY, LastRetailPricePurchaseHistory y NoVendibleQty.
@@ -291,7 +292,7 @@ class BinManagerClient:
         arrayfilters_condition = [{"Condition": c, "Name": c, "selected": True} for c in cond_list]
         base_payload = {
             "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
-            "LOCATIONID": "47,62,68",
+            "LOCATIONID": "47,68",
             "CONDITION": conditions,
             "FORINVENTORY": 0, "BUSCADOR": False,
             "RECORDSPAGE": _BM_PAGE_SIZE,
@@ -357,7 +358,8 @@ class BinManagerClient:
         return all_rows
 
     async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> tuple[int, int] | None:
-        """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,62,68 (MTY+CDMX).
+        """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,68 (MTY+CDMX).
+        LOC62 (Tijuana B2B) excluida — no suma al stock vendible.
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
           - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
           - Reserve      = unidades reservadas para órdenes pendientes
@@ -369,7 +371,7 @@ class BinManagerClient:
 
     async def get_available_qty(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
-        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,62,68.
+        Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1, LOCATIONID=47,68.
         Retorna 0 tanto para stock genuino 0 como para fallos — usar get_stock_with_reserve()
         si necesitas distinguir entre 0 real y fallo de red.
         Verificado: SNTV001764 → TotalQty=215, Reserve=2, AvailableQTY=213.
@@ -378,7 +380,7 @@ class BinManagerClient:
         return result[0] if result is not None else 0
 
     async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> tuple[int, int] | None:
-        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1 + LOCATIONID=47,62,68 (MTY+CDMX).
+        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1 + LOCATIONID=47,68 (MTY+CDMX).
         Método interno compartido por get_available_qty() y get_stock_with_reserve().
         Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2.
@@ -401,7 +403,7 @@ class BinManagerClient:
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": None, "WAREHOUSEID": None,
-            "LOCATIONID": "47,62,68",
+            "LOCATIONID": "47,68",
             "BINID": None,
             "SEARCH": base,
             "CONDITION": conditions,
