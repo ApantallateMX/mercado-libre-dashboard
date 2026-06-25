@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: Alertas de stock — 4 bugs de ciclo y visibilidad
+
+### Commits `a4b5117`, `b4e88ef` — subidos a Railway + Coolify
+
+**Problema 1 — Cache BM stale sobrevive Railway redeploy (SHIL000026 = 549 persistía):**
+La DB persiste entradas BM con `avail_total > 0`. Al reiniciar Railway con nuevo LOCATIONID,
+la entrada cargaba con su timestamp original → `_cache_is_valid()` la declaraba fresca → el
+bulk con `47,68` nunca corría para ese SKU → usuario seguía viendo 549 hasta que expiraba TTL.
+
+Fix: `_load_bm_cache_from_db()` carga DB con `timestamp=0` (siempre expirado) → prewarm
+re-fetcha TODOS los SKUs con la config actual del código → datos correctos en ~1-2 min.
+
+**Problema 2 — TTLs demasiado largos:**
+- `_BM_CACHE_TTL`: 900 → 420s (7 min) — ciclos de refresh más frecuentes
+- `_STOCK_ISSUES_TTL`: 1800 → 900s (15 min) — alertas más responsivas
+
+**Problema 3 — Synced items solo se ocultaban en la cuenta que hizo el sync:**
+`get_recently_synced_ids` filtraba `WHERE user_id = ?`. Si APANTALLATEMX activaba un SKU,
+AUTOBOT/LUTEMA seguían viéndolo en sus alertas → acciones duplicadas entre usuarios.
+
+Fix: quitar filtro `user_id` de la query → cualquier sync de cualquier cuenta suprime el
+item en alertas de TODAS las cuentas hasta el próximo ciclo BM.
+
+**Problema 4 — "Actualizar ahora" solo refrescaba la cuenta activa:**
+`force_prewarm` ejecutaba `_prewarm_caches(user_id=active_uid)` → solo una cuenta.
+Las otras 3 cuentas seguían con alertas desactualizadas 15-30 min más.
+
+Fix: `force_prewarm` encadena prewarm para TODAS las cuentas (activa primero, luego las demás).
+
+---
+
 ## 2026-06-25 — FIX: Riesgo Sobreventa — falsos positivos por cache BM incoherente
 
 ### Commits `ac6af2d`, `7ea6125` — subidos a Railway + Coolify
