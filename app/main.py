@@ -5040,7 +5040,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if not sku or sku in result_map:
                 continue
             cached = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-            if cached:
+            # ts=0.0 = cargado de DB sin verificar en este proceso → NO servir en fast-fail.
+            # Evita que SKUs con stock stale (ej: avail=549 real=0) aparezcan en Activar
+            # cuando BM está caído. Mejor sin dato que con dato incorrecto.
+            if cached and cached[0] > 0:
                 result_map[sku] = cached[1]
         return result_map
 
