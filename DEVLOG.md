@@ -7,6 +7,36 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: SHIL000026 persistente en Activar — root cause real encontrado y eliminado
+
+**Commits:** `0818eac` `029fae2` `9b149de` `1d42c3f` `38d2c92` `39278c5`
+
+**Problema:** SHIL000026 (Lampara tocador, MLM3042225518) aparecía en Activar con BM=549
+durante múltiples sesiones y después de 6+ commits de "fix". El valor real de BM es 0.
+
+**Root cause real (39278c5):** Dos bugs encadenados:
+
+1. **`_fetch_activate_wh` restauraba items eliminados:** Esta task background (corre 3s después
+   del prewarm para agregar datos MTY/CDMX/TJ) usaba `_updated = list(_act)` — copia de TODA
+   la lista antigua de activate. Al final sobreescribía el snapshot con TODOS los items, aunque
+   un prewarm más reciente o `clear-bm-sku` los hubiera eliminado.
+   Para SHIL000026: BM retorna HTTP 500 → cliente BM convierte a None → `_store_wh(avail_ok=False)`
+   → "Fix A" preservaba el valor stale (avail=549, _v=True) → `_wh_fetched=False`
+   → `_updated[i]` mantenía el item original → SHIL000026 restaurado en cada ciclo.
+
+2. **Fast-fail servía datos expirados indefinidamente:** El loop de fast-fail (BM DOWN,
+   consecutive_failures≥2) chequeaba solo `ts > 0` pero NO verificaba TTL. Datos con 24h
+   de antigüedad se servían como si fueran frescos.
+
+**Fix (39278c5):**
+- `_fetch_activate_wh`: antes de guardar el snapshot, filtrar `_updated` por IDs del snapshot
+  ACTUAL. Items borrados por el prewarm o `clear-bm-sku` no se restauran.
+- Fast-fail: aplicar TTL de 14 min (BM_CACHE_TTL×2) antes de servir datos expirados.
+
+**Verificación:** 3 checks en 90s post-deploy, todos `activate_entries_removed=0`. Confirmado.
+
+---
+
 ## 2026-06-25 — FIX: SHIL000026 mostrando BM=549 en Activar — bulk-miss stale guard
 
 ### Commit `e5d8a58` — subido a Railway + Coolify
