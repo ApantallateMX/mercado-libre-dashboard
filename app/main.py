@@ -4200,12 +4200,33 @@ async def _load_stock_issues_from_db():
     try:
         snapshots = await token_store.load_all_stock_issues_snapshots()
         loaded = 0
+        filtered_total = 0
         for key, (ts, data) in snapshots.items():
             if key not in _stock_issues_cache:
-                _stock_issues_cache[key] = (ts, data)
+                # Filtrar activate: excluir SKUs sin stock en _bm_stock_cache
+                # _load_bm_cache_from_db() ya corrió antes → solo tiene avail>0 verificados
+                # Si un SKU no está ahí, BM no confirma stock → es dato stale del snapshot
+                _orig_activate = data.get("activate") or []
+                _clean_activate = [
+                    p for p in _orig_activate
+                    if not p.get("sku")
+                    or _bm_stock_cache.get(normalize_to_bm_sku(p.get("sku", "")))
+                ]
+                _removed = len(_orig_activate) - len(_clean_activate)
+                if _removed:
+                    filtered_total += _removed
+                    _fdata = dict(data)
+                    _fdata["activate"] = _clean_activate
+                    _fdata["activate_count"] = len(_clean_activate)
+                    _stock_issues_cache[key] = (ts, _fdata)
+                else:
+                    _stock_issues_cache[key] = (ts, data)
                 loaded += 1
         if loaded:
-            logger.info(f"[STOCK-DB] {loaded} snapshots cargados desde DB (post-deploy, stale OK)")
+            _msg = f"[STOCK-DB] {loaded} snapshots cargados"
+            if filtered_total:
+                _msg += f" (activate: {filtered_total} stale removidos — sin stock en BM cache)"
+            logger.info(_msg)
         else:
             logger.info("[STOCK-DB] Sin snapshots en DB — esperando primer prewarm")
     except Exception as _e:
