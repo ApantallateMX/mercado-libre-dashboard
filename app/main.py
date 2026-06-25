@@ -5346,20 +5346,35 @@ def _apply_bm_stock(
                     _n = len(_vars)
                     _pool_raw = inv.get("avail_total", 0)
                     tot_avail_raw += _pool_raw
-                    # Apply distribution rule per-BM-key (pro-rata units_30d by variation count)
-                    _var_units_30d = _units_30d // len(_bm_key_vars) if _bm_key_vars else _units_30d
-                    _pool, _ds = _dist_apply_pool(_pool_raw, _bk, _var_units_30d, dist_rule, dist_settings, sold_history)
+                    # units_30d para este BM key: suma sold_quantity de sus variaciones
+                    # (sold_quantity es lifetime ML, buen proxy de popularidad relativa).
+                    # Fallback: prorratear el total del padre si no hay dato de variación.
+                    _var_sold_qtys = [int(v.get("sold_quantity") or 0) for v in _vars]
+                    _var_units_30d_key = sum(_var_sold_qtys) or (_units_30d // max(len(_bm_key_vars), 1))
+                    _pool, _ds = _dist_apply_pool(_pool_raw, _bk, _var_units_30d_key, dist_rule, dist_settings, sold_history)
                     _p_days_supply = min(_p_days_supply, _ds)
-                    _quot, _rem = divmod(_pool, _n)
+                    # Distribuir pool proporcionalmente por sold_quantity de cada variación.
+                    # Si todas tienen 0 (listing nuevo), caer a split equitativo.
+                    _total_sold = sum(_var_sold_qtys)
                     # Deduplicated parent totals — add once per unique BM key
                     tot_mty += inv["mty"]
                     tot_cdmx += inv["cdmx"]
                     tot_tj += inv["tj"]
                     tot_avail += _pool
                     tot_reserved += inv.get("reserved_total", 0)
+                    _assigned = 0
                     for i, v in enumerate(_vars):
                         v["_bm_total"] = inv["total"] // _n if _n > 1 else inv["total"]
-                        v["_bm_avail"] = _quot + (1 if i == 0 and _rem else 0)
+                        if _total_sold > 0:
+                            # Proporcional: cada variación recibe su cuota según ventas históricas
+                            _share = round(_pool * _var_sold_qtys[i] / _total_sold)
+                            # Última variación absorbe el resto para no perder unidades por redondeo
+                            v["_bm_avail"] = (_pool - _assigned) if i == _n - 1 else _share
+                            _assigned += _share
+                        else:
+                            # Split equitativo para listings nuevos sin historial
+                            _quot, _rem = divmod(_pool, _n)
+                            v["_bm_avail"] = _quot + (1 if i == 0 and _rem else 0)
                         v["_bm_reserved"] = inv.get("reserved_total", 0) // _n
                 else:
                     for v in _vars:
