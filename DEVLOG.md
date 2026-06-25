@@ -7,6 +7,34 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: SHIL000026 mostrando BM=549 en Activar — bulk-miss stale guard
+
+### Commit `e5d8a58` — subido a Railway + Coolify
+
+**Problema:** SHIL000026 mostraba BM Disponible=549 en la sección Activar aunque BM
+tiene 0 unidades en LOC47+LOC68. MTY/CDMX/TJ mostraban 0 correctamente.
+
+**Root cause — cadena de bugs:**
+1. SHIL000026 tiene stock=0 en BM. BM no incluye SKUs con stock=0 en el bulk response.
+2. Al ser "bulk miss" (`_bulk_miss_set`), `_store_wh` se llamaba con `avail_ok=False`
+3. `verified = False` → Fix A detecta entrada DB con `_v=True, avail_total=549`
+   (valor de la era LOC47,62,68 donde TJ tenía 549) → **return early** sin actualizar
+4. Cache queda con 549. El retry per-SKU (línea 5202) solo corre cuando `not _used_bulk`
+   pero el bulk SÍ corrió → SHIL000026 nunca se re-verifica
+
+**Fix:**
+- Loop bulk: si SKU en `_bulk_miss_set`, skip `_store_wh` completamente (evita Fix A)
+- Post-bulk: `_do_bulk_miss_retry()` lanza `get_stock_with_reserve()` per-SKU en
+  background (5s delay + 1s entre SKUs) para todos los bulk misses. Retorna valor
+  real de BM (0 para SHIL000026 en LOC47+LOC68).
+
+**Comportamiento esperado después del fix:**
+Prewarm → bulk → SHIL000026 no en bulk → skip _store_wh → background retry →
+get_stock_with_reserve devuelve (0,0) → cache = avail_total=0, _v=True →
+Activar filter `(p.get("_bm_avail") or 0) > 0` = False → SHIL000026 desaparece de Activar.
+
+---
+
 ## 2026-06-25 — FIX: Riesgo Sobreventa falso positivo por distribución escasez
 
 ### Commit `50c1d8b` — subido a Railway + Coolify
