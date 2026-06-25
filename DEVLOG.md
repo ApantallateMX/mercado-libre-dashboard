@@ -7,6 +7,37 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: Auditoría lógica de stock — 3 bugs corregidos
+
+### Commits `67d6103`, `84437ce` — subidos a Railway
+
+Auditoría completa de la lógica de inventario reveló 3 bugs reales (de 7 hallazgos).
+
+**Bug #2 — Fallback TotalQty activaba con AvailableQTY=0 genuino (sobreventa)**
+- `_lookup()` y `_lookup_diag()` usaban TotalQty como fallback cuando `avail==0 AND reserve==0`
+- Problema: si BM devolvía AvailableQTY=0 real (sin stock) pero con Reserve>0 no reportado,
+  el sistema asumía `avail = TotalQty` → riesgo directo de sobreventa
+- Fix: solo activar fallback si `ALL(AvailableQTY is None)` — campo genuinamente ausente de BM
+
+**Bug #6 — Gap sync no normalizaba SKU antes de buscar en caché**
+- `_sync_gap_stock_from_cache()` buscaba en `_bm_stock_cache` con el SKU raw (`SNTV001764-GRB`)
+- El caché está indexado por `normalize_to_bm_sku()` (`SNTV001764`) → nunca hacía match
+- Fix: `_bm_stock_cache.get(normalize_to_bm_sku(_sk))` — una línea, bug persistía silenciosamente
+
+**Bug #4 — Distribución equitativa de pool ignoraba velocidad de venta por variación**
+- `_apply_bm_stock()` dividía el pool por igual entre variaciones del mismo BM key
+- Variación que vende 30/mes recibía mismo stock que una que vende 5/mes
+- Fix: distribución proporcional por `sold_quantity` (lifetime ML de cada variación)
+- La última variación absorbe el resto del redondeo para conservar todas las unidades
+- Fallback a split equitativo para listings nuevos sin historial (sold_quantity=0)
+
+**Bugs descartados (comportamiento correcto o intencional):**
+- Bug #5: Tijuana excluida de `_bm_total` — intencional (LOC62 = informativo, no vendible)
+- Bug #1: ICB/ICC solo para SNTV — correcto por diseño de categorías
+- Bug #7 (NoVendibleQty): pendiente verificar si BM ya lo descuenta de AvailableQTY
+
+---
+
 ## 2026-06-24 — FIX: BM bulk stock restaurado — payload corregido
 
 ### Commits `63ca079`, `b190a4f`, `6b2864d` — subidos a Railway
