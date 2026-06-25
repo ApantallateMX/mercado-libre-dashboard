@@ -2109,6 +2109,19 @@ async def upsert_bm_stock_batch(entries: list[tuple]) -> None:
         await db.commit()
 
 
+async def delete_bm_stock_skus(skus: list[str]) -> int:
+    """Elimina SKUs de bm_stock_cache en DB. Retorna cuántos se borraron."""
+    if not skus:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        deleted = 0
+        for s in skus:
+            cur = await db.execute("DELETE FROM bm_stock_cache WHERE sku = ?", [s.upper()])
+            deleted += cur.rowcount
+        await db.commit()
+    return deleted
+
+
 async def load_bm_stock_cache(max_age_s: float = 1800.0) -> list[dict]:
     """Carga entradas de BM stock desde DB. Solo las que tienen menos de max_age_s segundos."""
     import time as _t

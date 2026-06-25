@@ -181,8 +181,7 @@
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
-                {% set _mob_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) + (p.get('_bm_tj') or 0) %}
-                {% set _mob_no_wh = (p.get('_bm_avail') or 0) > 0 and _mob_wh_sum == 0 %}
+                {% set _mob_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _mob_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}{% endif %}</div>
                 {% endif %}
             </div>
@@ -305,8 +304,7 @@
                         {% if p.get('_days_supply') is not none %}<div class="text-[10px] font-normal {{ 'text-orange-600 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}" title="Días de supply estimados">{{ p._days_supply }}d{% if p.get('_is_scarce') %} ⚡{% endif %}</div>{% endif %}
                         {% endif %}
                     </td>
-                    {% set _rst_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) + (p.get('_bm_tj') or 0) %}
-                    {% set _rst_no_wh = (p.get('_bm_avail') or 0) > 0 and _rst_wh_sum == 0 %}
+                    {% set _rst_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _rst_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _rst_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _rst_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
@@ -609,8 +607,7 @@
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-red-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_days_supply') is not none %} <span class="text-[10px] {{ 'text-orange-500 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}">({{ p._days_supply }}d)</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
-                {% set _ris_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) %}
-                {% set _ris_no_wh = (p.get('_bm_avail') or 0) > 0 and _ris_wh_sum == 0 %}
+                {% set _ris_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _ris_no_wh %}MTY:— CDMX:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }}{% endif %}</div>
                 {% endif %}
             </div>
@@ -694,8 +691,7 @@
                         <span class="font-bold {{ 'text-red-600' if (p.get('_bm_avail') or 0) <= 3 else 'text-orange-500' }}">{{ p.get('_bm_avail', 0) }}</span>
                         {% if p.get('_days_supply') is not none %}<div class="text-[10px] font-normal {{ 'text-orange-600 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}">{{ p._days_supply }}d</div>{% endif %}
                     </td>
-                    {% set _ris_dt_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) %}
-                    {% set _ris_dt_no_wh = (p.get('_bm_avail') or 0) > 0 and _ris_dt_wh_sum == 0 %}
+                    {% set _ris_dt_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
@@ -772,8 +768,7 @@
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
-                {% set _mob_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) + (p.get('_bm_tj') or 0) %}
-                {% set _mob_no_wh = (p.get('_bm_avail') or 0) > 0 and _mob_wh_sum == 0 %}
+                {% set _mob_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _mob_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}{% endif %}</div>
                 {% endif %}
                 <div>
@@ -855,8 +850,7 @@
                         {% endif %}
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_avail', 0) }}{% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}</td>
-                    {% set _act_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) + (p.get('_bm_tj') or 0) %}
-                    {% set _act_no_wh = (p.get('_bm_avail') or 0) > 0 and _act_wh_sum == 0 %}
+                    {% set _act_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
@@ -967,8 +961,7 @@
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
                     <td class="px-3 py-2 text-right font-bold text-cyan-700">{{ p.get('_bm_avail', 0) }}</td>
-                    {% set _full_wh_sum = (p.get('_bm_mty') or 0) + (p.get('_bm_cdmx') or 0) %}
-                    {% set _full_no_wh = (p.get('_bm_avail') or 0) > 0 and _full_wh_sum == 0 %}
+                    {% set _full_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-gray-600">{% if _full_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-gray-600">{% if _full_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">

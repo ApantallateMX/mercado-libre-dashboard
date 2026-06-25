@@ -4196,37 +4196,22 @@ async def _load_stock_issues_from_db():
     """Carga stock_issues_cache desde SQLite al arrancar.
     El Stock tab muestra datos inmediatamente post-deploy en vez de 'Calculando...'
     El prewarm sigue corriendo en background y sobreescribe con datos frescos al terminar.
+    NOTA: activate siempre empieza vacío — al arrancar no hay forma de verificar si
+    el stock BM del snapshot sigue siendo real sin llamar a BM. El prewarm llena
+    activate en <5 min. Mejor vacío que datos stale (ej: SKU con 0 stock real mostrando 549).
     """
     try:
         snapshots = await token_store.load_all_stock_issues_snapshots()
         loaded = 0
-        filtered_total = 0
         for key, (ts, data) in snapshots.items():
             if key not in _stock_issues_cache:
-                # Filtrar activate: excluir SKUs sin stock en _bm_stock_cache
-                # _load_bm_cache_from_db() ya corrió antes → solo tiene avail>0 verificados
-                # Si un SKU no está ahí, BM no confirma stock → es dato stale del snapshot
-                _orig_activate = data.get("activate") or []
-                _clean_activate = [
-                    p for p in _orig_activate
-                    if not p.get("sku")
-                    or _bm_stock_cache.get(normalize_to_bm_sku(p.get("sku", "")))
-                ]
-                _removed = len(_orig_activate) - len(_clean_activate)
-                if _removed:
-                    filtered_total += _removed
-                    _fdata = dict(data)
-                    _fdata["activate"] = _clean_activate
-                    _fdata["activate_count"] = len(_clean_activate)
-                    _stock_issues_cache[key] = (ts, _fdata)
-                else:
-                    _stock_issues_cache[key] = (ts, data)
+                _fdata = dict(data)
+                _fdata["activate"] = []
+                _fdata["activate_count"] = 0
+                _stock_issues_cache[key] = (ts, _fdata)
                 loaded += 1
         if loaded:
-            _msg = f"[STOCK-DB] {loaded} snapshots cargados"
-            if filtered_total:
-                _msg += f" (activate: {filtered_total} stale removidos — sin stock en BM cache)"
-            logger.info(_msg)
+            logger.info(f"[STOCK-DB] {loaded} snapshots cargados (activate vaciado — prewarm lo llenará)")
         else:
             logger.info("[STOCK-DB] Sin snapshots en DB — esperando primer prewarm")
     except Exception as _e:
@@ -4719,6 +4704,60 @@ async def _prewarm_caches(user_id: str = None):
                 except Exception as _e:
                     logger.warning(f"[STOCK-DB] Error guardando snapshot: {_e}")
 
+                # Background: fetch per-SKU warehouse (MTY/CDMX/TJ) para productos de Activar.
+                # El bulk sólo da avail_total. El WH endpoint per-SKU da el desglose real.
+                # Se corre en background para no bloquear el prewarm ni el Stock tab.
+                _act_for_wh = [p for p in activate if p.get("sku")][:60]
+                if _act_for_wh:
+                    _wh_sic_key   = _sic_key
+                    _wh_user_id   = client.user_id
+                    _wh_threshold = _DEFAULT_THRESHOLD
+
+                    async def _fetch_activate_wh(
+                        _act=_act_for_wh, _key=_wh_sic_key,
+                        _uid=_wh_user_id, _thr=_wh_threshold
+                    ):
+                        import logging as _wh_log
+                        _wh_logger = _wh_log.getLogger(__name__)
+                        await asyncio.sleep(3)
+                        _updated = list(_act)
+                        _n_ok = 0
+                        for _i, _ap in enumerate(_act):
+                            _asku = _ap.get("sku", "")
+                            if not _asku:
+                                continue
+                            try:
+                                await _wh_phase(_asku, _track_progress=False)
+                                _abk = normalize_to_bm_sku(_asku)
+                                _ae = _bm_stock_cache.get(_abk)
+                                if _ae and _ae[0] > 0 and _ae[1].get("_wh_fetched"):
+                                    _pu = dict(_ap)
+                                    _pu["_bm_mty"]      = _ae[1].get("mty", 0)
+                                    _pu["_bm_cdmx"]     = _ae[1].get("cdmx", 0)
+                                    _pu["_bm_tj"]       = _ae[1].get("tj", 0)
+                                    _pu["_bm_wh_fetched"] = True
+                                    _updated[_i] = _pu
+                                    _n_ok += 1
+                            except Exception:
+                                pass
+                            await asyncio.sleep(1)
+                        # Actualizar snapshot en memoria y en DB con datos de almacén reales
+                        _cur = _stock_issues_cache.get(_key)
+                        if _cur:
+                            _cur_ts, _cur_data = _cur
+                            _new_data = dict(_cur_data)
+                            _new_data["activate"] = _updated
+                            _stock_issues_cache[_key] = (_cur_ts, _new_data)
+                            try:
+                                await token_store.save_stock_issues_snapshot(_key, _cur_ts, _new_data)
+                            except Exception:
+                                pass
+                        _wh_logger.info(
+                            f"[ACTIVATE-WH] {_n_ok}/{len(_act)} SKUs con desglose MTY/CDMX/TJ actualizado"
+                        )
+
+                    asyncio.create_task(_fetch_activate_wh())
+
             # Timeout de 600s — BM puede tener cientos de SKUs sin caché
             await asyncio.wait_for(_do_prewarm(), timeout=600.0)
         except asyncio.TimeoutError:
@@ -4930,7 +4969,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total,
-               "no_vendible": no_vendible, "_v": verified}
+               "no_vendible": no_vendible, "_v": verified,
+               "_wh_fetched": wh_responded}  # True = per-SKU WH endpoint fue llamado → MTY/CDMX/TJ son reales
         # Guardar bajo clave normalizada (base BM SKU, 10 chars) para que todas las variantes
         # del mismo producto (SNTV007270-GRA, SNTV007270 NEW, etc.) compartan una sola entrada.
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), inv)
@@ -5226,26 +5266,37 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         )
                         await asyncio.sleep(5)
                         _db_updates = []
+                        _db_deletes = []
                         for _msku in miss_skus:
                             await _wh_phase(_msku, _track_progress=False)
-                            # Persistir el valor real en DB (aunque sea avail=0) para que
-                            # _load_bm_cache_from_db no vuelva a cargar el dato stale en
-                            # el próximo prewarm/deploy. El filtro avail>0 del warm-start
-                            # excluirá la entrada → siguiente prewarm tratará este SKU
-                            # como nuevo y obtendrá el valor correcto de BM.
                             _bk = normalize_to_bm_sku(_msku)
                             _bm_entry = _bm_stock_cache.get(_bk)
-                            if _bm_entry and _bm_entry[0] > 0:  # verificado en este proceso
+                            if _bm_entry and _bm_entry[0] > 0:
+                                # BM respondió — guardar en DB (avail=0 o >0)
                                 _db_updates.append((_bk, _bm_entry[1], _bm_entry[0]))
+                            else:
+                                # BM falló o no respondió — borrar entrada stale de DB para
+                                # que el próximo startup no cargue datos viejos (ej: avail=549 stale).
+                                # Al no estar en DB, _load_bm_cache_from_db no lo carga y
+                                # _load_stock_issues_from_db no lo pone en activate.
+                                _db_deletes.append(_bk)
                             await asyncio.sleep(1)
                         if _db_updates:
                             try:
                                 await token_store.upsert_bm_stock_batch(_db_updates)
                                 _log_miss.getLogger(__name__).info(
-                                    f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs actualizados en DB"
+                                    f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs guardados en DB"
                                 )
                             except Exception as _e_db:
                                 _log_miss.getLogger(__name__).warning(f"[BM-BULK] Error upsert DB: {_e_db}")
+                        if _db_deletes:
+                            try:
+                                _n_del = await token_store.delete_bm_stock_skus(_db_deletes)
+                                _log_miss.getLogger(__name__).info(
+                                    f"[BM-BULK] Bulk-miss retry: {_n_del} entradas stale borradas de DB (BM no respondió)"
+                                )
+                            except Exception as _e_del:
+                                _log_miss.getLogger(__name__).warning(f"[BM-BULK] Error delete DB: {_e_del}")
                         _log_miss.getLogger(__name__).info(
                             f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs"
                         )
@@ -5477,9 +5528,12 @@ def _apply_bm_stock(
                 p["_bm_tj"] = tot_tj
                 p["_bm_total"] = tot_mty + tot_cdmx
                 p["_bm_avail"] = tot_avail
-                p["_bm_avail_raw"] = tot_avail_raw  # BM sin ajuste de distribución
+                p["_bm_avail_raw"] = tot_avail_raw
                 p["_bm_reserved"] = tot_reserved
                 p["_bm_no_vendible"] = tot_no_vendible
+                p["_bm_wh_fetched"] = any(
+                    bm_map.get(v.get("sku", ""), {}).get("_wh_fetched") for v in p.get("variations", [])
+                )
                 p["_days_supply"] = round(_p_days_supply, 1) if _p_days_supply < 9999 else None
                 p["_is_scarce"] = dist_rule is not None and (
                     tot_avail_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
@@ -5499,6 +5553,7 @@ def _apply_bm_stock(
                     p["_bm_avail_raw"] = _pool_raw
                     p["_bm_reserved"] = inv.get("reserved_total", 0)
                     p["_bm_no_vendible"] = inv.get("no_vendible", 0)
+                    p["_bm_wh_fetched"] = inv.get("_wh_fetched", False)
                     p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
                     p["_is_scarce"] = dist_rule is not None and (
                         _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
@@ -5518,6 +5573,7 @@ def _apply_bm_stock(
                 p["_bm_avail_raw"] = _pool_raw
                 p["_bm_reserved"] = inv.get("reserved_total", 0)
                 p["_bm_no_vendible"] = inv.get("no_vendible", 0)
+                p["_bm_wh_fetched"] = inv.get("_wh_fetched", False)
                 p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
                 p["_is_scarce"] = dist_rule is not None and (
                     _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
@@ -13065,6 +13121,43 @@ async def diag_cache_health(token: str = ""):
         "bulk_gr_rows":    len(_bm_bulk_gr_cache[1])  if _bm_bulk_gr_cache  else 0,
         "bulk_all_age_s":  all_age_s,
         "bulk_all_rows":   len(_bm_bulk_all_cache[1]) if _bm_bulk_all_cache else 0,
+    })
+
+
+@app.get("/api/diag/clear-bm-sku")
+async def diag_clear_bm_sku(sku: str = "", token: str = ""):
+    """Admin: borra un SKU de _bm_stock_cache, _stock_issues_cache activate, y DB.
+    Uso inmediato cuando un SKU muestra stock stale que no se corrige solo (ej: BM down).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if not sku:
+        return JSONResponse({"error": "sku requerido"}, status_code=400)
+    bk = normalize_to_bm_sku(sku.upper())
+    # 1. Quitar de _bm_stock_cache
+    removed_cache = bk in _bm_stock_cache
+    _bm_stock_cache.pop(bk, None)
+    # 2. Quitar de activate en todos los snapshots en memoria
+    act_removed = 0
+    for _key, (_ts, _data) in list(_stock_issues_cache.items()):
+        _orig = _data.get("activate") or []
+        _clean = [p for p in _orig if p.get("sku", "").upper()[:10] != bk]
+        if len(_clean) < len(_orig):
+            _fd = dict(_data)
+            _fd["activate"] = _clean
+            _fd["activate_count"] = len(_clean)
+            _stock_issues_cache[_key] = (_ts, _fd)
+            act_removed += len(_orig) - len(_clean)
+    # 3. Borrar de DB
+    try:
+        db_deleted = await token_store.delete_bm_stock_skus([bk])
+    except Exception as _e:
+        db_deleted = f"error: {_e}"
+    return JSONResponse({
+        "sku": sku.upper(), "bm_key": bk,
+        "cache_removed": removed_cache,
+        "activate_entries_removed": act_removed,
+        "db_rows_deleted": db_deleted,
     })
 
 
