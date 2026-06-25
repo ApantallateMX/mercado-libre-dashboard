@@ -4741,12 +4741,18 @@ async def _prewarm_caches(user_id: str = None):
                             except Exception:
                                 pass
                             await asyncio.sleep(1)
-                        # Actualizar snapshot en memoria y en DB con datos de almacén reales
+                        # Actualizar snapshot en memoria y en DB con datos de almacén reales.
+                        # CRÍTICO: filtrar _updated por IDs del snapshot ACTUAL — un prewarm
+                        # más reciente o clear-bm-sku puede haber removido items mientras
+                        # este task corría. Sin este filtro, _updated restauraría esos items.
                         _cur = _stock_issues_cache.get(_key)
                         if _cur:
                             _cur_ts, _cur_data = _cur
+                            _cur_ids = {p.get("id") for p in _cur_data.get("activate", [])}
+                            _safe_updated = [p for p in _updated if p.get("id") in _cur_ids]
                             _new_data = dict(_cur_data)
-                            _new_data["activate"] = _updated
+                            _new_data["activate"] = _safe_updated
+                            _new_data["activate_count"] = len(_safe_updated)
                             _stock_issues_cache[_key] = (_cur_ts, _new_data)
                             try:
                                 await token_store.save_stock_issues_snapshot(_key, _cur_ts, _new_data)
@@ -5035,15 +5041,17 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     # bloquear 600 × 25s = 10+ min esperando timeouts. El health loop detecta la caída.
     if _bm_health.get("consecutive_failures", 0) >= 2:
         logger.warning(f"[BM-CACHE] BM DOWN — skip fetch de {len(to_fetch)} SKUs, usando cache stale")
+        _ff_now = _time.time()
+        _ff_max_age = _BM_CACHE_TTL * 2  # 14 min — mismo TTL efectivo que _cache_is_valid usa cuando BM está caído
         for p in products:
             sku = p.get(sku_key, "")
             if not sku or sku in result_map:
                 continue
             cached = _bm_stock_cache.get(normalize_to_bm_sku(sku))
-            # ts=0.0 = cargado de DB sin verificar en este proceso → NO servir en fast-fail.
-            # Evita que SKUs con stock stale (ej: avail=549 real=0) aparezcan en Activar
-            # cuando BM está caído. Mejor sin dato que con dato incorrecto.
-            if cached and cached[0] > 0:
+            # ts=0.0 = cargado de DB sin verificar en este proceso → NO servir.
+            # Entrada expirada (>14 min) = dato demasiado viejo para confiar → NO servir.
+            # Mejor sin dato que con dato incorrecto (ej: avail=549 real=0).
+            if cached and cached[0] > 0 and (_ff_now - cached[0]) < _ff_max_age:
                 result_map[sku] = cached[1]
         return result_map
 
