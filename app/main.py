@@ -3914,7 +3914,7 @@ _item_net_ratio_map: dict[str, float] = {}  # item_id -> net_final/total_amount 
 _PARTNER_COMMISSION_PCT = 0.07         # 7% comisión socio (aplicado sobre net_received ML)
 _category_cache: dict[str, str] = {}  # category_id -> name
 _PRODUCTS_CACHE_TTL = 900   # 15 min
-_BM_CACHE_TTL = 900         # 15 min
+_BM_CACHE_TTL = 420         # 7 min (era 15 — más frecuente para reflejar cambios de stock)
 _orders_cache: dict[str, tuple[float, list]] = {}
 _ORDERS_CACHE_TTL = 900     # 15 min
 # Cache RetailPrice PH por SKU base — TTL 30 min (cambia lentamente)
@@ -4056,7 +4056,7 @@ _stock_issues_cache: dict[str, tuple[float, dict]] = {}
 # Cache cross-account para dashboard general (independiente de cuenta activa)
 _multi_account_cache: dict[str, tuple[float, dict]] = {}
 _MULTI_ACCOUNT_CACHE_TTL = 300  # 5 minutos
-_STOCK_ISSUES_TTL = 1800     # 30 min — operadores trabajan con cache; admin renueva; BM down = servir stale
+_STOCK_ISSUES_TTL = 900      # 15 min (era 30 — más responsivo; BM down = servir stale)
 _products_fetch_lock = asyncio.Lock()  # prevenir doble fetch concurrente
 _synced_alert_items: dict[str, float] = {}  # item_id → timestamp de sync; TTL 10 min — excluidos de alertas hasta qty-sync ML
 
@@ -4167,8 +4167,10 @@ async def _get_orders_cached(client, date_from: str, date_to: str) -> list:
 
 
 async def _load_bm_cache_from_db():
-    """Carga el caché BM desde DB al arrancar — evita refetch completo tras restart.
-    Solo carga entradas con menos de 30 min de antigüedad."""
+    """Carga el caché BM desde DB al arrancar — warm-start que evita spinner tras restart.
+    Timestamp se pone a 0 para que el prewarm re-fetche todo inmediatamente con la config
+    actual (LOCATIONID, conditions). Así cualquier cambio de config se aplica en el primer
+    bulk post-restart (~1-2 min) sin mostrar datos incorrectos por hasta 15 min."""
     import json as _json, logging as _log
     logger = _log.getLogger(__name__)
     try:
@@ -4177,12 +4179,14 @@ async def _load_bm_cache_from_db():
         for row in rows:
             sku = row["sku"].upper()
             data = _json.loads(row["data_json"])
-            synced_at = float(row["synced_at"])
             # Solo cargar entradas con stock > 0 (DB solo debería tener >0, pero doble guarda)
             if sku not in _bm_stock_cache and data.get("avail_total", 0) > 0:
-                _bm_stock_cache[sku] = (synced_at, data)
+                # Timestamp 0 → _cache_is_valid() lo declara expirado → prewarm re-fetcha
+                # con el LOCATIONID y condiciones actuales del código. El dato de DB sigue
+                # disponible como warm-start para la primer renderización antes del re-fetch.
+                _bm_stock_cache[sku] = (0.0, data)
                 loaded += 1
-        logger.info(f"[BM-DB] Cargados {loaded} SKUs desde DB (de {len(rows)} disponibles)")
+        logger.info(f"[BM-DB] Warm-start: {loaded} SKUs cargados (timestamp=0 → re-fetch en primer prewarm)")
     except Exception as _e:
         import logging as _log2
         _log2.getLogger(__name__).warning(f"[BM-DB] Error cargando desde DB: {_e}")
