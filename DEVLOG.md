@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: Riesgo Sobreventa falso positivo por distribución escasez
+
+### Commit `50c1d8b` — subido a Railway + Coolify
+
+**Problema:** SKUs con regla de distribución activa (badge ⚡ ESCASEZ) y 0 ventas en 30 días
+aparecían en Riesgo Sobreventa aunque BM tuviera stock real disponible.
+
+Root cause: `_dist_apply_pool()` calcula `_bm_avail=0` cuando `scarce_enabled=False` +
+0 ventas → daily_rate=0 → is_scarce=True → pool bloqueado. Pero `_bm_avail_raw=3` (BM tiene
+unidades). El filtro `oversell_risk` verificaba `_bm_avail==0` — detectaba el 0 de distribución
+como si BM estuviera vacío → falso positivo.
+
+**Fix 1 — oversell_risk:** Agrega `and (p.get("_bm_avail_raw") or 0) == 0`. Solo entran
+productos donde BM genuinamente tiene 0 unidades. Distribución-bloqueados con raw>0 quedan fuera.
+
+**Fix 2 — imbalanced:** Cambia `_bm_avail` → `_bm_avail_raw` para detectar el gap real
+MeLi vs BM. SNTV005362 (MeLi=18, BM raw=3) ahora aparece en Desbalance con el gap correcto
+en lugar de en Riesgo Sobreventa.
+
+SKUs corregidos: SNTV005362 (MTY Available=3), SNMC000198 (CDMX Available=3).
+
+---
+
 ## 2026-06-25 — FIX: Alertas de stock — 4 bugs de ciclo y visibilidad
 
 ### Commits `a4b5117`, `b4e88ef` — subidos a Railway + Coolify
