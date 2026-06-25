@@ -4834,7 +4834,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             # → no se genera alerta de oversell por dato desconocido
         return result_map
 
-    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0}
+    _EMPTY_BM = {"mty": 0, "cdmx": 0, "tj": 0, "total": 0, "avail_total": 0, "reserved_total": 0, "no_vendible": 0}
 
     def _parse_wh_rows(rows):
         """Suma QtyTotal por almacen. Retorna (mty, cdmx, tj)."""
@@ -4850,7 +4850,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 tj += qty
         return mty, cdmx, tj
 
-    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, avail_ok=True, wh_responded=True):
+    def _store_wh(sku, rows_wh, avail_direct=0, reserve_direct=0, no_vendible_direct=0, avail_ok=True, wh_responded=True):
         """Parsea filas del Warehouse endpoint (MTY/CDMX/TJ) + avail/reserve directo de BM.
 
         avail_direct:   AvailableQTY de Get_GlobalStock_InventoryBySKU CONCEPTID=1+LOCATIONID=47,62,68
@@ -4870,6 +4870,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         warehouse_total = mty + cdmx
         avail_total     = int(avail_direct or 0)
         reserved_total  = int(reserve_direct or 0)
+        no_vendible     = int(no_vendible_direct or 0)
         # Fallback avail: si avail=0 con stock físico real, usar warehouse_total.
         # Dos casos que justifican el fallback:
         #   1) avail_ok=False: get_stock_with_reserve lanzó excepción/timeout — dato desconocido
@@ -4896,7 +4897,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
 
         inv = {"mty": mty, "cdmx": cdmx, "tj": tj, "total": warehouse_total,
                "avail_total": avail_total, "reserved_total": reserved_total,
-               "_v": verified}
+               "no_vendible": no_vendible, "_v": verified}
         # Guardar bajo clave normalizada (base BM SKU, 10 chars) para que todas las variantes
         # del mismo producto (SNTV007270-GRA, SNTV007270 NEW, etc.) compartan una sola entrada.
         _bm_stock_cache[normalize_to_bm_sku(sku)] = (_time.time(), inv)
@@ -5107,9 +5108,10 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     if len(_diag_not_in_bulk_skus) < 50:
                         _diag_not_in_bulk_skus.append(fsku)
                     _bulk_miss_set.add(fsku)
-                    return 0, 0
-                avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
-                reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
+                    return 0, 0, 0
+                avail       = sum(int(v.get("AvailableQTY")   or 0) for v in rows_to_sum)
+                reserve     = sum(int(v.get("Reserve")         or 0) for v in rows_to_sum)
+                no_vendible = sum(int(v.get("NoVendibleQty")   or 0) for v in rows_to_sum)
                 # Fallback a TotalQty SOLO si BM no envió AvailableQTY (campo null).
                 # No activar cuando AvailableQTY llegó como 0 genuino — ahí reserve puede
                 # ser > 0 aunque no se vea, y asumir avail=total genera sobreventa.
@@ -5127,7 +5129,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _diag_zero_in_bulk += 1
                     if len(_diag_zero_in_bulk_skus) < 30:
                         _diag_zero_in_bulk_skus.append(fsku)
-                return avail, reserve
+                return avail, reserve, no_vendible
 
             for _fsku in to_fetch:
                 _fbase = normalize_to_bm_sku(_fsku)
@@ -5137,12 +5139,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     continue
                 # Usar el bulk correcto según las condiciones del SKU
                 if _bm_conditions_for_sku(_fsku) == _BM_COND_ALL:
-                    _avail, _res = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
+                    _avail, _res, _nvq = _lookup_diag(_exact_all, _by_base_all, _fbase, _fsku)
                 else:
-                    _avail, _res = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
+                    _avail, _res, _nvq = _lookup_diag(_exact_gr, _by_base_gr, _fbase, _fsku)
                 # avail_ok=True solo si BM encontró el SKU en bulk (confirmó el valor, sea 0 o >0).
                 # avail_ok=False si no estaba en bulk → _v=False → stale retry hace per-SKU fetch.
                 _store_wh(_fsku, [], avail_direct=_avail, reserve_direct=_res,
+                          no_vendible_direct=_nvq,
                           avail_ok=(_fsku not in _bulk_miss_set), wh_responded=False)
                 _prewarm_progress["done"] = _prewarm_progress.get("done", 0) + 1
 
@@ -5329,7 +5332,7 @@ def _apply_bm_stock(
                 _bk = normalize_to_bm_sku(v_sku) if v_sku else ""
                 _bm_key_vars[_bk].append(v)
 
-            tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = 0
+            tot_mty = tot_cdmx = tot_tj = tot_avail = tot_reserved = tot_no_vendible = 0
             tot_avail_raw = 0  # raw BM total (pre-distribution) for display
             _any_inv_found = False  # Fix B4: rastrear si al menos una variación tuvo dato BM real
             _p_days_supply = 9999.0
@@ -5362,6 +5365,7 @@ def _apply_bm_stock(
                     tot_tj += inv["tj"]
                     tot_avail += _pool
                     tot_reserved += inv.get("reserved_total", 0)
+                    tot_no_vendible += inv.get("no_vendible", 0)
                     _assigned = 0
                     for i, v in enumerate(_vars):
                         v["_bm_total"] = inv["total"] // _n if _n > 1 else inv["total"]
@@ -5394,6 +5398,7 @@ def _apply_bm_stock(
                 p["_bm_avail"] = tot_avail
                 p["_bm_avail_raw"] = tot_avail_raw  # BM sin ajuste de distribución
                 p["_bm_reserved"] = tot_reserved
+                p["_bm_no_vendible"] = tot_no_vendible
                 p["_days_supply"] = round(_p_days_supply, 1) if _p_days_supply < 9999 else None
                 p["_is_scarce"] = dist_rule is not None and (
                     tot_avail_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
@@ -5412,6 +5417,7 @@ def _apply_bm_stock(
                     p["_bm_avail"] = _pool
                     p["_bm_avail_raw"] = _pool_raw
                     p["_bm_reserved"] = inv.get("reserved_total", 0)
+                    p["_bm_no_vendible"] = inv.get("no_vendible", 0)
                     p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
                     p["_is_scarce"] = dist_rule is not None and (
                         _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))
@@ -5430,6 +5436,7 @@ def _apply_bm_stock(
                 p["_bm_avail"] = _pool
                 p["_bm_avail_raw"] = _pool_raw
                 p["_bm_reserved"] = inv.get("reserved_total", 0)
+                p["_bm_no_vendible"] = inv.get("no_vendible", 0)
                 p["_days_supply"] = round(_ds, 1) if _ds < 9999 else None
                 p["_is_scarce"] = dist_rule is not None and (
                     _pool_raw < int((dist_settings or {}).get("scarce_threshold_units", 10))

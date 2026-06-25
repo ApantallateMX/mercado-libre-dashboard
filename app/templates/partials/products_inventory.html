@@ -321,6 +321,10 @@
             <span>MTY/CDMX/TJ</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" class="col-toggle rounded" data-col="no_vendible" onchange="toggleColumn('no_vendible', this.checked)">
+            <span class="text-amber-600">No Vendible</span>
+        </label>
+        <label class="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" class="col-toggle rounded" data-col="cvr" {{ 'checked' if preset in ('top', 'full', 'accion') }} onchange="toggleColumn('cvr', this.checked)">
             <span>CVR</span>
         </label>
@@ -412,16 +416,22 @@
                 {% endif %}
                 <span data-stock-msg></span>
             </div>
-            <!-- BM Disponible + Reservado (siempre visible en mobile) -->
+            <!-- BM Disponible + Reservado + No Vendible (siempre visible en mobile) -->
             {% set p_avail_m = p.get('_bm_avail', 0) or 0 %}
             {% set p_res_m = p.get('_bm_reserved', 0) or 0 %}
-            <div class="flex gap-2">
+            {% set p_nvq_m = p.get('_bm_no_vendible', 0) or 0 %}
+            <div class="flex gap-2 flex-wrap">
                 <div class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-green-100 text-green-700' if p_avail_m > 20 else 'bg-yellow-100 text-yellow-700' if p_avail_m > 4 else 'bg-red-100 text-red-600' }}">
                     Disp: {{ p_avail_m }}
                 </div>
                 <div class="px-2 py-0.5 rounded text-xs font-bold {{ 'bg-orange-100 text-orange-700' if p_res_m > 0 else 'bg-gray-100 text-gray-400' }}">
                     Res: {{ p_res_m }}
                 </div>
+                {% if p_nvq_m > 0 %}
+                <div class="px-2 py-0.5 rounded text-xs font-bold bg-amber-100 text-amber-700" title="Unidades en almacén no disponibles para venta">
+                    ⚠ NoVend: {{ p_nvq_m }}
+                </div>
+                {% endif %}
             </div>
             <!-- Ventas + CVR + Días inventario (mobile) -->
             <div>
@@ -505,6 +515,7 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Stock MeLi</th>
                 <th class="text-right px-3 py-3 text-blue-700 font-bold text-xs bg-blue-50">BM Disp.</th>
                 <th class="text-right px-3 py-3 text-orange-600 font-bold text-xs bg-orange-50">BM Res.</th>
+                <th class="text-right px-3 py-3 text-amber-600 font-medium text-xs bg-amber-50 hidden" data-col="no_vendible" title="Unidades en almacén no disponibles para venta (dañadas, cuarentena, etc.)">No Vend.</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">MTY</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">TJ</th>
@@ -647,6 +658,15 @@
                     <span class="font-bold text-sm text-orange-600">{{ p_reserved }}</span>
                     {% else %}
                     <span class="text-gray-300 text-xs">0</span>
+                    {% endif %}
+                </td>
+                <!-- BM No Vendible (oculto por defecto, visible via col toggle) -->
+                {% set p_nvq = p.get('_bm_no_vendible', 0) or 0 %}
+                <td class="px-3 py-2 text-right bg-amber-50/40 hidden" data-col="no_vendible">
+                    {% if p_nvq > 0 %}
+                    <span class="font-bold text-xs text-amber-600" title="Unidades en almacén no disponibles para venta">{{ p_nvq }}</span>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">—</span>
                     {% endif %}
                 </td>
                 <!-- MTY / CDMX / TJ — naranja cuando todo el stock es reservado -->
@@ -873,7 +893,7 @@
             </tr>
             {% if p.get('variations') %}
             <tr id="inv-v-{{ loop.index }}" class="hidden bg-purple-50/30 inv-var-row">
-                <td colspan="18" class="px-6 py-2">
+                <td colspan="19" class="px-6 py-2">
                     <div class="text-xs">
                         <table class="w-full">
                             <thead>
