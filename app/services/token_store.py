@@ -956,15 +956,16 @@ async def save_item_sync(item_id: str, user_id: str, synced_qty: int, synced_by:
 
 
 async def get_recently_synced_ids(user_id: str, ttl_seconds: int = 3600) -> set[str]:
-    """Retorna item_ids sincronizados en los últimos ttl_seconds para esta cuenta.
-    Usado en el prewarm para excluir items recién sincronizados de las alertas.
+    """Retorna item_ids sincronizados en los últimos ttl_seconds — GLOBAL, sin filtro de cuenta.
+    Si cualquier usuario sincronizó un item, se suprime de las alertas de TODAS las cuentas
+    para evitar acciones duplicadas entre usuarios. El item reaparece al siguiente ciclo BM.
     """
     import time as _t
     cutoff = _t.time() - ttl_seconds
     async with aiosqlite.connect(DATABASE_PATH) as db:
         rows = await (await db.execute(
-            "SELECT item_id FROM item_sync_log WHERE user_id = ? AND synced_at > ?",
-            (user_id, cutoff),
+            "SELECT item_id FROM item_sync_log WHERE synced_at > ?",
+            (cutoff,),
         )).fetchall()
     return {r[0] for r in rows}
 

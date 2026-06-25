@@ -13684,7 +13684,21 @@ async def force_prewarm(request: Request, full_clear: bool = False):
     # Limpiar stock_issues_cache para forzar recalculo completo
     _stock_issues_cache.clear()
 
-    _prewarm_task = asyncio.create_task(_prewarm_caches(user_id=_fp_uid))
+    # Correr prewarm para TODAS las cuentas en secuencia — primero la activa, luego las demás.
+    # Así "Actualizar ahora" refresca alertas de todos los usuarios, no solo del activo.
+    async def _all_accounts_prewarm(first_uid):
+        await _prewarm_caches(user_id=first_uid)
+        try:
+            _accs = await token_store.get_all_tokens()
+            for _acc in _accs:
+                _uid = _acc.get("user_id", "")
+                if _uid and str(_uid) != str(first_uid):
+                    await asyncio.sleep(1)
+                    await _prewarm_caches(user_id=_uid)
+        except Exception:
+            pass
+
+    _prewarm_task = asyncio.create_task(_all_accounts_prewarm(_fp_uid))
     return JSONResponse({"status": "started", "stale_cleared": stale_cleared, "full_clear": full_clear})
 
 
