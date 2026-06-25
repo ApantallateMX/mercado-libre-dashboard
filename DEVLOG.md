@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FEAT: NoVendibleQty display informativo
+
+### Commit `b6c5680` — subido a Railway + Coolify
+
+BM introdujo un nuevo campo `NoVendibleQty` (unidades en bodega físicamente presentes pero no disponibles para venta: dañadas, cuarentena, etc.). Confirmado via BM web: para SNTV001764, Total=1,601, Available=1,600, Not Sellable=845 — son campos **independientes**, BM ya calcula AvailableQTY correctamente.
+
+#### Cambios implementados
+
+**`app/main.py`:**
+- `_EMPTY_BM`: añadido `"no_vendible": 0` al dict vacío
+- `_store_wh()`: parámetro `no_vendible_direct=0`, almacenado en `inv` y en `_bm_stock_cache`
+- `_lookup_diag()`: extrae `NoVendibleQty` de filas bulk BM, retorna 3-tupla `(avail, reserve, no_vendible)`
+- Loop de fetch: desempaca `_avail, _res, _nvq`, pasa `no_vendible_direct=_nvq` a `_store_wh()`
+- `_apply_bm_stock()`: propagado `p["_bm_no_vendible"]` en los 3 ramos (simple, variation parent, variation fallback)
+
+**`app/templates/partials/products_inventory.html`:**
+- Toggle "No Vendible" en toolbar de columnas (amber, oculto por defecto)
+- Header `<th data-col="no_vendible">No Vend.</th>` oculto por defecto
+- Celda por producto con valor en amber (solo muestra número si > 0)
+- Mobile: badge "⚠ NoVend: N" en amber junto a Disp/Res, solo cuando > 0
+- colspan de fila de variaciones: 18 → 19
+
+#### Decisión de diseño
+`NoVendibleQty` **NO** se resta de `AvailableQTY`. Es solo informativo. BM server-side ya calcula el Available correctamente; el campo Not Sellable es contexto adicional para el operador.
+
+---
+
 ## 2026-06-25 — FIX: Auditoría lógica de stock — 3 bugs corregidos
 
 ### Commits `67d6103`, `84437ce` — subidos a Railway
