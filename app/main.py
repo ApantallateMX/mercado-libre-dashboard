@@ -4384,9 +4384,9 @@ async def _sync_gap_stock_from_cache():
             )).fetchall()
             _updates = []
             for _gr in _gap_rows:
-                _sk = _gr[0].upper()
+                _sk = _gr[0]
                 _current = int(_gr[1] or 0)
-                _entry = _bm_stock_cache.get(_sk)
+                _entry = _bm_stock_cache.get(normalize_to_bm_sku(_sk))
                 if _entry is not None:
                     _, _bm_data = _entry
                     _avail = int(_bm_data.get("avail_total") or 0)
@@ -5076,12 +5076,15 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     return 0, 0
                 avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
                 reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
-                # Fallback: si BM devuelve AvailableQTY=null/0 pero TotalQty existe,
-                # calcularlo nosotros (bulk a veces omite el campo para ítems en ciertos estados).
+                # Fallback a TotalQty SOLO si BM no envió AvailableQTY (campo null).
+                # No activar cuando AvailableQTY llegó como 0 genuino — asumir avail=total
+                # genera sobreventa si hay unidades reservadas no reportadas.
                 if avail == 0 and reserve == 0:
-                    total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
-                    if total > 0:
-                        avail = total  # reserve desconocido → asumir todo disponible
+                    _all_avail_null = all(v.get("AvailableQTY") is None for v in rows_to_sum)
+                    if _all_avail_null:
+                        total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
+                        if total > 0:
+                            avail = total  # AvailableQTY no vino → estimar desde TotalQty
                 return avail, reserve
 
             _diag_found = 0           # SKUs con avail > 0
@@ -5107,11 +5110,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     return 0, 0
                 avail   = sum(int(v.get("AvailableQTY") or 0) for v in rows_to_sum)
                 reserve = sum(int(v.get("Reserve")      or 0) for v in rows_to_sum)
+                # Fallback a TotalQty SOLO si BM no envió AvailableQTY (campo null).
+                # No activar cuando AvailableQTY llegó como 0 genuino — ahí reserve puede
+                # ser > 0 aunque no se vea, y asumir avail=total genera sobreventa.
                 if avail == 0 and reserve == 0:
-                    total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
-                    if total > 0:
-                        avail = total
-                        _diag_fallback += 1
+                    _all_avail_null = all(v.get("AvailableQTY") is None for v in rows_to_sum)
+                    if _all_avail_null:
+                        total = sum(int(v.get("TotalQty") or 0) for v in rows_to_sum)
+                        if total > 0:
+                            avail = total
+                            _diag_fallback += 1
                 if avail > 0:
                     _diag_found += 1
                 else:
