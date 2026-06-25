@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-25 — FIX: Riesgo Sobreventa — falsos positivos por cache BM incoherente
+
+### Commits `ac6af2d`, `7ea6125` — subidos a Railway + Coolify
+
+**Bug:** SNTV005362 aparecía en "Riesgo Sobreventa" con BM=0 (Res:1) y MeLi=18,
+pero BM en vivo confirmaba Available=3, Reserve=1. Múltiples listings del mismo SKU
+afectados simultáneamente.
+
+**Root cause:** El bulk BM devolvió un snapshot incoherente: `{AvailableQTY:0, Reserve:1}`
+sin `TotalQty` para SNTV005362. Este triplete es físicamente imposible (TotalQty siempre
+debe ser >= Reserve). La función `_cache_is_valid()` lo aceptaba como válido (`_v=True`)
+y nunca disparaba retry per-SKU. El dato incorrecto quedaba congelado en cache hasta el
+próximo bulk refresh.
+
+**Fix 1 — `_cache_is_valid()` anti-ghost** (`app/main.py`):
+```python
+if data.get("reserved_total", 0) > 0 and data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
+    return False  # snapshot incoherente → forzar retry per-SKU
+```
+Ahora cualquier entrada con reserve>0 pero sin total ni avail dispara un retry per-SKU
+que obtiene los valores reales de BM (Available=3 correcto para SNTV005362).
+
+**Fix 2 — Stagnant excluye `_synced_ids`** (`app/main.py`):
+Productos recién sincronizados (últ. 60 min) ya no aparecen como "estancados"
+antes del primer prewarm post-sync (tenían `units=0` aún sin actualizar).
+
+**Auditoría completa de secciones:** Reabastecer, Activar, Critical, Full No Stock,
+Price Risk, Imbalanced — lógica correcta. Sección Riesgo Sobreventa tiene guard correcto
+`"_bm_avail" in p` que previene falsas alertas cuando BM no responde.
+
+---
+
 ## 2026-06-25 — FEAT: NoVendibleQty display informativo
 
 ### Commit `b6c5680` — subido a Railway + Coolify
