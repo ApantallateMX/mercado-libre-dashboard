@@ -4618,7 +4618,7 @@ async def _prewarm_caches(user_id: str = None):
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
                 # porque (None or 0)==0. Solo flaggear cuando BM confirmó explícitamente avail=0.
-                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
+                oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
                 activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids]
@@ -4666,11 +4666,11 @@ async def _prewarm_caches(user_id: str = None):
                 # Desbalance peligroso: MeLi publica más stock del que hay en BM
                 imbalanced = [
                     p for p in products
-                    if p.get("available_quantity", 0) > (p.get("_bm_avail") or 0) > 0
+                    if p.get("available_quantity", 0) > (p.get("_bm_avail_raw") or 0) > 0
                     and not p.get("is_full")
                     and p.get("sku")
                 ]
-                imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail") or 0), reverse=True)
+                imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
