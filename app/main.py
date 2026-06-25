@@ -5186,25 +5186,29 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         f"{_diag_fallback} via TotalQty fallback")
             _used_bulk = True
 
-            # Retry per-SKU para bulk misses: BM no incluye SKUs con 0 stock en bulk,
-            # "no en bulk" ≠ "no en BM". Sin esto, Fix A en _store_wh preserva valores
-            # stale de DB (ej: SHIL000026=549 de la era LOC62). get_stock_with_reserve
-            # llama CONCEPTID=1+LOCATIONID=47,68 y retorna el valor real (0 o >0).
+            # Retry per-SKU para bulk misses CON ts=0.0 (cargados desde DB, nunca verificados
+            # en este proceso). SOLO ts=0 — no cada ciclo de prewarm (evita rate-limit BM).
+            # Una vez que _wh_phase retorna, ts queda en "ahora" y el SKU sale de esta lista.
+            # BM no incluye SKUs con stock=0 en bulk → "no en bulk" ≠ "no en BM".
             if retry_stale and _bulk_miss_set and not _bulk_returned_empty:
-                _miss_list = list(_bulk_miss_set)[:100]
-                async def _do_bulk_miss_retry(miss_skus=_miss_list):
-                    import logging as _log_miss
-                    _log_miss.getLogger(__name__).info(
-                        f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (stale guard)"
-                    )
-                    await asyncio.sleep(5)
-                    for _msku in miss_skus:
-                        await _wh_phase(_msku, _track_progress=False)
-                        await asyncio.sleep(1)
-                    _log_miss.getLogger(__name__).info(
-                        f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs"
-                    )
-                asyncio.create_task(_do_bulk_miss_retry())
+                _miss_list = [
+                    s for s in _bulk_miss_set
+                    if (_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[0]) == 0.0
+                ][:50]
+                if _miss_list:
+                    async def _do_bulk_miss_retry(miss_skus=_miss_list):
+                        import logging as _log_miss
+                        _log_miss.getLogger(__name__).info(
+                            f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (ts=0, 1 vez por deploy)"
+                        )
+                        await asyncio.sleep(5)
+                        for _msku in miss_skus:
+                            await _wh_phase(_msku, _track_progress=False)
+                            await asyncio.sleep(1)
+                        _log_miss.getLogger(__name__).info(
+                            f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs"
+                        )
+                    asyncio.create_task(_do_bulk_miss_retry())
 
         if not _used_bulk:
             # Fix B3: último recurso — servir desde _bm_stock_cache per-SKU aunque esté expirado.
