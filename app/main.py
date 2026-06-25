@@ -4638,6 +4638,7 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("units", 0) == 0
                     and not p.get("is_full")
                     and p.get("sku")
+                    and p.get("id") not in _synced_ids
                 ]
                 stagnant.sort(
                     key=lambda x: (x.get("_bm_avail") or 0) * (x.get("price") or 1),
@@ -4770,6 +4771,11 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         if not c or (_time.time() - c[0]) >= _effective_ttl:
             return False
         data = c[1]
+        # reserve>0 pero total=0 y avail=0 → snapshot incoherente del bulk BM.
+        # TotalQty siempre debe ser >= Reserve; este triplete indica dato parcial/corrupto.
+        # Forzar retry per-SKU para obtener el valor real de BM.
+        if data.get("reserved_total", 0) > 0 and data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
+            return False
         # Entradas con total=0 y avail=0 solo son válidas si el fetch fue verificado (_v=True).
         # Sin _v (DB antigua, timeout) se re-fetchean para no servir 0s de fetches fallidos.
         if data.get("total", 0) == 0 and data.get("avail_total", 0) == 0:
