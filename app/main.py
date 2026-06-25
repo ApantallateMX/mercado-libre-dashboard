@@ -4572,11 +4572,13 @@ async def _prewarm_caches(user_id: str = None):
                 # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
                 # no deben sobrevivir un restart y generar falsas alarmas de sobreventa.
                 # Los ceros genuinos se re-verifican en el primer prewarm post-restart.
-                # Persistir entradas con stock > 0 en DB
+                # t=0.0 = cargado de DB sin verificar en este proceso (bulk miss con dato stale).
+                # NO re-guardar esas entradas: perpetuarían datos incorrectos (ej: avail=549 real=0).
+                # Solo persistir entradas verificadas en ESTE proceso (t > 0).
                 try:
                     _bm_entries = [
                         (s, d, t) for s, (t, d) in _bm_stock_cache.items()
-                        if d.get("avail_total", 0) > 0
+                        if d.get("avail_total", 0) > 0 and t > 0
                     ]
                     if _bm_entries:
                         await token_store.upsert_bm_stock_batch(_bm_entries)
@@ -5202,9 +5204,27 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                             f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (ts=0, 1 vez por deploy)"
                         )
                         await asyncio.sleep(5)
+                        _db_updates = []
                         for _msku in miss_skus:
                             await _wh_phase(_msku, _track_progress=False)
+                            # Persistir el valor real en DB (aunque sea avail=0) para que
+                            # _load_bm_cache_from_db no vuelva a cargar el dato stale en
+                            # el próximo prewarm/deploy. El filtro avail>0 del warm-start
+                            # excluirá la entrada → siguiente prewarm tratará este SKU
+                            # como nuevo y obtendrá el valor correcto de BM.
+                            _bk = normalize_to_bm_sku(_msku)
+                            _bm_entry = _bm_stock_cache.get(_bk)
+                            if _bm_entry and _bm_entry[0] > 0:  # verificado en este proceso
+                                _db_updates.append((_bk, _bm_entry[1], _bm_entry[0]))
                             await asyncio.sleep(1)
+                        if _db_updates:
+                            try:
+                                await token_store.upsert_bm_stock_batch(_db_updates)
+                                _log_miss.getLogger(__name__).info(
+                                    f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs actualizados en DB"
+                                )
+                            except Exception as _e_db:
+                                _log_miss.getLogger(__name__).warning(f"[BM-BULK] Error upsert DB: {_e_db}")
                         _log_miss.getLogger(__name__).info(
                             f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs"
                         )
