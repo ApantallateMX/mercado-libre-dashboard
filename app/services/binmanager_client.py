@@ -357,8 +357,9 @@ class BinManagerClient:
         logger.info(f"[BM] get_bulk_stock: {len(all_rows)} SKUs en {_BM_MAX_PAGES} páginas (límite)")
         return all_rows
 
-    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> tuple[int, int] | None:
-        """Retorna (AvailableQTY, Reserve) para un SKU filtrado a LOCATIONID=47,68 (MTY+CDMX).
+    async def get_stock_with_reserve(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> tuple[int, int] | None:
+        """Retorna (AvailableQTY, Reserve) para un SKU.
+        location_id: "47,68" (MTY+CDMX combined, default), "47" (solo MTY), "68" (solo CDMX).
         LOC62 (Tijuana B2B) excluida — no suma al stock vendible.
         Usa Get_GlobalStock_InventoryBySKU CONCEPTID=1 — única fuente correcta de stock vendible.
           - AvailableQTY = stock vendible (TotalQty - Reserve, calculado por BM server-side)
@@ -367,7 +368,7 @@ class BinManagerClient:
         conditions: GRA,GRB,GRC,NEW por default. Pasar GRA,GRB,GRC,ICB,ICC,NEW para SKUs IC.
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2 (TotalQty=215)
         """
-        return await self._query_bm_stock(sku, conditions=conditions)
+        return await self._query_bm_stock(sku, conditions=conditions, location_id=location_id)
 
     async def get_available_qty(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> int:
         """Retorna solo AvailableQTY (stock vendible). Ver get_stock_with_reserve() para ambos.
@@ -379,8 +380,9 @@ class BinManagerClient:
         result = await self._query_bm_stock(sku, conditions=conditions)
         return result[0] if result is not None else 0
 
-    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW") -> tuple[int, int] | None:
-        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1 + LOCATIONID=47,68 (MTY+CDMX).
+    async def _query_bm_stock(self, sku: str, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> tuple[int, int] | None:
+        """Consulta BM y retorna (AvailableQTY, Reserve) con CONCEPTID=1.
+        location_id: default "47,68" (MTY+CDMX). Pasar "47" o "68" para desglose por almacén.
         Método interno compartido por get_available_qty() y get_stock_with_reserve().
         Maneja condición-variantes: si SKU no tiene match exacto, suma variantes -GRA/-GRB/etc.
         Verificado: SNTV001764 → AvailableQTY=213, Reserve=2.
@@ -403,7 +405,7 @@ class BinManagerClient:
         payload = {
             "COMPANYID": 1,
             "CATEGORYID": None, "WAREHOUSEID": None,
-            "LOCATIONID": "47,68",
+            "LOCATIONID": location_id,
             "BINID": None,
             "SEARCH": base,
             "CONDITION": conditions,

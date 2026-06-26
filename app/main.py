@@ -4727,14 +4727,43 @@ async def _prewarm_caches(user_id: str = None):
                             if not _asku:
                                 continue
                             try:
-                                await _wh_phase(_asku, _track_progress=False)
                                 _abk = normalize_to_bm_sku(_asku)
-                                _ae = _bm_stock_cache.get(_abk)
-                                if _ae and _ae[0] > 0 and _ae[1].get("_wh_fetched"):
+                                _cond = _bm_conditions_for_sku(_asku)
+                                from app.services.binmanager_client import get_shared_bm as _gsb
+                                _bm_act = await _gsb()
+                                # Dos llamadas por almacén para obtener desglose MTY/CDMX real.
+                                # LOC 47 = Monterrey MAXX, LOC 68 = CDMX Autobot/Ebanistas.
+                                try:
+                                    _mty_res = await asyncio.wait_for(
+                                        _bm_act.get_stock_with_reserve(_abk, conditions=_cond, location_id="47"),
+                                        timeout=8.0,
+                                    )
+                                except Exception:
+                                    _mty_res = None
+                                try:
+                                    _cdmx_res = await asyncio.wait_for(
+                                        _bm_act.get_stock_with_reserve(_abk, conditions=_cond, location_id="68"),
+                                        timeout=8.0,
+                                    )
+                                except Exception:
+                                    _cdmx_res = None
+                                _mty  = _mty_res[0]  if _mty_res  is not None else 0
+                                _cdmx = _cdmx_res[0] if _cdmx_res is not None else 0
+                                if _mty_res is not None or _cdmx_res is not None:
+                                    # Actualizar cache con desglose real (preservar ts y avail_total del bulk)
+                                    _ae = _bm_stock_cache.get(_abk)
+                                    if _ae:
+                                        _ae_data = dict(_ae[1])
+                                        _ae_data["mty"]  = _mty
+                                        _ae_data["cdmx"] = _cdmx
+                                        _ae_data["tj"]   = 0
+                                        _ae_data["_wh_fetched"] = True
+                                        _bm_stock_cache[_abk] = (_ae[0], _ae_data)
+                                    # Actualizar item en _updated (preserva _bm_avail del prewarm)
                                     _pu = dict(_ap)
-                                    _pu["_bm_mty"]      = _ae[1].get("mty", 0)
-                                    _pu["_bm_cdmx"]     = _ae[1].get("cdmx", 0)
-                                    _pu["_bm_tj"]       = _ae[1].get("tj", 0)
+                                    _pu["_bm_mty"]        = _mty
+                                    _pu["_bm_cdmx"]       = _cdmx
+                                    _pu["_bm_tj"]         = 0
                                     _pu["_bm_wh_fetched"] = True
                                     _updated[_i] = _pu
                                     _n_ok += 1
