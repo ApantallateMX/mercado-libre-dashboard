@@ -455,6 +455,9 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disponible</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-orange-500">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-blue-500">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-purple-400">TJ</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
@@ -528,6 +531,10 @@
                         {% if p.get('_days_supply') is not none %}<div class="text-[10px] font-normal {{ 'text-orange-600 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}" title="Días de supply estimados">{{ p._days_supply }}d{% if p.get('_is_scarce') %} ⚡{% endif %}</div>{% endif %}
                         {% endif %}
                     </td>
+                    {% set _ris_dt_no_wh2 = not p.get('_bm_wh_fetched') %}
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh2 %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh2 %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh2 %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1 flex-wrap">
@@ -614,10 +621,8 @@
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-red-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_days_supply') is not none %} <span class="text-[10px] {{ 'text-orange-500 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}">({{ p._days_supply }}d)</span>{% endif %}</div>
-                {% if p.get('_bm_mty') is not none %}
                 {% set _ris_no_wh = not p.get('_bm_wh_fetched') %}
-                <div class="text-[10px] text-gray-400">{% if _ris_no_wh %}MTY:— CDMX:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }}{% endif %}</div>
-                {% endif %}
+                <div class="text-[10px] text-gray-400">{% if _ris_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p.get('_bm_mty', 0) or 0 }} CDMX:{{ p.get('_bm_cdmx', 0) or 0 }} TJ:{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</div>
             </div>
             {% if p.get('_days_supply') is not none and p._days_supply < 3 %}
             <div class="mt-2 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5 text-[10px] font-semibold text-red-700">
@@ -634,6 +639,10 @@
                 <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                         class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
                     Sync BM
+                </button>
+                <button onclick="openEditModal('{{ p.id }}')"
+                        class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300 min-h-[36px]">
+                    Editar
                 </button>
                 <span id="crit-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
             </div>
@@ -653,8 +662,9 @@
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">MTY</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-orange-500">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-blue-500">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-purple-400">TJ</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acciones</th>
                 </tr>
             </thead>
@@ -702,6 +712,7 @@
                     {% set _ris_dt_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _ris_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
                         <div class="flex items-center justify-center gap-1 flex-wrap">
                             {% if p.sku %}
@@ -713,6 +724,10 @@
                             <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
                                     class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
                                 Sync BM
+                            </button>
+                            <button onclick="openEditModal('{{ p.id }}')"
+                                    class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
+                                Editar
                             </button>
                             <span id="crit-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
                         </div>
