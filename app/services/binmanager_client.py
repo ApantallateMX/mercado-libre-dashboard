@@ -270,10 +270,10 @@ class BinManagerClient:
                 return []
         return []
 
-    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW") -> list:
+    async def get_bulk_stock(self, conditions: str = "GRA,GRB,GRC,NEW", location_id: str = "47,68") -> list:
         """Retorna TODOS los SKUs vendibles paginando de 500 en 500.
 
-        LOCATIONID=47,68 (MTY+CDMX) + CONCEPTID=1.
+        location_id: "47,68" = MTY+CDMX combinado (default). "47" = solo CDMX. "68" = solo MTY.
         LOC62 (Tijuana B2B) excluida — es informativa y no suma al stock vendible.
         conditions: qué condiciones incluir. Default GRA,GRB,GRC,NEW (excluye ICB/ICC).
         Para SKUs con sufijo -ICB/-ICC pasar "GRA,GRB,GRC,ICB,ICC,NEW".
@@ -292,7 +292,7 @@ class BinManagerClient:
         arrayfilters_condition = [{"Condition": c, "Name": c, "selected": True} for c in cond_list]
         base_payload = {
             "COMPANYID": 1, "SEARCH": "", "CONCEPTID": 1,
-            "LOCATIONID": "47,68",
+            "LOCATIONID": location_id,
             "CONDITION": conditions,
             "FORINVENTORY": 0, "BUSCADOR": False,
             "RECORDSPAGE": _BM_PAGE_SIZE,

@@ -4324,8 +4324,10 @@ _catalog_sync_history: list = []   # últimas 10 corridas: {ts, skus, elapsed_s,
 _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_skus, fallback_used}
 
 # --- BM Bulk Caches (dos: GR-only y ALL-conditions) ---
-_bm_bulk_gr_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows)
-_bm_bulk_all_cache: tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/ICB/ICC/NEW rows)
+_bm_bulk_gr_cache:   tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows) LOC47+68
+_bm_bulk_all_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/ICB/ICC/NEW rows) LOC47+68
+_bm_bulk_loc47_cache: tuple[float, list] | None = None  # (timestamp, GR rows) solo LOC47 = CDMX
+_bm_bulk_loc68_cache: tuple[float, list] | None = None  # (timestamp, GR rows) solo LOC68 = MTY
 # Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
 _bm_bulk_raw_sample: dict | None = None  # primer row crudo de la última llamada bulk
 
@@ -5115,6 +5117,53 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _bulk_gr_rows = _bm_bulk_gr_cache[1]
                     logger.warning(f"[BM-CACHE] GR fallback a cache stale tras error fetch")
 
+        # ── Bulk por ubicación: LOC47=CDMX, LOC68=MTY (para desglose MTY/CDMX) ──
+        # Solo cuando el GR bulk fue fresco (mismo ciclo) — evitar 2 fetches extra si ya hay cache.
+        global _bm_bulk_loc47_cache, _bm_bulk_loc68_cache
+        _bulk_loc47_rows = None  # CDMX (LOC 47)
+        _bulk_loc68_rows = None  # MTY  (LOC 68)
+        if _bulk_gr_rows is not None and not _bm_is_down_now:
+            # Reutilizar si la cache de ubicación es tan fresca como el GR bulk
+            _loc_ttl = 900  # mismo TTL que GR bulk
+            if _bm_bulk_loc47_cache and (_time.time() - _bm_bulk_loc47_cache[0]) < _loc_ttl:
+                _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
+                logger.info(f"[BM-CACHE] Reutilizando LOC47 (CDMX) cache ({len(_bulk_loc47_rows)} rows)")
+            else:
+                try:
+                    _fresh_l47 = await asyncio.wait_for(
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
+                        timeout=270.0,
+                    )
+                    if _fresh_l47:
+                        _bm_bulk_loc47_cache = (_time.time(), _slim_bulk_rows(_fresh_l47))
+                        _bulk_loc47_rows = _fresh_l47
+                        logger.info(f"[BM-CACHE] LOC47 (CDMX) bulk OK: {len(_fresh_l47)} filas")
+                    elif _bm_bulk_loc47_cache:
+                        _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
+                except Exception as _le47:
+                    logger.warning(f"[BM-CACHE] LOC47 bulk error: {_le47}")
+                    if _bm_bulk_loc47_cache:
+                        _bulk_loc47_rows = _bm_bulk_loc47_cache[1]
+            if _bm_bulk_loc68_cache and (_time.time() - _bm_bulk_loc68_cache[0]) < _loc_ttl:
+                _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+                logger.info(f"[BM-CACHE] Reutilizando LOC68 (MTY) cache ({len(_bulk_loc68_rows)} rows)")
+            else:
+                try:
+                    _fresh_l68 = await asyncio.wait_for(
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
+                        timeout=270.0,
+                    )
+                    if _fresh_l68:
+                        _bm_bulk_loc68_cache = (_time.time(), _slim_bulk_rows(_fresh_l68))
+                        _bulk_loc68_rows = _fresh_l68
+                        logger.info(f"[BM-CACHE] LOC68 (MTY) bulk OK: {len(_fresh_l68)} filas")
+                    elif _bm_bulk_loc68_cache:
+                        _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+                except Exception as _le68:
+                    logger.warning(f"[BM-CACHE] LOC68 bulk error: {_le68}")
+                    if _bm_bulk_loc68_cache:
+                        _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
+
         # ── ALL bulk (solo si hay SKUs SNTV-ICB/ICC/bundle) ──────────────────
         _bulk_all_rows = None
         if _need_all:
@@ -5264,6 +5313,29 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         f"{_diag_zero_in_bulk} BM confirmó 0, {_diag_not_in_bulk} no en bulk (retry per-SKU), "
                         f"{_diag_fallback} via TotalQty fallback")
             _used_bulk = True
+
+            # ── Segunda pasada: MTY/CDMX desde bulks por ubicación ────────────
+            # LOC47=CDMX, LOC68=MTY. Si ambos bulks están disponibles, actualizar
+            # _bm_stock_cache con mty/cdmx reales y marcar _wh_fetched=True.
+            if _bulk_loc47_rows is not None or _bulk_loc68_rows is not None:
+                _loc_exact47, _loc_base47 = _build_lookup(_bulk_loc47_rows or [])
+                _loc_exact68, _loc_base68 = _build_lookup(_bulk_loc68_rows or [])
+                _wh_updated = 0
+                for _wh_sku in to_fetch:
+                    _wh_bk = normalize_to_bm_sku(_wh_sku)
+                    _existing = _bm_stock_cache.get(_wh_bk)
+                    if not _existing or not _existing[1].get("_v"):
+                        continue  # solo actualizar entradas verificadas
+                    _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
+                    _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
+                    _wh_ts, _wh_data = _existing
+                    _wh_new = dict(_wh_data)
+                    _wh_new["cdmx"] = _cdmx_avail
+                    _wh_new["mty"]  = _mty_avail
+                    _wh_new["_wh_fetched"] = True
+                    _bm_stock_cache[_wh_bk] = (_wh_ts, _wh_new)
+                    _wh_updated += 1
+                logger.info(f"[BM-WH] Desglose MTY/CDMX actualizado para {_wh_updated} SKUs desde LOC47/LOC68")
 
             # Retry per-SKU para bulk misses CON ts=0.0 (cargados desde DB, nunca verificados
             # en este proceso). SOLO ts=0 — no cada ciclo de prewarm (evita rate-limit BM).
