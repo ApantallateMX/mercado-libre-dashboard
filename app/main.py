@@ -5345,20 +5345,22 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _wh_updated += 1
                 logger.info(f"[BM-WH] Desglose MTY/CDMX actualizado para {_wh_updated} SKUs desde LOC47/LOC68")
 
-            # Retry per-SKU para bulk misses CON ts=0.0 (cargados desde DB, nunca verificados
-            # en este proceso). SOLO ts=0 — no cada ciclo de prewarm (evita rate-limit BM).
-            # Una vez que _wh_phase retorna, ts queda en "ahora" y el SKU sale de esta lista.
-            # BM no incluye SKUs con stock=0 en bulk → "no en bulk" ≠ "no en BM".
+            # Retry per-SKU para bulk misses CON ts=0.0 (nunca verificados) O CON stale
+            # avail_total>0 (tenían stock antes pero ya no están en el bulk → probablemente 0).
+            # BM omite SKUs con stock=0 del bulk, así que "no en bulk" + "stale>0" = sospechoso.
             if retry_stale and _bulk_miss_set and not _bulk_returned_empty:
                 _miss_list = [
                     s for s in _bulk_miss_set
-                    if (_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[0]) == 0.0
+                    if (
+                        (_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[0]) == 0.0
+                        or ((_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[1].get("avail_total") or 0) > 0)
+                    )
                 ][:50]
                 if _miss_list:
                     async def _do_bulk_miss_retry(miss_skus=_miss_list):
                         import logging as _log_miss
                         _log_miss.getLogger(__name__).info(
-                            f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (ts=0, 1 vez por deploy)"
+                            f"[BM-BULK] Retry per-SKU para {len(miss_skus)} bulk misses (ts=0 o stale>0)"
                         )
                         await asyncio.sleep(5)
                         _db_updates = []
