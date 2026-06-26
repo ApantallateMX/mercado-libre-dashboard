@@ -434,6 +434,10 @@
                     Qty 0
                 </button>
                 {% endif %}
+                <button onclick="openEditModal('{{ p.id }}')"
+                        class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300 min-h-[36px]">
+                    Editar
+                </button>
                 <span id="risk-msg-{{ p.id }}" class="text-[10px] ml-1 self-center"></span>
             </div>
         </div>
@@ -540,6 +544,10 @@
                                 Qty 0
                             </button>
                             {% endif %}
+                            <button onclick="openEditModal('{{ p.id }}')"
+                                    class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
+                                Editar
+                            </button>
                             <span id="risk-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
                         </div>
                     </td>

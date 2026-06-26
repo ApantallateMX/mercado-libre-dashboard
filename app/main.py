@@ -5131,7 +5131,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             else:
                 try:
                     _fresh_l47 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="47"),
                         timeout=270.0,
                     )
                     if _fresh_l47:
@@ -5150,7 +5150,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             else:
                 try:
                     _fresh_l68 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="68"),
                         timeout=270.0,
                     )
                     if _fresh_l68:
@@ -5329,19 +5329,18 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
                     _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
                     _wh_ts, _wh_data = _existing
-                    _wh_new = dict(_wh_data)
-                    # Cap: mty+cdmx no debe superar avail_total (timing entre 3 bulk calls).
+                    # Mutar _wh_data IN PLACE para que result_map (mismo objeto) también se actualice.
+                    # Si se crea dict nuevo, result_map queda desactualizado y el template muestra "—".
                     _avail_total = _wh_data.get("avail_total", 0) or 0
                     _loc_sum = _mty_avail + _cdmx_avail
                     if _loc_sum > _avail_total and _avail_total > 0:
-                        # Escalar proporcionalmente para que la suma cuadre con el total combinado
                         _scale = _avail_total / _loc_sum
                         _mty_avail  = round(_mty_avail  * _scale)
                         _cdmx_avail = _avail_total - _mty_avail
-                    _wh_new["cdmx"] = _cdmx_avail
-                    _wh_new["mty"]  = _mty_avail
-                    _wh_new["_wh_fetched"] = True
-                    _bm_stock_cache[_wh_bk] = (_wh_ts, _wh_new)
+                    _wh_data["cdmx"] = _cdmx_avail
+                    _wh_data["mty"]  = _mty_avail
+                    _wh_data["_wh_fetched"] = True
+                    # No se necesita re-asignar _bm_stock_cache — _wh_data ya es el objeto referenciado.
                     _wh_updated += 1
                 logger.info(f"[BM-WH] Desglose MTY/CDMX actualizado para {_wh_updated} SKUs desde LOC47/LOC68")
 
