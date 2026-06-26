@@ -4326,6 +4326,8 @@ _bm_bulk_stats: dict = {}  # {bulk_gr_rows, bulk_all_rows, found, zero, zero_sku
 # --- BM Bulk Caches (dos: GR-only y ALL-conditions) ---
 _bm_bulk_gr_cache:  tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/NEW rows)
 _bm_bulk_all_cache: tuple[float, list] | None = None  # (timestamp, GRA/GRB/GRC/ICB/ICC/NEW rows)
+# Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
+_bm_bulk_raw_sample: dict | None = None  # primer row crudo de la última llamada bulk
 
 # Campos mínimos que necesitamos de cada row BM bulk.
 # Descartar todo lo demás para reducir el footprint de memoria de los caches globales.
@@ -5088,6 +5090,9 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     timeout=270.0,
                 )
                 if _fresh_gr:
+                    global _bm_bulk_raw_sample
+                    if _fresh_gr and _bm_bulk_raw_sample is None:
+                        _bm_bulk_raw_sample = {k: (type(v).__name__ if not isinstance(v, (str, int, float, bool, type(None))) else v) for k, v in _fresh_gr[0].items()}
                     _bm_bulk_gr_cache = (_time.time(), _slim_bulk_rows(_fresh_gr))
                     _bm_health["ok"] = True
                     _bm_health["last_ok_ts"] = _time.time()
@@ -17587,6 +17592,28 @@ async def diag_mlmu(
     finally:
         await client.close()
     return JSONResponse(results)
+
+
+@app.get("/api/diag/bulk-raw-fields")
+async def diag_bulk_raw_fields(token: str = "", sku: str = ""):
+    """Diagnóstico: muestra los campos RAW del bulk BM antes de slimming.
+    Permite identificar qué campo contiene el desglose por warehouse (MTY/CDMX).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    if _bm_bulk_raw_sample is None:
+        return JSONResponse({"status": "no_sample", "msg": "Esperando primer bulk fetch (prewarm)"})
+    result = {"raw_fields": _bm_bulk_raw_sample}
+    # Si se pasa un SKU, buscar en el bulk cache actual el row crudo (ya slimmed)
+    if sku:
+        _sk = sku.upper().strip()
+        gr_rows = _bm_bulk_gr_cache[1] if _bm_bulk_gr_cache else []
+        all_rows = _bm_bulk_all_cache[1] if _bm_bulk_all_cache else []
+        _found_gr  = [r for r in gr_rows  if (r.get("SKU") or "").upper() == _sk or _extract_base_sku((r.get("SKU") or "").upper()) == _sk]
+        _found_all = [r for r in all_rows if (r.get("SKU") or "").upper() == _sk or _extract_base_sku((r.get("SKU") or "").upper()) == _sk]
+        result["sku_in_slimmed_gr"]  = _found_gr[:5]
+        result["sku_in_slimmed_all"] = _found_all[:5]
+    return JSONResponse(result)
 
 
 if __name__ == "__main__":
