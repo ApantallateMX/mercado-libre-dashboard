@@ -13183,6 +13183,28 @@ async def diag_clear_bm_sku(sku: str = "", token: str = ""):
     })
 
 
+@app.get("/api/diag/activate-snapshot")
+async def diag_activate_snapshot(token: str = "", sku_filter: str = ""):
+    """Diagnóstico: muestra el contenido actual del activate snapshot en memoria.
+    sku_filter: si se provee, filtra por SKU ([:10] match).
+    """
+    if token != _DIAG_TOKEN:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    result = {}
+    _fk = normalize_to_bm_sku(sku_filter.upper()) if sku_filter else None
+    for _key, (_ts, _data) in _stock_issues_cache.items():
+        _act = _data.get("activate") or []
+        if _fk:
+            _act = [p for p in _act if p.get("sku", "").upper()[:10] == _fk]
+        if _act or not _fk:
+            result[_key] = {
+                "ts": round(_ts, 1),
+                "activate_count": len(_data.get("activate") or []),
+                "filtered_items": [{"id": p.get("id"), "sku": p.get("sku"), "bm_avail": p.get("_bm_avail"), "title": p.get("title", "")[:50]} for p in _act],
+            }
+    return JSONResponse(result)
+
+
 @app.get("/api/diag/bm-sku-probe")
 async def diag_bm_sku_probe(sku: str = "", token: str = ""):
     """Diagnóstico: llama BM con _GS_BASE_PAYLOAD (CONCEPTID=8) + SEARCH=sku
