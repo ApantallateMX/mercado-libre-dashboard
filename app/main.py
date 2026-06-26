@@ -5330,6 +5330,14 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
                     _wh_ts, _wh_data = _existing
                     _wh_new = dict(_wh_data)
+                    # Cap: mty+cdmx no debe superar avail_total (timing entre 3 bulk calls).
+                    _avail_total = _wh_data.get("avail_total", 0) or 0
+                    _loc_sum = _mty_avail + _cdmx_avail
+                    if _loc_sum > _avail_total and _avail_total > 0:
+                        # Escalar proporcionalmente para que la suma cuadre con el total combinado
+                        _scale = _avail_total / _loc_sum
+                        _mty_avail  = round(_mty_avail  * _scale)
+                        _cdmx_avail = _avail_total - _mty_avail
                     _wh_new["cdmx"] = _cdmx_avail
                     _wh_new["mty"]  = _mty_avail
                     _wh_new["_wh_fetched"] = True
