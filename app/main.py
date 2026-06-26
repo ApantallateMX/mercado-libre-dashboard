@@ -13147,18 +13147,27 @@ async def diag_clear_bm_sku(sku: str = "", token: str = ""):
     bk = normalize_to_bm_sku(sku.upper())
     # 1. Quitar de _bm_stock_cache
     removed_cache = bk in _bm_stock_cache
-    _bm_stock_cache.pop(bk, None)
+    cache_val = _bm_stock_cache.pop(bk, None)
+    cache_detail = None
+    if cache_val:
+        cache_detail = {"ts": round(cache_val[0], 1), "avail": cache_val[1].get("avail_total", 0), "_v": cache_val[1].get("_v")}
     # 2. Quitar de activate en todos los snapshots en memoria
     act_removed = 0
+    removed_items = []
     for _key, (_ts, _data) in list(_stock_issues_cache.items()):
         _orig = _data.get("activate") or []
+        _matching = [p for p in _orig if p.get("sku", "").upper()[:10] == bk]
         _clean = [p for p in _orig if p.get("sku", "").upper()[:10] != bk]
-        if len(_clean) < len(_orig):
+        if _matching:
             _fd = dict(_data)
             _fd["activate"] = _clean
             _fd["activate_count"] = len(_clean)
             _stock_issues_cache[_key] = (_ts, _fd)
-            act_removed += len(_orig) - len(_clean)
+            act_removed += len(_matching)
+            removed_items.append({
+                "account_key": _key,
+                "items": [{"id": p.get("id"), "sku": p.get("sku"), "bm_avail": p.get("_bm_avail"), "title": p.get("title", "")[:40]} for p in _matching]
+            })
     # 3. Borrar de DB
     try:
         db_deleted = await token_store.delete_bm_stock_skus([bk])
@@ -13167,7 +13176,9 @@ async def diag_clear_bm_sku(sku: str = "", token: str = ""):
     return JSONResponse({
         "sku": sku.upper(), "bm_key": bk,
         "cache_removed": removed_cache,
+        "cache_detail": cache_detail,
         "activate_entries_removed": act_removed,
+        "removed_items": removed_items,
         "db_rows_deleted": db_deleted,
     })
 
