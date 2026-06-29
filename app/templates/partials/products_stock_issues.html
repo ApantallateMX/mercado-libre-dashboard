@@ -1541,9 +1541,12 @@ function setStockZero(itemId, btn) {
     })
     .then(function(r) {
         if (r.ok) {
-            btn.textContent = 'OK';
-            _setRiskMsg(itemId, 'Stock→0', 'text-[10px] ml-1 text-green-600 font-semibold');
-            setTimeout(function() { _removeStockRows(itemId); }, 1000);
+            btn.textContent = '✓';
+            // Ocultar fila desktop directamente desde el botón (más confiable que getElementById)
+            var _tr = btn.closest('tr');
+            if (_tr) { _tr.style.transition = 'opacity 0.4s'; _tr.style.opacity = '0'; setTimeout(function(){ if(_tr.parentNode) _tr.parentNode.removeChild(_tr); }, 450); }
+            // Ocultar card mobile y limpiar cualquier otra sección (restock, critical, etc.)
+            setTimeout(function() { _removeStockRows(itemId); }, 500);
         } else {
             return r.text().then(function(t) {
                 try { var d = JSON.parse(t); throw new Error(d.detail || 'Error'); }
@@ -1602,8 +1605,14 @@ function bulkStockZeroRisk() {
             updateProgress();
             if (done === total) {
                 var ok = done - errors;
-                btn.textContent = errors > 0 ? ok + ' OK / ' + errors + ' err' : 'Completado';
+                btn.textContent = errors > 0 ? ok + ' OK / ' + errors + ' err' : 'Completado ✓';
                 btn.className = btn.className.replace('bg-red-500', errors > 0 ? 'bg-yellow-500' : 'bg-green-600');
+                if (errors === 0) {
+                    // Recargar sección completa para reflejar el estado real del cache
+                    setTimeout(function() {
+                        if (window.switchProductTab) window.switchProductTab('stock', '/partials/products-stock-issues');
+                    }, 1500);
+                }
             }
         })
         .catch(function() { done++; errors++; updateProgress(); });
