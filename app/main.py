@@ -4331,6 +4331,7 @@ _bm_bulk_loc68_cache:     tuple[float, list] | None = None  # (timestamp, GR row
 _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC47 = CDMX (TVs ICB/ICC)
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
 _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
+_bm_prev_bulk_sku_set: set = set()  # SKUs (clave BM normalizada) del bulk anterior — para detectar desapariciones
 # Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
 _bm_bulk_raw_sample: dict | None = None  # primer row crudo de la última llamada bulk
 
@@ -4729,6 +4730,7 @@ async def _prewarm_caches(user_id: str = None):
                         await asyncio.sleep(3)
                         _updated = list(_act)
                         _n_ok = 0
+                        _n_evict = 0
                         for _i, _ap in enumerate(_act):
                             _asku = _ap.get("sku", "")
                             if not _asku:
@@ -4736,27 +4738,36 @@ async def _prewarm_caches(user_id: str = None):
                             try:
                                 await _wh_phase(_asku, _track_progress=False)
                                 _abk = normalize_to_bm_sku(_asku)
-                                _ae = _bm_stock_cache.get(_abk)
-                                if _ae and _ae[0] > 0 and _ae[1].get("_wh_fetched"):
-                                    _pu = dict(_ap)
-                                    _pu["_bm_mty"]      = _ae[1].get("mty", 0)
-                                    _pu["_bm_cdmx"]     = _ae[1].get("cdmx", 0)
-                                    _pu["_bm_tj"]       = _ae[1].get("tj", 0)
-                                    _pu["_bm_wh_fetched"] = True
-                                    _updated[_i] = _pu
-                                    _n_ok += 1
+                                _ae  = _bm_stock_cache.get(_abk)
+                                if _ae:
+                                    _entry = _ae[1]
+                                    _avail = _entry.get("avail_total", 0)
+                                    _ver   = _entry.get("_v", False)
+                                    if _ver and _avail > 0:
+                                        # Per-SKU confirmó stock — actualizar ítem con avail real.
+                                        _pu = dict(_ap)
+                                        _pu["_bm_avail"]    = _avail
+                                        _pu["_bm_reserved"] = _entry.get("reserved_total", 0)
+                                        _pu["_bm_mty"]      = _entry.get("mty", 0)
+                                        _pu["_bm_cdmx"]     = _entry.get("cdmx", 0)
+                                        _pu["_bm_tj"]       = _entry.get("tj", 0)
+                                        _updated[_i] = _pu
+                                        _n_ok += 1
+                                    elif _ver and _avail == 0:
+                                        # Per-SKU confirmó 0 en LOC47+68 — evictar de Activar.
+                                        _updated[_i] = None
+                                        _n_evict += 1
+                                    # else: BM falló (_v=False) — conservar valor del bulk.
                             except Exception:
                                 pass
                             await asyncio.sleep(1)
-                        # Actualizar snapshot en memoria y en DB con datos de almacén reales.
-                        # CRÍTICO: filtrar _updated por IDs del snapshot ACTUAL — un prewarm
-                        # más reciente o clear-bm-sku puede haber removido items mientras
-                        # este task corría. Sin este filtro, _updated restauraría esos items.
+                        # Actualizar snapshot: filtrar None (evictados) y limitar a IDs actuales.
+                        # CRÍTICO: _cur_ids filtra ítems removidos por un prewarm más reciente.
                         _cur = _stock_issues_cache.get(_key)
                         if _cur:
                             _cur_ts, _cur_data = _cur
                             _cur_ids = {p.get("id") for p in _cur_data.get("activate", [])}
-                            _safe_updated = [p for p in _updated if p.get("id") in _cur_ids]
+                            _safe_updated = [p for p in _updated if p is not None and p.get("id") in _cur_ids]
                             _new_data = dict(_cur_data)
                             _new_data["activate"] = _safe_updated
                             _new_data["activate_count"] = len(_safe_updated)
@@ -4766,7 +4777,8 @@ async def _prewarm_caches(user_id: str = None):
                             except Exception:
                                 pass
                         _wh_logger.info(
-                            f"[ACTIVATE-WH] {_n_ok}/{len(_act)} SKUs con desglose MTY/CDMX/TJ actualizado"
+                            f"[ACTIVATE-WH] {_n_ok}/{len(_act)} confirmados con stock, "
+                            f"{_n_evict} evictados (BM per-SKU confirmó 0 en LOC47+68)"
                         )
 
                     asyncio.create_task(_fetch_activate_wh())
@@ -5467,6 +5479,43 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     _wh_updated += 1
                 logger.info(f"[BM-WH] Desglose MTY/CDMX actualizado para {_wh_updated} SKUs desde LOC47/LOC68")
 
+            # ── Reconciliación bulk-a-bulk: SKUs que desaparecieron del ciclo anterior ────────────
+            # Compara el bulk actual vs el anterior para detectar SKUs que tenían stock y ya no
+            # aparecen. Esos se agregan a _bulk_miss_set para que el retry per-SKU los verifique
+            # y los actualice a 0 (nunca se borran del sistema — solo cambia la cantidad).
+            global _bm_prev_bulk_sku_set
+            _this_bulk_sku_set: set = set()
+            for _recon_row in (_bulk_gr_rows or []) + (_bulk_all_rows or []):
+                _recon_sk = normalize_to_bm_sku((_recon_row.get("SKU") or "").upper().strip())
+                if _recon_sk:
+                    _this_bulk_sku_set.add(_recon_sk)
+
+            if _bm_prev_bulk_sku_set and _this_bulk_sku_set:
+                _bm_key_to_ml_sku = {normalize_to_bm_sku(s): s for s in to_fetch if s}
+                _miss_bm_keys     = {normalize_to_bm_sku(s) for s in _bulk_miss_set if s}
+                _disappeared_bm   = (
+                    _bm_prev_bulk_sku_set            # estaba en el bulk anterior
+                    & set(_bm_key_to_ml_sku.keys())  # relevante para nuestros listings ML
+                    - _this_bulk_sku_set             # ya no en el bulk actual
+                    - _miss_bm_keys                  # no ya en la cola de misses
+                )
+                # Solo los que tenían stock previo (>0) — son los más urgentes de verificar.
+                _extra_recon = [
+                    _bm_key_to_ml_sku[_nk]
+                    for _nk in _disappeared_bm
+                    if (_bm_stock_cache.get(_nk, (0.0, {}))[1].get("avail_total") or 0) > 0
+                    and _nk in _bm_key_to_ml_sku
+                ][:30]
+                if _extra_recon:
+                    logger.info(f"[BM-RECON] {len(_extra_recon)} SKUs desaparecieron del bulk "
+                                f"con stock previo — agregando al retry per-SKU para verificar")
+                    for _rml in _extra_recon:
+                        _bulk_miss_set.add(_rml)
+                logger.info(f"[BM-RECON] Bulk diff: prev={len(_bm_prev_bulk_sku_set)}, "
+                            f"actual={len(_this_bulk_sku_set)}, desaparecieron={len(_disappeared_bm)}")
+
+            _bm_prev_bulk_sku_set = _this_bulk_sku_set
+
             # Retry per-SKU para bulk misses CON ts=0.0 (nunca verificados) O CON stale
             # avail_total>0 (tenían stock antes pero ya no están en el bulk → probablemente 0).
             # BM omite SKUs con stock=0 del bulk, así que "no en bulk" + "stale>0" = sospechoso.
@@ -5486,37 +5535,36 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         )
                         await asyncio.sleep(5)
                         _db_updates = []
-                        _db_deletes = []
                         for _msku in miss_skus:
                             await _wh_phase(_msku, _track_progress=False)
                             _bk = normalize_to_bm_sku(_msku)
                             _bm_entry = _bm_stock_cache.get(_bk)
-                            if _bm_entry and _bm_entry[0] > 0:
-                                # BM respondió — guardar en DB (avail=0 o >0)
+                            if _bm_entry:
+                                # Siempre actualizar DB — avail puede ser 0 (BM confirmó sin stock)
+                                # o >0 (tiene stock real). NUNCA borrar: los SKUs persisten en el
+                                # sistema, solo cambia la cantidad. Si BM falló, Fix A en _store_wh
+                                # preservó el valor anterior → guardamos ese valor sin sobrescribir.
                                 _db_updates.append((_bk, _bm_entry[1], _bm_entry[0]))
                             else:
-                                # BM falló o no respondió — borrar entrada stale de DB para
-                                # que el próximo startup no cargue datos viejos (ej: avail=549 stale).
-                                # Al no estar en DB, _load_bm_cache_from_db no lo carga y
-                                # _load_stock_issues_from_db no lo pone en activate.
-                                _db_deletes.append(_bk)
+                                # Edge case: _wh_phase no pudo guardar en cache (raro).
+                                # Actualizar DB a 0 explícito en lugar de borrar el SKU.
+                                _db_updates.append((_bk, {
+                                    "avail_total": 0, "reserved_total": 0, "mty": 0,
+                                    "cdmx": 0, "tj": 0, "total": 0, "no_vendible": 0,
+                                    "_v": False,
+                                }, _time.time()))
                             await asyncio.sleep(1)
                         if _db_updates:
                             try:
                                 await token_store.upsert_bm_stock_batch(_db_updates)
+                                _n_zero = sum(1 for _, _d, _ in _db_updates
+                                              if not (_d.get("avail_total") or 0))
                                 _log_miss.getLogger(__name__).info(
-                                    f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs guardados en DB"
+                                    f"[BM-BULK] Bulk-miss retry: {len(_db_updates)} SKUs actualizados "
+                                    f"({_n_zero} en 0, {len(_db_updates) - _n_zero} con stock)"
                                 )
                             except Exception as _e_db:
                                 _log_miss.getLogger(__name__).warning(f"[BM-BULK] Error upsert DB: {_e_db}")
-                        if _db_deletes:
-                            try:
-                                _n_del = await token_store.delete_bm_stock_skus(_db_deletes)
-                                _log_miss.getLogger(__name__).info(
-                                    f"[BM-BULK] Bulk-miss retry: {_n_del} entradas stale borradas de DB (BM no respondió)"
-                                )
-                            except Exception as _e_del:
-                                _log_miss.getLogger(__name__).warning(f"[BM-BULK] Error delete DB: {_e_del}")
                         _log_miss.getLogger(__name__).info(
                             f"[BM-BULK] Bulk-miss retry completado: {len(miss_skus)} SKUs"
                         )
