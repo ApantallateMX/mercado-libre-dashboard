@@ -4643,7 +4643,9 @@ async def _prewarm_caches(user_id: str = None):
                 oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
-                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress]
+                # _bm_avail_verified_zero: si per-SKU verificó 0 recientemente, no incluir aunque
+                # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
+                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", ""))]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 critical = [
                     p for p in products
@@ -10307,6 +10309,25 @@ async def delete_item_promotion_api(item_id: str, promotion_type: str):
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
     finally:
         await client.close()
+
+
+def _bm_avail_verified_zero(sku: str) -> bool:
+    """True si la última verificación per-SKU (CONCEPTID=1 LOC47+68) confirmó avail=0.
+    Filtra phantom stock del bulk — cuando BM bulk devuelve qty>0 pero el query
+    individual devuelve 0, confiamos en el individual (más preciso).
+    Solo aplica si la verificación tiene menos de 30 min de antigüedad."""
+    if not sku:
+        return False
+    bk = normalize_to_bm_sku(sku)
+    if not bk:
+        return False
+    entry = _bm_stock_cache.get(bk)
+    if not entry:
+        return False
+    entry_ts, entry_data = entry
+    if _time.time() - entry_ts > 1800:
+        return False
+    return bool(entry_data.get("_v")) and (entry_data.get("avail_total") or 0) == 0
 
 
 def _evict_item_from_alerts(uid: str, item_id: str):
