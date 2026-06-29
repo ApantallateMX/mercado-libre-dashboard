@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-28 — FEAT: TV MTY/CDMX background task desacoplado + mejoras BM flow
+
+**Commits:** `b1dd818`
+
+**Contexto:** Análisis exhaustivo del flujo BM reveló que per-location ALL bulks toman ~5s
+en condiciones normales, pero el semáforo `_BM_GLOBAL_SEM(1)` y la acumulación de tasks
+background (_do_bulk_miss_retry + _fetch_activate_wh) pueden causar queues de 9+ minutos
+en producción si se incluyen en el prewarm crítico.
+
+**Solución `_fetch_tv_wh_breakdown()`:**
+- Task module-level lanzado con `asyncio.create_task()` — NO bloquea el prewarm
+- Corre 180s después del prewarm (cuando semáforo está quieto y background tasks terminaron)
+- Fetcha LOC47 ALL + LOC68 ALL con timeout 60s cada uno
+- Actualiza solo SNTV* en `_bm_stock_cache` via mutación in-place (→ result_map se actualiza)
+- Flag `_bm_tv_loc_running` previene instancias concurrentes
+- Solo corre cuando `_need_all=True` (hay TVs en el batch) — sin overhead para cuentas sin TVs
+
+**Mejora de logging:**
+- Post-fetch pass ahora logea cuántos bulk-miss SKUs fueron filtrados (stale guard)
+- Visible en Railway logs para debugging futuro
+
+**Resultado esperado:** TVs muestran MTY=0/CDMX=0 al cargar el tab Stock, y se actualizan
+con valores reales ~3 minutos después (sin afectar la velocidad del prewarm).
+
+---
+
 ## 2026-06-28 — FIX DEFINITIVO: SHIL000026 stale + TVs MTY/CDMX reales
 
 **Commits:** `5db7eb8`
