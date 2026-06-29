@@ -7,6 +7,43 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-29 — FIX: Reconciliación bulk BM — 3 correcciones de arquitectura
+
+**Commit:** `20e15d4`
+
+**Contexto / Problema:**
+SHIL000026 (y potencialmente otros SKUs) persistían en la sección Activar con 545 unidades
+aunque BM per-SKU confirmara 0 en LOC47+68. El ciclo era infinito: bulk retorna 545 →
+snapshot guardado con 545 → verificación per-SKU da 0 → snapshot NO actualizado → siguiente
+prewarm repite.
+
+**3 correcciones en `app/main.py`:**
+
+**1. `_fetch_activate_wh` — condición rota corregida:**
+La condición `if _ae[0] > 0 and _ae[1].get("_wh_fetched")` siempre fallaba porque
+`_wh_phase` guarda `wh_responded=False` (el WH breakdown fue eliminado). Resultado:
+`_updated` nunca se modificaba — la función era un no-op.
+Nuevo comportamiento:
+- `_v=True AND avail>0` → actualiza ítem con avail real
+- `_v=True AND avail=0` → evicta ítem de Activar (marcado None, filtrado al guardar)
+- `_v=False` (BM falló) → conserva valor del bulk sin evictar
+
+**2. `_do_bulk_miss_retry` — delete → update-to-0:**
+Eliminado `_db_deletes` (código muerto — `_bm_entry` nunca es None después de `_wh_phase`).
+SKUs confirmados en 0 ahora siempre se actualizan en DB, nunca se borran del sistema.
+Los SKUs son permanentes en el sistema; solo cambia su cantidad.
+Edge case (cache-miss raro): genera update explícito a 0 en lugar de DELETE.
+
+**3. Reconciliación bulk-a-bulk — `_bm_prev_bulk_sku_set`:**
+Nuevo global `set` que guarda los SKUs normalizados del bulk anterior.
+En cada ciclo compara vs el bulk actual:
+- Detecta SKUs que estaban en el bulk anterior con stock y desaparecieron del actual
+- Los agrega a `_bulk_miss_set` para que el retry per-SKU los verifique
+- Log `[BM-RECON]` muestra el diff (prev vs actual vs desaparecidos)
+Garantiza que si BM deja de reportar un SKU, nuestro sistema lo actualiza a 0 automáticamente.
+
+---
+
 ## 2026-06-29 — FIX: Evicción inmediata de alertas Stock tras acción de usuario
 
 **Commit:** `0947296`
