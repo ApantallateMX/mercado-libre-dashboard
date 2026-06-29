@@ -7,6 +7,27 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-29 — FIX: Evicción inmediata de alertas Stock tras acción de usuario
+
+**Commit:** `0947296`
+
+**Problema:** Al presionar "Qty 0" en cualquier alerta (Riesgo Sobreventa, Reabastecer,
+Activar, Stock Crítico), el item permanecía visible en la lista hasta el próximo prewarm
+porque `PUT /api/items/{item_id}/stock` no tocaba `_stock_issues_cache`.
+
+**Solución — `_evict_item_from_alerts(uid, item_id)`:**
+- Función nueva, síncrona, llamada justo antes del `return {"ok": True}` en `update_item_stock_api`
+- Busca todas las keys de `_stock_issues_cache` con prefix `stock_issues:{uid}:` (independiente del threshold)
+- Filtra el item de las 8 secciones: `oversell_risk`, `restock`, `activate`, `critical`, `full_no_stock`, `imbalanced`, `stagnant`, `price_risk`
+- Recalcula todos los contadores derivados (risk_count, activate_count, etc.)
+- Solo toca el cache del usuario afectado — otros usuarios no se ven afectados
+- Log `[ALERTS-EVICT]` en Railway confirma la operación
+
+**Resultado:** Item desaparece de la alerta en el momento en que el botón responde.
+Si reaparece, es porque el prewarm encontró que el problema persiste con datos frescos de BM.
+
+---
+
 ## 2026-06-28 — FEAT: TV MTY/CDMX background task desacoplado + mejoras BM flow
 
 **Commits:** `b1dd818`
