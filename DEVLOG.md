@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-29 — FIX: Filtrar phantom stock BM en Activar con verificación per-SKU
+
+**Commits:** `504eef9`, `1721215`
+
+**Problema raíz confirmado:**
+`SHIL000026` aparecía en Activar con 549 unidades pese a que BM per-SKU confirma 0.
+BM bulk (SEARCH="") retorna 549 para SHIL000026 en LOC47+68 — bug server-side de BM.
+BM per-SKU (SEARCH="SHIL000026") retorna 0 — este valor es el correcto.
+
+**`_bm_avail_verified_zero(sku)` — nueva función (commit `1721215`):**
+- Busca en `_bm_stock_cache` si hay entry reciente (<30 min) con `_v=True` y `avail_total=0`
+- `_v=True` significa BM respondió con datos reales (no timeout ni falla)
+- Si retorna True: el SKU fue verificado genuinamente en 0 por per-SKU
+- Agregado como filtro al construir la lista Activar → SKU con `_bm_avail_verified_zero=True` nunca entra
+
+**Flujo de corrección en producción:**
+1. Primer prewarm: SHIL000026 entra a Activar (bulk=549)
+2. `_fetch_activate_wh` corre ~3s después → per-SKU confirma 0 → `_v=True, avail=0` en cache → evicta del snapshot
+3. Segundo prewarm: `_bm_avail_verified_zero("SHIL000026")=True` → nunca entra a Activar
+
+**Botón Ignorar (commit `504eef9`) — NOTA:**
+Implementado pero rechazado por el usuario como "parche". El fix real es `_bm_avail_verified_zero`.
+El botón y endpoint `/api/items/{item_id}/suppress-activate` quedan en código pero no son la solución.
+
+---
+
 ## 2026-06-29 — FIX: Reconciliación bulk BM — 3 correcciones de arquitectura
 
 **Commit:** `20e15d4`
