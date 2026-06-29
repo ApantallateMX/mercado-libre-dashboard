@@ -4330,6 +4330,7 @@ _bm_bulk_loc47_cache:     tuple[float, list] | None = None  # (timestamp, GR row
 _bm_bulk_loc68_cache:     tuple[float, list] | None = None  # (timestamp, GR rows)  solo LOC68 = MTY
 _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC47 = CDMX (TVs ICB/ICC)
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
+_bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
 # Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
 _bm_bulk_raw_sample: dict | None = None  # primer row crudo de la última llamada bulk
 
@@ -4823,6 +4824,125 @@ async def _prewarm_caches(user_id: str = None):
             _queued_uid = _prewarm_queued_uid
             _prewarm_queued_uid = None
             asyncio.create_task(_prewarm_caches(user_id=_queued_uid))
+
+
+async def _fetch_tv_wh_breakdown():
+    """Background task: fetch ALL-condition per-location bulks para desglose MTY/CDMX de TVs (SNTV*).
+
+    Diseño:
+    - Corre 180s DESPUÉS del prewarm — cuando _do_bulk_miss_retry (~50s) y _fetch_activate_wh (~60s)
+      ya terminaron y el semáforo _BM_GLOBAL_SEM está quieto.
+    - NO bloquea el prewarm. Lanzado con asyncio.create_task().
+    - Solo actualiza entradas SNTV* en _bm_stock_cache (mutación in-place → result_map también se actualiza).
+    - Flag _bm_tv_loc_running previene instancias concurrentes.
+    """
+    global _bm_tv_loc_running, _bm_bulk_loc47_all_cache, _bm_bulk_loc68_all_cache
+    import logging as _tvl
+    _tvlog = _tvl.getLogger(__name__)
+
+    if _bm_tv_loc_running:
+        _tvlog.info("[BM-TV-WH] Task ya corriendo — skip")
+        return
+    _bm_tv_loc_running = True
+    try:
+        await asyncio.sleep(180)  # ceder espacio a bulk-miss retry + fetch_activate_wh
+
+        from app.services.binmanager_client import get_shared_bm as _gsbm
+        _tv_bm = await _gsbm()
+        _TV_COND = "GRA,GRB,GRC,ICB,ICC,NEW"
+        _ttl = 900
+        _now = _time.time()
+
+        # ── LOC47 ALL ───────────────────────────────────────────────────────
+        _r47 = None
+        if _bm_bulk_loc47_all_cache and (_now - _bm_bulk_loc47_all_cache[0]) < _ttl:
+            _r47 = _bm_bulk_loc47_all_cache[1]
+            _tvlog.info(f"[BM-TV-WH] LOC47-ALL cache ({len(_r47)} rows)")
+        else:
+            try:
+                _f47 = await asyncio.wait_for(
+                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="47"), timeout=60.0)
+                if _f47:
+                    _bm_bulk_loc47_all_cache = (_time.time(), _slim_bulk_rows(_f47))
+                    _r47 = _f47
+                    _tvlog.info(f"[BM-TV-WH] LOC47-ALL fetch OK: {len(_f47)} filas")
+                elif _bm_bulk_loc47_all_cache:
+                    _r47 = _bm_bulk_loc47_all_cache[1]
+            except Exception as _e47:
+                _tvlog.warning(f"[BM-TV-WH] LOC47-ALL error: {_e47}")
+                if _bm_bulk_loc47_all_cache:
+                    _r47 = _bm_bulk_loc47_all_cache[1]
+
+        # ── LOC68 ALL ───────────────────────────────────────────────────────
+        _r68 = None
+        if _bm_bulk_loc68_all_cache and (_now - _bm_bulk_loc68_all_cache[0]) < _ttl:
+            _r68 = _bm_bulk_loc68_all_cache[1]
+            _tvlog.info(f"[BM-TV-WH] LOC68-ALL cache ({len(_r68)} rows)")
+        else:
+            try:
+                _f68 = await asyncio.wait_for(
+                    _tv_bm.get_bulk_stock(conditions=_TV_COND, location_id="68"), timeout=60.0)
+                if _f68:
+                    _bm_bulk_loc68_all_cache = (_time.time(), _slim_bulk_rows(_f68))
+                    _r68 = _f68
+                    _tvlog.info(f"[BM-TV-WH] LOC68-ALL fetch OK: {len(_f68)} filas")
+                elif _bm_bulk_loc68_all_cache:
+                    _r68 = _bm_bulk_loc68_all_cache[1]
+            except Exception as _e68:
+                _tvlog.warning(f"[BM-TV-WH] LOC68-ALL error: {_e68}")
+                if _bm_bulk_loc68_all_cache:
+                    _r68 = _bm_bulk_loc68_all_cache[1]
+
+        if not _r47 and not _r68:
+            _tvlog.warning("[BM-TV-WH] Ambos bulks fallaron — sin actualización TV")
+            return
+
+        # Construir lookups
+        def _tv_lkp_build(rows):
+            ex, by = {}, {}
+            for _row in (rows or []):
+                _sk = (_row.get("SKU") or "").upper().strip()
+                if _sk:
+                    ex[_sk] = _row
+                    by.setdefault(_extract_base_sku(_sk), []).append(_row)
+            return ex, by
+
+        def _tv_lkp(ex, by, key):
+            _rr = [ex[key]] if key in ex else by.get(key, [])
+            if not _rr:
+                return 0
+            _av = sum(int(v.get("AvailableQTY") or 0) for v in _rr)
+            if _av == 0 and all(v.get("AvailableQTY") is None for v in _rr):
+                _av = sum(int(v.get("TotalQty") or 0) for v in _rr)
+            return _av
+
+        _ex47, _by47 = _tv_lkp_build(_r47 or [])
+        _ex68, _by68 = _tv_lkp_build(_r68 or [])
+
+        _tv_n = 0
+        for _ck, (_cts, _cd) in list(_bm_stock_cache.items()):
+            if not _ck.upper().startswith("SNTV") or _cts == 0.0:
+                continue  # solo SNTV* verificadas
+            _cdmx = _tv_lkp(_ex47, _by47, _ck.upper())
+            _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
+            _avt  = _cd.get("avail_total", 0) or 0
+            _lsum = _cdmx + _mty
+            if _lsum > _avt > 0:
+                _sc   = _avt / _lsum
+                _mty  = round(_mty * _sc)
+                _cdmx = _avt - _mty
+            _cd["cdmx"] = _cdmx
+            _cd["mty"]  = _mty
+            _cd["_wh_fetched"] = True
+            _tv_n += 1
+
+        _tvlog.info(f"[BM-TV-WH] MTY/CDMX actualizado para {_tv_n} TVs (SNTV*)")
+
+    except Exception as _tv_err:
+        import logging as _tvl2
+        _tvl2.getLogger(__name__).error(f"[BM-TV-WH] Error inesperado: {_tv_err}")
+    finally:
+        _bm_tv_loc_running = False
 
 
 async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool = False) -> dict:
@@ -5402,6 +5522,13 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                         )
                     asyncio.create_task(_do_bulk_miss_retry())
 
+            # Lanzar desglose MTY/CDMX para TVs (SNTV*) como background task desacoplado.
+            # Corre 180s después para no competir con _do_bulk_miss_retry y _fetch_activate_wh.
+            # Solo si hay SKUs TV en este batch y no hay ya una instancia corriendo.
+            if _need_all and not _bm_tv_loc_running:
+                asyncio.create_task(_fetch_tv_wh_breakdown())
+                logger.info("[BM-TV-WH] Task MTY/CDMX TVs lanzado (corre en 180s)")
+
         if not _used_bulk:
             # Fix B3: último recurso — servir desde _bm_stock_cache per-SKU aunque esté expirado.
             # Cuando ambos bulk fallan (stale también ausente), mejor datos viejos que result_map vacío.
@@ -5453,16 +5580,20 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
     # de SKUs que el bulk no encontró (ej: SHIL000026 con 545 stale). El retry per-SKU
     # los corregirá. Sin esta exclusión, el dato stale reaparece en result_map aunque
     # el bulk confirmó que no están en LOC47+68.
+    _pf_miss_filtered = 0
     for p in products:
         sku = p.get(sku_key, "")
         if not sku or sku in result_map:
             continue
         if sku in _bulk_miss_set:
+            _pf_miss_filtered += 1
             continue  # bulk miss: esperar al retry per-SKU, no agregar stale data
         bm_key = normalize_to_bm_sku(sku)
         cached = _bm_stock_cache.get(bm_key)
         if cached and _cache_is_valid(cached):
             result_map[sku] = cached[1]
+    if _pf_miss_filtered:
+        logger.info(f"[BM-POSTFETCH] {_pf_miss_filtered} bulk-miss SKUs filtrados (stale guard activo)")
     # Lo mismo para variaciones
     for p in products:
         if not p.get("has_variations"):
