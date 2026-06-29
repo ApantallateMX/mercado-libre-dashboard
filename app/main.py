@@ -5168,53 +5168,6 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                     if _bm_bulk_loc68_cache:
                         _bulk_loc68_rows = _bm_bulk_loc68_cache[1]
 
-        # ── ALL bulk por ubicación: LOC47 y LOC68 con ICB/ICC para TVs (SNTV*) ──
-        # BM specialist confirmó: LOC47-ALL ~1.1s, LOC68-ALL ~3.8s. Perfectamente asumible en prewarm.
-        # Los 9 minutos del incidente anterior fueron por semáforo acumulado, NO por el endpoint.
-        global _bm_bulk_loc47_all_cache, _bm_bulk_loc68_all_cache
-        _bulk_loc47_all_rows = None
-        _bulk_loc68_all_rows = None
-        if _need_all and _bulk_gr_rows is not None and not _bm_is_down_now:
-            _loc_all_ttl = 900
-            if _bm_bulk_loc47_all_cache and (_time.time() - _bm_bulk_loc47_all_cache[0]) < _loc_all_ttl:
-                _bulk_loc47_all_rows = _bm_bulk_loc47_all_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando LOC47-ALL (CDMX TVs) cache ({len(_bulk_loc47_all_rows)} rows)")
-            else:
-                try:
-                    _fresh_l47a = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="47"),
-                        timeout=60.0,
-                    )
-                    if _fresh_l47a:
-                        _bm_bulk_loc47_all_cache = (_time.time(), _slim_bulk_rows(_fresh_l47a))
-                        _bulk_loc47_all_rows = _fresh_l47a
-                        logger.info(f"[BM-CACHE] LOC47-ALL (CDMX TVs) bulk OK: {len(_fresh_l47a)} filas")
-                    elif _bm_bulk_loc47_all_cache:
-                        _bulk_loc47_all_rows = _bm_bulk_loc47_all_cache[1]
-                except Exception as _le47a:
-                    logger.warning(f"[BM-CACHE] LOC47-ALL bulk error: {_le47a}")
-                    if _bm_bulk_loc47_all_cache:
-                        _bulk_loc47_all_rows = _bm_bulk_loc47_all_cache[1]
-            if _bm_bulk_loc68_all_cache and (_time.time() - _bm_bulk_loc68_all_cache[0]) < _loc_all_ttl:
-                _bulk_loc68_all_rows = _bm_bulk_loc68_all_cache[1]
-                logger.info(f"[BM-CACHE] Reutilizando LOC68-ALL (MTY TVs) cache ({len(_bulk_loc68_all_rows)} rows)")
-            else:
-                try:
-                    _fresh_l68a = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="68"),
-                        timeout=60.0,
-                    )
-                    if _fresh_l68a:
-                        _bm_bulk_loc68_all_cache = (_time.time(), _slim_bulk_rows(_fresh_l68a))
-                        _bulk_loc68_all_rows = _fresh_l68a
-                        logger.info(f"[BM-CACHE] LOC68-ALL (MTY TVs) bulk OK: {len(_fresh_l68a)} filas")
-                    elif _bm_bulk_loc68_all_cache:
-                        _bulk_loc68_all_rows = _bm_bulk_loc68_all_cache[1]
-                except Exception as _le68a:
-                    logger.warning(f"[BM-CACHE] LOC68-ALL bulk error: {_le68a}")
-                    if _bm_bulk_loc68_all_cache:
-                        _bulk_loc68_all_rows = _bm_bulk_loc68_all_cache[1]
-
         # ── ALL bulk (solo si hay SKUs SNTV-ICB/ICC/bundle) ──────────────────
         _bulk_all_rows = None
         if _need_all:
@@ -5366,46 +5319,27 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             _used_bulk = True
 
             # ── Segunda pasada: MTY/CDMX desde bulks por ubicación ────────────
-            # LOC47=CDMX, LOC68=MTY. Para no-TVs usa bulks GR. Para TVs (SNTV*) usa bulks ALL
-            # si están disponibles (BM specialist: ~1.1s + ~3.8s, asumible en prewarm).
-            _any_loc_rows = (_bulk_loc47_rows is not None or _bulk_loc68_rows is not None
-                             or _bulk_loc47_all_rows is not None or _bulk_loc68_all_rows is not None)
-            if _any_loc_rows:
-                _loc_exact47,     _loc_base47     = _build_lookup(_bulk_loc47_rows     or [])
-                _loc_exact68,     _loc_base68     = _build_lookup(_bulk_loc68_rows     or [])
-                _loc_exact47_all, _loc_base47_all = _build_lookup(_bulk_loc47_all_rows or [])
-                _loc_exact68_all, _loc_base68_all = _build_lookup(_bulk_loc68_all_rows or [])
+            # LOC47=CDMX, LOC68=MTY. Usa GR per-location para todos los SKUs.
+            if _bulk_loc47_rows is not None or _bulk_loc68_rows is not None:
+                _loc_exact47, _loc_base47 = _build_lookup(_bulk_loc47_rows or [])
+                _loc_exact68, _loc_base68 = _build_lookup(_bulk_loc68_rows or [])
                 _wh_updated = 0
                 for _wh_sku in to_fetch:
                     _wh_bk = normalize_to_bm_sku(_wh_sku)
                     _existing = _bm_stock_cache.get(_wh_bk)
                     if not _existing or not _existing[1].get("_v"):
                         continue  # solo actualizar entradas verificadas
-                    _is_tv = _bm_conditions_for_sku(_wh_sku) == _BM_COND_ALL
-                    # TVs: usar ALL per-location si disponible, sino GR (best effort)
-                    if _is_tv and _bulk_loc47_all_rows is not None:
-                        _cdmx_avail, _ = _lookup(_loc_exact47_all, _loc_base47_all, _wh_bk)
-                    else:
-                        _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
-                    if _is_tv and _bulk_loc68_all_rows is not None:
-                        _mty_avail, _ = _lookup(_loc_exact68_all, _loc_base68_all, _wh_bk)
-                    else:
-                        _mty_avail, _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
+                    _cdmx_avail, _ = _lookup(_loc_exact47, _loc_base47, _wh_bk)
+                    _mty_avail,  _ = _lookup(_loc_exact68, _loc_base68, _wh_bk)
                     _wh_ts, _wh_data = _existing
                     # Mutar _wh_data IN PLACE para que result_map (mismo objeto) también se actualice.
                     # Si se crea dict nuevo, result_map queda desactualizado y el template muestra "—".
                     _avail_total = _wh_data.get("avail_total", 0) or 0
                     _loc_sum = _mty_avail + _cdmx_avail
                     if _loc_sum > _avail_total and _avail_total > 0:
-                        # Per-location suma más que combined: escalar proporcionalmente
                         _scale = _avail_total / _loc_sum
                         _mty_avail  = round(_mty_avail  * _scale)
                         _cdmx_avail = _avail_total - _mty_avail
-                    elif _loc_sum < _avail_total and not _is_tv:
-                        # Para no-TVs: si per-location suma MENOS que combined, el combined
-                        # puede incluir ubicaciones no vendibles (LOC62/LOC69/etc.).
-                        # Corregir avail_total al valor real (LOC47+LOC68 son las únicas vendibles).
-                        _wh_data["avail_total"] = _loc_sum
                     _wh_data["cdmx"] = _cdmx_avail
                     _wh_data["mty"]  = _mty_avail
                     _wh_data["_wh_fetched"] = True
