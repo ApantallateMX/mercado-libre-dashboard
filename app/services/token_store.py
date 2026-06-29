@@ -1368,6 +1368,16 @@ async def get_all_sync_alerts() -> list:
         return [dict(r) for r in rows]
 
 
+async def delete_sync_alert(user_id: str, item_id: str):
+    """Elimina un item específico de sync_alerts para user_id."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM sync_alerts WHERE user_id = ? AND item_id = ?",
+            (str(user_id), str(item_id))
+        )
+        await db.commit()
+
+
 async def save_sync_status(user_id: str, alerts_count: int, result: str = "ok"):
     """Actualiza el estado del último sync para user_id."""
     async with aiosqlite.connect(DATABASE_PATH) as db:

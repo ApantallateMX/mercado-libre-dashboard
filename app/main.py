@@ -10334,6 +10334,8 @@ async def update_item_stock_api(item_id: str, request: Request):
         # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
         asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
         _evict_item_from_alerts(uid, item_id)
+        if quantity == 0:
+            asyncio.create_task(token_store.delete_sync_alert(uid, item_id))
         return {"ok": True, "quantity": quantity}
     except ValueError as e:
         # Item tiene variaciones — rechazar con mensaje claro
@@ -12330,6 +12332,11 @@ async def get_sync_alerts_partial(request: Request):
         if (done === ids.length && btn && blocked === 0) {{
           btn.textContent = 'Completado \u2713';
           btn.className = btn.className.replace('bg-red-100 hover:bg-red-200 text-red-700', 'bg-green-100 text-green-700');
+          // Limpiar el contenedor completo \u2014 todos los items ya est\u00e1n en 0
+          setTimeout(function() {{
+            var container = document.getElementById('sync-alerts-container');
+            if (container) container.innerHTML = '';
+          }}, 1200);
         }}
       }});
     }});
@@ -12349,7 +12356,11 @@ window.zeroAlertItem = function(itemId, btn) {{
       btn.textContent = '✓ 0';
       btn.className = btn.className.replace(/bg-red-\d00/g, 'bg-green-600').replace(/hover:bg-red-\d00/g, '').replace(/active:bg-red-\d00/g, '');
       var row = btn.closest('.alert-row');
-      if (row) row.style.opacity = '0.4';
+      if (row) {{
+        row.style.transition = 'opacity 0.4s';
+        row.style.opacity = '0';
+        setTimeout(function() {{ if (row.parentNode) row.parentNode.removeChild(row); }}, 450);
+      }}
     }} else if (res.status === 503 && res.data && res.data.bm_down) {{
       btn.textContent = 'BM caído';
       btn.title = res.data.detail || 'BinManager no disponible';
