@@ -7,6 +7,38 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-28 — FIX DEFINITIVO: SHIL000026 stale + TVs MTY/CDMX reales
+
+**Commits:** `5db7eb8`
+
+**Investigación previa:** BinManager specialist estudió el API de A a Z con queries reales.
+Findings críticos:
+- LOCATIONID comma-separated (`"47,68"`) sí filtra correctamente en el bulk API
+- SHIL000026 **no aparece** en el bulk con LOCATIONID="47,68" (genuinamente 0 en LOC47+68)
+- El 545 en el dashboard era dato stale en memoria, NO un bug de BM
+- Per-location ALL bulk (LOC47: ~1.1s, LOC68: ~3.8s) — completamente asumible en prewarm
+- Los 9 min del incidente anterior fueron por semáforo acumulado, no por el endpoint
+
+**Root cause SHIL000026:** El `post-fetch pass` (rellena result_map para SKUs deduplicados)
+no excluía los bulk-miss SKUs. Aunque el bulk confirmaba que SHIL000026 no existe en
+LOC47+68, el post-fetch pass agregaba su dato stale (545) al result_map desde `_bm_stock_cache`.
+
+**Fix aplicados:**
+
+1. **Post-fetch pass excluye bulk-miss SKUs** — `if sku in _bulk_miss_set: continue` en ambos
+   loops del post-fetch pass. `_bulk_miss_set` se inicializa antes del bloque bulk para que
+   esté disponible siempre (no solo cuando `to_fetch > 30`).
+
+2. **TVs MTY/CDMX reales** — se agregan `_bm_bulk_loc47_all_cache` y `_bm_bulk_loc68_all_cache`
+   con bulk ALL (GR+ICB+ICC) por ubicación. La segunda pasada usa estos para SNTV* y GR
+   para no-TVs. TVs ya no muestran 0 por falta de ICB/ICC en el bulk GR por ubicación.
+
+3. **avail_total corregido para no-TVs** — si la suma per-location (LOC47+LOC68) es menor que
+   el combined bulk, se actualiza avail_total al valor real. LOC47+LOC68 son las únicas
+   ubicaciones vendibles en ML; el combined puede incluir LOC62/LOC69/etc.
+
+---
+
 ## 2026-06-25 — FIX: SHIL000026 persistente en Activar — root cause real encontrado y eliminado
 
 **Commits:** `0818eac` `029fae2` `9b149de` `1d42c3f` `38d2c92` `39278c5`
