@@ -5131,7 +5131,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             else:
                 try:
                     _fresh_l47 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="47"),
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="47"),
                         timeout=270.0,
                     )
                     if _fresh_l47:
@@ -5150,7 +5150,7 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             else:
                 try:
                     _fresh_l68 = await asyncio.wait_for(
-                        bm_cli.get_bulk_stock(conditions=_BM_COND_ALL, location_id="68"),
+                        bm_cli.get_bulk_stock(conditions=_BM_COND_GR, location_id="68"),
                         timeout=270.0,
                     )
                     if _fresh_l68:
