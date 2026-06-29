@@ -1378,6 +1378,44 @@ async def delete_sync_alert(user_id: str, item_id: str):
         await db.commit()
 
 
+async def get_activate_suppressed(user_id: str) -> set:
+    """Retorna set de item_ids suprimidos de Activar para este usuario."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS activate_suppressed
+            (user_id TEXT, item_id TEXT, PRIMARY KEY (user_id, item_id))
+        """)
+        cursor = await db.execute(
+            "SELECT item_id FROM activate_suppressed WHERE user_id = ?", (str(user_id),)
+        )
+        rows = await cursor.fetchall()
+        return {r[0] for r in rows}
+
+
+async def add_activate_suppressed(user_id: str, item_id: str):
+    """Suprime permanentemente un item de la sección Activar para este usuario."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS activate_suppressed
+            (user_id TEXT, item_id TEXT, PRIMARY KEY (user_id, item_id))
+        """)
+        await db.execute(
+            "INSERT OR IGNORE INTO activate_suppressed (user_id, item_id) VALUES (?, ?)",
+            (str(user_id), str(item_id))
+        )
+        await db.commit()
+
+
+async def remove_activate_suppressed(user_id: str, item_id: str):
+    """Restaura un item suprimido para que vuelva a aparecer en Activar."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "DELETE FROM activate_suppressed WHERE user_id = ? AND item_id = ?",
+            (str(user_id), str(item_id))
+        )
+        await db.commit()
+
+
 async def save_sync_status(user_id: str, alerts_count: int, result: str = "ok"):
     """Actualiza el estado del último sync para user_id."""
     async with aiosqlite.connect(DATABASE_PATH) as db:

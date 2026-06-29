@@ -4332,6 +4332,7 @@ _bm_bulk_loc47_all_cache: tuple[float, list] | None = None  # (timestamp, ALL ro
 _bm_bulk_loc68_all_cache: tuple[float, list] | None = None  # (timestamp, ALL rows) solo LOC68 = MTY (TVs ICB/ICC)
 _bm_tv_loc_running: bool = False  # True mientras _fetch_tv_wh_breakdown corre (evita instancias concurrentes)
 _bm_prev_bulk_sku_set: set = set()  # SKUs (clave BM normalizada) del bulk anterior — para detectar desapariciones
+_activate_suppressed: dict = {}     # {user_id_str: set(item_id_str)} — ítems ocultados de Activar, persistido en DB
 # Muestra de campos RAW del bulk (antes de slimming) — para diagnóstico de campos disponibles.
 _bm_bulk_raw_sample: dict | None = None  # primer row crudo de la última llamada bulk
 
@@ -4628,6 +4629,11 @@ async def _prewarm_caches(user_id: str = None):
                 # excluirlos de alertas hasta que ML confirme el qty nuevo en el próximo sync.
                 # Si ML volvió a 0 después de 60 min → el item re-aparece en alertas automáticamente.
                 _synced_ids = await token_store.get_recently_synced_ids(str(client.user_id), ttl_seconds=3600)
+                # Cargar ítems suprimidos de Activar (persistidos en DB por el usuario).
+                _uid_str = str(client.user_id)
+                if _uid_str not in _activate_suppressed:
+                    _activate_suppressed[_uid_str] = await token_store.get_activate_suppressed(_uid_str)
+                _uid_suppress = _activate_suppressed.get(_uid_str, set())
 
                 restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
@@ -4637,7 +4643,7 @@ async def _prewarm_caches(user_id: str = None):
                 oversell_risk = [p for p in products if p.get("available_quantity", 0) > 0 and "_bm_avail" in p and p.get("_bm_avail", 0) == 0 and (p.get("_bm_avail_raw") or 0) == 0 and not p.get("is_full") and p.get("sku") and p.get("id") not in _synced_ids]
                 oversell_risk.sort(key=lambda x: x.get("available_quantity", 0), reverse=True)
                 restock_ids = {p["id"] for p in restock}
-                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids]
+                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 critical = [
                     p for p in products
@@ -10350,6 +10356,28 @@ def _evict_item_from_alerts(uid: str, item_id: str):
             )
             _stock_issues_cache[key] = (ts, data)
             logger.info(f"[ALERTS-EVICT] item {item_id} eliminado de alertas uid={uid}")
+
+
+@app.post("/api/items/{item_id}/suppress-activate")
+async def suppress_activate_item(item_id: str, request: Request):
+    """Oculta permanentemente un item de la sección Activar para este usuario.
+    Persiste en DB — sobrevive deploys y reinicios. No afecta BM ni ML."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        uid = str(client.user_id)
+        await token_store.add_activate_suppressed(uid, str(item_id))
+        if uid not in _activate_suppressed:
+            _activate_suppressed[uid] = set()
+        _activate_suppressed[uid].add(str(item_id))
+        _evict_item_from_alerts(uid, str(item_id))
+        logger.info(f"[ACTIVATE-SUPPRESS] item {item_id} suprimido de Activar uid={uid}")
+        return {"ok": True, "suppressed": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
 
 
 @app.put("/api/items/{item_id}/stock")

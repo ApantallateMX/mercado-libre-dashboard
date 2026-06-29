@@ -887,6 +887,11 @@
                                     class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">
                                 Editar
                             </button>
+                            <button onclick="suppressActivateItem('{{ p.id }}', this)"
+                                    title="Ocultar permanentemente de Activar"
+                                    class="px-1.5 py-1 bg-red-50 text-red-400 rounded hover:bg-red-100 hover:text-red-600 text-xs font-medium transition">
+                                ✕
+                            </button>
                             <span id="act-msg-d-{{ p.id }}" class="text-[10px] ml-1"></span>
                         </div>
                     </td>
@@ -1531,6 +1536,31 @@ function _setRiskMsg(itemId, msg, cls) {
         el.textContent = msg; el.className = cls;
     });
 }
+window.suppressActivateItem = function(itemId, btn) {
+    if (!confirm('¿Ocultar este producto de Activar permanentemente?\n(Puedes restaurarlo desde la base de datos si es necesario)')) return;
+    btn.disabled = true;
+    btn.textContent = '...';
+    fetch('/api/items/' + itemId + '/suppress-activate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true'}
+    })
+    .then(function(r) {
+        if (r.ok) {
+            btn.textContent = '✓';
+            var _tr = btn.closest('tr');
+            if (_tr) {
+                _tr.style.transition = 'opacity 0.4s';
+                _tr.style.opacity = '0';
+                setTimeout(function() { if (_tr.parentNode) _tr.parentNode.removeChild(_tr); }, 450);
+            }
+            setTimeout(function() { _removeStockRows(itemId); }, 500);
+        } else {
+            btn.textContent = '✕';
+            btn.disabled = false;
+        }
+    })
+    .catch(function() { btn.textContent = '✕'; btn.disabled = false; });
+};
 function setStockZero(itemId, btn) {
     btn.disabled = true;
     btn.textContent = '...';
