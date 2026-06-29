@@ -10255,6 +10255,55 @@ async def delete_item_promotion_api(item_id: str, promotion_type: str):
         await client.close()
 
 
+def _evict_item_from_alerts(uid: str, item_id: str):
+    """Elimina un item de _stock_issues_cache tras una escritura de stock.
+    Quirúrgico: toca solo las listas del usuario afectado y recalcula contadores."""
+    prefix = f"stock_issues:{uid}:"
+    keys = [k for k in _stock_issues_cache if k.startswith(prefix)]
+    for key in keys:
+        entry = _stock_issues_cache.get(key)
+        if not entry:
+            continue
+        ts, data = entry
+        changed = False
+        for section in ("oversell_risk", "restock", "activate", "critical",
+                        "full_no_stock", "imbalanced", "stagnant", "price_risk"):
+            lst = data.get(section)
+            if not isinstance(lst, list):
+                continue
+            new_lst = [p for p in lst if str(p.get("id", "")) != str(item_id)]
+            if len(new_lst) != len(lst):
+                data[section] = new_lst
+                changed = True
+        if changed:
+            data["restock_count"] = len(data.get("restock", [])) + len(data.get("activate", []))
+            data["lost_revenue"] = (
+                sum(p.get("revenue", 0) for p in data.get("restock", []))
+                + sum(p.get("price", 0) * min(p.get("_bm_avail", 0), 3) for p in data.get("activate", []))
+            )
+            data["risk_count"] = len(data.get("oversell_risk", []))
+            data["risk_stock"] = sum(p.get("available_quantity", 0) for p in data.get("oversell_risk", []))
+            data["activate_count"] = len(data.get("activate", []))
+            data["activate_stock"] = sum(p.get("_bm_avail", 0) for p in data.get("activate", []))
+            data["critical_count"] = len(data.get("critical", []))
+            data["critical_bm_total"] = sum(p.get("_bm_avail", 0) for p in data.get("critical", []))
+            data["full_no_stock_count"] = len(data.get("full_no_stock", []))
+            data["full_no_stock_bm"] = sum(p.get("_bm_avail", 0) for p in data.get("full_no_stock", []))
+            data["imbalanced_count"] = len(data.get("imbalanced", []))
+            data["imbalanced_gap"] = sum(
+                p.get("available_quantity", 0) - (p.get("_bm_avail") or 0)
+                for p in data.get("imbalanced", [])
+            )
+            data["stagnant_count"] = len(data.get("stagnant", []))
+            data["stagnant_bm"] = sum(p.get("_bm_avail", 0) for p in data.get("stagnant", []))
+            data["price_risk_count"] = len(data.get("price_risk", []))
+            data["price_risk_gap"] = sum(
+                p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in data.get("price_risk", [])
+            )
+            _stock_issues_cache[key] = (ts, data)
+            logger.info(f"[ALERTS-EVICT] item {item_id} eliminado de alertas uid={uid}")
+
+
 @app.put("/api/items/{item_id}/stock")
 async def update_item_stock_api(item_id: str, request: Request):
     """Actualiza el stock de un item SIN variaciones.
@@ -10284,6 +10333,7 @@ async def update_item_stock_api(item_id: str, request: Request):
         asyncio.create_task(token_store.save_item_sync(item_id, uid, quantity))
         # Fase C: si el listing quedó pausado por out_of_stock, reactivarlo
         asyncio.create_task(_reactivate_if_oos_bg(item_id, uid))
+        _evict_item_from_alerts(uid, item_id)
         return {"ok": True, "quantity": quantity}
     except ValueError as e:
         # Item tiene variaciones — rechazar con mensaje claro
