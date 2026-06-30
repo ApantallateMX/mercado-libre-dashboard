@@ -1,3 +1,26 @@
+{% if questions %}
+{% set _q_red = questions | selectattr('urgency', 'equalto', 'red') | list | length %}
+{% set _q_yellow = questions | selectattr('urgency', 'equalto', 'yellow') | list | length %}
+{% if _q_red > 0 or _q_yellow > 0 %}
+<div class="flex items-center gap-3 mb-3 px-3 py-2.5 rounded-lg {% if _q_red > 0 %}bg-red-50 border border-red-200{% else %}bg-yellow-50 border border-yellow-200{% endif %}">
+    {% if _q_red > 0 %}
+    <span class="flex h-2.5 w-2.5 relative flex-shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+    </span>
+    {% else %}
+    <span class="w-2.5 h-2.5 rounded-full bg-yellow-500 flex-shrink-0"></span>
+    {% endif %}
+    <span class="text-sm font-semibold {% if _q_red > 0 %}text-red-700{% else %}text-yellow-700{% endif %}">
+        {% if _q_red > 0 %}{{ _q_red }} pregunta{{ 's' if _q_red > 1 }} urgente{{ 's' if _q_red > 1 }} (más de 12h sin respuesta){% endif %}
+        {% if _q_red > 0 and _q_yellow > 0 %} · {% endif %}
+        {% if _q_yellow > 0 %}<span class="text-yellow-700">{{ _q_yellow }} moderada{{ 's' if _q_yellow > 1 }} (1-12h)</span>{% endif %}
+    </span>
+    <span class="ml-auto text-xs text-gray-400">ML penaliza si tardas más de 24h</span>
+</div>
+{% endif %}
+{% endif %}
+
 <!-- Status Filters -->
 <div class="flex gap-2 mb-4">
     <button onclick="setHealthStatus('questions', 'UNANSWERED')"

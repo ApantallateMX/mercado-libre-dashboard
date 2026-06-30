@@ -6226,6 +6226,16 @@ async def products_inventory_partial(
             products = [p for p in products if p.get("units", 0) <= 2]
         elif preset == "full":
             products = [p for p in products if p.get("is_full")]
+        elif preset == "full_candidates":
+            # Listings que NO están en FULL pero venden bien y tienen stock
+            products = [
+                p for p in products
+                if not p.get("is_full")
+                and p.get("available_quantity", 0) > 0
+                and p.get("units", 0) > 2
+                and p.get("sku")
+            ]
+            products.sort(key=lambda x: x.get("units", 0), reverse=True)
         elif preset == "no_stock":
             products = [p for p in products if p.get("available_quantity", 0) == 0]
         elif preset == "accion":
@@ -6596,6 +6606,11 @@ async def products_low_sellers_partial(request: Request):
 @app.get("/partials/products-full", response_class=HTMLResponse)
 async def products_full_partial(request: Request, stock_filter: str = "all"):
     return await products_inventory_partial(request, preset="full", enrich="full", full_filter=stock_filter)
+
+
+@app.get("/partials/products-full-candidates", response_class=HTMLResponse)
+async def products_full_candidates_partial(request: Request):
+    return await products_inventory_partial(request, preset="full_candidates", enrich="full")
 
 
 @app.get("/partials/products-deals", response_class=HTMLResponse)

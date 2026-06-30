@@ -244,6 +244,7 @@
             ("stock", "Mayor Stock"),
             ("low", "Baja Venta"),
             ("full", "FULL"),
+            ("full_candidates", "🚀 Candidatos FULL"),
             ("no_stock", "Sin Stock"),
         ] %}
         {% for key, label in presets %}
@@ -325,23 +326,23 @@
             <span class="text-amber-600">No Vendible</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="cvr" {{ 'checked' if preset in ('top', 'full', 'accion') }} onchange="toggleColumn('cvr', this.checked)">
+            <input type="checkbox" class="col-toggle rounded" data-col="cvr" {{ 'checked' if preset in ('top', 'full', 'full_candidates', 'accion') }} onchange="toggleColumn('cvr', this.checked)">
             <span>CVR</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="rating" {{ 'checked' if preset in ('top', 'full') }} onchange="toggleColumn('rating', this.checked)">
+            <input type="checkbox" class="col-toggle rounded" data-col="rating" {{ 'checked' if preset in ('top', 'full', 'full_candidates') }} onchange="toggleColumn('rating', this.checked)">
             <span>Rating</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="revenue" {{ 'checked' if preset in ('top', 'stock', 'full') }} onchange="toggleColumn('revenue', this.checked)">
+            <input type="checkbox" class="col-toggle rounded" data-col="revenue" {{ 'checked' if preset in ('top', 'stock', 'full', 'full_candidates') }} onchange="toggleColumn('revenue', this.checked)">
             <span>Revenue</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="cost" {{ 'checked' if preset in ('top', 'stock', 'full') }} onchange="toggleColumn('cost', this.checked)">
+            <input type="checkbox" class="col-toggle rounded" data-col="cost" {{ 'checked' if preset in ('top', 'stock', 'full', 'full_candidates') }} onchange="toggleColumn('cost', this.checked)">
             <span>Costo</span>
         </label>
         <label class="inline-flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" class="col-toggle rounded" data-col="margin" {{ 'checked' if preset in ('top', 'stock', 'full') }} onchange="toggleColumn('margin', this.checked)">
+            <input type="checkbox" class="col-toggle rounded" data-col="margin" {{ 'checked' if preset in ('top', 'stock', 'full', 'full_candidates') }} onchange="toggleColumn('margin', this.checked)">
             <span>Margen</span>
         </label>
         <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
@@ -520,12 +521,12 @@
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">CDMX</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('stock', 'accion') }}" data-col="warehouse">TJ</th>
                 <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs">Ventas {{ alert_days }}d</th>
-                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'full', 'accion') }}" data-col="cvr" title="Tasa de conversión = unidades vendidas 30d / visitas 30d × 100">CVR</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'full', 'full_candidates', 'accion') }}" data-col="cvr" title="Tasa de conversión = unidades vendidas 30d / visitas 30d × 100">CVR</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'full') }}" data-col="rating" title="Rating promedio y número de reseñas">Rating</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="revenue">Revenue</th>
-                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="cost">Costo BM</th>
-                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="margin">Margen</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="dias" title="Días de inventario = BM disponible / (ventas 30d / 30)">Días inv.</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="revenue">Revenue</th>
+                <th class="text-right px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="cost">Costo BM</th>
+                <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="margin">Margen</th>
                     <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs hidden" data-col="price_floor">Precio Piso</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset not in ('top', 'stock', 'full') }}" data-col="retail_ph">Retail PH</th>
                 <th class="text-center px-3 py-3 text-gray-600 font-medium text-xs {{ 'hidden' if preset != 'low' }}" data-col="photos">Fotos</th>
@@ -697,7 +698,7 @@
                 <!-- CVR (Tasa de Conversión) -->
                 {% set _cvr = p.get('_cvr') %}
                 {% set _visits = p.get('_visits_30d', 0) or 0 %}
-                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'full', 'accion') }}" data-col="cvr">
+                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'full', 'full_candidates', 'accion') }}" data-col="cvr">
                     {% if _cvr is not none %}
                     <div class="flex flex-col items-center gap-0.5">
                         <span class="text-xs font-bold px-1.5 py-0.5 rounded
@@ -742,7 +743,7 @@
                 {% set _u30 = p.get('units', 0) %}
                 {% set _bav = p.get('_bm_avail', 0) or 0 %}
                 {% set _dias = (_bav / (_u30 / 30)) | round | int if _u30 > 0 else none %}
-                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="dias">
+                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="dias">
                     {% if _dias is not none %}
                     <span class="text-xs font-semibold px-1.5 py-0.5 rounded
                         {% if _dias <= 7 %}bg-red-100 text-red-700
@@ -759,7 +760,7 @@
                     {% endif %}
                 </td>
                 <!-- Revenue -->
-                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="revenue">
+                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="revenue">
                     {% if p.get('revenue', 0) > 0 %}
                     <span class="text-gray-700 text-xs">${{ "{:,.0f}".format(p.revenue) }}</span>
                     {% else %}
@@ -767,7 +768,7 @@
                     {% endif %}
                 </td>
                 <!-- Costo BM -->
-                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="cost">
+                <td class="px-3 py-2 text-right {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="cost">
                     {% if p.get('_costo_mxn') and p._costo_mxn > 0 %}
                     <div class="flex flex-col items-end">
                         <span class="text-gray-700 text-xs font-semibold">${{ "{:,.0f}".format(p._costo_mxn) }}</span>
@@ -780,7 +781,7 @@
                     {% endif %}
                 </td>
                 <!-- Margen -->
-                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'stock', 'full', 'accion') }}" data-col="margin">
+                <td class="px-3 py-2 text-center {{ 'hidden' if preset not in ('top', 'stock', 'full', 'full_candidates', 'accion') }}" data-col="margin">
                     {% if p.get('_margen_pct') is not none %}
                     <div class="flex flex-col items-center">
                         <span class="inline-block px-2 py-0.5 rounded text-xs font-semibold
@@ -974,7 +975,7 @@
 {% else %}
 <div class="mt-3 text-sm text-gray-500">
     Mostrando {{ products|length }} productos
-    {% if preset == 'top' %}con ventas{% elif preset == 'stock' %}con stock BM{% elif preset == 'low' %}con 0-2 ventas{% elif preset == 'full' %}en Fulfillment{% elif preset == 'no_stock' %}sin stock{% endif %}
+    {% if preset == 'top' %}con ventas{% elif preset == 'stock' %}con stock BM{% elif preset == 'low' %}con 0-2 ventas{% elif preset == 'full' %}en Fulfillment{% elif preset == 'full_candidates' %}candidatos para FULL (ventas >2 en 30d, sin FULL){% elif preset == 'no_stock' %}sin stock{% endif %}
 </div>
 {% endif %}
 {% else %}
@@ -1024,7 +1025,7 @@ function alertGoToPage(pg) {
 function buildInvUrl(overrides) {
     overrides = overrides || {};
     var preset = overrides.preset || _invPreset;
-    var enrich = overrides.enrich || ((['top','stock','full','accion'].indexOf(preset) >= 0) ? 'full' : _invEnrich);
+    var enrich = overrides.enrich || ((['top','stock','full','full_candidates','accion'].indexOf(preset) >= 0) ? 'full' : _invEnrich);
     var params = {
         preset: preset,
         enrich: enrich,
