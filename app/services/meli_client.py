@@ -390,6 +390,13 @@ class MeliClient:
         except Exception:
             return None
 
+    async def get_price_suggestions(self, item_id: str) -> dict | None:
+        """GET /items/{item_id}/price_suggestions — precio sugerido competitivo ML."""
+        try:
+            return await self.get(f"/items/{item_id}/price_suggestions")
+        except Exception:
+            return None
+
     # === Questions ===
 
     async def get_questions(self, status: str = "UNANSWERED", offset: int = 0, limit: int = 50,

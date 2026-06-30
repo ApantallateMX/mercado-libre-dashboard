@@ -4264,6 +4264,7 @@ _seller_catalog: dict = {}     # {uid: {item_id: {title, permalink, price}}}
 _seller_catalog_ts: dict = {}  # {uid: float (last refresh timestamp)}
 _CATALOG_CACHE_TTL = 900       # 15 min before background refresh
 _seller_catalog_refresh_tasks: set = set()  # active background tasks
+_price_comp_cache: dict = {}   # {uid: {"ts": float, "data": dict}} — caché 30 min
 
 async def _refresh_seller_catalog(uid: str, access_token: str, refresh_token: str = ""):
     """Background: fetch all active items for seller uid and populate _seller_catalog."""
@@ -7325,6 +7326,133 @@ async def health_scores():
     _scored = [_calc_score(p) for p in _products if p.get("id")]
     _scored.sort(key=lambda x: x["score"])  # peores primero
     return JSONResponse({"items": _scored[:100], "total": len(_scored)})
+
+
+@app.get("/api/dashboard/cvr-funnel")
+async def dashboard_cvr_funnel():
+    """Funnel CVR: productos con y sin tráfico usando prewarm cache (sin API calls extra)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"})
+    uid = str(client.user_id)
+    await client.close()
+
+    products: list = []
+    for _ck, _cv in _stock_issues_cache.items():
+        if _ck.startswith(f"stock_issues:{uid}:"):
+            products = _cv.get("products") or []
+            if products:
+                break
+
+    with_visits: list = []
+    no_visits: list = []
+    for p in products:
+        if not p.get("id"):
+            continue
+        visits = p.get("_visits_30d", 0) or 0
+        units = p.get("units", 0) or 0
+        item = {
+            "id": p.get("id"),
+            "title": p.get("title", ""),
+            "sku": p.get("sku", ""),
+            "thumbnail": p.get("thumbnail", ""),
+            "permalink": p.get("permalink", ""),
+            "visits": visits,
+            "units_30d": units,
+            "cvr": p.get("_cvr"),
+        }
+        if visits > 0:
+            with_visits.append(item)
+        else:
+            no_visits.append(item)
+
+    with_visits.sort(key=lambda x: x["cvr"] or 0, reverse=True)
+    top15 = with_visits[:15]
+    bottom15 = list(reversed(with_visits[-15:])) if len(with_visits) > 15 else []
+    no_visits.sort(key=lambda x: x["units_30d"], reverse=True)
+
+    total_visits = sum(x["visits"] for x in with_visits)
+    total_units = sum(x["units_30d"] for x in with_visits) + sum(x["units_30d"] for x in no_visits)
+    global_cvr = round(total_units / total_visits * 100, 1) if total_visits > 0 else None
+
+    return JSONResponse({
+        "top": top15,
+        "bottom": bottom15,
+        "no_visits": no_visits[:20],
+        "total_with_visits": len(with_visits),
+        "total_no_visits": len(no_visits),
+        "global_cvr": global_cvr,
+        "total_visits": total_visits,
+        "total_units": total_units,
+    })
+
+
+@app.get("/api/dashboard/price-competition")
+async def dashboard_price_competition():
+    """Precio vs Competencia: precio actual vs sugerido ML para top 20 activos. Caché 30 min."""
+    import time as _t
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session"})
+    uid = str(client.user_id)
+
+    cached = _price_comp_cache.get(uid)
+    if cached and (_t.time() - cached["ts"]) < 1800:
+        await client.close()
+        return JSONResponse(cached["data"])
+
+    products: list = []
+    for _ck, _cv in _stock_issues_cache.items():
+        if _ck.startswith(f"stock_issues:{uid}:"):
+            products = _cv.get("products") or []
+            if products:
+                break
+
+    active = [p for p in products if (p.get("available_quantity", 0) or 0) > 0 and p.get("id")]
+    active.sort(key=lambda x: (x.get("units", 0) or 0), reverse=True)
+    top_items = active[:20]
+
+    async def _check_one(p: dict):
+        try:
+            r = await client.get_price_suggestions(p["id"])
+            if not r or not isinstance(r, dict):
+                return None
+            suggested = None
+            for field in ("price", "suggested_price", "sale_price"):
+                v = r.get(field)
+                if v:
+                    suggested = float(v)
+                    break
+            if not suggested:
+                return None
+            current = float(p.get("price") or 0)
+            if current <= 0 or suggested <= 0:
+                return None
+            delta_pct = round((current - suggested) / suggested * 100, 1)
+            badge = "red" if delta_pct > 15 else ("yellow" if delta_pct > 5 else ("below" if delta_pct < -10 else "green"))
+            return {
+                "id": p.get("id"),
+                "title": p.get("title", ""),
+                "sku": p.get("sku", ""),
+                "thumbnail": p.get("thumbnail", ""),
+                "permalink": p.get("permalink", ""),
+                "current_price": current,
+                "suggested_price": suggested,
+                "delta_pct": delta_pct,
+                "badge": badge,
+                "units_30d": p.get("units", 0) or 0,
+            }
+        except Exception:
+            return None
+
+    results = await asyncio.gather(*[_check_one(p) for p in top_items], return_exceptions=True)
+    items = [r for r in results if r and isinstance(r, dict)]
+    items.sort(key=lambda x: abs(x["delta_pct"]), reverse=True)
+
+    data = {"items": items, "analyzed": len(top_items), "ts": int(_t.time())}
+    _price_comp_cache[uid] = {"ts": _t.time(), "data": data}
+    await client.close()
+    return JSONResponse(data)
 
 
 @app.get("/api/health/counts")
