@@ -7,6 +7,26 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-30 — FEAT: Mejoras de Ventas #1 y #2 — Precio vs Competencia + CVR% Funnel
+
+**Commit:** `ff6d7b6`
+
+**Feature #2 — CVR% Funnel (widget en Dashboard, auto):**
+- Widget "📈 Funnel CVR por Listing" en `/dashboard` — carga automática desde `_stock_issues_cache`
+- Endpoint `/api/dashboard/cvr-funnel` — cero API calls extra, lee prewarm cache
+- 3 tabs: Top CVR (mejores) / Bajo CVR (peores) / Sin tráfico (sin visitas)
+- Badge CVR: verde ≥3%, amarillo 1-3%, rojo <1%
+- CVR global del catálogo en header del widget
+
+**Feature #1 — Precio vs Competencia (button-triggered, caché 30 min):**
+- Widget "🏷️ Precio vs Competencia" en `/dashboard` — requiere click en "Analizar"
+- Endpoint `/api/dashboard/price-competition` — llama `GET /items/{id}/price_suggestions` ML para top 20 activos
+- Badge: verde (OK ±5%), amarillo (+5-15%), rojo (+15%+ arriba), azul (por debajo = oportunidad subir)
+- `MeliClient.get_price_suggestions()` añadido a `meli_client.py`
+- Caché 30 min en `_price_comp_cache` por cuenta
+
+---
+
 ## 2026-06-30 — FEAT: Mejoras de Ventas #3, #4, #5, #6 — Score Salud, Candidatos FULL, Días Inventario, Preguntas Urgentes
 
 **Commits:** `1a4c168` (feat #5 y #6), `b832a07` (feat #3), `17dcb29` (feat #4)
