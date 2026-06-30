@@ -394,6 +394,12 @@ function _buildVelRow(p, globalIdx, maxRate, hasAmz) {
         '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_7d||0) + (p.amz_units_7d||0)) + '</td>' +
         '<td class="py-2 pr-3 text-right text-gray-600">' + ((p.units_30d||0) + (p.amz_units_30d||0)) + '</td>' +
         '<td class="py-2 pr-3 text-right text-gray-500 text-xs">' + _fmtMXN(p.revenue_30d) + '</td>' +
+        (function(){
+            var d = p.dias_inventario;
+            if (d == null) return '<td class="py-2 pr-3 text-right text-gray-300 text-xs">—</td>';
+            var cls = d <= 7 ? 'bg-red-100 text-red-700' : (d <= 14 ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700');
+            return '<td class="py-2 pr-3 text-right"><span class="inline-block px-1.5 py-0.5 rounded text-xs font-semibold ' + cls + '">' + d + 'd</span></td>';
+        })() +
         '<td class="py-2 w-24"><div class="h-2 bg-gray-100 rounded-full overflow-hidden">' +
             '<div class="h-2 rounded-full ' + barC + '" style="width:' + barW + '%"></div></div></td>' +
         '<td class="py-2 pl-2 text-center">' + histBtn + '</td>' +
@@ -432,6 +438,7 @@ function _renderVelPage() {
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">7 días</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">' + _days() + ' días</th>' +
             '<th class="pb-2 pr-3 text-right whitespace-nowrap">Revenue</th>' +
+            '<th class="pb-2 pr-3 text-right whitespace-nowrap" title="Días de inventario BM al ritmo actual">Días inv.</th>' +
             '<th class="pb-2 pr-3">Proporción</th>' +
             '<th class="pb-2 pl-2 w-6"></th>' +
             '</tr></thead><tbody>';

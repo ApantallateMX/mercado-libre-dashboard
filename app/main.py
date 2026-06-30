@@ -16520,6 +16520,25 @@ async def planning_velocity(days: int = Query(30, ge=7, le=90)):
         })
 
     result_items.sort(key=lambda x: x["total_daily_rate"], reverse=True)
+
+    # Enriquecer con BM stock desde cache en memoria (sin llamadas extra)
+    import time as _time_mod
+    _now_ts = _time_mod.time()
+    for _ri in result_items:
+        _ri_sku = _ri.get("sku", "")
+        if not _ri_sku:
+            continue
+        _bk = normalize_to_bm_sku(_ri_sku)
+        if not _bk:
+            continue
+        _bentry = _bm_stock_cache.get(_bk)
+        if _bentry and (_now_ts - _bentry[0]) < 3600:
+            _ri["bm_avail"] = _bentry[1].get("avail_total", 0) or 0
+            _ri["bm_verified"] = bool(_bentry[1].get("_v"))
+            _tdr = _ri.get("total_daily_rate") or 0
+            if _tdr > 0:
+                _ri["dias_inventario"] = round(_ri["bm_avail"] / _tdr)
+
     return {
         "items": result_items[:100],
         "total_items": len(result_items),
