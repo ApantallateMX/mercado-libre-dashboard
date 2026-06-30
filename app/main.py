@@ -7244,6 +7244,89 @@ def _elapsed_str(iso_date: str) -> tuple:
         return ("-", 0)
 
 
+@app.get("/api/health/scores")
+async def health_scores():
+    """Score de salud por listing usando datos del prewarm cache (sin API calls extra)."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"error": "no_session", "items": []})
+    uid = str(client.user_id)
+    await client.close()
+
+    # Leer products del prewarm cache más reciente para este usuario
+    _scored: list = []
+    for _ck, _cv in _stock_issues_cache.items():
+        if not _ck.startswith(f"stock_issues:{uid}:"):
+            continue
+        _products = _cv.get("products") or []
+        if _products:
+            break
+    else:
+        _products = []
+
+    def _calc_score(p: dict) -> dict:
+        score = 0
+        detail = {}
+
+        # Ventas 30d (30 pts)
+        u = p.get("units", 0) or 0
+        if u > 10:   sv = 30
+        elif u > 5:  sv = 20
+        elif u > 0:  sv = 10
+        else:        sv = 0
+        score += sv
+        detail["ventas"] = sv
+
+        # Stock BM (25 pts)
+        bm = p.get("_bm_avail", 0) or 0
+        if bm > 5:   sb = 25
+        elif bm > 0: sb = 15
+        else:        sb = 0
+        score += sb
+        detail["stock_bm"] = sb
+
+        # Stock ML activo (20 pts)
+        sa = 20 if (p.get("available_quantity", 0) or 0) > 0 else 0
+        score += sa
+        detail["stock_ml"] = sa
+
+        # CVR (15 pts)
+        cvr = p.get("_cvr")
+        if cvr is not None:
+            if cvr > 2:    sc = 15
+            elif cvr > 0.5: sc = 10
+            else:           sc = 5
+        else:
+            sc = 0
+        score += sc
+        detail["cvr"] = sc
+
+        # Tiene SKU (10 pts)
+        ss = 10 if p.get("sku") else 0
+        score += ss
+        detail["sku"] = ss
+
+        return {
+            "id": p.get("id"),
+            "title": p.get("title", ""),
+            "sku": p.get("sku", ""),
+            "thumbnail": p.get("thumbnail", ""),
+            "permalink": p.get("permalink", ""),
+            "score": score,
+            "detail": detail,
+            "units_30d": u,
+            "bm_avail": bm,
+            "available_quantity": p.get("available_quantity", 0) or 0,
+            "cvr": p.get("_cvr"),
+            "is_full": p.get("is_full", False),
+            "price": p.get("price", 0),
+        }
+
+    _scored = [_calc_score(p) for p in _products if p.get("id")]
+    _scored.sort(key=lambda x: x["score"])  # peores primero
+    return JSONResponse({"items": _scored[:100], "total": len(_scored)})
+
+
 @app.get("/api/health/counts")
 async def health_counts():
     """Contadores rápidos para badges de navegación: reclamos abiertos + preguntas sin respuesta."""
