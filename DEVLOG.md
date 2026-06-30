@@ -7,6 +7,33 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-06-30 — FEAT: Mejoras de Ventas #3, #4, #5, #6 — Score Salud, Candidatos FULL, Días Inventario, Preguntas Urgentes
+
+**Commits:** `1a4c168` (feat #5 y #6), `b832a07` (feat #3), `17dcb29` (feat #4)
+
+**Feature #5 — Candidatos FULL (tab en Productos):**
+- Nuevo tab "🚀 Candidatos FULL" en `/items` — productos con ventas >2 en 30d, sin logística FULL, stock disponible
+- Endpoint `/partials/products-full-candidates` reutiliza `products_inventory_partial(preset="full_candidates")`
+- Ordena por mayor velocidad de ventas primero
+
+**Feature #6 — Preguntas Urgentes (banner en Salud):**
+- Banner de urgencia al tope de la pestaña Preguntas en `/health`
+- Rojo animado si hay preguntas >12h sin respuesta, amarillo si 1-12h
+- Recordatorio de penalización ML por preguntas no respondidas
+
+**Feature #3 — Días de Inventario (tabla Velocidad de Ventas):**
+- Columna "Días inv." en `/planning` — días restantes al ritmo de ventas actual
+- Semáforo: rojo ≤7d, amarillo ≤14d, verde >14d
+- Enriquece `/api/planning/velocity` con `bm_avail`+`dias_inventario` desde `_bm_stock_cache` (sin API calls)
+
+**Feature #4 — Score de Salud por listing (tab Score en Salud):**
+- Tab "📊 Score" en `/health` — hasta 100 listings ordenados peores primero
+- Score 0-100: Ventas 30d (30), Stock BM (25), Stock ML (20), CVR (15), SKU (10)
+- Badge rojo <40, amarillo 40-69, verde ≥70
+- Lee datos de `_stock_issues_cache` prewarm (cero API calls adicionales)
+
+---
+
 ## 2026-06-29 — FIX: Filtrar phantom stock BM en Activar con verificación per-SKU
 
 **Commits:** `504eef9`, `1721215`
