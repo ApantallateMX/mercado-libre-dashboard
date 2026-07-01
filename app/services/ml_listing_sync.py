@@ -308,7 +308,7 @@ async def _sync_qty_only_account(uid: str, client) -> int:
             logger.info(f"[ML-QTY] uid={uid}: {changed}/{len(updates)} items qty actualizada")
             if _on_listings_updated:
                 try:
-                    _on_listings_updated(uid)
+                    _on_listings_updated(uid, updates)
                 except Exception:
                     pass
         return changed

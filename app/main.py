@@ -636,14 +636,41 @@ async def lifespan(app: FastAPI):
     # Sync incremental de listings ML → DB local (elimina spinner en Stock tab)
     from app.services.ml_listing_sync import start_ml_listing_sync, register_listings_updated_callback
 
-    def _invalidate_products_on_sync(uid: str):
+    def _invalidate_products_on_sync(uid: str, updates=None):
         """Limpia _products_cache cuando ml_listing_sync actualiza la DB.
-        NO limpia _stock_issues_cache: el prewarm la reconstruye con datos frescos.
-        Borrarla aquí causaba spinner en el tab Stock después de cada deploy."""
+        Si updates contiene items cuya qty pasó a >0, los evicta quirúrgicamente de
+        _stock_issues_cache (restock/activate) sin borrar el resto del cache — sin spinner."""
         uid_prefix = f"{uid}:"
         for k in [k for k in _products_cache if k.startswith(uid_prefix)]:
             del _products_cache[k]
         logger.debug(f"[ML-SYNC-CB] products_cache invalidado para uid={uid} post-sync")
+        # Evicción quirúrgica: items que recuperaron stock en ML → sacar de alertas Reabastecer
+        if updates:
+            newly_stocked = {iid for (iid, qty) in updates if qty > 0}
+            if newly_stocked:
+                si_prefix = f"stock_issues:{uid}:"
+                for cache_key in [k for k in _stock_issues_cache if k.startswith(si_prefix)]:
+                    cached = _stock_issues_cache.get(cache_key)
+                    if not isinstance(cached, tuple) or len(cached) < 2:
+                        continue
+                    ts, data = cached
+                    if not isinstance(data, dict):
+                        continue
+                    changed_cache = False
+                    for section in ("restock", "activate"):
+                        old_list = data.get(section, [])
+                        if not old_list:
+                            continue
+                        new_list = [p for p in old_list if p.get("id") not in newly_stocked]
+                        if len(new_list) != len(old_list):
+                            evicted = len(old_list) - len(new_list)
+                            data[section] = new_list
+                            if section == "restock":
+                                data["restock_count"] = data.get("restock_count", len(old_list)) - evicted
+                            changed_cache = True
+                            logger.info(f"[ML-QTY-CB] {section}: evictados {evicted} items uid={uid} (qty recuperó >0)")
+                    if changed_cache:
+                        _stock_issues_cache[cache_key] = (ts, data)
 
     register_listings_updated_callback(_invalidate_products_on_sync)
     start_ml_listing_sync()
