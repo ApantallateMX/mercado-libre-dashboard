@@ -2227,7 +2227,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             </span>
             <button onclick="window._closeAllNoBmSku()" id="close-all-no-bm-btn"
                     class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
-                Cerrar Todos ({{ no_bm_sku_count }})
+                Eliminar Todos ({{ no_bm_sku_count }})
             </button>
         </div>
     </div>
@@ -2282,7 +2282,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                         <button onclick="window._closeNoBmSku('{{ p.id }}', this)"
                                 id="nobm-btn-{{ p.id }}"
                                 class="px-2 py-1 bg-red-500 text-white text-[10px] font-bold rounded hover:bg-red-600 transition">
-                            Cerrar
+                            Eliminar
                         </button>
                     </td>
                 </tr>
@@ -2322,7 +2322,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
 <script>
 (function() {
   window._closeNoBmSku = function(itemId, btn) {
-    if (!confirm('¿Cerrar listing ' + itemId + ' en Mercado Libre?\n\nEsta acción es irreversible. El listing quedará cerrado en ML.')) return;
+    if (!confirm('¿Eliminar listing ' + itemId + ' de Mercado Libre?\n\nEsta acción es irreversible.')) return;
     btn.textContent = '...'; btn.disabled = true;
     fetch('/api/items/' + itemId + '/close', {method: 'POST', headers: {'Content-Type': 'application/json'}})
       .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
@@ -2330,14 +2330,14 @@ window.syncOneImbalanced = function(itemId, bmQty) {
         if (res.ok) {
           var row = document.getElementById('nobm-row-' + itemId);
           if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 500); }
-          if (window.showToast) showToast('Listing ' + itemId + ' cerrado en ML', 'success');
+          if (window.showToast) showToast('Listing ' + itemId + ' eliminado de ML', 'success');
         } else {
-          btn.textContent = 'Cerrar'; btn.disabled = false;
-          if (window.showToast) showToast((res.d && res.d.detail) || 'Error al cerrar', 'error');
+          btn.textContent = 'Eliminar'; btn.disabled = false;
+          if (window.showToast) showToast((res.d && res.d.detail) || 'Error al eliminar', 'error');
         }
       })
       .catch(function() {
-        btn.textContent = 'Cerrar'; btn.disabled = false;
+        btn.textContent = 'Eliminar'; btn.disabled = false;
         if (window.showToast) showToast('Error de red', 'error');
       });
   };
@@ -2347,7 +2347,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
     var ids = [];
     rows.forEach(function(r) { var id = r.id.replace('nobm-row-', ''); if (id) ids.push(id); });
     if (!ids.length) return;
-    if (!confirm('¿Cerrar TODOS los ' + ids.length + ' listings en Mercado Libre?\n\nEsta acción es irreversible. Los listings quedarán cerrados en ML.')) return;
+    if (!confirm('¿Eliminar TODOS los ' + ids.length + ' listings de Mercado Libre?\n\nEsta acción es irreversible.')) return;
     var allBtn = document.getElementById('close-all-no-bm-btn');
     if (allBtn) { allBtn.textContent = 'Cerrando...'; allBtn.disabled = true; }
     fetch('/api/items/close-batch', {
@@ -2361,13 +2361,13 @@ window.syncOneImbalanced = function(itemId, bmQty) {
         var row = document.getElementById('nobm-row-' + iid);
         if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 400); }
       });
-      var msg = 'Cerrados: ' + (d.closed || 0);
+      var msg = 'Eliminados: ' + (d.closed || 0);
       if (d.errors && d.errors.length) msg += ' · Errores: ' + d.errors.length;
       if (allBtn) { allBtn.textContent = msg; }
       if (window.showToast) showToast(msg, d.errors && d.errors.length ? 'warning' : 'success');
     })
     .catch(function() {
-      if (allBtn) { allBtn.textContent = 'Cerrar Todos'; allBtn.disabled = false; }
+      if (allBtn) { allBtn.textContent = 'Eliminar Todos'; allBtn.disabled = false; }
       if (window.showToast) showToast('Error de red', 'error');
     });
   };

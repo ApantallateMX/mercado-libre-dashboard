@@ -11095,12 +11095,12 @@ async def update_item_status_api(item_id: str, request: Request):
 
 @app.post("/api/items/{item_id}/close")
 async def close_item_api(item_id: str):
-    """Cierra un listing en Mercado Libre (status=closed). Acción manual, irreversible."""
+    """Elimina un listing de Mercado Libre (DELETE /items/{item_id}). Acción irreversible."""
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
     try:
-        await client.update_item_status(item_id, "closed")
+        await client.delete(f"/items/{item_id}")
         return {"ok": True, "item_id": item_id}
     except Exception as e:
         return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
@@ -11110,7 +11110,7 @@ async def close_item_api(item_id: str):
 
 @app.post("/api/items/close-batch")
 async def close_items_batch_api(request: Request):
-    """Cierra múltiples listings en Mercado Libre. body: {item_ids: [...]}"""
+    """Elimina múltiples listings de Mercado Libre. body: {item_ids: [...]}"""
     client = await get_meli_client()
     if not client:
         return JSONResponse({"detail": "No autenticado"}, status_code=401)
@@ -11123,7 +11123,7 @@ async def close_items_batch_api(request: Request):
         errors = []
         for iid in item_ids:
             try:
-                await client.update_item_status(iid, "closed")
+                await client.delete(f"/items/{iid}")
                 closed.append(iid)
                 await asyncio.sleep(0.3)
             except Exception as e:
