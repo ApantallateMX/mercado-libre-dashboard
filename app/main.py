@@ -4723,27 +4723,6 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("sku")
                 ]
                 imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
-
-                # GAP 9: Listings sin cobertura BM — BM nunca confirmó el SKU (_v ausente o False).
-                # Indica que el seller_custom_field del listing en ML no corresponde a un SKU de BM.
-                # El equipo debe buscar el producto en BM y actualizar el SKU del listing.
-                no_bm_sku = []
-                for _p_nb in products:
-                    if _p_nb.get("is_full"):
-                        continue
-                    _psku_nb = _p_nb.get("sku", "")
-                    if not _psku_nb:
-                        continue
-                    _pbase_nb = normalize_to_bm_sku(_psku_nb)
-                    if not _pbase_nb:
-                        continue
-                    _cached_nb = _bm_stock_cache.get(_pbase_nb)
-                    if _cached_nb is not None and _cached_nb[1].get("_v", False):
-                        continue  # BM conoce este SKU (puede estar en 0 temporal) — no es mismatch
-                    no_bm_sku.append({**_p_nb, "_base_sku_bm": _pbase_nb})
-                no_bm_sku.sort(key=lambda x: x.get("units", 0), reverse=True)
-                no_bm_sku = no_bm_sku[:100]
-
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
@@ -4751,7 +4730,6 @@ async def _prewarm_caches(user_id: str = None):
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
                     "stagnant": stagnant, "price_risk": price_risk,
-                    "no_bm_sku": no_bm_sku, "no_bm_sku_count": len(no_bm_sku),
                     "restock_count": len(restock) + len(activate),
                     "lost_revenue": sum(p.get("revenue", 0) for p in restock) + sum(p.get("price", 0) * min(p.get("_bm_avail", 0), 3) for p in activate),
                     "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
