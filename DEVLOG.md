@@ -7,29 +7,49 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
-## 2026-07-01 — FEAT: Alerta "Sin SKU en BM" en tab Stock
+## 2026-07-01 — FEAT: Alerta "SKU no en catálogo BM" + catalog sync diario
 
-**Commit:** `c164c1f`
+**Archivos:** `app/main.py`, `app/templates/partials/products_stock_issues.html`
 
-Nueva alerta en el tab Stock > Health que detecta listings de ML cuyo SKU no existe en BinManager.
+**Problema previo resuelto:** La alerta anterior usaba `_v=False` en `_bm_stock_cache` como proxy
+de "BM no conoce este SKU". Era incorrecto: BM omite productos con stock=0 del bulk response,
+por lo que cualquier SNTV* sin stock era falso positivo. Esa implementación fue revertida.
 
-**Cómo funciona:**
-- Prewarm: después de procesar los bulks de BM, verifica cuáles SKUs (base_sku) nunca tuvieron
-  confirmación de BM (`_v=False` o sin entrada en `_bm_stock_cache`)
-- Los que sí tienen `_v=True` con stock=0 son "fuera de stock temporal" → no se alertan
-- Los que nunca fueron confirmados → lista `no_bm_sku[]` en `_sic_data`
+**Solución correcta — fuente de verdad: `bm_product_catalog`:**
+- La tabla `bm_product_catalog` (9,188 SKUs en Railway) es el catálogo descargado de BM.
+  Si un SKU SN*/SHIL*/RMTC*/etc. NO aparece ahí → BM genuinamente no lo conoce.
+- Si aparece en catálogo pero stock=0 → producto real, solo sin inventario → sin alerta.
 
-**UI (partials/products_stock_issues.html):**
-- KPI card amber en el grid con conteo (click → scroll a sección)
-- Tabla desktop + cards mobile: título, ID, SKU en ML, base_sku que se buscó en BM (en rojo "✗ no en BM"), ventas 30d, stock ML, precio
-- Paginación incluida
-- Total Alertas incluye `no_bm_sku_count`
+**Cambio 1 — Sync diario del catálogo BM:**
+- `_weekly_catalog_sync()` (~línea 613): cambiado de "domingo 9pm MTY = lunes 02:00 UTC"
+  a **09:00 UTC diario (= 3am MTY CDT)**. El catálogo es fuente de verdad → debe estar fresco.
 
-**Flujo de trabajo:** el equipo ve el listing → busca el producto en BM → actualiza el
-`seller_custom_field` en ML con el SKU BM correcto → próximo sync (3 min) lo detecta.
+**Cambio 2 — Alert B en prewarm (`_prewarm_caches`):**
+- Después de `imbalanced.sort()` (~línea 4726): carga `bm_product_catalog` SKUs via
+  `token_store.get_bm_catalog_all()`. Para cada producto con SKU de formato BM (prefijos:
+  SN, SHIL, RMTC, SHEL, SHFL, SHHP, SHLB) → verifica si `normalize_to_bm_sku(sku)` existe
+  en el set de catálogo. Si NO existe → `no_bm_sku[]`. Deduplicado por SKU normalizado.
+- `_sic_data` incluye: `no_bm_sku`, `no_bm_sku_count`, `bm_catalog_size`.
 
-**Decisión de diseño:** NO excluir estos listings de alertas — alertar para que el equipo
-asigne el SKU correcto. RetailPH semanal aceptado (precios no cambian drásticamente en 7 días).
+**Cambio 3 — UI (products_stock_issues.html):**
+- KPI card violeta en el grid (solo si `no_bm_sku_count > 0`, click scroll a sección).
+- Total Alertas incluye `no_bm_sku_count`.
+- Sección tabla desktop + cards mobile: título, SKU, precio, estado ML, qty, ventas 30d.
+- Paginación: `paginateTable('tbody-no-bm-sku', 'pager-no-bm-sku')`.
+
+**Flujo de trabajo:** el equipo ve el listing → busca en BM → da de alta el SKU → próximo
+catalog sync (~24h) confirma el alta y el alert desaparece.
+
+---
+
+## 2026-07-01 — REVERT: Alerta "Sin SKU en BM" basada en `_v=False` — falsos positivos
+
+**Commit:** `cf69c66`
+
+La implementación anterior usaba `_v=False` en `_bm_stock_cache` para detectar SKUs
+desconocidos en BM. Generaba 100 falsos positivos: productos SNTV* válidos con stock=0
+no aparecen en el bulk response de BM (BM omite ceros del bulk), por lo que tenían `_v=False`
+aunque existían perfectamente en BinManager. Se revirtió completamente.
 
 ---
 

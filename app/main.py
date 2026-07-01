@@ -607,28 +607,26 @@ async def lifespan(app: FastAPI):
     if not _BM_DISABLED:
         asyncio.create_task(_bm_health_loop())
 
-    # ── Sync semanal de catálogo BM (domingo 9pm Monterrey CDT = lunes 02:00 UTC) ──
+    # ── Sync diario de catálogo BM (3am Monterrey CDT = 09:00 UTC) ──
     # Descarga retail_ph, brand, model, title para todos los SKUs del bulk cache.
-    # 1 sola corrida/semana para no saturar BM. Concurrencia=3, ~10 min.
+    # Corre cada noche — catálogo es fuente de verdad para alert "SKU desconocido en BM".
     async def _weekly_catalog_sync():
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         while True:
             _now = _dt.now(_tz.utc)
-            # Domingo 9pm Monterrey CDT (UTC-5) = lunes 02:00 UTC
-            # weekday: lunes=0, martes=1, ..., domingo=6
-            days_until_monday = (0 - _now.weekday()) % 7
-            if days_until_monday == 0 and _now.hour >= 2:
-                days_until_monday = 7  # ya pasó el lunes 02:00 UTC de esta semana
-            _next = (_now + _td(days=days_until_monday)).replace(hour=2, minute=0, second=0, microsecond=0)
+            # 3am Monterrey CDT (UTC-6) = 09:00 UTC
+            _next = _now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if _next <= _now:
+                _next += _td(days=1)
             _secs = (_next - _now).total_seconds()
-            logger.info(f"[CATALOG-SYNC] Próximo sync semanal en {_secs/3600:.1f}h (domingo 9pm MTY = lunes 02:00 UTC)")
+            logger.info(f"[CATALOG-SYNC] Próximo sync diario en {_secs/3600:.1f}h (3am MTY = 09:00 UTC)")
             await asyncio.sleep(_secs)
-            logger.info("[CATALOG-SYNC] Iniciando sync semanal de catálogo BM...")
+            logger.info("[CATALOG-SYNC] Iniciando sync diario de catálogo BM...")
             try:
                 synced = await _sync_bm_product_catalog(source="auto")
-                logger.info(f"[CATALOG-SYNC] Sync semanal completado: {synced} SKUs")
+                logger.info(f"[CATALOG-SYNC] Sync diario completado: {synced} SKUs")
             except Exception as _e:
-                logger.warning(f"[CATALOG-SYNC] Error en sync semanal: {_e}")
+                logger.warning(f"[CATALOG-SYNC] Error en sync diario: {_e}")
     if not _BM_DISABLED:
         asyncio.create_task(_weekly_catalog_sync())
     # Lanzador Inteligente — scan nocturno BM vs MeLi (3am Mexico = 9am UTC)
@@ -4723,13 +4721,35 @@ async def _prewarm_caches(user_id: str = None):
                     and p.get("sku")
                 ]
                 imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
+
+                # Alert: SKU con formato BM que no aparece en bm_product_catalog
+                # Fuente de verdad: catálogo BM descargado (no runtime cache/bulk).
+                # Excluye prefijos numéricos (8501-style = dropship externo, no BM).
+                _BM_PREFIXES = ("SN", "SHIL", "RMTC", "SHEL", "SHFL", "SHHP", "SHLB")
+                try:
+                    _cat_rows = await token_store.get_bm_catalog_all()
+                    _bm_catalog_skus = {(r.get("sku") or "").upper() for r in _cat_rows if r.get("sku")}
+                except Exception:
+                    _bm_catalog_skus = set()
+                no_bm_sku: list = []
+                if _bm_catalog_skus:
+                    _seen_no_bm: set = set()
+                    for _p in products:
+                        _raw = ((_p.get("sku") or "")).upper()
+                        if not _raw or not any(_raw.startswith(_px) for _px in _BM_PREFIXES):
+                            continue
+                        _norm = normalize_to_bm_sku(_raw)
+                        if _norm and _norm not in _bm_catalog_skus and _norm not in _seen_no_bm:
+                            _seen_no_bm.add(_norm)
+                            no_bm_sku.append(_p)
+
                 # CLAVE: usar f"stock_issues:{uid}:t{threshold}" para que coincida con el endpoint
                 _sic_key = f"stock_issues:{client.user_id}:t{_DEFAULT_THRESHOLD}"
                 _sic_ts   = _time.time()
                 _sic_data = {
                     "restock": restock, "oversell_risk": oversell_risk, "activate": activate,
                     "critical": critical, "full_no_stock": full_no_stock, "imbalanced": imbalanced,
-                    "stagnant": stagnant, "price_risk": price_risk,
+                    "stagnant": stagnant, "price_risk": price_risk, "no_bm_sku": no_bm_sku,
                     "restock_count": len(restock) + len(activate),
                     "lost_revenue": sum(p.get("revenue", 0) for p in restock) + sum(p.get("price", 0) * min(p.get("_bm_avail", 0), 3) for p in activate),
                     "risk_count": len(oversell_risk), "risk_stock": sum(p.get("available_quantity", 0) for p in oversell_risk),
@@ -4739,6 +4759,8 @@ async def _prewarm_caches(user_id: str = None):
                     "imbalanced_count": len(imbalanced), "imbalanced_gap": sum(p.get("available_quantity", 0) - (p.get("_bm_avail") or 0) for p in imbalanced),
                     "stagnant_count": len(stagnant), "stagnant_bm": sum(p.get("_bm_avail", 0) for p in stagnant),
                     "price_risk_count": len(price_risk), "price_risk_gap": sum(p.get("_retail_ph_mxn", 0) - p.get("price", 0) for p in price_risk),
+                    "no_bm_sku_count": len(no_bm_sku),
+                    "bm_catalog_size": len(_bm_catalog_skus),
                     "threshold": _DEFAULT_THRESHOLD,
                 }
                 _stock_issues_cache[_sic_key] = (_sic_ts, _sic_data)

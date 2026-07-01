@@ -115,9 +115,17 @@
         <p class="text-[10px] text-gray-400">Gap prom. ${{ "{:,.0f}".format(price_risk_gap / price_risk_count) }}</p>
     </div>
     {% endif %}
+    {% if no_bm_sku_count %}
+    <div onclick="document.getElementById('no-bm-sku-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-violet-500 cursor-pointer hover:shadow-md hover:bg-violet-50/30 transition">
+        <p class="text-xs text-gray-500">SKU no en catálogo BM</p>
+        <p class="text-2xl font-bold text-violet-700">{{ no_bm_sku_count }}</p>
+        <p class="text-[10px] text-gray-400">Requieren registro en BinManager</p>
+    </div>
+    {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
     {% if orphan_count %}
@@ -2174,6 +2182,7 @@ function bulkActivateAll() {
   paginateTable('tbody-imbalanced', 'pager-imbalanced');
   paginateTable('tbody-stagnant',   'pager-stagnant');
   paginateTable('tbody-price-risk', 'pager-price-risk');
+  paginateTable('tbody-no-bm-sku',  'pager-no-bm-sku');
 })();
 
 window.syncOneImbalanced = function(itemId, bmQty) {
@@ -2202,6 +2211,94 @@ window.syncOneImbalanced = function(itemId, bmQty) {
     });
 };
 </script>
+
+{% if no_bm_sku_count %}
+<!-- ===== Seccion: SKU no en catálogo BM ===== -->
+<div class="mb-8" id="no-bm-sku-section">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-violet-500 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">SKU no registrado en catálogo BM</h3>
+            <span class="text-xs text-gray-400">(SKU existe en ML pero BinManager no lo conoce — requiere alta)</span>
+        </div>
+        <span class="text-xs text-gray-400 bg-violet-50 border border-violet-200 rounded px-2 py-0.5">
+            {{ no_bm_sku_count }} SKU{{ 's' if no_bm_sku_count != 1 }} · catálogo {{ bm_catalog_size | default(0) }} entradas
+        </span>
+    </div>
+    <!-- Desktop table -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-hidden border border-violet-100">
+        <div class="overflow-x-auto">
+        <table class="min-w-full text-xs">
+            <thead class="bg-violet-50 text-gray-600">
+                <tr>
+                    <th class="py-2 px-3 text-left">Producto</th>
+                    <th class="py-2 px-3 text-left">SKU</th>
+                    <th class="py-2 px-3 text-right">Precio ML</th>
+                    <th class="py-2 px-3 text-center">Estado ML</th>
+                    <th class="py-2 px-3 text-center">Qty ML</th>
+                    <th class="py-2 px-3 text-center">Ventas 30d</th>
+                    <th class="py-2 px-3 text-left">Acción</th>
+                </tr>
+            </thead>
+            <tbody id="tbody-no-bm-sku">
+                {% for p in no_bm_sku %}
+                <tr class="border-t border-gray-100 hover:bg-violet-50/30">
+                    <td class="py-2 px-3">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <a href="{{ p.permalink }}" target="_blank"
+                               class="text-blue-600 hover:underline line-clamp-2 max-w-[260px]">{{ p.title }}</a>
+                        </div>
+                    </td>
+                    <td class="py-2 px-3 font-mono font-bold text-violet-700">{{ p.sku }}</td>
+                    <td class="py-2 px-3 text-right font-medium">${{ "{:,.0f}".format(p.price or 0) }}</td>
+                    <td class="py-2 px-3 text-center">
+                        {% if p.status == 'active' %}
+                        <span class="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-[10px] font-bold">Activo</span>
+                        {% elif p.status == 'paused' %}
+                        <span class="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] font-bold">Pausado</span>
+                        {% else %}
+                        <span class="px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px]">{{ p.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2 px-3 text-center font-medium">{{ p.available_quantity or 0 }}</td>
+                    <td class="py-2 px-3 text-center text-gray-500">{{ p.sold_30d or 0 }}</td>
+                    <td class="py-2 px-3">
+                        <span class="text-[10px] text-violet-600 font-medium">Dar de alta en BM</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <div id="pager-no-bm-sku"></div>
+    </div>
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2">
+        {% for p in no_bm_sku %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-violet-400">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    <p class="text-[10px] font-mono text-violet-700 font-bold mt-0.5">{{ p.sku }}</p>
+                    <div class="flex items-center gap-2 mt-1">
+                        <span class="text-[10px] text-gray-500">${{ "{:,.0f}".format(p.price or 0) }}</span>
+                        <span class="text-[10px] text-gray-400">· Qty: {{ p.available_quantity or 0 }}</span>
+                        <span class="text-[10px] text-gray-400">· {{ p.sold_30d or 0 }} vendidos</span>
+                    </div>
+                    <p class="text-[10px] text-violet-600 font-medium mt-1">→ Dar de alta en BinManager</p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
 
 {% if orphan_count %}
 <!-- ===== Seccion: Listings Eliminados ===== -->
