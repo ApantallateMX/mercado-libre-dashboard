@@ -2232,6 +2232,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             <thead class="bg-violet-50 text-gray-600">
                 <tr>
                     <th class="py-2 px-3 text-left">Producto</th>
+                    <th class="py-2 px-3 text-left">MLM</th>
                     <th class="py-2 px-3 text-left">SKU</th>
                     <th class="py-2 px-3 text-right">Precio ML</th>
                     <th class="py-2 px-3 text-center">Estado ML</th>
@@ -2251,6 +2252,12 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                             <a href="{{ p.permalink }}" target="_blank"
                                class="text-blue-600 hover:underline line-clamp-2 max-w-[260px]">{{ p.title }}</a>
                         </div>
+                    </td>
+                    <td class="py-2 px-3">
+                        {% if p.id %}
+                        <a href="{{ p.permalink }}" target="_blank"
+                           class="font-mono text-[11px] text-blue-600 hover:underline">{{ p.id }}</a>
+                        {% endif %}
                     </td>
                     <td class="py-2 px-3 font-mono font-bold text-violet-700">{{ p.sku }}</td>
                     <td class="py-2 px-3 text-right font-medium">${{ "{:,.0f}".format(p.price or 0) }}</td>
@@ -2285,6 +2292,10 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                 {% endif %}
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
+                    {% if p.id %}
+                    <a href="{{ p.permalink }}" target="_blank"
+                       class="text-[10px] font-mono text-blue-600 hover:underline">{{ p.id }}</a>
+                    {% endif %}
                     <p class="text-[10px] font-mono text-violet-700 font-bold mt-0.5">{{ p.sku }}</p>
                     <div class="flex items-center gap-2 mt-1">
                         <span class="text-[10px] text-gray-500">${{ "{:,.0f}".format(p.price or 0) }}</span>
