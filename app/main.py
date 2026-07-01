@@ -11093,6 +11093,48 @@ async def update_item_status_api(item_id: str, request: Request):
         await client.close()
 
 
+@app.post("/api/items/{item_id}/close")
+async def close_item_api(item_id: str):
+    """Cierra un listing en Mercado Libre (status=closed). Acción manual, irreversible."""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        await client.update_item_status(item_id, "closed")
+        return {"ok": True, "item_id": item_id}
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
+@app.post("/api/items/close-batch")
+async def close_items_batch_api(request: Request):
+    """Cierra múltiples listings en Mercado Libre. body: {item_ids: [...]}"""
+    client = await get_meli_client()
+    if not client:
+        return JSONResponse({"detail": "No autenticado"}, status_code=401)
+    try:
+        body = await request.json()
+        item_ids = body.get("item_ids", [])
+        if not item_ids:
+            return {"ok": True, "closed": 0, "errors": []}
+        closed = []
+        errors = []
+        for iid in item_ids:
+            try:
+                await client.update_item_status(iid, "closed")
+                closed.append(iid)
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                errors.append({"item_id": iid, "error": str(e)})
+        return {"ok": True, "closed": len(closed), "errors": errors}
+    except Exception as e:
+        return JSONResponse({"ok": False, "detail": str(e)}, status_code=400)
+    finally:
+        await client.close()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # GLOBAL INVENTORY CENTER — BinManager × 4 cuentas MeLi
 # ═══════════════════════════════════════════════════════════════════════════

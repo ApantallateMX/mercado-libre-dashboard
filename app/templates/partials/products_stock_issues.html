@@ -2221,9 +2221,15 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             <h3 class="text-sm md:text-base font-bold text-gray-800">SKU no registrado en catálogo BM</h3>
             <span class="text-xs text-gray-400">(SKU existe en ML pero BinManager no lo conoce — requiere alta)</span>
         </div>
-        <span class="text-xs text-gray-400 bg-violet-50 border border-violet-200 rounded px-2 py-0.5">
-            {{ no_bm_sku_count }} SKU{{ 's' if no_bm_sku_count != 1 }} · catálogo {{ bm_catalog_size | default(0) }} entradas
-        </span>
+        <div class="flex items-center gap-2">
+            <span class="text-xs text-gray-400 bg-violet-50 border border-violet-200 rounded px-2 py-0.5">
+                {{ no_bm_sku_count }} SKU{{ 's' if no_bm_sku_count != 1 }} · catálogo {{ bm_catalog_size | default(0) }} entradas
+            </span>
+            <button onclick="window._closeAllNoBmSku()" id="close-all-no-bm-btn"
+                    class="px-3 py-1.5 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 active:bg-red-800 transition">
+                Cerrar Todos ({{ no_bm_sku_count }})
+            </button>
+        </div>
     </div>
     <!-- Desktop table -->
     <div class="hidden md:block bg-white rounded-lg shadow overflow-hidden border border-violet-100">
@@ -2243,7 +2249,7 @@ window.syncOneImbalanced = function(itemId, bmQty) {
             </thead>
             <tbody id="tbody-no-bm-sku">
                 {% for p in no_bm_sku %}
-                <tr class="border-t border-gray-100 hover:bg-violet-50/30">
+                <tr class="border-t border-gray-100 hover:bg-violet-50/30 transition-opacity" id="nobm-row-{{ p.id }}">
                     <td class="py-2 px-3">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}
@@ -2273,7 +2279,11 @@ window.syncOneImbalanced = function(itemId, bmQty) {
                     <td class="py-2 px-3 text-center font-medium">{{ p.available_quantity or 0 }}</td>
                     <td class="py-2 px-3 text-center text-gray-500">{{ p.sold_30d or 0 }}</td>
                     <td class="py-2 px-3">
-                        <span class="text-[10px] text-violet-600 font-medium">Dar de alta en BM</span>
+                        <button onclick="window._closeNoBmSku('{{ p.id }}', this)"
+                                id="nobm-btn-{{ p.id }}"
+                                class="px-2 py-1 bg-red-500 text-white text-[10px] font-bold rounded hover:bg-red-600 transition">
+                            Cerrar
+                        </button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -2309,6 +2319,60 @@ window.syncOneImbalanced = function(itemId, bmQty) {
         {% endfor %}
     </div>
 </div>
+<script>
+(function() {
+  window._closeNoBmSku = function(itemId, btn) {
+    if (!confirm('¿Cerrar listing ' + itemId + ' en Mercado Libre?\n\nEsta acción es irreversible. El listing quedará cerrado en ML.')) return;
+    btn.textContent = '...'; btn.disabled = true;
+    fetch('/api/items/' + itemId + '/close', {method: 'POST', headers: {'Content-Type': 'application/json'}})
+      .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); })
+      .then(function(res) {
+        if (res.ok) {
+          var row = document.getElementById('nobm-row-' + itemId);
+          if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 500); }
+          if (window.showToast) showToast('Listing ' + itemId + ' cerrado en ML', 'success');
+        } else {
+          btn.textContent = 'Cerrar'; btn.disabled = false;
+          if (window.showToast) showToast((res.d && res.d.detail) || 'Error al cerrar', 'error');
+        }
+      })
+      .catch(function() {
+        btn.textContent = 'Cerrar'; btn.disabled = false;
+        if (window.showToast) showToast('Error de red', 'error');
+      });
+  };
+
+  window._closeAllNoBmSku = function() {
+    var rows = document.querySelectorAll('#tbody-no-bm-sku tr[id^="nobm-row-"]');
+    var ids = [];
+    rows.forEach(function(r) { var id = r.id.replace('nobm-row-', ''); if (id) ids.push(id); });
+    if (!ids.length) return;
+    if (!confirm('¿Cerrar TODOS los ' + ids.length + ' listings en Mercado Libre?\n\nEsta acción es irreversible. Los listings quedarán cerrados en ML.')) return;
+    var allBtn = document.getElementById('close-all-no-bm-btn');
+    if (allBtn) { allBtn.textContent = 'Cerrando...'; allBtn.disabled = true; }
+    fetch('/api/items/close-batch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_ids: ids})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      (d.closed_ids || ids).forEach(function(iid) {
+        var row = document.getElementById('nobm-row-' + iid);
+        if (row) { row.style.opacity = '0.3'; setTimeout(function() { row.remove(); }, 400); }
+      });
+      var msg = 'Cerrados: ' + (d.closed || 0);
+      if (d.errors && d.errors.length) msg += ' · Errores: ' + d.errors.length;
+      if (allBtn) { allBtn.textContent = msg; }
+      if (window.showToast) showToast(msg, d.errors && d.errors.length ? 'warning' : 'success');
+    })
+    .catch(function() {
+      if (allBtn) { allBtn.textContent = 'Cerrar Todos'; allBtn.disabled = false; }
+      if (window.showToast) showToast('Error de red', 'error');
+    });
+  };
+})();
+</script>
 {% endif %}
 
 {% if orphan_count %}
