@@ -7,6 +7,32 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-01 — FEAT: Alerta "Sin SKU en BM" en tab Stock
+
+**Commit:** `c164c1f`
+
+Nueva alerta en el tab Stock > Health que detecta listings de ML cuyo SKU no existe en BinManager.
+
+**Cómo funciona:**
+- Prewarm: después de procesar los bulks de BM, verifica cuáles SKUs (base_sku) nunca tuvieron
+  confirmación de BM (`_v=False` o sin entrada en `_bm_stock_cache`)
+- Los que sí tienen `_v=True` con stock=0 son "fuera de stock temporal" → no se alertan
+- Los que nunca fueron confirmados → lista `no_bm_sku[]` en `_sic_data`
+
+**UI (partials/products_stock_issues.html):**
+- KPI card amber en el grid con conteo (click → scroll a sección)
+- Tabla desktop + cards mobile: título, ID, SKU en ML, base_sku que se buscó en BM (en rojo "✗ no en BM"), ventas 30d, stock ML, precio
+- Paginación incluida
+- Total Alertas incluye `no_bm_sku_count`
+
+**Flujo de trabajo:** el equipo ve el listing → busca el producto en BM → actualiza el
+`seller_custom_field` en ML con el SKU BM correcto → próximo sync (3 min) lo detecta.
+
+**Decisión de diseño:** NO excluir estos listings de alertas — alertar para que el equipo
+asigne el SKU correcto. RetailPH semanal aceptado (precios no cambian drásticamente en 7 días).
+
+---
+
 ## 2026-07-01 — FIX: Reabastecer muestra stock 0 cuando ML tiene qty positiva
 
 **Commit:** `05a80bc`
