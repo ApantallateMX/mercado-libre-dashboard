@@ -7,6 +7,29 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-01 — FIX: Reabastecer muestra stock 0 cuando ML tiene qty positiva
+
+**Commit:** `05a80bc`
+
+**Síntoma:** MLM4780362912 aparecía en "Reabastecer (MeLi=0, BM disponible)" con
+Stock MeLi = 0, pero la API de ML confirmaba `available_quantity: 7`.
+
+**Causa raíz:** `_invalidate_products_on_sync` solo limpiaba `_products_cache`.
+El `_stock_issues_cache` (TTL 15 min) persistía con la qty stale. El qty-sync
+actualizaba la DB cada 3 min pero no forzaba recalcular las alertas.
+
+**Fix:** El qty-sync pasa `updates = [(item_id, new_qty)]` al callback. Si algún
+item pasó de qty 0 → qty positiva, se evicta quirúrgicamente de las listas
+`restock` y `activate` en `_stock_issues_cache` sin borrar el cache completo.
+
+- Archivo: `app/services/ml_listing_sync.py` — `_on_listings_updated(uid, updates)`
+- Archivo: `app/main.py` — `_invalidate_products_on_sync(uid, updates=None)` con evicción quirúrgica
+
+**Resultado:** La corrección es visible en el próximo ciclo de qty-sync (≤3 min)
+sin spinner y sin prewarm completo.
+
+---
+
 ## 2026-06-30 — FEAT: Mejoras de Ventas #1 y #2 — Precio vs Competencia + CVR% Funnel
 
 **Commit:** `ff6d7b6`
