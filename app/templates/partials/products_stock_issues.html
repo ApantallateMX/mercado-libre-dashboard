@@ -117,7 +117,7 @@
     {% endif %}
     <div class="bg-white rounded-lg shadow p-4 border-l-4 border-gray-300">
         <p class="text-xs text-gray-500">Total Alertas</p>
-        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) }}</p>
+        <p class="text-2xl font-bold text-gray-700">{{ restock_count + risk_count + activate_count + critical_count + full_no_stock_count + (imbalanced_count or 0) + (stagnant_count or 0) + (price_risk_count or 0) + (no_bm_sku_count or 0) }}</p>
         <p class="text-[10px] text-gray-400">Acciones pendientes</p>
     </div>
     {% if orphan_count %}
@@ -126,6 +126,14 @@
         <p class="text-xs text-gray-500">Listings Eliminados</p>
         <p class="text-2xl font-bold text-red-600">{{ orphan_count }}</p>
         <p class="text-[10px] text-gray-400">Eliminados de MercadoLibre</p>
+    </div>
+    {% endif %}
+    {% if no_bm_sku_count %}
+    <div onclick="document.getElementById('no-bm-sku-section').scrollIntoView({behavior:'smooth'})"
+         class="bg-white rounded-lg shadow p-4 border-l-4 border-amber-500 cursor-pointer hover:shadow-md hover:bg-amber-50/30 transition">
+        <p class="text-xs text-gray-500">Sin SKU en BM</p>
+        <p class="text-2xl font-bold text-amber-600">{{ no_bm_sku_count }}</p>
+        <p class="text-[10px] text-gray-400">SKU no encontrado en BinManager</p>
     </div>
     {% endif %}
 </div>
@@ -2174,6 +2182,7 @@ function bulkActivateAll() {
   paginateTable('tbody-imbalanced', 'pager-imbalanced');
   paginateTable('tbody-stagnant',   'pager-stagnant');
   paginateTable('tbody-price-risk', 'pager-price-risk');
+  paginateTable('tbody-no-bm-sku',  'pager-no-bm-sku');
 })();
 
 window.syncOneImbalanced = function(itemId, bmQty) {
@@ -2325,4 +2334,111 @@ window.syncOneImbalanced = function(itemId, bmQty) {
     _loadOrphans();
 })();
 </script>
+{% endif %}
+
+{% if no_bm_sku %}
+<!-- ===== Seccion: Sin cobertura BM ===== -->
+<div class="mb-8" id="no-bm-sku-section">
+    <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+            <div class="w-1 h-6 bg-amber-500 rounded"></div>
+            <h3 class="text-sm md:text-base font-bold text-gray-800">Sin SKU en BinManager</h3>
+            <span class="text-xs text-gray-400">({{ no_bm_sku_count }} listings — SKU no encontrado en BM)</span>
+        </div>
+    </div>
+    <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-xs text-amber-800">
+        <strong>Acción requerida:</strong> Estos listings tienen un SKU en ML que BinManager no reconoce.
+        Busca el producto en BM, obtén el SKU correcto (formato <code class="font-mono bg-amber-100 px-1 rounded">SNXX000000</code>) y actualízalo en el listing de ML (campo "Código de referencia del vendedor").
+    </div>
+
+    <!-- Desktop -->
+    <div class="hidden md:block bg-white rounded-lg shadow overflow-hidden border border-amber-100">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="bg-amber-50 border-b border-amber-200 text-left">
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">Publicación</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">ID</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">SKU en ML</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">Buscado en BM</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold text-center">Vtas 30d</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">Stock ML</th>
+                    <th class="py-2 px-3 text-xs text-gray-500 font-semibold">Precio</th>
+                </tr>
+            </thead>
+            <tbody id="tbody-no-bm-sku">
+                {% for p in no_bm_sku %}
+                <tr class="border-b border-gray-100 hover:bg-amber-50/30">
+                    <td class="py-2.5 px-3">
+                        <div class="flex items-center gap-2">
+                            {% if p.thumbnail %}
+                            <img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">
+                            {% endif %}
+                            <a href="https://articulo.mercadolibre.com.mx/MLM-{{ p.id|replace('MLM','') }}"
+                               target="_blank"
+                               class="text-xs text-blue-600 hover:underline line-clamp-2 max-w-[220px]">{{ p.title }}</a>
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 whitespace-nowrap">
+                        <span class="font-mono text-[11px] text-gray-500">{{ p.id }}</span>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <span class="font-mono text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">{{ p.sku or '—' }}</span>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <span class="font-mono text-[11px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded">{{ p._base_sku_bm or '—' }}</span>
+                        <span class="text-[10px] text-red-400 ml-1">✗ no en BM</span>
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        {% if p.get('units', 0) > 0 %}
+                        <span class="font-bold text-gray-800">{{ p.units }}</span>
+                        {% else %}
+                        <span class="text-gray-300">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-center">
+                        <span class="{% if p.available_quantity == 0 %}text-red-500 font-bold{% else %}text-gray-700{% endif %}">{{ p.available_quantity }}</span>
+                    </td>
+                    <td class="py-2.5 px-3 whitespace-nowrap text-xs text-gray-700">
+                        ${{ "{:,.0f}".format(p.price) }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div id="pager-no-bm-sku"></div>
+    </div>
+
+    <!-- Mobile cards -->
+    <div class="md:hidden space-y-2">
+        {% for p in no_bm_sku %}
+        <div class="bg-white rounded-lg shadow p-3 border-l-4 border-amber-400">
+            <div class="flex gap-3">
+                {% if p.thumbnail %}
+                <img src="{{ p.thumbnail }}" class="w-10 h-10 rounded object-cover flex-shrink-0" alt="">
+                {% endif %}
+                <div class="flex-1 min-w-0">
+                    <a href="https://articulo.mercadolibre.com.mx/MLM-{{ p.id|replace('MLM','') }}"
+                       target="_blank"
+                       class="text-xs font-medium text-blue-600 hover:underline line-clamp-2">{{ p.title }}</a>
+                    <span class="font-mono text-[10px] text-gray-400 block">{{ p.id }}</span>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-x-3 gap-y-1 mt-2 text-xs">
+                <div>
+                    <span class="text-gray-500">SKU ML:</span>
+                    <span class="font-mono font-bold text-amber-700">{{ p.sku or '—' }}</span>
+                </div>
+                <div>
+                    <span class="text-gray-500">En BM:</span>
+                    <span class="font-mono text-red-600">{{ p._base_sku_bm or '—' }}</span>
+                    <span class="text-red-400">✗</span>
+                </div>
+                <div><span class="text-gray-500">Vtas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
+                <div><span class="text-gray-500">Stock ML:</span> <span class="{% if p.available_quantity == 0 %}text-red-500 font-bold{% else %}text-gray-700{% endif %}">{{ p.available_quantity }}</span></div>
+                <div><span class="text-gray-500">Precio:</span> <span class="font-bold">${{ "{:,.0f}".format(p.price) }}</span></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
 {% endif %}
