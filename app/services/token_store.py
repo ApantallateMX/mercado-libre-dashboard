@@ -167,6 +167,16 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS ml_message_views (
+                pack_id    TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                viewed_by  TEXT NOT NULL,
+                viewed_at  REAL NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'pending',
+                PRIMARY KEY (pack_id, account_id)
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS bm_gap_scan_status (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 status TEXT NOT NULL DEFAULT 'idle',
@@ -1009,6 +1019,57 @@ async def get_bm_catalog_last_sync() -> float:
             row = await cur.fetchone()
     val = row[0] if row else None
     return float(val) if val else 0.0
+
+
+# ─── ml_message_views helpers ────────────────────────────────────────────────
+
+async def register_message_view(pack_id: str, account_id: str, viewed_by: str) -> None:
+    """Registra quién abrió primero un mensaje (INSERT OR IGNORE — no sobreescribe)."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR IGNORE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
+               VALUES (?, ?, ?, ?, 'pending')""",
+            (pack_id, account_id, viewed_by, _t.time()),
+        )
+        await db.commit()
+
+
+async def take_message(pack_id: str, account_id: str, taken_by: str) -> None:
+    """Asigna explícitamente un mensaje a un usuario (sobreescribe cualquier vista previa)."""
+    import time as _t
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
+               VALUES (?, ?, ?, ?, 'in_progress')""",
+            (pack_id, account_id, taken_by, _t.time()),
+        )
+        await db.commit()
+
+
+async def update_message_view_status(pack_id: str, account_id: str, status: str) -> None:
+    """Actualiza el estado de un mensaje: pending / in_progress / resolved."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE ml_message_views SET status = ? WHERE pack_id = ? AND account_id = ?",
+            (status, pack_id, account_id),
+        )
+        await db.commit()
+
+
+async def get_message_views(pack_ids: list, account_id: str) -> dict:
+    """Retorna dict {pack_id: {viewed_by, viewed_at, status}} para los pack_ids dados."""
+    if not pack_ids:
+        return {}
+    placeholders = ",".join("?" * len(pack_ids))
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT pack_id, viewed_by, viewed_at, status FROM ml_message_views "
+            f"WHERE pack_id IN ({placeholders}) AND account_id = ?",
+            list(pack_ids) + [account_id],
+        )).fetchall()
+    return {r["pack_id"]: dict(r) for r in rows}
 
 
 async def save_oauth_state(state: str, code_verifier: str):

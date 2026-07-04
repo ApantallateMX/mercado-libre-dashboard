@@ -1,8 +1,9 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from app.services.meli_client import get_meli_client, MeliApiError
+from app.services import token_store as _ts
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
@@ -242,6 +243,42 @@ async def list_messages(
         data = await client.get_messages(offset=offset, limit=limit,
                                          date_from=df, date_to=dt)
         return data
+    finally:
+        await client.close()
+
+
+@router.post("/messages/{pack_id}/take")
+async def take_message(pack_id: str, request: Request):
+    """Asigna explícitamente esta conversación al usuario actual."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        username = user.get("sub") or user.get("name") or "?"
+        account_id = str(client.user_id)
+        await _ts.take_message(pack_id, account_id, username)
+        return {"ok": True, "taken_by": username}
+    finally:
+        await client.close()
+
+
+class MessageStatusRequest(BaseModel):
+    status: str  # pending | in_progress | resolved
+
+
+@router.post("/messages/{pack_id}/status")
+async def update_message_status(pack_id: str, body: MessageStatusRequest, request: Request):
+    """Actualiza el estado interno de una conversación."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    if body.status not in ("pending", "in_progress", "resolved"):
+        raise HTTPException(status_code=400, detail="Status inválido")
+    try:
+        account_id = str(client.user_id)
+        await _ts.update_message_view_status(pack_id, account_id, body.status)
+        return {"ok": True, "status": body.status}
     finally:
         await client.close()
 

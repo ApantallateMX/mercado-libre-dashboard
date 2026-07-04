@@ -8415,6 +8415,7 @@ async def health_messages_partial(
     limit: int = Query(20, ge=1, le=50),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    q: str = Query("", description="Buscar por orden, comprador o producto"),
 ):
     client = await get_meli_client()
     if not client:
@@ -8531,11 +8532,37 @@ async def health_messages_partial(
             sorted_msgs.extend(grp)
         enriched = sorted_msgs
 
-        return templates.TemplateResponse(request, "partials/health_messages.html", {            "conversations": enriched,
+        # Búsqueda por orden, comprador o producto
+        q_clean = (q or "").strip().lower()
+        if q_clean:
+            enriched = [
+                c for c in enriched
+                if q_clean in str(c.order_id).lower()
+                or q_clean in str(c.pack_id).lower()
+                or q_clean in (c.order_buyer or "").lower()
+                or q_clean in (c.order_product or "").lower()
+            ]
+
+        # Enriquecer con quién abrió/tomó cada conversación
+        _du = getattr(request.state, "dashboard_user", {}) or {}
+        _current_user = _du.get("sub") or _du.get("name") or "?"
+        _pack_ids = [str(c.pack_id) for c in enriched if c.pack_id]
+        try:
+            _views_map = await token_store.get_message_views(_pack_ids, seller_id)
+        except Exception:
+            _views_map = {}
+        for c in enriched:
+            _v = _views_map.get(str(c.pack_id))
+            c.view_info = _v  # {viewed_by, viewed_at, status} o None
+            c.current_user = _current_user
+
+        return templates.TemplateResponse(request, "partials/health_messages.html", {
+            "conversations": enriched,
             "paging": paging,
             "offset": offset,
             "limit": limit,
             "seller_id": seller_id,
+            "q": q,
         })
     except Exception as e:
         return HTMLResponse(f'<p class="text-center py-4 text-red-500">Error cargando mensajes: {e}</p>')

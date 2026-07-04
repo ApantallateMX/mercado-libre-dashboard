@@ -1,5 +1,6 @@
-<!-- Filter: Pendientes / Todos -->
-<div class="flex gap-2 mb-4">
+<!-- Barra superior: búsqueda + filtros -->
+<div class="flex flex-wrap gap-2 mb-4 items-center">
+    <!-- Filtro Pendientes / Todos -->
     <button onclick="filterMessages('pending')" id="msg-filter-pending"
             class="px-3 py-1 text-xs rounded-full bg-yellow-400 text-gray-800 font-semibold">
         Pendientes
@@ -8,7 +9,31 @@
             class="px-3 py-1 text-xs rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200">
         Todos
     </button>
+
+    <!-- Búsqueda -->
+    <form id="msg-search-form" class="flex items-center gap-1 ml-auto" onsubmit="searchMessages(event)">
+        <input type="text" id="msg-search-input" value="{{ q or '' }}"
+               placeholder="Buscar por orden, comprador, producto..."
+               class="border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 w-56 focus:outline-none focus:border-yellow-400 focus:ring-1 focus:ring-yellow-300">
+        <button type="submit"
+                class="px-3 py-1.5 bg-yellow-400 text-gray-800 text-xs font-semibold rounded-lg hover:bg-yellow-500 transition">
+            Buscar
+        </button>
+        {% if q %}
+        <button type="button" onclick="clearMsgSearch()"
+                class="px-2 py-1.5 bg-gray-100 text-gray-500 text-xs rounded-lg hover:bg-gray-200 transition">
+            ✕
+        </button>
+        {% endif %}
+    </form>
 </div>
+
+{% if q %}
+<p class="text-xs text-gray-500 mb-3">
+    Mostrando resultados para <strong class="text-gray-700">"{{ q }}"</strong>
+    — {{ conversations | length }} coincidencia{{ 's' if conversations | length != 1 }}
+</p>
+{% endif %}
 
 <script>
 window.filterMessages = function(filter) {
@@ -27,23 +52,110 @@ window.filterMessages = function(filter) {
         cards.forEach(function(c) { c.style.display = ''; });
     }
 };
+
+window.searchMessages = function(e) {
+    e.preventDefault();
+    var q = document.getElementById('msg-search-input').value.trim();
+    if (window.switchHealthTab) {
+        window.switchHealthTab('messages', '/partials/health-messages?q=' + encodeURIComponent(q));
+    } else {
+        var url = '/partials/health-messages?q=' + encodeURIComponent(q);
+        htmx.ajax('GET', url, {target: '#health-tab-content', swap: 'innerHTML'});
+    }
+};
+
+window.clearMsgSearch = function() {
+    if (window.switchHealthTab) {
+        window.switchHealthTab('messages', '/partials/health-messages');
+    } else {
+        htmx.ajax('GET', '/partials/health-messages', {target: '#health-tab-content', swap: 'innerHTML'});
+    }
+};
+
+window._takeMsgConv = function(packId, btn) {
+    btn.disabled = true; btn.textContent = '...';
+    fetch('/api/health/messages/' + packId + '/take', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+        var badge = document.getElementById('msg-view-badge-' + packId);
+        if (badge) {
+            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700';
+            badge.innerHTML = '&#9679; Atendiendo: ' + (d.taken_by || '?');
+        }
+        btn.textContent = 'Tomado ✓'; btn.disabled = true;
+        btn.className = btn.className.replace('bg-violet-100 text-violet-700 hover:bg-violet-200', 'bg-gray-100 text-gray-400 cursor-default');
+    })
+    .catch(function() { btn.disabled = false; btn.textContent = 'Tomar'; });
+};
+
+window._setMsgStatus = function(packId, status, btn) {
+    btn.disabled = true;
+    fetch('/api/health/messages/' + packId + '/status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: status})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function() {
+        var badge = document.getElementById('msg-view-badge-' + packId);
+        if (status === 'resolved' && badge) {
+            badge.className = 'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700';
+            badge.textContent = '✓ Resuelto';
+            var card = document.getElementById('msg-card-' + packId);
+            if (card) { setTimeout(function() { card.style.opacity = '0.45'; }, 300); }
+        }
+        btn.disabled = false;
+    })
+    .catch(function() { btn.disabled = false; });
+};
 </script>
 
 {% if conversations %}
 <div class="space-y-4">
     {% for conv in conversations %}
+    {% set vi = conv.view_info %}
+    {% set vi_status = vi.status if vi else 'none' %}
     <div class="msg-conv-card border border-gray-200 rounded-lg overflow-hidden {{ 'border-l-4 border-l-yellow-400' if conv.needs_response else '' }}"
+         id="msg-card-{{ conv.pack_id }}"
          data-needs-response="{{ 'true' if conv.needs_response else 'false' }}">
-        <!-- Header with order context -->
+
+        <!-- Header -->
         <div class="p-4 pb-2">
-            <div class="flex justify-between items-start mb-2">
+            <div class="flex justify-between items-start mb-2 flex-wrap gap-y-1">
                 <div class="flex items-center gap-2 flex-wrap">
-                    <span class="text-sm font-semibold text-gray-800">Conversacion #{{ conv.pack_id }}</span>
+                    <span class="text-sm font-semibold text-gray-800">Conversación #{{ conv.pack_id }}</span>
                     {% if conv.needs_response %}
                     <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 font-semibold">Pendiente</span>
                     {% endif %}
                     {% if conv.order_buyer %}
                     <span class="text-xs text-gray-400">{{ conv.order_buyer }}</span>
+                    {% endif %}
+
+                    <!-- Badge de quién lo abrió/tomó -->
+                    {% if vi %}
+                        {% if vi_status == 'resolved' %}
+                        <span id="msg-view-badge-{{ conv.pack_id }}"
+                              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">
+                            ✓ Resuelto
+                        </span>
+                        {% elif vi_status == 'in_progress' %}
+                        <span id="msg-view-badge-{{ conv.pack_id }}"
+                              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-100 text-violet-700">
+                            &#9679; Atendiendo: {{ vi.viewed_by }}
+                        </span>
+                        {% else %}
+                        <span id="msg-view-badge-{{ conv.pack_id }}"
+                              class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-600">
+                            Abrió: {{ vi.viewed_by }}
+                        </span>
+                        {% endif %}
+                    {% else %}
+                    <span id="msg-view-badge-{{ conv.pack_id }}"
+                          class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-400">
+                        Sin abrir
+                    </span>
                     {% endif %}
                 </div>
                 <span class="text-xs text-gray-500">{{ conv.date }} &middot; {{ conv.last_elapsed }}</span>
@@ -54,6 +166,9 @@ window.filterMessages = function(filter) {
             <div class="bg-gray-50 rounded px-3 py-2 mb-2 text-xs text-gray-600 flex items-center gap-3 flex-wrap">
                 <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
                 <span class="truncate max-w-xs">{{ conv.order_product[:60] }}</span>
+                {% if conv.order_id %}
+                <span class="font-mono text-gray-400">Orden #{{ conv.order_id }}</span>
+                {% endif %}
                 {% if conv.order_amount %}
                 <span class="font-semibold text-gray-700">${{ "{:,.2f}".format(conv.order_amount) }} {{ conv.order_currency }}</span>
                 {% endif %}
@@ -67,6 +182,7 @@ window.filterMessages = function(filter) {
             {% endif %}
         </div>
 
+        <!-- Mensajes del hilo -->
         {% if conv.messages %}
         <div id="conv-messages-{{ conv.pack_id }}" class="px-4 space-y-1.5 mb-3 max-h-48 overflow-y-auto">
             {% for m in conv.messages[-5:] %}
@@ -84,8 +200,39 @@ window.filterMessages = function(filter) {
         </div>
         {% endif %}
 
+        <!-- Acciones -->
         <div class="px-4 pb-4 border-t pt-3">
-            <!-- AI Suggest Button -->
+
+            <!-- Botones de gestión interna -->
+            <div class="flex items-center gap-2 mb-3 flex-wrap">
+                <!-- Tomar: solo si no está tomado/resuelto por otro -->
+                {% if not vi or vi_status == 'pending' %}
+                <button onclick="window._takeMsgConv('{{ conv.pack_id }}', this)"
+                        class="text-xs px-3 py-1 rounded-full bg-violet-100 text-violet-700 hover:bg-violet-200 font-semibold transition">
+                    Tomar
+                </button>
+                {% elif vi_status == 'in_progress' and vi.viewed_by == conv.current_user %}
+                <button onclick="window._takeMsgConv('{{ conv.pack_id }}', this)"
+                        class="text-xs px-3 py-1 rounded-full bg-violet-100 text-violet-700 hover:bg-violet-200 font-semibold transition">
+                    Re-tomar
+                </button>
+                {% endif %}
+
+                <!-- Resolver: solo si hay una vista registrada y no está resuelto -->
+                {% if vi and vi_status != 'resolved' %}
+                <button onclick="window._setMsgStatus('{{ conv.pack_id }}', 'resolved', this)"
+                        class="text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 hover:bg-green-200 font-semibold transition">
+                    Marcar resuelto
+                </button>
+                {% elif vi and vi_status == 'resolved' %}
+                <button onclick="window._setMsgStatus('{{ conv.pack_id }}', 'pending', this)"
+                        class="text-xs px-3 py-1 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 font-semibold transition">
+                    Reabrir
+                </button>
+                {% endif %}
+            </div>
+
+            <!-- IA Suggest -->
             <div class="mb-2">
                 <button onclick="suggestMessageReply(this)"
                         data-pack-id="{{ conv.pack_id }}"
@@ -117,7 +264,7 @@ window.filterMessages = function(filter) {
                 </div>
             </div>
 
-            <!-- Message textarea -->
+            <!-- Textarea respuesta -->
             <textarea id="msg-input-{{ conv.pack_id }}" rows="2"
                       class="w-full border rounded px-3 py-2 text-sm" placeholder="Escribe tu mensaje..."></textarea>
             <div class="flex items-center gap-2 mt-2">
@@ -153,5 +300,7 @@ window.filterMessages = function(filter) {
 {% endif %}
 
 {% else %}
-<p class="text-center py-8 text-gray-500">No hay mensajes</p>
+<p class="text-center py-8 text-gray-500">
+    {% if q %}No se encontraron mensajes para "{{ q }}"{% else %}No hay mensajes{% endif %}
+</p>
 {% endif %}
