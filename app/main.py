@@ -7958,7 +7958,15 @@ async def health_claims_partial(
         # Sort: urgency first (red > yellow > green > gray), then by date
         _urgency_order = {"red": 0, "yellow": 1, "green": 2, "gray": 3}
         enriched.sort(key=lambda c: (_urgency_order.get(c.urgency, 3), not c._sort_date, c._sort_date), reverse=False)
-        # Reverse date within same urgency (newest first) — already handled by tuple sort
+
+        # Attach view tracking info to each claim
+        _du = getattr(request.state, "dashboard_user", {}) or {}
+        _current_user = _du.get("sub") or _du.get("name") or "?"
+        _claim_ids = [str(c.id) for c in enriched if c.id]
+        _claim_views = await token_store.get_claim_views(_claim_ids, str(client.user_id))
+        for c in enriched:
+            c.view_info = _claim_views.get(str(c.id))
+            c.current_user = _current_user
 
         return templates.TemplateResponse(request, "partials/health_claims.html", {            "claims": enriched,
             "paging": paging,

@@ -43,6 +43,19 @@
                 }.get(claim.status, 'bg-yellow-100 text-yellow-800') %}
                 <span class="px-2 py-0.5 text-xs rounded-full {{ status_class }}">{{ claim.status }}</span>
 
+                <!-- Tracking badge -->
+                {% if claim.view_info %}
+                    {% if claim.view_info.status == 'resolved' %}
+                    <span class="tracking-badge px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold">&#10003; Resuelto por {{ claim.view_info.viewed_by }}</span>
+                    {% elif claim.view_info.status == 'in_progress' %}
+                    <span class="tracking-badge px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 font-semibold">Atendiendo: {{ claim.view_info.viewed_by }}</span>
+                    {% else %}
+                    <span class="tracking-badge px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">Abrió: {{ claim.view_info.viewed_by }}</span>
+                    {% endif %}
+                {% else %}
+                <span class="tracking-badge px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500">Sin atender</span>
+                {% endif %}
+
                 <!-- Countdown badge -->
                 {% if claim.countdown_hours is not none and claim.status == 'opened' %}
                     {% if claim.countdown_hours < 8 %}
@@ -173,6 +186,31 @@
         {% endif %}
 
         {% if claim.status == 'opened' %}
+        <!-- Tracking actions -->
+        <div class="flex gap-2 mb-3 flex-wrap">
+            {% if not claim.view_info or claim.view_info.status == 'pending' %}
+            <button onclick="window._takeClaimConv('{{ claim.id }}', this)"
+                    class="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full hover:bg-indigo-200 font-semibold transition-colors">
+                &#128722; Tomar
+            </button>
+            {% elif claim.view_info.status == 'in_progress' and claim.view_info.viewed_by == claim.current_user %}
+            <button onclick="window._setClaimStatus('{{ claim.id }}', 'resolved', this)"
+                    class="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-full hover:bg-green-200 font-semibold transition-colors">
+                &#10003; Marcar resuelto
+            </button>
+            {% elif claim.view_info.status == 'resolved' %}
+            <button onclick="window._setClaimStatus('{{ claim.id }}', 'pending', this)"
+                    class="text-xs bg-gray-100 text-gray-600 px-3 py-1.5 rounded-full hover:bg-gray-200 font-semibold transition-colors">
+                &#8635; Reabrir
+            </button>
+            {% else %}
+            <button onclick="window._takeClaimConv('{{ claim.id }}', this)"
+                    class="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full hover:bg-indigo-200 font-semibold transition-colors">
+                &#128722; Tomar
+            </button>
+            {% endif %}
+        </div>
+
         <!-- AI Action Buttons -->
         <div class="flex gap-2 mb-3">
             <button onclick="analyzeClaimAi(this)"
@@ -286,3 +324,73 @@
     <p class="text-xs text-gray-300 mt-2">Si esperas ver reclamos, ajusta el filtro de fechas</p>
 </div>
 {% endif %}
+
+<script>
+window._takeClaimConv = function(claimId, btn) {
+    btn.disabled = true;
+    btn.textContent = '...';
+    fetch('/api/health/claims/' + claimId + '/take', {method: 'POST'})
+        .then(r => r.json())
+        .then(d => {
+            if (d.ok) {
+                var row = document.getElementById('claim-row-' + claimId);
+                if (row) {
+                    var badge = row.querySelector('.tracking-badge');
+                    if (badge) {
+                        badge.textContent = 'Atendiendo: ' + d.taken_by;
+                        badge.className = 'tracking-badge px-2 py-0.5 text-xs rounded-full bg-violet-100 text-violet-700 font-semibold';
+                    }
+                }
+                btn.textContent = '✓ Tomado';
+                btn.className = btn.className.replace('bg-indigo-100 text-indigo-700', 'bg-green-100 text-green-700');
+                btn.onclick = function(){ window._setClaimStatus(claimId, 'resolved', btn); };
+                btn.textContent = '✓ Marcar resuelto';
+            } else {
+                btn.disabled = false;
+                btn.textContent = '🚢 Tomar';
+            }
+        })
+        .catch(() => { btn.disabled = false; btn.textContent = '🚢 Tomar'; });
+};
+
+window._setClaimStatus = function(claimId, status, btn) {
+    btn.disabled = true;
+    fetch('/api/health/claims/' + claimId + '/status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status: status})
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.ok) {
+            var row = document.getElementById('claim-row-' + claimId);
+            if (status === 'resolved' && row) {
+                var badge = row.querySelector('.tracking-badge');
+                if (badge) {
+                    badge.className = 'tracking-badge px-2 py-0.5 text-xs rounded-full bg-green-100 text-green-700 font-semibold';
+                    badge.textContent = '✓ Resuelto';
+                }
+                btn.textContent = '↺ Reabrir';
+                btn.className = btn.className.replace('bg-green-100 text-green-700', 'bg-gray-100 text-gray-600');
+                btn.disabled = false;
+                btn.onclick = function(){ window._setClaimStatus(claimId, 'pending', btn); };
+            } else if (status === 'pending' && row) {
+                var badge = row.querySelector('.tracking-badge');
+                if (badge) {
+                    badge.className = 'tracking-badge px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-500';
+                    badge.textContent = 'Sin atender';
+                }
+                btn.textContent = '🚢 Tomar';
+                btn.className = btn.className.replace('bg-gray-100 text-gray-600', 'bg-indigo-100 text-indigo-700');
+                btn.disabled = false;
+                btn.onclick = function(){ window._takeClaimConv(claimId, btn); };
+            } else {
+                btn.disabled = false;
+            }
+        } else {
+            btn.disabled = false;
+        }
+    })
+    .catch(() => { btn.disabled = false; });
+};
+</script>

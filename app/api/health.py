@@ -283,6 +283,42 @@ async def update_message_status(pack_id: str, body: MessageStatusRequest, reques
         await client.close()
 
 
+@router.post("/claims/{claim_id}/take")
+async def take_claim(claim_id: str, request: Request):
+    """Asigna explícitamente este reclamo al usuario actual."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    try:
+        user = getattr(request.state, "dashboard_user", {}) or {}
+        username = user.get("sub") or user.get("name") or "?"
+        account_id = str(client.user_id)
+        await _ts.take_claim(claim_id, account_id, username)
+        return {"ok": True, "taken_by": username}
+    finally:
+        await client.close()
+
+
+class ClaimStatusRequest(BaseModel):
+    status: str  # pending | in_progress | resolved
+
+
+@router.post("/claims/{claim_id}/status")
+async def update_claim_status(claim_id: str, body: ClaimStatusRequest, request: Request):
+    """Actualiza el estado interno de seguimiento de un reclamo."""
+    client = await get_meli_client()
+    if not client:
+        raise HTTPException(status_code=401, detail="No autenticado")
+    if body.status not in ("pending", "in_progress", "resolved"):
+        raise HTTPException(status_code=400, detail="Status inválido")
+    try:
+        account_id = str(client.user_id)
+        await _ts.update_claim_view_status(claim_id, account_id, body.status)
+        return {"ok": True, "status": body.status}
+    finally:
+        await client.close()
+
+
 @router.post("/messages/{pack_id}/send")
 async def send_message(pack_id: str, body: MessageRequest):
     """Enviar mensaje en una conversacion."""

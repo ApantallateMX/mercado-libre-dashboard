@@ -1072,6 +1072,48 @@ async def get_message_views(pack_ids: list, account_id: str) -> dict:
     return {r["pack_id"]: dict(r) for r in rows}
 
 
+# ─── ml_claim_views helpers (reusa ml_message_views con prefijo "claim:") ─────
+
+async def take_claim(claim_id: str, account_id: str, taken_by: str) -> None:
+    """Asigna explícitamente un reclamo a un usuario (sobreescribe)."""
+    import time as _t
+    _key = f"claim:{claim_id}"
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO ml_message_views (pack_id, account_id, viewed_by, viewed_at, status)
+               VALUES (?, ?, ?, ?, 'in_progress')""",
+            (_key, account_id, taken_by, _t.time()),
+        )
+        await db.commit()
+
+
+async def update_claim_view_status(claim_id: str, account_id: str, status: str) -> None:
+    """Actualiza el estado interno de un reclamo: pending / in_progress / resolved."""
+    _key = f"claim:{claim_id}"
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE ml_message_views SET status = ? WHERE pack_id = ? AND account_id = ?",
+            (status, _key, account_id),
+        )
+        await db.commit()
+
+
+async def get_claim_views(claim_ids: list, account_id: str) -> dict:
+    """Retorna dict {claim_id: {viewed_by, viewed_at, status}} para los claim_ids dados."""
+    if not claim_ids:
+        return {}
+    _keys = [f"claim:{cid}" for cid in claim_ids]
+    placeholders = ",".join("?" * len(_keys))
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        rows = await (await db.execute(
+            f"SELECT pack_id, viewed_by, viewed_at, status FROM ml_message_views "
+            f"WHERE pack_id IN ({placeholders}) AND account_id = ?",
+            list(_keys) + [account_id],
+        )).fetchall()
+    return {r["pack_id"].replace("claim:", "", 1): dict(r) for r in rows}
+
+
 async def save_oauth_state(state: str, code_verifier: str):
     """Guarda el state OAuth en DB para sobrevivir reinicios del servidor."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
