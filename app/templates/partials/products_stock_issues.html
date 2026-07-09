@@ -187,7 +187,10 @@
                 {% endif %}
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
+                {% set _rst_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else p.get('_bm_avail', 0) %}
+                {% set _rst_alloc = p.get('_bm_avail', 0) %}
+                {% set _rst_sync_qty = [(_rst_alloc * 0.6) | int, 1] | max %}
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ _rst_raw }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}{% if _rst_raw != _rst_alloc and _rst_alloc > 0 %} <span class="text-[10px] text-indigo-400" title="Cuota asignada a esta cuenta">asig:{{ _rst_alloc }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
                 {% set _mob_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _mob_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}{% endif %}</div>
@@ -204,7 +207,7 @@
                            class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
                             Ver en MeLi ↗
                         </a>
-                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                        <button onclick="syncFullItem('{{ p.id }}', {{ _rst_alloc }}, this)"
                                 class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600">
                             Ya cambié → Sync
                         </button>
@@ -218,9 +221,10 @@
                     Sync Var. ({{ p.variations|length }})
                 </button>
                 {% else %}
-                <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
-                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
-                    Sync 60%
+                <button onclick="syncRestockItem('{{ p.id }}', {{ _rst_alloc }}, this)"
+                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]"
+                        title="Sincroniza ~{{ _rst_sync_qty }} uds (60% de cuota asignada)">
+                    Sync ~{{ _rst_sync_qty }} uds
                 </button>
                 {% endif %}
                 <button onclick="openEditModal('{{ p.id }}')"
@@ -300,14 +304,18 @@
                     </td>
                     <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) }}</td>
-                    <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if p.get('_bm_avail', 0) > 0 else 'text-gray-400' }}">
+                    {% set _rst_dt_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else p.get('_bm_avail', 0) %}
+                    {% set _rst_dt_alloc = p.get('_bm_avail', 0) %}
+                    {% set _rst_dt_sq = [(_rst_dt_alloc * 0.6) | int, 1] | max %}
+                    <td class="px-3 py-2 text-right font-bold {{ 'text-green-600' if _rst_dt_raw > 0 else 'text-gray-400' }}">
                         {% if p.get('has_variations') %}
                         <span class="text-indigo-500 text-[10px] cursor-pointer underline decoration-dotted"
                               data-variations='{{ p.variations | tojson }}'
                               onclick="showVarStockPanel('{{ p.id }}', this)"
                               title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
-                        {{ p.get('_bm_avail', 0) }}
+                        {{ _rst_dt_raw }}
+                        {% if _rst_dt_raw != _rst_dt_alloc and _rst_dt_alloc > 0 %}<div class="text-[10px] text-indigo-400 font-normal" title="Cuota asignada a esta cuenta">asig:{{ _rst_dt_alloc }}</div>{% endif %}
                         {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}
                         {% if p.get('_days_supply') is not none %}<div class="text-[10px] font-normal {{ 'text-orange-600 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}" title="Días de supply estimados">{{ p._days_supply }}d{% if p.get('_is_scarce') %} ⚡{% endif %}</div>{% endif %}
                         {% endif %}
@@ -322,7 +330,7 @@
                             <span class="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded text-[10px] font-semibold whitespace-nowrap">⚠️ FULL</span>
                             <a href="https://articulo.mercadolibre.com.mx/{{ p.id | replace('MLM', 'MLM-') }}" target="_blank"
                                class="px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs font-medium whitespace-nowrap">Ver en MeLi ↗</a>
-                            <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
+                            <button onclick="syncFullItem('{{ p.id }}', {{ _rst_dt_alloc }}, this)"
                                     class="px-2 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium whitespace-nowrap">
                                 Ya cambié → Sync
                             </button>
@@ -334,13 +342,14 @@
                             <button onclick="syncVariationStocks('{{ p.id }}', this)"
                                     data-variations='{{ p.variations | tojson }}'
                                     class="px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs font-medium transition"
-                                    title="Sync seguro por variacion">
+                                    title="Sync por variacion — seguro">
                                 Sync Var.
                             </button>
                             {% else %}
-                            <button onclick="syncRestockItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, this)"
-                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition">
-                                Sync 60%
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ _rst_dt_alloc }}, this)"
+                                    class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition"
+                                    title="Sincroniza ~{{ _rst_dt_sq }} uds (60% de cuota asignada)">
+                                Sync ~{{ _rst_dt_sq }} uds
                             </button>
                             {% endif %}
                             <button onclick="openEditModal('{{ p.id }}')"
@@ -420,9 +429,12 @@
                     <span class="font-bold text-yellow-600">{{ p.available_quantity }}</span>
                     {% endif %}
                 </div>
+                {% set _act_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else (p.get('_bm_avail', 0) or 0) %}
+                {% set _act_alloc = p.get('_bm_avail', 0) or 0 %}
                 <div>
                     <span class="text-gray-500">BM Disp:</span>
-                    <span class="font-bold {{ 'text-red-600' if (p.get('_bm_avail', 0) or 0) == 0 else 'text-blue-600' }}">{{ p.get('_bm_avail', 0) or 0 }}</span>
+                    <span class="font-bold {{ 'text-red-600' if _act_raw == 0 else 'text-blue-600' }}">{{ _act_raw }}</span>
+                    {% if _act_raw != _act_alloc and _act_alloc > 0 %}<span class="text-[9px] text-indigo-400 ml-1" title="Cuota asignada a esta cuenta">asig:{{ _act_alloc }}</span>{% endif %}
                     {% if (p.get('_bm_reserved', 0) or 0) > 0 %}<span class="text-[9px] text-orange-500 ml-1">{{ p.get('_bm_reserved', 0) }}↩res</span>{% endif %}
                 </div>
                 <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
@@ -527,14 +539,17 @@
                         {{ p.available_quantity }}
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right font-bold text-red-600">
+                    {% set _act_dt_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else (p.get('_bm_avail', 0) or 0) %}
+                    {% set _act_dt_alloc = p.get('_bm_avail', 0) or 0 %}
+                    <td class="px-3 py-2 text-right font-bold {{ 'text-red-600' if _act_dt_raw == 0 else 'text-blue-600' }}">
                         {% if p.get('has_variations') %}
                         <span class="text-indigo-500 text-[10px] font-normal cursor-pointer underline decoration-dotted"
                               data-variations='{{ p.variations | tojson }}'
                               onclick="showVarStockPanel('{{ p.id }}', this)"
                               title="Ver stock BM por variacion">por var. 👁</span>
                         {% else %}
-                        {{ p.get('_bm_avail', 0) or 0 }}
+                        {{ _act_dt_raw }}
+                        {% if _act_dt_raw != _act_dt_alloc and _act_dt_alloc > 0 %}<div class="text-[10px] text-indigo-400 font-normal" title="Cuota asignada">asig:{{ _act_dt_alloc }}</div>{% endif %}
                         {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}
                         {% if p.get('_days_supply') is not none %}<div class="text-[10px] font-normal {{ 'text-orange-600 font-bold' if p.get('_is_scarce') else 'text-gray-400' }}" title="Días de supply estimados">{{ p._days_supply }}d{% if p.get('_is_scarce') %} ⚡{% endif %}</div>{% endif %}
                         {% endif %}

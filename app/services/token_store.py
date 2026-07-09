@@ -662,7 +662,9 @@ async def init_db():
             )
         """)
         await db.execute(
-            "INSERT OR IGNORE INTO stock_distribution_settings (id) VALUES (1)"
+            "INSERT OR IGNORE INTO stock_distribution_settings "
+            "(id, scarce_threshold_units, scarce_threshold_days, safety_buffer_units, updated_at) "
+            "VALUES (1, 3, 7, 1, 0)"
         )
         # ─────────────────────────────────────────────────────────────────
         # TABLA: account_deal_config — precios para deals por cuenta

@@ -510,6 +510,19 @@ async def lifespan(app: FastAPI):
 
     async def _deferred_init():
         """Inicialización diferida — corre después de que uvicorn ya acepta requests."""
+        # 0. One-time migration: si distribution_settings nunca fue configurado
+        #    manualmente (updated_at==0), aplicar umbrales más sensatos que los
+        #    defaults originales (threshold=10, buffer=2 → threshold=3, buffer=1).
+        try:
+            _dist_stg = await token_store.get_distribution_settings()
+            if (_dist_stg.get("updated_at") or 0) == 0:
+                await token_store.upsert_distribution_settings(
+                    scarce_threshold_units=3, scarce_threshold_days=7, safety_buffer_units=1
+                )
+                logger.info("[MIGRATION] distribution_settings: threshold 10→3, buffer 2→1")
+        except Exception as _e_dm:
+            logger.warning(f"[MIGRATION] distribution_settings failed: {_e_dm}")
+
         # 1. Refrescar tokens ML + Amazon (con retry si ML rate-limita)
         await _seed_tokens_with_retry()
         await _seed_amazon_accounts()
