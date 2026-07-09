@@ -482,3 +482,110 @@ async def delete_request(request: Request, req_id: int):
         raise HTTPException(status_code=403, detail="Solo admin puede eliminar solicitudes")
     await token_store.delete_billing_request(req_id)
     return {"ok": True}
+
+
+@router.post("/requests/backfill-order-data")
+async def backfill_order_data(request: Request):
+    """Migración one-time: enriquece order_data para solicitudes ML sin items.
+    Solo admin. Llama /orders/{id} para cada solicitud sin datos de producto.
+    """
+    du = _get_du(request)
+    if du["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Solo admin")
+
+    import aiosqlite, json as _json, asyncio as _asyncio
+    from app.services.token_store import DATABASE_PATH
+    from app.services.meli_client import get_meli_client
+
+    # 1. Obtener todas las solicitudes ML
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, order_number, ml_user_id FROM billing_requests "
+            "WHERE platform='mercadolibre' AND (order_data IS NULL OR order_data='{}' OR order_data='')"
+        )
+        pending = [dict(r) for r in await cur.fetchall()]
+
+    if not pending:
+        return {"ok": True, "updated": 0, "skipped": 0, "errors": [], "message": "Nada por enriquecer"}
+
+    # 2. Cache de clientes ML por user_id
+    _clients: dict = {}
+    async def _get_client(uid: str):
+        if uid not in _clients:
+            c = await get_meli_client(user_id=uid or None)
+            _clients[uid] = c
+        return _clients[uid]
+
+    updated = 0
+    skipped = 0
+    errors = []
+
+    # 3. Procesar secuencialmente (evitar 429)
+    for row in pending:
+        req_id    = row["id"]
+        order_num = (row["order_number"] or "").strip()
+        uid       = (row["ml_user_id"] or "").strip()
+
+        if not order_num:
+            skipped += 1
+            continue
+
+        try:
+            client = await _get_client(uid)
+            if not client:
+                # Intentar con cualquier cuenta disponible
+                all_tokens = await token_store.get_all_tokens()
+                for acc in all_tokens:
+                    client = await get_meli_client(user_id=acc["user_id"])
+                    if client:
+                        break
+            if not client:
+                errors.append({"id": req_id, "order": order_num, "error": "Sin cliente ML"})
+                continue
+
+            order = await client.get(f"/orders/{order_num}")
+            if not order or "error" in order:
+                errors.append({"id": req_id, "order": order_num, "error": str(order.get("error", "not found"))})
+                continue
+
+            order_items_raw = order.get("order_items", [])
+            items = []
+            for oi in order_items_raw:
+                item = oi.get("item") or {}
+                items.append({
+                    "title":      item.get("title", ""),
+                    "sku":        item.get("seller_sku") or item.get("seller_custom_field") or "",
+                    "quantity":   oi.get("quantity", 1),
+                    "unit_price": oi.get("unit_price") or oi.get("full_unit_price") or 0,
+                })
+
+            od = {
+                "items":    items,
+                "total":    order.get("total_amount"),
+                "currency": order.get("currency_id", "MXN"),
+                "date":     (order.get("date_closed") or order.get("date_created") or "")[:10],
+                "status":   order.get("status", ""),
+            }
+
+            await token_store.update_billing_order_data(req_id, _json.dumps(od))
+            updated += 1
+
+        except Exception as e:
+            errors.append({"id": req_id, "order": order_num, "error": str(e)})
+
+    # Cerrar clientes abiertos
+    for c in _clients.values():
+        if c:
+            try:
+                await c.close()
+            except Exception:
+                pass
+
+    return {
+        "ok": True,
+        "updated": updated,
+        "skipped": skipped,
+        "errors":  errors,
+        "message": f"{updated} solicitudes enriquecidas, {skipped} sin número de orden, {len(errors)} errores",
+    }
