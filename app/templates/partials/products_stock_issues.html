@@ -196,6 +196,14 @@
                 <div class="text-[10px] text-gray-400">{% if _mob_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}{% endif %}</div>
                 {% endif %}
             </div>
+            {% if p.get('_rec_qty') %}
+            {% set _rec_color = 'bg-green-50 border-green-200 text-green-700' if p._rec_badge == 'alta demanda' else ('bg-yellow-50 border-yellow-200 text-yellow-700' if p._rec_badge == 'demanda media' else 'bg-gray-50 border-gray-200 text-gray-600') %}
+            <div class="flex items-center gap-2 mt-2 px-2 py-1.5 {{ _rec_color }} border rounded-lg">
+                <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"/><path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"/></svg>
+                <span class="text-[10px] font-bold">IA: {{ p._rec_qty }} uds</span>
+                <span class="text-[10px] opacity-70">{{ p.get('_rec_u30', 0) }} ventas/mes · {{ p._rec_badge }}</span>
+            </div>
+            {% endif %}
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
                 {% if p.get('is_full') %}
                 <div class="flex-1 flex flex-col gap-1">
@@ -207,7 +215,7 @@
                            class="flex-1 py-1.5 text-center text-xs bg-blue-500 text-white rounded-lg font-medium">
                             Ver en MeLi ↗
                         </a>
-                        <button onclick="syncFullItem('{{ p.id }}', {{ _rst_alloc }}, this)"
+                        <button onclick="syncFullItem('{{ p.id }}', {{ p.get('_rec_qty') or _rst_alloc }}, this)"
                                 class="flex-1 py-1.5 text-xs bg-orange-500 text-white rounded-lg font-medium active:bg-orange-600">
                             Ya cambié → Sync
                         </button>
@@ -221,10 +229,10 @@
                     Sync Var. ({{ p.variations|length }})
                 </button>
                 {% else %}
-                <button onclick="syncRestockItem('{{ p.id }}', {{ _rst_alloc }}, this)"
-                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]"
-                        title="Sincroniza ~{{ _rst_sync_qty }} uds (60% de cuota asignada)">
-                    Sync ~{{ _rst_sync_qty }} uds
+                {% set _final_qty = p.get('_rec_qty') or _rst_sync_qty %}
+                <button onclick="syncRestockItem('{{ p.id }}', {{ _final_qty }}, this)"
+                        class="flex-1 py-1.5 text-xs bg-purple-600 text-white rounded-lg font-medium active:bg-purple-700 min-h-[36px]">
+                    Sync {{ _final_qty }} uds
                 </button>
                 {% endif %}
                 <button onclick="openEditModal('{{ p.id }}')"
@@ -346,10 +354,11 @@
                                 Sync Var.
                             </button>
                             {% else %}
-                            <button onclick="syncRestockItem('{{ p.id }}', {{ _rst_dt_alloc }}, this)"
+                            {% set _rst_dt_final = p.get('_rec_qty') or _rst_dt_sq %}
+                            <button onclick="syncRestockItem('{{ p.id }}', {{ _rst_dt_final }}, this)"
                                     class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs font-medium transition"
-                                    title="Sincroniza ~{{ _rst_dt_sq }} uds (60% de cuota asignada)">
-                                Sync ~{{ _rst_dt_sq }} uds
+                                    title="{{ p.get('_rec_badge', '') }} · {{ p.get('_rec_u30', 0) }} ventas/mes">
+                                Sync {{ _rst_dt_final }} uds{% if p.get('_rec_badge') %} <span class="opacity-70 font-normal">(IA)</span>{% endif %}
                             </button>
                             {% endif %}
                             <button onclick="openEditModal('{{ p.id }}')"
@@ -812,7 +821,9 @@
                     {% endif %}
                 </div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-red-600">0</span></div>
-                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ p.get('_bm_avail', 0) }}</span>{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
+                {% set _act_mob_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else p.get('_bm_avail', 0) %}
+                {% set _act_mob_alloc = p.get('_bm_avail', 0) %}
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-600">{{ _act_mob_raw }}</span>{% if _act_mob_raw != _act_mob_alloc and _act_mob_alloc > 0 %} <span class="text-[10px] text-indigo-400">asig:{{ _act_mob_alloc }}</span>{% endif %}{% if p.get('_bm_reserved', 0) > 0 %} <span class="text-[10px] text-orange-500">Res:{{ p._bm_reserved }}</span>{% endif %}</div>
                 {% if p.get('_bm_mty') is not none %}
                 {% set _mob_no_wh = not p.get('_bm_wh_fetched') %}
                 <div class="text-[10px] text-gray-400">{% if _mob_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p._bm_mty }} CDMX:{{ p.get('_bm_cdmx', 0) }} TJ:{{ p.get('_bm_tj', 0) }}{% endif %}</div>
@@ -822,10 +833,19 @@
                     <span class="font-bold {{ 'text-yellow-600' if p.status == 'paused' else 'text-gray-600' }}">{{ p.status }}</span>
                 </div>
             </div>
+            {% if p.get('_rec_qty') %}
+            {% set _act_rec_color = 'bg-green-50 border-green-200 text-green-700' if p._rec_badge == 'alta demanda' else ('bg-yellow-50 border-yellow-200 text-yellow-700' if p._rec_badge == 'demanda media' else 'bg-gray-50 border-gray-200 text-gray-600') %}
+            <div class="flex items-center gap-2 mt-2 px-2 py-1.5 {{ _act_rec_color }} border rounded-lg">
+                <svg class="w-3 h-3 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path d="M11 3a1 1 0 100 2h2.586l-6.293 6.293a1 1 0 101.414 1.414L15 6.414V9a1 1 0 102 0V4a1 1 0 00-1-1h-5z"/><path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z"/></svg>
+                <span class="text-[10px] font-bold">IA: {{ p._rec_qty }} uds</span>
+                <span class="text-[10px] opacity-70">{{ p.get('_rec_u30', 0) }} ventas/mes · {{ p._rec_badge }}</span>
+            </div>
+            {% endif %}
             <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
+                {% set _act_final = p.get('_rec_qty') or p.get('_bm_avail', 0) %}
+                <button onclick="activateItem('{{ p.id }}', {{ _act_final }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
                         class="flex-1 py-1.5 text-xs bg-green-600 text-white rounded-lg font-medium active:bg-green-700 min-h-[36px]">
-                    Sync + Activar
+                    Sync {{ _act_final }} uds + Activar
                 </button>
                 <button onclick="openEditModal('{{ p.id }}')"
                         class="flex-1 py-1.5 text-xs bg-gray-200 text-gray-700 rounded-lg font-medium active:bg-gray-300 min-h-[36px]">
@@ -895,16 +915,25 @@
                         <span class="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-[10px] font-medium">{{ p.status }}</span>
                         {% endif %}
                     </td>
-                    <td class="px-3 py-2 text-right font-bold text-green-600">{{ p.get('_bm_avail', 0) }}{% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}</td>
+                    {% set _act_dt_bm_raw = p.get('_bm_avail_raw') if p.get('_bm_avail_raw') is not none else p.get('_bm_avail', 0) %}
+                    {% set _act_dt_alloc = p.get('_bm_avail', 0) %}
+                    <td class="px-3 py-2 text-right font-bold text-green-600">
+                        {{ _act_dt_bm_raw }}
+                        {% if _act_dt_bm_raw != _act_dt_alloc and _act_dt_alloc > 0 %}<div class="text-[10px] text-indigo-400 font-normal">asig:{{ _act_dt_alloc }}</div>{% endif %}
+                        {% if p.get('_bm_reserved', 0) > 0 %}<div class="text-[10px] text-orange-500 font-normal">Res:{{ p._bm_reserved }}</div>{% endif %}
+                        {% if p.get('_rec_qty') %}<div class="text-[10px] font-bold {{ 'text-green-600' if p._rec_badge == 'alta demanda' else 'text-yellow-600' }}">IA:{{ p._rec_qty }}</div>{% endif %}
+                    </td>
                     {% set _act_no_wh = not p.get('_bm_wh_fetched') %}
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _act_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
+                        {% set _act_dt_final = p.get('_rec_qty') or _act_dt_alloc %}
                         <div class="flex items-center justify-center gap-1">
-                            <button onclick="activateItem('{{ p.id }}', {{ p.get('_bm_avail', 0) }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
-                                    class="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium transition">
-                                Sync + Activar
+                            <button onclick="activateItem('{{ p.id }}', {{ _act_dt_final }}, '{{ p.status }}', this, {{ 'true' if p.get('has_variations') else 'false' }})"
+                                    class="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-xs font-medium transition"
+                                    title="{{ p.get('_rec_badge', '') }} · {{ p.get('_rec_u30', 0) }} ventas/mes">
+                                Sync {{ _act_dt_final }} + Activar
                             </button>
                             <button onclick="openEditModal('{{ p.id }}')"
                                     class="px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs font-medium transition">

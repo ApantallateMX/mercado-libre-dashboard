@@ -4622,6 +4622,30 @@ async def _prewarm_caches(user_id: str = None):
                 _sold_history = await token_store.get_account_sold_history(str(client.user_id)) if _dist_rule else None
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
 
+                # Recomendación inteligente de qty a sincronizar por velocidad de ventas.
+                # Fórmula: stock para 14 días al ritmo actual, acotado a la cuota asignada.
+                import math as _math_rec
+                for _rp in products:
+                    _r_raw  = int(_rp.get("_bm_avail_raw") or _rp.get("_bm_avail") or 0)
+                    _r_alloc = int(_rp.get("_bm_avail") or 0)
+                    _u30    = int(_rp.get("units_30d") or 0)
+                    if _r_raw == 0:
+                        _rp["_rec_qty"] = 0; _rp["_rec_badge"] = ""; _rp["_rec_u30"] = 0
+                        continue
+                    _cap = _r_alloc if _r_alloc > 0 else _r_raw
+                    if _u30 == 0:
+                        _rp["_rec_qty"]   = min(2, _cap)
+                        _rp["_rec_badge"] = "sin historial"
+                    else:
+                        _target = max(1, int(_math_rec.ceil(_u30 / 30.0 * 14)))
+                        _rp["_rec_qty"]   = max(1, min(_cap, _target))
+                        _rp["_rec_badge"] = (
+                            "alta demanda" if _u30 >= 20 else
+                            "demanda media" if _u30 >= 6 else
+                            "baja demanda"
+                        )
+                    _rp["_rec_u30"] = _u30
+
                 # Persistir caché BM en DB para sobrevivir reinicios.
                 # SOLO guardar entradas con avail_total > 0 — los ceros de bulk fallido
                 # no deben sobrevivir un restart y generar falsas alarmas de sobreventa.
