@@ -1626,12 +1626,17 @@ function _renderQualityScores(d) {
     scores.forEach(function(s) {
         var c = _gradeColor(s.grade);
         var barW = s.score;
-        var name = s.title ? s.title.slice(0, 22) + (s.title.length > 22 ? '…' : '') : (s.sku || s.item_id.slice(-6));
+        var sku   = s.sku || s.item_id.slice(-6);
+        var title = s.title ? (s.title.length > 32 ? s.title.slice(0, 32) + '…' : s.title) : '(sin título)';
         html += '<div class="p-2 rounded-lg border ' + c.bg + '">';
-        html += '<div class="flex items-center justify-between mb-1">';
-        html += '<span class="text-[10px] text-gray-700 font-medium flex-1 truncate" title="' + (s.title||s.sku||s.item_id) + '">' + name + '</span>';
+        // Fila 1: SKU badge + Grade
+        html += '<div class="flex items-center justify-between mb-0.5">';
+        html += '<span class="text-[9px] font-bold text-gray-500 bg-white bg-opacity-70 px-1.5 py-0.5 rounded font-mono">' + sku + '</span>';
         html += '<span class="text-[10px] font-black ml-2 ' + c.text + '">' + s.grade + ' · ' + s.score + '</span>';
         html += '</div>';
+        // Fila 2: título (marca + modelo)
+        html += '<p class="text-[10px] text-gray-700 font-medium truncate mb-1" title="' + (s.title||'') + '">' + title + '</p>';
+        // Barra
         html += '<div class="h-1 bg-white bg-opacity-60 rounded-full overflow-hidden">';
         html += '<div class="h-1 rounded-full ' + c.bar + '" style="width:' + barW + '%"></div>';
         html += '</div>';

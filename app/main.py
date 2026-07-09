@@ -16547,6 +16547,24 @@ async def returns_quality_scores(
         entry["severity_sum"] += _REASON_SEVERITY.get(rcode, 8)
         entry["reasons"][rcode] = entry["reasons"].get(rcode, 0) + 1
 
+    # Enriquecer title/sku desde ml_listings (DB local — sin llamadas API extra)
+    _listing_meta: dict = {}
+    try:
+        _item_ids_qs = list(item_data.keys())
+        if _item_ids_qs:
+            _ph = ",".join("?" * len(_item_ids_qs))
+            import aiosqlite as _aio_qs
+            async with _aio_qs.connect(DATABASE_PATH) as _db_qs:
+                _cur_qs = await _db_qs.execute(
+                    f"SELECT item_id, title, sku FROM ml_listings WHERE item_id IN ({_ph})",
+                    _item_ids_qs,
+                )
+                _rows_qs = await _cur_qs.fetchall()
+            for _r in _rows_qs:
+                _listing_meta[_r[0]] = {"title": _r[1] or "", "sku": _r[2] or ""}
+    except Exception:
+        pass
+
     scores = []
     for iid, d in item_data.items():
         if not iid or d["count"] == 0:
@@ -16568,10 +16586,11 @@ async def returns_quality_scores(
         else:
             grade = "F"
         main_reason = max(d["reasons"], key=d["reasons"].get) if d["reasons"] else ""
+        _meta = _listing_meta.get(iid, {})
         scores.append({
             "item_id": iid,
-            "sku": d["sku"],
-            "title": d["title"],
+            "sku": _meta.get("sku") or d["sku"],
+            "title": _meta.get("title") or d["title"],
             "score": score,
             "grade": grade,
             "return_count": n,
