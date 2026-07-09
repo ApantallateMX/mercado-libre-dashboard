@@ -9,13 +9,25 @@
       <h1 class="text-xl font-bold text-gray-800">Facturación</h1>
       <p class="text-xs text-gray-500 mt-0.5">Gestiona solicitudes de factura de clientes</p>
     </div>
-    <button onclick="window._openCreateModal()"
-            class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-4 py-2 rounded-lg transition">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
-      </svg>
-      Nueva solicitud
-    </button>
+    <div class="flex items-center gap-2">
+      {% if dashboard_user and dashboard_user.role == 'admin' %}
+      <button id="btn-backfill" onclick="window._runBackfill()"
+              title="Enriquecer órdenes existentes sin datos de producto"
+              class="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium text-xs px-3 py-2 rounded-lg transition border border-gray-200">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+        Sync órdenes
+      </button>
+      {% endif %}
+      <button onclick="window._openCreateModal()"
+              class="flex items-center gap-2 bg-yellow-400 hover:bg-yellow-500 text-gray-800 font-semibold text-sm px-4 py-2 rounded-lg transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
+        </svg>
+        Nueva solicitud
+      </button>
+    </div>
   </div>
 
   <!-- ── Filtros ───────────────────────────────────────────────────────────── -->
@@ -718,5 +730,31 @@ function _esc(s) {
 
 // Carga inicial
 window._loadRequests();
+
+// ── Backfill: enriquecer órdenes sin datos de producto ────────────────────
+window._runBackfill = function() {
+  var btn = document.getElementById('btn-backfill');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Sincronizando...';
+
+  fetch('/api/facturacion/requests/backfill-order-data', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false;
+      btn.innerHTML = '<svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Sync órdenes';
+      var msg = d.message || (d.updated + ' actualizadas');
+      if (d.errors && d.errors.length) {
+        msg += '\n\nCon errores (' + d.errors.length + '):\n' + d.errors.map(function(e){ return '• Orden ' + e.order + ': ' + e.error; }).join('\n');
+      }
+      alert('✅ ' + msg);
+      window._loadRequests();
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = 'Sync órdenes';
+      alert('Error: ' + e);
+    });
+};
 </script>
 {% endblock %}
