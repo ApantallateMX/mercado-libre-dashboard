@@ -16489,8 +16489,10 @@ async def returns_quality_scores(
 ):
     """Calcula Quality Score por item para la cuenta activa.
     Score 0-100: 100=sin retornos, decrece con cantidad y severidad de razones.
+    Agrupa por item_id (obtenido desde /orders/{order_id}) — no por order_id.
     """
     from app.services.meli_client import _active_user_id as _ctx
+    from collections import defaultdict
     _uid = account_id or str(_ctx.get() or "")
 
     _REASON_SEVERITY = {
@@ -16505,100 +16507,141 @@ async def returns_quality_scores(
     client_qs = await get_meli_client(user_id=_uid or None)
     if not client_qs:
         return {"ok": False, "error": "No autenticado", "scores": []}
+
     try:
         all_claims = await _fetch_all_claims_cached(client_qs, _qd_from, _qd_to)
     except Exception:
-        return {"ok": False, "error": "Error al obtener reclamos", "scores": []}
-    finally:
         await client_qs.close()
+        return {"ok": False, "error": "Error al obtener reclamos", "scores": []}
 
-    # Group by item_id
-    from collections import defaultdict
-    item_data: dict = defaultdict(lambda: {
-        "count": 0, "opened": 0, "closed": 0,
-        "severity_sum": 0, "title": "", "item_id": "",
-        "sku": "", "reasons": {},
+    # Paso 1 — agrupar claims por order_id (resource_id)
+    cutoff = (_dt2.date.today() - _dt2.timedelta(days=days)).isoformat() if days > 0 else ""
+    order_data: dict = defaultdict(lambda: {
+        "count": 0, "opened": 0, "severity_sum": 0, "reasons": {},
     })
-
-    cutoff = ""
-    if days > 0:
-        import datetime
-        cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
-
     for c in all_claims:
-        d_created = (c.get("date_created") or "")[:10]
-        if cutoff and d_created < cutoff:
+        if cutoff and (c.get("date_created") or "")[:10] < cutoff:
             continue
-        iid   = str(c.get("resource_id") or "")
-        title = str(c.get("resource_title") or c.get("product_title") or "")
-        sku   = str(c.get("bm_sku") or "")
+        oid   = str(c.get("resource_id") or "")
         rcode = str(c.get("reason_id") or "")
-        status = str(c.get("status") or "")
-
-        entry = item_data[iid]
+        if not oid:
+            continue
+        entry = order_data[oid]
         entry["count"] += 1
-        entry["item_id"] = entry["item_id"] or iid
-        entry["title"]   = entry["title"]   or title
-        entry["sku"]     = entry["sku"]     or sku
-        if status == "opened":
+        if c.get("status") == "opened":
             entry["opened"] += 1
-        else:
-            entry["closed"] += 1
         entry["severity_sum"] += _REASON_SEVERITY.get(rcode, 8)
         entry["reasons"][rcode] = entry["reasons"].get(rcode, 0) + 1
 
-    # Enriquecer title/sku desde ml_listings (DB local — sin llamadas API extra)
-    _listing_meta: dict = {}
-    try:
-        _item_ids_qs = list(item_data.keys())
-        if _item_ids_qs:
-            _ph = ",".join("?" * len(_item_ids_qs))
-            import aiosqlite as _aio_qs
-            async with _aio_qs.connect(DATABASE_PATH) as _db_qs:
-                _cur_qs = await _db_qs.execute(
-                    f"SELECT item_id, title, sku FROM ml_listings WHERE item_id IN ({_ph})",
-                    _item_ids_qs,
-                )
-                _rows_qs = await _cur_qs.fetchall()
-            for _r in _rows_qs:
-                _listing_meta[_r[0]] = {"title": _r[1] or "", "sku": _r[2] or ""}
-    except Exception:
-        pass
+    # Paso 2 — batch-fetch order details para los top 25 peores órdenes
+    # (mayor count = mayor impacto; de ahí obtenemos item_id + título + SKU)
+    _orders_by_count = sorted(order_data.keys(),
+                              key=lambda k: order_data[k]["count"], reverse=True)
+    _top_orders = _orders_by_count[:25]
 
+    _order_item_map: dict = {}  # order_id -> {item_id, title, sku}
+    if _top_orders:
+        _sem_qs = asyncio.Semaphore(5)
+
+        async def _fetch_order_item(oid_str: str):
+            async with _sem_qs:
+                try:
+                    order = await client_qs.get(f"/orders/{oid_str}")
+                    oi = order.get("order_items") or []
+                    if oi:
+                        item = oi[0].get("item") or {}
+                        return oid_str, {
+                            "item_id": str(item.get("id") or ""),
+                            "title":   item.get("title") or "",
+                            "sku":     item.get("seller_sku") or item.get("seller_custom_field") or "",
+                        }
+                except Exception:
+                    pass
+            return oid_str, {}
+
+        _order_results = await asyncio.gather(
+            *[_fetch_order_item(o) for o in _top_orders],
+            return_exceptions=True,
+        )
+        for res in _order_results:
+            if isinstance(res, tuple):
+                _order_item_map[res[0]] = res[1]
+
+    await client_qs.close()
+
+    # Paso 3 — agrupar por item_id (usando los datos del order lookup)
+    item_acc: dict = {}  # item_id -> acumulado
+    for oid, d in order_data.items():
+        info = _order_item_map.get(oid) or {}
+        iid  = info.get("item_id") or ""
+        # Para órdenes sin lookup (no están en top 25), usar el order_id como clave fallback
+        key  = iid or f"__order_{oid}"
+        if key not in item_acc:
+            item_acc[key] = {
+                "item_id":      iid,
+                "title":        info.get("title") or "",
+                "sku":          info.get("sku") or "",
+                "count":        0, "opened": 0,
+                "severity_sum": 0, "reasons": {},
+            }
+        acc = item_acc[key]
+        acc["count"]        += d["count"]
+        acc["opened"]       += d["opened"]
+        acc["severity_sum"] += d["severity_sum"]
+        for rk, rv in d["reasons"].items():
+            acc["reasons"][rk] = acc["reasons"].get(rk, 0) + rv
+
+    # Paso 4 — calcular scores por item
     scores = []
-    for iid, d in item_data.items():
-        if not iid or d["count"] == 0:
+    for key, d in item_acc.items():
+        if d["count"] == 0:
             continue
         n = d["count"]
-        # Score formula: start 100, deduct by count (capped at 60pts) + severity
-        count_deduct   = min(n * 8, 60)
-        sev_deduct     = min(d["severity_sum"] / max(n, 1), 30)
-        open_penalty   = d["opened"] * 5
+        count_deduct = min(n * 8, 60)
+        sev_deduct   = min(d["severity_sum"] / max(n, 1), 30)
+        open_penalty = d["opened"] * 5
         score = max(0, round(100 - count_deduct - sev_deduct - open_penalty))
-        if score >= 80:
-            grade = "A"
-        elif score >= 60:
-            grade = "B"
-        elif score >= 40:
-            grade = "C"
-        elif score >= 20:
-            grade = "D"
-        else:
-            grade = "F"
+        grade = ("A" if score >= 80 else
+                 "B" if score >= 60 else
+                 "C" if score >= 40 else
+                 "D" if score >= 20 else "F")
         main_reason = max(d["reasons"], key=d["reasons"].get) if d["reasons"] else ""
-        _meta = _listing_meta.get(iid, {})
+        # Enriquecer SKU desde item_sku_cache si no vino del order lookup
         scores.append({
-            "item_id": iid,
-            "sku": _meta.get("sku") or d["sku"],
-            "title": _meta.get("title") or d["title"],
-            "score": score,
-            "grade": grade,
+            "item_id":      d["item_id"],
+            "sku":          d["sku"],
+            "title":        d["title"],
+            "score":        score,
+            "grade":        grade,
             "return_count": n,
-            "opened": d["opened"],
-            "main_reason": main_reason,
+            "opened":       d["opened"],
+            "main_reason":  main_reason,
         })
 
+    # Paso 5 — enriquecer SKU/título desde DB local para los que aún no tienen
+    _need_enrich = [s["item_id"] for s in scores if s["item_id"] and not s["sku"]]
+    if _need_enrich:
+        try:
+            _ph2 = ",".join("?" * len(_need_enrich))
+            import aiosqlite as _aio_qs2
+            async with _aio_qs2.connect(DATABASE_PATH) as _db2:
+                _cur2 = await _db2.execute(
+                    f"SELECT item_id, sku, title FROM ml_listings WHERE item_id IN ({_ph2})",
+                    _need_enrich,
+                )
+                for _r2 in await _cur2.fetchall():
+                    for s in scores:
+                        if s["item_id"] == _r2[0]:
+                            s["sku"]   = s["sku"]   or (_r2[1] or "")
+                            s["title"] = s["title"] or (_r2[2] or "")
+        except Exception:
+            pass
+
     scores.sort(key=lambda x: x["score"])
+    # Filtrar entradas sin item_id real (órdenes sin lookup) solo si hay suficientes con item_id
+    _real = [s for s in scores if s["item_id"]]
+    if len(_real) >= 5:
+        scores = _real
     return {"ok": True, "scores": scores, "total": len(scores), "days": days}
 
 
