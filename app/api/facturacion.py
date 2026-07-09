@@ -487,7 +487,7 @@ async def delete_request(request: Request, req_id: int):
 @router.post("/requests/backfill-order-data")
 async def backfill_order_data(request: Request):
     """Migración one-time: enriquece order_data para solicitudes ML sin items.
-    Solo admin. Llama /orders/{id} para cada solicitud sin datos de producto.
+    Solo admin. Usa resolve_order (soporta pack_id) y prueba todas las cuentas.
     """
     du = _get_du(request)
     if du["role"] != "admin":
@@ -497,7 +497,7 @@ async def backfill_order_data(request: Request):
     from app.services.token_store import DATABASE_PATH
     from app.services.meli_client import get_meli_client
 
-    # 1. Obtener todas las solicitudes ML
+    # 1. Solicitudes ML sin items
     async with aiosqlite.connect(DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
@@ -507,15 +507,30 @@ async def backfill_order_data(request: Request):
         pending = [dict(r) for r in await cur.fetchall()]
 
     if not pending:
-        return {"ok": True, "updated": 0, "skipped": 0, "errors": [], "message": "Nada por enriquecer"}
+        return {"ok": True, "updated": 0, "skipped": 0, "errors": [],
+                "message": "Nada por enriquecer"}
 
-    # 2. Cache de clientes ML por user_id
-    _clients: dict = {}
-    async def _get_client(uid: str):
-        if uid not in _clients:
-            c = await get_meli_client(user_id=uid or None)
-            _clients[uid] = c
-        return _clients[uid]
+    # 2. Obtener todos los clientes ML disponibles (una sola vez)
+    all_accounts = await token_store.get_all_tokens()
+    all_clients = []
+    for acc in all_accounts:
+        c = await get_meli_client(user_id=acc["user_id"])
+        if c:
+            all_clients.append((acc["user_id"], c))
+
+    if not all_clients:
+        return {"ok": False, "error": "Sin cuentas ML autenticadas"}
+
+    async def _resolve_with_any_account(order_num: str):
+        """Prueba todas las cuentas con resolve_order hasta encontrar la orden."""
+        for uid, client in all_clients:
+            try:
+                order = await client.resolve_order(order_num)
+                if order and "error" not in order and order.get("id"):
+                    return order
+            except Exception:
+                continue
+        return None
 
     updated = 0
     skipped = 0
@@ -525,31 +540,18 @@ async def backfill_order_data(request: Request):
     for row in pending:
         req_id    = row["id"]
         order_num = (row["order_number"] or "").strip()
-        uid       = (row["ml_user_id"] or "").strip()
 
         if not order_num:
             skipped += 1
             continue
 
         try:
-            client = await _get_client(uid)
-            if not client:
-                # Intentar con cualquier cuenta disponible
-                all_tokens = await token_store.get_all_tokens()
-                for acc in all_tokens:
-                    client = await get_meli_client(user_id=acc["user_id"])
-                    if client:
-                        break
-            if not client:
-                errors.append({"id": req_id, "order": order_num, "error": "Sin cliente ML"})
+            order = await _resolve_with_any_account(order_num)
+            if not order:
+                errors.append({"id": req_id, "order": order_num, "error": "order_not_found_en_ninguna_cuenta"})
                 continue
 
-            order = await client.get(f"/orders/{order_num}")
-            if not order or "error" in order:
-                errors.append({"id": req_id, "order": order_num, "error": str(order.get("error", "not found"))})
-                continue
-
-            order_items_raw = order.get("order_items", [])
+            order_items_raw = order.get("order_items") or []
             items = []
             for oi in order_items_raw:
                 item = oi.get("item") or {}
@@ -567,23 +569,21 @@ async def backfill_order_data(request: Request):
                 "date":     (order.get("date_closed") or order.get("date_created") or "")[:10],
                 "status":   order.get("status", ""),
             }
-
             await token_store.update_billing_order_data(req_id, _json.dumps(od))
             updated += 1
 
         except Exception as e:
             errors.append({"id": req_id, "order": order_num, "error": str(e)})
 
-    # Cerrar clientes abiertos
-    for c in _clients.values():
-        if c:
-            try:
-                await c.close()
-            except Exception:
-                pass
+    # 4. Cerrar clientes
+    for _, c in all_clients:
+        try:
+            await c.close()
+        except Exception:
+            pass
 
     return {
-        "ok": True,
+        "ok":      True,
         "updated": updated,
         "skipped": skipped,
         "errors":  errors,
