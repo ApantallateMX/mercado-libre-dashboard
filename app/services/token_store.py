@@ -2528,15 +2528,16 @@ async def create_billing_request(
     client_ref: str,
     created_by: str,
     notes: str = "",
+    order_data: str = "{}",
 ) -> int:
     """Crea una nueva solicitud de facturación. Retorna el id."""
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cursor = await db.execute(
             """INSERT INTO billing_requests
-               (token, ml_user_id, platform, order_number, client_ref, created_by, created_at, notes)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (token, ml_user_id, platform, order_number, client_ref, created_by, now, notes),
+               (token, ml_user_id, platform, order_number, client_ref, created_by, created_at, notes, order_data)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (token, ml_user_id, platform, order_number, client_ref, created_by, now, notes, order_data),
         )
         await db.commit()
         return cursor.lastrowid

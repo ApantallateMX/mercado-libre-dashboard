@@ -397,8 +397,10 @@ window._openCreateModal = function() {
 
 // ── Debounced order lookup ─────────────────────────────────────────────────
 var _lookupTimer = null;
+var _currentOrderData = null;
 window._debounceLookup = function() {
   clearTimeout(_lookupTimer);
+  _currentOrderData = null;
   var val = (document.getElementById('c-order-number').value || '').trim();
   document.getElementById('c-order-preview').classList.add('hidden');
   document.getElementById('c-order-notfound').classList.add('hidden');
@@ -432,6 +434,9 @@ window._doOrderLookup = function(orderNumber) {
       for (var j = 0; j < platSel.options.length; j++) {
         if (platSel.options[j].value === d.platform) { platSel.selectedIndex = j; break; }
       }
+
+      // Guardar order data para enviar al crear la solicitud
+      _currentOrderData = d.order || null;
 
       // Mostrar mini preview de la orden
       var platLabel = d.platform === 'amazon' ? 'Amazon' : 'Mercado Libre';
@@ -485,6 +490,7 @@ window._createRequest = function() {
   fd.append('order_number', document.getElementById('c-order-number').value.trim());
   fd.append('client_ref',   document.getElementById('c-client-ref').value.trim());
   fd.append('notes',        document.getElementById('c-notes').value.trim());
+  fd.append('order_data',   _currentOrderData ? JSON.stringify(_currentOrderData) : '{}');
   fetch('/api/facturacion/requests', { method: 'POST', body: fd })
     .then(function(r) {
       if (r.status === 409) return r.json().then(function(e) { throw {is409: true, data: e}; });

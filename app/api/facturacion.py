@@ -311,6 +311,7 @@ async def create_request(
     order_number: str = Form(""),
     client_ref:   str = Form(""),
     notes:        str = Form(""),
+    order_data:   str = Form("{}"),
 ):
     du = _require_editor(request)
     base_url = str(request.base_url).rstrip("/")
@@ -339,6 +340,12 @@ async def create_request(
             )
 
     token = str(uuid.uuid4())
+    # Validar que order_data sea JSON válido antes de guardar
+    try:
+        import json as _j
+        _j.loads(order_data or "{}")
+    except Exception:
+        order_data = "{}"
     req_id = await token_store.create_billing_request(
         token=token,
         ml_user_id=ml_user_id,
@@ -347,6 +354,7 @@ async def create_request(
         client_ref=client_ref,
         created_by=du["username"],
         notes=notes,
+        order_data=order_data or "{}",
     )
     return {
         "id":    req_id,
