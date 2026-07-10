@@ -69,14 +69,16 @@
 {% endif %}
 {% endif %}
 
-<!-- Barra búsqueda + CSV -->
+<!-- Banner modo búsqueda / CSV -->
 <div class="flex items-center gap-2 mb-3">
-    <div class="relative flex-1">
-        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-        <input type="text" id="orders-search" placeholder="Filtrar en esta página (SKU, producto, estado)..."
-               class="w-full pl-9 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-yellow-400"
-               oninput="window._filterOrders(this.value)">
+    {% if search_mode %}
+    <div class="flex-1 flex items-center gap-2 px-3 py-1.5 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800">
+        <svg class="w-3.5 h-3.5 text-yellow-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <span>Buscando <strong>"{{ q }}"</strong> — {{ paging.total }} resultado{% if paging.total != 1 %}s{% endif %} del {{ date_from }} al {{ date_to }} (historial local)</span>
     </div>
+    {% else %}
+    <div class="flex-1"></div>
+    {% endif %}
     <a href="/api/orders/export.csv?{% if date_from %}date_from={{ date_from }}&{% endif %}{% if date_to %}date_to={{ date_to }}&{% endif %}"
        class="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 hover:border-gray-300 transition whitespace-nowrap"
        title="Descargar CSV del historial de órdenes">
@@ -84,21 +86,6 @@
         CSV
     </a>
 </div>
-<script>
-window._filterOrders = function(q) {
-    q = (q || '').toLowerCase();
-    var rows = document.querySelectorAll('#orders-table [data-order-row]');
-    var cards = document.querySelectorAll('#orders-table [data-order-card]');
-    function match(el) { return !q || (el.textContent || '').toLowerCase().includes(q); }
-    rows.forEach(function(r) {
-        var show = match(r);
-        r.style.display = show ? '' : 'none';
-        var next = r.nextElementSibling;
-        if (next && next.classList.contains('order-expand')) next.style.display = show ? '' : 'none';
-    });
-    cards.forEach(function(c) { c.style.display = match(c) ? '' : 'none'; });
-};
-</script>
 
 <!-- KPI Filtros de margen — server-side, persiste en paginación -->
 {% set _date_params = ('&date_from=' ~ date_from if date_from else '') ~ ('&date_to=' ~ date_to if date_to else '') %}

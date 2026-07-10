@@ -3031,6 +3031,224 @@ async def ml_item_analysis(
     })
 
 
+async def _orders_search_partial(
+    request: Request,
+    q: str,
+    date_from: str,
+    date_to: str,
+    sort: str,
+    margin_band: str,
+    offset: int,
+    limit: int,
+) -> HTMLResponse:
+    """Búsqueda en order_history por SKU, MLM, orden, título, marca o modelo."""
+    import aiosqlite as _aio_s
+    from datetime import datetime as _dt_s, timedelta as _td_s
+
+    client = await get_meli_client()
+    if not client:
+        return HTMLResponse("<p class='p-4 text-sm text-red-500'>No autenticado</p>")
+    try:
+        user = await client.get_user_info()
+        account_id = str(user.get("id", ""))
+    finally:
+        await client.close()
+
+    # Calcular rango de fechas — default 7d si no se pasa nada
+    today = _dt_s.utcnow().date()
+    if date_from:
+        df = date_from
+    else:
+        df = (today - _td_s(days=7)).isoformat()
+    dt = date_to or today.isoformat()
+
+    like = f"%{q}%"
+    order_dir = "ASC" if sort == "date_asc" else "DESC"
+
+    async with _aio_s.connect(DATABASE_PATH) as _db_s:
+        _db_s.row_factory = _aio_s.Row
+        rows = await (await _db_s.execute(
+            f"""
+            SELECT
+                oh.order_id, oh.item_id, oh.sku,
+                oh.unit_price, oh.quantity,
+                oh.sale_fee, oh.neto_plat,
+                oh.ganancia_neta, oh.margen_pct, oh.recup_retail_pct,
+                oh.order_date, oh.status, oh.data_source,
+                COALESCE(ml.title, '') AS ml_title,
+                COALESCE(bm.brand,  '') AS brand,
+                COALESCE(bm.model,  '') AS model,
+                COALESCE(bm.title,  '') AS bm_title
+            FROM order_history oh
+            LEFT JOIN ml_listings        ml  ON oh.item_id = ml.item_id
+            LEFT JOIN bm_product_catalog bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
+            WHERE oh.account_id = ?
+              AND oh.platform   = 'ml'
+              AND oh.order_date >= ?
+              AND oh.order_date <= ?
+              AND (
+                  oh.sku      LIKE ? COLLATE NOCASE
+               OR oh.item_id  LIKE ? COLLATE NOCASE
+               OR oh.order_id LIKE ? COLLATE NOCASE
+               OR ml.title    LIKE ? COLLATE NOCASE
+               OR bm.brand    LIKE ? COLLATE NOCASE
+               OR bm.model    LIKE ? COLLATE NOCASE
+               OR bm.title    LIKE ? COLLATE NOCASE
+              )
+            ORDER BY oh.order_date {order_dir}
+            LIMIT ? OFFSET ?
+            """,
+            (account_id, df, dt, like, like, like, like, like, like, like, limit, offset),
+        )).fetchall()
+
+        total_count = (await (await _db_s.execute(
+            """
+            SELECT COUNT(*)
+            FROM order_history oh
+            LEFT JOIN ml_listings        ml  ON oh.item_id = ml.item_id
+            LEFT JOIN bm_product_catalog bm  ON UPPER(TRIM(oh.sku)) = UPPER(TRIM(bm.sku))
+            WHERE oh.account_id = ?
+              AND oh.platform   = 'ml'
+              AND oh.order_date >= ?
+              AND oh.order_date <= ?
+              AND (
+                  oh.sku      LIKE ? COLLATE NOCASE
+               OR oh.item_id  LIKE ? COLLATE NOCASE
+               OR oh.order_id LIKE ? COLLATE NOCASE
+               OR ml.title    LIKE ? COLLATE NOCASE
+               OR bm.brand    LIKE ? COLLATE NOCASE
+               OR bm.model    LIKE ? COLLATE NOCASE
+               OR bm.title    LIKE ? COLLATE NOCASE
+              )
+            """,
+            (account_id, df, dt, like, like, like, like, like, like, like),
+        )).fetchone())[0]
+
+    _deal_cfg = await token_store.get_deal_config(account_id)
+    _deal_buffer   = _deal_cfg["deal_buffer_pct"]
+    _retail_target = _deal_cfg["retail_target_pct"]
+    _fx = _manual_fx_rate if _manual_fx_rate > 0 else _last_fx_rate
+
+    enriched = []
+    for r in rows:
+        title    = r["ml_title"] or r["bm_title"] or r["sku"] or "-"
+        sku_disp = r["sku"] or "-"
+        unit_price = float(r["unit_price"] or 0)
+        qty        = int(r["quantity"] or 1)
+        sale_fee   = float(r["sale_fee"] or 0)
+        neto       = float(r["neto_plat"] or 0)
+        subtotal   = unit_price * qty
+        total_amt  = subtotal
+
+        _retail_ref = _sku_retail_map.get(normalize_to_bm_sku(sku_disp), 0) if sku_disp != "-" else 0
+        _retail_pct = round(unit_price / _retail_ref * 100, 1) if (_retail_ref > 0 and unit_price > 0) else None
+
+        items_detail = [SimpleNamespace(
+            title=title,
+            sku=sku_disp,
+            item_id=r["item_id"] or "-",
+            quantity=qty,
+            unit_price=unit_price,
+            full_unit_price=unit_price,
+            discount=0,
+            subtotal=subtotal,
+            sale_fee=sale_fee,
+            iva_fee=round(sale_fee * 0.16, 2),
+            listing_type="-",
+            retail_ref=_retail_ref,
+            retail_pct=_retail_pct,
+            price_alert=(_retail_pct is not None and _retail_pct < 80),
+        )]
+
+        partner_commission = round(neto * _PARTNER_COMMISSION_PCT, 2)
+        net_final = round(neto - partner_commission, 2)
+
+        if _retail_ref > 0 and net_final > 0:
+            _net_pct = round(net_final / _retail_ref * 100, 1)
+            _margin_band = "alto" if _net_pct >= 100 else ("medio" if _net_pct >= 80 else "bajo")
+            _net_ratio = net_final / total_amt if total_amt > 0 else 0
+            _precio_sugerido = round(_retail_ref / _net_ratio) if _net_ratio > 0 else None
+        else:
+            _net_pct = round(net_final / total_amt * 100, 1) if total_amt > 0 else 0.0
+            _margin_band = "alto" if _net_pct >= 65 else ("medio" if _net_pct >= 55 else "bajo")
+            _precio_sugerido = None
+
+        enriched.append(SimpleNamespace(
+            id=r["order_id"],
+            date_created=r["order_date"] + "T00:00:00.000Z",
+            status=r["status"] or "paid",
+            buyer=SimpleNamespace(nickname="-"),
+            total_amount=total_amt,
+            total_fees=round(sale_fee, 2),
+            total_iva=round(sale_fee * 0.16, 2),
+            shipping_cost=0,
+            iva_shipping=0,
+            taxes=0,
+            net_amount=neto,
+            partner_commission=partner_commission,
+            net_final=net_final,
+            total_cargos=round(sale_fee + partner_commission, 2),
+            net_pct=_net_pct,
+            margin_band=_margin_band,
+            precio_sugerido=_precio_sugerido,
+            precio_deal=None,
+            deal_buffer_pct=_deal_buffer,
+            retail_target_pct=_retail_target,
+            ganancia_est=float(r["ganancia_neta"]) if r["ganancia_neta"] else None,
+            margen_est=float(r["margen_pct"]) if r["margen_pct"] else None,
+            underpriced_count=1 if items_detail[0].price_alert else 0,
+            shipping_id=None,
+            payment_method="-",
+            payment_type="-",
+            installments=1,
+            order_items=items_detail,
+            pack_id=None,
+            tags=[],
+        ))
+
+    if margin_band in ("alto", "medio", "bajo"):
+        enriched = [o for o in enriched if o.margin_band == margin_band]
+
+    active_orders = [o for o in enriched if o.status != "cancelled"]
+    pl_revenue  = sum(o.total_amount       for o in active_orders)
+    pl_net_ml   = sum(o.net_amount         for o in active_orders)
+    pl_partner  = sum(o.partner_commission for o in active_orders)
+    pl_net      = sum(o.net_final          for o in active_orders)
+    pl_ganancia = sum(o.ganancia_est for o in active_orders if o.ganancia_est is not None)
+    pl_has_costs = any(o.ganancia_est is not None for o in active_orders)
+    pl_margen   = round(pl_net / pl_revenue * 100, 1) if pl_revenue > 0 else 0
+    pl_underpriced = sum(1 for o in active_orders if o.underpriced_count > 0)
+    pl_alto  = sum(1 for o in active_orders if o.margin_band == "alto")
+    pl_medio = sum(1 for o in active_orders if o.margin_band == "medio")
+    pl_bajo  = sum(1 for o in active_orders if o.margin_band == "bajo")
+
+    return templates.TemplateResponse(request, "partials/orders_table.html", {
+        "orders": enriched,
+        "paging": {"total": total_count},
+        "offset": offset,
+        "limit": limit,
+        "sort": sort,
+        "margin_band": margin_band,
+        "date_from": df,
+        "date_to": dt,
+        "q": q,
+        "search_mode": True,
+        "usd_to_mxn": _fx,
+        "seller_name": user.get("nickname", "-"),
+        "pl_revenue": pl_revenue,
+        "pl_net_ml": pl_net_ml,
+        "pl_partner": pl_partner,
+        "pl_net": pl_net,
+        "pl_ganancia": pl_ganancia if pl_has_costs else None,
+        "pl_margen": pl_margen,
+        "pl_count": len(active_orders),
+        "pl_underpriced": pl_underpriced,
+        "pl_alto": pl_alto,
+        "pl_medio": pl_medio,
+        "pl_bajo": pl_bajo,
+    })
+
+
 @app.get("/partials/orders-table", response_class=HTMLResponse)
 async def orders_table_partial(
     request: Request,
@@ -3040,7 +3258,14 @@ async def orders_table_partial(
     margin_band: str = Query("", description="Filtro: alto / medio / bajo"),
     date_from: str = Query("", description="YYYY-MM-DD"),
     date_to: str = Query("", description="YYYY-MM-DD"),
+    q: str = Query("", description="Buscar por SKU, MLM, título, marca, modelo"),
 ):
+    # ── MODO BÚSQUEDA: consultar order_history + ml_listings + bm_product_catalog ──
+    if q.strip():
+        return await _orders_search_partial(
+            request, q.strip(), date_from, date_to, sort, margin_band, offset, limit
+        )
+
     client = await get_meli_client()
     if not client:
         return HTMLResponse("<p>Error: No autenticado</p>")
@@ -3324,6 +3549,8 @@ async def orders_table_partial(
             "margin_band": margin_band,
             "date_from": date_from,
             "date_to": date_to,
+            "q": "",
+            "search_mode": False,
             "usd_to_mxn": _fx,
             "seller_name": user.get("nickname", "-"),
             "pl_revenue": pl_revenue,

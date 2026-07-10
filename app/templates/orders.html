@@ -50,6 +50,27 @@
 
 <!-- ═══ FILTROS ═══ -->
 <div class="bg-white p-4 rounded-xl shadow mb-5">
+
+    <!-- Buscador global -->
+    <div class="relative mb-3">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" id="ord-search-q" name="q"
+               placeholder="Buscar por SKU, MLM, título, marca, modelo..."
+               class="w-full pl-10 pr-10 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-200 bg-gray-50 focus:bg-white transition"
+               oninput="window._ordOnSearch(this.value)"
+               onkeydown="if(event.key==='Escape'){this.value='';window._ordOnSearch('')}">
+        <button id="ord-search-clear"
+                onclick="document.getElementById('ord-search-q').value='';window._ordOnSearch('')"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden"
+                title="Limpiar búsqueda">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+
     <div class="flex flex-wrap gap-3 items-center justify-between">
         <!-- Ordenamiento -->
         <select id="sort-select" name="sort" class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-yellow-400 focus:border-yellow-400 outline-none">
@@ -93,7 +114,7 @@
     <div id="orders-table"
          hx-get="/partials/orders-table"
          hx-trigger="load, ordersFilter"
-         hx-include="#sort-select, #ord-date-from, #ord-date-to"
+         hx-include="#sort-select, #ord-date-from, #ord-date-to, #ord-search-q"
          hx-swap="innerHTML">
         <div class="animate-pulse p-4 space-y-3">
             {% for i in range(10) %}
@@ -168,8 +189,23 @@ window.setOrdCustomDates = function() {
         fromEl.value = new Date(now.getTime() - 1 * 86400000).toISOString().slice(0, 10);
     }
     window._setOrdPeriodBtn(1);
-    // htmx hx-trigger="load" picks these up automatically since they're hidden inputs
 })();
+
+// ─── Buscador global — debounce 500ms, auto-switch a 7d si estaba en Hoy ────
+var _ordSearchTimer = null;
+window._ordOnSearch = function(val) {
+    var clearBtn = document.getElementById('ord-search-clear');
+    if (clearBtn) clearBtn.classList.toggle('hidden', !val);
+    clearTimeout(_ordSearchTimer);
+    _ordSearchTimer = setTimeout(function() {
+        // Si hay búsqueda y el periodo activo es "Hoy" (1d), cambiar a 7d
+        if (val && val.trim() && window._ordActivePeriod === 1) {
+            window.setOrdPeriod(7);
+        } else {
+            htmx.trigger(document.getElementById('orders-table'), 'ordersFilter');
+        }
+    }, 450);
+};
 
 // ─── Also re-trigger when sort changes ────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
