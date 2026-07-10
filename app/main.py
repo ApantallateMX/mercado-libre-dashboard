@@ -3163,6 +3163,13 @@ async def _orders_search_partial(
         partner_commission = round(neto * _PARTNER_COMMISSION_PCT, 2)
         net_final = round(neto - partner_commission, 2)
 
+        # Estimar impuestos: residuo entre precio - fee - neto depositado ML
+        # neto_plat en DB ya tiene descontados fee + taxes + shipping
+        _est_taxes = max(0.0, round(total_amt - sale_fee - neto, 2))
+        # Si el residuo parece razonable (>0 y <40% del total) usarlo; si no, estimarlo con IVA
+        if _est_taxes <= 0 or _est_taxes > total_amt * 0.4:
+            _est_taxes = round(sale_fee * 0.16, 2)
+
         if _retail_ref > 0 and net_final > 0:
             _net_pct = round(net_final / _retail_ref * 100, 1)
             _margin_band = "alto" if _net_pct >= 100 else ("medio" if _net_pct >= 80 else "bajo")
@@ -3183,11 +3190,11 @@ async def _orders_search_partial(
             total_iva=round(sale_fee * 0.16, 2),
             shipping_cost=0,
             iva_shipping=0,
-            taxes=0,
+            taxes=_est_taxes,
             net_amount=neto,
             partner_commission=partner_commission,
             net_final=net_final,
-            total_cargos=round(sale_fee + partner_commission, 2),
+            total_cargos=round(sale_fee + _est_taxes + partner_commission, 2),
             net_pct=_net_pct,
             margin_band=_margin_band,
             precio_sugerido=_precio_sugerido,
