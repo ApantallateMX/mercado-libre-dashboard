@@ -5855,7 +5855,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
             if retry_stale and _bulk_miss_set and not _bulk_returned_empty:
                 _miss_list = [
                     s for s in _bulk_miss_set
-                    if (
+                    if not normalize_to_bm_sku(s).upper().startswith("SNTV")  # TVs → _fetch_tv_wh_breakdown los maneja
+                    and (
                         (_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[0]) == 0.0
                         or ((_bm_stock_cache.get(normalize_to_bm_sku(s), (0.0, {}))[1].get("avail_total") or 0) > 0)
                     )
