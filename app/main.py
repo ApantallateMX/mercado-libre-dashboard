@@ -4856,6 +4856,15 @@ async def _prewarm_caches(user_id: str = None):
                 _sold_history = await token_store.get_account_sold_history(str(client.user_id)) if _dist_rule else None
                 _apply_bm_stock(products, bm_map, dist_rule=_dist_rule, dist_settings=_dist_settings, sold_history=_sold_history)
 
+                # Helper: SKU bulk-verificado en ESTE ciclo de prewarm (ts > 0).
+                # Entradas cargadas de DB (ts = 0.0) pueden tener stock obsoleto.
+                # Las alertas SOLO usan datos confirmados por el bulk actual.
+                def _bm_bulk_ok(sku: str) -> bool:
+                    if not sku:
+                        return False
+                    _e = _bm_stock_cache.get(normalize_to_bm_sku(sku))
+                    return _e is not None and _e[0] > 0.0
+
                 # Recomendación inteligente de qty a sincronizar por velocidad de ventas.
                 # Fórmula: stock para 14 días al ritmo actual, acotado a la cuota asignada.
                 import math as _math_rec
@@ -4932,7 +4941,11 @@ async def _prewarm_caches(user_id: str = None):
                     _activate_suppressed[_uid_str] = await token_store.get_activate_suppressed(_uid_str)
                 _uid_suppress = _activate_suppressed.get(_uid_str, set())
 
-                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids]
+                # _bm_bulk_ok: True solo si el stock de este SKU fue confirmado por el bulk
+                # ACTUAL de este prewarm (ts > 0). Entradas con ts=0 son warm-start de DB y
+                # pueden tener stock obsoleto — excluirlas de alertas evita falsos positivos
+                # cuando BM ya no tiene ese SKU en stock.
+                restock = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("units", 0) > 0 and not p.get("is_full") and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 restock.sort(key=lambda x: x.get("units", 0), reverse=True)
                 # "_bm_avail" in p: BM fue consultado y respondió (avail=0 confirmado por BM).
                 # Sin esta guarda, productos sin dato BM (fetch fallido) se clasifican como riesgo
@@ -4942,7 +4955,7 @@ async def _prewarm_caches(user_id: str = None):
                 restock_ids = {p["id"] for p in restock}
                 # _bm_avail_verified_zero: si per-SKU verificó 0 recientemente, no incluir aunque
                 # el bulk diga >0 — bulk de BM puede devolver phantom stock (bug BM server-side).
-                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", ""))]
+                activate = [p for p in products if p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p["id"] not in restock_ids and not p.get("is_full") and p["id"] not in _synced_ids and str(p["id"]) not in _uid_suppress and not _bm_avail_verified_zero(p.get("sku", "")) and _bm_bulk_ok(p.get("sku", ""))]
                 activate.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 critical = [
                     p for p in products
@@ -4951,9 +4964,10 @@ async def _prewarm_caches(user_id: str = None):
                     and not p.get("is_full")
                     and p.get("sku")
                     and p.get("id") not in _synced_ids
+                    and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 critical.sort(key=lambda x: x.get("_bm_avail", 0))
-                full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids]
+                full_no_stock = [p for p in products if p.get("is_full") and p.get("available_quantity", 0) == 0 and (p.get("_bm_avail") or 0) > 0 and p.get("id") not in _synced_ids and _bm_bulk_ok(p.get("sku", ""))]
                 full_no_stock.sort(key=lambda x: x.get("_bm_avail", 0), reverse=True)
                 # GAP 7: Inventario estancado — stock en ambos lados pero 0 ventas en 30d
                 stagnant = [
@@ -4964,6 +4978,7 @@ async def _prewarm_caches(user_id: str = None):
                     and not p.get("is_full")
                     and p.get("sku")
                     and p.get("id") not in _synced_ids
+                    and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 stagnant.sort(
                     key=lambda x: (x.get("_bm_avail") or 0) * (x.get("price") or 1),
@@ -4990,6 +5005,7 @@ async def _prewarm_caches(user_id: str = None):
                     if p.get("available_quantity", 0) > (p.get("_bm_avail_raw") or 0) > 0
                     and not p.get("is_full")
                     and p.get("sku")
+                    and _bm_bulk_ok(p.get("sku", ""))
                 ]
                 imbalanced.sort(key=lambda x: x.get("available_quantity", 0) - (x.get("_bm_avail_raw") or 0), reverse=True)
 
@@ -5277,6 +5293,9 @@ async def _fetch_tv_wh_breakdown():
             _cd["cdmx"] = _cdmx
             _cd["mty"]  = _mty
             _cd["_wh_fetched"] = True
+            # Actualizar ts a tiempo actual: marca esta entrada como bulk-verificada (ts > 0).
+            # Sin esto, SNTV* quedan con ts=0 (DB warm-start) y serían excluidas de alertas.
+            _bm_stock_cache[_ck] = (_time.time(), _cd)
             _tv_n += 1
 
         _tvlog.info(f"[BM-TV-WH] MTY/CDMX actualizado para {_tv_n} TVs (SNTV*)")
