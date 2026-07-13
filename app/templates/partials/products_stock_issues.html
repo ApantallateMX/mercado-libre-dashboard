@@ -1314,9 +1314,23 @@ window._stockFilter = function(q) {
                 </div>
             </div>
             <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
+                <div>
+                    {% if p.original_price and p.original_price > p.price %}
+                    <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                    <span class="font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% else %}
+                    <span class="font-bold text-gray-800">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% endif %}
+                </div>
+                {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                <div><span class="text-gray-500">Retail:</span> <span class="font-bold text-blue-600">${{ "{:,.0f}".format(p._bm_retail_price) }}</span></div>
+                {% endif %}
+                <div><span class="text-gray-500">Ventas:</span> <span class="font-bold">{{ p.get('units', 0) }}</span></div>
                 <div><span class="text-gray-500">MeLi:</span> <span class="font-bold text-purple-700">{{ p.get('available_quantity', 0) }}</span></div>
                 <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-green-700">{{ p.get('_bm_avail', 0) }}</span></div>
                 <div><span class="text-gray-500">Gap:</span> <span class="font-bold text-red-600">{{ p.get('available_quantity', 0) - (p.get('_bm_avail') or 0) }}</span></div>
+                {% set _imb_no_wh = not p.get('_bm_wh_fetched') %}
+                <div class="text-[10px] text-gray-400">{% if _imb_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p.get('_bm_mty', 0) or 0 }} CDMX:{{ p.get('_bm_cdmx', 0) or 0 }} TJ:{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</div>
             </div>
             <div class="mt-2 pt-2 border-t border-gray-100">
                 <button onclick="syncOneImbalanced('{{ p.id }}', {{ p.get('_bm_avail', 0) }})"
@@ -1334,11 +1348,16 @@ window._stockFilter = function(q) {
             <thead class="bg-purple-50 border-b">
                 <tr>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
-                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-red-600">Gap</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-orange-500">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-blue-500">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-purple-400">TJ</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Acción</th>
                 </tr>
             </thead>
@@ -1348,17 +1367,38 @@ window._stockFilter = function(q) {
                     <td class="px-3 py-2">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
-                            <span class="text-gray-800 truncate max-w-[220px] text-xs" title="{{ p.title }}">{{ p.title[:55] }}</span>
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
                         </div>
                     </td>
                     <td class="px-3 py-2">
-                        <span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span>
-                        <div class="text-[10px] text-blue-500 font-mono">{{ p.id }}</div>
+                        <div class="flex flex-col gap-0.5">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="font-mono text-[10px] text-gray-400">{{ p.sku or '-' }}</span>
+                        </div>
                     </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.original_price and p.original_price > p.price %}
+                        <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                        <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% else %}
+                        <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-gray-800">{{ p.get('units', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-purple-700">{{ p.get('available_quantity', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-green-700">{{ p.get('_bm_avail', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-red-600">{{ p.get('available_quantity', 0) - (p.get('_bm_avail') or 0) }}</td>
-                    <td class="px-3 py-2 text-right text-gray-700">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
+                    {% set _imb_dt_no_wh = not p.get('_bm_wh_fetched') %}
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _imb_dt_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _imb_dt_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _imb_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-center">
                         <button onclick="syncOneImbalanced('{{ p.id }}', {{ p.get('_bm_avail', 0) }})"
                                 id="imbal-btn-{{ p.id }}"
@@ -1395,14 +1435,32 @@ window._stockFilter = function(q) {
                 {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-12 h-12 rounded object-cover flex-shrink-0" alt="">{% endif %}
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-gray-800 line-clamp-2">{{ p.title }}</p>
-                    {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku }}</span>{% endif %}
+                    <div class="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span class="font-mono text-[10px] text-gray-400">{{ p.id }}</span>
+                        {% if p.sku %}<span class="font-mono text-[11px] font-bold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded">{{ p.sku }}</span>{% endif %}
+                    </div>
                 </div>
             </div>
             <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs">
-                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">{{ p.get('available_quantity', 0) }}</span></div>
-                <div><span class="text-gray-500">BM:</span> <span class="font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</span></div>
-                <div><span class="text-gray-500">Precio:</span> <span class="font-bold">${{ "{:,.0f}".format(p.get('price', 0)) }}</span></div>
+                <div>
+                    {% if p.original_price and p.original_price > p.price %}
+                    <span class="text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                    <span class="font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% else %}
+                    <span class="font-bold text-gray-800">${{ "{:,.0f}".format(p.price) }}</span>
+                    {% endif %}
+                </div>
+                {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                <div><span class="text-gray-500">Retail:</span> <span class="font-bold text-blue-600">${{ "{:,.0f}".format(p._bm_retail_price) }}</span></div>
+                {% endif %}
                 <div><span class="text-gray-500">Ventas 30d:</span> <span class="font-bold text-red-600">0</span></div>
+                <div><span class="text-gray-500">MeLi:</span> <span class="font-bold">{{ p.get('available_quantity', 0) }}</span></div>
+                <div><span class="text-gray-500">BM Disp:</span> <span class="font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</span></div>
+                {% set _stag_no_wh = not p.get('_bm_wh_fetched') %}
+                <div class="text-[10px] text-gray-400">{% if _stag_no_wh %}MTY:— CDMX:— TJ:—{% else %}MTY:{{ p.get('_bm_mty', 0) or 0 }} CDMX:{{ p.get('_bm_cdmx', 0) or 0 }} TJ:{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</div>
+                {% if p.get('_margen_pct') is not none %}
+                <div><span class="text-gray-500">Margen:</span> <span class="font-bold {{ 'text-red-600' if p._margen_pct < 10 else 'text-gray-700' }}">{{ p._margen_pct }}%</span></div>
+                {% endif %}
             </div>
         </div>
         {% endfor %}
@@ -1413,10 +1471,15 @@ window._stockFilter = function(q) {
             <thead class="bg-slate-50 border-b">
                 <tr>
                     <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">Producto</th>
-                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">SKU</th>
+                    <th class="text-left px-3 py-2 text-gray-600 font-medium text-xs">ID / SKU</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Retail USD</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Ventas 30d</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Stock MeLi</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">BM Disp.</th>
-                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs">Precio</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-orange-500">MTY</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-blue-500">CDMX</th>
+                    <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-purple-400">TJ</th>
                     <th class="text-right px-3 py-2 text-gray-600 font-medium text-xs text-pink-600">Margen Est.</th>
                     <th class="text-center px-3 py-2 text-gray-600 font-medium text-xs">Ver</th>
                 </tr>
@@ -1427,13 +1490,37 @@ window._stockFilter = function(q) {
                     <td class="px-3 py-2">
                         <div class="flex items-center gap-2">
                             {% if p.thumbnail %}<img src="{{ p.thumbnail }}" class="w-8 h-8 rounded object-cover flex-shrink-0" alt="">{% endif %}
-                            <span class="text-gray-800 truncate max-w-[220px] text-xs" title="{{ p.title }}">{{ p.title[:55] }}</span>
+                            <span class="text-gray-800 truncate max-w-[200px] text-xs" title="{{ p.title }}">{{ p.title[:50] }}</span>
                         </div>
                     </td>
-                    <td class="px-3 py-2"><span class="font-mono text-[11px] font-bold text-orange-600">{{ p.sku or '-' }}</span></td>
+                    <td class="px-3 py-2">
+                        <div class="flex flex-col gap-0.5">
+                            <span class="text-xs text-blue-600 font-mono font-semibold">{{ p.id }}</span>
+                            <span class="font-mono text-[10px] text-gray-400">{{ p.sku or '-' }}</span>
+                        </div>
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.original_price and p.original_price > p.price %}
+                        <span class="text-[10px] text-gray-400 line-through">${{ "{:,.0f}".format(p.original_price) }}</span>
+                        <span class="text-xs font-bold text-green-600">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% else %}
+                        <span class="text-xs font-semibold text-gray-700">${{ "{:,.0f}".format(p.price) }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right">
+                        {% if p.get('_bm_retail_price') and p._bm_retail_price > 0 and p._bm_retail_price < 9999 %}
+                        <span class="text-xs text-blue-600 font-mono">${{ "{:,.0f}".format(p._bm_retail_price) }}</span>
+                        {% else %}
+                        <span class="text-xs text-gray-300">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-right font-bold text-red-600">0</td>
                     <td class="px-3 py-2 text-right text-gray-700">{{ p.get('available_quantity', 0) }}</td>
                     <td class="px-3 py-2 text-right font-bold text-slate-700">{{ p.get('_bm_avail', 0) }}</td>
-                    <td class="px-3 py-2 text-right text-gray-700">${{ "{:,.0f}".format(p.get('price', 0)) }}</td>
+                    {% set _stag_dt_no_wh = not p.get('_bm_wh_fetched') %}
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_mty') or 0) > 0 else 'text-gray-300' }}">{% if _stag_dt_no_wh %}—{% else %}{{ p.get('_bm_mty', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_cdmx') or 0) > 0 else 'text-gray-300' }}">{% if _stag_dt_no_wh %}—{% else %}{{ p.get('_bm_cdmx', 0) or 0 }}{% endif %}</td>
+                    <td class="px-3 py-2 text-right text-xs {{ 'text-green-600' if (p.get('_bm_tj') or 0) > 0 else 'text-gray-300' }}">{% if _stag_dt_no_wh %}—{% else %}{{ p.get('_bm_tj', 0) or 0 }}{% endif %}</td>
                     <td class="px-3 py-2 text-right {% if p.get('_margen_pct') is not none and p._margen_pct < 10 %}text-red-600 font-bold{% else %}text-gray-600{% endif %}">
                         {% if p.get('_margen_pct') is not none %}{{ p._margen_pct }}%{% else %}—{% endif %}
                     </td>
