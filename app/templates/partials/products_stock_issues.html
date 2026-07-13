@@ -45,6 +45,85 @@
 })();
 </script>
 {% endif %}
+<!-- ═══ BUSCADOR DE STOCK ═══ -->
+<div class="bg-white rounded-xl shadow p-3 mb-4">
+    <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        <input type="text" id="stock-search-sku"
+               placeholder="Buscar por SKU, MLM, título — filtra todas las alertas..."
+               class="w-full pl-10 pr-10 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-yellow-400 focus:ring-2 focus:ring-yellow-200 bg-gray-50 focus:bg-white transition"
+               oninput="window._stockFilter(this.value)"
+               onkeydown="if(event.key==='Escape'){this.value='';window._stockFilter('')}">
+        <button id="stock-search-clear"
+                onclick="document.getElementById('stock-search-sku').value='';window._stockFilter('')"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 hidden"
+                title="Limpiar">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+        </button>
+    </div>
+    <div id="stock-search-status" class="hidden mt-1.5 text-xs text-gray-400 text-center"></div>
+</div>
+<script>
+window._stockFilter = function(q) {
+    q = (q || '').trim().toUpperCase();
+    var clearBtn = document.getElementById('stock-search-clear');
+    var statusEl = document.getElementById('stock-search-status');
+    if (clearBtn) clearBtn.classList.toggle('hidden', !q);
+
+    var SECTION_IDS = [
+        'restock-section','activate-section','risk-section','critical-section',
+        'full-nostock-section','imbalanced-section','stagnant-section',
+        'price-risk-section','no-bm-sku-section','orphans-section'
+    ];
+
+    var totalShown = 0;
+    SECTION_IDS.forEach(function(sid) {
+        var section = document.getElementById(sid);
+        if (!section) return;
+
+        var rows  = section.querySelectorAll('tbody tr');
+        var cards = section.querySelectorAll('.space-y-2 > div, .space-y-3 > div');
+        var visibleRows = 0, visibleCards = 0;
+
+        rows.forEach(function(r) {
+            var show = !q || r.textContent.toUpperCase().includes(q);
+            r.style.display = show ? '' : 'none';
+            if (show) visibleRows++;
+        });
+        cards.forEach(function(c) {
+            var show = !q || c.textContent.toUpperCase().includes(q);
+            c.style.display = show ? '' : 'none';
+            if (show) visibleCards++;
+        });
+
+        var total = rows.length + cards.length;
+        var visible = visibleRows + visibleCards;
+        totalShown += visible;
+
+        if (q && total > 0) {
+            section.classList.toggle('hidden', visible === 0);
+        } else {
+            section.classList.remove('hidden');
+        }
+    });
+
+    if (statusEl) {
+        if (q) {
+            statusEl.classList.remove('hidden');
+            statusEl.textContent = totalShown === 0
+                ? 'Sin resultados para "' + q + '"'
+                : totalShown + ' alerta' + (totalShown !== 1 ? 's' : '') + ' encontrada' + (totalShown !== 1 ? 's' : '') + ' para "' + q + '"';
+        } else {
+            statusEl.classList.add('hidden');
+        }
+    }
+};
+</script>
+
 <!-- KPIs -->
 <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
     <div onclick="document.getElementById('restock-section').scrollIntoView({behavior:'smooth'})"
