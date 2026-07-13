@@ -5268,10 +5268,12 @@ async def _fetch_tv_wh_breakdown():
             _mty  = _tv_lkp(_ex68, _by68, _ck.upper())
             _avt  = _cd.get("avail_total", 0) or 0
             _lsum = _cdmx + _mty
-            if _lsum > _avt > 0:
-                _sc   = _avt / _lsum
-                _mty  = round(_mty * _sc)
-                _cdmx = _avt - _mty
+            # Confiar en el bulk per-location ALL (ICB/ICC incluido) sobre el bulk combinado.
+            # El bulk combinado LOC47+68 retorna a veces un Available inferior al real
+            # (discrepancia de agregación en BM API). Si per-location suma más, actualizar
+            # avail_total para que BM Disp refleje el valor correcto.
+            if _lsum > _avt:
+                _cd["avail_total"] = _lsum
             _cd["cdmx"] = _cdmx
             _cd["mty"]  = _mty
             _cd["_wh_fetched"] = True
@@ -5787,6 +5789,8 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
                 _wh_updated = 0
                 for _wh_sku in to_fetch:
                     _wh_bk = normalize_to_bm_sku(_wh_sku)
+                    if _wh_bk.upper().startswith("SNTV"):
+                        continue  # TV WH breakdown maneja SNTV* a T+180s con ICB/ICC conditions
                     _existing = _bm_stock_cache.get(_wh_bk)
                     if not _existing or not _existing[1].get("_v"):
                         continue  # solo actualizar entradas verificadas
