@@ -7,6 +7,44 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-13 — FIX: BM Disp inconsistente entre secciones del Stock tab (Stock Crítico=1, Reabastecer=7)
+
+**Commits:** `631cd7e`, `4bf81fc`, `87c4d02`, `53a9810`, `1a4a39d`
+**Archivos:** `app/main.py`
+
+**Síntoma:** SNTV008016 mostraba BM Disp=1 en Stock Crítico pero BM Disp=7 en Reabastecer.
+MTY/CDMX/TJ mostraban "—" en todas las secciones.
+
+**Causa raíz (cadena de problemas):**
+
+1. **BM bulk GR** (`GRA,GRB,GRC,NEW`) no incluye SNTV* — las TVs usan condición ICB/ICC.
+   El bulk devolvía `avail_total=1` para SNTV008016 porque el ALL bulk (`GRA…ICC…NEW`)
+   retorna el valor correcto (7+). Fix: `_fetch_tv_wh_breakdown` usa ALL bulk y actualiza
+   `avail_total` con la suma real `mty+cdmx` cuando `lsum > avt`.
+
+2. **Dos handlers corriendo para SNTV*:** el prewarm second pass (`_wh_phase`) Y el TV WH
+   breakdown ejecutaban para SNTV*. El second pass pisaba `mty=0, _wh_fetched=False` sobre
+   datos correctos. Fix: excluir SNTV* del prewarm second pass y del `_do_bulk_miss_retry`.
+
+3. **DB warm-start siempre arrancaba con mty=0 para SNTV*:** el save al DB ocurría en T+0
+   (antes del TV WH breakdown a T+180s). Fix: agregar save al DB al final del TV WH breakdown.
+
+4. **`_stock_issues_cache` estancado con datos del prewarm T+0:** el cache se construía con
+   `avail_total=1` y el TV WH breakdown actualizaba el BM cache pero NO el stock_issues_cache.
+   Por eso Stock Crítico (lee del cache viejo) mostraba 1, mientras Reabastecer mostraba 7
+   (el listing fue eviccionado individualmente y se reconstruyó fresco con datos nuevos).
+   Fix: al finalizar TV WH breakdown, limpiar `_stock_issues_cache` y disparar prewarm de
+   reconstrucción. El nuevo prewarm lee el BM cache corregido y todas las secciones muestran
+   valores consistentes.
+
+**Resultado final:** ~4 minutos después de cada arranque, Stock Crítico y Reabastecer muestran
+el mismo BM Disp, y MTY/CDMX/TJ se pueblan correctamente en todas las secciones.
+
+**Regla confirmada:** BM ya descuenta reservas de `AvailableQTY`. NUNCA restar reservas
+manualmente — confiar en `avail_total` como valor final vendible.
+
+---
+
 ## 2026-07-01 — FEAT: Alerta "SKU no en catálogo BM" + catalog sync diario
 
 **Archivos:** `app/main.py`, `app/templates/partials/products_stock_issues.html`
