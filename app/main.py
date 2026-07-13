@@ -5301,6 +5301,16 @@ async def _fetch_tv_wh_breakdown():
         except Exception as _tv_db_err:
             _tvlog.warning(f"[BM-TV-WH] Error persistiendo en DB: {_tv_db_err}")
 
+        # Invalidar _stock_issues_cache: fue construido en prewarm (T+0) con avail_total
+        # incorrecto para SNTV*. Ahora que tenemos mty/cdmx/avail correctos, forzar
+        # reconstrucción en el próximo request del Stock tab.
+        _stock_issues_cache.clear()
+        _tvlog.info("[BM-TV-WH] _stock_issues_cache limpiado — próximo request reconstruye con datos BM correctos")
+        # Disparar prewarm para reconstruir stock_issues_cache en background sin esperar al usuario.
+        if not _prewarm_running:
+            asyncio.create_task(_prewarm_caches())
+            _tvlog.info("[BM-TV-WH] Prewarm de reconstrucción disparado")
+
     except Exception as _tv_err:
         import logging as _tvl2
         _tvl2.getLogger(__name__).error(f"[BM-TV-WH] Error inesperado: {_tv_err}")
