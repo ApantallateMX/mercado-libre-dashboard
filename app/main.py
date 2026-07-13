@@ -5281,6 +5281,26 @@ async def _fetch_tv_wh_breakdown():
 
         _tvlog.info(f"[BM-TV-WH] MTY/CDMX actualizado para {_tv_n} TVs (SNTV*)")
 
+        # Persistir entradas SNTV* al DB con mty/cdmx ya actualizados.
+        # El DB save del prewarm ocurre a T+0 (antes de este task a T+180s), así que
+        # el DB queda con mty=0/_wh_fetched=False. Sin este save, cada restart/deploy
+        # arranca con MTY="—" para todos los TVs durante 3 minutos.
+        try:
+            from app.db import token_store as _tv_ts
+            _tv_entries = [
+                (_ck, _bm_stock_cache[_ck][1], _bm_stock_cache[_ck][0])
+                for _ck in _bm_stock_cache
+                if _ck.upper().startswith("SNTV")
+                and _bm_stock_cache[_ck][0] > 0
+                and (_bm_stock_cache[_ck][1].get("avail_total", 0) > 0
+                     or _bm_stock_cache[_ck][1].get("_wh_fetched"))
+            ]
+            if _tv_entries:
+                await _tv_ts.upsert_bm_stock_batch(_tv_entries)
+                _tvlog.info(f"[BM-TV-WH] {len(_tv_entries)} entradas SNTV* persistidas en DB")
+        except Exception as _tv_db_err:
+            _tvlog.warning(f"[BM-TV-WH] Error persistiendo en DB: {_tv_db_err}")
+
     except Exception as _tv_err:
         import logging as _tvl2
         _tvl2.getLogger(__name__).error(f"[BM-TV-WH] Error inesperado: {_tv_err}")
