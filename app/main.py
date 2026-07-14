@@ -4708,9 +4708,11 @@ _bm_health: dict = {
 _bm_health_log: list = []   # últimos 20 registros de health checks
 
 async def _check_bm_health():
-    """Verifica salud de BM testeando un endpoint de API real.
-    Timeout 20s — evita falsos positivos cuando BM está lento pero funcional.
-    Clasifica el error para diagnóstico: timeout / auth / connection / error.
+    """Verifica salud de BM haciendo una mini-página del bulk (1 página, 500 SKUs).
+    Usa el MISMO endpoint que el bulk real — si trae filas, BM está vivo.
+    El endpoint individual (get_stock_with_reserve) puede fallar aunque el bulk funcione,
+    lo que causaba que el bulk nunca se refrescara (BM marcado caído en falso).
+    Timeout 45s — bulk paginado es más lento que individual.
     """
     global _bm_health, _bm_health_log
     t0 = _time.time()
@@ -4721,12 +4723,17 @@ async def _check_bm_health():
     try:
         from app.services.binmanager_client import get_shared_bm as _get_shared_bm_health
         _bm_cli_health = await _get_shared_bm_health()
+        # Mini-bulk: 1 página de hasta 500 SKUs — testea el mismo endpoint que el bulk real.
+        # Si devuelve al menos 1 fila, BM está vivo y el bulk puede refrescarse.
         _result = await asyncio.wait_for(
-            _bm_cli_health.get_stock_with_reserve("SNTV001764"),
-            timeout=20.0,
+            _bm_cli_health.get_global_inventory(page=1, per_page=500, min_qty=0),
+            timeout=45.0,
         )
         elapsed_ms = round((_time.time() - t0) * 1000)
-        ok = True
+        ok = isinstance(_result, list) and len(_result) > 0
+        if not ok:
+            error_type = "error"
+            error_msg = "Mini-bulk devolvió lista vacía o None"
     except asyncio.TimeoutError:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False
@@ -5596,12 +5603,16 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         _bulk_gr_rows = None
         if _bm_bulk_gr_cache:
             _age_gr = _time.time() - _bm_bulk_gr_cache[0]
-            if _age_gr < 900 or _bm_is_down_now:
-                # BM caído → servir cache sin importar antigüedad (mejor que 0 falso)
+            # Servir cache si: fresco (<15 min) O BM marcado caído Y no excede 2h.
+            # Cap de 2h: aunque BM esté "caído" según health check, forzar re-intento
+            # si el bulk tiene >2h — el health check puede estar equivocado (endpoint
+            # individual falla pero bulk funciona). El except abajo tiene fallback a stale.
+            _use_cache = _age_gr < 900 or (_bm_is_down_now and _age_gr < 7200)
+            if _use_cache:
                 _bulk_gr_rows = _bm_bulk_gr_cache[1]
                 _age_label = f"{round(_age_gr)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_gr >= 900 else "")
                 logger.info(f"[BM-CACHE] Reutilizando GR bulk cache ({_age_label})")
-        if _bulk_gr_rows is None and not _bm_is_down_now:
+        if _bulk_gr_rows is None:
             try:
                 _fresh_gr = await asyncio.wait_for(
                     bm_cli.get_bulk_stock(conditions=_BM_COND_GR),
@@ -5685,11 +5696,12 @@ async def _get_bm_stock_cached(products: list, sku_key="sku", retry_stale: bool 
         if _need_all:
             if _bm_bulk_all_cache:
                 _age_all = _time.time() - _bm_bulk_all_cache[0]
-                if _age_all < 900 or _bm_is_down_now:
+                _use_cache_all = _age_all < 900 or (_bm_is_down_now and _age_all < 7200)
+                if _use_cache_all:
                     _bulk_all_rows = _bm_bulk_all_cache[1]
                     _age_label_all = f"{round(_age_all)}s" + (" [STALE-BM-DOWN]" if _bm_is_down_now and _age_all >= 900 else "")
                     logger.info(f"[BM-CACHE] Reutilizando ALL bulk cache ({_age_label_all})")
-            if _bulk_all_rows is None and not _bm_is_down_now:
+            if _bulk_all_rows is None:
                 try:
                     _fresh_all = await asyncio.wait_for(
                         bm_cli.get_bulk_stock(conditions=_BM_COND_ALL),
