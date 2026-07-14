@@ -4708,11 +4708,11 @@ _bm_health: dict = {
 _bm_health_log: list = []   # últimos 20 registros de health checks
 
 async def _check_bm_health():
-    """Verifica salud de BM haciendo una mini-página del bulk (1 página, 500 SKUs).
-    Usa el MISMO endpoint que el bulk real — si trae filas, BM está vivo.
-    El endpoint individual (get_stock_with_reserve) puede fallar aunque el bulk funcione,
-    lo que causaba que el bulk nunca se refrescara (BM marcado caído en falso).
-    Timeout 45s — bulk paginado es más lento que individual.
+    """Verifica salud de BM con una consulta ligera de inventario (per_page=1).
+    Usa get_global_inventory en vez de get_stock_with_reserve — el endpoint individual
+    puede fallar aunque el bulk/inventario funcione, lo que causaba bulk congelado 20+h.
+    per_page=1: mínima carga a BM (1 fila), suficiente para confirmar que responde.
+    Timeout 30s.
     """
     global _bm_health, _bm_health_log
     t0 = _time.time()
@@ -4723,17 +4723,17 @@ async def _check_bm_health():
     try:
         from app.services.binmanager_client import get_shared_bm as _get_shared_bm_health
         _bm_cli_health = await _get_shared_bm_health()
-        # Mini-bulk: 1 página de hasta 500 SKUs — testea el mismo endpoint que el bulk real.
+        # 1 fila de inventario — mínima carga a BM, mismo endpoint que el bulk real.
         # Si devuelve al menos 1 fila, BM está vivo y el bulk puede refrescarse.
         _result = await asyncio.wait_for(
-            _bm_cli_health.get_global_inventory(page=1, per_page=500, min_qty=0),
-            timeout=45.0,
+            _bm_cli_health.get_global_inventory(page=1, per_page=1, min_qty=0),
+            timeout=30.0,
         )
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = isinstance(_result, list) and len(_result) > 0
         if not ok:
             error_type = "error"
-            error_msg = "Mini-bulk devolvió lista vacía o None"
+            error_msg = "Health check devolvió lista vacía — BM sin datos o caído"
     except asyncio.TimeoutError:
         elapsed_ms = round((_time.time() - t0) * 1000)
         ok = False
