@@ -1610,15 +1610,18 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
 
 
 # ── ML claims background save ────────────────────────────────────────────────
-# Persiste reclamos ML (con SKU, comentarios y fotos) en claims_history/claim_photos.
-# Solo ML: Amazon no expone reason codes ni fotos vía SP-API (ver DEVLOG).
+# Persiste reclamos ML (SKU + comentarios/resumen) en claims_history. Las fotos NO
+# se bajan aquí — se cachean de forma perezosa (1 a la vez) vía
+# /api/returns/claim-photos cuando alguien realmente abre la galería de un reclamo.
+# Bajarlas todas de una llenó el Railway Volume (500MB) y tumbó el login del
+# dashboard completo — ver DEVLOG 2026-07-15 (incidente).
 _ml_claims_bg_running: bool = False
 _ml_claims_bg_last_run: float = 0.0
 
 async def _save_ml_claims_bg(days: int = 180) -> None:
-    """Background: descarga reclamos ML de todas las cuentas + mensajes/fotos,
-    guarda en claims_history/claim_photos. Guard de 1h entre corridas (ML no tiene
-    el rate limit tan estricto de Amazon, pero igual no hace sentido correrlo seguido)."""
+    """Background: descarga reclamos ML de todas las cuentas + mensajes (solo texto),
+    guarda en claims_history. Guard de 1h entre corridas (ML no tiene el rate limit
+    tan estricto de Amazon, pero igual no hace sentido correrlo seguido)."""
     global _ml_claims_bg_running, _ml_claims_bg_last_run
     if _ml_claims_bg_running:
         return
@@ -1630,26 +1633,18 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
             get_all_tokens as _get_ml_accts,
             get_tokens as _get_tok,
             upsert_claims_history as _upsert_ch,
-            save_claim_photos as _save_cp,
         )
         from app.services.meli_client import MeliClient
         from app.services.sku_utils import normalize_to_bm_sku as _norm_sku
         from datetime import datetime as _dt, timedelta as _td
-        from pathlib import Path as _Path
-        import os as _os_cp
 
         accounts = await _get_ml_accts()
         if not accounts:
             return
         date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
 
-        photos_dir = _Path(DATABASE_PATH).resolve().parent / "claim_photos"
-        photos_dir.mkdir(parents=True, exist_ok=True)
-
         sem_ml = asyncio.Semaphore(5)
         all_rows: list = []
-        all_photos: list = []  # (claim_id, [photo dicts]) — se guardan en 1 sola pasada al final
-        # (evita "database is locked" de SQLite con escrituras concurrentes desde varios claims a la vez)
 
         async def _process_account(acc):
             uid = acc["user_id"]
@@ -1682,8 +1677,14 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                             except Exception:
                                 pass
 
+                        # Solo texto — NO se descargan fotos aquí. Un sync masivo bajando
+                        # TODAS las fotos de TODOS los reclamos llenó el Railway Volume de
+                        # 500MB en producción (835 fotos = 1.5GB) y tumbó el login de todo
+                        # el dashboard (SQLite no pudo escribir con el disco lleno).
+                        # /api/returns/claim-photos ya tiene un fallback que descarga y
+                        # cachea UNA foto a la vez, solo cuando alguien abre la galería de
+                        # ese reclamo específico (lazy) — eso es suficiente y seguro.
                         buyer_comment = ""
-                        photos_to_save = []
                         try:
                             msgs = await client.get_claim_messages(claim_id)
                             texts = []
@@ -1696,41 +1697,9 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
                                     t = (msg.get("message") or msg.get("text") or "").strip()
                                     if t:
                                         texts.append(t)
-                                for att in (msg.get("attachments") or []):
-                                    fname = att.get("filename") or att.get("name") or ""
-                                    mime = att.get("type") or att.get("mime_type") or ""
-                                    is_img = (
-                                        mime.startswith("image/") or
-                                        any(fname.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
-                                    )
-                                    # Los attachments de claims v2 NO traen url/path — hay que
-                                    # armar la ruta de descarga: .../attachments/{filename}/download
-                                    if is_img and fname:
-                                        dl_path = f"/marketplace/v2/claims/{claim_id}/attachments/{fname}/download"
-                                        photos_to_save.append({"url": dl_path, "filename": fname, "from_role": role})
                             buyer_comment = " | ".join(texts)[:2000]
                         except Exception:
                             pass
-
-                        saved_photos = []
-                        if photos_to_save:
-                            claim_dir = photos_dir / claim_id
-                            for i, p in enumerate(photos_to_save):
-                                base_name = _os_cp.path.basename(p["filename"]) or f"foto_{i}.jpg"
-                                local_path = claim_dir / f"{i}_{base_name}"
-                                if not local_path.exists():
-                                    content = await client.download_binary(p["url"])
-                                    if not content:
-                                        continue
-                                    claim_dir.mkdir(parents=True, exist_ok=True)
-                                    local_path.write_bytes(content)
-                                saved_photos.append({
-                                    "local_path": str(local_path.relative_to(photos_dir.parent)),
-                                    "original_url": p["url"],
-                                    "from_role": p["from_role"],
-                                })
-                        if saved_photos:
-                            all_photos.append((claim_id, saved_photos))
 
                         all_rows.append({
                             "claim_id": claim_id, "platform": "ml", "account_id": nick,
@@ -1756,13 +1725,6 @@ async def _save_ml_claims_bg(days: int = 180) -> None:
         if all_rows:
             await _upsert_ch(all_rows)
             logger.info(f"[CLAIMS-BG] {len(all_rows)} reclamos guardados en claims_history")
-        for claim_id, saved_photos in all_photos:
-            try:
-                await _save_cp(claim_id, "ml", saved_photos)
-            except Exception as _e:
-                logger.warning(f"[CLAIMS-BG] Error guardando fotos de {claim_id}: {_e}")
-        if all_photos:
-            logger.info(f"[CLAIMS-BG] {sum(len(p) for _, p in all_photos)} fotos guardadas en claim_photos")
         _ml_claims_bg_last_run = _time.time()
     except Exception as _e:
         logger.warning(f"[CLAIMS-BG] Error general: {_e}")
@@ -14309,6 +14271,117 @@ async def diag_sku(sku: str = "", token: str = ""):
             "retail_ph_usd": round(_bm_retail_ph_cache[bm_key][1], 2) if bm_key in _bm_retail_ph_cache else None,
         },
     })
+
+
+@app.get("/api/diag/db-size")
+async def diag_db_size(token: str = ""):
+    """Diagnóstico URGENTE: tamaño de tokens.db, filas por tabla, y tamaño de
+    claim_photos/ en disco — para encontrar qué está llenando el Railway Volume."""
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import aiosqlite as _aio_sz
+    import os as _os_sz
+
+    result = {}
+    try:
+        db_path = DATABASE_PATH
+        result["db_file_mb"] = round(_os_sz.path.getsize(db_path) / 1024 / 1024, 2)
+    except Exception as _e:
+        result["db_file_mb_error"] = str(_e)
+
+    try:
+        photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+        total = 0
+        n_files = 0
+        if photos_dir.is_dir():
+            for root, _dirs, files in _os_sz.walk(photos_dir):
+                for f in files:
+                    try:
+                        total += _os_sz.path.getsize(_os_sz.path.join(root, f))
+                        n_files += 1
+                    except Exception:
+                        pass
+        result["claim_photos_mb"] = round(total / 1024 / 1024, 2)
+        result["claim_photos_files"] = n_files
+    except Exception as _e:
+        result["claim_photos_error"] = str(_e)
+
+    try:
+        volume_root = Path(DATABASE_PATH).resolve().parent
+        total_vol = 0
+        for root, _dirs, files in _os_sz.walk(volume_root):
+            for f in files:
+                try:
+                    total_vol += _os_sz.path.getsize(_os_sz.path.join(root, f))
+                except Exception:
+                    pass
+        result["volume_total_mb"] = round(total_vol / 1024 / 1024, 2)
+    except Exception as _e:
+        result["volume_total_error"] = str(_e)
+
+    tables = {}
+    try:
+        async with _aio_sz.connect(db_path) as db:
+            cur = await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            names = [r[0] for r in await cur.fetchall()]
+            for t in names:
+                try:
+                    c = await db.execute(f"SELECT COUNT(*) FROM {t}")
+                    tables[t] = (await c.fetchone())[0]
+                except Exception as _e:
+                    tables[t] = f"err {_e}"
+    except Exception as _e:
+        result["tables_error"] = str(_e)
+    result["tables"] = dict(sorted(tables.items(), key=lambda kv: kv[1] if isinstance(kv[1], int) else 0, reverse=True))
+    return result
+
+
+@app.get("/api/diag/emergency-clear-claim-photos")
+async def diag_emergency_clear_claim_photos(token: str = ""):
+    """URGENTE: borra TODAS las fotos de reclamos ya descargadas a disco (y su registro
+    en claim_photos) para liberar espacio cuando el Railway Volume se llena. Los
+    reclamos en sí (claims_history) NO se tocan — solo las fotos, que se recachean
+    solas la próxima vez que alguien abra la galería de un reclamo (lazy, 1 a la vez).
+    """
+    _DT = "dk_b55c96a82a49f04908e0079bda6bee41ce2748be2c11f3b5"
+    if token != _DT:
+        return JSONResponse({"error": "token inválido"}, status_code=403)
+    import os as _os_ec
+    import shutil as _shutil_ec
+    import aiosqlite as _aio_ec
+
+    freed_mb = 0.0
+    n_files = 0
+    photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+    if photos_dir.is_dir():
+        for root, _dirs, files in _os_ec.walk(photos_dir):
+            for f in files:
+                try:
+                    freed_mb += _os_ec.path.getsize(_os_ec.path.join(root, f)) / 1024 / 1024
+                    n_files += 1
+                except Exception:
+                    pass
+        _shutil_ec.rmtree(photos_dir, ignore_errors=True)
+        photos_dir.mkdir(parents=True, exist_ok=True)
+
+    rows_deleted = 0
+    vacuum_ok = True
+    async with _aio_ec.connect(DATABASE_PATH) as db:
+        cur = await db.execute("DELETE FROM claim_photos")
+        rows_deleted = cur.rowcount
+        await db.commit()
+        try:
+            # VACUUM necesita espacio libre temporal — si el disco seguía muy justo
+            # esto puede fallar; no es crítico, ya se liberó lo importante arriba.
+            await db.execute("VACUUM")
+        except Exception:
+            vacuum_ok = False
+
+    return {
+        "ok": True, "files_deleted": n_files, "freed_mb": round(freed_mb, 2),
+        "db_rows_deleted": rows_deleted, "vacuum_ok": vacuum_ok,
+    }
 
 
 @app.get("/api/diag/cache-health")

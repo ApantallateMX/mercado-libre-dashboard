@@ -1036,6 +1036,89 @@ class AmazonClient:
         logger.warning(f"[Amazon Reports] Timeout esperando reporte {report_id} ({max_wait_secs}s)")
         return {}
 
+    async def get_returns_report(self, date_from: str, date_to: str, max_wait_secs: int = 180) -> list:
+        """
+        Reporte GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE — devoluciones de inventario
+        FBA con razón y COMENTARIO REAL DEL CLIENTE (columna customer-comments).
+
+        IMPORTANTE — solo cubre FBA:
+            Ventas MFN (envío propio, fulfillment-channel="DEFAULT" en amazon_listings)
+            NO aparecen en este reporte — Amazon no expone reason/comentario para MFN
+            sin Seller Fulfilled Prime. No hay fotos del cliente en ningún caso — no
+            existe ese campo en ningún reporte de Amazon (a diferencia de ML).
+
+        Args:
+            date_from, date_to: "YYYY-MM-DD". Amazon limita a 60 días por reporte —
+                                 si el rango es más amplio, pedir varios reportes.
+
+        Returns:
+            Lista de dicts: {order_id, sku, asin, return_date, reason, customer_comments,
+                              disposition, quantity}
+        """
+        import csv, io as _io
+
+        created_after = f"{date_from}T00:00:00Z"
+        created_before = f"{date_to}T23:59:59Z"
+        logger.info(f"[Amazon Reports] Creando reporte de devoluciones FBA {date_from}→{date_to}…")
+        body = {
+            "reportType": "GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE",
+            "marketplaceIds": [self.marketplace_id],
+            "dataStartTime": created_after,
+            "dataEndTime": created_before,
+        }
+        result = await self._request("POST", "/reports/2021-06-30/reports", json_body=body)
+        report_id = result.get("reportId", "")
+        if not report_id:
+            raise ValueError(f"Amazon no devolvió reportId: {result}")
+
+        wait_interval = 15
+        attempts = max(4, max_wait_secs // wait_interval)
+
+        for attempt in range(attempts):
+            await asyncio.sleep(wait_interval)
+            status_data = await self.get_report_status(report_id)
+            proc_status = status_data.get("processingStatus", "")
+            logger.debug(f"[Amazon Reports] returns {report_id} → {proc_status} (intento {attempt+1}/{attempts})")
+
+            if proc_status == "DONE":
+                doc_id = status_data.get("reportDocumentId", "")
+                if not doc_id:
+                    raise ValueError("DONE pero sin reportDocumentId")
+                doc_info = await self.get_report_document_url(doc_id)
+                url = doc_info.get("url", "")
+                compressed = doc_info.get("compressionAlgorithm", "") == "GZIP"
+                content = await self.download_report_document(url, compressed)
+
+                items = []
+                reader = csv.DictReader(_io.StringIO(content), delimiter="\t")
+                logger.info(f"[Amazon Reports] Columnas returns TSV: {reader.fieldnames}")
+                for row in reader:
+                    sku = (row.get("sku") or row.get("merchant-sku") or "").strip()
+                    if not sku:
+                        continue
+                    try:
+                        qty = int(float(row.get("quantity") or 1))
+                    except (ValueError, TypeError):
+                        qty = 1
+                    items.append({
+                        "order_id": (row.get("order-id") or "").strip(),
+                        "sku": sku,
+                        "asin": (row.get("asin") or "").strip(),
+                        "return_date": (row.get("return-date") or "")[:10],
+                        "reason": (row.get("reason") or "").strip(),
+                        "customer_comments": (row.get("customer-comments") or "").strip(),
+                        "disposition": (row.get("detailed-disposition") or row.get("status") or "").strip(),
+                        "quantity": qty,
+                    })
+                logger.info(f"[Amazon Reports] {len(items)} devoluciones FBA para {self.seller_id}")
+                return items
+
+            elif proc_status in ("FATAL", "CANCELLED"):
+                raise RuntimeError(f"Reporte {report_id} terminó con estado {proc_status}")
+
+        logger.warning(f"[Amazon Reports] Timeout esperando reporte de devoluciones {report_id} ({max_wait_secs}s)")
+        return []
+
     async def get_merchant_listings_report(self, max_wait_secs: int = 300) -> list:
         """
         Obtiene TODOS los listings del vendedor via Reports API.
