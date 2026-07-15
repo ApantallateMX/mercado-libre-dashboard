@@ -190,6 +190,51 @@
     </div>
 </div>
 
+<!-- ===== TASA REAL DE RECLAMOS POR SKU + PAQUETE PARA PROVEEDOR ===== -->
+<div id="ret-claimrate-card" class="bg-white rounded-lg shadow mb-6">
+    <div class="px-6 py-3 flex items-center gap-2 border-b border-gray-100">
+        <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+        <h2 class="text-sm font-semibold text-gray-700">Tasa Real de Reclamos por SKU</h2>
+        <span class="text-[10px] text-gray-400 font-normal">(unidades reclamadas ÷ vendidas — no % del total de reclamos)</span>
+    </div>
+    <div class="p-5">
+        <div class="flex flex-wrap items-end gap-4 p-4 bg-gray-50 rounded-lg mb-4">
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Desde</label>
+                <input type="date" id="ret-rate-from" class="border rounded px-2 py-1 text-xs bg-white">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Hasta</label>
+                <input type="date" id="ret-rate-to" class="border rounded px-2 py-1 text-xs bg-white">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-500 mb-1">Mín. reclamos</label>
+                <input type="number" id="ret-rate-min" value="2" min="1" class="border rounded px-2 py-1 text-xs bg-white w-16">
+            </div>
+            <div class="flex items-center gap-2 pb-0.5">
+                <button onclick="loadClaimRate()"
+                        class="bg-yellow-400 text-gray-800 font-semibold px-4 py-1.5 rounded hover:bg-yellow-500 text-xs">
+                    Calcular
+                </button>
+                <button onclick="syncClaimsNow()" id="ret-sync-claims-btn"
+                        class="bg-gray-200 text-gray-600 px-3 py-1.5 rounded hover:bg-gray-300 text-xs">
+                    🔄 Actualizar reclamos (últimos 90d)
+                </button>
+            </div>
+        </div>
+        <p class="text-[11px] text-gray-400 mb-3">
+            Solo Mercado Libre — Amazon no expone motivo ni fotos de devolución vía su API.
+            Rango máximo 180 días (se calcula en vivo). Si nunca corriste "Actualizar reclamos",
+            hazlo primero — puede tardar varios minutos.
+        </p>
+        <div id="ret-claimrate-results">
+            <p class="text-center text-gray-400 py-8 text-sm">Elige un rango de fechas y presiona Calcular.</p>
+        </div>
+    </div>
+</div>
+
 <!-- ══ Vista Global (todas las cuentas) ══ -->
 <div id="ret-global-view" class="hidden">
     <div class="bg-white rounded-xl shadow mb-5 border-l-4 border-blue-400 overflow-hidden">
@@ -698,6 +743,94 @@ window.clearTopComparison = function() {
     document.getElementById('ret-compare-from').value = '';
     document.getElementById('ret-compare-to').value   = '';
 };
+
+// ============================================================
+// Tasa real de reclamos por SKU + paquete para proveedor
+// ============================================================
+window.syncClaimsNow = function() {
+    var btn = document.getElementById('ret-sync-claims-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sincronizando...';
+    fetch('/api/planning/sync-claims?days=90', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            btn.disabled = false;
+            btn.textContent = '🔄 Actualizar reclamos (últimos 90d)';
+            alert(data.message || data.error || 'Sync iniciado — vuelve a calcular la tasa en unos minutos.');
+        })
+        .catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = '🔄 Actualizar reclamos (últimos 90d)';
+            alert('Error: ' + e.message);
+        });
+};
+
+window.loadClaimRate = function() {
+    var from = document.getElementById('ret-rate-from').value;
+    var to   = document.getElementById('ret-rate-to').value;
+    var minC = document.getElementById('ret-rate-min').value || 1;
+    var el   = document.getElementById('ret-claimrate-results');
+    if (!from || !to) {
+        el.innerHTML = '<p class="text-center text-yellow-600 py-6 text-sm">Selecciona fecha desde y hasta.</p>';
+        return;
+    }
+    el.innerHTML =
+        '<div class="flex items-center justify-center gap-3 py-10 text-sm text-gray-500">' +
+        '<svg class="animate-spin h-5 w-5 text-yellow-500" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>' +
+        'Calculando (rangos amplios tardan más — está bajando ventas en vivo)...</div>';
+
+    fetch('/api/returns/sku-claim-rate?date_from=' + from + '&date_to=' + to + '&min_claims=' + minC)
+        .then(function(r) { return r.json(); })
+        .then(function(data) { _renderClaimRate(data, from, to); })
+        .catch(function(e) {
+            el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">Error: ' + e.message + '</p>';
+        });
+};
+
+function _renderClaimRate(data, from, to) {
+    var el = document.getElementById('ret-claimrate-results');
+    if (data.error) {
+        el.innerHTML = '<p class="text-center text-red-500 py-6 text-sm">' + data.error + '</p>';
+        return;
+    }
+    var products = data.products || [];
+    if (!products.length) {
+        el.innerHTML = '<p class="text-center text-gray-400 py-8 text-sm">Sin reclamos en este rango. ' +
+            'Si nunca corriste "Actualizar reclamos", presiónalo primero.</p>';
+        return;
+    }
+    var html = '<div class="overflow-x-auto"><table class="w-full text-xs">' +
+        '<thead><tr class="text-left text-gray-500 border-b">' +
+        '<th class="py-2 pr-3">SKU</th><th class="py-2 pr-3">Reclamos</th>' +
+        '<th class="py-2 pr-3">Uds. reclamadas</th><th class="py-2 pr-3">Uds. vendidas</th>' +
+        '<th class="py-2 pr-3">Tasa</th><th class="py-2 pr-3">Monto MXN</th>' +
+        '<th class="py-2 pr-3">Motivos</th><th class="py-2 pr-3"></th></tr></thead><tbody>';
+    products.forEach(function(p) {
+        var rateColor = p.claim_rate_pct === null ? 'text-gray-400' :
+            (p.claim_rate_pct > 20 ? 'text-red-600 font-bold' :
+                (p.claim_rate_pct > 8 ? 'text-orange-600 font-semibold' : 'text-gray-700'));
+        var rateTxt = p.claim_rate_pct === null ? 'sin ventas en rango' : (p.claim_rate_pct + '%');
+        var titleHtml = p.title ? '<br><span class="text-gray-400 font-normal">' + p.title + '</span>' : '';
+        var noteHtml = p.note ? '<br><span class="text-[9px] text-gray-400 font-normal">' + p.note + '</span>' : '';
+        var monto = (p.amount_mxn || 0).toLocaleString('es-MX', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+        html += '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
+            '<td class="py-2 pr-3 font-mono font-semibold">' + p.sku + titleHtml + '</td>' +
+            '<td class="py-2 pr-3">' + p.claims_count + '</td>' +
+            '<td class="py-2 pr-3">' + p.units_claimed + '</td>' +
+            '<td class="py-2 pr-3">' + p.units_sold + '</td>' +
+            '<td class="py-2 pr-3 ' + rateColor + '">' + rateTxt + noteHtml + '</td>' +
+            '<td class="py-2 pr-3">$' + monto + '</td>' +
+            '<td class="py-2 pr-3 text-gray-500">' + p.reasons.join(', ') + '</td>' +
+            '<td class="py-2 pr-3">' +
+            '<a href="/api/returns/supplier-package?sku=' + encodeURIComponent(p.sku) +
+            '&date_from=' + from + '&date_to=' + to + '" ' +
+            'class="bg-purple-100 text-purple-700 px-2 py-1 rounded hover:bg-purple-200 whitespace-nowrap inline-block">' +
+            '📦 Paquete proveedor</a></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+}
 
 // ============================================================
 // Render top products — rich cards

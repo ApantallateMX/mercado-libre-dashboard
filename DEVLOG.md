@@ -56,6 +56,41 @@ Reports API para reason codes reales.
 
 ---
 
+## 2026-07-15 — FEAT: Tasa real de reclamos por SKU + paquete descargable para proveedor — Fase 2/4
+
+**Archivos:** `app/main.py`
+
+**Continuación de la Fase 1 (arriba, mismo día).** Dos endpoints nuevos:
+
+- `GET /api/returns/sku-claim-rate?date_from&date_to` — unidades reclamadas ÷ vendidas por
+  SKU, en vivo. **No usa `order_history` como denominador** — se descubrió que esa tabla
+  está casi vacía para ML (20 filas totales), solo se llena de forma parcial/fire-and-forget
+  desde otros flujos. En su lugar hace fetch en vivo de ventas (mismo patrón de paginación
+  adaptativa que `generate_purchase_order.py`, con partición de rango de fechas si una cuenta
+  supera el límite de ~10,000 resultados de la API de ML). Rango máximo 180 días (fetch en
+  vivo, límite práctico antes del timeout de 30s de Railway).
+  - "Unidades reclamadas" cuenta **órdenes distintas**, no reclamos crudos — ML a veces abre
+    un `claim` y después una `mediation` como IDs separados para la MISMA orden; contar
+    reclamos crudos infla el numerador.
+  - Nota automática cuando la tasa pasa de 100%: el filtro de fecha es sobre cuándo se
+    **abrió el reclamo**, no cuándo se hizo la venta — un reclamo de julio puede ser de una
+    venta de marzo. Con ventanas cortas (30d) esto puede dar tasas >100% en SKUs con pocas
+    ventas recientes pero reclamos viejos resurgiendo; es información real, solo hay que
+    leerla con ese contexto.
+- `GET /api/returns/supplier-package?sku=X&date_from&date_to` — ZIP descargable con
+  `resumen.xlsx` (detalle de cada reclamo: fecha, motivo, comentario/resumen del comprador,
+  monto — más una hoja de resumen ejecutivo) + carpeta `fotos/` con todas las fotos de
+  clientes para ese SKU. Usa `openpyxl` (ya en requirements) + `zipfile` (stdlib).
+
+**Validado localmente:** SNAC000046 → ZIP de 6.7MB, 5 reclamos, 5 órdenes distintas, $27,036.88
+MXN, 5 fotos reales verificadas.
+
+**Pendiente:** Amazon Reports API para reason codes reales (Amazon nunca va a tener fotos ni
+comentarios de cliente — limitación de su API, no nuestra). UI en `/returns` para disparar
+estos dos endpoints desde el navegador (hoy solo existen como API, se probaron por curl).
+
+---
+
 ## 2026-07-13 — FIX: BM Disp inconsistente entre secciones del Stock tab (Stock Crítico=1, Reabastecer=7)
 
 **Commits:** `631cd7e`, `4bf81fc`, `87c4d02`, `53a9810`, `1a4a39d`
