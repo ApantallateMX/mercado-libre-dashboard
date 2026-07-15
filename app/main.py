@@ -17648,6 +17648,223 @@ async def planning_sync_claims(days: int = Query(180, ge=1, le=365)):
     }
 
 
+_ML_ORDER_SEARCH_CAP = 9500  # margen bajo el límite real (~10,000) de ML /orders/search
+
+
+async def _fetch_live_ml_sales_by_sku(date_from: str, date_to: str) -> dict:
+    """Ventas reales por SKU en vivo, TODAS las cuentas ML, partiendo el rango de
+    fechas si una cuenta supera el límite de resultados de ML (igual que
+    generate_purchase_order.py). order_history NO sirve para esto — está muy
+    poco poblado (ver DEVLOG 2026-07-15), solo se llena de forma parcial/fire-and-forget."""
+    from datetime import date as _date, timedelta as _td2
+    from app.services import token_store as _ts_live
+    from app.services.meli_client import MeliClient as _MC
+
+    async def _fetch_range(client, d_from: _date, d_to: _date, depth=0) -> list:
+        df, dt = d_from.isoformat(), d_to.isoformat()
+        first = await client.get_orders(offset=0, limit=1, date_from=df, date_to=dt)
+        total = first.get("paging", {}).get("total", 0)
+        if total <= _ML_ORDER_SEARCH_CAP or d_from == d_to or depth > 5:
+            return await client.fetch_all_orders(date_from=df, date_to=dt)
+        mid = d_from + (d_to - d_from) // 2
+        left = await _fetch_range(client, d_from, mid, depth + 1)
+        right = await _fetch_range(client, mid + _td2(days=1), d_to, depth + 1)
+        return left + right
+
+    d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+    d_to = datetime.strptime(date_to, "%Y-%m-%d").date()
+
+    accounts = await _ts_live.get_all_tokens()
+    sales: dict = {}
+
+    async def _process(acc):
+        uid = acc["user_id"]
+        tok = await _ts_live.get_tokens(uid)
+        if not tok:
+            return
+        client = _MC(tok["access_token"], tok["refresh_token"], uid)
+        try:
+            orders = await _fetch_range(client, d_from, d_to)
+            dedup = {o.get("id"): o for o in orders}
+            _EXCL = {"cancelled", "payment_required", "payment_in_process"}
+            for order in dedup.values():
+                if order.get("status") in _EXCL:
+                    continue
+                for oi in order.get("order_items", []):
+                    item = oi.get("item", {})
+                    sku = (item.get("seller_sku") or "").strip().upper()
+                    if not sku:
+                        continue
+                    sales[sku] = sales.get(sku, 0) + oi.get("quantity", 1)
+        except Exception as _e:
+            logger.warning(f"[SKU-CLAIM-RATE] Error ventas en vivo cuenta {uid}: {_e}")
+        finally:
+            await client.close()
+
+    await asyncio.gather(*[_process(a) for a in accounts], return_exceptions=True)
+    return sales
+
+
+@app.get("/api/returns/sku-claim-rate")
+async def returns_sku_claim_rate(
+    date_from: str = Query(..., description="YYYY-MM-DD"),
+    date_to: str = Query(..., description="YYYY-MM-DD"),
+    min_claims: int = Query(1, ge=1),
+):
+    """Tasa REAL de reclamos por SKU (unidades reclamadas ÷ vendidas EN VIVO — no usa
+    order_history, que está muy poco poblado), no % del total de reclamos como el
+    feature viejo. Requiere haber corrido /api/planning/sync-claims al menos una vez.
+    Solo ML — Amazon no expone reason codes/fotos vía SP-API (ver DEVLOG). Rango amplio
+    puede tardar (fetch en vivo paginado) — mismo trade-off que /api/metrics/top-products."""
+    from app.services import token_store as _ts_rate
+
+    if (datetime.strptime(date_to, "%Y-%m-%d") - datetime.strptime(date_from, "%Y-%m-%d")).days > 180:
+        return {"error": "Rango máximo 180 días (fetch en vivo — rangos más amplios se pasan del timeout de Railway)"}
+
+    claims_rows = await _ts_rate.get_claims_history(date_from=date_from, date_to=date_to, limit=5000)
+    claims_by_sku: dict = {}
+    for c in claims_rows:
+        sku = c.get("sku", "")
+        if not sku:
+            continue
+        agg = claims_by_sku.setdefault(sku, {
+            "claims_count": 0, "orders_affected": set(), "amount_mxn": 0.0, "reasons": set(),
+        })
+        agg["claims_count"] += 1
+        # ML a veces genera un claim_id nuevo por cada escalación de la MISMA orden
+        # (claim → mediation). Contar claims crudos infla "unidades afectadas" — lo
+        # correcto es # de órdenes distintas, ya que cada orden ≈ 1 evento de venta.
+        order_key = c.get("order_id") or c.get("claim_id")
+        agg["orders_affected"].add(order_key)
+        agg["amount_mxn"] += c.get("amount_mxn", 0) or 0
+        if c.get("reason_id"):
+            agg["reasons"].add(c["reason_id"])
+
+    sales_by_sku = await _fetch_live_ml_sales_by_sku(date_from, date_to)
+
+    titles = {}
+    try:
+        import aiosqlite as _aio_rate
+        async with _aio_rate.connect(_ts_rate.DATABASE_PATH) as db:
+            db.row_factory = _aio_rate.Row
+            cur = await db.execute("SELECT sku, title FROM bm_product_catalog")
+            titles = {r["sku"]: r["title"] for r in await cur.fetchall()}
+    except Exception:
+        pass
+
+    results = []
+    for sku, c in claims_by_sku.items():
+        if c["claims_count"] < min_claims:
+            continue
+        units_claimed = len(c["orders_affected"])
+        units_sold = sales_by_sku.get(sku, 0)
+        rate_pct = round(units_claimed / units_sold * 100, 2) if units_sold > 0 else None
+        results.append({
+            "sku": sku,
+            "title": titles.get(sku, ""),
+            "claims_count": c["claims_count"],
+            "units_claimed": units_claimed,
+            "units_sold": units_sold,
+            "claim_rate_pct": rate_pct,
+            "amount_mxn": round(c["amount_mxn"], 2),
+            "reasons": sorted(c["reasons"]),
+            "note": (
+                "Reclamos filtrados por fecha del reclamo, no de la venta — "
+                "una tasa >100% suele indicar reclamos de ventas de fuera del rango."
+            ) if rate_pct is not None and rate_pct > 100 else "",
+        })
+    results.sort(key=lambda r: (r["claim_rate_pct"] is None, -(r["claim_rate_pct"] or 0), -r["claims_count"]))
+
+    return {
+        "date_from": date_from, "date_to": date_to,
+        "total_skus": len(results), "products": results,
+    }
+
+
+@app.get("/api/returns/supplier-package")
+async def returns_supplier_package(
+    sku: str = Query(...),
+    date_from: str = Query("", description="YYYY-MM-DD"),
+    date_to: str = Query("", description="YYYY-MM-DD"),
+):
+    """Genera un ZIP descargable listo para mandarle al proveedor: resumen.xlsx con
+    el detalle de cada reclamo del SKU (fecha, motivo, comentario del comprador, monto)
+    + carpeta fotos/ con todas las fotos que mandaron los clientes. Solo ML (ver nota
+    en /api/returns/sku-claim-rate sobre por qué Amazon no tiene esta info)."""
+    import io
+    import zipfile
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from app.services import token_store as _ts_pkg
+
+    sku = sku.strip().upper()
+    claims = await _ts_pkg.get_claims_history(
+        sku=sku, date_from=date_from or None, date_to=date_to or None, limit=2000,
+    )
+    if not claims:
+        return Response(status_code=404, content=f"Sin reclamos para {sku} en ese rango")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Resumen"
+    headers = ["Claim ID", "Fecha", "Motivo", "Etapa", "Estado", "Monto MXN", "Comentario / resumen del comprador"]
+    ws.append(headers)
+    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+    for i, _ in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=i)
+        c.font = Font(color="FFFFFF", bold=True)
+        c.fill = header_fill
+    total_amount = 0.0
+    for row in claims:
+        ws.append([
+            row["claim_id"], row["date_created"], row["reason_id"], row["stage"],
+            row["status"], row["amount_mxn"], row["buyer_comment"],
+        ])
+        total_amount += row["amount_mxn"] or 0
+    widths = [14, 12, 10, 10, 10, 12, 80]
+    from openpyxl.utils import get_column_letter
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    for cell in ws["G"]:
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+    ws.freeze_panes = "A2"
+
+    ws2 = wb.create_sheet("Resumen ejecutivo")
+    ws2.append(["SKU", sku])
+    ws2.append(["Periodo", f"{date_from or 'todo el histórico'} a {date_to or 'hoy'}"])
+    ws2.append(["Total de reclamos", len(claims)])
+    ws2.append(["Órdenes distintas afectadas", len({c['order_id'] or c['claim_id'] for c in claims})])
+    ws2.append(["Monto total reclamado (MXN)", round(total_amount, 2)])
+    ws2.column_dimensions["A"].width = 28
+    ws2.column_dimensions["B"].width = 40
+
+    xlsx_buf = io.BytesIO()
+    wb.save(xlsx_buf)
+    xlsx_buf.seek(0)
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("resumen.xlsx", xlsx_buf.read())
+        seen_photos = set()
+        for row in claims:
+            photos = await _ts_pkg.get_claim_photos(row["claim_id"])
+            for p in photos:
+                local_path = Path(DATABASE_PATH).resolve().parent / p["local_path"]
+                if not local_path.is_file() or p["local_path"] in seen_photos:
+                    continue
+                seen_photos.add(p["local_path"])
+                arc_name = f"fotos/{row['claim_id']}_{local_path.name}"
+                zf.write(local_path, arc_name)
+    zip_buf.seek(0)
+
+    fname = f"reclamos_{sku}_{date_from or 'inicio'}_{date_to or 'hoy'}.zip"
+    return Response(
+        content=zip_buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @app.get("/api/planning/production-kpis")
 async def planning_production_kpis(days: int = Query(7, ge=1, le=30)):
     """Production KPIs from BinManager Operations Dashboard."""
