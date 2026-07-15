@@ -7,6 +7,55 @@ Tipos: `FIX` `FEAT` `BUG` `DECISION` `OPERACION`
 
 ---
 
+## 2026-07-15 — FEAT: Persistencia de reclamos ML (claims_history + claim_photos) — Fase 1 de mejora de Reclamos/Retornos
+
+**Archivos:** `app/services/token_store.py`, `app/services/meli_client.py`, `app/main.py`
+
+**Motivación:** El feature de Reclamos existente (`/returns`) nunca persistía nada — todo se
+leía en vivo de la API de ML en cada carga de página. Sin historial no se puede armar un
+paquete para proveedor, ni calcular tasa real de reclamos por SKU (unidades reclamadas ÷
+vendidas). Amazon queda fuera de esta fase: SP-API no expone reason codes ni fotos, solo
+refund $ vía Finances API (gap ya documentado, requiere `GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE`).
+
+**Qué se agregó:**
+- Tablas `claims_history` y `claim_photos` en `token_store.py` (mismo patrón que `order_history`).
+- `_save_ml_claims_bg()` en `main.py` — job de background que descarga reclamos de las 4 cuentas
+  ML, resuelve SKU vía la orden asociada, extrae comentarios y fotos de los mensajes, y persiste
+  todo. Trigger manual: `POST /api/planning/sync-claims?days=N`.
+- Fotos se descargan a `/app/data/claim_photos/` (Railway Volume — persiste entre deploys,
+  confirmado vía Railway GraphQL API, ver `.claude/agents/devops-engineer.md`).
+- `MeliClient.download_binary()` — nuevo helper para descargar adjuntos autenticados.
+
+**Bugs encontrados y corregidos en el camino (afectaban también el feature `/returns` ya
+existente, no solo lo nuevo):**
+1. El código asumía `msg["from"]["role"]` — el campo real en `/marketplace/v2/claims/{id}/messages`
+   es `msg["sender_role"]` (plano, sin `from`). Esto hacía que el filtro de comentarios del
+   comprador nunca matcheara nada, ni en el sync nuevo ni en el endpoint viejo de fotos.
+2. Los attachments de claims v2 **no traen `url`/`path`** — solo `filename`. La URL real de
+   descarga hay que armarla: `/marketplace/v2/claims/{claim_id}/attachments/{filename}/download`
+   (requiere Bearer auth, no es pública). El endpoint viejo `/api/returns/claim-photos/{claim_id}`
+   nunca mostraba fotos en producción por esto — el `<img src>` apuntaba a una URL vacía.
+3. Escrituras SQLite concurrentes desde `_process_claim` (hasta 5 en paralelo, cada una abriendo
+   su propia conexión para guardar fotos) causaban "database is locked" silencioso — el claim
+   completo se perdía del batch de upsert aunque el texto/fotos ya se hubieran calculado
+   correctamente. Fix: acumular todo en memoria y hacer una sola escritura batched al final,
+   igual que ya se hacía con `order_history`.
+
+**Fix también aplicado al endpoint viejo:** `/api/returns/claim-photos/{claim_id}` ahora
+prioriza el mirror local (`claim_photos`) y sirve vía `/api/returns/claim-photo-file`; si no
+hay nada sincronizado aún, cae a `/api/returns/claim-photo-proxy` (descarga en vivo + cachea a
+disco de paso). La galería de fotos de `/returns` que estaba silenciosamente rota ahora
+funciona.
+
+**Validado localmente:** sync de 30 días × 4 cuentas → 984 reclamos, 660 con SKU resuelto, 608
+con comentario/resumen del comprador, 835 fotos descargadas y verificadas (JPEG válido).
+
+**Pendiente (siguientes fases, no implementado aún):** tasa real de reclamos por SKU (cruce
+contra `order_history`), rollup de impacto monetario, export/paquete para proveedor, Amazon
+Reports API para reason codes reales.
+
+---
+
 ## 2026-07-13 — FIX: BM Disp inconsistente entre secciones del Stock tab (Stock Crítico=1, Reabastecer=7)
 
 **Commits:** `631cd7e`, `4bf81fc`, `87c4d02`, `53a9810`, `1a4a39d`

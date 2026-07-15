@@ -85,12 +85,17 @@ Railway inyecta la variable `$PORT` automáticamente. No usar `--reload` en prod
 # NO depende de app.db para los tokens de API
 ```
 
-**Solución correcta para app.db**:
-- Railway ofrece volumes (almacenamiento persistente) — considerar migración
-- Alternativa: usar PostgreSQL de Railway (también disponible)
-- Estado actual: SQLite se regenera en cada deploy (usuarios y sesiones se pierden)
+**Estado actual (verificado 2026-07-15 vía Railway GraphQL API): YA HAY VOLUME.**
+- Volume `web-volume` montado en `/app/data`, service `web` (0775482a...), environment `production` (a4c39edf...)
+- `DATABASE_PATH=/app/data/tokens.db` — persistente entre deploys
+- Esta sección quedó desactualizada de una migración anterior; no volver a asumir que SQLite se regenera en cada deploy sin verificar primero con la query de abajo.
 
-**Implicación**: después de cada deploy, los usuarios del dashboard necesitan volver a hacer login. Considerar Railway Volumes para persistir `app.db`.
+Verificación rápida (no asumir, confirmar):
+```bash
+curl -s -X POST https://backboard.railway.app/graphql/v2 \
+  -H "Authorization: Bearer $RAILWAY_TOKEN" -H "Content-Type: application/json" \
+  -d '{"query":"query { project(id: \"4d273fe8-14ec-456c-8177-f89d87124de0\") { volumes { edges { node { name volumeInstances { edges { node { mountPath serviceId } } } } } } } }"}'
+```
 
 ## Railway — Timeout de 30 segundos
 

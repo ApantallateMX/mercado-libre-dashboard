@@ -717,6 +717,53 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_account ON order_history(account_id, platform)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_oh_month ON order_history(order_month)")
         # ─────────────────────────────────────────────────────────────────
+        # TABLA: claims_history — reclamos/devoluciones persistidos por SKU/cuenta.
+        # A diferencia de order_history, esto SOLO existe para ML por ahora — Amazon
+        # no expone reason codes ni fotos vía SP-API (solo refund $ via Finances API).
+        # sku se resuelve desde la orden asociada (resource_id) al momento del sync.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS claims_history (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_id       TEXT NOT NULL,
+                platform       TEXT NOT NULL DEFAULT 'ml',
+                account_id     TEXT NOT NULL DEFAULT '',
+                order_id       TEXT NOT NULL DEFAULT '',
+                item_id        TEXT NOT NULL DEFAULT '',
+                sku            TEXT NOT NULL DEFAULT '',
+                reason_id      TEXT NOT NULL DEFAULT '',
+                stage          TEXT NOT NULL DEFAULT '',
+                status         TEXT NOT NULL DEFAULT '',
+                quantity       INTEGER NOT NULL DEFAULT 1,
+                amount_mxn     REAL NOT NULL DEFAULT 0,
+                buyer_comment  TEXT NOT NULL DEFAULT '',
+                date_created   TEXT NOT NULL DEFAULT '',
+                synced_at      REAL NOT NULL DEFAULT 0,
+                UNIQUE(claim_id, platform)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_sku ON claims_history(sku)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_account ON claims_history(account_id, platform)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_ch_date ON claims_history(date_created)")
+        # ─────────────────────────────────────────────────────────────────
+        # TABLA: claim_photos — fotos de reclamos, mirror local en /app/data/claim_photos/
+        # (Railway Volume persistente — ver reference_railway_volume_persistence).
+        # Se guardan porque las URLs originales de ML pueden expirar/archivarse.
+        # ─────────────────────────────────────────────────────────────────
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS claim_photos (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                claim_id     TEXT NOT NULL,
+                platform     TEXT NOT NULL DEFAULT 'ml',
+                local_path   TEXT NOT NULL DEFAULT '',
+                original_url TEXT NOT NULL DEFAULT '',
+                from_role    TEXT NOT NULL DEFAULT '',
+                downloaded_at REAL NOT NULL DEFAULT 0,
+                UNIQUE(claim_id, local_path)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_cp_claim ON claim_photos(claim_id)")
+        # ─────────────────────────────────────────────────────────────────
         # TABLA: item_history — auditoría de cambios por listing
         # field: price | title | description | stock | status | shipping | pictures | attributes
         # old_value/new_value: TEXT (serializado) para cualquier tipo
@@ -2891,6 +2938,101 @@ async def upsert_order_history(rows: list[dict]) -> int:
             ))
         await db.commit()
     return len(rows)
+
+
+async def upsert_claims_history(rows: list[dict]) -> int:
+    """Guarda/actualiza reclamos ML persistidos. ON CONFLICT actualiza status/stage/comentario
+    (un claim puede seguir evolucionando — abrirse, cerrarse, cambiar de stage)."""
+    import time as _t
+    if not rows:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for r in rows:
+            await db.execute("""
+                INSERT INTO claims_history
+                    (claim_id, platform, account_id, order_id, item_id, sku,
+                     reason_id, stage, status, quantity, amount_mxn,
+                     buyer_comment, date_created, synced_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(claim_id, platform) DO UPDATE SET
+                    stage         = excluded.stage,
+                    status        = excluded.status,
+                    amount_mxn    = CASE WHEN excluded.amount_mxn > 0 THEN excluded.amount_mxn ELSE claims_history.amount_mxn END,
+                    buyer_comment = CASE WHEN excluded.buyer_comment != '' THEN excluded.buyer_comment ELSE claims_history.buyer_comment END,
+                    sku           = CASE WHEN excluded.sku != '' THEN excluded.sku ELSE claims_history.sku END,
+                    synced_at     = excluded.synced_at
+            """, (
+                r.get("claim_id", ""), r.get("platform", "ml"), r.get("account_id", ""),
+                r.get("order_id", ""), r.get("item_id", ""), r.get("sku", ""),
+                r.get("reason_id", ""), r.get("stage", ""), r.get("status", ""),
+                r.get("quantity", 1), r.get("amount_mxn", 0),
+                r.get("buyer_comment", ""), r.get("date_created", ""), _t.time(),
+            ))
+        await db.commit()
+    return len(rows)
+
+
+async def save_claim_photos(claim_id: str, platform: str, photos: list[dict]) -> int:
+    """Registra fotos ya descargadas a disco (local_path bajo /app/data/claim_photos/)."""
+    import time as _t
+    if not photos:
+        return 0
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        for p in photos:
+            await db.execute("""
+                INSERT OR IGNORE INTO claim_photos
+                    (claim_id, platform, local_path, original_url, from_role, downloaded_at)
+                VALUES (?,?,?,?,?,?)
+            """, (
+                claim_id, platform, p.get("local_path", ""), p.get("original_url", ""),
+                p.get("from_role", ""), _t.time(),
+            ))
+        await db.commit()
+    return len(photos)
+
+
+async def get_claims_history(
+    sku: str = None,
+    account_id: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    limit: int = 1000,
+) -> list[dict]:
+    """Lee claims_history con filtros opcionales, más recientes primero."""
+    conditions = []
+    params: list = []
+    if sku:
+        conditions.append("sku = ?")
+        params.append(sku.upper())
+    if account_id:
+        conditions.append("account_id = ?")
+        params.append(account_id)
+    if date_from:
+        conditions.append("date_created >= ?")
+        params.append(date_from)
+    if date_to:
+        conditions.append("date_created <= ?")
+        params.append(date_to)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            f"SELECT * FROM claims_history {where} ORDER BY date_created DESC LIMIT ?",
+            params,
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_claim_photos(claim_id: str) -> list[dict]:
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM claim_photos WHERE claim_id = ? ORDER BY id", (claim_id,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 async def get_sku_price_history(

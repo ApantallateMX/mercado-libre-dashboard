@@ -1,5 +1,6 @@
 .env
 tokens.db
+claim_photos/
 __pycache__/
 *.pyc
 *.log

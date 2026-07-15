@@ -216,6 +216,18 @@ class MeliClient:
     async def delete(self, endpoint: str, **kwargs) -> dict:
         return await self._request("DELETE", endpoint, **kwargs)
 
+    async def download_binary(self, url: str) -> bytes | None:
+        """Descarga un adjunto (ej. foto de reclamo) usando el mismo Bearer token de la
+        cuenta. Attachments de claims/messages viven en dominio ML y requieren auth."""
+        await self._refresh_token_if_needed()
+        try:
+            resp = await self._client.get(url, timeout=20.0)
+            if resp.status_code == 200:
+                return resp.content
+        except Exception:
+            pass
+        return None
+
     # === User ===
 
     async def get_user_info(self) -> dict:

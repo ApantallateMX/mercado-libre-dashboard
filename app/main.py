@@ -1609,6 +1609,167 @@ async def _save_amazon_orders_bg(days: int = 30) -> None:
         _amz_bg_running = False
 
 
+# ── ML claims background save ────────────────────────────────────────────────
+# Persiste reclamos ML (con SKU, comentarios y fotos) en claims_history/claim_photos.
+# Solo ML: Amazon no expone reason codes ni fotos vía SP-API (ver DEVLOG).
+_ml_claims_bg_running: bool = False
+_ml_claims_bg_last_run: float = 0.0
+
+async def _save_ml_claims_bg(days: int = 180) -> None:
+    """Background: descarga reclamos ML de todas las cuentas + mensajes/fotos,
+    guarda en claims_history/claim_photos. Guard de 1h entre corridas (ML no tiene
+    el rate limit tan estricto de Amazon, pero igual no hace sentido correrlo seguido)."""
+    global _ml_claims_bg_running, _ml_claims_bg_last_run
+    if _ml_claims_bg_running:
+        return
+    if _time.time() - _ml_claims_bg_last_run < 3600:
+        return
+    _ml_claims_bg_running = True
+    try:
+        from app.services.token_store import (
+            get_all_tokens as _get_ml_accts,
+            get_tokens as _get_tok,
+            upsert_claims_history as _upsert_ch,
+            save_claim_photos as _save_cp,
+        )
+        from app.services.meli_client import MeliClient
+        from app.services.sku_utils import normalize_to_bm_sku as _norm_sku
+        from datetime import datetime as _dt, timedelta as _td
+        from pathlib import Path as _Path
+        import os as _os_cp
+
+        accounts = await _get_ml_accts()
+        if not accounts:
+            return
+        date_from = (_dt.utcnow() - _td(days=days)).strftime("%Y-%m-%d")
+
+        photos_dir = _Path(DATABASE_PATH).resolve().parent / "claim_photos"
+        photos_dir.mkdir(parents=True, exist_ok=True)
+
+        sem_ml = asyncio.Semaphore(5)
+        all_rows: list = []
+        all_photos: list = []  # (claim_id, [photo dicts]) — se guardan en 1 sola pasada al final
+        # (evita "database is locked" de SQLite con escrituras concurrentes desde varios claims a la vez)
+
+        async def _process_account(acc):
+            uid = acc["user_id"]
+            nick = acc.get("nickname") or uid
+            tok = await _get_tok(uid)
+            if not tok:
+                return
+            client = MeliClient(tok["access_token"], tok["refresh_token"], uid)
+            try:
+                claims = await client.fetch_all_claims(date_from=date_from)
+                logger.info(f"[CLAIMS-BG] {nick}: {len(claims)} reclamos en {days}d")
+
+                async def _process_claim(c):
+                    async with sem_ml:
+                        claim_id = str(c.get("id", ""))
+                        if not claim_id:
+                            return
+                        resource_id = str(c.get("resource_id", "")) if c.get("resource") == "order" else ""
+                        sku = ""
+                        amount_mxn = 0.0
+                        if resource_id:
+                            try:
+                                order = await client.get(f"/orders/{resource_id}")
+                                items_o = order.get("order_items", [])
+                                if items_o:
+                                    item_d = items_o[0].get("item", {})
+                                    sku_raw = item_d.get("seller_custom_field") or item_d.get("seller_sku") or ""
+                                    sku = _norm_sku(sku_raw) if sku_raw else ""
+                                amount_mxn = float(order.get("total_amount") or 0)
+                            except Exception:
+                                pass
+
+                        buyer_comment = ""
+                        photos_to_save = []
+                        try:
+                            msgs = await client.get_claim_messages(claim_id)
+                            texts = []
+                            for msg in (msgs if isinstance(msgs, list) else []):
+                                # v2 usa "sender_role" en el mensaje (no "from.role"). "mediator" es
+                                # el resumen que arma el asistente virtual de ML del reclamo del
+                                # comprador — casi siempre más útil que el texto crudo del comprador.
+                                role = msg.get("sender_role", "")
+                                if role in ("complainant", "mediator"):
+                                    t = (msg.get("message") or msg.get("text") or "").strip()
+                                    if t:
+                                        texts.append(t)
+                                for att in (msg.get("attachments") or []):
+                                    fname = att.get("filename") or att.get("name") or ""
+                                    mime = att.get("type") or att.get("mime_type") or ""
+                                    is_img = (
+                                        mime.startswith("image/") or
+                                        any(fname.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
+                                    )
+                                    # Los attachments de claims v2 NO traen url/path — hay que
+                                    # armar la ruta de descarga: .../attachments/{filename}/download
+                                    if is_img and fname:
+                                        dl_path = f"/marketplace/v2/claims/{claim_id}/attachments/{fname}/download"
+                                        photos_to_save.append({"url": dl_path, "filename": fname, "from_role": role})
+                            buyer_comment = " | ".join(texts)[:2000]
+                        except Exception:
+                            pass
+
+                        saved_photos = []
+                        if photos_to_save:
+                            claim_dir = photos_dir / claim_id
+                            for i, p in enumerate(photos_to_save):
+                                base_name = _os_cp.path.basename(p["filename"]) or f"foto_{i}.jpg"
+                                local_path = claim_dir / f"{i}_{base_name}"
+                                if not local_path.exists():
+                                    content = await client.download_binary(p["url"])
+                                    if not content:
+                                        continue
+                                    claim_dir.mkdir(parents=True, exist_ok=True)
+                                    local_path.write_bytes(content)
+                                saved_photos.append({
+                                    "local_path": str(local_path.relative_to(photos_dir.parent)),
+                                    "original_url": p["url"],
+                                    "from_role": p["from_role"],
+                                })
+                        if saved_photos:
+                            all_photos.append((claim_id, saved_photos))
+
+                        all_rows.append({
+                            "claim_id": claim_id, "platform": "ml", "account_id": nick,
+                            "order_id": resource_id, "item_id": "", "sku": sku,
+                            "reason_id": c.get("reason_id", ""), "stage": c.get("stage", ""),
+                            "status": c.get("status", ""), "quantity": 1,
+                            "amount_mxn": amount_mxn, "buyer_comment": buyer_comment,
+                            "date_created": (c.get("date_created") or "")[:10],
+                        })
+
+                claim_results = await asyncio.gather(*[_process_claim(c) for c in claims], return_exceptions=True)
+                n_errors = sum(1 for r in claim_results if isinstance(r, Exception))
+                if n_errors:
+                    logger.warning(f"[CLAIMS-BG] {nick}: {n_errors}/{len(claims)} claims fallaron: "
+                                    f"{[str(r) for r in claim_results if isinstance(r, Exception)][:3]}")
+            except Exception as _e:
+                logger.warning(f"[CLAIMS-BG] Error cuenta {nick}: {_e}")
+            finally:
+                await client.close()
+
+        await asyncio.gather(*[_process_account(a) for a in accounts], return_exceptions=True)
+
+        if all_rows:
+            await _upsert_ch(all_rows)
+            logger.info(f"[CLAIMS-BG] {len(all_rows)} reclamos guardados en claims_history")
+        for claim_id, saved_photos in all_photos:
+            try:
+                await _save_cp(claim_id, "ml", saved_photos)
+            except Exception as _e:
+                logger.warning(f"[CLAIMS-BG] Error guardando fotos de {claim_id}: {_e}")
+        if all_photos:
+            logger.info(f"[CLAIMS-BG] {sum(len(p) for _, p in all_photos)} fotos guardadas en claim_photos")
+        _ml_claims_bg_last_run = _time.time()
+    except Exception as _e:
+        logger.warning(f"[CLAIMS-BG] Error general: {_e}")
+    finally:
+        _ml_claims_bg_running = False
+
+
 def _get_item_sku(body: dict) -> str:
     """Extrae SKU de un item body usando TODAS las fuentes disponibles en cascada.
 
@@ -16537,7 +16698,25 @@ async def returns_resolve_flag(request: Request):
 
 @app.get("/api/returns/claim-photos/{claim_id}")
 async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
-    """Extrae fotos adjuntas de los mensajes de un reclamo ML."""
+    """Fotos de un reclamo ML. Prioriza el mirror local ya sincronizado por
+    _save_ml_claims_bg (claim_photos); si no hay nada guardado, cae a fetch en
+    vivo de los mensajes del reclamo (attachments v2 no traen url — se arma la
+    ruta de descarga y se sirve vía proxy con auth, que además cachea a disco)."""
+    import os as _os
+    from urllib.parse import quote
+    from app.services import token_store as _ts_ph
+
+    local_photos = await _ts_ph.get_claim_photos(claim_id)
+    if local_photos:
+        return {
+            "ok": True, "claim_id": claim_id, "total": len(local_photos),
+            "photos": [{
+                "url": f"/api/returns/claim-photo-file?path={quote(p['local_path'])}",
+                "filename": _os.path.basename(p["local_path"]),
+                "from_role": p.get("from_role", ""),
+            } for p in local_photos],
+        }
+
     from app.services.meli_client import _active_user_id as _ctx
     _uid = account_id or str(_ctx.get() or "")
     client = await get_meli_client(user_id=_uid or None)
@@ -16548,18 +16727,21 @@ async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
         photos = []
         if isinstance(msgs, list):
             for msg in msgs:
-                sender = (msg.get("from") or {}).get("role", "")
+                sender = msg.get("sender_role", "")
                 for att in (msg.get("attachments") or []):
                     fname = att.get("filename") or att.get("name") or ""
-                    mime  = att.get("type") or att.get("mime_type") or ""
-                    url   = att.get("url") or att.get("path") or ""
+                    mime = att.get("type") or att.get("mime_type") or ""
                     is_img = (
                         mime.startswith("image/") or
                         any(fname.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"))
                     )
-                    if is_img and url:
+                    if is_img and fname:
+                        proxy_url = (
+                            f"/api/returns/claim-photo-proxy?claim_id={claim_id}"
+                            f"&filename={quote(fname)}&account_id={_uid}"
+                        )
                         photos.append({
-                            "url": url,
+                            "url": proxy_url,
                             "filename": fname,
                             "mime": mime,
                             "from_role": sender,
@@ -16567,6 +16749,56 @@ async def returns_claim_photos(claim_id: str, account_id: str = Query("")):
         return {"ok": True, "claim_id": claim_id, "photos": photos, "total": len(photos)}
     except Exception as _e:
         return {"ok": False, "error": str(_e), "photos": []}
+    finally:
+        await client.close()
+
+
+@app.get("/api/returns/claim-photo-file")
+async def returns_claim_photo_file(path: str = Query(...)):
+    """Sirve una foto ya persistida en /app/data/claim_photos/. `path` es relativo
+    a la carpeta de datos (Railway Volume) — se valida que no escape el directorio."""
+    import mimetypes
+    photos_root = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+    full_path = (photos_root.parent / path).resolve()
+    if photos_root not in full_path.parents or not full_path.is_file():
+        return Response(status_code=404)
+    mime, _ = mimetypes.guess_type(str(full_path))
+    return Response(content=full_path.read_bytes(), media_type=mime or "application/octet-stream")
+
+
+@app.get("/api/returns/claim-photo-proxy")
+async def returns_claim_photo_proxy(claim_id: str = Query(...), filename: str = Query(...), account_id: str = Query("")):
+    """Descarga en vivo una foto de reclamo (con auth) y la sirve al navegador —
+    además la cachea a disco + DB para que la próxima carga sea local (fast path)."""
+    import os as _os
+    import mimetypes
+    from app.services import token_store as _ts_ph
+
+    client = await get_meli_client(user_id=account_id or None)
+    if not client:
+        return Response(status_code=401)
+    try:
+        dl_path = f"/marketplace/v2/claims/{claim_id}/attachments/{filename}/download"
+        content = await client.download_binary(dl_path)
+        if not content:
+            return Response(status_code=404)
+
+        photos_dir = Path(DATABASE_PATH).resolve().parent / "claim_photos"
+        claim_dir = photos_dir / claim_id
+        claim_dir.mkdir(parents=True, exist_ok=True)
+        local_path = claim_dir / f"0_{_os.path.basename(filename)}"
+        if not local_path.exists():
+            local_path.write_bytes(content)
+            await _ts_ph.save_claim_photos(claim_id, "ml", [{
+                "local_path": str(local_path.relative_to(photos_dir.parent)),
+                "original_url": dl_path,
+                "from_role": "",
+            }])
+
+        mime, _ = mimetypes.guess_type(filename)
+        return Response(content=content, media_type=mime or "image/jpeg")
+    except Exception:
+        return Response(status_code=502)
     finally:
         await client.close()
 
@@ -17391,6 +17623,28 @@ async def planning_sync_amazon():
         "accounts": len(amazon_accounts),
         "nicknames": [a.get("nickname", a["seller_id"]) for a in amazon_accounts],
         "message": f"Descargando órdenes de {len(amazon_accounts)} cuentas Amazon en background (~5 min). Recarga la tabla cuando termine.",
+    }
+
+
+@app.post("/api/planning/sync-claims")
+async def planning_sync_claims(days: int = Query(180, ge=1, le=365)):
+    """Fuerza descarga de reclamos ML (con SKU, comentarios, fotos) para todas las cuentas.
+    Resetea el guard de 1h y corre _save_ml_claims_bg en background.
+    """
+    global _ml_claims_bg_running, _ml_claims_bg_last_run
+    from app.services.token_store import get_all_tokens as _get_ml_accts
+    ml_accounts = await _get_ml_accts()
+    if not ml_accounts:
+        return {"error": "No hay cuentas ML configuradas"}
+    _ml_claims_bg_running = False
+    _ml_claims_bg_last_run = 0.0
+    asyncio.create_task(_save_ml_claims_bg(days=days))
+    return {
+        "status": "iniciado",
+        "accounts": len(ml_accounts),
+        "nicknames": [a.get("nickname", a["user_id"]) for a in ml_accounts],
+        "days": days,
+        "message": f"Descargando reclamos de {len(ml_accounts)} cuentas ML ({days}d) en background. Puede tardar varios minutos según el volumen.",
     }
 
 
