@@ -460,18 +460,35 @@ async def lifespan(app: FastAPI):
     3. _seed_amazon_accounts() → Siembra cuentas Amazon desde .env.production
     """
     # ── Esenciales síncronos — deben completar antes de aceptar requests ──────
-    await token_store.init_db()
-    await user_store.init_user_db()
+    # Envueltos en try/except: si el disco/volumen se llena, un solo INSERT que
+    # falla (sqlite3.OperationalError: database or disk is full) NO debe tumbar
+    # el arranque completo — eso deja el servicio 502 sin forma de entrar ni
+    # siquiera a los endpoints de diagnóstico para liberar espacio (incidente
+    # 2026-07-15, ver DEVLOG). Mejor bootear en modo degradado y poder actuar.
+    try:
+        await token_store.init_db()
+    except Exception as _e_init:
+        logger.error(f"[STARTUP] init_db() falló (¿disco lleno?): {_e_init}")
+    try:
+        await user_store.init_user_db()
+    except Exception as _e_uinit:
+        logger.error(f"[STARTUP] init_user_db() falló: {_e_uinit}")
     # Cargar cache de stock desde DB inmediatamente — operadores ven datos del
     # deploy anterior desde el primer request, sin esperar el prewarm (90s).
-    await _load_bm_cache_from_db()
-    await _load_stock_issues_from_db()
-    # Cargar catálogo de productos BM (retail_ph, brand, model) desde DB
-    # Para que VS REF% en planeación funcione desde el primer request.
-    await _load_catalog_from_db()
+    try:
+        await _load_bm_cache_from_db()
+        await _load_stock_issues_from_db()
+        # Cargar catálogo de productos BM (retail_ph, brand, model) desde DB
+        # Para que VS REF% en planeación funcione desde el primer request.
+        await _load_catalog_from_db()
+    except Exception as _e_load:
+        logger.error(f"[STARTUP] Carga de caché desde DB falló: {_e_load}")
 
     # Seed product type templates (TELEVISION, VACUUM_CLEANER validated)
-    await token_store.seed_product_type_templates()
+    try:
+        await token_store.seed_product_type_templates()
+    except Exception as _e_seed:
+        logger.error(f"[STARTUP] seed_product_type_templates() falló (¿disco lleno?): {_e_seed}")
 
     # ── Todo lo demás en background — yield inmediato para Coolify/Railway ───
     # Así uvicorn emite "Application startup complete" en <2s y el contenedor
